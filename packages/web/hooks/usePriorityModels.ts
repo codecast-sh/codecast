@@ -11,52 +11,72 @@ import { isUnderRole } from "@codecast/shared/contracts";
 import { placeInboxRows, railRowPlacement, useInboxStore, waitsOnViewer, type InboxSession } from "../store/inboxStore";
 import { useWorkspaceCollection } from "./useWorkspaceCollection";
 import { useCoarseNow } from "./useCoarseNow";
+import { hostedStopOf, splitHostedStops } from "../lib/hostedNotice";
 import type { DeployInfo } from "../lib/priorityList";
 
 type PlaceState = Parameters<typeof placeInboxRows>[0];
-const asksYouByState = new WeakMap<object, (row: InboxSession) => boolean>();
 
 /**
- * Whether your sidebar files a row under Questions or Needs You, flat or
- * nested under a Needs You lead, as that section's count reads it: placed
- * needs_input, waiting on you (else it sits in Dormant), and not a role's
- * session (the role triages those). Placed once per store state, however
+ * Whose Needs You a session's needs you follows. "sidebar": web's, in the
+ * viewer's own scope, a hosted conversation that ended on a stop filed apart
+ * under "Couldn't finish" (lib/hostedNotice splitHostedStops). "phone": the
+ * phone inbox's (packages/mobile hooks/useInboxPlacement), which places in
+ * the viewer's chosen inbox scope, holds the focused session in place, and
+ * keeps those stops under Needs You.
+ */
+export type LiveInbox = "sidebar" | "phone";
+
+const asksYouByState: Record<LiveInbox, WeakMap<object, (row: InboxSession) => boolean>> = { sidebar: new WeakMap(), phone: new WeakMap() };
+
+/**
+ * Whether `inbox` files a row under Questions or Needs You, flat or nested
+ * under a Needs You lead, as that section's count reads it: placed
+ * needs_input, waiting on you (else it sits in Dormant), not a role's
+ * session (the role triages those), and on the sidebar not a hosted
+ * conversation that ended on a stop. Placed once per store state, however
  * many priority cards ask.
  */
-function sidebarAsksYou(s: PlaceState, now: number): (row: InboxSession) => boolean {
-  let hit = asksYouByState.get(s);
+function inboxAsksYou(s: PlaceState & { messages?: Record<string, any[] | undefined>; currentSessionId?: string | null }, now: number, inbox: LiveInbox): (row: InboxSession) => boolean {
+  let hit = asksYouByState[inbox].get(s);
   if (!hit) {
-    const placed = placeInboxRows(s, { scope: "mine", now });
+    const phone = inbox === "phone";
+    const placed = placeInboxRows(s, phone ? { focusedId: s.currentSessionId ?? null, now } : { scope: "mine", now });
     const meId = s.currentUser?._id?.toString?.() ?? null;
-    const flat = new Set(placed.needsInput.map((r) => r._id));
+    const messagesOf = (id: string) => s.messages?.[id];
+    const stopped = (row: InboxSession) => !phone && !!hostedStopOf(row, messagesOf(row._id));
+    const flat = new Set((phone ? placed.needsInput : splitHostedStops(placed.needsInput, messagesOf).asks).map((r) => r._id));
     hit = (row) => placed.isQuestion(row) || flat.has(row._id)
-      || (placed.placements.get(row._id)?.bucket === "needs_input" && waitsOnViewer(row, meId) && !isUnderRole(row));
-    asksYouByState.set(s, hit);
+      || (placed.placements.get(row._id)?.bucket === "needs_input" && waitsOnViewer(row, meId) && !isUnderRole(row) && !stopped(row));
+    asksYouByState[inbox].set(s, hit);
   }
   return hit;
 }
 
+/** One session's state as `inbox` reads it (usePriorityLiveStates), or undefined when the store does not hold it. */
+export function liveStateOf(s: Parameters<typeof inboxAsksYou>[0], id: string, now: number, inbox: LiveInbox = "sidebar"): PrioritySessionState | undefined {
+  const row = (s.sessions as Record<string, any>)[id];
+  if (!row) return undefined;
+  const own = stateOfStatus(sessionStatusOf({ row, placement: railRowPlacement(row, now), now }));
+  return inboxAsksYou(s, now, inbox)(row) ? "needs_you" : own === "needs_you" ? "dormant" : own;
+}
+
 /**
  * The inbox's verdict for each linked session the store holds, by
- * conversation id. A session needs you exactly when your inbox files it
- * under Needs You or Questions (placeInboxRows, mine scope); a row's own
- * facts say how it is otherwise, never that it waits on you, since a wait
- * that belongs to someone else (a card addressed to a teammate, a session
- * another person owns) sits in your Dormant. One subscription to a
- * signature of just those rows' states, so a heartbeat elsewhere wakes
- * nothing.
+ * conversation id. A session needs you exactly when your inbox (`inbox`:
+ * web's sidebar by default, or the phone's) files it under Needs You or
+ * Questions; a row's own facts say how it is otherwise, never that it waits
+ * on you, since a wait that belongs to someone else (a card addressed to a
+ * teammate, a session another person owns) sits in your Dormant. One
+ * subscription to a signature of just those rows' states, so a heartbeat
+ * elsewhere wakes nothing.
  */
-export function usePriorityLiveStates(ids: readonly string[], now: number): (conversationId: string) => PrioritySessionState | undefined {
+export function usePriorityLiveStates(ids: readonly string[], now: number, inbox: LiveInbox = "sidebar"): (conversationId: string) => PrioritySessionState | undefined {
   const key = ids.join(",");
   const sig = useInboxStore((s) => {
-    const asksYou = sidebarAsksYou(s, now);
     const out: string[] = [];
     for (const id of key.split(",")) {
-      const row = (s.sessions as Record<string, any>)[id];
-      if (!row) continue;
-      const own = stateOfStatus(sessionStatusOf({ row, placement: railRowPlacement(row, now), now }));
-      const state = asksYou(row) ? "needs_you" : own === "needs_you" ? "dormant" : own;
-      out.push(`${id}:${state}`);
+      const state = id ? liveStateOf(s as any, id, now, inbox) : undefined;
+      if (state) out.push(`${id}:${state}`);
     }
     return out.join(",");
   });
@@ -91,7 +111,7 @@ function deploysFor(m: MilestoneModel, deploys: readonly TeamDeployRow[]): Deplo
   const out: DeployInfo[] = [];
   const hits = deploys
     .filter((d) => (d.tasks ?? []).some((t) => t.short_id && tasks.has(t.short_id)) || d.sessions.some((x) => sessions.has(x.conversation_id)))
-    .map((d) => ({ id: d._id, target: d.target, status: d.status, at: d.live_at ?? d.finished_at ?? d.created_at }))
+    .map((d) => ({ id: d._id, short_id: d.short_id, target: d.target, status: d.status, at: d.live_at ?? d.finished_at ?? d.created_at }))
     .sort((a, b) => b.at - a.at);
   for (const d of hits) if (!out.some((x) => x.target === d.target)) out.push(d);
   return out;
@@ -112,12 +132,12 @@ export const branchesOf = (m: MilestoneModel, lookups: LinkLookups) =>
 
 const NO_DAYS: string[] = [];
 
-/** One priority's model (lib/priorityList buildModels), with the inbox's live verdict laid over its sessions. */
-export function usePriorityModel(row: PriorityRow, history?: PriorityHistory, days: string[] = NO_DAYS): PriorityModel {
+/** One priority's model (lib/priorityList buildModels), with `inbox`'s live verdict laid over its sessions. */
+export function usePriorityModel(row: PriorityRow, history?: PriorityHistory, days: string[] = NO_DAYS, inbox: LiveInbox = "sidebar"): PriorityModel {
   const now = useCoarseNow(30_000);
   const ids = useMemo(() => linkedSessionIds([row]), [row]);
-  const live = usePriorityLiveStates(ids, now);
-  return useMemo(() => buildModels([row], history, live, days, now)[0], [row, history, live, days, now]);
+  const live = usePriorityLiveStates(ids, now, inbox);
+  return useMemo(() => buildModels([row], history, live, days)[0], [row, history, live, days]);
 }
 
 /** Every pull request (`owner/repo#N`) the milestones of `rows` name, sorted, once each. */

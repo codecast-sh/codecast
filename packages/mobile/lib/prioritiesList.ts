@@ -1,85 +1,172 @@
-// What the phone's Priorities list (app/priorities.tsx) says and offers, as
-// pure functions over web's models (lib/priorityList), so they are tested
-// without React Native: which milestone lines a priority shows, each line's
-// one trailing thing, the stats line's words, and the owner's ⋯ menus as
-// sheet rows whose presses are web's writes (lib/priorityWrites).
-import type { PriorityRow, PriorityStep } from '@codecast/shared/contracts/priorities';
-import { asksPerson, type NextAction } from '@codecast/shared/contracts/priorityDerive';
-import { STATE_WORD, lineSession, type Landed, type MilestoneModel, type PriorityModel, type SessionLine } from '@codecast/web/lib/priorityList';
-import { rankProvenance, type PriorityWrites } from '@codecast/web/lib/priorities';
+// What the phone's priorities (the list, app/priorities.tsx, and a priority's
+// screen, app/priority/[id].tsx) say and offer, as pure functions over web's
+// models (lib/priorityList), so they are tested without React Native: each
+// milestone's mark, the DONE and POLISH sections, an open milestone's
+// connected groups, the ten-day bars, and the owner's ⋯ menus as sheet rows
+// whose presses are web's writes (lib/priorityWrites).
+import type { PriorityPlanRef, PriorityRow, PriorityStep } from '@codecast/shared/contracts/priorities';
+import { isClosedSession, orderByState, type MilestoneStateKind } from '@codecast/shared/contracts/priorityDerive';
+import { MILESTONE_STATE_WORD, ago, type MilestoneModel, type PriorityModel, type SessionLine } from '@codecast/web/lib/priorityList';
+import { milestoneStart, rankProvenance, type PriorityWrites } from '@codecast/web/lib/priorities';
+import type { SessionStatus } from '@codecast/web/lib/sessionStatus';
+import type { SessionStart } from '@codecast/web/store/composeSlice';
+import type { ComposeTask } from './compose';
 import type { SheetItem } from './popups';
 
-/** Waiting on you shows this many rows before "+N more". */
-export const WAITING_SHOWN = 3;
+// ── A milestone's mark ──────────────────────────────────────────────────
 
 /**
- * The milestone lines a priority shows: its open critical ones, the done ones
- * once its progress is pressed, then polish. Collapsed polish still shows the
- * line holding the priority's action and any line asking the person, so
- * nothing waiting is out of sight (web's PriorityBlock).
+ * What a milestone's first column draws. Only two marks are actions: Needs
+ * you opens the session to answer, New session opens the composer seeded
+ * with the milestone's brief. The rest are a session state's mark alone.
  */
-export function shownLines(model: Pick<PriorityModel, 'milestones' | 'action'>, open: { done: boolean; polish: boolean }): { critical: MilestoneModel[]; polish: MilestoneModel[] } {
+export type MilestoneMark =
+  | { kind: 'needs_you'; session: SessionLine; label: string }
+  | { kind: 'start'; label: string }
+  | { kind: 'quiet'; status: SessionStatus; label: string }
+  /** Nobody on it and nothing to start (a teammate's, a past priority's): an empty box. */
+  | { kind: 'none' };
+
+const QUIET_STATUS: Record<Exclude<MilestoneStateKind, 'needs_you' | 'start' | 'none'>, SessionStatus> = { working: 'working', dormant: 'dormant', idle: 'idle', done: 'done' };
+
+export function milestoneMark(m: Pick<MilestoneModel, 'state'>): MilestoneMark {
+  const { kind, session } = m.state;
+  if (kind === 'needs_you') return session ? { kind: 'needs_you', session, label: `Needs you: ${sessionLabel(session)}` } : { kind: 'none' };
+  if (kind === 'start') return { kind: 'start', label: 'New session on this milestone' };
+  if (kind === 'none') return { kind: 'none' };
+  return { kind: 'quiet', status: QUIET_STATUS[kind], label: MILESTONE_STATE_WORD[kind] };
+}
+
+type TaskRow = { _id?: string; short_id?: string; title?: string; status?: string };
+
+/**
+ * New session on a milestone, as web starts it: the composer seeded with the
+ * same brief (milestones, open tasks and plan as live references) and the
+ * session linked at creation to the priority, the milestone and its plan,
+ * and bound to the milestone's first open task (the store's row, by its id).
+ */
+export function startCompose(
+  row: Parameters<typeof milestoneStart>[0],
+  m: Parameters<typeof milestoneStart>[1],
+  task: (shortId: string) => TaskRow | undefined,
+): { seed: string; start: SessionStart; task: ComposeTask | null } {
+  const { draft, start, task: first } = milestoneStart(row, m, task);
+  const t = first ? task(first) : undefined;
+  return { seed: draft, start, task: first && t?._id ? { _id: String(t._id), short_id: first, title: t.title, status: t.status } : null };
+}
+
+// ── Sections ────────────────────────────────────────────────────────────
+
+export type SectionKind = 'done' | 'polish';
+export type MilestoneSection = { kind: SectionKind; label: string; count: string; rows: MilestoneModel[] };
+
+/** A priority's milestones: its open critical ones, then DONE n and POLISH x/y, Done first, each only when it holds any. */
+export function milestoneSections(model: Pick<PriorityModel, 'milestones'>): { open: MilestoneModel[]; sections: MilestoneSection[] } {
   const critical = model.milestones.filter((m) => m.tier === 'critical');
   const polish = model.milestones.filter((m) => m.tier === 'polish');
+  const done = critical.filter((m) => m.done);
+  const sections: MilestoneSection[] = [];
+  if (done.length) sections.push({ kind: 'done', label: 'Done', count: `${done.length}`, rows: done });
+  if (polish.length) sections.push({ kind: 'polish', label: 'Polish', count: `${polish.filter((m) => m.done).length}/${polish.length}`, rows: polish });
+  return { open: critical.filter((m) => !m.done), sections };
+}
+
+/** Sections in order: closed ones side by side share a line; an open one is its head over its milestones. */
+export function sectionRuns(sections: readonly MilestoneSection[], open: ReadonlySet<SectionKind>): Array<{ open: boolean; sections: MilestoneSection[] }> {
+  const runs: Array<{ open: boolean; sections: MilestoneSection[] }> = [];
+  for (const s of sections) {
+    const isOpen = open.has(s.kind);
+    const last = runs[runs.length - 1];
+    if (!isOpen && last && !last.open) last.sections.push(s);
+    else runs.push({ open: isOpen, sections: [s] });
+  }
+  return runs;
+}
+
+// ── An open milestone ───────────────────────────────────────────────────
+
+const WORKFLOW_TITLE = /^([A-Z][A-Za-z]+) · ((?:ct|pl)-\d+)\s*(.*)$/;
+
+/** The task or plan a workflow step's session works on ("Review · ct-9 tidy" → "ct-9"), or null for any other title. */
+export const workflowRef = (title: string): string | null => WORKFLOW_TITLE.exec(title)?.[2] ?? null;
+
+/** A session's title; a workflow step's ("Review · ct-9 tidy") reads as what it works on, "Review: <task title>", never its id. */
+export function sessionLabel(s: Pick<SessionLine, 'title'>, titleOf: (shortId: string) => string | undefined = () => undefined): string {
+  const m = WORKFLOW_TITLE.exec(s.title);
+  if (!m) return s.title || 'Untitled session';
+  return `${m[1]}: ${titleOf(m[2]) || m[3] || 'work'}`;
+}
+
+/** "6m ago", "just now". */
+export const age = (ts: number, now: number) => { const a = ago(ts, now); return a === 'just now' ? a : `${a} ago`; };
+
+export type Connected = {
+  /** Live sessions, sorted the way the sidebar files them: needs you, working, sleeping, idle, then the most recent. */
+  live: SessionLine[];
+  /** Finished or closed, folded under "› n closed". */
+  closed: SessionLine[];
+  /** Linked sessions the row does not carry. */
+  more: number;
+  tasks: string[];
+  prs: string[];
+  plans: Array<{ plan: PriorityPlanRef; partOf: boolean }>;
+};
+
+/**
+ * Everything an open milestone is connected to, grouped by kind. Its plan is
+ * its own, else `priorityPlan` (the list passes the priority's; its screen
+ * shows that once above the milestones and passes null), then the big plans
+ * it is part of.
+ */
+export function connectedOf(m: MilestoneModel, priorityPlan: PriorityPlanRef | null): Connected {
+  const sessions = orderByState(m.sessions);
+  const own = m.plan ?? priorityPlan;
   return {
-    critical: [...critical.filter((m) => !m.done), ...(open.done ? critical.filter((m) => m.done) : [])],
-    polish: polish.filter((m) => (open.polish ? !m.done || open.done : model.action?.milestone.key === m.key || m.sessions.some(asksPerson))),
+    live: sessions.filter((s) => !isClosedSession(s)),
+    closed: sessions.filter(isClosedSession),
+    more: m.more,
+    tasks: m.tasks,
+    prs: m.prs,
+    plans: [...(own ? [{ plan: own, partOf: false }] : []), ...m.partOf.map((plan) => ({ plan, partOf: true }))],
   };
 }
 
-/** A line's one trailing thing: the priority's action, an outlined Answer, or its session's state in a word. */
-export type LineTrail =
-  | { kind: 'action'; action: NextAction<MilestoneModel> }
-  | { kind: 'answer'; session: SessionLine }
-  | { kind: 'state'; word: string };
+// ── Ten days ────────────────────────────────────────────────────────────
 
-export function lineTrail(model: Pick<PriorityModel, 'action'>, m: MilestoneModel): LineTrail | null {
-  if (m.done) return null;
-  if (model.action?.milestone.key === m.key) return { kind: 'action', action: model.action };
-  const s = lineSession(model, m);
-  if (!s) return null;
-  return asksPerson(s) ? { kind: 'answer', session: s } : { kind: 'state', word: STATE_WORD[s.state] };
+/** A day's bar, on the shared scale `peak`, shaded by how much was typed: an empty day is a 2px line. */
+export function dayBar(count: number, peak: number, max: number): { height: number; opacity: number } {
+  const top = Math.max(1, peak);
+  const share = Math.sqrt(Math.min(count, top) / top);
+  return count <= 0 ? { height: 2, opacity: 1 } : { height: Math.max(4, Math.round(share * max)), opacity: 0.45 + 0.55 * share };
 }
 
-/** The stats line: critical milestones landed over the shown days, and "N% top 3 today" once anything was typed today. */
-export function statsWords(landed: Map<string, Landed[]>, days: readonly string[], today: { total: number; topPct: number }): { landed: number; today: string | null } {
-  const n = days.reduce((c, d) => c + (landed.get(d) ?? []).filter((l) => l.tier === 'critical').length, 0);
-  return { landed: n, today: today.total > 0 ? `${today.topPct}% top 3 today` : null };
-}
+/** A day under the priority screen's strip: "Today", else its day of the month. */
+export const dayLabel = (day: string, today: boolean) => (today ? 'Today' : String(Number(day.slice(8))));
 
-/** Critical landings per shown day, for the band's bars. */
-export function landedPerDay(landed: Map<string, Landed[]>, days: readonly string[]): number[] {
-  return days.map((d) => (landed.get(d) ?? []).filter((l) => l.tier === 'critical').length);
-}
+// ── Menus ───────────────────────────────────────────────────────────────
 
-/** "3 landed · last 2d", or "· stalled 6d" in place of how long since. */
-export function momentumWords(model: Pick<PriorityModel, 'landed10' | 'lastLandedDays' | 'stalledDays'>): string {
-  const since = model.stalledDays != null
-    ? `stalled ${model.stalledDays}d`
-    : model.lastLandedDays == null ? 'none yet' : model.lastLandedDays === 0 ? 'last today' : `last ${model.lastLandedDays}d`;
-  return `${model.landed10} landed · ${since}`;
-}
-
-/** What a sheet row asks the screen to open next: a second sheet, a prompt, or a confirm. */
+/** What a sheet row asks the screen to open next: a second sheet, a prompt, or a confirm. `open` is left out on the priority's own screen. */
 export type MenuUi = {
+  open?: () => void;
+  rename: () => void;
   moveTo: () => void;
   mergeInto: () => void;
   correct: () => void;
   copyLink: () => void;
-  open: () => void;
 };
 
 /**
  * The priority's ⋯ (web's PriorityMenu): who placed it, then for the owner
- * the moves, done, set aside or restore, merge and Correct…; Open and Copy
- * link for anyone. `own` is the owner's active priorities in order.
+ * Rename, the moves, done, set aside or restore, merge and Correct…; Open
+ * and Copy link for anyone. `own` is the owner's active priorities in order.
  */
 export function priorityMenu(row: PriorityRow, own: readonly PriorityRow[], writes: PriorityWrites, ui: MenuUi): { title: string; items: SheetItem[] } {
   const rank = row.status === 'active' ? row.rank : null;
   const why = rank != null ? rankProvenance(row) : null;
-  const items: SheetItem[] = [{ label: 'Open', icon: 'arrow-right', onPress: ui.open }];
+  const items: SheetItem[] = ui.open ? [{ label: 'Open', icon: 'arrow-right', onPress: ui.open }] : [];
   if (row.mine) {
     const count = Math.max(own.length, rank ?? 0);
+    items.push({ label: 'Rename', icon: 'type', onPress: ui.rename });
     if (rank != null && rank > 1) items.push({ label: 'Move up', icon: 'arrow-up', onPress: () => writes.move(row.short_id, 'up') });
     if (rank != null && rank < count) items.push({ label: 'Move down', icon: 'arrow-down', onPress: () => writes.move(row.short_id, 'down') });
     if (rank != null && count > 1) items.push({ label: 'Move to #…', icon: 'hash', onPress: ui.moveTo });

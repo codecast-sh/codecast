@@ -1,5 +1,5 @@
 // The person's controls over their priorities (convex priorities.ts): a move,
-// a milestone's tier, done state, title and drop, a priority's done, set
+// a title, a milestone's tier, done state, title and drop, a priority's done, set
 // aside, restore and merge, a session's move and "not this", and corrections.
 // Each paints the rows at once (lib/priorities paint*): the `priorities` list
 // row, else the detail's own copy of a priority the list does not hold, and
@@ -12,7 +12,7 @@ import { asyncAction } from "./mutativeMiddleware";
 import type { PriorDone, PriorityRow, PrioritySetBy, PriorityStepTier } from "@codecast/shared/contracts/priorities";
 import {
   paintCorrection, paintCorrectionDelete, paintDetachedMove, paintDrop, paintedRow, paintMerge, paintMove, paintPriorityDone, paintRename, paintSessionMove,
-  paintSessionNotThis, paintStatus, paintStepDone, paintTier, paintUndoPriorityDone, paintUndoStepDone, type PaintState, type PriorityMove,
+  paintSessionNotThis, paintStatus, paintStepDone, paintTier, paintTitle, paintUndoPriorityDone, paintUndoStepDone, type PaintState, type PriorityMove,
 } from "../lib/priorities";
 
 export type PrioritiesSliceActions = {
@@ -21,6 +21,7 @@ export type PrioritiesSliceActions = {
   setPriorityAside: (shortId: string) => Promise<unknown>;
   restorePriority: (shortId: string) => Promise<unknown>;
   setPriorityStepDone: (shortId: string, stepKey: string, done: boolean) => Promise<unknown>;
+  renamePriorityTitle: (shortId: string, title: string) => Promise<unknown>;
   renamePriorityStep: (shortId: string, stepKey: string, title: string) => Promise<unknown>;
   dropPriorityStep: (shortId: string, stepKey: string) => Promise<unknown>;
   markPriorityDone: (shortId: string) => Promise<unknown>;
@@ -64,6 +65,10 @@ export function createPrioritiesSlice(): PrioritiesSliceActions {
       const row = paintedRow(this, shortId);
       if (row) paintStepDone(row, stepKey, done, Date.now());
     }) as PrioritiesSliceActions["setPriorityStepDone"],
+    renamePriorityTitle: asyncAction(function (this: PaintState, shortId: string, title: string) {
+      const row = paintedRow(this, shortId);
+      if (row) paintTitle(row, title);
+    }) as PrioritiesSliceActions["renamePriorityTitle"],
     renamePriorityStep: asyncAction(function (this: PaintState, shortId: string, stepKey: string, title: string) {
       const row = paintedRow(this, shortId);
       if (row) paintRename(row, stepKey, title);

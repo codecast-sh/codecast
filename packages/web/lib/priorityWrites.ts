@@ -98,6 +98,7 @@ export function priorityWrites(onError: (message: string) => void): PriorityWrit
         () => undoStepDone(id, key, setBy),
       );
     },
+    renamePriority: (id, title) => run(() => st().renamePriorityTitle(id, title)),
     renameStep: (id, key, title) => run(() => st().renamePriorityStep(id, key, title)),
     dropStep: (id, key) => run(() => st().dropPriorityStep(id, key)),
     markDone: (id) => {

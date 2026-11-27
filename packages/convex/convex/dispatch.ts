@@ -1821,6 +1821,8 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     ctx.runMutation!((api as any).priorities.setStepDone, { short_id: shortId, step_key: stepKey, done }),
   renamePriorityStep: async (ctx, _userId, [shortId, stepKey, title]: [string, string, string]) =>
     ctx.runMutation!((api as any).priorities.renameStep, { short_id: shortId, step_key: stepKey, title }),
+  renamePriorityTitle: async (ctx, _userId, [shortId, title]: [string, string]) =>
+    ctx.runMutation!((api as any).priorities.renameTitle, { short_id: shortId, title }),
   dropPriorityStep: async (ctx, _userId, [shortId, stepKey]: [string, string]) =>
     ctx.runMutation!((api as any).priorities.dropStep, { short_id: shortId, step_key: stepKey }),
   markPriorityDone: async (ctx, _userId, [shortId]: [string]) => ctx.runMutation!((api as any).priorities.markDone, { short_id: shortId }),

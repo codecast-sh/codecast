@@ -9,43 +9,26 @@ import {
   type PriorityRow,
 } from "../priorities";
 import { parseComposeLink } from "../composeLink";
-import { buildModels, distinctFrom, lastDays } from "../priorityList";
+import { buildModels, lastDays } from "../priorityList";
 import { priorityPlaceReader } from "../../store/priorityOrder";
 
-describe("distinctFrom: a session's part of \"milestone · session\"", () => {
-  const M = "Calibrate goal finding and session mapping";
-  test("a title of its own stays whole", () => {
-    expect(distinctFrom(M, "Scorer calibration", 1)).toBe("Scorer calibration");
-    expect(distinctFrom("Ship it", "Copy review", 1)).toBe("Copy review");
+describe("buildModels: each milestone's state", () => {
+  const NOW = new Date(2026, 10, 26, 9).getTime();
+  const sess = (state: string, mine = true) => ({ short_id: `jx7${state}`, conversation_id: `c-${state}`, title: state, state, mine, workflow: false, why: ["mapped"], last_active_at: NOW } as any);
+  const model = (over: Partial<PriorityRow>, sessions: any[] = [], live: (id: string) => any = () => undefined) => buildModels([row("pri-1", {
+    steps: [step("s1", "critical")],
+    links: [{ key: "s1", sessions, sessions_more: 0, plan: null, part_of: [], looks_done: false, correction_pending: false }],
+    ...over,
+  } as any)], undefined, live, lastDays(10, NOW))[0].milestones[0].state;
+  test("the inbox's live verdict sets the state; with nobody on it, the owner's active priority offers New session", () => {
+    expect(model({}, [sess("dormant")]).kind).toBe("dormant");
+    expect(model({}, [sess("dormant")], () => "needs_you").kind).toBe("needs_you");
+    expect(model({}, []).kind).toBe("start");
   });
-  test("a title that repeats the milestone shows what differs, or which session it is", () => {
-    expect(distinctFrom(M, "Calibrate goal finding: scorer pass", 1)).toBe("scorer pass");
-    expect(distinctFrom(M, "Calibrate goal finding", 2)).toBe("session 2");
-    expect(distinctFrom("Ship it", "Ship it", 3)).toBe("session 3");
-  });
-  test("a plural and its singular are one word", () => {
-    expect(distinctFrom("Calibrate the scorer", "Calibrate the scorers", 2)).toBe("session 2");
-    expect(distinctFrom("Deploy webhooks", "Deploy webhook retries", 1)).toBe("retries");
-  });
-});
-
-describe("Stalled", () => {
-  const DAY = 86_400_000;
-  const at = (y: number, mo: number, d: number, h: number) => new Date(y, mo, d, h).getTime();
-  const NOW = at(2026, 10, 26, 9);
-  const model = (first_seen_at: number, done_at?: number) => buildModels([row("pri-1", {
-    status: "active", first_seen_at,
-    steps: [{ ...step("s1", "critical"), done: false }, ...(done_at ? [{ ...step("s2", "critical", true), done_at }] : [])],
-  })], undefined, () => undefined, lastDays(10, NOW), NOW)[0];
-  test("a three-day-old priority with nothing landed is not stalled", () => {
-    expect(model(NOW - 3 * DAY).stalledDays).toBeNull();
-  });
-  test("counts calendar days, as \"last Nd\" does", () => {
-    // First seen five calendar days ago late in the evening: under five 24-hour days, five by the calendar.
-    expect(model(at(2026, 10, 21, 23)).stalledDays).toBe(5);
-    // A landing five calendar days ago reads "last 5d" and Stalled 5d together.
-    const m = model(NOW - 20 * DAY, at(2026, 10, 21, 22));
-    expect([m.lastLandedDays, m.stalledDays]).toEqual([5, 5]);
+  test("a teammate's or a past priority offers nothing to start, and a teammate's ask never needs the viewer", () => {
+    expect(model({ mine: false }).kind).toBe("none");
+    expect(model({ status: "set_aside" }).kind).toBe("none");
+    expect(model({}, [sess("needs_you", false)]).kind).toBe("idle");
   });
 });
 

@@ -1,19 +1,16 @@
 "use client";
-// /priorities: the page checked between sessions. One line of stats (critical
-// milestones landed in ten days, where today's messages went), the filters
-// (Mine, Hide done, which links to Show; kept in the address, and a bare
-// address opens the viewer's last ones: lib/rememberedFilters), what waits on
-// the person, then each priority with its one next action (lib/priorityList,
-// shared/contracts/priorityDerive). The rows come from the store
-// (useSyncPriorities feeds convex priorities.list, whose rows carry each
-// milestone's sessions and plans); typing per day is an enrichment read
-// beside them, and each session's live state is the inbox's own verdict when
-// the store holds its row. A compact view, kept per viewer, folds each
-// priority to one line. The list's own width picks the layout: the desktop
-// grid down to a Daylight-sized list, the phone layout below it.
+// /priorities: the page checked between sessions. The viewer's own active
+// priorities in rank order, each with its milestones' states in the session
+// language (components/priorities/PriorityBlock; lib/priorityList,
+// shared/contracts/priorityDerive), the ones done or set aside folded into one
+// line at the bottom, then where the viewer's messages went. The rows come
+// from the store (useSyncPriorities feeds convex priorities.list, whose rows
+// carry each milestone's sessions and plans); typing per day is an enrichment
+// read beside them, and each session's live state is the inbox's own verdict
+// when the store holds its row. The list's own width picks the layout: the
+// desktop rows down to a Daylight-sized list, the phone layout below it.
 import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
-import { AlertTriangle, Check, ChevronDown, Loader2, Play, Rows3, Target } from "lucide-react";
+import { AlertTriangle, ChevronRight, Loader2, Play, Target } from "lucide-react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import type { PriorityHistory } from "@codecast/shared/contracts/priorities";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
@@ -26,25 +23,15 @@ import { SwitchReview, type SwitchLedger } from "../consequential/ConsequentialS
 import { EmptyState } from "../ui/empty-state";
 import { SkeletonRows } from "../ui/skeleton";
 import { PageFrame, PageHeader } from "../ui/page-header";
-import { LegendButton, Mark } from "../Mark";
-import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuTrigger } from "../ui/dropdown-menu";
-import { behindLabel, nextPassLabel, ownerGroups, passDue, type OwnerGroup, type PriorityRow } from "../../lib/priorities";
-import {
-  COARSE_TALL, FILTER_PARAMS, LIST_DAYS, LIST_GRID, POLISH_SLOT, SHOW_KINDS, TOUCH_AREA, buildModels, filterParams, filtersHref, landedByDay, lastDays, layoutForWidth, listedRows, TABLET_QUERY, localDayKey, readFilters, todayOf, waitingOf,
-  type ListFilters, type ListLayout, type PriorityModel, type ShowKind,
-} from "../../lib/priorityList";
-import { useInboxStore, type ClientUI } from "../../store/inboxStore";
-import { rememberFilters, useRememberedFilters } from "../../lib/rememberedFilters";
+import { behindLabel, nextPassLabel, ownerGroups, passDue, type PriorityRow } from "../../lib/priorities";
+import { COARSE_TALL, LIST_DAYS, buildModels, lastDays, layoutForWidth, TABLET_QUERY, localDayKey, type ListLayout, type PriorityModel } from "../../lib/priorityList";
 import { cn } from "../../lib/utils";
 import { PriorityBlock, type RankDrag } from "./PriorityBlock";
+import { Legend } from "./Legend";
+import { MessagesByWorkspace } from "./MessagesByWorkspace";
 import { linkedPrRefs, linkedSessionIds, usePriorityLiveStates, usePriorityLookups } from "../../hooks/usePriorityModels";
-import { StatsLine } from "./StatsLine";
-import { WaitingOnYou } from "./Waiting";
 
 const api = _api as any;
-
-/** The compact view rides the ui prefs bag, so it follows the viewer to every device. */
-type CompactPrefs = { priorities_view?: { compact?: boolean } };
 
 export default function PrioritiesPage() {
   const workspace = useActiveWorkspaceKey();
@@ -62,24 +49,17 @@ export default function PrioritiesPage() {
   const now = useCoarseNow(30_000);
   const behind = behindLabel(meta.behind_by_ms);
 
-  const router = useRouter();
-  const params = useSearchParams();
-  // An address that names no filter opens the ones the viewer last chose here (lib/rememberedFilters).
-  const opened = useRememberedFilters("priorities", FILTER_PARAMS, params);
-  const filters = useMemo(() => readFilters(opened), [opened]);
-  const setFilters = useCallback((f: ListFilters) => {
-    rememberFilters("priorities", filterParams(f));
-    router.replace(filtersHref(f, params));
-  }, [router, params]);
-  const compact = useInboxStore((s) => !!(s.clientState.ui as CompactPrefs | undefined)?.priorities_view?.compact);
-  const updateClientUI = useInboxStore((s) => s.updateClientUI);
-  const setCompact = useCallback((on: boolean) => updateClientUI({ priorities_view: { compact: on } } as Partial<ClientUI>), [updateClientUI]);
   const [measure, layout] = useListLayout();
 
   const behindChip = behind ? <BehindChip label={behind} /> : undefined;
-  const legacy = <h1 className="flex items-center gap-2 px-4 pt-6 text-title font-semibold text-sol-text">Priorities{behindChip}</h1>;
-  // The count beside the title is what the list below it draws.
-  const listed = useMemo(() => listedRows(rows, filters).length, [rows, filters]);
+  const legacy = (
+    <header className="flex items-center gap-2 px-4 pt-6">
+      <h1 className="flex items-center gap-2 text-title font-semibold text-sol-text">Priorities{behindChip}</h1>
+      <span className="ml-auto"><Legend /></span>
+    </header>
+  );
+  // The count beside the title is the viewer's own active priorities, the list's rows.
+  const listed = useMemo(() => rows.filter((r) => r.mine && r.status === "active").length, [rows]);
 
   let body: ReactNode;
   if (rows.length === 0 && feed.error) {
@@ -93,19 +73,18 @@ export default function PrioritiesPage() {
     );
   } else if (rows.length === 0 && !feed.ready) {
     body = <SkeletonRows rows={6} className="pt-2" rowClassName="h-8" />;
-  } else if (rows.length === 0) {
+  } else if (!rows.some((r) => r.mine && r.status !== "merged")) {
+    // Teammates' priorities alone draw nothing here: the list is the viewer's own.
     body = <NoPrioritiesYet nextPass={nextPassLabel(meta.next_pass_at, now)} running={pass.running || passDue(meta, now)} onRun={pass.run} />;
   } else {
-    body = <PrioritiesView rows={rows} history={history} now={now} layout={layout} filters={filters} onFilters={setFilters} compact={compact} onCompact={setCompact} />;
+    body = <PrioritiesView rows={rows} history={history} now={now} layout={layout} />;
   }
 
   return (
     <PageFrame
-      header={<PageHeader legacy={legacy} title="Priorities" glyph={<Mark id="entity.priority" labeled><Target className="size-4 shrink-0 text-sol-text-muted" aria-hidden /></Mark>} count={rows.length ? listed : null} status={behindChip} actions={<LegendButton lead="Priorities" />} />}
-      // The side padding is the gutter a wide list's ⋯ menus sit in (PriorityBlock C_MENU), 32px: from 544px a list can be wide (520px).
-      // Classic's shell pads 24px at sm and 32px from lg.
-      legacyColumn="mx-auto w-full max-w-[1280px] min-[544px]:px-4 min-[640px]:px-2 min-[1024px]:px-0"
-      column="mx-auto w-full max-w-[1280px] px-3 pb-16 pt-3 min-[544px]:px-10"
+      header={<PageHeader legacy={legacy} title="Priorities" icon={Target} count={rows.length ? listed : null} status={behindChip} actions={<Legend />} />}
+      legacyColumn="mx-auto w-full max-w-[1280px]"
+      column="mx-auto w-full max-w-[1280px] px-3 pb-16 sm:px-6"
     >
       <div ref={measure}>{body}</div>
     </PageFrame>
@@ -184,152 +163,70 @@ export function NoPrioritiesYet({ nextPass, running, onRun }: { nextPass: string
   );
 }
 
-export function PrioritiesView({ rows, history, now, layout, filters, onFilters, compact, onCompact }: {
+export function PrioritiesView({ rows, history, now, layout }: {
   rows: PriorityRow[];
   history: PriorityHistory | undefined;
   now: number;
   layout: ListLayout;
-  filters: ListFilters;
-  onFilters: (f: ListFilters) => void;
-  compact: boolean;
-  onCompact: (on: boolean) => void;
 }) {
-  const scoped = useMemo(() => rows.filter((r) => r.status !== "merged" && (!filters.mine || r.mine)), [rows, filters.mine]);
-  const visible = useMemo(() => listedRows(rows, filters), [rows, filters]);
+  // Only the viewer's own: active in rank order, then done, quiet and set aside.
+  const own = useMemo(() => ownerGroups(rows).find((g) => g.mine) ?? { active: [], past: [] }, [rows]);
+  const shown = useMemo(() => [...own.active, ...own.past], [own]);
   const days = useMemo(() => lastDays(LIST_DAYS, now), [now]);
   const todayIndex = days.indexOf(localDayKey(now));
-  const ids = useMemo(() => linkedSessionIds(visible), [visible]);
+  const ids = useMemo(() => linkedSessionIds(shown), [shown]);
   const live = usePriorityLiveStates(ids, now);
-  const models = useMemo(() => buildModels(visible, history, live, days, now), [visible, history, live, days, now]);
-  const waiting = useMemo(() => waitingOf(models), [models]);
-  const landed = useMemo(() => landedByDay(scoped, days), [scoped, days]);
-  const today = useMemo(() => todayOf(history, rows, now), [history, rows, now]);
+  const models = useMemo(() => buildModels(shown, history, live, days), [shown, history, live, days]);
   const peak = useMemo(() => Math.max(1, ...models.flatMap((m) => m.counts)), [models]);
-
-  const prs = useMemo(() => linkedPrRefs(visible), [visible]);
+  const prs = useMemo(() => linkedPrRefs(shown), [shown]);
   const lookups = usePriorityLookups(ids, prs);
   const writes = usePriorityWrites();
+  const [pastOpen, setPastOpen] = useState(false);
   // A drag of the viewer's rank on a desktop list: which row, and where it would land.
   const [drag, setDrag] = useState<{ id: string; over: string | null; after: boolean } | null>(null);
 
-  const groups = ownerGroups(visible);
   const byId = new Map(models.map((m) => [m.row.short_id, m]));
-  const dragOf = (g: OwnerGroup, r: PriorityRow): RankDrag | undefined => {
-    if (layout !== "wide" || !g.mine || r.status !== "active") return undefined;
-    const ids = g.active.map((x) => x.short_id);
-    const ours = !!drag && ids.includes(drag.id);
+  const activeIds = own.active.map((x) => x.short_id);
+  const dragOf = (r: PriorityRow): RankDrag | undefined => {
+    if (layout !== "wide" || r.status !== "active") return undefined;
     return {
       dragging: drag?.id === r.short_id,
-      accepts: ours && drag!.id !== r.short_id,
-      over: ours && drag!.id !== r.short_id && drag!.over === r.short_id ? (drag!.after ? "after" : "before") : null,
+      accepts: !!drag && drag.id !== r.short_id,
+      over: drag && drag.id !== r.short_id && drag.over === r.short_id ? (drag.after ? "after" : "before") : null,
       start: () => setDrag({ id: r.short_id, over: null, after: false }),
       end: () => setDrag(null),
       hover: (after) => setDrag((d) => (d && (d.over !== r.short_id || d.after !== after) ? { ...d, over: r.short_id, after } : d)),
       drop: (after) => {
         if (!drag) return;
-        const rest = ids.filter((x) => x !== drag.id);
+        const rest = activeIds.filter((x) => x !== drag.id);
         writes.move(drag.id, rest.indexOf(r.short_id) + (after ? 1 : 0) + 1);
         setDrag(null);
       },
     };
   };
-  const block = (m: PriorityModel | undefined, g: OwnerGroup) => m && (
-    <PriorityBlock key={m.row.short_id} model={m} layout={layout} compact={compact} filters={filters} todayIndex={todayIndex} peak={peak} now={now} lookups={lookups} drag={dragOf(g, m.row)} />
-  );
+  const block = (r: PriorityRow) => {
+    const m: PriorityModel | undefined = byId.get(r.short_id);
+    return m && <PriorityBlock key={r.short_id} model={m} layout={layout} days={days} todayIndex={todayIndex} peak={peak} now={now} lookups={lookups} drag={dragOf(r)} />;
+  };
   return (
-    <div data-priorities data-layout={layout} data-compact={compact || undefined} className="[container-type:inline-size]">
-      <StatsLine days={days} landed={landed} todayIndex={todayIndex} today={today} loose={history?.unassigned_today ?? []} now={now} layout={layout} />
-      <FilterBar filters={filters} onChange={onFilters} compact={compact} onCompact={onCompact} layout={layout} />
-      {filters.mine && <WaitingOnYou items={waiting} now={now} layout={layout} />}
-      {layout === "wide" && (
-        <div aria-hidden className={cn(LIST_GRID.wide, "border-b border-sol-border/50 pb-1 text-mark font-medium uppercase tracking-wide text-sol-text-dim")}>
-          <span className="col-start-3 flex w-full justify-end gap-2"><span className="px-1">Critical</span><span className={cn(POLISH_SLOT, compact && "[@container(max-width:44rem)]:hidden")} /></span>
-          <span className="col-start-4 justify-self-center">Today</span>
-          <span className="col-start-5">10 days</span>
+    <div data-priorities data-layout={layout} className="[container-type:inline-size]">
+      <ol data-active>{own.active.map(block)}</ol>
+      {own.past.length > 0 && (
+        <div data-past-priorities className="mt-1 border-t border-sol-border/50 pt-2">
+          <button
+            type="button"
+            data-past-toggle
+            aria-expanded={pastOpen}
+            onClick={() => setPastOpen((o) => !o)}
+            className="-ml-1 inline-flex min-h-6 items-center gap-1 rounded px-1 text-mark font-semibold uppercase tracking-wide text-sol-text-dim hover:bg-sol-bg-alt hover:text-sol-text [@media(pointer:coarse)]:min-h-11"
+          >
+            Past <span className="font-normal tabular-nums">{own.past.length}</span>
+            <ChevronRight className={cn("size-3 transition-transform", pastOpen && "rotate-90")} aria-hidden />
+          </button>
+          {pastOpen && <ol>{own.past.map(block)}</ol>}
         </div>
       )}
-      {groups.map((g) => (
-        <section key={g.user_id} data-owner={g.user_id} className={cn(!filters.mine && "mb-6")}>
-          {!filters.mine && <h2 className="mb-1 border-b border-sol-border/60 pb-1.5 pt-2 text-ui font-semibold text-sol-text">{g.mine ? "You" : g.owner || "Teammate"}</h2>}
-          <ol>{[...g.active, ...g.past].map((r) => block(byId.get(r.short_id), g))}</ol>
-        </section>
-      ))}
-    </div>
-  );
-}
-
-const SHOW_LABELS: Record<ShowKind, string> = { sessions: "Sessions", plans: "Plans", tasks: "Tasks", prs: "PRs", branches: "Branches", deploys: "Deploys" };
-
-/** Which priorities: two quiet segments, set apart from the Show chips. */
-function Segment({ on, onClick, children, tall, ...rest }: { on: boolean; onClick: () => void; children: ReactNode; tall?: boolean } & Record<`data-${string}`, string>) {
-  return (
-    <button
-      type="button"
-      aria-pressed={on}
-      onClick={onClick}
-      {...rest}
-      className={cn("inline-flex items-center gap-1 rounded-[5px] px-2.5 text-meta transition-colors", tall ? "h-11" : cn("h-7 [@media(pointer:coarse)]:h-11", TOUCH_AREA), on ? "bg-sol-card font-medium text-sol-text shadow-sm" : "text-sol-text-dim hover:text-sol-text")}
-    >
-      {on && <Check className="size-3" strokeWidth={2.5} />}
-      {children}
-    </button>
-  );
-}
-
-function FilterBar({ filters, onChange, compact, onCompact, layout }: { filters: ListFilters; onChange: (f: ListFilters) => void; compact: boolean; onCompact: (on: boolean) => void; layout: ListLayout }) {
-  const toggleShow = (k: ShowKind) => onChange({ ...filters, show: { ...filters.show, [k]: !filters.show[k] } });
-  const shown = SHOW_KINDS.filter((k) => filters.show[k]).length;
-  const wide = layout === "wide";
-  return (
-    // Wraps rather than clips: on a narrow list (Daylight beside the inbox) Compact goes to a second line. Under a coarse
-    // pointer the segments are 44px themselves and wrapped rows sit 16px apart, so no two press areas overlap.
-    <div data-filters className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 [@media(pointer:coarse)]:gap-y-4">
-      <div className="inline-flex shrink-0 gap-0.5 rounded-[7px] bg-sol-text/[0.06] p-0.5">
-        <Segment data-filter="mine" on={filters.mine} onClick={() => onChange({ ...filters, mine: !filters.mine })} tall={!wide}>Mine</Segment>
-        <Segment data-filter="done" on={filters.hideDone} onClick={() => onChange({ ...filters, hideDone: !filters.hideDone })} tall={!wide}>Hide done</Segment>
-      </div>
-      {wide ? (
-        <div data-show-chips className="flex items-center gap-0.5">
-          <span className="mr-1 text-meta text-sol-text-dim">Show</span>
-          {SHOW_KINDS.map((k) => (
-            <button
-              key={k}
-              type="button"
-              data-show={k}
-              aria-pressed={filters.show[k]}
-              onClick={() => toggleShow(k)}
-              className={cn("inline-flex h-6 items-center gap-1 rounded-full border px-2 text-meta transition-colors", TOUCH_AREA, filters.show[k] ? "border-sol-text-muted/60 text-sol-text" : "border-transparent text-sol-text-dim hover:border-sol-border")}
-            >
-              {filters.show[k] && <Check className="size-3" strokeWidth={2.5} />}
-              {SHOW_LABELS[k]}
-            </button>
-          ))}
-        </div>
-      ) : (
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <button type="button" data-show-menu className="ml-auto inline-flex h-11 shrink-0 items-center gap-1 whitespace-nowrap rounded-control px-2.5 text-ui text-sol-text-muted hover:bg-sol-bg-alt">
-              Show <span className="tabular-nums text-sol-text-dim">{shown}</span> <ChevronDown className="size-3.5" />
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            {SHOW_KINDS.map((k) => (
-              <DropdownMenuCheckboxItem key={k} checked={filters.show[k]} onSelect={(e) => e.preventDefault()} onCheckedChange={() => toggleShow(k)}>{SHOW_LABELS[k]}</DropdownMenuCheckboxItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      )}
-      <button
-        type="button"
-        data-compact-toggle
-        aria-pressed={compact}
-        aria-label="Compact"
-        title={compact ? "One line per milestone" : "One line per priority"}
-        onClick={() => onCompact(!compact)}
-        className={cn("inline-flex shrink-0 items-center gap-1 rounded-control px-2 text-meta", wide ? cn("ml-auto h-7", TOUCH_AREA) : "size-11 justify-center", compact ? "bg-sol-text/[0.08] text-sol-text" : "text-sol-text-dim hover:text-sol-text")}
-      >
-        <Rows3 className="size-3.5" />{wide && " Compact"}
-      </button>
+      <MessagesByWorkspace days={days} todayIndex={todayIndex} />
     </div>
   );
 }

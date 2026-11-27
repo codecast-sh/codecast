@@ -67,6 +67,9 @@ describe("priority controls ride dispatch", () => {
     await dispatch(t, ada, "renamePriorityStep", ["pri-1", "s2", "Ship it"]);
     let one = await t.run(async (ctx: any) => ctx.db.get(p1));
     expect([one.steps[0].done, one.steps[0].done_set_by, one.steps[1].title, one.steps[1].title_set_by]).toEqual([true, "person", "Ship it", "person"]);
+    await dispatch(t, ada, "renamePriorityTitle", ["pri-1", "Grader in prod"]);
+    one = await t.run(async (ctx: any) => ctx.db.get(p1));
+    expect([one.title, one.title_set_by]).toEqual(["Grader in prod", "person"]);
     await dispatch(t, ada, "dropPriorityStep", ["pri-1", "s2"]);
     one = await t.run(async (ctx: any) => ctx.db.get(p1));
     expect(one.steps[1].dropped).toBe(true);

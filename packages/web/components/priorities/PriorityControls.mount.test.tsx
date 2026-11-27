@@ -5,10 +5,10 @@
 // (convex/dispatch.ts): the row's ⋯ (Move up and down, Move to #, Mark done,
 // Set aside, Restore, Merge into… behind its review, Correct…), each
 // milestone's ⋯ (Done, Rename in place, Move to polish, Drop… behind its
-// review, Correct…) and its gutter toggle, each session's ⋯ (Not this
-// milestone, Not this priority, Move to…), a drag of the rank, and the page's
-// Correct… and correction delete. Rank provenance reads once per surface. A
-// teammate's priority shows no write control anywhere.
+// review, Correct…), each session's ⋯ (Not this milestone, Not this
+// priority, Move to…), a drag of the rank, and the page's Correct… and
+// correction delete. Rank provenance reads once per surface. A teammate's
+// priority is not on the list, and shows no write control anywhere.
 // Run: cd packages/web && bun test --isolate components/priorities/PriorityControls.mount.test.tsx
 import { afterAll, beforeEach, expect, mock, test } from "bun:test";
 import { fixtureId, installDom, installMissingBackend, seedViewer, TEAM_ID, VIEWER_ID } from "../../test-helpers/missingBackend";
@@ -39,7 +39,7 @@ const { PrioritiesView } = await import("./PrioritiesPage");
 const { default: PriorityPage } = await import("./PriorityPage");
 const { PriorityCard } = await import("./PriorityRef");
 const { usePriorities } = await import("../../hooks/usePriorities");
-const { lastDays, readFilters } = await import("../../lib/priorityList");
+const { lastDays } = await import("../../lib/priorityList");
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -53,7 +53,7 @@ const sess = (tag: string, title: string, state: string, extra: Record<string, u
 });
 const links = (key: string, sessions: unknown[], extra: Record<string, unknown> = {}) => ({ key, sessions, sessions_more: 0, plan: null, part_of: [], looks_done: false, correction_pending: false, ...extra });
 const counts = (steps: any[]) => ({ critical_done: steps.filter((s) => s.tier === "critical" && s.done).length, critical_total: steps.filter((s) => s.tier === "critical").length });
-const base = { summary: "", person_pos: null, rank_source: "ai", serves: null, workspace: `team:${TEAM_ID}`, user_id: VIEWER_ID, owner: "Dana Viewer", owner_image: null, mine: true, first_seen_at: NOW - 3 * DAY, last_active_at: NOW, done_at: null, session_count: 1, session_count_more: false, status: "active", status_set_by: "pass", correction_pending: false, plan: null };
+const base = { summary: "", person_pos: null, rank_source: "ai", serves: null, workspace: `team:${TEAM_ID}`, user_id: VIEWER_ID, owner: "Dana Viewer", mine: true, first_seen_at: NOW - 3 * DAY, last_active_at: NOW, done_at: null, session_count: 1, session_count_more: false, status: "active", status_set_by: "pass", correction_pending: false, plan: null };
 const row = (id: number, title: string, rank: number, steps: any[], extra: Record<string, unknown> = {}) => ({
   ...base, _id: fixtureId(`pri${id}`), short_id: `pri-${id}`, title, rank, ai_rank: rank, steps, counts: counts(steps), sessions: [], links: steps.map((s) => links(s.key, [])), ...extra,
 });
@@ -82,11 +82,10 @@ beforeEach(() => {
 });
 afterAll(() => (useInboxStore.getState() as any)._clearRuntimeBindings?.());
 
-const FILTERS = { ...readFilters(new URLSearchParams()), mine: false, hideDone: false };
 /** The list as /priorities draws it, read from the store so each paint shows. */
-function Live({ layout = "wide", filters = FILTERS }: { layout?: "wide" | "phone"; filters?: typeof FILTERS }) {
+function Live({ layout = "wide" }: { layout?: "wide" | "phone" }) {
   const live = usePriorities();
-  return <PrioritiesView rows={live} history={{ days, lanes: [] } as any} now={NOW} layout={layout} filters={filters} onFilters={() => {}} compact={false} onCompact={() => {}} />;
+  return <PrioritiesView rows={live} history={{ days, lanes: [] } as any} now={NOW} layout={layout} />;
 }
 const mount = (node: React.ReactNode) => mountSurface(<MemoryRouter initialEntries={["/priorities"]}>{node}</MemoryRouter>);
 
@@ -113,6 +112,7 @@ const dispatched = async (name: string) => {
   for (let i = 0; i < 50 && !calls.some(([a]) => a === name); i++) await tick();
   return calls.filter(([a]) => a === name).map(([, args]) => args);
 };
+const openPast = () => press(document.querySelector("[data-past-toggle]")!);
 const priorityMenu = (id: string) => block(id).querySelector(`[data-priority-menu="${id}"]`)!;
 const ranks = () => [...document.querySelectorAll("li[data-priority]")].filter((li) => li.getAttribute("data-status") === "active").map((li) => `${li.getAttribute("data-priority")}#${li.querySelector("[data-rank-source]")?.textContent}`);
 
@@ -170,6 +170,7 @@ test("a drag of the rank number drops the priority where it is let go, and rides
 test("Mark done, Set aside and Restore paint the row's status and ride their overrides", async () => {
   const page = await mount(<Live />);
   try {
+    await openPast();
     await choose(priorityMenu("pri-3"), '[data-act="mark-done"]');
     expect(block("pri-3").getAttribute("data-status")).toBe("done");
     expect([stored("pri-3").status_set_by, stored("pri-3").ai_rank]).toEqual(["person", null]);
@@ -185,13 +186,14 @@ test("Mark done, Set aside and Restore paint the row's status and ride their ove
   }
 }, 60_000);
 
-test("with Hide done on, a check-off leaves the list, and its receipt's Undo (or ⌘Z) brings it back as it was", async () => {
+test("a check-off leaves the open milestones (or the active list), and its receipt's Undo (or ⌘Z) brings it back as it was", async () => {
   const { performUndo } = await import("../../store/undoStack");
-  const page = await mount(<Live filters={{ ...FILTERS, hideDone: true }} />);
+  const page = await mount(<Live />);
   try {
-    // A milestone: gone from the list, then back open and the pass's again.
-    await press(line("pri-2", "s1").querySelector('[data-milestone-toggle="s1"]')!);
+    // A milestone: into DONE, then back open and the pass's again.
+    await choose(line("pri-2", "s1").querySelector('[data-milestone-menu="s1"]')!, '[data-act="step-done"]');
     expect(line("pri-2", "s1")).toBeNull();
+    expect(block("pri-2").querySelector('[data-section="done"]')!.textContent).toBe("Done 1");
     const undoStep = undoButtons.get("Marked “Auto-deploy from main” done");
     expect(undoStep).toBeDefined();
     await act(async () => undoStep!());
@@ -200,7 +202,7 @@ test("with Hide done on, a check-off leaves the list, and its receipt's Undo (or
     expect(stored("pri-2").steps[0].done_set_by).toBeUndefined();
     expect(await dispatched("undoPriorityStepDone")).toEqual([["pri-2", "s1", null]]);
 
-    // A priority: gone from the list, then back at #1 by ⌘Z.
+    // A priority: gone from the active list into Past, then back at #1 by ⌘Z.
     await choose(priorityMenu("pri-1"), '[data-act="mark-done"]');
     expect(block("pri-1")).toBeNull();
     expect(toasts).toContain("Marked “Cam's eval requests flow” done");
@@ -260,10 +262,15 @@ test("a milestone's ⋯: Done, Rename in place, Move to polish and Correct… pa
     const menu = () => line("pri-3", "s1").querySelector('[data-milestone-menu="s1"]')!;
     await choose(menu(), '[data-act="step-done"]');
     expect(stored("pri-3").steps[0].done).toBe(true);
-    expect(block("pri-3").querySelector("[data-progress]")?.textContent).toBe("1/1");
+    expect(block("pri-3").querySelector('[data-section="done"]')!.textContent).toBe("Done 1");
     expect(await dispatched("setPriorityStepDone")).toEqual([["pri-3", "s1", true]]);
 
     const ship = () => line("pri-2", "s1").querySelector('[data-milestone-menu="s1"]')!;
+    // Rename in the ⋯ is for a coarse pointer; a mouse double-clicks the title.
+    await key(ship(), "Enter");
+    expect(item('[data-act="rename"]').className).toContain("[@media(pointer:fine)]:hidden");
+    await key(item('[data-act="rename"]'), "Escape");
+    await tick();
     await choose(ship(), '[data-act="rename"]');
     await page.waitFor(() => !!line("pri-2", "s1").querySelector("[data-rename-input]"));
     const input = line("pri-2", "s1").querySelector("[data-rename-input]") as HTMLInputElement;
@@ -305,40 +312,23 @@ test("Drop… asks first, then the milestone leaves the row and rides dropPriori
   }
 }, 60_000);
 
-test("the milestone's whole left gutter toggles Done, a 44px target on a phone", async () => {
-  const page = await mount(<Live layout="phone" />);
-  try {
-    const toggle = line("pri-2", "s1").querySelector('[data-milestone-toggle="s1"]') as HTMLElement;
-    expect(toggle.className).toContain("h-[52px]");
-    expect(toggle.className).toContain("-ml-[30px]");
-    await press(toggle);
-    expect(stored("pri-2").steps[0].done).toBe(true);
-    // The press toggles Done, never the line's expansion.
-    expect(line("pri-2", "s1").querySelector("[data-milestone-detail]")).toBeNull();
-    await press(line("pri-2", "s1").querySelector('[data-milestone-toggle="s1"]')!);
-    expect(stored("pri-2").steps[0].done).toBe(false);
-    expect(await dispatched("setPriorityStepDone")).toEqual([["pri-2", "s1", true], ["pri-2", "s1", false]]);
-    // Every ⋯ on the phone is always shown and 44px.
-    for (const b of document.querySelectorAll("[data-priority-menu], [data-milestone-menu]")) {
-      expect(b.className).toContain("size-11");
-      expect(b.className).not.toContain("opacity-0");
+test("each ⋯ sits right after its title, shown on hover, and always on a phone or a touch screen", async () => {
+  for (const layout of ["wide", "phone"] as const) {
+    const page = await mount(<Live layout={layout} />);
+    try {
+      const head = block("pri-2").querySelector("[data-priority-head]")!;
+      expect(priorityMenu("pri-2").closest("span.group\\/head")!.firstElementChild!.hasAttribute("data-priority-title")).toBe(true);
+      const title = line("pri-2", "s1").querySelector("[data-milestone-title]")!;
+      expect(title.nextElementSibling!.querySelector('[data-milestone-menu="s1"]')).not.toBeNull();
+      for (const b of [priorityMenu("pri-2"), line("pri-2", "s1").querySelector('[data-milestone-menu="s1"]')!]) {
+        expect(b.className).toContain("opacity-0");
+        expect(b.className).toContain("[@media(hover:none)]:opacity-100");
+        expect(b.className).toContain("[@media(pointer:coarse)]:opacity-100");
+      }
+      expect(head).not.toBeNull();
+    } finally {
+      await page.unmount();
     }
-    // The box sits by the title's first line, not the middle of a title that wraps or carries its marks under it:
-    // the line starts its parts at the top, and the press area rises 8px and draws the box 15px down, beside the first line.
-    expect(line("pri-2", "s1").querySelector("[data-line-title]")!.className).toContain("items-start");
-    for (const c of ["-mt-2", "items-start", "pt-[15px]"]) expect(toggle.className.split(" ")).toContain(c);
-  } finally {
-    await page.unmount();
-  }
-  // A wide line starts its parts at the top on every pointer, so a title that wraps grows downward with the box by its first line;
-  // Daylight (wide, coarse pointer) also draws the tall press area.
-  const wide = await mount(<Live />);
-  try {
-    const title = line("pri-2", "s1").querySelector("[data-line-title]")!;
-    expect(title.className.split(" ")).toContain("items-start");
-    expect(title.querySelector("[data-milestone-toggle]")!.className).toContain("[@media(pointer:coarse)]:-mt-2 [@media(pointer:coarse)]:-mb-4 [@media(pointer:coarse)]:h-[52px]");
-  } finally {
-    await wide.unmount();
   }
 }, 60_000);
 
@@ -347,7 +337,7 @@ test("a session's ⋯: Not this milestone, Move to… and Not this priority pain
   try {
     const open = async () => {
       await press(line("pri-1", "s1").querySelector('[role="button"]')!);
-      await page.waitFor(() => !!line("pri-1", "s1").querySelector("[data-milestone-detail]"));
+      await page.waitFor(() => !!line("pri-1", "s1").querySelector("[data-connected]"));
     };
     await open();
     const sessionMenu = () => line("pri-1", "s1").querySelector(`[data-session-menu="${FEED.short_id}"]`)!;
@@ -361,7 +351,7 @@ test("a session's ⋯: Not this milestone, Move to… and Not this priority pain
     expect(await dispatched("movePrioritySession")).toEqual([[FEED.short_id, "pri-1", "pri-1", "s2"]]);
 
     await press(line("pri-1", "s2").querySelector('[role="button"]')!);
-    await page.waitFor(() => !!line("pri-1", "s2").querySelector("[data-milestone-detail]"));
+    await page.waitFor(() => !!line("pri-1", "s2").querySelector("[data-connected]"));
     await choose(line("pri-1", "s2").querySelector(`[data-session-menu="${FEED.short_id}"]`)!, '[data-act="not-milestone"]');
     expect(stored("pri-1").links.every((l: any) => l.sessions.length === 0)).toBe(true);
     expect(stored("pri-1").sessions[0].step_key).toBeNull();
@@ -370,7 +360,7 @@ test("a session's ⋯: Not this milestone, Move to… and Not this priority pain
     // Back on a milestone, then off the priority.
     useInboxStore.getState().syncTable("priorities", rows() as any);
     await page.waitFor(() => stored("pri-1").links[0].sessions.length === 1 && !!line("pri-1", "s1"));
-    if (!line("pri-1", "s1").querySelector("[data-milestone-detail]")) await open();
+    if (!line("pri-1", "s1").querySelector("[data-connected]")) await open();
     await page.waitFor(() => !!sessionMenu());
     await choose(sessionMenu(), '[data-act="not-priority"]');
     expect(stored("pri-1").sessions).toEqual([]);
@@ -381,35 +371,16 @@ test("a session's ⋯: Not this milestone, Move to… and Not this priority pain
   }
 }, 60_000);
 
-test("a teammate's priority shows no write control: no toggles, no milestone or session ⋯, a menu of Copy link alone", async () => {
+test("a teammate's priority is not on the list, nor a set-aside one until Past opens", async () => {
   const page = await mount(<Live />);
   try {
-    const mate = block("pri-4");
-    expect(mate.querySelector("[data-milestone-toggle]")).toBeNull();
-    expect(mate.querySelector("[data-milestone-menu]")).toBeNull();
-    expect(mate.querySelector("[data-rank-handle]")).toBeNull();
-    await press(mate.querySelector('li[data-milestone="s1"] [role="button"]')!);
-    await page.waitFor(() => !!mate.querySelector("[data-milestone-detail]"));
-    expect(mate.querySelector("[data-session-row]")).not.toBeNull();
-    expect(mate.querySelector("[data-session-menu]")).toBeNull();
-    await key(priorityMenu("pri-4"), "Enter");
-    expect([...document.querySelectorAll('[role="menuitem"]')].map((n) => n.getAttribute("data-act"))).toEqual(["copy-link"]);
-    // A teammate's priority shows the owner's real rank, in its menu and its rank cell.
-    expect(document.querySelector("[data-menu-rank-by]")?.textContent).toBe("#1 · ranked by AI");
-    expect(mate.querySelector("[data-rank-source]")?.textContent).toBe("1");
+    expect(block("pri-4")).toBeNull();
+    expect(block("pri-5")).toBeNull();
+    await openPast();
+    expect(block("pri-5")).not.toBeNull();
+    expect(block("pri-4")).toBeNull();
   } finally {
     await page.unmount();
-  }
-  // On the list, wide and phone, a teammate's milestone is a status mark, never a checkbox.
-  for (const layout of ["wide", "phone"] as const) {
-    const list = await mount(<Live layout={layout} />);
-    try {
-      const mate = block("pri-4");
-      expect(mate.querySelector('li[data-milestone="s1"] [data-milestone-mark="open"]')).not.toBeNull();
-      expect(mate.querySelector('[aria-label="Open"]:not([data-milestone-mark]), [aria-label="Done"]:not([data-milestone-mark])')).toBeNull();
-    } finally {
-      await list.unmount();
-    }
   }
 }, 60_000);
 
@@ -429,7 +400,6 @@ test("the page: Correct… beside Share writes a correction that lists at once; 
   const page = await inRouter(<PriorityPage id="pri-2" />);
   try {
     await page.waitFor(() => !!page.container.querySelector("[data-corrections]"));
-    expect(page.container.querySelector("[data-rank-by]")?.textContent).toBe("ranked by AI");
     await press(page.container.querySelector("[data-correct-priority]")!);
     await page.waitFor(() => !!document.querySelector("[data-correct-text]"));
     await typeInto(document.querySelector("[data-correct-text]") as HTMLTextAreaElement, "Notes belong to the deploy milestone");
@@ -453,20 +423,21 @@ test("the page: Correct… beside Share writes a correction that lists at once; 
   }
 }, 60_000);
 
-test("the page: a milestone's box and ⋯ write as on the list, and the header's ⋯ holds the priority's controls", async () => {
+test("the page: a milestone's ⋯ writes as on the list, and the header's ⋯ holds the priority's controls", async () => {
   answers["priorities:show"] = DETAIL();
   const page = await inRouter(<PriorityPage id="pri-2" />);
   try {
-    await page.waitFor(() => !!page.container.querySelector("[data-critical-path]"));
-    await press(page.container.querySelector('[data-critical-path] [data-milestone-toggle="s1"]')!);
+    await page.waitFor(() => !!page.container.querySelector("[data-milestones]"));
+    await choose(page.container.querySelector('[data-milestones] [data-milestone-menu="s1"]')!, '[data-act="step-done"]');
     expect(stored("pri-2").steps[0].done).toBe(true);
-    expect(page.container.querySelector("[data-critical-path]")!.textContent).toContain("Landed");
+    expect(page.container.querySelector('[data-milestones] [data-section="done"]')!.textContent).toBe("Done 1");
     expect(await dispatched("setPriorityStepDone")).toEqual([["pri-2", "s1", true]]);
-    await choose(page.container.querySelector('[data-polish-list] [data-milestone-menu="p1"]')!, '[data-act="tier"]');
-    expect(page.container.querySelector("[data-polish-list]")).toBeNull();
+    await press(page.container.querySelector('[data-milestones] [data-section="polish"]')!);
+    await choose(page.container.querySelector('[data-milestones] [data-milestone-menu="p1"]')!, '[data-act="tier"]');
+    expect(page.container.querySelector('[data-section="polish"]')).toBeNull();
     expect(await dispatched("setPriorityStepTier")).toEqual([["pri-2", "p1", "critical"]]);
     await key(page.container.querySelector('[data-priority-menu="pri-2"]')!, "Enter");
-    expect([...document.querySelectorAll('[role="menuitem"]')].map((n) => n.getAttribute("data-act"))).toEqual(["move-up", "move-down", "move-to", "mark-done", "set-aside", "merge", "correct", "copy-link"]);
+    expect([...document.querySelectorAll('[role="menuitem"]')].map((n) => n.getAttribute("data-act"))).toEqual(["rename", "move-up", "move-down", "move-to", "mark-done", "set-aside", "merge", "correct", "copy-link"]);
   } finally {
     await page.unmount();
   }
@@ -476,73 +447,56 @@ test("the page and the card of a teammate's priority show no write control", asy
   answers["priorities:show"] = { ...DETAIL(), ...rows()[3], steps: rows()[3].steps.map((s) => ({ ...s, sessions: [] })), corrections: [], other_sessions: [] };
   const page = await inRouter(<PriorityPage id="pri-4" />);
   try {
-    await page.waitFor(() => !!page.container.querySelector("[data-critical-path]"));
-    for (const sel of ["[data-correct-priority]", "[data-milestone-toggle]", "[data-milestone-menu]", "[data-delete-correction]"]) expect(page.container.querySelector(sel)).toBeNull();
-    // A teammate's active priority shows the owner's real rank, never "Set aside".
-    const meta = page.container.querySelector("[data-priority-meta]")!;
-    expect(meta.querySelector("[data-rank]")?.textContent).toBe("#1");
-    expect(meta.querySelector("[data-rank-by]")?.textContent).toBe("ranked by AI");
-    expect(meta.textContent).not.toContain("Set aside");
-    // Each milestone is a status mark, not a box that looks pressable.
-    expect(page.container.querySelector('[data-critical-path] [data-milestone="s1"] [data-milestone-mark="open"]')).not.toBeNull();
-    expect(page.container.querySelector('[data-critical-path] [aria-label="Open"]:not([data-milestone-mark])')).toBeNull();
+    await page.waitFor(() => !!page.container.querySelector("[data-milestones]"));
+    for (const sel of ["[data-correct-priority]", "[data-milestone-menu]", "[data-session-menu]", "[data-state-action]", "[data-delete-correction]"]) expect(page.container.querySelector(sel)).toBeNull();
+    // Its title is no rename.
+    await act(async () => { page.container.querySelector("h1")!.dispatchEvent(new window.MouseEvent("dblclick", { bubbles: true })); });
+    expect(page.container.querySelector("[data-rename-input]")).toBeNull();
+    // Each milestone shows its state: Sam's session sleeps on it.
+    expect(page.container.querySelector('[data-milestones] li[data-milestone="s1"]')!.getAttribute("data-state")).toBe("dormant");
   } finally {
     await page.unmount();
   }
   const card = await mount(<PriorityCard row={stored("pri-4")} />);
   try {
-    expect(card.container.querySelector("[data-milestone-toggle]")).toBeNull();
+    expect(card.container.querySelector("[data-state-action]")).toBeNull();
   } finally {
     await card.unmount();
   }
 }, 60_000);
 
-test("the card: the rank badge, and the owner marks an open critical milestone done from it", async () => {
-  const card = await mount(<PriorityCard row={stored("pri-3")} />);
+test("the card: provenance once, and its open milestones with their states", async () => {
+  const card = await mount(<PriorityCard row={stored("pri-1")} />);
   try {
-    expect(card.container.querySelector("[data-rank-mark]")?.textContent).toBe("3");
-    await press(card.container.querySelector('[data-milestone-toggle="s1"]')!);
-    expect(stored("pri-3").steps[0].done).toBe(true);
-    expect(await dispatched("setPriorityStepDone")).toEqual([["pri-3", "s1", true]]);
+    expect(card.text()).toContain("#1 ranked by AI");
+    const listed = [...card.container.querySelectorAll("li[data-milestone]")].map((li) => `${li.getAttribute("data-milestone")}:${li.getAttribute("data-state")}`);
+    expect(listed).toEqual(["s1:dormant", "s2:start"]);
+    expect(card.container.querySelector('[data-state-action="start"]')!.getAttribute("href")).toContain("pri-1");
   } finally {
     await card.unmount();
   }
 }, 60_000);
 
-test("on a phone the row's correction pending sits on the meta line, so the title keeps its width", async () => {
+test("the row's correction pending sits by its title, on both layouts", async () => {
   useInboxStore.getState().syncTable("priorities", [{ ...stored("pri-2"), correction_pending: true }] as any, { isDelta: true });
-  const phone = await mount(<Live layout="phone" />);
-  try {
-    const mark = block("pri-2").querySelector("[data-correction-pending]")!;
-    expect(mark.closest("[data-meta]")).not.toBeNull();
-  } finally {
-    await phone.unmount();
-  }
-  const wide = await mount(<Live />);
-  try {
-    expect(block("pri-2").querySelector("[data-correction-pending]")!.closest("[data-meta]")).toBeNull();
-  } finally {
-    await wide.unmount();
+  for (const layout of ["wide", "phone"] as const) {
+    const page = await mount(<Live layout={layout} />);
+    try {
+      expect(block("pri-2").querySelector("[data-priority-head] [data-correction-pending]")).not.toBeNull();
+    } finally {
+      await page.unmount();
+    }
   }
 }, 60_000);
 
-test("on the desktop grid each ⋯ keeps its 24px look and a coarse pointer presses 44px; lines and the Done toggle make room for it", async () => {
+test("on the desktop list each ⋯ keeps its 24px look and a coarse pointer presses 44px around it", async () => {
   const page = await mount(<Live />);
   try {
     for (const b of [priorityMenu("pri-1"), line("pri-1", "s1").querySelector('[data-milestone-menu="s1"]')!]) {
       expect(b.className).toContain("size-6");
-      // 44px each way under a coarse pointer, grown only leftward: each ⋯ sits in the page's right gutter, so the page never scrolls sideways.
-      expect(b.className).toContain("[@media(pointer:coarse)]:after:-inset-y-2.5 [@media(pointer:coarse)]:after:-left-5 [@media(pointer:coarse)]:after:right-0");
-      // Always shown where a finger points, as where nothing hovers.
-      if (b.hasAttribute("data-milestone-menu")) {
-        expect(b.className).toContain("[@media(hover:none)]:opacity-100");
-        expect(b.className).toContain("[@media(pointer:coarse)]:opacity-100");
-        // Centred on the line's 48px first row under a coarse pointer (12px down), so the line's clip keeps all 44px of the press area.
-        expect(b.closest('[class*="left-full"]')!.className.split(" ")).toContain("[@media(pointer:coarse)]:top-3");
-      }
+      expect(b.className).toContain("[@media(pointer:coarse)]:after:-inset-2.5");
     }
     expect(line("pri-1", "s1").querySelector('[role="button"]')!.className).toContain("[@media(pointer:coarse)]:min-h-11");
-    expect(line("pri-1", "s1").querySelector("[data-milestone-toggle]")!.className).toContain("[@media(pointer:coarse)]:h-[52px]");
   } finally {
     await page.unmount();
   }
@@ -557,16 +511,16 @@ test("a refused write takes back only what it painted, keeps a server push that 
   toasts.length = 0;
   const page = await mount(<Live />);
   try {
-    await press(line("pri-3", "s1").querySelector('[data-milestone-toggle="s1"]')!);
+    await choose(line("pri-3", "s1").querySelector('[data-milestone-menu="s1"]')!, '[data-act="step-done"]');
     expect(stored("pri-3").steps[0].done).toBe(true);
     await dispatched("setPriorityStepDone");
     // A push from the server (a pass, another window) lands on another row before the refusal.
     useInboxStore.getState().syncTable("priorities", [{ ...stored("pri-2"), title: "One ship flow, renamed by the pass" }] as any, { isDelta: true });
     await tick();
     await act(async () => { refuse(new Error("[CONVEX M(dispatch:dispatch)] [Request ID: x] Server Error\nUncaught Error: pri-3 is Sam's priority; only they can change it")); });
-    await page.waitFor(() => stored("pri-3").steps[0].done === false && block("pri-3").querySelector("[data-progress]")?.textContent === "0/1" && toasts.length > 0);
+    await page.waitFor(() => stored("pri-3").steps[0].done === false && !!line("pri-3", "s1") && toasts.length > 0);
     expect(stored("pri-3").steps[0].done).toBe(false);
-    expect(block("pri-3").querySelector("[data-progress]")?.textContent).toBe("0/1");
+    expect(block("pri-3").querySelector('[data-section="done"]')).toBeNull();
     expect(stored("pri-2").title).toBe("One ship flow, renamed by the pass");
     expect(block("pri-2").textContent).toContain("One ship flow, renamed by the pass");
     // The check-off's receipt, then why the server refused it.
@@ -593,8 +547,9 @@ test("Looks done? is the owner's button: it marks the milestone done through set
     expect(looks.querySelector("span")!.className).toContain("rounded-full");
     await press(looks);
     expect(stored("pri-3").steps[0].done).toBe(true);
-    // The press marks it done; it never opens the line.
-    expect(line("pri-3", "s1").querySelector("[data-milestone-detail]")).toBeNull();
+    // The press marks it done (the line leaves for DONE); it never opens the line.
+    expect(line("pri-3", "s1")).toBeNull();
+    expect(block("pri-3").querySelector("[data-connected]")).toBeNull();
     expect(await dispatched("setPriorityStepDone")).toEqual([["pri-3", "s1", true]]);
     await act(async () => { refuse(new Error("[CONVEX M(dispatch:dispatch)] [Request ID: x] Server Error\nUncaught Error: pri-3 changed under you")); });
     await page.waitFor(() => stored("pri-3").steps[0].done === false && toasts.length > 0);
@@ -663,7 +618,7 @@ test("Move to… lists this priority's milestones under its name, polish after a
   const page = await mount(<Live />);
   try {
     await press(line("pri-1", "s1").querySelector('[role="button"]')!);
-    await page.waitFor(() => !!line("pri-1", "s1").querySelector("[data-milestone-detail]"));
+    await page.waitFor(() => !!line("pri-1", "s1").querySelector("[data-connected]"));
     await openSub(line("pri-1", "s1").querySelector(`[data-session-menu="${FEED.short_id}"]`)!, '[data-act="move-session"]');
     const list = document.querySelector('[data-sub-list="move-session"]')!;
     const parts = [...list.children].map((n) => n.hasAttribute("data-move-here") ? `head:${n.textContent}` : n.hasAttribute("data-move-polish") ? "polish-sep" : n.getAttribute("data-move-session-to") ?? (n.getAttribute("role") === "separator" ? "sep" : n.querySelector("[data-move-session-priority]")?.getAttribute("data-move-session-priority") ?? n.getAttribute("data-move-session-priority") ?? n.tagName));

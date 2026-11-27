@@ -1,6 +1,6 @@
 // `cast priorities`: what each person is driving at (shared/contracts/priorities.ts),
 // inferred by a pass over their own sessions, and the person's own controls:
-// rank; a milestone's tier, done state, title and drop; set aside, done,
+// rank; a title; a milestone's tier, done state, title and drop; set aside, done,
 // restore and merge; moving a session or saying it is not part of one; and
 // corrections the pass reads. Their call always wins over the pass.
 
@@ -221,6 +221,18 @@ export function registerPrioritiesCommand(program: Command, deps: PublishDeps): 
       const row: PriorityRow = await apiPost(deps, "/cli/priorities/move", { short_id: priorityId(id), to: rank });
       if (options.json) return console.log(JSON.stringify(row, null, 2));
       console.log(`ok ${row.short_id} now #${row.rank}`);
+    });
+
+  pri
+    .command("rename <id> <title...>")
+    .description("Rename a priority; the pass keeps your title")
+    .option("--json", "The updated priority as JSON")
+    .action(async (id: string, words: string[], options: { json?: boolean }) => {
+      const title = words.join(" ").trim();
+      if (!title) fail("a priority needs a title");
+      const row: PriorityRow = await apiPost(deps, "/cli/priorities/rename", { short_id: priorityId(id), title });
+      if (options.json) return console.log(JSON.stringify(row, null, 2));
+      console.log(`ok ${row.short_id} renamed`);
     });
 
   /** A milestone verb's target: "pri-3/s2". */
