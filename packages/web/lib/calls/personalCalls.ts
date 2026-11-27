@@ -2,7 +2,7 @@
 // Personal workspace, and where a task made from a call is filed. Read off the
 // call list's rows (convex callReads.shapeCallRow) and the live rooms, so the
 // page answers from the store on its first frame.
-import { dmRoomKey, isRoomlessKey, parseRoomKey } from "@codecast/shared/contracts";
+import { callParticipantKind, dmRoomKey, isRoomlessKey, parseRoomKey } from "@codecast/shared/contracts";
 import { activeTeamIdOf } from "../activeTeam";
 
 /** The viewer's id while the Personal workspace is active ("" before the
@@ -36,16 +36,20 @@ export function callIsPrivate(call: CallPrivacyRow, viewerId: string): boolean {
   return call.private === true;
 }
 
-/** Only the viewer can read it: their room of one, a private huddle with
- *  nobody else in it (an owner-only session huddle), or their own unshared
- *  recording. What Personal's Calls page lists. */
+/** Only the viewer can read it: their room of one, a private session huddle
+ *  with no other person in it (an owner-only session huddle, whose agent may
+ *  speak), or their own unshared recording. What Personal's Calls page
+ *  lists. */
 export function callOnlyMine(call: CallPrivacyRow, viewerId: string): boolean {
   if (!callIsPrivate(call, viewerId)) return false;
   if (call.room_key === dmRoomKey(viewerId) || isRoomlessKey(call.room_key)) return true;
   // A people room's key names everyone it is for; only a session room can be
   // one person's while its key names nobody.
   if (parseRoomKey(call.room_key ?? "")?.kind !== "session") return false;
-  return String(call.started_by ?? "") === viewerId && (call.participants ?? []).every((p) => String(p.id) === viewerId);
+  return (
+    String(call.started_by ?? "") === viewerId &&
+    (call.participants ?? []).every((p) => String(p.id) === viewerId || callParticipantKind(String(p.id)) === "agent")
+  );
 }
 
 /** A live room only the viewer is in and only they may enter: their room of

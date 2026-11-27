@@ -55,6 +55,8 @@ describe("the calls only the viewer can read", () => {
     expect(callOnlyMine(solo, ME)).toBe(true);
     expect(callOnlyMine({ ...solo, participants: [{ id: ME }, { id: ANN }] }, ME)).toBe(false);
     expect(callOnlyMine({ ...solo, private: false }, ME)).toBe(false);
+    // The session's agent speaking in it keeps it yours.
+    expect(callOnlyMine({ ...solo, participants: [{ id: ME }, { id: "agent:c1" }] }, ME)).toBe(true);
   });
   test("team calls and people rooms with somebody else are not Personal's", () => {
     expect(callOnlyMine(row({ room_key: "channel:ch1" }), ME)).toBe(false);
