@@ -212,3 +212,27 @@ test("Create then Esc while finishing creates nothing and keeps the dialog", asy
   expect(m.editor().getText()).toBe("");
   await m.unmount();
 });
+
+test("the language menu opens above the dialog, and Esc on it closes the menu, not the dialog", async () => {
+  const m = await mountModal();
+  const caret = m.button("Dictation settings")!;
+  await act(async () => {
+    caret.dispatchEvent(new w.PointerEvent("pointerdown", { bubbles: true, button: 0, ctrlKey: false }));
+  });
+  await flush();
+  const menu = () => w.document.querySelector('[role="menu"]') as HTMLElement | null;
+  expect(menu()).not.toBeNull();
+  // Portalled to the body: it must stack above the dialog's z-[10001] overlay.
+  expect(menu()!.className).toContain("z-[10002]");
+  const item = menu()!.querySelector('[role="menuitemcheckbox"]') as HTMLElement;
+  await act(async () => {
+    item.dispatchEvent(new w.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+  });
+  await flush();
+  expect(menu()).toBeNull();
+  expect(m.closed()).toBe(0);
+  // A second Esc, with no menu open, closes the dialog as before.
+  await m.keyOnTitle("Escape");
+  expect(m.closed()).toBe(1);
+  await m.unmount();
+});
