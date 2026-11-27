@@ -14,7 +14,7 @@ import { PendingDeliveryHeldError, createDeliveryAdmission } from "./pendingDeli
 import { handoffParentSessionId, linkPlanHandoffChild, planHandoffTarget } from "./planHandoff.js";
 import { createPendingDeliveryBatches } from "./pendingDeliveryBatches.js";
 import { pendingMessageFinished, pendingMessageOutcome, prepareTmuxDelivery, receiptSettled, TmuxDeliveryExhaustedError, TmuxDeliveryUncertainError, type TmuxDeliveryIdentity, type TmuxDeliveryJournal, tmuxDeliveryJournal } from "./tmuxDeliveryJournal.js";
-import { ACTIVE_AGENT_STATUSES, AGENT_CLIENTS, LOCAL_AGENT_CLIENTS, RESUME_BURST_SPACING_MS, CODEX_EFFORT_LEVELS, DECLARED_VERDICT_STATUSES, HEARTBEAT_FLUSH_INTERVAL_MS, MID_TURN_AGENT_STATUSES, SETTLE_VERDICT_STATUSES, SNIPPET_CATALOG, STABLE_ENV_CONVERSATION_ID, STABLE_ENV_EXCLUDE, STABLE_ENV_MODE, agentForksNatively, agentReconstitutes, authorizesTeardown, CLOUD_SESSION_SOURCES, cloudSessionSyncOn, classifyApiErrorBanner, isCloudAgentActionName, confineToOwningDevice, findModelOption, fromConvexAgentType, modelOptionKey, isClaudeAutoContinueLine, isCodexSafetyError, isLocalCommandLine, isRecoveryContinueClientId, type ApiErrorBannerKind, isMachineDeliveredMessage, isValidPaneTarget, isValidBrowserStreamKey, isMachineSetting, MACHINE_SETTINGS, machineSettingValues, snippetBySlug, verdictFromProbe, worktreeOfPath, localAgentClient, isHostedAgentType } from "@codecast/shared/contracts";
+import { ACTIVE_AGENT_STATUSES, AGENT_CLIENTS, LOCAL_AGENT_CLIENTS, RESUME_BURST_SPACING_MS, CODEX_EFFORT_LEVELS, DECLARED_VERDICT_STATUSES, HEARTBEAT_FLUSH_INTERVAL_MS, isCompactionSummaryMessage, MID_TURN_AGENT_STATUSES, SETTLE_VERDICT_STATUSES, SNIPPET_CATALOG, STABLE_ENV_CONVERSATION_ID, STABLE_ENV_EXCLUDE, STABLE_ENV_MODE, agentForksNatively, agentReconstitutes, authorizesTeardown, CLOUD_SESSION_SOURCES, cloudSessionSyncOn, classifyApiErrorBanner, isCloudAgentActionName, confineToOwningDevice, findModelOption, fromConvexAgentType, modelOptionKey, isClaudeAutoContinueLine, isCodexSafetyError, isLocalCommandLine, isRecoveryContinueClientId, type ApiErrorBannerKind, isMachineDeliveredMessage, isValidPaneTarget, isValidBrowserStreamKey, isMachineSetting, MACHINE_SETTINGS, machineSettingValues, snippetBySlug, verdictFromProbe, worktreeOfPath, localAgentClient, isHostedAgentType } from "@codecast/shared/contracts";
 import { CLOUD_START_RUN_MS, canonicalSlashCommand, codePasteSignInUrl, deviceCodePrompt, isHomeDirectoryPath, stampDeliveryId, withoutDeliveryId } from "@codecast/shared/contracts";
 import { DELIVERY_FAILED_SUBTYPE, formatDeliveryFailedNotice } from "@codecast/shared/contracts/deliveryFailed";
 import { isClosedSession, isLoopFresh, materializeFileTags } from "@codecast/shared/contracts";
@@ -2022,14 +2022,18 @@ export function turnStartedAtFor(sessionId: string): number | null {
 
 // The newest turn-starting message in a synced batch: a user turn that is not a
 // tool_result reply (those ride INSIDE a turn — a permissioned tool finishing,
-// an AskUserQuestion answer). Meta/system entries never reach ParsedMessage.
+// an AskUserQuestion answer). Meta/system entries never reach ParsedMessage. A
+// compaction's summary is a user-role line too, but nobody delivered it: an
+// idle compaction writes one into a parked session, and counting it spent the
+// session's dormant or done pin with no turn run (ct-102518).
 export function latestTurnStartTs(
-  messages: Array<{ role: string; timestamp: number; toolResults?: unknown[] }>,
+  messages: Array<{ role: string; timestamp: number; toolResults?: unknown[]; content?: string }>,
 ): number | null {
   let latest: number | null = null;
   for (const m of messages) {
     if (m.role !== "user") continue;
     if (m.toolResults && m.toolResults.length > 0) continue;
+    if (isCompactionSummaryMessage(m.content)) continue;
     if (typeof m.timestamp === "number" && (latest === null || m.timestamp > latest)) latest = m.timestamp;
   }
   return latest;
@@ -17271,7 +17275,7 @@ export function transcriptTailTurnStartTs(tailContent: string, currentSessionId?
   for (const rawLine of tailContent.split("\n")) {
     const line = rawLine.trim();
     if (!line) continue;
-    let d: { type?: string; sessionId?: string; timestamp?: string; message?: { role?: string; content?: unknown } };
+    let d: { type?: string; sessionId?: string; timestamp?: string; isCompactSummary?: boolean; message?: { role?: string; content?: unknown } };
     try {
       d = JSON.parse(line);
     } catch {
@@ -17284,6 +17288,8 @@ export function transcriptTailTurnStartTs(tailContent: string, currentSessionId?
     if (d.type !== "user" || d.message?.role !== "user") continue;
     const content = d.message?.content;
     if (Array.isArray(content) && content.some((b) => (b as { type?: string })?.type === "tool_result")) continue;
+    // A compaction's summary starts no turn (latestTurnStartTs).
+    if (d.isCompactSummary || isCompactionSummaryMessage(jsonlMessageText(content))) continue;
     if (latest === null || ts > latest) latest = ts;
   }
   return latest ?? oldest;
