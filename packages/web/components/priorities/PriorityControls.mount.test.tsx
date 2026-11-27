@@ -167,6 +167,53 @@ test("a drag of the rank number drops the priority where it is let go, and rides
   }
 }, 60_000);
 
+const setView = (v: Record<string, unknown> | undefined) => useInboxStore.setState((st: any) => ({ clientState: { ...st.clientState, ui: { ...st.clientState.ui, priorities_view: v } } }));
+const PERSONAL = row(7, "Wardrobe", 1, [step("s1", "Shop", "critical")], { workspace: `user:${VIEWER_ID}` });
+
+test("Person, then workspace: a drag reorders within its workspace, rides movePriority, and never drops into another workspace", async () => {
+  useInboxStore.getState().syncTable("priorities", [...rows(), PERSONAL] as any);
+  setView({ group_by: "person_workspace" });
+  const page = await mount(<Live />);
+  try {
+    expect(document.querySelector("[data-priorities]")!.getAttribute("data-group-by")).toBe("person_workspace");
+    const dragEvent = (type: string) => Object.assign(new window.Event(type, { bubbles: true, cancelable: true }), { dataTransfer: { setData() {}, effectAllowed: "", dropEffect: "" }, clientY: 0 });
+    await act(async () => { block("pri-3").querySelector("[data-rank-handle]")!.dispatchEvent(dragEvent("dragstart")); });
+    // Over the viewer's priority in their personal workspace: no drop there.
+    await act(async () => { block("pri-7").dispatchEvent(dragEvent("dragover")); });
+    expect(block("pri-7").querySelector("[data-drop-at]")).toBeNull();
+    await act(async () => { block("pri-2").dispatchEvent(dragEvent("dragover")); });
+    expect(block("pri-2").querySelector("[data-drop-at]")?.getAttribute("data-drop-at")).toBe("before");
+    await act(async () => { block("pri-2").dispatchEvent(dragEvent("drop")); });
+    expect(await dispatched("movePriority")).toEqual([["pri-3", 2]]);
+    expect(ranks().slice(0, 3)).toEqual(["pri-1#1", "pri-3#2", "pri-2#3"]);
+  } finally {
+    await page.unmount();
+    setView(undefined);
+  }
+}, 60_000);
+
+test("a chip turned off stays off when the page is drawn again from the store", async () => {
+  useInboxStore.getState().syncTable("priorities", [...rows(), PERSONAL] as any);
+  setView(undefined);
+  const first = await mount(<Live />);
+  try {
+    await press(document.querySelector(`[data-workspace-chip="user:${VIEWER_ID}"]`)!);
+    expect(block("pri-7")).toBeNull();
+    expect(await dispatched("updateClientUI")).not.toEqual([]);
+  } finally {
+    await first.unmount();
+  }
+  const again = await mount(<Live />);
+  try {
+    expect(document.querySelector(`[data-workspace-chip="user:${VIEWER_ID}"]`)!.getAttribute("aria-pressed")).toBe("false");
+    expect(block("pri-7")).toBeNull();
+    expect(block("pri-1")).not.toBeNull();
+  } finally {
+    await again.unmount();
+    setView(undefined);
+  }
+}, 60_000);
+
 test("Mark done, Set aside and Restore paint the row's status and ride their overrides", async () => {
   const page = await mount(<Live />);
   try {
