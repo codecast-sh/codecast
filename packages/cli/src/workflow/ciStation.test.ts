@@ -18,7 +18,7 @@ async function station(gh: Gh, opts: { deadlineMs?: number; dir?: string; head?:
   if (out.written) expect(JSON.parse(fs.readFileSync(path.join(dir, "ci.json"), "utf-8"))).toEqual(out.result);
   return { ...out, lines };
 }
-const verdict = (r: Partial<CiResult>): CiResult => ({ green: false, head_sha: HEAD, tested_main_sha: null, failing: [], preexisting: [], unjudged: [], blocked_by_main: false, ci_changed: false, ci_edit: null, pending: [], not_started: [], reran: false, timed_out: false, no_ci: false, head_moved: false, observed_head: null, ...r });
+const verdict = (r: Partial<CiResult>): CiResult => ({ green: false, head_sha: HEAD, tested_main_sha: null, failing: [], preexisting: [], unjudged: [], blocked_by_main: false, ci_changed: false, ci_edit: null, ci_edit_files: null, pending: [], not_started: [], reran: false, timed_out: false, no_ci: false, head_moved: false, observed_head: null, ...r });
 /** CI red on its first run (each job id one lower), then the rollup given, after the station's rerun. */
 const redAfterRerun = (rollup2: Rollup[], extra: Partial<Parameters<typeof fakeGh>[0]>) =>
   fakeGh({ polls: [{ rollup: rollup2.map((c) => ({ ...c, detailsUrl: c.detailsUrl.replace(/job\/(\d+)/, (_: string, n: string) => `job/${Number(n) - 1}`) })) }, { rollup: rollup2 }], ...extra });
@@ -286,20 +286,30 @@ describe("cast flow ci: splitting a red head (routing only, never green)", () =>
     expect(summary).toBe("CI red on #7: 1 failure in test-cli");
   });
 
-  test("a change to CI carries a digest of its CI files at the head: the same edit, the same digest; content, mode or removal changes it", async () => {
-    const pass = { polls: [{ rollup: [check("lint", "SUCCESS", 1)] }], files: [".github/workflows/ci.yml", "src/app.ts"] };
-    const edit = (tree: string[] | undefined) => station(fakeGh({ ...pass, tree })).then((s) => s.result);
-    const at = (mode: string, sha: string) => [`${mode} ${sha} .github/workflows/ci.yml`, "100644 aaa src/app.ts"];
-    const a = await edit(at("100644", "111"));
+  test("a change to CI carries a digest of its own edit to its CI files: main's edits around it, brought in by a rebase, keep it", async () => {
+    const files = [".github/workflows/ci.yml", "src/app.ts"];
+    const pass = { polls: [{ rollup: [check("lint", "SUCCESS", 1)] }], files };
+    const ci = (patch: string | undefined, o: { status?: string; tree?: string[] } = {}) => [{ filename: ".github/workflows/ci.yml", status: o.status ?? "modified", ...(patch !== undefined ? { patch } : {}) }, { filename: "src/app.ts", status: "modified", patch: "@@ -1 +1 @@\n-a\n+b" }];
+    const tree = (mode = "100644", sha = "111") => [`${mode} ${sha} .github/workflows/ci.yml`, "100644 aaa src/app.ts"];
+    const edit = (patches: ReturnType<typeof ci>, t: string[] | "none" = tree()) => station(fakeGh({ ...pass, patches, tree: t === "none" ? undefined : t })).then((s) => s.result);
+    const a = await edit(ci("@@ -3,2 +3,2 @@ jobs:\n   lint:\n-    runs-on: x\n+    runs-on: y"));
     expect(a).toMatchObject({ green: true, ci_changed: true });
     expect(a.ci_edit).toMatch(/^[0-9a-f]{16}$/);
-    expect((await edit(at("100644", "111"))).ci_edit).toBe(a.ci_edit);
-    // A different content, a mode-only change (same blob), and the file removed are each another edit.
-    const others = [await edit(at("100644", "222")), await edit(at("100755", "111")), await edit(["100644 aaa src/app.ts"])].map((r) => r.ci_edit);
-    expect(new Set([a.ci_edit, ...others]).size).toBe(4);
-    // A tree GitHub cut short, or no tree at all, names no edit: a person is asked.
-    expect((await edit(["truncated", ...at("100644", "111")])).ci_edit).toBeNull();
-    expect((await edit(undefined)).ci_edit).toBeNull();
+    expect(Object.keys(a.ci_edit_files!)).toEqual([".github/workflows/ci.yml"]);
+    // The same added and removed lines after main edited the file elsewhere (another blob, other lines and context).
+    expect((await edit(ci("@@ -9,2 +12,2 @@ on:\n   test:\n-    runs-on: x\n+    runs-on: y"), tree("100644", "999"))).ci_edit).toBe(a.ci_edit);
+    // Another line edited, the file added rather than modified, a mode change, and no patch (by its blob) are each another edit.
+    const others = [
+      await edit(ci("@@ -3,2 +3,2 @@\n-    runs-on: x\n+    runs-on: z")),
+      await edit(ci("@@ -3,2 +3,2 @@\n-    runs-on: x\n+    runs-on: y", { status: "added" })),
+      await edit(ci("@@ -3,2 +3,2 @@\n-    runs-on: x\n+    runs-on: y"), tree("100755")),
+      await edit(ci(undefined)),
+    ].map((r) => r.ci_edit);
+    expect(new Set([a.ci_edit, ...others]).size).toBe(5);
+    // A tree GitHub cut short, no tree at all, or a CI path the list lacks names no edit: a person is asked.
+    expect((await edit(ci("@@ -1 +1 @@\n-x\n+y"), ["truncated", ...tree()])).ci_edit).toBeNull();
+    expect((await edit(ci("@@ -1 +1 @@\n-x\n+y"), "none")).ci_edit).toBeNull();
+    expect((await edit([{ filename: "src/app.ts", status: "modified", patch: "@@ -1 +1 @@\n-a\n+b" }])).ci_edit).toBeNull();
   });
 
   test("the real ci.yml's summary job is no failure of its own beside a matrix job's (`test-web (1/4)`, `typecheck (web)`)", async () => {

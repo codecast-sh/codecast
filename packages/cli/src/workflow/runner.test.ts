@@ -3,7 +3,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { parseWorkflowSource, parseWorkflowFile, validateWorkflow } from "./parser.js";
-import { runWorkflow, reportRunStopped, refreshedOnResume, graphToPushPayload, parseGateEdgeLabel, gatePayload, stationTitle, runRegistrationIsFatal, buildNodePrompt, PRESENTER_BASE, type RunOptions } from "./runner.js";
+import { runWorkflow, reportRunStopped, refreshedOnResume, graphToPushPayload, parseGateEdgeLabel, gatePayload, stationTitle, runRegistrationIsFatal, buildNodePrompt, expandScriptVars, PRESENTER_BASE, type RunOptions } from "./runner.js";
 import { BUILTIN_WORKFLOW_TEMPLATES } from "./templates.js";
 import { handTimeouts } from "./handWatch.js";
 import { isolateCodecastDirEachTest } from "../test-helpers/codecastDir.js";
@@ -1409,6 +1409,19 @@ describe("gatePayload asker", () => {
     const named = parseWorkflowSource(src.replace('prompt="Ship?"', 'prompt="Ship this acme-app fix?"'));
     expect(gatePayload(named.nodes.get("decide")!, named, { repo_name: "acme-app", branch: "b" }).prompt).toBe("Ship this acme-app fix?");
     expect(gatePayload(node, g, { repo_name: "acme-app" }).prompt).toBe("Ship?");
+  });
+  // Polish round 3: the change flow's CI-edit card is a segment's gate; cards from cast 1.1.316 named no repository, and
+  // its reviewer's note opened with an answer ("Yes, and nothing new is in the way") to a question the card dropped.
+  test("the change flow's CI-edit card names the repository, then Verdicts' card, then the reviewer's own question", () => {
+    const g = parseWorkflowSource(BUILTIN_WORKFLOW_TEMPLATES.change);
+    const bin = fs.mkdtempSync(path.join(os.tmpdir(), "ci-card-"));
+    fs.writeFileSync(path.join(bin, "cast"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    const card = "This change edits CI: merge it?\nCI files it edits: .github/workflows/ci.yml.";
+    const context: Record<string, string> = { task_id: "ct-1", "verdicts.json": JSON.stringify({ next: "decide", card }), review_question: "Can a release go out from any machine?", repo_name: "acme-app", branch: "codecast/change-ct-1" };
+    const said = Bun.spawnSync(["bash", "-c", expandScriptVars(g.nodes.get("ci_card")!.script!, context)], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } });
+    fs.rmSync(bin, { recursive: true, force: true });
+    context["ci_card.output"] = said.stdout.toString().trim();
+    expect(gatePayload(g.nodes.get("decide__decide")!, g, context).prompt).toBe(`In acme-app: ${card}\n**The reviewer's question:** Can a release go out from any machine?`);
   });
 });
 

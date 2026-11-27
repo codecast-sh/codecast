@@ -76,9 +76,10 @@ digraph change {
   wait_main [label="Wait for green main", shape=parallelogram, parks=true, timeout=15000,
     script="cast flow wait-main --base \"$default_branch\" --deadline 4h --run \"$run_id\" --node wait_main"]
   onto_main [label="Onto main", shape=parallelogram, timeout=600, script="cast flow pr --rebase --base \"$default_branch\" --dir \"$run_dir\" --run \"$run_id\""]
-  // CI cannot vouch for a change to CI itself: the card the person answers asks that, above the reviewer's note.
+  // CI cannot vouch for a change to CI itself: the card the person answers asks that (Verdicts' card: the CI files, and
+  // on a second ask what changed in them since the approval), then the reviewer's own question, which its note answers.
   ci_card [label="Why a person", shape=parallelogram, timeout=120,
-    script="cast task comment \"$task_id\" \"This change edits CI, so CI can't vouch for it: a person decides whether it ships.\" -t review >/dev/null; echo \"This change edits CI: merge it?\""]
+    script="cast task comment \"$task_id\" \"This change edits CI, so CI can't vouch for it: a person decides whether it ships.\" -t review >/dev/null; printf '%s\\n' \"$verdicts.json.card\" \"**The reviewer's question:** $review_question\""]
   // A question typed at the approval card goes to the reviewer, who has read the change. A person asked once is not
   // asked again in the run while the change's CI files stay as they approved them (Verdicts, Merge's ci-approved.json).
   decide [flow="decide", answerer="review", asks_if="it edits CI", question="$ci_card.output"]

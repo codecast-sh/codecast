@@ -202,7 +202,12 @@ export function registerFlowStations(flow: Command, deps: FlowDeps): Command {
       const ls = branch ? spawnSync("git", ["ls-remote", "origin", `refs/heads/${branch}`], { cwd: deps.realCwd(), encoding: "utf-8" }) : null;
       const originHead = ls?.status === 0 ? String(ls.stdout).trim().split(/\s/)[0] || null : null;
       const proof = needsProof(opts.dir) ? await mergeProof(opts.run ?? process.env.run_id) : null;
-      console.log(JSON.stringify(changeVerdicts(opts.dir, opts.review, originHead, proof)));
+      // A second CI-edit card shows what changed in the CI files since the head a person approved them at.
+      const ciDiff = (from: string, to: string, files: string[]) => {
+        const r = spawnSync("git", ["diff", from, to, "--", ...files], { cwd: deps.realCwd(), encoding: "utf-8" });
+        return r.status === 0 ? String(r.stdout) : null;
+      };
+      console.log(JSON.stringify(changeVerdicts(opts.dir, opts.review, originHead, proof, ciDiff)));
     });
 
   flow

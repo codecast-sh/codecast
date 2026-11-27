@@ -135,6 +135,14 @@ async function mergeStation(args: MergeStationArgs): Promise<MergeStationResult>
   if (!review) return refuse(`no review.json in ${runDir}: Merge runs after the review station`);
   if (review.verdict !== "ship") return refuse(`review.json says ${review.verdict ?? "nothing"}, so nothing clears the merge`);
   if (typeof review.head_sha !== "string" || !review.head_sha) return refuse("review.json names no head_sha, so nothing says which head the reviewer read");
+  // A CI edit reaches Merge only past a person's Ship on its card: the edit they let merge is recorded first, before
+  // anything here can send the run round again (a head pushed during the card's wait, a rebase onto a moved main), so
+  // a later round with the same edit asks nobody again. Verdicts counts it only while the server holds a person's Ship
+  // in the attempt (merge-proof's ci_shipped), and the server clears no CI edit without one.
+  if (ci.ci_changed === true && typeof ci.ci_edit === "string") {
+    const approval = { ci_edit: ci.ci_edit, ...(ci.ci_edit_files ? { ci_edit_files: ci.ci_edit_files } : {}), head_sha: ci.head_sha };
+    try { fs.writeFileSync(path.join(runDir, CI_APPROVAL_FILE), JSON.stringify(approval) + "\n"); } catch {}
+  }
 
   const view = exec("gh", ["pr", "view", String(pr), "--json", "state,headRefOid,url"], args.cwd);
   let info: { state?: string; headRefOid?: string; url?: string };
@@ -179,11 +187,6 @@ async function mergeStation(args: MergeStationArgs): Promise<MergeStationResult>
   } catch (err) {
     return refuse(message(err));
   }
-  // The server cleared a CI edit only on a person's Ship: a later round with the same edit asks nobody again.
-  if (ci.ci_changed === true && typeof ci.ci_edit === "string") {
-    try { fs.writeFileSync(path.join(runDir, CI_APPROVAL_FILE), JSON.stringify({ ci_edit: ci.ci_edit }) + "\n"); } catch {}
-  }
-
   // A merge an earlier attempt made whose station ended before it said so: what landed, and its deploys again.
   let already: string | null = null;
   if (merged) {

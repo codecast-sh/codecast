@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { fetchRuns, formatRunDetail, restartHint, runByRef, slimRun, stopWords, type RunListRow } from "./runsCli.js";
+import { fetchRuns, formatRunDetail, gateAnswers, restartHint, runByRef, slimRun, stopWords, type RunListRow } from "./runsCli.js";
 
 const SITE = "https://x.test";
 const deps = { getCliEndpoint: () => ({ siteUrl: SITE, apiToken: "t" }), detectCurrentSessionId: () => null } as any;
@@ -79,6 +79,15 @@ test("the detail names each station with its label, time, outcome and session, a
   expect(formatRunDetail({ ...run, status: "failed", fail_reason: "verify exited 1" }, new Map(), now)).toContain("failed: verify exited 1");
 });
 
+// Polish round 3: a gate's outcome read "outcome s", the key a person picked; it reads as the option they chose.
+test("a gate's outcome reads as the option the person picked", () => {
+  const run: RunListRow = { _id: "r1", status: "completed", created_at: 0, updated_at: 1, node_statuses: [{ node_id: "decide__decide", status: "completed", outcome: "s", started_at: 0, completed_at: 60_000 }, { node_id: "merge", status: "completed", outcome: "success", started_at: 0, completed_at: 1 }] };
+  const answers = gateAnswers([{ from: "decide__decide", label: "[S] Approve merge :: Merges it; it goes live with the next deploy" }, { from: "decide__decide", label: "[R] Revise :: Your note goes to the session" }, { from: "merge", label: "conflict" }]);
+  const out = formatRunDetail(run, new Map(), 60_000, answers);
+  expect(out).toMatch(/decide__decide\s+completed, 1m, answered Approve merge/);
+  expect(out).toMatch(/merge\s+completed, 0s, outcome success/);
+});
+
 // ct-102369: the session, `cast workflow show` and the run page each said a different restart for the same stop.
 test("a failed run's restart is the one its stop names in the graph's words, else a fresh run of a change, else a resume", async () => {
   const change = { task_short_id: "ct-9", workflow_slug: "change", takes_change: true };
@@ -91,6 +100,25 @@ test("a failed run's restart is the one its stop names in the graph's words, els
   expect(restartHint({ task_short_id: "ct-9", workflow_slug: "line", current_node_id: "build" }, null)).toBe("try it again from where it stopped: cast workflow resume ct-9 --at build");
   expect(restartHint({ task_short_id: "ct-9", workflow_slug: "line" }, null)).toBe("try it again from its start: cast workflow resume ct-9 --at start");
   expect(restartHint({ workflow_slug: "line", current_node_id: "build" }, null)).toBe("it is bound to no task, so it cannot be resumed: start it again");
+});
+
+// Polish round 3 H2: ct-102396 stopped at Deploy failed with its change on main; show said "run it again" while the run
+// page offered Open Deploys. The stops are the ones changePage.test.ts opens Deploys on (ct-102256, F3, "a stop at Deploy").
+test("a landed run's restart is the deploy that takes it live, as the run page's Open Deploys", async () => {
+  const change = { task_short_id: "ct-9", workflow_slug: "change", takes_change: true, current_node_id: "deploy__failed" };
+  const stop = await stopWords({ workflow_slug: "change", current_node_id: "deploy__failed" });
+  const failed = { ...change, merge: { sha: "929c5d8d44" }, fail_reason: "Stopped: The deploy that carried 929c5d8 failed: desktop dp-3559 (Stopped at Send.)." };
+  expect(restartHint(failed, stop)).toBe("it is on main, so running it again lands nothing: the next desktop deploy takes it live (cast line deploy targets --target desktop)");
+  // The stop's words say it landed even when the row carries no merge, and every failed target is named.
+  const two = { ...change, fail_reason: "Stopped: The deploy that carried 929c5d8 failed: desktop dp-3559 (Stopped at Send.), web dp-12. A later deploy that takes it live ends this run at Live." };
+  expect(restartHint(two, stop)).toBe("it is on main, so running it again lands nothing: the next desktop and web deploys take it live (cast line deploy targets)");
+  const unsent = { ...change, merge: { sha: "929c5d8d44" }, fail_reason: "Stopped: No deploy took 929c5d8 out: cli dp-3789 stopped at Send before sending anything (gh failed). A later deploy that takes it live ends this run at Live." };
+  expect(restartHint(unsent, stop)).toBe("it is on main, so running it again lands nothing: the next cli deploy takes it live (cast line deploy targets --target cli)");
+  const stuck = { ...change, current_node_id: "deploy__stuck", merge: { sha: "acbd8d27a8" }, fail_reason: "Stopped: Deploy stuck: cli is not live with acbd8d2 after 60m (last: waiting on main CI at c6c7a32 (running)). Live: backend dp-3302." };
+  expect(restartHint(stuck, null)).toBe("it is on main, so running it again lands nothing: the next cli deploy takes it live (cast line deploy targets --target cli)");
+  expect(restartHint({ ...change, merge: { sha: "31ccbb83b1" }, fail_reason: "Stopped: Deploy stuck" }, stop)).toBe("it is on main, so running it again lands nothing: each target's next deploy takes it live (cast line deploy targets)");
+  // Deploy found no merge: the change is not on main, and a fresh run is the way on.
+  expect(restartHint({ ...change, current_node_id: "deploy__unmerged", fail_reason: "Stopped: 929c5d8 is not on main" }, null)).toBe("once the change is fixed, run it again: cast flow run change --task ct-9");
 });
 
 // ct-102477: a refreeze refused a worktree something rebased; the session heard one restart, show printed "<station>".

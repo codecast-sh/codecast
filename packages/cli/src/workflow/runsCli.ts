@@ -10,6 +10,7 @@ import { apiPost, isOlderBackendRefusal, type PublishDeps } from "../castApi.js"
 import { c, fmt } from "../colors.js";
 import { formatAge } from "../decideCommand.js";
 import { ownRestartOf } from "@codecast/shared/contracts/runRestart";
+import { failedDeploysOf, stuckTargetOf } from "@codecast/shared/contracts/deployStop";
 
 export interface RunNode {
   node_id: string;
@@ -94,8 +95,23 @@ function duration(ms: number): string {
 
 const STATUS_MARK: Record<string, string> = { completed: "✓", failed: "✗", running: "▸", pending: "·" };
 
+/**
+ * The options a gate's routes offer, by gate and key ("[S] Approve merge :: …" out of decide__decide is s →
+ * Approve merge): a gate's outcome is the key a person picked, which reads as the option's words.
+ */
+export function gateAnswers(edges: ReadonlyArray<{ from: string; label?: string | null }>): Map<string, Map<string, string>> {
+  const out = new Map<string, Map<string, string>>();
+  for (const e of edges) {
+    const m = /^\s*\[(\w)\]\s*([^:]*?)\s*(?:::|$)/.exec(e.label ?? "");
+    if (!m) continue;
+    if (!out.has(e.from)) out.set(e.from, new Map());
+    out.get(e.from)!.set(m[1].toLowerCase(), m[2]);
+  }
+  return out;
+}
+
 /** `cast workflow show`: the run, then each station it reached in order, with its session, time and outcome. */
-export function formatRunDetail(run: RunListRow, labels: Map<string, string> = new Map(), now: number = Date.now()): string {
+export function formatRunDetail(run: RunListRow, labels: Map<string, string> = new Map(), now: number = Date.now(), answers: Map<string, Map<string, string>> = new Map()): string {
   const flow = run.workflow_label ?? run.workflow_name ?? "workflow";
   const bound = run.task_short_id ?? run.plan_short_id;
   const lines = [`${c.bold}${flow}${c.reset}${bound ? ` ${bound}` : ""}  ${run.status}  ${fmt.muted(run._id)}`];
@@ -124,7 +140,7 @@ export function formatRunDetail(run: RunListRow, labels: Map<string, string> = n
     const bits = [
       n.status,
       took ? (n.completed_at ? took : `${took} so far`) : null,
-      n.outcome ? `outcome ${n.outcome}` : null,
+      n.outcome ? (answers.get(n.node_id)?.get(n.outcome.toLowerCase()) ? `answered ${answers.get(n.node_id)!.get(n.outcome.toLowerCase())}` : `outcome ${n.outcome}`) : null,
       n.visits && n.visits > 1 ? `${n.visits} visits` : null,
       n.session_id ? `session ${n.session_id}` : null,
     ].filter(Boolean);
@@ -141,13 +157,17 @@ function fail(message: string): never {
 }
 
 /**
- * How a failed run goes on, the same restart the session heard and the run page offers: the resume its stop names in
- * the graph's own words (`stop`, read before any $var was filled in, so a reviewer's finding or a merge's output quoted
- * into the reason names none), else the restart the runner's own words for the stop name (a worktree something reset
- * or rebased: shared/contracts/runRestart.ts), else for a run that ships a change a fresh run once the change is fixed
- * (Ship again), else a resume at the station it stopped at. A run bound to no task cannot be resumed.
+ * How a failed run goes on, the same restart the session heard and the run page offers: for a change already on main
+ * (its merge recorded, or a Deploy stop naming the deploys that failed) the deploy that takes it live, as the run page's
+ * Open Deploys does, since running it again would land nothing; else the resume its stop names in the graph's own words
+ * (`stop`, read before any $var was filled in, so a reviewer's finding or a merge's output quoted into the reason names
+ * none), else the restart the runner's own words for the stop name (a worktree something reset or rebased:
+ * shared/contracts/runRestart.ts), else for a run that ships a change a fresh run once the change is fixed (Ship
+ * again), else a resume at the station it stopped at. A run bound to no task cannot be resumed.
  */
-export function restartHint(run: { task_short_id?: string | null; workflow_slug?: string | null; takes_change?: boolean | null; current_node_id?: string | null; fail_reason?: string | null }, stop?: string | null): string {
+export function restartHint(run: { task_short_id?: string | null; workflow_slug?: string | null; takes_change?: boolean | null; current_node_id?: string | null; fail_reason?: string | null; merge?: { sha?: string | null } | null }, stop?: string | null): string {
+  const landed = landedHint(run);
+  if (landed) return landed;
   const task = run.task_short_id;
   if (!task) return "it is bound to no task, so it cannot be resumed: start it again";
   const at = /`cast workflow resume \S*\s*--at ([\w-]+)`/.exec(stop ?? "")?.[1];
@@ -157,6 +177,16 @@ export function restartHint(run: { task_short_id?: string | null; workflow_slug?
   if (run.takes_change && run.workflow_slug) return `once the change is fixed, run it again: cast flow run ${run.workflow_slug} --task ${task}`;
   if (run.current_node_id) return `try it again from where it stopped: cast workflow resume ${task} --at ${run.current_node_id}`;
   return `try it again from its start: cast workflow resume ${task} --at start`;
+}
+
+/** A landed change's way on: the next deploy of each target its Deploy stop names (failed, or not live), else all of them. */
+function landedHint(run: { fail_reason?: string | null; merge?: { sha?: string | null } | null }): string | null {
+  const failed = failedDeploysOf(run.fail_reason);
+  if (!run.merge?.sha && !failed.length) return null;
+  const targets = failed.length ? failed.map((f) => f.target) : [stuckTargetOf(run.fail_reason)].filter((t): t is string => !!t);
+  const see = targets.length === 1 ? `cast line deploy targets --target ${targets[0]}` : "cast line deploy targets";
+  const next = targets.length ? `the next ${targets.join(" and ")} deploy${targets.length > 1 ? "s take" : " takes"} it live` : "each target's next deploy takes it live";
+  return `it is on main, so running it again lands nothing: ${next} (${see})`;
 }
 
 /**
@@ -193,7 +223,7 @@ export async function showRun(deps: PublishDeps, ref: string, options: { session
   // Station labels live on the graph the run executes; only its owner reads that, and the ids stand alone without it.
   const got = await apiPost(deps, "/cli/workflow-runs/get", { run_id: run._id }, { read: true, exitOnError: false }).catch(() => null);
   const labels = new Map<string, string>((got?.workflow?.nodes ?? []).map((n: { id: string; label?: string }) => [n.id, n.label ?? n.id]));
-  console.log(formatRunDetail(run, labels));
+  console.log(formatRunDetail(run, labels, Date.now(), gateAnswers(got?.workflow?.edges ?? [])));
   if (run.status === "failed") console.log(fmt.muted(`\n  ${restartHint(run, await stopWords(run, got?.workflow?.nodes ?? null))}`));
   else if (run.status === "running" || run.status === "paused" || run.status === "pending") console.log(fmt.muted(`\n  stop it: cast workflow cancel ${ref}`));
 }

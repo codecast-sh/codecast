@@ -144,6 +144,34 @@ describe("changeVerdicts", () => {
     expect(approved({ ...edited, ci_edit: null }, { review: null, ci_shipped: true }).next).toBe("decide");
   });
 
+  // Polish round 3 M6: ct-102479 approved at 9678927, Merge rebased onto a main that had edited .codecast/deploy.toml
+  // around the change's own edit, and the card came back with nothing on it to say why. The approval holds on the
+  // change's own edit (ciStation's digest); a card that does come back says what changed since, and shows the diff.
+  test("a second CI-edit card says which CI files' edit changed since the approval, with their diff since that head", () => {
+    const edited = { ...GREEN, ci_changed: true, ci_edit: "e2", ci_edit_files: { ".codecast/deploy.toml": "d2", ".github/workflows/cut.yml": "w1" } };
+    const approval = { ci_edit: "e1", ci_edit_files: { ".codecast/deploy.toml": "d1", ".github/workflows/cut.yml": "w1" }, head_sha: "9678927801f81f72" };
+    const asked: Array<[string, string, string[]]> = [];
+    const ciDiff = (from: string, to: string, files: string[]) => (asked.push([from, to, files]), "--- a/.codecast/deploy.toml\n+++ b/.codecast/deploy.toml\n+unless = []");
+    const v = changeVerdicts(dir({ "pr.json": PR, "ci.json": edited, "ci-approved.json": approval }), SHIP, null, { review: null, rebases: [], ci_shipped: true } as any, ciDiff);
+    expect(v.next).toBe("decide");
+    expect(asked).toEqual([["9678927801f81f72", "abc", [".codecast/deploy.toml"]]]);
+    expect(v.card).toBe([
+      "This change's edit to CI changed since it was approved: merge it?",
+      "Its edit to .codecast/deploy.toml changed since a person let it merge at 9678927801.",
+      "\n```diff\n--- a/.codecast/deploy.toml\n+++ b/.codecast/deploy.toml\n+unless = []\n```",
+      "CI files it edits: .codecast/deploy.toml, .github/workflows/cut.yml.",
+    ].join("\n"));
+    // The first card names the CI files; a resumed attempt's card says why the same edit is asked again.
+    expect(verdicts({ "ci.json": edited }).card).toBe("This change edits CI: merge it?\nCI files it edits: .codecast/deploy.toml, .github/workflows/cut.yml.");
+    const resumed = changeVerdicts(dir({ "pr.json": PR, "ci.json": edited, "ci-approved.json": { ...approval, ci_edit: "e2" } }), SHIP, null, { review: null, rebases: [], ci_shipped: false } as any);
+    expect(resumed.card).toBe("This change edits CI: merge it?\nA person let this same edit merge before the run was resumed, and a resumed run asks again.\nCI files it edits: .codecast/deploy.toml, .github/workflows/cut.yml.");
+    // A diff that cannot be read still names the files; one too long is cut.
+    expect(changeVerdicts(dir({ "pr.json": PR, "ci.json": edited, "ci-approved.json": approval }), SHIP, null, { review: null, rebases: [], ci_shipped: true } as any, () => null).card).not.toContain("```");
+    const long = changeVerdicts(dir({ "pr.json": PR, "ci.json": edited, "ci-approved.json": approval }), SHIP, null, { review: null, rebases: [], ci_shipped: true } as any, () => "+x\n".repeat(2000)).card!;
+    expect(long.length).toBeLessThan(3200);
+    expect(long).toContain("cut short; the pull request has the rest");
+  });
+
   test("a change that edits CI goes to a person when CI is green and the reviewer says ship; a red one goes back or waits like any red", () => {
     const edited = { ...GREEN, ci_changed: true };
     expect(verdicts({ "ci.json": edited })).toMatchObject({ ci: "green", next: "decide", why: "This change edits CI, so CI can't vouch for it" });

@@ -92,6 +92,8 @@ export function fakeGh(o: {
   compare?: Record<string, string>;
   /** What the pull request's files query prints: each path, and a renamed file's old path. */
   files?: string[];
+  /** The pull request's files as GitHub lists them with their patches (status, old path); absent, each of `files` is modified by one line. */
+  patches?: Array<{ filename: string; previous_filename?: string; status?: string; patch?: string }>;
   fail?: (a: string) => { code: number; out: string } | null;
   onLog?: (jobId: number) => void;
   /** How gh treats --allow-escape-sequences on a log read: 2.105 refuses a log without it, a gh older than the flag rejects it. */
@@ -114,6 +116,13 @@ export function fakeGh(o: {
       return { code: 0, out: JSON.stringify({ url: `https://github.com/${REPO}/pull/7`, headRefOid: p.head ?? HEAD, headRefName: "feature", baseRefName: "main", baseRefOid: BASE_OID, mergeable: p.mergeable ?? "MERGEABLE", statusCheckRollup: p.rollup }) };
     }
     if (a.startsWith(`api repos/${REPO}/git/trees/`)) return o.tree ? { code: 0, out: o.tree.join("\n") } : { code: 1, out: "HTTP 404: Not Found" };
+    // The patches query names the CI paths it wants in its filter, as GitHub's jq would select them.
+    const patched = a.startsWith(`api --paginate repos/${REPO}/pulls/7/files`) ? /select\((\[.*?\]) \| any/.exec(a) : null;
+    if (patched) {
+      const wanted: string[] = JSON.parse(patched[1]!);
+      const all = o.patches ?? (o.files ?? ["src/app.ts"]).map((filename) => ({ filename, status: "modified", patch: "@@ -1 +1 @@\n-old\n+new" }));
+      return { code: 0, out: all.filter((f) => wanted.includes(f.filename) || (!!f.previous_filename && wanted.includes(f.previous_filename))).map((f) => JSON.stringify(f)).join("\n") };
+    }
     if (a.startsWith(`api --paginate repos/${REPO}/pulls/7/files`)) return { code: 0, out: (o.files ?? ["src/app.ts"]).join("\n") };
     const compare = /^api repos\/acme\/app\/compare\/(\S+) --jq \.status$/.exec(a);
     if (compare) return o.compare?.[compare[1]!] ? { code: 0, out: o.compare[compare[1]!]! } : { code: 1, out: "HTTP 404: No common ancestor or unknown sha" };
