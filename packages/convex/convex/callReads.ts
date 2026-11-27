@@ -4,7 +4,7 @@
 // pulled from it). Plain helpers; the queries that use them stay in
 // transcripts.ts.
 import type { Doc, Id } from "./_generated/dataModel";
-import { authorizeRoom, authorizeRoomNoGrant, canReadRoomlessCall, ownerOnlyRoom } from "./callRooms";
+import { authorizeRoom, authorizeRoomNoGrant, canReadRoomlessCall } from "./callRooms";
 import { isTeamMember } from "./privacy";
 import { teamHasFeature } from "./teamFeatures";
 import { isRoomlessKey, parseRoomKey } from "@codecast/shared/contracts";
@@ -73,10 +73,8 @@ export async function canReadCall(
   }
   // A private huddle's record is the people in it. The room's membership
   // reaches the team (a team-visible session, a public channel) everywhere
-  // but a people room, whose key names exactly the people it was for, and a
-  // room that is still one person's alone, whose membership is that person.
-  const membershipReads =
-    !t.private || parseRoomKey(t.room_key)?.kind === "dm" || !!(await ownerOnlyRoom(ctx, t.room_key));
+  // but a people room, whose key names exactly the people it was for.
+  const membershipReads = !t.private || parseRoomKey(t.room_key)?.kind === "dm";
   if (membershipReads && (await authorizeRoomNoGrant(ctx, userId, t.room_key)).ok) return true;
   // The huddle running now reads like the huddle: whoever its door admits
   // (the open door, a ring) may read the words being said in it, the way they

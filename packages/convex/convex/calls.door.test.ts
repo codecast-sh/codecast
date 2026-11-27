@@ -297,7 +297,7 @@ describe("lock, knock and the live-room list", () => {
     seat(rows, "uc", "session:cvs", now);
     const live = await (await fn("getLiveRooms"))(ctx, {});
     const byKey = Object.fromEntries(live.map((r: any) => [r.room_key, r]));
-    // A session the team cannot read is its owner's alone (ownerOnlyRoom).
+    // A session the team cannot read is its owner's alone (isOwnerOnlyRoom).
     expect(byKey["session:cvp"]).toBeUndefined();
     expect(JSON.stringify(live)).not.toContain("Secret refactor");
     expect(byKey["session:cvs"]).toMatchObject({ redacted: false, title: "Shared work" });

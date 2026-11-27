@@ -1,4 +1,4 @@
-// A huddle that is one person's alone (callRooms.ownerOnlyRoom): a people
+// A huddle that is one person's alone (callRooms.isOwnerOnlyRoom): a people
 // room of one (`dm:<you>`), and a session room whose conversation the team
 // cannot read. Nothing stores that it is private, so these tests drive every
 // surface a teammate could reach it through, live and after it ends, and the
@@ -9,7 +9,8 @@ import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { allModules } from "./testModules.testkit";
 import { ensureCallBoard } from "./callStage";
-import { dmRoomKey, sessionRoomKey } from "./callRooms";
+import { authorizeRoom, dmRoomKey, isOwnerOnlyRoom, sessionRoomKey } from "./callRooms";
+import { createTeamFeedFilter } from "./privacy";
 
 setDefaultTimeout(30_000);
 
@@ -262,5 +263,114 @@ describe("handing the scribe seat back", () => {
   test("a room with no live record releases nothing", async () => {
     const w = await world();
     expect(await w.as(w.ids.ana).mutation(api.transcripts.releaseScribe, { room_key: dmRoomKey(w.ids.ana) })).toEqual({ released: false });
+  });
+});
+
+describe("review fixes", () => {
+  test("a session room whose conversation is gone mid-huddle stays shut to the team", async () => {
+    const w = await world();
+    const { t, as, ids } = w;
+    const room = sessionRoomKey(ids.routed);
+    await startHuddle(w, room);
+    await t.run(async (ctx) => ctx.db.delete(ids.routed));
+    expect((await as(ids.ben).query(api.calls.getLiveRooms, {})).map((r: any) => r.room_key)).not.toContain(room);
+    expect(await as(ids.ben).query(internal.calls.authForToken, { room_key: room })).toBeNull();
+    expect(await as(ids.ben).query(api.transcripts.getLive, { room_key: room })).toBeNull();
+    expect(await as(ids.ben).query(api.callChat.list, { room_key: room })).toBeNull();
+  });
+
+  test("a session owner who makes the session private later does not gain a teammate's private huddle record", async () => {
+    const w = await world();
+    const { t, as, ids } = w;
+    const room = sessionRoomKey(ids.shared);
+    await as(ids.ben).mutation(api.calls.joinRoom, { room_key: room, deliberate: true, private: true });
+    const { transcript_id } = await as(ids.ben).mutation(api.transcripts.start, { room_key: room });
+    await t.run(async (ctx) => {
+      await ctx.db.insert("transcript_segments", { transcript_id: transcript_id!, seq: 1, speaker_id: String(ids.ben), speaker_name: "Ben", text: "mine", t0: 0, t1: 1000 });
+      await ctx.db.patch(transcript_id!, { last_seq: 1 });
+    });
+    await endCall(w, transcript_id);
+    expect(await as(ids.ana).query(api.transcripts.webGetCall, { transcript_id: transcript_id! })).toBeNull();
+    await t.run(async (ctx) => ctx.db.patch(ids.shared, { is_private: true, team_visibility: "private" } as any));
+    expect(await as(ids.ana).query(api.transcripts.webGetCall, { transcript_id: transcript_id! })).toBeNull();
+    expect(await as(ids.ben).query(api.transcripts.webGetCall, { transcript_id: transcript_id! })).not.toBeNull();
+  });
+
+  test("a session room is owner-only exactly when the team feed hides the session", async () => {
+    const w = await world();
+    const { t, ids } = w;
+    const cases: Array<{ conv: Record<string, unknown>; membership?: Record<string, unknown> }> = [];
+    for (const is_private of [true, false]) {
+      for (const team_visibility of [undefined, "private", "summary", "full"]) {
+        for (const visibility of [undefined, "hidden", "activity", "summary", "full"]) {
+          cases.push({ conv: { is_private, team_visibility }, membership: { visibility } });
+        }
+      }
+    }
+    // A going-forward switch: a session started before it reads at the old level.
+    cases.push({ conv: { is_private: false, started_at: 1_000 }, membership: { visibility: "full", visibility_history: [{ before: 2_000, visibility: "hidden" }] } });
+    cases.push({ conv: { is_private: false, started_at: 3_000 }, membership: { visibility: "hidden", visibility_history: [{ before: 2_000, visibility: "full" }] } });
+    let ownerOnlyCount = 0;
+    for (const c of cases) {
+      const { derived, feed } = await t.run(async (ctx) => {
+        const owner = await ctx.db.insert("users", { name: "Owner" } as any);
+        await ctx.db.insert("team_memberships", { user_id: owner, team_id: ids.team, role: "member", joined_at: 1, ...c.membership } as any);
+        const conv = await ctx.db.insert("conversations", { user_id: owner, team_id: ids.team, agent_type: "claude_code", status: "active", started_at: 5_000, updated_at: 1, message_count: 0, ...c.conv } as any);
+        const derived = await isOwnerOnlyRoom(ctx, sessionRoomKey(conv));
+        const feed = (await createTeamFeedFilter(ctx as any, ids.team)).isVisible((await ctx.db.get(conv))! as any);
+        return { derived, feed };
+      });
+      expect([c, derived]).toEqual([c, !feed]);
+      if (derived) ownerOnlyCount++;
+    }
+    // Both answers occur, so the table pins the rule rather than one branch.
+    expect(ownerOnlyCount).toBeGreaterThan(0);
+    expect(ownerOnlyCount).toBeLessThan(cases.length);
+  });
+
+  test("once a room turns owner-only, a walk-in seated in it can no longer ring people in; someone rung in still can", async () => {
+    const w = await world();
+    const { t, as, ids } = w;
+    const room = sessionRoomKey(ids.shared);
+    const dee = await t.run(async (ctx) => {
+      const dee = await ctx.db.insert("users", { name: "Dee", active_team_id: ids.team } as any);
+      await ctx.db.insert("team_memberships", { user_id: dee, team_id: ids.team, role: "member", joined_at: 1 } as any);
+      return dee;
+    });
+    await startHuddle(w, room);
+    await as(ids.ben).mutation(api.calls.joinRoom, { room_key: room, deliberate: true });
+    await as(ids.ana).mutation(api.calls.invite, { room_key: room, to_user: ids.cy });
+    const invite = await t.run(async (ctx) => (await ctx.db.query("call_invites").collect()).find((i) => String(i.to_user) === String(ids.cy)));
+    await as(ids.cy).mutation(api.calls.respondInvite, { invite_id: invite!._id, accept: true });
+    await as(ids.cy).mutation(api.calls.joinRoom, { room_key: room, deliberate: true });
+    await t.run(async (ctx) => ctx.db.patch(ids.shared, { is_private: true, team_visibility: "private" } as any));
+    await expect(as(ids.ben).mutation(api.calls.invite, { room_key: room, to_user: dee })).rejects.toThrow("Cannot invite");
+    await as(ids.cy).mutation(api.calls.invite, { room_key: room, to_user: dee });
+  });
+
+  test("a room of one keeps billing the team its seats sit in when its owner switches workspace", async () => {
+    const w = await world();
+    const { t, as, ids } = w;
+    const room = dmRoomKey(ids.ana);
+    await as(ids.ana).mutation(api.calls.joinRoom, { room_key: room, deliberate: true });
+    await t.run(async (ctx) => {
+      const other = await ctx.db.insert("teams", { name: "Other", features: { calls: true } } as any);
+      await ctx.db.insert("team_memberships", { user_id: ids.ana, team_id: other, role: "member", joined_at: 1 } as any);
+      await ctx.db.patch(ids.ana, { active_team_id: other });
+    });
+    const auth = await t.run(async (ctx) => authorizeRoom(ctx, ids.ana, room));
+    expect(auth.ok && String(auth.teamId)).toBe(String(ids.team));
+  });
+
+  test("unlocking does not open an owner-only room", async () => {
+    const w = await world();
+    const { as, ids } = w;
+    for (const room of [dmRoomKey(ids.ana), sessionRoomKey(ids.routed)]) {
+      await startHuddle(w, room);
+      await as(ids.ana).mutation(api.calls.setRoomLocked, { room_key: room, locked: true });
+      await as(ids.ana).mutation(api.calls.setRoomLocked, { room_key: room, locked: false });
+      await expect(as(ids.ben).mutation(api.calls.joinRoom, { room_key: room, deliberate: true })).rejects.toThrow("Cannot join room");
+      expect((await as(ids.ben).query(api.calls.getLiveRooms, {})).map((r: any) => r.room_key)).not.toContain(room);
+    }
   });
 });

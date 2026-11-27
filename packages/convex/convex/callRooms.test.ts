@@ -553,7 +553,7 @@ describe("authorizeRoom open door", () => {
   });
 
   test("a live session huddle admits no teammate who cannot see the conversation", async () => {
-    // A session the team cannot read is its owner's alone (ownerOnlyRoom):
+    // A session the team cannot read is its owner's alone (isOwnerOnlyRoom):
     // its open door stays shut, and only a ring lets a teammate in.
     const ctx = fakeCtx({
       conversations: [{ _id: "cv1", user_id: "ua", team_id: TEAM, is_private: true }],
