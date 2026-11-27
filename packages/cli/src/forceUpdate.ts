@@ -1,11 +1,16 @@
-// `cast force-update` (index.ts wires it): which floor a call moves, decided
-// here so it is tested without a backend. Platform staff raise the global
-// floor; a team's admins and its Release Captain raise the team's, named with
-// --team; a team's admins alone lower or clear it. Every raise is checked
-// against latest.json: a floor above every published release is one no
-// machine reaches, and each one below it would try again on every check.
+// `cast force-update`, a command group (commandGroups.ts) registered at the
+// end: which floor a call moves, decided here so it is tested without a
+// backend. Platform staff raise the global floor; a team's admins and its
+// Release Captain raise the team's, named with --team; a team's admins alone
+// lower or clear it. Every raise is checked against latest.json: a floor above
+// every published release is one no machine reaches, and each one below it
+// would try again on every check.
 
+import type { Command } from "commander";
 import { isBelowMinimum } from "@platform/cli-kit/update";
+import type { GroupDeps } from "./commandGroupTypes.js";
+import { commandGroup } from "./commandGroupLookup.js";
+import { defaultConfigDir, readAuthConfig } from "./config/readAuthConfig.js";
 
 export type ForceUpdateOptions = { team?: string; deploy?: string; clear?: boolean; lowerTo?: string };
 
@@ -84,4 +89,56 @@ export async function runForceUpdate(version: string | undefined, o: ForceUpdate
 function fail(deps: ForceUpdateDeps, line: string): number {
   deps.error(line);
   return 1;
+}
+
+export function registerForceUpdateCommand(program: Command, { flow }: GroupDeps): void {
+  program
+    .command("force-update")
+    .description(commandGroup("force-update").description)
+    .argument("[version]", "Minimum version required (e.g., 1.0.12)")
+    .option("--team <team>", "Move this team's floor; without it only platform staff may run this, and it sets every machine's floor")
+    .option("--deploy <deploy>", "A live CLI release's deploy (dp-N): raise its team's floor only when the daemon changed since the release the team was last forced onto, wait for the team's machines, and record both on the deploy")
+    .option("--wait <minutes>", "With --deploy: how long to wait for the team's online machines to run it", "20")
+    .option("--lower-to <version>", "With --team: lower the team's floor to this version (team admins)")
+    .option("--clear", "With --team: clear the team's floor (team admins)")
+    .action(async (version: string | undefined, options: { team?: string; deploy?: string; wait: string; lowerTo?: string; clear?: boolean }) => {
+      const config = readAuthConfig(defaultConfigDir());
+      if (!config?.auth_token || !config?.convex_url) {
+        console.error("Not authenticated. Run: cast auth");
+        process.exit(1);
+      }
+      const { convex_url: convexUrl, auth_token: authToken, user_id: userId } = config;
+      const [{ SyncService }, { updater }] = await Promise.all([import("./syncService.js"), import("./update.js")]);
+      const setGlobal = async (v: string) => {
+        const sync = new SyncService({ convexUrl, authToken, userId });
+        try { await sync.getClient().mutation("systemConfig:setMinCliVersion" as any, { version: v, api_token: authToken }); return true; }
+        catch (err) { if (String(err instanceof Error ? err.message : err).includes("Admin access required")) return false; throw err; }
+      };
+      const post = (p: string, body: Record<string, unknown>) => flow.cliPost(p, body, { throwOnError: true });
+      try {
+        const code = await runForceUpdate(version, options, {
+          latest: async () => (await updater.fetchManifest())?.version ?? null,
+          setGlobal,
+          team: async (name) => { const ws = await flow.writeWorkspace(name); return ws.kind === "team" ? { teamId: ws.teamId, name: ws.name ?? name } : null; },
+          activeTeam: async () => { const ws = await flow.readWorkspace(); return ws.kind === "team" ? (ws.name ?? null) : null; },
+          post,
+          finish: async (v) => {
+            const { finishCliRelease } = await import("./releaseFinish.js");
+            return finishCliRelease({
+              root: process.cwd(), deploy: options.deploy!, version: v, waitMs: (Number(options.wait) || 0) * 60_000,
+              post, fromSession: flow.callingSession(), setGlobal,
+              // No token: the global floor alone, not the caller's teams' raised over it.
+              globalFloor: async () => (await new SyncService({ convexUrl, authToken, userId }).getClient().query("systemConfig:getMinCliVersion" as any, {})) as string | null,
+            });
+          },
+          fromSession: flow.callingSession(),
+          log: (l) => console.log(l),
+          error: (l) => console.error(l),
+        });
+        process.exit(code);
+      } catch (err) {
+        console.error(`${options.deploy ? "Release finish" : "force-update"} failed: ${err instanceof Error ? err.message : String(err)}`);
+        process.exit(1);
+      }
+    });
 }

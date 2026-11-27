@@ -63,7 +63,7 @@ export const waitOwesSetter = (w: TaskWait, convId: string): boolean =>
  * tasks it set waits on (parked_on_task_ids). `parkedOn` is that list kept to
  * the tasks whose waits still owe this session a wake. A task blocker that parks it is
  * returned in `repairs` when its `blocks` mirror lacks the held task (an edge
- * named before the blocker existed gets none, tasks.patchDepMirror), because
+ * named before the blocker existed gets none, taskEdges.patchDepMirror), because
  * the blocker closing finds the sessions to recompute through that mirror. A
  * session reviewing the task it holds gets no blocker from it: owner wakes
  * pass reviewers over (lib/taskOwner.boundSessionsOf), so nothing would come.
