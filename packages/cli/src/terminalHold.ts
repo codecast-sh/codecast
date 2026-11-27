@@ -46,3 +46,16 @@ export class BlankStartHoldError extends Error {
     this.holdReason = reason;
   }
 }
+
+// A message to a subagent a person took over, while the copy inside its
+// parent's process may still run (subagentPromotion.ts). Resuming it now would
+// run a second copy beside it; the parent was told to stop it, and the message
+// goes out once it has.
+export const PROMOTION_HOLD_RECHECK_MS = 10_000;
+
+export class PromotionHoldError extends Error {
+  readonly recheckMs = PROMOTION_HOLD_RECHECK_MS;
+  constructor(readonly holdReason: string) {
+    super(holdReason);
+  }
+}

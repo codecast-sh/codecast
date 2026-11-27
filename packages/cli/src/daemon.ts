@@ -342,7 +342,8 @@ import {
   performReconciliation,
   repairDiscrepancies,
 } from "./reconciliation.js";
-import { SubagentFinishTracker } from "./subagentFinish.js";
+import { SubagentFinishTracker, readSubagentRunFacts, subagentRunState } from "./subagentFinish.js";
+import { promotionHold } from "./subagentPromotion.js";
 import { TEST_SCRATCH_DIRNAME, isTestArtifactPath, isProjectAllowedToSync, launchScopeRefusal, markLaunched, transcriptScopeRefusal, wasLaunched, watchDirFilter, watchFilter } from "./syncScope.js";
 import { folderOnThisMachine } from "@codecast/shared/team/folderLists";
 import { parseOrphanProcessIdentity } from "./orphanProcessIdentity.js";
@@ -353,7 +354,7 @@ import { hasSessionServer, listEveryServer, sessionServerSockets, sessionSocketN
 import { ghosttyPane } from "./ghostty.js";
 import type { PaneTransport } from "./paneTransport.js";
 import { HERD_SESSION, findHerdrPaneForTty, herdrRequest, herdrSocketPath, herdrSocketPaths, openHerdrTab } from "./herdr.js";
-import { BlankStartHoldError, RunLimitHoldError, TerminalHoldError } from "./terminalHold.js";
+import { BlankStartHoldError, PromotionHoldError, RunLimitHoldError, TerminalHoldError } from "./terminalHold.js";
 import { ForeignWriterHoldError, foreignSessionWriter, foreignWriterScreen, parsePsRows, PS_ROWS_ARGS, type PsRow } from "./foreignSessionWriter.js";
 import { HERD_TAKE_PATH, SwapHeldError, abortableWait, closeHerdrPane, pollUntilUp, serveHerdTake, swapHeld, takeBusy, type HerdTakeDeps } from "./herdTake.js";
 import { herdViewerAlive } from "./herdViewer.js";
@@ -12502,6 +12503,35 @@ export function resetSubagentActivityForTests(): void {
 // Marks a finished Task subagent completed after its transcript goes quiet,
 // and reopens it when its transcript grows again (subagentFinish.ts).
 export const subagentFinish = new SubagentFinishTracker();
+
+// A message that would resume a Claude Code subagent as its own process waits
+// while the copy inside its parent's process may still run, and the agent goes
+// on the SendMessage deny list first (subagentPromotion.ts). A workflow agent
+// is refused later in delivery instead: it is never resumed.
+async function holdForInProcessSubagent(sessionId: string, conversationId: string): Promise<void> {
+  const file = findSessionFile(sessionId);
+  if (!file || file.agentType !== "claude" || !isSubagentTranscriptPath(file.path) || isWorkflowAgentTranscriptPath(file.path)) return;
+  const reason = await promotionHold(file.path, conversationId.slice(0, 7), {
+    configDir: CONFIG_DIR,
+    now: Date.now,
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    runState: async (jsonlPath) => {
+      const facts = await readSubagentRunFacts(jsonlPath);
+      return facts ? subagentRunState(facts) : "running";
+    },
+    mtimeMs: (jsonlPath) => {
+      try {
+        return fs.statSync(jsonlPath).mtimeMs;
+      } catch {
+        return null;
+      }
+    },
+  });
+  if (reason) {
+    logDelivery(`[PROMOTE] ${sessionId.slice(0, 20)} still runs in its parent's process; holding`);
+    throw new PromotionHoldError(reason);
+  }
+}
 
 // Cap how many bytes a single sync pass reads from a file. A large unsynced
 // backlog (e.g. an old, image-heavy session that gets resumed) used to be re-read
@@ -28623,6 +28653,8 @@ async function deliverMessageIntoSession(
   if (agentTypeHint) detectedType = agentTypeHint;
 
   logDelivery(`Delivering to session=${sessionId.slice(0, 12)} conv=${conversationId.slice(0, 12)} type=${detectedType}`);
+  // Before any lookup: a subagent's process lookup can only find its parent's.
+  if (detectedType === "claude") await holdForInProcessSubagent(sessionId, conversationId);
   // The agent has to redraw the paste for the Enter gate to see it: out of background priority first.
   await holdForDelivery(sessionId);
 
@@ -34752,7 +34784,7 @@ async function main(): Promise<void> {
             logDelivery(`HELD: msg=${msg._id.slice(0, 8)} ${hold.holdReason} in conv=${msg.conversation_id.slice(0, 12)}; retrying when the screen changes`);
             holdConversationForPrompt(msg.conversation_id);
             rependAfterAttempt(syncService, msg._id, hold).catch(logConvexFailure);
-          } else if (err instanceof CloudAgentHoldError || err instanceof SwapHeldError || err instanceof RunLimitHoldError || err instanceof ForeignWriterHoldError || err instanceof BlankStartHoldError || err instanceof TerminalHoldError || err instanceof BackendSwitchHoldError) {
+          } else if (err instanceof CloudAgentHoldError || err instanceof SwapHeldError || err instanceof RunLimitHoldError || err instanceof ForeignWriterHoldError || err instanceof BlankStartHoldError || err instanceof PromotionHoldError || err instanceof TerminalHoldError || err instanceof BackendSwitchHoldError) {
             // A cloud agent that cannot take the message yet (its setup is
             // missing, or a turn is still running): held with its reason,
             // never spending the retry budget, and tried again at the error's

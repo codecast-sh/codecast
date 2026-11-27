@@ -24,7 +24,7 @@ import { stepTimer } from "./stepTimer";
 import { setKnownValuesForTest } from "./knownValueRedaction";
 import { CloudAgentHoldError, CloudAgentUnsentError } from "./cloudAgents/types";
 import { SwapHeldError } from "./herdTake";
-import { BlankStartHoldError, RunLimitHoldError, TerminalHoldError } from "./terminalHold";
+import { BlankStartHoldError, PromotionHoldError, RunLimitHoldError, TerminalHoldError } from "./terminalHold";
 import { ForeignWriterHoldError } from "./foreignSessionWriter";
 import { BackendSwitchHoldError } from "./claudeSdk/switchBackend";
 import { ghosttyPane } from "./ghostty";
@@ -65,7 +65,7 @@ function fixture(transport = "tmux", cached = true) {
   const captureSizes: number[] = [];
   const reaped: number[] = [];
   const killed: string[] = [];
-  const hooks = { resume: fail("resume") as (...args: unknown[]) => unknown, capture: () => {}, input: (_event: string) => {}, loaded: () => {}, exec: async (_args: string[]) => {}, prepare: async (): Promise<unknown> => null, markWrite: undefined as undefined | ((id: string) => Promise<unknown>) };
+  const hooks = { resume: fail("resume") as (...args: unknown[]) => unknown, capture: () => {}, input: (_event: string) => {}, loaded: () => {}, exec: async (_args: string[]) => {}, prepare: async (): Promise<unknown> => null, markWrite: undefined as undefined | ((id: string) => Promise<unknown>), promote: async (_sessionId: string): Promise<void> => {} };
   const timers: Array<{ fn: () => unknown; ms: number; cancelled: boolean }> = [];
   const clock = { now: 1_000_000, steps: 0 };
   const step = (ms = 0) => {
@@ -185,7 +185,7 @@ function fixture(transport = "tmux", cached = true) {
     tmuxExec, execAsync, redactSecrets, stepTimer,
     // The delivery catch also holds a cloud agent's message; a hold re-drives the scan.
     // No cloud agent owns this fixture's conversation, so every one goes to the pane.
-    CloudAgentHoldError, CloudAgentUnsentError, SwapHeldError, TerminalHoldError, RunLimitHoldError, ForeignWriterHoldError, BackendSwitchHoldError, BlankStartHoldError, backendSwitchHeld: () => false, pollPendingNow: () => {},
+    CloudAgentHoldError, CloudAgentUnsentError, SwapHeldError, TerminalHoldError, RunLimitHoldError, ForeignWriterHoldError, BackendSwitchHoldError, BlankStartHoldError, PromotionHoldError, backendSwitchHeld: () => false, pollPendingNow: () => {},
     cloudAgents: { deliver: async () => null, forConversation: () => undefined, interrupt: async () => null },
     // A recovery continue restarts a pane that holds its own credential first;
     // this fixture's machine has no fleet store, so no pane is restarted.
@@ -281,6 +281,8 @@ function fixture(transport = "tmux", cached = true) {
     planSessionTeardown, acquireSessionProcessOwnership: async () => "owned",
     reapPidTree: async (pid: number) => { reaped.push(pid); return 1; }, sessionProcessCache: new Map(),
     workflowAgentTranscriptPathFor: async () => null, isSessionCircuitOpen: () => false,
+    // No session here is a subagent transcript (subagentPromotion.ts).
+    holdForInProcessSubagent: (sessionId: string) => hooks.promote(sessionId),
     // No session here last ran by hand in another terminal (handHostGrace.ts).
     waitForHandHost, deadClaims: new Map(), registryRegistrationFor: () => null, MACHINE_BOOTED_AT: 0,
     resetSessionDeliveryFailures: () => {}, materializedSessions: new Set(), postDeliveryHealthCheck: async () => {},
@@ -1186,6 +1188,23 @@ describe("machine prompt delivery safety", () => {
     expect(unreachableTerminalOf(f.holds[0]?.holdReason)).toBe(label);
     expect(f.reaped).toEqual([]);
     expect(f.bodies).toEqual([]);
+  });
+
+  // pl-1134: a subagent a person took over runs as its own process only once
+  // the copy inside its parent's process has stopped. Until then the message
+  // is held with that reason, at the hold's pace, before any process lookup
+  // or resume could start a second copy.
+  test("a subagent whose in-process copy still runs is held, never looked up or resumed", async () => {
+    const f = fixture();
+    f.hooks.promote = async () => { throw new PromotionHoldError("waiting for its parent to stop it"); };
+    f.hooks.resume = () => { throw new Error("resumed beside the in-process copy"); };
+    await f.scan([{ _id: "update", content: "take it from here", retry_count: 0 } as any]);
+    const rechecks = f.timers.filter((t: { ms: number }) => t.ms < 180_000);
+    expect(rechecks.map((t: { ms: number }) => t.ms)).toEqual([10_000]);
+    await rechecks[0].fn();
+    expect(f.holds).toEqual([{ id: "update", holdReason: "waiting for its parent to stop it" }]);
+    expect(f.bodies).toEqual([]);
+    expect(f.reaped).toEqual([]);
   });
 
   test("AppleScript defaults preserve human submit and explicit poll scripts", () => {
