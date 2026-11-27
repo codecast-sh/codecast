@@ -37,6 +37,7 @@ import { spawn, spawnSync, whichBin } from "../proc.js";
 import { narrated } from "./narrate.js";
 import { expireIfSpent, remainingMs, setStage } from "./deadline.js";
 import { browserHome } from "./profile.js";
+import { withFileLockSync } from "../lockFile.js";
 import { frontAppPid, restoreFocusIfStolen } from "./focusGuard.js";
 import { readState } from "./instance.js";
 import { agentTabStampSource } from "./observe.js";
@@ -102,6 +103,9 @@ export interface InstallResult {
  * needs write access to a directory the user may not own, and silently changing
  * a machine-wide binary is not ours to do. A local prefix is self-contained and
  * removable with one `rm -rf`.
+ *
+ * Several agents' first `cast browser` calls can land at once, and two npm runs
+ * into one prefix race; the lock makes the later ones wait, then find the copy.
  */
 export function ensureEngine(opts: { quiet?: boolean } = {}): InstallResult {
   const existing = findEngine();
@@ -109,17 +113,25 @@ export function ensureEngine(opts: { quiet?: boolean } = {}): InstallResult {
 
   const home = engineHome();
   fs.mkdirSync(home, { recursive: true });
+  return withFileLockSync(path.join(home, "install.lock"), () => installEngine(home, opts), { waitMs: 5 * 60_000, staleMs: 10 * 60_000 });
+}
+
+function installEngine(home: string, opts: { quiet?: boolean }): InstallResult {
+  const existing = findEngine();
+  if (existing) return { binary: existing, installed: false };
   if (!opts.quiet) {
     process.stderr.write(`  installing the browser engine (${ENGINE_PACKAGE}@${ENGINE_VERSION}), one time…\n`);
   }
   const res = spawnSync(
     "npm",
     ["install", `${ENGINE_PACKAGE}@${ENGINE_VERSION}`, "--prefix", home, "--no-save", "--silent"],
-    { encoding: "utf-8", stdio: opts.quiet ? ["ignore", "ignore", "ignore"] : ["ignore", "ignore", "inherit"] },
+    { encoding: "utf-8", stdio: ["ignore", "ignore", "pipe"] },
   );
   if (res.status !== 0) {
+    // npm's own last word (or why it could not start) is the reason worth keeping.
+    const npmSaid = res.error?.message ?? String(res.stderr ?? "").trim().split("\n").filter(Boolean).pop();
     throw new Error(
-      `could not install the browser engine.\n` +
+      `could not install the browser engine${npmSaid ? ` (npm: ${npmSaid})` : ""}.\n` +
         `  Install it yourself with:  npm install -g ${ENGINE_PACKAGE}\n` +
         `  or point cast at an existing copy:  CAST_BROWSER_ENGINE=/path/to/${ENGINE_PACKAGE}`,
     );
@@ -509,6 +521,61 @@ export function engineFitness(): EngineFitness {
   if (!v) return { ok: true, version: "unknown" };
   if (compareVersions(v, ENGINE_MIN_VERSION) < 0) return { ok: false, reason: "too-old", version: v };
   return { ok: true, version: v };
+}
+
+/** How long a failed first-use install is left alone before cast tries again,
+ *  so a machine with no npm or no network does not pay for one on every call. */
+const INSTALL_RETRY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Should the engine drive? Installs it on first use, on a laptop and a cloud
+ * host alike: without it an agent gets the built-in driver, which lacks verbs
+ * the agent docs tell it to run (read, handoff, subscribe). When the install
+ * cannot run, says so in one line and leaves the built-in driver to it.
+ */
+export function resolveEngine(io: {
+  env?: NodeJS.ProcessEnv;
+  fitness?: () => EngineFitness;
+  install?: () => unknown;
+  warn?: (line: string) => void;
+  now?: number;
+} = {}): boolean {
+  const { env = process.env, fitness = engineFitness, install = ensureEngine, warn = (l) => process.stderr.write(`  ! ${l}\n`), now = Date.now() } = io;
+  if (env.CAST_BROWSER_LEGACY === "1") return false;
+  const fit = fitness();
+  if (fit.ok) return true;
+  if (fit.reason === "too-old") {
+    warn(`browser engine ${fit.version} is older than ${ENGINE_MIN_VERSION}; using the built-in driver. Upgrade with: npm install -g ${ENGINE_PACKAGE}@${ENGINE_VERSION}`);
+    return false;
+  }
+  // A test that registers `cast browser` must not reach the network for npm.
+  if (env.NODE_ENV === "test") return false;
+  const failedMarker = path.join(engineHome(), "install-failed");
+  let failedAt = 0;
+  let why = "";
+  try {
+    failedAt = fs.statSync(failedMarker).mtimeMs;
+    why = fs.readFileSync(failedMarker, "utf-8").trim();
+  } catch {
+    /* never failed */
+  }
+  if (now - failedAt >= INSTALL_RETRY_MS) {
+    try {
+      install();
+      fs.rmSync(failedMarker, { force: true });
+      return true;
+    } catch (err) {
+      why = (err as Error).message.split("\n")[0];
+      try {
+        fs.mkdirSync(path.dirname(failedMarker), { recursive: true });
+        fs.writeFileSync(failedMarker, why);
+      } catch {
+        /* the marker only spares retries */
+      }
+    }
+  }
+  warn(`no browser engine${why ? ` (${why})` : ""}, so read, handoff, subscribe and the other engine verbs are unavailable; using the built-in driver. Install with: npm install -g ${ENGINE_PACKAGE}@${ENGINE_VERSION}`);
+  return false;
 }
 
 /**
