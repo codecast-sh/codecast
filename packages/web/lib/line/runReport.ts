@@ -500,6 +500,8 @@ export function gateAnswer(run: Pick<ReportRun, "gate_answer" | "gate_choices" |
  *  (the merge left to a person), drawn neutral rather than as a failure.
  *  "nothing": it ran and its result said it found nothing to do there (stationResult.ts). */
 export type StepState = "done" | "failed" | "live" | "waiting" | "noted" | "nothing" | "unknown";
+/** A route step's result: the run went this way. */
+export const ROUTE_WORDS = "Route taken";
 /** Every step is named by its station; `note` says why when the result
  *  needs it (a merge left to a person); `href` is where the result leads:
  *  the session that did the step, or the task when a person finished it. */
@@ -520,6 +522,8 @@ function answeredWords(gateId: string, answer: string, who: string | null | unde
 const UNAPPROVED_STEP = "Ran without an approval, so it is not a ship";
 
 function stepOf(row: RunNodeRow, run: ReportRun, task?: ReportTask | null, opts: PathOpts = {}): ReportStep {
+  // A segment's way out the run took and went on from (runNodeRows `route`): where it went, neither passed nor failed.
+  if (row.route) return { id: row.id, label: stepLabel(row), state: "noted", result: ROUTE_WORDS, at: row.completed_at ?? row.started_at };
   const gate = GATES.has(row.id);
   // The merge step never fails a run (line.cast): a refused merge leaves the
   // change to a person, and the task's blocker comment says what is left.
