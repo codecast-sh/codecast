@@ -375,9 +375,21 @@ unknown_command() {
 # it holds the world and logs the calls it answered where the agent cannot
 # write, so neither can be forged. The reply is the exit code on its first
 # line, then the answer. 125 leaves the call to this guard.
+# reads_stdin <argv...>: the CLI reads this call's stdin: a `-` argument, or a
+# board verb that takes its items on stdin (`cast board place <doc> grid <<EOF`),
+# as wantsStdin says in packages/evals/src/fakes/cast/index.ts.
+reads_stdin() {
+  has_arg - "$@" && return 0
+  [ "${1:-}" = board ] || return 1
+  case "${2:-}" in
+    place|matrix|timeline|themes) return 0 ;;
+    apply) ! has_arg -f "$@" && ! has_arg --file "$@" ;;
+    *) return 1 ;;
+  esac
+}
 fake_via_broker() {
   local f="" n=0 reply="${TMPDIR:-${RUN_DIR:-$PWD}}/.fake-reply.$$" code
-  if has_arg - "$@"; then f="${TMPDIR:-${RUN_DIR:-$PWD}}/.fake-stdin.$$"; cat > "$f"; n="$(wc -c < "$f" | tr -dc 0-9)"; fi
+  if reads_stdin "$@"; then f="${TMPDIR:-${RUN_DIR:-$PWD}}/.fake-stdin.$$"; cat > "$f"; n="$(wc -c < "$f" | tr -dc 0-9)"; fi
   { [ -z "$f" ] || cat "$f"; printf '%s\0' "$@"; } | curl -sS --max-time 120 -o "$reply" -H "X-Dry-Run-Stdin-Bytes: ${n:-0}" -H "X-Dry-Run-Call: $CALL_ID" --data-binary @- "${DRY_RUN_BROKER%/read}/fake" || { rm -f "$f" "$reply"; return 125; }
   code="$(sed -n 1p "$reply" | tr -dc 0-9)"
   [ "${code:-125}" = 125 ] || tail -n +2 "$reply"

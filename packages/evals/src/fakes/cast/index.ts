@@ -1,3 +1,6 @@
+import { BOARD_VERBS } from '@codecast/shared/artifacts/board';
+
+import { boardVerb } from './board';
 import { parseWith, resolveCommand, type Tree } from './tree';
 import { VERBS, type Answer } from './verbs';
 import { loadWorld, saveWorld, withLock, type FakeWorld, type WorldSeed } from './world';
@@ -19,12 +22,18 @@ export function answer(argv: string[], stdin: string, w: FakeWorld, tree: Tree):
   if (argv.some((a) => a === '--help' || a === '-h') || argv[0] === 'help') return null;
   const hit = resolveCommand(tree, argv);
   if (!hit) return null;
-  const handler = VERBS[hit.node.path.join(' ')];
+  const path = hit.node.path.join(' ');
+  // A board layout verb takes its own flags (the CLI's allowUnknownOption), so it gets the words as typed.
+  if (hit.node.path[0] === 'board' && hit.node.path.length === 2 && BOARD_VERBS[hit.node.path[1]!]) {
+    w.seq++;
+    return boardVerb(hit.node.path[1]!, hit.rest, stdin, { w, stdin });
+  }
+  const handler = VERBS[path];
   if (!handler) return null;
   const r = parseWith(hit.node, hit.rest, stdin);
   w.seq++;
   if ('error' in r) return { out: `${r.error}\n`, exit: 1, ...(r.error.startsWith('error: ') ? { cli: true as const } : {}) };
-  return handler(r.parsed, { w });
+  return handler(r.parsed, { w, stdin });
 }
 
 /**
@@ -44,5 +53,7 @@ export function openFake(o: { worldPath: string; seed?: WorldSeed; tree: Tree })
     });
 }
 
-/** Whether a call would read stdin: the CLI reads it only for a `-` argument or option value. */
-export const wantsStdin = (argv: string[]): boolean => argv.includes('-');
+/** Whether a call would read stdin: a `-` argument or option value, or a board verb that reads its items from it (the guard's reads_stdin). */
+export const wantsStdin = (argv: string[]): boolean =>
+  argv.includes('-') ||
+  (argv[0] === 'board' && (['place', 'matrix', 'timeline', 'themes'].includes(argv[1] ?? '') || (argv[1] === 'apply' && !argv.includes('-f') && !argv.includes('--file'))));
