@@ -101,9 +101,8 @@ describe("every catalog snippet is wired into the CLI", () => {
     // Two mechanisms keep an installed section current, and a snippet needs
     // only one: refreshEnabledSnippets() reinstalls every enabled section on
     // `cast update`, and some snippets additionally carry a version-gated
-    // re-check. Browser has both. (Not asserted for the whole catalog — forks,
-    // for one, relies on the refresh path alone and never writes its version
-    // key, so a blanket rule here would encode an invariant that is not real.)
+    // re-check. Browser has both. The section snippets get both from the
+    // SECTION_SNIPPET_VERSIONS table (snippets.sections.test.ts pins it).
     expect(indexSource).toContain("config.browser_enabled && config.browser_version");
     expect(indexSource).toContain("if (config.browser_enabled) installBrowserSnippet(true)");
   });

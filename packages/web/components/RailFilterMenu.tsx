@@ -16,12 +16,13 @@ import {
   type BucketItem,
 } from "../store/inboxStore";
 import { clickBucketChip, clickProjectChip } from "../store/chipFilterClicks";
-import { projectAxisLabel, projectAxisNoun, workProjectIdOfChipKey } from "../store/workProjects";
+import { axisKeyShowsCount, projectAxisLabel, projectAxisNoun, workProjectIdOfChipKey } from "../store/workProjects";
 import { useRosterMachines } from "./DeviceBadge";
 import { useRouter } from "next/navigation";
 import { getLabelColor } from "../lib/labelColors";
 import { OWNS_MODIFIER_CLICK } from "../lib/openIntent";
 import { folderShortList, type FolderActivity } from "../lib/railFolderFilter";
+import { priorityMenuRows } from "../store/priorityChips";
 import { ContextMenu, useContextMenu, CtxItem, CtxHeader, CtxSeparator } from "./ui/context-menu";
 import {
   DropdownMenu,
@@ -43,9 +44,10 @@ type ChipCtxPayload =
 // every folder a session ever ran in (scratch folders named after prompts or
 // UUIDs included) in front of the person all the time.
 //
-// The menu leads with the five folders the person works in most over the last
-// 30 days (lib/railFolderFilter), then "All folders…", which swaps the menu to
-// the full list with a search field. Labels follow in their own group, with
+// The menu lists Codecast projects, then the five folders the person works in
+// most over the last 30 days (lib/railFolderFilter) with "All folders…", which
+// swaps the menu to the full list with a search field, then machines, then
+// Top 3 / 5 / 10 of the person's priorities. Labels come last, with
 // "New label…". Every chip capability survives in the menu:
 //   - click filters to one term; ⇧-click adds or removes a term and keeps the
 //     menu open; ⌥-click hides (the same keys work with Enter on the keyboard);
@@ -65,6 +67,7 @@ export function RailFilterMenu({
   projectPathByName,
   projectActivity,
   machineCounts,
+  priorityCounts,
   dropSessionOnLabel,
 }: {
   bucketCounts: Record<string, number>;
@@ -73,6 +76,8 @@ export function RailFilterMenu({
   projectActivity?: Record<string, FolderActivity>;
   /** `mc:<device>` keys on the same axis; empty when there's one machine. */
   machineCounts: Array<[string, number]>;
+  /** `pr:<n>` keys (Top 3, 5, 10); empty when no session serves a top priority. */
+  priorityCounts: Array<[string, number]>;
   dropSessionOnLabel: (draggedId: string, bucketId: string | null) => void;
 }) {
   const s = useTrackedStore([
@@ -244,7 +249,8 @@ export function RailFilterMenu({
   }, []);
 
   // ── Folders ──────────────────────────────────────────────────────────────
-  const countByFolder = useMemo(() => new Map([...projectCounts, ...machineCounts]), [projectCounts, machineCounts]);
+  const priorityRows = useMemo(() => priorityMenuRows(priorityCounts, projectFilters), [priorityCounts, projectFilters]);
+  const countByFolder = useMemo(() => new Map([...projectCounts, ...machineCounts, ...priorityRows]), [projectCounts, machineCounts, priorityRows]);
   const shortFolders = useMemo(() => {
     const list = folderShortList(folders, projectActivity);
     // A folder in the filter always shows here, so it can be seen and undone
@@ -272,7 +278,7 @@ export function RailFilterMenu({
     ? activeTerms
         .map((t) => `${t.exclude ? "Hiding" : "Showing"} ${activeKind === "label" ? "label" : projectAxisNoun(t.id)} "${activeKind === "label" ? s.buckets[t.id]?.name ?? t.id : chipLabel(t.id)}"`)
         .join(", ")
-    : "Filter by project, folder, machine or label";
+    : "Filter by project, folder, machine, priority or label";
   const clearFilter = () => {
     const store = useInboxStore.getState();
     if (labelFilters.length > 0) store.setActiveBucketFilter(null);
@@ -303,7 +309,7 @@ export function RailFilterMenu({
       >
         {stateIcon(term)}
         <span className={`truncate ${term ? "text-sol-text" : ""}`}>{chipLabel(name)}</span>
-        <span className={COUNT}>{countByFolder.get(name) ?? 0}</span>
+        {axisKeyShowsCount(name) && <span className={COUNT}>{countByFolder.get(name) ?? 0}</span>}
       </DropdownMenuItem>
     );
   };
@@ -495,6 +501,15 @@ export function RailFilterMenu({
                   {/* The machine a session runs on (owner_device_id). */}
                   <DropdownMenuLabel className={groupLabel}>Machines</DropdownMenuLabel>
                   {machineCounts.map(([name]) => folderItem(name))}
+                  <DropdownMenuSeparator />
+                </>
+              )}
+              {priorityRows.length > 0 && (
+                <>
+                  {/* Sessions serving the viewer's N highest-ranked priorities
+                      in this workspace (store/priorityOrder). */}
+                  <DropdownMenuLabel className={groupLabel}>Priorities</DropdownMenuLabel>
+                  {priorityRows.map(([name]) => folderItem(name))}
                   <DropdownMenuSeparator />
                 </>
               )}

@@ -2339,7 +2339,6 @@ function installTaskSnippet(update = false) { return installSnippetSection("trig
 function installWorkSnippet(update = false) { return installSnippetSection("work", update); }
 function installWorkflowSnippet(update = false) { return installSnippetSection("workflow", update); }
 function installVisualSnippet(update = false) { return installSnippetSection("visual", update); }
-function installForksSnippet(update = false) { return installSnippetSection("forks", update); }
 // The section tells the agent to keep its pinned state current; the
 // thread-state hook that raises the question again once work is underway is
 // one of the codecast hooks, and follows their switch (syncHooks).
@@ -2431,8 +2430,9 @@ function uninstallSkillsSnippet(): void {
  * refresh and the `cast install` table all derive from this one list, so a new
  * section snippet is its catalog entry, its version and one line here.
  */
-type SectionSnippetSlug = "calls" | "limits" | "pr" | "computer" | "sim" | "vault" | "check" | "mods";
+type SectionSnippetSlug = "forks" | "calls" | "limits" | "pr" | "computer" | "sim" | "vault" | "check" | "mods";
 const SECTION_SNIPPET_VERSIONS: Record<SectionSnippetSlug, () => string> = {
+  forks: getForksVersion,
   calls: getCallsVersion,
   limits: getLimitsVersion,
   pr: getPrVersion,
@@ -7203,10 +7203,10 @@ program
     "new = session entered the watched set · transition = work_state changed · gone = left\n" +
     'the set (stopped matching --state, or dismissed). Event states use underscores\n' +
     '("needs_input"); the --state flag accepts either form.\n\n' +
-    "Orchestrate a fleet: spawn workers under a label, watch that label, act when a worker\n" +
+    "Orchestrate a fleet: spawn workers nested under you, watch them by id, act when a worker\n" +
     "flips to done (finished) or needs_input (blocked); dormant means parked, not blocked:\n" +
-    '  cast spawn --label fleet "task A" "task B"\n' +
-    "  cast sessions --label fleet -w --json   # → {\"event\":\"transition\",\"to\":\"done\",…}\n" +
+    '  cast spawn --subagent -- "task A" "task B"   # prints each worker\'s id\n' +
+    "  cast sessions <id> <id> -w --json   # → {\"event\":\"transition\",\"to\":\"done\",…}\n" +
     '  cast read <id>  /  cast send <id> "next step"\n\n' +
     "Examples:\n" +
     "  cast sessions                  # state snapshot of your sessions\n" +
@@ -11199,7 +11199,6 @@ program
     const SNIPPET_BEHAVIOR: Record<string, { getVersion: () => string; install: (update?: boolean) => { installed: boolean; updated: boolean } | Promise<{ installed: boolean; updated: boolean }>; reEnable: string }> = {
       memory: { getVersion: getMemoryVersion, install: installMemorySnippet, reEnable: "cast memory" },
       messaging: { getVersion: getMessagingVersion, install: installMessagingSnippet, reEnable: "cast messaging install" },
-      forks: { getVersion: getForksVersion, install: installForksSnippet, reEnable: "cast install" },
       tasks: { getVersion: getWorkVersion, install: installWorkSnippet, reEnable: "cast task install" },
       triggers: { getVersion: getTaskVersion, install: installTaskSnippet, reEnable: "cast trigger install" },
       workflows: { getVersion: getWorkflowVersion, install: installWorkflowSnippet, reEnable: "cast workflow install" },
@@ -12193,7 +12192,7 @@ program
   .option("--at <line>", "Fork at message line N (cast read numbering); default: just before the latest user message, so the fork request stays out of the branches")
   .option("--tip", "Fork at the very end instead, keeping everything including the latest user message — use when forking on your own initiative, where there is no fork request to strip")
   .option("--from <index>", "Alias for --at (back-compat)")
-  .option("--label <name>", "File each branch under this label instead of the parent's (created if new; branches inherit the parent label by default)")
+  .option("--label <name>", "File the branches under this label instead of the parent's (created if new). Only when the human asks, or to group two or more branches they will watch together")
   .option("--all-branches", "Make every direction a branch and keep this thread out of the fan-out (default with two or more directions: this thread takes the first)")
   .option("--cloud [host]", "Run each branch in its own worktree on the cloud host (seeded forks only); [host] = a registered instance id. This thread's own direction stays here unless --all-branches")
   .option("--start-from <source>", "With --cloud: what each worktree starts from: checkout (this machine's branch, HEAD and uncommitted changes; default) or origin-main")
@@ -12618,7 +12617,7 @@ program
   .option("--cloud [host]", "Run each task in its own worktree on the cloud host (wakes it, syncs the repo + gitignored files over SSH); [host] = a registered instance id")
   .option("--shared", "With --cloud: run in the host's main checkout instead of a fresh worktree (one task only; refused when that checkout is dirty or already used by a live session)")
   .option("--from <source>", "With --cloud: what each worktree starts from: checkout (this machine's branch, HEAD and uncommitted changes; default) or origin-main")
-  .option("--label <name>", "File each spawned session under a label (created if new)")
+  .option("--label <name>", "File the spawned sessions under a label (created if new). Only when the human asks, or to group two or more independent sessions; never for --subagent workers")
   .option("--local", "Start on this machine even when the load governor would send unattended work to the cloud host")
   .option("--unattended", "Run as an unattended principal: reversible actions proceed, protected decisions go through cast decide, no inline questions (the briefing every line hand gets)")
   .option("--json", "Machine-readable output")

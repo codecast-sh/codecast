@@ -29,20 +29,45 @@ export function machineIdOfChipKey(key: string | null | undefined): string | nul
   return key?.startsWith(MACHINE_CHIP_PREFIX) ? key.slice(MACHINE_CHIP_PREFIX.length) : null;
 }
 
+// And the viewer's priorities (`pr:<n>`): a session answers to `pr:3` when it
+// serves one of their three highest-ranked priorities in the active workspace.
+export const PRIORITY_CHIP_PREFIX = "pr:";
+export const PRIORITY_TOP_NS = [3, 5, 10] as const;
+export const priorityChipKey = (topN: number): string => `${PRIORITY_CHIP_PREFIX}${topN}`;
+export function priorityTopNOfChipKey(key: string | null | undefined): number | null {
+  if (!key?.startsWith(PRIORITY_CHIP_PREFIX)) return null;
+  const n = Number(key.slice(PRIORITY_CHIP_PREFIX.length));
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+/** Whether a key's menu row and chip show a count. A Top N row shows none:
+ *  what its filter keeps differs by view (a grouped card stays for a nested
+ *  worker that matches, a flat list drops it), so no one number is true. */
+export function axisKeyShowsCount(key: string): boolean {
+  return priorityTopNOfChipKey(key) == null;
+}
+
+/** The `pr:` keys a session with this rank answers to (none without a rank). */
+export function priorityChipKeysOf(rank: number | null | undefined): string[] {
+  return rank == null ? [] : PRIORITY_TOP_NS.filter((n) => rank <= n).map(priorityChipKey);
+}
+
 /** A chip-axis key as people read it: a project's title, a machine's name
- *  (from the viewer's roster), else the folder name it already is. */
+ *  (from the viewer's roster), "Top 3" for a priority key, else the folder
+ *  name it already is. */
 export function projectAxisLabel(
   key: string,
   projects: Parameters<typeof projectChipLabel>[1],
   machineOf: (deviceId: string) => DeviceNameSource | undefined,
 ): string {
+  const topN = priorityTopNOfChipKey(key);
+  if (topN != null) return `Top ${topN}`;
   const deviceId = machineIdOfChipKey(key);
   return deviceId ? deviceDisplayName(machineOf(deviceId)) : projectChipLabel(key, projects);
 }
 
 /** What a chip-axis key names, for copy ("Hide this machine"). */
-export function projectAxisNoun(key: string): "project" | "machine" | "folder" {
-  return workProjectIdOfChipKey(key) ? "project" : machineIdOfChipKey(key) ? "machine" : "folder";
+export function projectAxisNoun(key: string): "project" | "machine" | "priority" | "folder" {
+  return workProjectIdOfChipKey(key) ? "project" : machineIdOfChipKey(key) ? "machine" : priorityTopNOfChipKey(key) != null ? "priority" : "folder";
 }
 
 type SessionLike = {

@@ -85,7 +85,7 @@ import { FindBar } from "./FindBar";
 import { KeyboardShortcutsPanel, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { AppLoader, SlowBootNote } from "./AppLoader";
 import { freshHomeLaunchPending, settleFreshHomeLaunch } from "../store/viewNav";
-import { useInboxStore, useTrackedStore, selectSessionRailOpen, selectSessionRailUserClosed, selectNavCollapsed, selectNavHidden, bucketProjectPath, ownCheckoutPath, projectAxisKeys, projectOfFromState, resolveSimpleView, resolveInboxCompact, resolveVisualStyle, resolveInboxHome, isModernFocused } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, selectSessionRailOpen, selectSessionRailUserClosed, selectNavCollapsed, selectNavHidden, bucketProjectPath, ownCheckoutPath, projectAxisKeys, projectOfFromState, priorityRankOfFromState, resolveSimpleView, resolveInboxCompact, resolveVisualStyle, resolveInboxHome, isModernFocused } from "../store/inboxStore";
 import { newConversationAgentType } from "../lib/defaultAgent";
 import { ConnectToast } from "./simple/ConnectToast";
 import { pathOnMyMachines, savedDefaultProject } from "../lib/machinePicker";
@@ -926,8 +926,8 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     if (
       selected?.project_path &&
       seedable(selected.project_path) &&
-      // Any key the session answers to on the chip axis: its folder, project or machine.
-      (!activeProjectFilter || projectAxisKeys(selected, projectOfFromState(store)).includes(activeProjectFilter))
+      // Any key the session answers to on the chip axis: its folder, project, machine or Top N.
+      (!activeProjectFilter || projectAxisKeys(selected, projectOfFromState(store), priorityRankOfFromState(store)).includes(activeProjectFilter))
     ) {
       return {
         path: selected.project_path,

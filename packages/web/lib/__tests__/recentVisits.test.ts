@@ -100,3 +100,17 @@ describe("resolveRecentVisits", () => {
     expect(resolveRecentVisits(state, 10).map((r) => r.title)).toEqual(["x influence", "Mine", "From search"]);
   });
 });
+
+describe("filter views in recents", () => {
+  it("a Top N or machine view reads by its label but reopens by its key", () => {
+    const state = {
+      ...base,
+      recentVisits: [
+        { kind: "view", key: "project:pr:3", label: "Top 3", ts: 2 },
+        { kind: "view", key: "project:mc:m2", label: "jb-m2-pro", ts: 1 },
+      ],
+    };
+    const rows = resolveRecentVisits(state, 20);
+    expect(rows.map((r) => [r.title, r.projectName])).toEqual([["Top 3", "pr:3"], ["jb-m2-pro", "mc:m2"]]);
+  });
+});

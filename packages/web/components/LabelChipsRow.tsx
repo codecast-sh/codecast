@@ -17,9 +17,11 @@ import {
   type BucketItem,
 } from "../store/inboxStore";
 import { clickBucketChip, clickProjectChip } from "../store/chipFilterClicks";
-import { projectAxisLabel, projectAxisNoun, workProjectIdOfChipKey } from "../store/workProjects";
+import { axisKeyShowsCount, projectAxisLabel, projectAxisNoun, workProjectIdOfChipKey } from "../store/workProjects";
 import { useRosterMachines } from "./DeviceBadge";
 import { ProjectAxisPopoverSections } from "./ProjectAxisPopoverSections";
+import type { FolderActivity } from "../lib/railFolderFilter";
+import { priorityMenuRows } from "../store/priorityChips";
 import { useRouter } from "next/navigation";
 import { getLabelColor } from "../lib/labelColors";
 import { OWNS_MODIFIER_CLICK } from "../lib/openIntent";
@@ -62,14 +64,19 @@ export function LabelChipsRow({
   bucketCounts,
   projectCounts,
   projectPathByName,
+  projectActivity,
   machineCounts,
+  priorityCounts,
   dropSessionOnLabel,
 }: {
   bucketCounts: Record<string, number>;
   projectCounts: Array<[string, number]>;
   projectPathByName: Record<string, string>;
+  projectActivity?: Record<string, FolderActivity>;
   /** `mc:<device>` keys on the same axis; empty when there's one machine. */
   machineCounts: Array<[string, number]>;
+  /** `pr:<n>` keys (Top 3, 5, 10); empty when no session serves a top priority. */
+  priorityCounts: Array<[string, number]>;
   dropSessionOnLabel: (draggedId: string, bucketId: string | null) => void;
 }) {
   const s = useTrackedStore([
@@ -101,13 +108,17 @@ export function LabelChipsRow({
     () => chipProjectFilters(s),
     [s.activeProjectFilter, s.activeProjectPath, s.chipFilterExclude, s.extraProjectFilters],
   );
-  // The row's project-axis chips: folders and projects. Machines live in the
-  // popover; one joins the row only while it is in the filter, so the filter
-  // stays visible with the popover closed.
+  const priorityRows = useMemo(() => priorityMenuRows(priorityCounts, projectFilters), [priorityCounts, projectFilters]);
+  // The row's project-axis chips: folders and projects. Machines and Top N
+  // live in the popover; one joins the row only while it is in the filter, so
+  // the filter stays visible with the popover closed.
   const axisChips = useMemo(
-    () => [...projectCounts, ...machineCounts.filter(([name]) => projectFilters.some((t) => t.id === name))],
-    [projectCounts, machineCounts, projectFilters],
+    () => [...projectCounts, ...[...machineCounts, ...priorityRows].filter(([name]) => projectFilters.some((t) => t.id === name))],
+    [projectCounts, machineCounts, priorityRows, projectFilters],
   );
+  // Popover rows the row never draws (machines and Top N out of the filter):
+  // the +N pill counts them, so the popover is reachable even when every chip fits.
+  const popoverOnlyCount = [...machineCounts, ...priorityRows].filter(([name]) => !projectFilters.some((t) => t.id === name)).length;
 
   // Modifier-click hints, rendered as real keycaps (never bare glyphs in text).
   const clickHint = (...mods: string[]) => (
@@ -632,7 +643,7 @@ export function LabelChipsRow({
                   ? `${pc.bg} ${pc.text}`
                   : "bg-sol-text-dim/10 text-sol-text-muted hover:bg-sol-text-dim/20 hover:text-sol-text modern:text-sol-text"
               }`}
-              title={active ? filterChipTitle(label, excluded, sole) : `${{ project: "Project", machine: "Machine", folder: "Folder" }[projectAxisNoun(name)]}: ${label} — click to filter, right-click for more`}
+              title={active ? filterChipTitle(label, excluded, sole) : `${{ project: "Project", machine: "Machine", priority: "Priorities", folder: "Folder" }[projectAxisNoun(name)]}: ${label} — click to filter, right-click for more`}
             >
               {/* Same exclude cues + constant-width construction as the label
                   chips above. */}
@@ -641,7 +652,7 @@ export function LabelChipsRow({
                 <span aria-hidden className="invisible font-medium col-start-1 row-start-1">{label}</span>
                 <span className={`col-start-1 row-start-1 ${active ? "font-medium" : ""} ${excluded ? "opacity-75" : ""}`}>{label}</span>
               </span>
-              <span className="ml-0.5 opacity-50 modern:opacity-100">{count}</span>
+              {axisKeyShowsCount(name) && <span className="ml-0.5 opacity-50 modern:opacity-100">{count}</span>}
             </button>
           );
         })}
@@ -703,14 +714,14 @@ export function LabelChipsRow({
           >
             <span className={`w-1.5 flex-shrink-0 ${excluded ? "h-[2px] rounded-full bg-current" : `h-1.5 rounded-full ${pc.dot}`}`} />
             <span className={`truncate ${excluded ? "opacity-75" : ""}`}>{label}</span>
-            <span className="ml-0.5 opacity-50 modern:opacity-100 tabular-nums flex-shrink-0">{count}</span>
+            {axisKeyShowsCount(name) && <span className="ml-0.5 opacity-50 modern:opacity-100 tabular-nums flex-shrink-0">{count}</span>}
           </button>
         );
       })}
 
       </div>
 
-      {hiddenCount + zeroHiddenCount > 0 && (
+      {hiddenCount + zeroHiddenCount + popoverOnlyCount > 0 && (
         <button
           ref={pillRef}
           onClick={() => setPopoverOpen((v) => !v)}
@@ -728,14 +739,14 @@ export function LabelChipsRow({
               setEmptyOpen(true);
             }
           }}
-          title={`${hiddenCount + zeroHiddenCount} more: view all labels and projects`}
+          title={`${hiddenCount + zeroHiddenCount + popoverOnlyCount} more: every project, folder, machine, priority and label`}
           // Outside the clip shell, so the shell can collapse to nothing and
           // the pill still paints and still takes clicks. flex-shrink-0 is what
           // holds its width while the shell (flex-1 min-w-0) gives way first —
           // squeezing the panel hides every chip but never this pill.
           className="flex-shrink-0 px-1.5 py-0.5 rounded-full text-meta tabular-nums transition-colors border border-sol-border/50 bg-sol-bg/70 text-sol-text-dim modern:text-sol-text-muted hover:text-sol-text hover:border-sol-border modern:h-6 modern:rounded-control modern:px-2 modern:py-0 modern:border-sol-border modern:bg-sol-card modern:hover:bg-sol-bg-alt"
         >
-          +{hiddenCount + zeroHiddenCount}
+          +{hiddenCount + zeroHiddenCount + popoverOnlyCount}
         </button>
       )}
 
@@ -746,7 +757,20 @@ export function LabelChipsRow({
           style={{ top: popoverPos.top, bottom: popoverPos.bottom, left: popoverPos.left, maxHeight: popoverPos.maxHeight }}
           className="fixed z-[9999] w-64 overflow-y-auto rounded-lg border border-sol-border/70 bg-sol-bg shadow-2xl shadow-black/30 py-1 modern:rounded-card modern:border-sol-border modern:bg-sol-card modern:shadow-popover"
         >
-          <div className="px-3 pt-1.5 pb-1 text-mark font-semibold uppercase tracking-widest text-sol-text-dim/70 flex items-center gap-1.5 modern:text-meta modern:font-medium modern:normal-case modern:tracking-normal modern:text-sol-text-dim">
+          <ProjectAxisPopoverSections
+            sections={[["Projects", workProjects], ["Folders", folders], ["Machines", machineCounts], ["Priorities", priorityRows]]}
+            folderActivity={projectActivity}
+            chipLabel={chipLabel}
+            projectFilters={projectFilters}
+            projectPathByName={projectPathByName}
+            onPick={(shift) => { if (!shift) setPopoverOpen(false); }}
+            onContextMenu={(e, name) => {
+              ctxMenu.open(e, { kind: "project", name });
+              setPopoverOpen(false);
+            }}
+          />
+          {/* Labels last, under the axis sections, ruled off when any drew. */}
+          <div className={`px-3 pb-1 text-mark font-semibold uppercase tracking-widest text-sol-text-dim/70 flex items-center gap-1.5 modern:text-meta modern:font-medium modern:normal-case modern:tracking-normal modern:text-sol-text-dim ${workProjects.length + folders.length + machineCounts.length + priorityRows.length > 0 ? "mt-0.5 border-t border-sol-border/40 pt-2" : "pt-1.5"}`}>
             <Tag className="w-2.5 h-2.5" /> Labels
           </div>
           {visibleBuckets.length === 0 && (
@@ -881,17 +905,6 @@ export function LabelChipsRow({
               className="w-full px-2 py-1 rounded-md text-meta bg-sol-bg-alt/50 border border-sol-border/40 text-sol-text placeholder:text-sol-text-dim/60 outline-none focus:border-sol-cyan/50 modern:h-control-sm modern:rounded-control modern:border-sol-border modern:bg-sol-card modern:py-0 modern:text-ui"
             />
           </div>
-          <ProjectAxisPopoverSections
-            sections={[["Folders", folders], ["Projects", workProjects], ["Machines", machineCounts]]}
-            chipLabel={chipLabel}
-            projectFilters={projectFilters}
-            projectPathByName={projectPathByName}
-            onPick={(shift) => { if (!shift) setPopoverOpen(false); }}
-            onContextMenu={(e, name) => {
-              ctxMenu.open(e, { kind: "project", name });
-              setPopoverOpen(false);
-            }}
-          />
         </div>,
         document.body
       )}

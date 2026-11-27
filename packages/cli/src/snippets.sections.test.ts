@@ -824,14 +824,12 @@ describe("the refresh gates in index.ts", () => {
   const indexSource = fs.readFileSync(path.join(import.meta.dir, "index.ts"), "utf-8");
 
   // Snippets kept current WITHOUT a per-snippet staleness gate in index.ts:
-  //   - forks relies on the blanket refreshEnabledSnippets() pass alone and
-  //     never writes its version key (recorded in snippets.wiring.test.ts);
   //   - orchestration installs no markdown at all;
   //   - skills installs SKILL.md files and byte-compares each on refresh
   //     (writeOwnedFile), so a body edit lands with no version gate.
   // A new catalog entry lands in the gated list below by default, so its
   // author either wires a gate or moves it here with a reason.
-  const UNGATED = new Set(["forks", "orchestration", "skills"]);
+  const UNGATED = new Set(["orchestration", "skills"]);
 
   // Boolean assertions with a message, not toContain(indexSource): a failing
   // toContain prints the whole 700KB "received" source, burying the finding.
