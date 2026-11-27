@@ -121,12 +121,12 @@ export function formatHistory(res: PriorityHistory): string[] {
   ];
 }
 
-/** The workspace a verb reads, resolved the way every work command does (see objCommand.ts). */
-async function scope(deps: PublishDeps, team: string | undefined): Promise<{ team_id?: string; personal?: boolean }> {
-  const { loadWorkspaceRoster, resolveWorkspaceForRead } = await import("./resolveWorkspace.js");
+/** The workspace a verb reads, or a create writes to, resolved the way every work command does (see objCommand.ts). */
+async function scope(deps: PublishDeps, team: string | undefined, write = false): Promise<{ team_id?: string; personal?: boolean }> {
+  const { loadWorkspaceRoster, resolveWorkspaceForRead, resolveWorkspaceForWrite } = await import("./resolveWorkspace.js");
   const roster = await loadWorkspaceRoster(async () => await apiPost(deps, "/cli/teams", {}, { read: true }));
   try {
-    const ws = resolveWorkspaceForRead(roster, team);
+    const ws = write ? resolveWorkspaceForWrite(roster, team) : resolveWorkspaceForRead(roster, team);
     return ws.kind === "team" ? { team_id: ws.teamId } : { personal: true };
   } catch (err) {
     fail(err instanceof Error ? err.message : String(err));
@@ -157,6 +157,27 @@ export function registerPrioritiesCommand(program: Command, deps: PublishDeps): 
       for (const line of formatPriorityLines(rows)) console.log(line);
       if (res.own_truncated) console.log("Your priorities past the most recently active ones are not listed.");
       if (res.teammates_truncated) console.log("Teammates' priorities past the most recently active ones are not listed.");
+    });
+
+  pri
+    .command("create <title...>")
+    .description("Create an active priority, last in its owner's order; the pass ranks and maps it from then on")
+    .option("--summary <text>", "What it is driving at, in a sentence")
+    .option("--owner <@handle>", "Whose priority it is: a member of the team (default: yours)")
+    .option("--from-call <call>", "The call it was pulled from (cl-42, from `cast calls`)")
+    .option("--team <name|id|personal>", "Which workspace to file it in (default: your active team)")
+    .option("--json", "The new priority as JSON")
+    .action(async (words: string[], options: { summary?: string; owner?: string; fromCall?: string; team?: string; json?: boolean }) => {
+      const body = {
+        title: words.join(" "),
+        ...(options.summary ? { summary: options.summary } : {}),
+        ...(options.owner ? { owner: options.owner } : {}),
+        ...(options.fromCall ? { from_call: options.fromCall.trim() } : {}),
+        ...(await scope(deps, options.team, true)),
+      };
+      const res: { short_id: string; title: string } = await apiPost(deps, "/cli/priorities/create", body);
+      if (options.json) return console.log(JSON.stringify(res, null, 2));
+      console.log(`ok Created ${res.short_id}: ${res.title}`);
     });
 
   pri

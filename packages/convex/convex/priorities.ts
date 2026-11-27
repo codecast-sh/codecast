@@ -5,8 +5,10 @@
 // priority is readable by its owner, and by a teammate holding its `workspace`
 // key only while the owner lists their sessions to that team; nothing is
 // readable, writable or run while the `priorities` feature is off there. Only the owner
-// changes a priority, and every change marks its field set by the person, so
-// the pass (lib/priorityPass.ts, priorityPassRun applyPlan) never overrides it:
+// changes a priority (a member of its workspace may create one for them or add
+// a task's milestone to it, priorityCreate.ts), and every change marks its
+// field set by the person, so the pass (lib/priorityPass.ts, priorityPassRun
+// applyPlan) never overrides it:
 // a placed rank; a milestone's tier, done state, title and drop (steps are milestones);
 // set aside, done and merge; a session's move and "not this". Corrections are
 // the person's words to the pass, read by every later pass until deleted.
@@ -24,6 +26,7 @@ import type { PriorityDetail, PriorityHistory, PriorityList, PriorityPinLine } f
 import type { Doc, Id } from "./_generated/dataModel";
 import { type Priority, type Result, cliWorkspace, criticalCounts, isOwner, listFor, positionOf, showFor, tokenUser } from "./priorityRead";
 import { historyFor } from "./priorityHistory";
+import { doCreate } from "./priorityCreate";
 import { type MilestoneChange, doCorrect, doCorrectionDelete, doMerge, doMilestone, doMove, doPriorityDone, doSessionMove, doSessionNotThis, doSetAside, doUndoPriorityDone } from "./priorityWrite";
 
 function orThrow<T>(res: Result<T>): T {
@@ -229,6 +232,18 @@ export const cliHistory = query({
     const viewer = await tokenUser(ctx, args.api_token);
     if (!viewer) return { error: "Unauthorized" };
     return historyFor(ctx, viewer, { days: args.days, tz_offset_minutes: args.tz_offset_minutes, workspace: cliWorkspace(viewer, args) });
+  },
+});
+
+/** `cast priorities create`: a priority a person names, in the workspace the CLI resolved for the write. */
+export const cliCreate = mutation({
+  args: { api_token: v.string(), title: v.string(), summary: v.optional(v.string()), owner: v.optional(v.string()), from_call: v.optional(v.string()), ...cliScope },
+  handler: async (ctx, args) => {
+    const viewer = await tokenUser(ctx, args.api_token);
+    if (!viewer) return { error: "Unauthorized" };
+    const workspace = cliWorkspace(viewer, args);
+    if (!workspace) return { error: "name a workspace: a team, or personal" };
+    return doCreate(ctx, viewer, { workspace, title: args.title, summary: args.summary, owner: args.owner, from_call: args.from_call });
   },
 });
 
