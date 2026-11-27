@@ -53,6 +53,8 @@ const REACH_READS_MAX = 12;
 const COMMIT_CLOCK_SLACK_MS = 1_000;
 /** A worktree under the checkout: an edit there names the same repository path below it. */
 const WORKTREE_PREFIX = /^\.(?:codecast|claude)\/worktrees\/[^/]+\//;
+/** The system's temporary directories: a scratch file there is nobody's change. */
+const SCRATCH_DIR = /^\/(?:private\/)?(?:tmp|var\/folders)\//;
 
 export const RETIRE_COMMAND = "retire_on_live";
 
@@ -129,9 +131,8 @@ async function ownWork(ctx: any, conv: Doc<"conversations">): Promise<string | {
 }
 
 /**
- * The repository path an edit names, or null for a file outside the checkout (a scratch file, a note), which is no part
- * of the change as the client's attribution reads it. An edit names the path it wrote: absolute, under the checkout or
- * a worktree of it.
+ * The repository path an edit names, or null for a file outside the checkout (a scratch file, another repository). An
+ * edit names the path it wrote: absolute, under the checkout or a worktree of it.
  */
 export function repoPathOf(path: string, gitRoot: string | undefined): string | null {
   let rel = path;
@@ -143,15 +144,24 @@ export function repoPathOf(path: string, gitRoot: string | undefined): string | 
   return rel.replace(/^\.\//, "").replace(WORKTREE_PREFIX, "");
 }
 
-/** The files the session (or a subagent of its own) changed that no commit of its own on main holds since. */
+/**
+ * The files the session (or a subagent of its own) changed that no commit of its own on main holds since. An edit
+ * outside its checkout (a second repository, a worktree elsewhere) keeps it outright: the daemon checks only the
+ * checkout, so nothing would confirm that work landed. A scratch file in a temporary directory is no one's change.
+ */
 function uncommittedEdits(conv: Doc<"conversations">, lastEdit: Map<string, number>, landed: Doc<"commits">[]): string | null {
   const left: string[] = [];
+  const outside: string[] = [];
   for (const [path, at] of lastEdit) {
     const rel = repoPathOf(path, conv.git_root);
-    if (rel == null) continue;
+    if (rel == null) {
+      if (!SCRATCH_DIR.test(path)) outside.push(path);
+      continue;
+    }
     const held = landed.some((c) => c.timestamp + COMMIT_CLOCK_SLACK_MS >= at && (c.files ?? []).some((f) => f.filename === rel));
     if (!held) left.push(rel);
   }
+  if (outside.length) return `it wrote outside its checkout: ${outside.slice(0, 3).join(", ")}${outside.length > 3 ? ` and ${outside.length - 3} more` : ""}`;
   return left.length ? `it has changes not on main: ${left.slice(0, 5).join(", ")}${left.length > 5 ? ` and ${left.length - 5} more` : ""}` : null;
 }
 

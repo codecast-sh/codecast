@@ -193,6 +193,34 @@ describe("cast flow merge: before-merge steps", () => {
     }, T);
   }
 
+  // An origin that is not github.com (an SSH host alias such as git@github-work:o/r) names no repository to lease.
+  test("no repository named: a merge with no before-merge step merges without the lease, saying so once", async () => {
+    const s = setup();
+    try {
+      const head = s.branch("web/page.ts", "page\n");
+      s.ci(head);
+      const r = await s.run({ repository: null });
+      expect(r.code).toBe(0);
+      expect(s.git(s.work, "rev-parse", "origin/main")).toBe(r.line);
+      expect(s.logged.filter((l) => l.includes("without the repository's turn"))).toEqual(["warning: merging without the repository's turn: no GitHub repository is named for this checkout's origin"]);
+      expect(s.posts.filter((p) => p.path === "/cli/repo-lease")).toEqual([]);
+    } finally { s.done(); }
+  }, T);
+
+  test("no repository named: a merge with a before-merge step refuses (exit 2), deploying and merging nothing", async () => {
+    const s = setup();
+    try {
+      s.profile("deploy");
+      const head = s.branch("api/route.ts", "export {}\n");
+      s.ci(head);
+      const ran: string[] = [];
+      const r = await s.run({ repository: null, runStep: async (cmd) => { ran.push(cmd); return { code: 0, output: "" }; } });
+      expect(r).toEqual({ code: 2, line: "convex must go out before the merge, and only under the lease on the repository's deploys, which could not be taken: no GitHub repository is named for this checkout's origin" });
+      expect(ran).toEqual([]);
+      expect(s.merged()).toBe(false);
+    } finally { s.done(); }
+  }, T);
+
   test("any other refusal of the lease refuses the merge (exit 2), even with no before-merge step", async () => {
     const s = setup();
     try {
