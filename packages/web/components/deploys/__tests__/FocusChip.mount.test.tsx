@@ -1,6 +1,6 @@
 // The Deploys page's focus chip: the thing a link names reads as the pill a conversation draws for it (a session or
-// task by its title), never a raw conversation id, and its × still clears the highlight; a change on its
-// way (a Ship run in Shipping) reads as on its way. The pill runs for real; only the Convex transport is faked. Below it, the landing a link
+// task by its title), never a raw conversation id, and its × still clears the highlight; where the thing stands reads
+// from lib/deploys/spot, each reason a link. The pill runs for real; only the Convex transport is faked. Below it, the landing a link
 // runs (landFocus): each column brings its highlighted row to the middle, the row flashes once, and the viewer's own
 // move ends it.
 import { afterAll, describe, expect, mock, test } from "bun:test";
@@ -56,7 +56,7 @@ function mount(focus: any, onClear = () => {}) {
   const host = document.createElement("div");
   document.body.appendChild(host);
   const root = createRoot(host);
-  act(() => root.render(<MemoryRouter><FocusChip focus={focus} repository="acme/app" waiting deploys={[]} live={null} onClear={onClear} /></MemoryRouter>));
+  act(() => root.render(<MemoryRouter><FocusChip focus={focus} repository="acme/app" spot={{ kind: "absent" }} onClear={onClear} /></MemoryRouter>));
   return { host, unmount: () => act(() => root.unmount()) };
 }
 
@@ -91,42 +91,59 @@ test("a branch keeps its plain name", () => {
   unmount();
 });
 
-// A link to something on neither the queue nor a deploy: when it is on its way (a Ship run in the left column) the
-// chip says so and reads as waiting; otherwise it is not on this target.
-function mountWhere(coming: "coming" | "parked" | "reading" | null) {
+// Where the linked thing stands (lib/deploys/spot): the deploy that holds it, its place among what waits with what holds
+// it there, where its Ship run is off main, still looking, or not on this target. Every reason is a link to what it names.
+function mountSpot(spot: any, focus: any = { kind: "sha", sha: "abcdef1234" }) {
   const host = document.createElement("div");
   document.body.appendChild(host);
   const root = createRoot(host);
-  act(() => root.render(<MemoryRouter><FocusChip focus={{ kind: "pr", pr: 101 } as any} repository="acme/app" waiting={false} coming={coming} deploys={[]} live={null} onClear={() => {}} /></MemoryRouter>));
-  return { host, unmount: () => act(() => root.unmount()) };
+  act(() => root.render(<MemoryRouter><FocusChip focus={focus} repository="acme/app" spot={spot} onClear={() => {}} /></MemoryRouter>));
+  const chip = host.querySelector(".dpp-focus")!;
+  return { chip, words: chip.querySelector(":scope > span:not(.dpp-focus-ref)")!.textContent, unmount: () => act(() => root.unmount()) };
 }
 
-test("a change on its way, on no deploy yet, reads as on its way and waiting", () => {
-  const { host, unmount } = mountWhere("coming");
-  const chip = host.querySelector(".dpp-focus")!;
-  expect(chip.querySelector(":scope > span:not(.dpp-focus-ref)")!.textContent).toBe("on its way");
-  expect(chip.getAttribute("data-state")).toBe("waiting");
-  unmount();
+test("a waiting change says its place since the live deploy and what holds it, as a link to that", () => {
+  const failed = mountSpot({ kind: "waiting", place: 14, of: 49, since: "dp-3298", held: { kind: "failed", deploy: "dp-3375" } });
+  expect(failed.words).toBe("waiting14 of 49 since dp-3298dp-3375 failed");
+  expect(failed.chip.getAttribute("data-state")).toBe("waiting");
+  expect(failed.chip.querySelector('[data-spot-held="failed"]')!.getAttribute("href")).toBe("#deploy-dp-3375");
+  failed.unmount();
+  const red = mountSpot({ kind: "waiting", place: 2, of: 3, since: "dp-1", held: { kind: "ci", ci: "failed", url: "https://ci/run" } });
+  expect(red.chip.querySelector('[data-spot-held="ci-failed"]')!.getAttribute("href")).toBe("https://ci/run");
+  red.unmount();
+  const press = mountSpot({ kind: "waiting", place: null, of: 3, since: "dp-1", held: { kind: "press" } });
+  expect(press.words).toBe("waiting3 commits since dp-1waits on Deploy");
+  expect(press.chip.querySelector('[data-spot-held="press"]')!.getAttribute("href")).toBe("#deploy-next");
+  press.unmount();
 });
 
-test("a parked change says so, never that it is moving", () => {
-  const { host, unmount } = mountWhere("parked");
-  expect(host.querySelector(".dpp-focus")!.querySelector(":scope > span:not(.dpp-focus-ref)")!.textContent).toBe("parked on its way");
-  unmount();
+test("a deploy that holds the change is named as a link to its card; a deploy link says the deploy's own state", () => {
+  const live = mountSpot({ kind: "deploy", deploy: "dp-12", word: "live" });
+  expect(live.words).toBe("live since dp-12");
+  expect(live.chip.querySelector("[data-spot-deploy]")!.getAttribute("href")).toBe("#deploy-dp-12");
+  expect(live.chip.getAttribute("data-state")).toBe("deployed");
+  live.unmount();
+  const own = mountSpot({ kind: "deploy", deploy: "dp-12", word: "going" }, { kind: "deploy", id: "dp-12" });
+  expect(own.words).toBe("going out");
+  own.unmount();
 });
 
-test("while what is on its way is still being read, the chip says it is looking, never that the thing is not here", () => {
-  const { host, unmount } = mountWhere("reading");
-  expect(host.querySelector(".dpp-focus")!.querySelector(":scope > span:not(.dpp-focus-ref)")!.textContent).toBe("looking…");
-  unmount();
+test("a change not on main says where its run is, linked to its card, never that it is absent", () => {
+  const run = mountSpot({ kind: "run", run: { _id: "r1" }, word: "Stopped at Merge", dropped: true }, { kind: "session", id: "jx7b0m0" });
+  expect(run.words).toBe("not on mainStopped at Mergeparked");
+  expect(run.chip.querySelector("[data-spot-run]")!.getAttribute("href")).toBe("#ship-r1");
+  expect(run.chip.getAttribute("data-state")).toBe("waiting");
+  run.unmount();
 });
 
-test("a change neither coming nor deployed is not on this target", () => {
-  const { host, unmount } = mountWhere(null);
-  const chip = host.querySelector(".dpp-focus")!;
-  expect(chip.querySelector(":scope > span:not(.dpp-focus-ref)")!.textContent).toBe("not on this target");
-  expect(chip.getAttribute("data-state")).toBe("missing");
-  unmount();
+test("while what is shipping is read the chip is looking; a change found nowhere is not on this target", () => {
+  const reading = mountSpot({ kind: "reading" });
+  expect(reading.words).toBe("looking…");
+  reading.unmount();
+  const absent = mountSpot({ kind: "absent" });
+  expect(absent.words).toBe("not on this target");
+  expect(absent.chip.getAttribute("data-state")).toBe("missing");
+  absent.unmount();
 });
 
 // The repository's production pause (DP17): who, why, the rollback and the task that lift it, the migrations that rule

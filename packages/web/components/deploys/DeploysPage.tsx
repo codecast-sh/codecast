@@ -19,6 +19,7 @@ import type { BoardView } from "../../lib/deploys/board";
 import { useDeployPress } from "../../hooks/useDeployPress";
 import { FOCUS_PARAMS, focusRef, focusRepository, focusSettled, focusTarget, pickTarget, reachAnyDeploy, targetKey, type DeployFocus } from "../../lib/deploys/focus";
 import { useDeployReach } from "../../hooks/useDeployReach";
+import { focusTargets } from "../../lib/deploys/spot";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { rememberFilters } from "../../lib/rememberedFilters";
 import { DeploysBoard } from "./DeploysBoard";
@@ -99,6 +100,8 @@ export function DeploysPage({ initialTarget, initialTeam, initialDeploy, initial
   // A deploy link opens at that deploy's target; a change's link opens where its reach says (focusAt), not at the deploy that found the team.
   const want = pickedId ?? (initialDeploy && where ? targetKey(where.target, where.repository) : null) ?? focusAt?._id ?? null;
   const picked = pickTarget(ordered, want);
+  // The targets the linked change is on are outlined, the rest dimmed: a run's change reads across every target it goes to.
+  const onFocus = useMemo(() => focusTargets(allTargets, deploys, focus, reach), [allTargets, deploys, focus, reach]);
   const press = useDeployPress(teamId, deploys, productions);
   const modern = useIsModernStyle();
   const repos = new Set(allTargets.map((t) => t.repository).filter(Boolean));
@@ -132,7 +135,7 @@ export function DeploysPage({ initialTarget, initialTeam, initialDeploy, initial
             const pause = productionOf(productions, t)?.pause;
             return (
               <li key={t._id}>
-                <button type="button" className="dpp-target" aria-current={picked?._id === t._id ? "true" : undefined} data-tone={tone} data-paused={pause ? "" : undefined} onClick={() => setPicked(t._id)} title={pause ? `paused by ${pause.by}` : targetWords(t, n, tone)} data-deploy-target={t.name}>
+                <button type="button" className="dpp-target" aria-current={picked?._id === t._id ? "true" : undefined} data-tone={tone} data-paused={pause ? "" : undefined} data-focus-on={onFocus.has(t.name) ? "" : undefined} data-focus-off={onFocus.size && !onFocus.has(t.name) ? "" : undefined} onClick={() => setPicked(t._id)} title={pause ? `paused by ${pause.by}` : targetWords(t, n, tone)} data-deploy-target={t.name}>
                   {pause ? <Pause className="dpp-mark" aria-label="Paused" /> : <ToneMark tone={tone} />}
                   <span className="dpp-target-name">{t.name}{repos.size > 1 ? <span className="dpp-repo">{t.repository.split("/").pop()}</span> : null}</span>
                   {waiting ? <span className="dpp-target-n" data-deploy-target-waiting={waiting}>{waiting}</span> : null}

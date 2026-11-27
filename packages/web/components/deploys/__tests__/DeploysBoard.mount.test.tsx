@@ -299,3 +299,25 @@ test("Dropped opens on its own once the run a link points at is found there", ()
   expect(host.querySelector('[data-deploy-run="r-old"]')!.hasAttribute("data-focus")).toBe(true);
   unmount();
 });
+
+test("a head with red CI is never the primary press: Deploy stays a plain button", () => {
+  const red = { ...target, queue: { ...target.queue, head_ci: "failed", head_ci_url: "https://ci/red" } };
+  const { host, unmount } = mountWith(props({ target: red, deploys: [live] }));
+  const go = card(host, "next").querySelector("[data-deploy-go]")!;
+  expect(go.classList.contains("dpp-go")).toBe(false);
+  expect(go.getAttribute("data-ci")).toBe("failed");
+  unmount();
+  const green = mountWith(props({ target, deploys: [live] }));
+  expect(card(green.host, "next").querySelector("[data-deploy-go]")!.classList.contains("dpp-go")).toBe(true);
+  green.unmount();
+});
+
+test("opened at a waiting commit, the chip says its place since the live deploy and the failed try holding it", () => {
+  const failed = { ...live, _id: "d9", short_id: "dp-9", status: "failed", sha: "a1aaaaaaaa", live_at: null, created_at: NOW - 0.5 * H, commit_rows: [], sessions: [] };
+  const reach = { state: "failed", sha: "b2bbbbbbbb", targets: [{ target: "production", state: "failed", deploy: { short_id: "dp-9", status: "failed", sha: "a1aaaaaaaa", at: NOW, url: null }, now: null }] };
+  const { host, unmount } = mountWith(props({ target, deploys: [failed, live], focus: { kind: "sha", sha: "b2bbbbb" }, reach }));
+  const chip = host.querySelector(".dpp-focus")!;
+  expect(chip.querySelector("[data-spot-place]")!.textContent).toBe("1 of 2 since dp-7");
+  expect(chip.querySelector('[data-spot-held="failed"]')!.getAttribute("href")).toBe("#deploy-dp-9");
+  unmount();
+});

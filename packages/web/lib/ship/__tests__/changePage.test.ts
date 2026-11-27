@@ -169,6 +169,8 @@ describe("B: the head is structure, never a station's free text", () => {
     expect(deploysHref({ workspace: "team:t1", merge: { sha: "acbd8d27a8" } }, line)).toBe("/deploys?team=t1&target=cli&sha=acbd8d27a8");
     // A target going out opens its own deploy.
     expect(deploysHref({ workspace: "team:t1" }, "backend: live in dp-1; cli: dp-2 sending a8ccc22")).toBe("/deploys?team=t1&target=cli&deploy=dp-2");
+    // A run that landed a commit opens at that commit, its deploy open beside it.
+    expect(deploysHref({ workspace: "team:t1", merge: { sha: "acbd8d27a8" } }, "backend: live in dp-1; cli: dp-2 sending a8ccc22")).toBe("/deploys?team=t1&target=cli&sha=acbd8d27a8&deploy=dp-2");
     // A line with one named deploy and no per-target form is read as before.
     expect(deploysHref({ workspace: "team:t1" }, "Deploy stuck: web dp-12 failed")).toBe("/deploys?team=t1&target=web&deploy=dp-12");
   });
@@ -291,8 +293,8 @@ describe("D: a stop always has one way on, and never one that cannot help", () =
     const r = run({ status: "failed", current_node_id: "deploy__stuck", merge: { sha: "acbd8d27a8" }, fail_reason: why, node_statuses: [...MERGED, st("deploy__wait", "failed", 16, { result_preview: why.replace("Stopped: ", "") })] });
     expect(deploysHref(r, why)).toBe("/deploys?team=t1&target=cli&sha=acbd8d27a8");
     expect(act(r)).toMatchObject({ kind: "deploys", href: "/deploys?team=t1&target=cli&sha=acbd8d27a8" });
-    // The deploy records name the target and its deploy: they win over any words.
-    expect(act(r, change, { targets: [{ name: "backend", state: "live", deploy: "dp-3302" }, { name: "cli", state: "deploying", deploy: "dp-3313" }] })!.href).toBe("/deploys?team=t1&target=cli&deploy=dp-3313");
+    // The deploy records name the target and its deploy: they win over any words, and that deploy opens beside the change.
+    expect(act(r, change, { targets: [{ name: "backend", state: "live", deploy: "dp-3302" }, { name: "cli", state: "deploying", deploy: "dp-3313" }] })!.href).toBe("/deploys?team=t1&target=cli&sha=acbd8d27a8&deploy=dp-3313");
   });
 
   test("F5: a pushed flow keeps the stored node's backend where its source names none", () => {
@@ -356,6 +358,8 @@ describe("changeLinks", () => {
     const links = changeLinks(liveRun, change, [{ name: "web", state: "live", deploy: "dp-9" }, { name: "backend", state: "waiting" }]);
     expect(links.filter((l) => l.kind === "deploy").map((l) => [l.label, l.tone])).toEqual([["web dp-9", "ok"], ["backend waiting", "default"]]);
     expect(links.find((l) => l.label === "backend waiting")!.href).toBe("/deploys?team=t1&target=backend&sha=31ccbb83b1");
+    // A deploy's chip opens the change on that target with the deploy open beside it (the phone reads it as that deploy).
+    expect(links.find((l) => l.label === "web dp-9")!.href).toBe("/deploys?team=t1&target=web&sha=31ccbb83b1&deploy=dp-9");
   });
 
   test("no review session, no review link: a label with nowhere to go is not drawn", () => {

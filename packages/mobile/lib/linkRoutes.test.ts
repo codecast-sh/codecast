@@ -274,6 +274,8 @@ describe('commit and deploy links', () => {
   test('a deploy opens the phone deploy screen', () => {
     expect(mobileEntityRoute('deploy', 'dp-1113')).toBe('/deploy/dp-1113');
     expect(mobileRouteForUrl('https://codecast.sh/deploys?deploy=dp-1113')).toBe('/deploy/dp-1113');
+    // A run's link names its change beside the deploy; the phone opens that deploy's screen.
+    expect(mobileRouteForUrl('/deploys?team=t1&target=web&sha=31ccbb83b1&deploy=dp-9')).toBe('/deploy/dp-9');
   });
 });
 

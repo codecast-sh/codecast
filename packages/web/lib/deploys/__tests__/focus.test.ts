@@ -16,13 +16,14 @@ const deploy = (short_id: string, target: string, created_at: number, rows: any[
 }) as any;
 
 describe("what a link into Deploys points at", () => {
-  test("each kind reads from its own param, a deploy first", () => {
+  test("each kind reads from its own param; a change named beside a deploy is the focus, the deploy only opens", () => {
     expect(focusOf(params("pr=4431"))).toEqual({ kind: "pr", pr: 4431 });
     expect(focusOf(params("pr=%234431"))).toEqual({ kind: "pr", pr: 4431 });
     expect(focusOf(params("sha=ABC1234"))).toEqual({ kind: "sha", sha: "abc1234" });
     expect(focusOf(params("task=ct-98647"))).toEqual({ kind: "task", id: "ct-98647" });
     expect(focusOf(params("session=jx7b0m0"))).toEqual({ kind: "session", id: "jx7b0m0" });
-    expect(focusOf(params("deploy=dp-2314&pr=1"))).toEqual({ kind: "deploy", id: "dp-2314" });
+    expect(focusOf(params("deploy=dp-2314&pr=1"))).toEqual({ kind: "pr", pr: 1 });
+    expect(focusOf(params("deploy=dp-2314"))).toEqual({ kind: "deploy", id: "dp-2314" });
   });
   test("nonsense names nothing", () => {
     expect(focusOf(params("pr=abc"))).toBeNull();

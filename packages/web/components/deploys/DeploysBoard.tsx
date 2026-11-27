@@ -15,7 +15,8 @@ import {
   VIEWS, ago, attemptGroups, carriedOfAttempts, carriedOfQueue, fold, mineSessionIds, queueCommits, recordedOf, rowsFor, shipperOf, shippingRuns, splitQueue, tasksOnMain, yourSessions,
   type BoardDeploy, type BoardQueueCommit, type BoardRow, type BoardView, type Bucket, type CardId, type Carried, type DeployCard as Card, type DeployLine,
 } from "../../lib/deploys/board";
-import { carriedMatches, commitMatches, deployMatches, focusWord, reachDeployOn, rowMatches, runMatches, type DeployFocus } from "../../lib/deploys/focus";
+import { carriedMatches, commitMatches, deployMatches, focusWord, reachDeployOn, rowMatches, type DeployFocus } from "../../lib/deploys/focus";
+import { changeSpot, type Held, type HoldWord, type Spot } from "../../lib/deploys/spot";
 import { isOpen, rebuiltOnly, rollbackTarget, sessionWords, sessionsOf, sourceWord, targetNow, type DeployProductionRow, type DeployTargetRow, type TeamDeployRow } from "../../lib/deploys/targets";
 import { rollBackHere, rollbackOffer, type Press, type RollbackPress } from "../../lib/deploys/press";
 import { landFocus } from "../../lib/deploys/landFocus";
@@ -108,20 +109,23 @@ export function DeploysBoard(p: DeploysBoardProps) {
 
   // Where the linked thing is: waiting in the queue, or on the deploys that took it out (reach names the one that holds
   // a PR or commit; anything else is matched on what each deploy carried), or on a Ship run on its way.
-  const focusWaiting = !!focus && queue.some((c) => commitMatches(c, focus));
   const held = reachDeployOn(p.reach, t.name);
   const focusDeploys = !focus ? [] : held ? history.filter((d) => d.short_id === held.short_id) : history.filter((d) => deployMatches(d, focus));
   const runs = p.shipping?.runs ?? null;
   const shipping = useMemo(() => (runs ? shippingRuns(runs, { repository: t.repository, checkouts: p.checkouts, now }) : null), [runs, t.repository, p.checkouts, now]);
-  const coming: FocusComing = !focus || focusWaiting || focusDeploys.length ? null
-    : !shipping ? (p.shippingError ? null : "reading") : shipping.moving.some((r) => runMatches(r, focus)) ? "coming" : shipping.dropped.some((r) => runMatches(r, focus)) ? "parked" : null;
+  const pause = production?.pause ?? null;
+  // Where the linked change stands here: the deploy that holds it, its place in what waits and what holds it, or its run.
+  const onTarget = p.reach?.targets.find((r) => r.target === t.name);
+  const spot = focus ? changeSpot({
+    focus, target: t, queue, history: n.history, live: n.live, focusDeploys, paused: !!pause, shipping, shippingError: p.shippingError,
+    reach: onTarget ? { short_id: onTarget.deploy?.short_id ?? "", state: onTarget.state } : null,
+  }) : null;
   // A link brings what it names on screen and flashes it, wherever it is in either column; the rows find themselves.
   const focusKey = focus ? `${focus.kind}:${focusWord(focus)}` : null;
   useWatchEffect(() => (focusKey ? landFocus() : undefined), [focusKey]);
 
   const back = rollbackTarget(n.history, n.live);
   const backPaused = t.workflow ? rollbackOffer(back, t, production, p.deploys) : null;
-  const pause = production?.pause ?? null;
   const waiting = t.queue.commits;
   return (
     <section className="dpp-main" data-deploy-pane={t.name}>
@@ -159,7 +163,7 @@ export function DeploysBoard(p: DeploysBoardProps) {
       </header>
 
       {pause ? <Paused p={pause} canLift={!!production?.can_lift} now={now} onLift={p.onLift} /> : null}
-      {focus ? <FocusChip focus={focus} repository={t.repository} waiting={focusWaiting} coming={coming} deploys={focusDeploys} live={n.live} onClear={p.onClearFocus} /> : null}
+      {focus && spot ? <FocusChip focus={focus} repository={t.repository} spot={spot} onClear={p.onClearFocus} /> : null}
 
       {/* Shipping on the left, Deploys on the right once the page is wide (deploys.css), each its own scroll; narrower, Deploys comes first. */}
       <div className="dpp-body">
@@ -267,8 +271,10 @@ function DeployButton({ t, production, n, onPress }: { t: DeployTargetRow; produ
   if (t.runs === "push") return <span className="dpp-auto">goes out when main moves</span>;
   const pause = production?.pause ?? null;
   const blocked = pause ? "Production is paused" : n.open ? `${n.open.short_id || "A deploy"} is going out` : !t.can_deploy ? "No machine publishes it" : t.queue.known && t.queue.commits === 0 ? "Nothing waiting" : null;
+  // Red CI on what it would send is never the primary press: it stays a plain button, and the confirm says CI failed.
+  const red = t.queue.head_ci === "failed";
   return (
-    <button type="button" className="dpp-go" disabled={!!blocked} title={blocked ?? undefined} onClick={() => onPress({ target: t, action: "deploy", of: null })} data-deploy-go={t.name}>
+    <button type="button" className={red ? "dpp-back" : "dpp-go"} data-ci={red ? "failed" : undefined} disabled={!!blocked} title={blocked ?? undefined} onClick={() => onPress({ target: t, action: "deploy", of: null })} data-deploy-go={t.name}>
       {t.queue.known ? "Deploy" : "Deploy main"}
     </button>
   );
@@ -469,7 +475,7 @@ function DeployNames({ g }: { g: ChangeGroup }) {
 export function Paused({ p, canLift, now, onLift }: { p: DeployPauseView; canLift: boolean; now: number; onLift: () => void }) {
   const u = p.until;
   return (
-    <section className="dpp-going" data-kind="paused" data-deploy-paused={p.repository}>
+    <section className="dpp-going" id="deploy-paused" data-kind="paused" data-deploy-paused={p.repository}>
       <Pause className="w-3.5 h-3.5" aria-hidden />
       <b>Paused</b>
       <span className="dpp-paused-by">{p.by}</span>
@@ -496,27 +502,61 @@ export function Paused({ p, canLift, now, onLift }: { p: DeployPauseView; canLif
   );
 }
 
-/** Where a linked change stands in Shipping: on its way, dropped there, not read yet, or not there. */
-export type FocusComing = "coming" | "parked" | "reading" | null;
+/** A deploy's own state, for a link to that deploy; and how a deploy holds a linked change, before the deploy's name. */
+const DEPLOY_WORD: Record<HoldWord, string> = { live: "live now", went_out: "went out", going: "going out", asked: "asked for", failed: "failed", cancelled: "cancelled", rolled_back: "rolled back" };
+const HOLD_WORD: Record<HoldWord, string> = { live: "live since", went_out: "went out in", going: "going out in", asked: "asked for in", failed: "failed in", cancelled: "cancelled in", rolled_back: "rolled back after" };
+const SPOT_STATE: Record<Spot["kind"], string> = { deploy: "deployed", waiting: "waiting", run: "waiting", reading: "waiting", absent: "missing" };
 
-/** The thing the link pointed at, and where it is on this target: waiting, live in a deploy, on its way out, or not here. */
-export function FocusChip({ focus, repository, waiting, coming = null, deploys, live, onClear }: { focus: DeployFocus; repository: string; waiting: boolean; coming?: FocusComing; deploys: TeamDeployRow[]; live: TeamDeployRow | null; onClear: () => void }) {
-  const d = deploys[0];
-  const where = waiting ? "waiting"
-    : !d && coming === "coming" ? "on its way"
-    : !d && coming === "parked" ? "parked on its way"
-    : !d && coming === "reading" ? "looking…"
-    : !d ? "not on this target"
-    : focus.kind === "deploy" ? (d._id === live?._id ? "live now" : d.status)
-    : d._id === live?._id ? `live in ${d.short_id}` : d.status === "live" ? `went out in ${d.short_id}` : `${d.status} in ${d.short_id}`;
+/** The thing the link pointed at, and where it is on this target: the deploy that holds it, its place in what waits and
+ *  what holds it there, where its run stands off main, or not here. Each reason opens what it names. */
+export function FocusChip({ focus, repository, spot, onClear }: { focus: DeployFocus; repository: string; spot: Spot; onClear: () => void }) {
   return (
-    <div className="dpp-focus" data-state={waiting || (!d && coming) ? "waiting" : d ? "deployed" : "missing"} data-deploy-focus={focusWord(focus)}>
+    <div className="dpp-focus" data-state={SPOT_STATE[spot.kind]} data-spot={spot.kind} data-deploy-focus={focusWord(focus)}>
       {/* The thing reads as its pill does anywhere: a session, task, PR, commit or deploy by its title; a branch by its name. */}
       <span className="dpp-focus-ref"><FocusRef focus={focus} repository={repository} /></span>
-      <span>{where}</span>
+      <SpotWords spot={spot} own={focus.kind === "deploy"} />
       <button type="button" onClick={onClear} aria-label="Clear highlight" data-deploy-focus-clear><X className="w-3 h-3" aria-hidden /></button>
     </div>
   );
+}
+
+const toCard = (dp: string) => `#deploy-${dp}`;
+
+function SpotWords({ spot: s, own }: { spot: Spot; own: boolean }) {
+  switch (s.kind) {
+    case "deploy": return own ? <span>{DEPLOY_WORD[s.word]}</span> : <span>{HOLD_WORD[s.word]} <a href={toCard(s.deploy)} data-spot-deploy={s.deploy}>{s.deploy}</a></span>;
+    case "waiting": return (
+      <span className="dpp-focus-where">
+        <span>waiting</span>
+        {s.place ? <span data-spot-place>{s.place} of {s.of}{s.since ? ` since ${s.since}` : ""}</span> : s.since ? <span>{plural(s.of, "commit")} since {s.since}</span> : null}
+        {s.held ? <HeldBy held={s.held} /> : null}
+      </span>
+    );
+    case "run": return (
+      <span className="dpp-focus-where">
+        <span>not on main</span>
+        <a href={`#ship-${s.run._id}`} data-spot-run>{s.word}</a>
+        {s.dropped ? <span>parked</span> : null}
+      </span>
+    );
+    case "reading": return <span>looking…</span>;
+    case "absent": return <span>not on this target</span>;
+  }
+}
+
+/** What holds a waiting change, as a link to it: the failed try, the deploy ahead, main's CI, the press, the pause. */
+function HeldBy({ held: h }: { held: Held }) {
+  switch (h.kind) {
+    case "paused": return <a href="#deploy-paused" data-spot-held="paused">production paused</a>;
+    case "failed": return <a href={toCard(h.deploy)} data-spot-held="failed">{h.deploy} failed</a>;
+    case "behind": return <a href={toCard(h.deploy)} data-spot-held="behind">after {h.deploy}</a>;
+    case "ci": {
+      const word = h.ci === "failed" ? "main CI red" : "main CI running";
+      return h.url ? <a href={h.url} target="_blank" rel="noreferrer" data-spot-held={`ci-${h.ci}`}>{word}</a> : <a href="#deploy-next" data-spot-held={`ci-${h.ci}`}>{word}</a>;
+    }
+    case "press": return <a href="#deploy-next" data-spot-held="press">waits on Deploy</a>;
+    case "no_machine": return <a href="#deploy-next" data-spot-held="no_machine">no machine publishes it</a>;
+  }
 }
 
 function FocusRef({ focus: f, repository }: { focus: DeployFocus; repository: string }) {

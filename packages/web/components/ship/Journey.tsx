@@ -22,7 +22,9 @@ import { resumeAtLedger } from "../consequential/resumeLedger";
 import { RunGate } from "../WorkflowContextPanel";
 import { useDeployTargets } from "../../hooks/useSyncDeployTargets";
 import { sessionTargets, targetNow } from "../../lib/deploys/targets";
-import { deploysFocusHref, deploysHref, runFocus, type DeployFocus } from "../../lib/deploys/focus";
+import { commitMatches, deploysFocusHref, deploysHref, runFocus, type DeployFocus } from "../../lib/deploys/focus";
+import { queueCommits } from "../../lib/deploys/board";
+import { openTakes } from "../../lib/deploys/spot";
 import { useDeployPress } from "../../hooks/useDeployPress";
 import { useJourneyViewer } from "../../hooks/useJourneyViewer";
 import type { SessionAsk } from "../../lib/ship/sessionAsk";
@@ -439,23 +441,27 @@ export function SessionTargets({ teamId, conversationId, line, known: reached, f
     if (reached) return [...reached];
     const known = sessionTargets(conversationId, targets, deploys);
     const all = [...known, ...targetsFromLine(line).filter((t) => !known.some((k) => k.name === t.name))];
-    // A deploy going out sends main's head, which holds the landed change whatever its commits link to.
+    // A deploy going out takes the change only when it was cut at or after the change's commits: an open request with
+    // no commit, or one older than the change, is not carrying it (a stale requested deploy once read "going out" forever).
     return all.map((t) => {
       const row = targets.find((x) => x.name === t.name);
       const open = t.state === "waiting" && row ? targetNow(row, deploys).open : null;
-      return open ? { ...t, state: "deploying" as const, deploy: open.short_id || null, at: open.created_at } : t;
+      const queue = row ? queueCommits(row.queue.groups) : [];
+      const change = queue.filter((c) => (focus ? commitMatches(c, focus) : c.session?.conversation_id === conversationId));
+      return open && openTakes(open, queue, change) ? { ...t, state: "deploying" as const, deploy: open.short_id || null, at: open.created_at } : t;
     });
-  }, [conversationId, targets, deploys, line, reached]);
+  }, [conversationId, targets, deploys, line, reached, focus]);
   const press = useDeployPress(teamId, deploys, productions);
   if (!mine.length) return null;
   return (
     <ul className="sj-targets" data-session-targets>
       {mine.map((t) => {
         const row = targets.find((x) => x.name === t.name);
-        const canPress = t.state === "waiting" && !!row && row.runs === "here" && row.can_deploy && !targetNow(row, deploys).open;
+        // Red CI on what a deploy would send is never offered as the press here; the target's link opens the Deploys page.
+        const canPress = t.state === "waiting" && !!row && row.runs === "here" && row.can_deploy && row.queue.head_ci !== "failed" && !targetNow(row, deploys).open;
         return (
           <li key={t.name} className="sj-target-item">
-            <Link className="sj-target" data-state={t.state} href={deploysFocusHref({ team: teamId, target: t.name, focus: focus ?? { kind: "session", id: conversationId } })} data-session-target={t.name}>
+            <Link className="sj-target" data-state={t.state} href={deploysFocusHref({ team: teamId, target: t.name, focus: focus ?? { kind: "session", id: conversationId }, open: t.deploy })} data-session-target={t.name}>
               <i aria-hidden />{t.name}<span>{t.state === "live" ? t.deploy ?? "live" : t.state === "deploying" ? `going out${t.deploy ? ` · ${t.deploy}` : ""}` : t.state === "failed" ? "failed" : "waiting"}</span>
             </Link>
             {canPress ? <button type="button" className="sj-btn" data-primary onClick={() => press.open({ target: row!, action: "deploy", of: null })} data-session-deploy={t.name}>Deploy</button> : null}
