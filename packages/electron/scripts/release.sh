@@ -85,11 +85,14 @@ ASAR_LIST=$(npx asar list "$ASAR")
 # Every packaged module, not just the entry points: osPermissions.js is what
 # requires the native addon. A .node keeps its extension and must also sit
 # on disk beside the asar (asarUnpack), or dlopen fails inside the archive.
+# A require resolves from the requiring file's own folder (installedApps/
+# requires ./engine and ../winInstaller), so normalize before the lookup.
 for src in $(jq -r '.build.files[] | select(endswith(".js"))' package.json); do
-  for mod in $(grep -oE 'require\("\./[^"]+"\)' "$src" | sed -E 's|require\("\./([^"]+)"\)|\1|'); do
-    case "$mod" in *.js|*.mjs|*.node) f="/$mod" ;; *) f="/$mod.js" ;; esac
+  for mod in $(grep -oE 'require\("\.\.?/[^"]+"\)' "$src" | sed -E 's|require\("([^"]+)"\)|\1|'); do
+    case "$mod" in *.js|*.mjs|*.node|*.json) ;; *) mod="$mod.js" ;; esac
+    f="/$(python3 -c 'import os,sys; print(os.path.normpath(os.path.join(os.path.dirname(sys.argv[1]), sys.argv[2])))' "$src" "$mod")"
     if ! echo "$ASAR_LIST" | grep -qx "$f"; then
-      echo "  ERROR: $src requires ./$mod but $f is not in the asar — add it to build.files"
+      echo "  ERROR: $src requires $mod but $f is not in the asar — add it to build.files"
       exit 1
     fi
     if [[ "$f" == *.node ]] && [ ! -f "${ASAR}.unpacked$f" ]; then
