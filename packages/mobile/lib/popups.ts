@@ -51,7 +51,18 @@ export type Popup =
 
 type Shown = Popup & { id: number };
 
-export const usePopups = create<{ queue: Shown[] }>(() => ({ queue: [] }));
+/** `held` while the app lock is up (components/BiometricGate): nothing shows,
+ *  and the queue waits for the unlock. On Android a popup is a window of its
+ *  own, above the lock, so a shown one would be pressable without unlocking. */
+export const usePopups = create<{ queue: Shown[]; held: boolean }>(() => ({ queue: [], held: false }));
+
+/** The popup on screen now: the head of the queue, unless the lock holds it. */
+export const shownPopup = (s: { queue: Shown[]; held: boolean }): Shown | undefined => (s.held ? undefined : s.queue[0]);
+
+/** Set by the lock as it comes up and goes down; a held popup shows on unlock. */
+export function holdPopups(held: boolean) {
+  if (usePopups.getState().held !== held) usePopups.setState({ held });
+}
 
 let seq = 0;
 function push(p: Popup) {

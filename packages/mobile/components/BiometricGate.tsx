@@ -6,6 +6,7 @@ import { Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { useAuth } from '@/lib/auth';
 import { shouldLockOnReturn } from '@/lib/biometricLock';
 import { optionalNative } from '@/lib/optionalNative';
+import { holdPopups } from '@/lib/popups';
 
 // Drawn in its own window, as a popup is (components/PopupHost), so a modal
 // screen or an open sheet cannot sit above the lock. A binary without the
@@ -123,8 +124,12 @@ export function BiometricGate() {
     return () => sub.remove();
   }, [lock, prompt]);
 
+  // Popups wait while the lock or the cover is up (lib/popups holdPopups).
+  const shown = state !== 'open' && !signedOut;
+  useEffect(() => { holdPopups(shown); }, [shown]);
+
   const Theme = useTheme();
-  if (state === 'open' || signedOut) return null;
+  if (!shown) return null;
   const body = (
     <View style={styles.cover} accessibilityViewIsModal>
       {state === 'locked' ? (

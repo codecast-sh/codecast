@@ -98,13 +98,17 @@ const runs = [
   }),
 ];
 
-function Board({ unavailable = false }: { unavailable?: boolean }) {
+// An open pull request no Ship run carries, opened by someone else: Shipping lists it under Open pull requests.
+const OPEN_PR = { _id: "pr900", repository: target.repository, number: 900, title: "Hand-opened fix", state: "open", created_at: NOW - 2 * H, author_github_username: "someone", checks_state: "failure" };
+
+function Board({ unavailable = false, prs = [OPEN_PR] }: { unavailable?: boolean; prs?: any[] | null }) {
   const [show, setShow] = useState<any>("sessions");
   const [mine, setMine] = useState(false);
   return (
     <MemoryRouter>
       <DeploysBoard
         target={target} production={undefined} deploys={[live]} shipping={unavailable ? null : { runs: runs as any, shippers: [] }} shippingError={unavailable}
+        prs={prs as any} meLogin="me"
         linesByDeploy={lines} onLinesWanted={(ids) => wanted.push(ids)} checkouts={[]} me={ME} now={NOW}
         priorities={false} focus={null} reach={null} openDeploy={null} show={show} mine={mine} onShow={setShow} onMine={setMine}
         onClearFocus={() => {}} onPress={() => {}} onRollback={() => {}} onPause={() => {}} onLift={() => {}}
@@ -136,7 +140,13 @@ test("a Shipping card shows its stepper and where the run stands, stopped runs f
   expect(steps(cards[1]!)).toEqual(["PR:done", "CI:done", "Review:active", "Merge:idle"]);
   expect(cards[1]!.querySelector("[data-deploy-run-state]")!.textContent).toBe("Fixing review findings");
   expect(cards[1]!.querySelector(".dpp-run-title")!.getAttribute("href")).toBe("/tasks/ct-51");
-  expect(host.querySelector("[data-deploy-shipping-count]")!.textContent).toBe("2 changes");
+  // The open PR no run carries follows the runs, its stepper read from GitHub, its title to its page.
+  const pr = host.querySelector('[data-deploy-pr="900"]')!;
+  expect(host.querySelector("[data-deploy-open-prs]")!.textContent).toContain("Open pull requests1");
+  expect(steps(pr)).toEqual(["PR:done", "CI:failed", "Review:idle", "Merge:idle"]);
+  expect(pr.querySelector("[data-deploy-run-state]")!.textContent).toBe("CI failing");
+  expect(pr.querySelector(".dpp-run-title")!.getAttribute("href")).toBe(`/pr/${target.repository}/900`);
+  expect(host.querySelector("[data-deploy-shipping-count]")!.textContent).toBe("3 changes");
   unmount();
 });
 
@@ -189,7 +199,9 @@ test("Mine narrows both columns to the viewer's work and counts what it kept", (
   click(host.querySelector("[data-deploy-mine]"));
   expect(host.querySelector("[data-deploy-mine]")!.getAttribute("aria-pressed")).toBe("true");
   expect([...host.querySelectorAll("[data-deploy-run]")].map((c) => c.getAttribute("data-deploy-run"))).toEqual(["r-fixing"]);
-  expect(host.querySelector("[data-deploy-shipping-count]")!.textContent).toBe("1 of 2");
+  // Of three: two runs and the open PR someone else opened, which Mine leaves out.
+  expect(host.querySelector("[data-deploy-shipping-count]")!.textContent).toBe("1 of 3");
+  expect(host.querySelector('[data-deploy-pr="900"]')).toBeNull();
   expect(rowKeys(card(host, "next"))).toEqual(["jx7mineaaaaaaa"]);
   expect(rowKeys(card(host, "dp-7"))).toEqual(["jx7mineoldaaaa"]);
   // The dot marks yours among others; with only yours listed it says nothing.
@@ -200,7 +212,7 @@ test("Mine narrows both columns to the viewer's work and counts what it kept", (
 
 test("a backend without the Ship runs query says Shipping can't be read, and the deploys still list what they carried", () => {
   const { host, unmount } = mount(true);
-  expect(host.querySelector("[data-deploy-shipping]")!.textContent).toContain("What is shipping can't be read right now");
+  expect(host.querySelector("[data-deploy-shipping]")!.textContent).toContain("Ship runs can't be read right now");
   expect(host.querySelector("[data-deploy-shipping-count]")).toBeNull();
   expect(rowKeys(card(host, "dp-7"))).toEqual(["jx7mineoldaaaa", "jx7anaoldaaaaa"]);
   unmount();
@@ -222,7 +234,7 @@ const many = [
 ];
 const props = (over: Record<string, unknown> = {}) => ({
   target: { ...target, queue: { ...target.queue, commits: 0, shown: 0, groups: [] } }, production: undefined, deploys: many,
-  shipping: { runs: runs as any, shippers: [] }, checkouts: [], me: ME, now: NOW + 30 * H, priorities: false, focus: null, reach: null,
+  shipping: { runs: runs as any, shippers: [] }, prs: [], meLogin: null, checkouts: [], me: ME, now: NOW + 30 * H, priorities: false, focus: null, reach: null,
   openDeploy: null, show: "sessions", mine: false, onShow() {}, onMine() {}, onClearFocus() {}, onPress() {}, onRollback() {}, onPause() {}, onLift() {}, ...over,
 }) as any;
 function mountWith(p: any) {
