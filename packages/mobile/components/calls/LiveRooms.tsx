@@ -13,7 +13,9 @@ import { SolarizedLight, Spacing, themedStyles, useTheme } from "@/constants/The
 import { ChatAvatar } from "@/components/chat/MessageRow";
 import { getCallSnapshot, joinCall, subscribeCall } from "@/lib/calls/callManager";
 import { useActiveTeam } from "@/hooks/useWorkspaceArgs";
-import { callsOnInWorkspace, personalLiveRoom } from "@/lib/calls/callsGate";
+import { callsOnInWorkspace } from "@/lib/calls/callsGate";
+import { liveRoomOnlyMine, personalViewerOf } from "@codecast/web/lib/calls/personalCalls";
+import { findSessionRow } from "@codecast/web/lib/calls/findSessionRow";
 
 // Live now, phone-shaped: the huddles running anywhere in your teams, listed
 // where you would walk past them. A room is a door — one tap walks into a
@@ -35,17 +37,22 @@ export function useCallsOn(): boolean {
 
 /** The live huddles off the store (the sync bridge feeds calls.getLiveRooms),
  *  through web's own derivation, with "mine" meaning my call plane's room.
- *  Personal lists no team's huddles: only my room of one and rooms I sit in. */
+ *  Personal lists only the viewer's own rooms (web's liveRoomOnlyMine). */
 export function useLiveRooms(enabled: boolean): LiveRoomRow[] {
   const myRoomKey = useSyncExternalStore(subscribeCall, () => getCallSnapshot().roomKey, () => null);
   const rows = useLiveRoomRows(myRoomKey);
-  const { teamId } = useActiveTeam();
-  const meId = useInboxStore((s) => (s.currentUser?._id ? String(s.currentUser._id) : null));
+  const personalViewer = useInboxStore(personalViewerOf);
   return useMemo(() => {
     if (!enabled) return NO_ROWS;
-    if (teamId) return rows;
-    return rows.filter((r) => personalLiveRoom(r.roomKey, r.members.map((m) => String(m.user_id)), meId));
-  }, [enabled, teamId, rows, meId]);
+    if (personalViewer === null) return rows;
+    // Whose session: read when the rooms change; an owner's own sessions are in their store.
+    const st = useInboxStore.getState();
+    const ownerOf = (id: string) => {
+      const row = findSessionRow(st, id);
+      return row?.user_id ? String(row.user_id) : null;
+    };
+    return rows.filter((r) => liveRoomOnlyMine(r, personalViewer, ownerOf));
+  }, [enabled, personalViewer, rows]);
 }
 
 const NO_ROWS: LiveRoomRow[] = [];

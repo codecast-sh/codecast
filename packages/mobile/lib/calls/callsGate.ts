@@ -31,10 +31,3 @@ export function callsOnForRoom(config: CallConfig, roomTeamId: string | null | u
 export function peopleHuddle(viewerId: string, userIds: readonly string[]): { roomKey: string; toUserIds: string[] } {
   return { roomKey: dmRoomKey(viewerId, [...userIds]), toUserIds: userIds.filter((id) => id !== viewerId) };
 }
-
-/** A live room Personal lists: my room of one, or a room I sit in. A team's
- *  other huddles belong to that team's workspace. */
-export function personalLiveRoom(roomKey: string, memberIds: readonly string[], meId: string | null): boolean {
-  if (!meId) return false;
-  return roomKey === dmRoomKey(meId) || memberIds.includes(meId);
-}

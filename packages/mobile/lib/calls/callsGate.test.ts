@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { callsOnForRoom, callsOnInWorkspace, peopleHuddle, personalLiveRoom } from "./callsGate";
+import { callsOnForRoom, callsOnInWorkspace, peopleHuddle } from "./callsGate";
 
 const on = { enabled: true, teams: ["t1"] };
 
@@ -41,19 +41,5 @@ describe("peopleHuddle", () => {
   });
   test("a teammate is your shared room, ringing them", () => {
     expect(peopleHuddle("me", ["ann"])).toEqual({ roomKey: "dm:ann:me", toUserIds: ["ann"] });
-  });
-});
-
-describe("personalLiveRoom", () => {
-  test("my room of one and rooms I sit in", () => {
-    expect(personalLiveRoom("dm:me", [], "me")).toBe(true);
-    expect(personalLiveRoom("session:c1", ["me"], "me")).toBe(true);
-  });
-  test("a team's huddle I am not in stays out", () => {
-    expect(personalLiveRoom("channel:ch1", ["ann"], "me")).toBe(false);
-    expect(personalLiveRoom("dm:ann:bo", ["ann", "bo"], "me")).toBe(false);
-  });
-  test("an unknown viewer sees nothing", () => {
-    expect(personalLiveRoom("dm:me", ["me"], null)).toBe(false);
   });
 });
