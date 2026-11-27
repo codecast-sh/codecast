@@ -178,12 +178,11 @@ describe("collapse and expand", () => {
     ]);
     const v1 = apply(v0, collapseFrameOps(v0, "el_i"));
     expect([...hiddenKeys(v1)]).toEqual(["el_s1"]);
-    // The outer frame reflowed and, holding a folded frame now, narrowed to the pill: s2 sits under it.
+    // The outer frame reflowed: pill then s2 in one row, and it shrank to fit.
     const o1 = box(v1, "el_o"), i1 = box(v1, "el_i");
     expect(i1).toMatchObject({ x: FRAME_PAD, y: FRAME_PAD + FRAME_TITLE_BAND, h: FRAME_PILL_H });
-    expect(pos(v1, "el_s2")).toEqual({ x: FRAME_PAD, y: FRAME_PAD + FRAME_TITLE_BAND + FRAME_PILL_H + FRAME_GAP });
-    expect(o1.w).toBe(i1.w + 2 * FRAME_PAD);
-    expect(o1.h).toBe(FRAME_PAD + FRAME_TITLE_BAND + FRAME_PILL_H + FRAME_GAP + 160 + FRAME_PAD);
+    expect(pos(v1, "el_s2")).toEqual({ x: FRAME_PAD + i1.w + FRAME_GAP, y: FRAME_PAD + FRAME_TITLE_BAND });
+    expect(o1.h).toBe(FRAME_PAD + FRAME_TITLE_BAND + 160 + FRAME_PAD);
     // The hidden sticky moved with the pill.
     expect(pos(v1, "el_s1")).toEqual({ x: 80, y: 128 });
 
@@ -276,6 +275,20 @@ describe("reflow", () => {
     expect(box(v1, "el_t").h).toBe(pill.y + pill.h + FRAME_PAD);
     // Reflowing again changes nothing.
     expect(reflowFrameOps(v1, "el_t")).toEqual([]);
+  });
+
+  test("folded notes without a card are not resolved: the frame keeps today's width and its text keeps its own", () => {
+    const v0 = board([
+      frame("el_t", 0, 0, 1200, 900),
+      el("el_sum", "text", { x: 40, y: 64, text: "Still talking about caps", size: 16 }),
+      frame("el_n", 400, 140, 260, 48, { collapsed: { w: 500, h: 400, holds: ["el_s"] } }),
+      sticky("el_s", 440, 204),
+    ]);
+    const ops = reflowFrameOps(v0, "el_t");
+    const v1 = apply(v0, ops);
+    expect(box(v1, "el_t").w).toBe(1200);
+    expect(ops.find((o) => o.k === "el_sum" && "set" in o && "w" in o.set)).toBeUndefined();
+    expect(box(v1, "el_sum").w).toBe(box(v0, "el_sum").w);
   });
 
   test("an open frame keeps today's width rule: never narrower than it was", () => {
