@@ -240,7 +240,7 @@ describe("evidence marks a milestone done at the evidence's own time", () => {
     expect((await stepOf(t, p1, "s1")).done).toBe(false);
   });
 
-  test("a cascade closing many tasks reads the owner's priorities and the workspace's active ones once each", async () => {
+  test("a cascade closing many tasks reads the owner's priorities once", async () => {
     const { t, p1, ct1, ct3, ct4, ct5 } = await world();
     const reads = await t.run(async (ctx: any) => {
       let n = 0;
@@ -255,7 +255,7 @@ describe("evidence marks a milestone done at the evidence's own time", () => {
       for (const id of [ct1, ct3, ct4, ct5]) await patchTask(counted, await ctx.db.get(id), { status: "done", closed_at: NOW - H });
       return n;
     });
-    expect(reads).toBe(2);
+    expect(reads).toBe(1);
     for (const key of ["s1", "s5", "s6"]) expect((await stepOf(t, p1, key)).done).toBe(true);
   });
 

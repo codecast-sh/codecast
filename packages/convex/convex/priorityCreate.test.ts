@@ -179,10 +179,30 @@ describe("a priority made for a teammate from a call", () => {
     expect(unreadable.replace("pri-1", "pri-N")).toBe(missing.replace("pri-404", "pri-N"));
   });
 
-  test("a milestone filed under a teammate's priority closes with its task", async () => {
+  test("the call's readers lose it once a pass writes it, unless a session of it is listed to them", async () => {
+    const { t, create, as, ana, ben, team } = await world();
+    await create({ title: "Ana's launch", owner: "@ana", from_call: "cl-7" });
+    const show = () => as(String(ben)).query(pri.show, { short_id: "pri-1" });
+    expect((await show())?.title).toBe("Ana's launch");
+
+    const id = await t.run(async (ctx: any) => {
+      const p = await ctx.db.query("priorities").withIndex("by_short_id", (q: any) => q.eq("short_id", "pri-1")).first();
+      await ctx.db.patch(p._id, { pass_at: NOW, summary: "Written from Ana's private sessions" });
+      return p._id;
+    });
+    expect(await show()).toBeNull();
+
+    await t.run(async (ctx: any) => ctx.db.insert("conversations", {
+      user_id: ana, team_id: team, agent_type: "claude_code", session_id: "sess-ana", short_id: "jx7ana1", title: "Launch plan",
+      started_at: NOW, updated_at: NOW, message_count: 3, is_private: false, team_visibility: "full", status: "active", priority_id: id,
+    }));
+    expect((await show())?.summary).toBe("Written from Ana's private sessions");
+  });
+
+  test("a milestone filed from a call under a teammate's priority closes with its task", async () => {
     const { t, create, createTask, priority, ana } = await world();
     await create({ title: "Ana's launch", owner: "@ana", from_call: "cl-7" });
-    const made = await createTask({ title: "Book the venue", under_priority: "pri-1" });
+    const made = await createTask({ title: "Book the venue", under_priority: "pri-1", from_call: "cl-7", source: "meeting" });
     expect((await priority("pri-1")).steps[0].done).toBe(false);
     await t.mutation(api.tasks.update, { api_token: TOKEN, short_id: made.short_id, status: "done" } as any);
     const p = await priority("pri-1");

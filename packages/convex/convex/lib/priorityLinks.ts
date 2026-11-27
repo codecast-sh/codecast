@@ -89,7 +89,10 @@ const workspaceReads = new WeakMap<object, Map<string, Promise<Priority[]>>>();
  * priorities per member (tens in all), and WORKSPACE_ACTIVE_READ caps it. No
  * index reaches a milestone's refs, and a milestone filed for someone else
  * (`cast task create --under pri-N`) names a task its owner neither filed nor
- * linked a session to, so only this read finds it.
+ * linked a session to, so only this read finds it. Read only for a task
+ * pulled from a call (Scribe's case): the read conflicts with every pass
+ * writing a priority in the workspace, and any other task's milestone on a
+ * teammate's priority is caught by its owner's next pass.
  */
 function workspaceActivePriorities(ctx: Ctx, workspace: string): Promise<Priority[]> {
   let reads = workspaceReads.get(ctx.db);
@@ -218,14 +221,14 @@ export async function recomputeStepDone(ctx: Ctx, priorityId: Id<"priorities">, 
 /**
  * A task closed or reopened (lib/taskWrite patchTask, issueSync, orgInit
  * setTaskStatus): every milestone naming it, among the priorities of its
- * owner and of the people whose sessions link it, and among every active
- * priority there, in the task's workspace (the only workspace whose pass can
+ * owner and of the people whose sessions link it, and, for a task pulled from
+ * a call, among every active priority there, in the task's workspace (the only workspace whose pass can
  * name it, wherever those sessions are).
  * Each of those people's pass there is asked for (lib/priorityPassSchedule),
  * unless the session that made the change is a machine's (a role's seat, a
  * trigger's run, a workflow's): those come round the clock (pinsAskForPass).
  */
-export async function taskStatusChanged(ctx: Ctx & { scheduler?: any }, task: Pick<Doc<"tasks">, "_id" | "short_id" | "user_id" | "workspace" | "conversation_ids" | "created_from_conversation">, acting?: Conv | Id<"conversations"> | null): Promise<void> {
+export async function taskStatusChanged(ctx: Ctx & { scheduler?: any }, task: Pick<Doc<"tasks">, "_id" | "short_id" | "user_id" | "workspace" | "conversation_ids" | "created_from_conversation" | "from_call">, acting?: Conv | Id<"conversations"> | null): Promise<void> {
   const workspace = task.workspace;
   if (!workspace || !(await prioritiesOn(ctx, workspace))) return;
   const rail: Array<{ conversation_id: Id<"conversations"> }> = await ctx.db
@@ -235,8 +238,8 @@ export async function taskStatusChanged(ctx: Ctx & { scheduler?: any }, task: Pi
   const sessions = await sessionsOf(ctx, [...(task.conversation_ids ?? []), task.created_from_conversation, ...rail.map((r) => r.conversation_id)]);
   const places = [task.user_id, ...sessions.map((c) => c.user_id)].map((user) => ({ user, workspace }));
   const named = await stepsNaming(ctx, places, { kind: "task", id: task.short_id });
-  // Milestones on anyone else's active priority here that name it, and their owners' passes.
-  for (const p of await workspaceActivePriorities(ctx, workspace)) {
+  // A task pulled from a call: milestones on anyone else's active priority here that name it, and their owners' passes.
+  for (const p of task.from_call ? await workspaceActivePriorities(ctx, workspace) : []) {
     if (named.some((n) => String(n.priority) === String(p._id))) continue;
     const keys = p.steps.filter((st) => st.refs.some((r) => r.kind === "task" && r.id === task.short_id)).map((st) => st.key);
     if (!keys.length) continue;
