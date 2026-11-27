@@ -102,6 +102,8 @@ digraph change {
 }
 \`\`\`
 
+A heavy command station takes a place in one of the machine's named slots before its script runs: \`local_ci [..., machine_slot="local_ci"]\`. It waits while the slot's places are all held (\`cast config local_ci.per_machine <n>\`, 2 unless set) or the machine is short of memory, up to its \`timeout\`, which starts counting only once it runs. A wait that runs out is the outcome \`no_slot\`, routed like any other: \`local_ci -> pr [condition="outcome = no_slot"]\` goes on without it, and a station placed with \`after=\` or \`before=\` may write that edge itself. \`cast slot ls\` lists each slot's holders and waiters, and \`cast slot run --name <slot> [--wait 15m] -- <cmd>\` runs any command in one (exit 75 when the wait runs out).
+
 A backbone leaves part of itself to the flow that extends it: a node marked \`slot="<what it must do>"\`, with \`flow=\` for the steps it runs when nothing fills it. A flow naming it by \`extends="<flow>"\` fills the slot with \`subgraph <slot> { ... }\`, whose steps run in its place as a segment's would: written as a chain they start at the first and leave by the slot's own routes after the last, or they name their own start and exit. A subgraph fills only a slot or a node of its own flow, so the backbone's other stations stay as the team keeps them, and a backbone with an empty slot does not run. \`cast flow run -\` and \`cast flow validate -\` read the graph from stdin, keep it in \`.codecast/session-flows/\` (outside git) as this session's draft, and check it, slots included, before anything starts. A flow written for one change extends a library flow that leaves no slot the same way, placing its own steps with \`after=\`:
 
 \`\`\`dot

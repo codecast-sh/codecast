@@ -5715,11 +5715,33 @@ program
 
 program
   .command("queue")
-  .description("Every queue on this machine: typecheck watchers, Interactive jobs and subagent workers, what runs and what waits")
+  .description("Every queue on this machine: typecheck watchers, Interactive jobs, named slots and subagent workers, what runs and what waits")
   .option("--json", "Print the queues as JSON")
   .action(async (o: { json?: boolean }) => {
     const { runQueueCommand } = await import("./queueCommand.js");
     await runQueueCommand(o);
+  });
+
+const slotCmd = program
+  .command("slot")
+  .description("Named slots on this machine: at most a few holders of one name at once, none while memory is short (cast config <name>.per_machine <n>)");
+slotCmd
+  .command("run")
+  .description("Run a command once it holds a place in a slot, and give the place back when it ends; a wait that runs out exits 75")
+  .requiredOption("--name <name>", "The slot, e.g. local_ci (cast slot ls lists them)")
+  .option("--wait <dur>", "Longest to wait for a place (90s, 15m, 1h); default: until one frees")
+  .argument("<cmd...>", "The command, after --")
+  .action(async (cmd: string[], o: { name: string; wait?: string }) => {
+    const { runSlotRun } = await import("./slotCommand.js");
+    await runSlotRun(cmd, o);
+  });
+slotCmd
+  .command("ls")
+  .description("Each slot's cap, holders and waiters")
+  .option("--json", "Print them as JSON")
+  .action(async (o: { json?: boolean }) => {
+    const { runSlotLs } = await import("./slotCommand.js");
+    runSlotLs(o);
   });
 
 program
@@ -5912,7 +5934,7 @@ registerSyncVerbs(syncCommand);
 // ones with their own setter below. The help and the unknown-key error both
 // read this list, so they cannot disagree.
 const CONFIG_SETTABLE_KEYS = ["auth_token", "web_url", "user_id", "convex_url", "team_id", "excluded_paths", "claude_args", "codex_args", "browser_capture", "cloud_mirror_enabled", "cloud_mirror_exclude", "cloud_mirror_include", "sync_always", "sync_never", "session_trailer", "tmux_server_per_session", "level_checkouts_enabled", "messaging_only"] as const;
-const CONFIG_ALL_KEYS: readonly string[] = [...CONFIG_SETTABLE_KEYS, "claude_backend", "subagents.per_session", "subagents.per_machine", "check.per_machine", "check.reserve_gb", "interactive_jobs.per_machine", "flow.device", "agent"];
+const CONFIG_ALL_KEYS: readonly string[] = [...CONFIG_SETTABLE_KEYS, "claude_backend", "subagents.per_session", "subagents.per_machine", "check.per_machine", "check.reserve_gb", "interactive_jobs.per_machine", "local_ci.per_machine", "flow.device", "agent"];
 
 program
   .command("config")
@@ -5927,6 +5949,7 @@ program
     "  cast config set check.reserve_gb 24       # memory typecheck watchers leave for everything else (default 8 GB or 20% of RAM, whichever is more)\n" +
     "  cast config set check.per_machine 8       # at most this many typecheck watchers (default 16; fewer when memory is short)\n" +
     "  cast config set interactive_jobs.per_machine 4  # commands run as Interactive jobs at once (default 8)\n" +
+    "  cast config set local_ci.per_machine 1    # Local CI runs at once (cast slot ls; default 2)\n" +
     "  cast config set flow.device <machine>     # cast flow run places runs on this machine of yours (\"here\" keeps them local)\n" +
     "  cast config set flow.device.<owner>/<repo> <machine>  # the same for one repository"
   )
@@ -6102,7 +6125,7 @@ program
     // The queue limits: whole numbers, one shape for every queue (cast queue
     // shows them all). Workers are capped per session and per machine by the
     // server; typecheck watchers and Interactive jobs per machine by this CLI.
-    const capKey = /^(subagents)\.(per_session|per_machine)$|^(check|interactive_jobs)\.(per_machine)$/.exec(key ?? "");
+    const capKey = /^(subagents)\.(per_session|per_machine)$|^(check|interactive_jobs|local_ci)\.(per_machine)$/.exec(key ?? "");
     if (capKey) {
       const group = (capKey[1] ?? capKey[3]) as "subagents" | MachineCapKey;
       const field = (capKey[2] ?? capKey[4]) as "per_session" | "per_machine";

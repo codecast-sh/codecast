@@ -1,7 +1,7 @@
 /**
  * `cast queue`: every queue that decides when work starts on this machine,
- * what holds each one now and what waits for it. Typecheck watchers and
- * Interactive jobs are capped by this CLI (machineCaps.ts); subagent workers
+ * what holds each one now and what waits for it. Typecheck watchers,
+ * Interactive jobs and named slots (machineSlot.ts) are capped by this CLI (machineCaps.ts); subagent workers
  * by the server, per session and per machine (shared/contracts/subagentFleet.ts).
  */
 
@@ -11,6 +11,7 @@ import { fmtGb } from "./watcherMemory.js";
 import { INTERACTIVE_JOB_SLOTS_DIR } from "./interactiveJob.js";
 import { listFileSlots, type SlotEntry } from "./lockFile.js";
 import { machineCap } from "./machineCaps.js";
+import { listMachineSlots } from "./machineSlot.js";
 import { queueAhead, queuedLabel, type SlotRow } from "@codecast/shared/contracts";
 
 type WorkerRow = SlotRow & { title: string | null };
@@ -18,10 +19,11 @@ type WorkerRow = SlotRow & { title: string | null };
 export type QueueReport = {
   check: { cap: number; memory?: { heldBytes: number; budgetBytes: number }; running: Array<{ project: string; root: string; pid: number; checking: boolean; errors?: number; holdBytes?: number }>; waiting: Array<{ project: string; root: string; pid: number; at: number }> };
   interactive_jobs: { cap: number; running: SlotEntry[]; waiting: SlotEntry[] };
+  slots: Array<{ name: string; cap: number; running: SlotEntry[]; waiting: SlotEntry[] }>;
   workers: { device: string; rows: Array<WorkerRow & { ahead: number | null }> } | { error: string };
 };
 
-export function localQueues(): Pick<QueueReport, "check" | "interactive_jobs"> {
+export function localQueues(): Pick<QueueReport, "check" | "interactive_jobs" | "slots"> {
   const jobs = listFileSlots(INTERACTIVE_JOB_SLOTS_DIR());
   const status = watcherStatus();
   return {
@@ -32,6 +34,7 @@ export function localQueues(): Pick<QueueReport, "check" | "interactive_jobs"> {
       waiting: listQueue().map((t) => ({ project: t.project, root: t.root, pid: t.pid, at: t.at })),
     },
     interactive_jobs: { cap: machineCap("interactive_jobs"), running: jobs.holding, waiting: jobs.waiting },
+    slots: listMachineSlots(),
   };
 }
 
@@ -69,6 +72,12 @@ export function renderQueueReport(r: QueueReport, now = Date.now()): string {
   for (const j of r.interactive_jobs.running) lines.push(`  ${ago(j.at, now)}  pid ${j.pid}  ${j.what ?? ""}`.trimEnd());
   for (const j of r.interactive_jobs.waiting) lines.push(`  waiting ${ago(j.at, now)}: pid ${j.pid}  ${j.what ?? ""}`.trimEnd());
 
+  for (const s of r.slots) {
+    head(`Slot ${s.name}`, s.running.length, String(s.cap), s.waiting.length);
+    for (const j of s.running) lines.push(`  ${ago(j.at, now)}  pid ${j.pid}  ${j.what ?? ""}`.trimEnd());
+    for (const j of s.waiting) lines.push(`  waiting ${ago(j.at, now)}: pid ${j.pid}  ${j.what ?? ""}`.trimEnd());
+  }
+
   if ("error" in r.workers) {
     lines.push(`Workers  unavailable: ${r.workers.error}`);
   } else {
@@ -85,7 +94,7 @@ export function renderQueueReport(r: QueueReport, now = Date.now()): string {
 
   lines.push(
     "",
-    "Limits: cast config check.reserve_gb <n> · check.per_machine <n> · interactive_jobs.per_machine <n> · subagents.per_session <n> · subagents.per_machine <n>",
+    "Limits: cast config check.reserve_gb <n> · check.per_machine <n> · interactive_jobs.per_machine <n> · local_ci.per_machine <n> · subagents.per_session <n> · subagents.per_machine <n>",
     "A waiting worker starts when one ends; cast kill <id> drops one from the queue.",
   );
   return lines.join("\n");
