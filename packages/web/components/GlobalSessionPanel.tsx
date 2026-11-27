@@ -2267,7 +2267,7 @@ function SessionListPanelImpl({
 
   // Stale working set: what the sweep would dismiss (staleInboxSessions).
   const staleCutoff = coarseNow - STALE_SESSION_MS;
-  const staleSessions = useMemo(() => staleInboxSessions(s.sessions, activeSessionId, staleCutoff), [s.sessions, activeSessionId, staleCutoff]);
+  const staleSessions = useMemo(() => staleInboxSessions(s.sessions, activeSessionId, staleCutoff, meId), [s.sessions, activeSessionId, staleCutoff, meId]);
   // The snooze is a persisted pref, not component state: a "Not now" used to
   // evaporate on every reload, so the prompt kept coming back.
   const stalePromptSnoozedAt = s.clientState.ui?.inbox_stale_prompt_snoozed_at ?? 0;
@@ -2290,8 +2290,8 @@ function SessionListPanelImpl({
   // always matches what a revive would act on.
   // (blockedInboxSessions; coarseNow keeps a revive stamp's TTL live).
   const blockedSessions = useMemo(
-    () => blockedInboxSessions(s.sessions as Record<string, InboxSession>, s.blockedReviveRequestedAt, Date.now()),
-    [s.sessions, s.blockedReviveRequestedAt, coarseNow],
+    () => blockedInboxSessions(s.sessions as Record<string, InboxSession>, s.blockedReviveRequestedAt, Date.now(), meId),
+    [s.sessions, s.blockedReviveRequestedAt, coarseNow, meId],
   );
   // A fleet of nothing but blocked subagent workers doesn't earn the amber
   // pill: their parents have moved on, so there's no one waiting on a revive.
@@ -2991,7 +2991,7 @@ function SessionListPanelImpl({
     const isDragOverSection = dragOverSectionKey === key;
     // The flat views draw a nested row under its card (underParent): it rides
     // that card's slot, and one its session owns adds to no count.
-    const flatUnderParent = flat ? drawnUnderParentIds(items, globalSubByParent) : null;
+    const flatUnderParent = flat ? drawnUnderParentIds(items, globalSubByParent, nestWorkers) : null;
     const dropProps = isDropTarget
       ? {
           onDragOver: (e: React.DragEvent) => {
@@ -3026,7 +3026,7 @@ function SessionListPanelImpl({
       >
         <SectionHeader
           label={label}
-          count={opts?.count ?? (flatUnderParent ? flatHeaderCount(items, flatUnderParent) : items.length)}
+          count={opts?.count ?? (flatUnderParent ? flatHeaderCount(items, flatUnderParent, meId) : items.length)}
           color={color}
           sectionKey={key}
           collapsed={collapsed}

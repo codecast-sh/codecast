@@ -302,6 +302,16 @@ describe("a nested subagent whose turn ended", () => {
     expect(status(row({ parent_conversation_id: "jx7parent", parent_message_uuid: null, updated_at: NOW - 6 * 60_000, agent_status_updated_at: NOW - 6 * 60_000 }))).toBe("done");
   });
 
+  // A session a person dragged under another (adopted_at) runs its own
+  // process: drawn on its new parent's card, it reads its own placement, never
+  // the subagent Done rule, as the server's slim row says (is_subagent false).
+  test("an adopted session on its parent's card reads its own placement", () => {
+    const adopted = row({ parent_conversation_id: "jx7parent", owner_session_id: "jx7parent", owners_model: true, owned_by_me: false, is_subagent: false, adopted_at: NOW - 60_000, updated_at: NOW - 6 * 60_000, agent_status_updated_at: NOW - 6 * 60_000 } as any);
+    expect(status(adopted)).toBe(sessionStatusOf({ row: adopted, now: NOW, placement: railRowPlacement(adopted, NOW) }));
+    expect(status(adopted)).not.toBe("done");
+    expect(status({ ...adopted, adopted_at: null } as any)).toBe("done");
+  });
+
   test("a subagent standing as its own card reads its placement", () => {
     const sub = row({ is_subagent: true, parent_conversation_id: "jx7parent" });
     expect(status(sub, undefined, false)).toBe("needs_you");

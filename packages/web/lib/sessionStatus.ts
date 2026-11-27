@@ -170,6 +170,8 @@ export type StatusRow = {
   owners_model?: boolean | null;
   org_role_id?: string | null;
   owner_session_id?: string | null;
+  /** When a person dragged it under its parent: it runs its own process. */
+  adopted_at?: number | null;
   wait_up_count?: number | null;
   wait_up_person?: string | null;
   // The replicated facts the rail re-derives liveness from (lib/liveness liveFactsOf).
@@ -289,10 +291,11 @@ export function sessionStatusOf({ row, section, placement, now, live = {}, hoste
   // quiet past it, whatever its placement says (a settled wait files Needs
   // you, or Working "With <owner>" when an agent owner answers it). An ask or
   // send of the person's, a failure, a set-aside row and a section above the
-  // row still decide. A spawned worker, and a subagent standing as its own
-  // card, read their placement like any session.
+  // row still decide. A spawned worker, a session a person dragged under the
+  // parent (adopted_at: it runs its own process), and a subagent standing as
+  // its own card, read their placement like any session.
   const inParentsTurn = nested && !section && (row.message_count ?? 0) > 0
-    && (row.is_subagent === true || (!!row.parent_conversation_id && !row.parent_message_uuid))
+    && (row.is_subagent === true || (!!row.parent_conversation_id && !row.parent_message_uuid)) && row.adopted_at == null
     && !row.spawned_by_conversation_id && !row.agent_status && !live.asking && !live.pendingSend
     && where !== "dismissed" && where !== "stashed" && where !== "snoozed" && where !== "questions"
     && !row.inbox_killed_at && !row.inbox_dismissed_at && !row.inbox_stashed_at;

@@ -31,7 +31,7 @@ describe("staleInboxSessions", () => {
   ].map((s) => [s._id, s]));
 
   it("skips a child its session owns, counting only inbox rows", () => {
-    const ids = staleInboxSessions(sessions, null, CUTOFF).map((s) => s._id);
+    const ids = staleInboxSessions(sessions, null, CUTOFF, ME).map((s) => s._id);
     expect(ids).not.toContain(OWNED);
     expect(ids.sort()).toEqual([LEAD, MINE, LEGACY].sort());
   });
@@ -43,8 +43,23 @@ describe("staleInboxSessions", () => {
       r: row("r", { updated_at: NOW }),
       u: row("u", { updated_at: undefined }),
     };
-    const ids = staleInboxSessions(more, LEAD, CUTOFF).map((s) => s._id);
+    const ids = staleInboxSessions(more, LEAD, CUTOFF, ME).map((s) => s._id);
     expect(ids.sort()).toEqual([MINE, LEGACY].sort());
+  });
+
+  // Its wait reached the viewer (wait_up_person, no message since): it is in
+  // their Needs You, so the sweep counts it like any of their rows. A role's
+  // child is not on its old parent's card either: the card's rule is the
+  // server's (shared ridesParentCard).
+  it("counts a child whose wait reached the viewer, and one a role took", () => {
+    const more = {
+      ...sessions,
+      esc: row("esc", { owners_model: true, owned_by_me: false, owner_session_id: LEAD, parent_conversation_id: LEAD, is_subagent: true, wait_up_person: ME, wait_up_count: 3, wait_up_at: OLD } as any),
+      roled: row("roled", { owners_model: true, owned_by_me: false, owner_session_id: LEAD, parent_conversation_id: LEAD, org_role_id: "r_1" } as any),
+    };
+    const ids = staleInboxSessions(more, null, CUTOFF, ME).map((s) => s._id);
+    expect(ids).toEqual(expect.arrayContaining(["esc", "roled"]));
+    expect(ids).not.toContain(OWNED);
   });
 });
 
@@ -60,7 +75,7 @@ describe("blockedInboxSessions", () => {
   ].map((s) => [s._id, s]));
 
   it("skips a child its session owns", () => {
-    const ids = blockedInboxSessions(sessions, undefined, NOW).map((s) => s._id);
+    const ids = blockedInboxSessions(sessions, undefined, NOW, ME).map((s) => s._id);
     expect(ids.sort()).toEqual([LEAD, MINE, LEGACY].sort());
   });
 
@@ -70,7 +85,12 @@ describe("blockedInboxSessions", () => {
       old: row("old", { ...blocked, pending_api_error_at: NOW - 30 * 24 * 3600_000, updated_at: NOW - 30 * 24 * 3600_000 } as any),
       fine: row("fine", { updated_at: NOW }),
     };
-    const ids = blockedInboxSessions(more, { [LEGACY]: NOW - 1000 }, NOW).map((s) => s._id);
+    const ids = blockedInboxSessions(more, { [LEGACY]: NOW - 1000 }, NOW, ME).map((s) => s._id);
     expect(ids.sort()).toEqual([LEAD, MINE].sort());
+  });
+
+  it("counts a blocked child whose wait reached the viewer: it is in their inbox", () => {
+    const more = { ...sessions, esc: row("esc", { owners_model: true, owned_by_me: false, owner_session_id: LEAD, parent_conversation_id: LEAD, is_subagent: true, wait_up_person: ME, wait_up_count: 3, ...blocked } as any) };
+    expect(blockedInboxSessions(more, undefined, NOW, ME).map((s) => s._id)).toContain("esc");
   });
 });

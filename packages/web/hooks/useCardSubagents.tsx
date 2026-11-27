@@ -20,14 +20,15 @@ const EMPTY_SUBAGENT_ROWS: readonly SubagentRow[] = [];
  *  those buckets, but dismissing their parent promotes them to top-level, so
  *  they must be in the dismiss set or they refill the inbox after a sweep. A
  *  child its session owns (isOwnedChildRow) is in nobody's inbox and rides its
- *  owner's card, so it is never counted. Newest first, so the borderline ones
- *  lead the review list. */
-export function staleInboxSessions(sessions: Record<string, InboxSession>, activeSessionId: string | null | undefined, cutoff: number): InboxSession[] {
+ *  owner's card, so it is never counted; one whose wait reached the viewer is
+ *  theirs, and counts. Newest first, so the borderline ones lead the review
+ *  list. */
+export function staleInboxSessions(sessions: Record<string, InboxSession>, activeSessionId: string | null | undefined, cutoff: number, meId: string | null | undefined): InboxSession[] {
   return Object.values(sessions)
     .filter(
       (sess) =>
         !isSessionHidden(sess) &&
-        !isOwnedChildRow(sess) &&
+        !isOwnedChildRow(sess, meId) &&
         !sess.is_pinned &&
         !sess.inbox_snoozed_until &&
         sess._id !== activeSessionId &&
@@ -43,11 +44,12 @@ export function staleInboxSessions(sessions: Record<string, InboxSession>, activ
  *  just told to continue or switch (a fresh revive stamp) is out at once, not
  *  on the daemon round trip; if it never resumes the stamp expires and it
  *  comes back. A child its session owns (isOwnedChildRow) rides its owner's
- *  card, in nobody's inbox, so it never counts. */
-export function blockedInboxSessions(sessions: Record<string, InboxSession>, reviveRequestedAt: Record<string, number> | undefined, now: number): InboxSession[] {
+ *  card, in nobody's inbox, so it never counts; one whose wait reached the
+ *  viewer is theirs, and counts. */
+export function blockedInboxSessions(sessions: Record<string, InboxSession>, reviveRequestedAt: Record<string, number> | undefined, now: number, meId: string | null | undefined): InboxSession[] {
   const reviving = freshReviveRequestIds(reviveRequestedAt, now);
   return Object.values(sessions).filter(
-    (sess) => !isSessionHidden(sess) && !isOwnedChildRow(sess) && !reviving.has(sess._id) && isCurrentBlock(sess, now),
+    (sess) => !isSessionHidden(sess) && !isOwnedChildRow(sess, meId) && !reviving.has(sess._id) && isCurrentBlock(sess, now),
   ).map(withSafetyBlock).filter(
     (sess) => isBlockedConversation(sess.agent_type != null ? sess : { ...sess, agent_type: "claude_code" }),
   );

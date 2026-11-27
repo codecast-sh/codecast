@@ -37,23 +37,23 @@ describe("the phone's flat All run", () => {
   });
 
   test('marks each row hoisted under its listed card as drawn there', () => {
-    const rows = flatAllItems(flat, subsByParent, { collapsed: false }).flatMap((item) => (item.kind === 'row' ? [[item.session._id, !!item.underParent] as const] : []));
+    const rows = flatAllItems(flat, subsByParent, { collapsed: false, meId: 'me' }).flatMap((item) => (item.kind === 'row' ? [[item.session._id, !!item.underParent] as const] : []));
     expect(rows).toEqual([[PARENT, false], [OWNED, true], [TASK, true], [OTHER, false]]);
   });
 
   test('a child its session owns adds to no count, as the grouped headers and web leave it out', () => {
-    const [header] = flatAllItems(flat, subsByParent, { collapsed: false });
+    const [header] = flatAllItems(flat, subsByParent, { collapsed: false, meId: 'me' });
     expect(header).toMatchObject({ kind: 'header', section: 'all', label: 'All', count: 3 });
   });
 
   test('with its card off the list, the open child stands as a card of its own and counts', () => {
     const alone = flatViewSessions([owned, other], subsByParent, { mode: 'recent', showSubagents: false, focusedId: OWNED });
-    const items = flatAllItems(alone, subsByParent, { collapsed: false });
+    const items = flatAllItems(alone, subsByParent, { collapsed: false, meId: 'me' });
     expect(items[0]).toMatchObject({ kind: 'header', count: 2 });
     expect(items.some((item) => item.kind === 'row' && item.underParent)).toBe(false);
   });
 
   test('collapsed, the run is its header alone', () => {
-    expect(flatAllItems(flat, subsByParent, { collapsed: true }).map((item) => item.kind)).toEqual(['header']);
+    expect(flatAllItems(flat, subsByParent, { collapsed: true, meId: 'me' }).map((item) => item.kind)).toEqual(['header']);
   });
 });

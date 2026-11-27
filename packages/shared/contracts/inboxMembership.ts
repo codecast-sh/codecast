@@ -226,6 +226,16 @@ export function isInboxMember(row: OwnersModelRow, viewerId: string | { toString
     || (String(row.wait_up_person ?? "") === me && waitReachedPeople(row));
 }
 
+/** A child its parent session still owns, drawn on that session's card for
+ *  display only: under the model, owned by a session (owner_session_id), no
+ *  role took it, nobody released it, and it is none of the viewer's own inbox
+ *  rows (an owner seat or a wait that reached them makes it one). ONE rule for
+ *  the server's feeders (convex conversations nestedOnParentCard) and the web
+ *  nest (store isOwnedChildRow), so a child rides the card on both or neither. */
+export function ridesParentCard(row: OwnersModelRow & { parent_released_at?: number | null }, viewerId: string | { toString(): string } | null | undefined): boolean {
+  return underOwnersModel(row) && !!row.owner_session_id && !row.org_role_id && !row.parent_released_at && !isInboxMember(row, viewerId);
+}
+
 export type InboxAgentOwner = { kind: "role"; id: string } | { kind: "session"; id: string };
 
 /** The agent that owns the row under the model: its role, else the session

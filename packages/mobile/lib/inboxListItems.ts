@@ -27,7 +27,8 @@ export function sectionItems(label: string, items: readonly InboxSession[], opts
 /** The flat views' "All" run (flatViewSessions' list): a subagent hoisted
  *  under its card reads as drawn there (rowWithOwner), and the header leaves
  *  out the children their sessions own, as web's does (flatHeaderCount). */
-export function flatAllItems(flat: readonly InboxSession[], subsByParent: ReadonlyMap<string, readonly InboxSession[]>, opts: { collapsed: boolean; color?: string }): InboxListItem[] {
+export function flatAllItems(flat: readonly InboxSession[], subsByParent: ReadonlyMap<string, readonly InboxSession[]>, opts: { collapsed: boolean; color?: string; meId: string | null | undefined }): InboxListItem[] {
+  const { meId, ...look } = opts;
   const underParent = drawnUnderParentIds(flat, subsByParent);
-  return sectionItems('All', flat, { key: 'all', ...opts, count: flatHeaderCount(flat, underParent), underParent });
+  return sectionItems('All', flat, { key: 'all', ...look, count: flatHeaderCount(flat, underParent, meId), underParent });
 }

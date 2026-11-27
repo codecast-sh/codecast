@@ -245,6 +245,17 @@ export function createSessionOwnersSlice(): SessionOwnersSliceActions {
           org_role_id: next.role,
           owner_session_id: next.parentSession,
         };
+        // An adopt nests it under the target as the server writes it
+        // (convex lib/ownersChange): the parent link, and adopted_at stamped
+        // once, so the target's card draws it on the press (ownedChildrenOf).
+        // A detach takes both off.
+        if (change.adopt_parent && next.parentSession === change.adopt_parent) {
+          stamps.parent_conversation_id = change.adopt_parent;
+          stamps.adopted_at = row.adopted_at ?? Date.now();
+        } else if (change.detach_parent) {
+          stamps.parent_conversation_id = null;
+          stamps.adopted_at = null;
+        }
         for (const [field, value] of Object.entries(stamps)) if ((row[field] ?? null) !== (value ?? null)) row[field] = value;
       }
     }) as SessionOwnersSliceActions["applySessionOwners"],

@@ -58,6 +58,7 @@ import {
   isAssignedAwayFromViewer,
   underOwnersModel,
   isInboxMember,
+  ridesParentCard,
   agentAnswersRow,
   agentOwnerOfRow,
   personWorkState,
@@ -8510,6 +8511,9 @@ function stripInboxLiveness(row: any, fastFieldsToo = false): void {
 // outside (Date.now() is frozen inside a query). Production callers pass none.
 export type InboxEnrichSkip = {
   children?: boolean;
+  /** The adopted workers past a full children page: only a read that draws
+   *  owned children on a card (the web's own inbox, its crawl) needs them. */
+  adopted?: boolean;
   auq?: boolean;
   refs?: boolean;
 };
@@ -8573,6 +8577,12 @@ export async function stampInboxViewerFields(
     row.owner_email = ownerDoc?.email ?? null;
   }
 }
+
+// The children a listed row's read takes (newest by creation), and the cap on
+// the adopted workers it reads past them (enrichInboxSessionRow). The web nest
+// keeps the same set (store ownedChildrenOf).
+const CHILDREN_HORIZON = 20;
+const ADOPTED_CHILDREN_CAP = 50;
 
 async function enrichInboxSessionRow(
   ctx: any,
@@ -8709,7 +8719,7 @@ async function enrichInboxSessionRow(
         q.eq("parent_conversation_id", conv._id)
       )
       .order("desc")
-      .take(20);
+      .take(CHILDREN_HORIZON);
     const implChild = children.find(
       (c: any) => c.parent_message_uuid === "plan-handoff" && !c.is_subagent
     );
@@ -8720,7 +8730,17 @@ async function enrichInboxSessionRow(
     // subagentIsProducing): a settled parent files as working until then
     // (classifyWorkState's childProducing).
     producingUntil = producingUntilOf(children, maps);
-    for (const c of children) {
+    // A session a person dragged under this one (adopted_at) is on its card
+    // however many newer children it has: past a full page, its adopted
+    // workers are one more read (web ownedChildrenOf keeps the same set). A
+    // read that never draws children on a card skips it (skip.adopted).
+    const adopted = skip?.adopted || children.length < CHILDREN_HORIZON ? [] : await ctx.db
+      .query("conversations")
+      .withIndex("by_parent_adopted", (q: any) => q.eq("parent_conversation_id", conv._id).gte("adopted_at", 0))
+      .order("desc")
+      .take(ADOPTED_CHILDREN_CAP);
+    const seen = new Set(children.map((c: any) => c._id.toString()));
+    for (const c of [...children, ...adopted.filter((c: any) => !seen.has(c._id.toString()))]) {
       if ((c.is_subagent || (c.parent_conversation_id && !c.parent_message_uuid)) && c.message_count > 0) {
         subagentChildren.push(c);
       }
@@ -9056,22 +9076,15 @@ function spellAbsentAsNull<T extends Record<string, any>>(row: T): T {
   return row;
 }
 
-// Build a subagent child row (lighter — children carry no AUQ/plan context).
-// A child its listed parent still owns under the owners model: no role took
-// it and nobody released it. Released and role-owned children are seated by
-// their own windows, never under the parent's card.
-function isParentOwnedChild(child: any): boolean {
-  return !child.org_role_id && !child.parent_released_at;
-}
-
 // A child drawn on its parent's card, in the slim child row: its parent still
-// owns it and it is none of the viewer's own inbox rows. An owner seat or a
-// wait escalated to the viewer makes it one, which the scan lists in the full
-// row. Every feeder of the row (the inbox read, the crawl, byIds) asks this one
-// rule, so the row is written one way whichever delivered it last.
+// owns it (no role took it, nobody released it) and it is none of the viewer's
+// own inbox rows. An owner seat or a wait escalated to the viewer makes it one,
+// which the scan lists in the full row; released and role-owned children are
+// seated by their own windows. Every feeder of the row (the inbox read, the
+// crawl, byIds) asks this one rule, the shared ridesParentCard the web nest
+// asks too, so the row is written and drawn one way whichever delivered it.
 function nestedOnParentCard(child: any, viewerId: Id<"users">, myOwnerRow: any | null): boolean {
-  return isParentOwnedChild(child)
-    && !isInboxMember({ ...child, owners_model: true, implicit_owner: null, owned_by_me: !!myOwnerRow }, viewerId);
+  return ridesParentCard({ ...child, owners_model: true, implicit_owner: null, owned_by_me: !!myOwnerRow, owner_session_id: child.parent_conversation_id }, viewerId);
 }
 
 // The owners fields of such a child (inboxOwnerRowFields' shape), read off the
@@ -9085,6 +9098,7 @@ function parentOwnedChildFields(child: any, parentId: Id<"conversations">): Reco
     role_started: child.role_started ?? null,
     owners_changed_at: child.owners_changed_at ?? null,
     parent_released_at: null,
+    adopted_at: child.adopted_at ?? null,
     wait_up_at: child.wait_up_at ?? null,
     wait_up_count: child.wait_up_count ?? null,
     wait_up_person: child.wait_up_person?.toString() ?? null,
@@ -9092,6 +9106,7 @@ function parentOwnedChildFields(child: any, parentId: Id<"conversations">): Reco
   };
 }
 
+// Build a subagent child row (lighter — children carry no AUQ/plan context).
 async function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: number, parentId: Id<"conversations">, getDoc: (id: any) => Promise<any>) {
   const childDaemon = maps.liveConvIds.has(child._id.toString());
   const childAgentStatus = trustedAgentStatus(
@@ -9195,8 +9210,10 @@ async function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: nu
     // Same parent-link fields as the top-level scan (subagentLinkFields), so the
     // two emission paths stay byte-consistent when the client dedups by _id. This
     // path is for confirmed children, so is_subagent is forced true (covers the
-    // parent_message_uuid-less child that has no is_subagent flag of its own).
-    ...subagentLinkFields({ is_subagent: true, parent_conversation_id: parentId }),
+    // parent_message_uuid-less child that has no is_subagent flag of its own),
+    // except for a session a person dragged under the parent (adopted_at): it
+    // runs its own process and reads its own placement (isSubagentConversation).
+    ...subagentLinkFields({ is_subagent: child.is_subagent === true || child.adopted_at == null, parent_conversation_id: parentId }),
     spawned_by_conversation_id: child.spawned_by_conversation_id?.toString() || null,
     agent_team_name: child.agent_team_name ?? null,
     agent_name: child.agent_name ?? null,
@@ -9941,9 +9958,12 @@ export async function computeInboxSessions(
   // awaiting_input / is_idle — fields stripInboxLiveness nulls when liveness is
   // excluded, so on that path the read is pure waste. The web's live
   // subscription gets those fields from the sessionsLiveness overlay instead.
-  const enrichSkip: InboxEnrichSkip | undefined = includeLiveness
+  const enrichSkip0: InboxEnrichSkip | undefined = includeLiveness
     ? opts._skip
     : { ...(opts._skip ?? {}), auq: true };
+  // The CLI's list and the team board never draw a child on its parent's
+  // card (below), so they never read the adopted ones past the page.
+  const enrichSkip: InboxEnrichSkip | undefined = opts.projection || opts.teamScope ? { ...(enrichSkip0 ?? {}), adopted: true } : enrichSkip0;
   // The projection clock: every window bound, the cluster cut and every
   // liveness threshold compare against the minute, so two executions inside
   // one minute over the same data are byte identical (sync-convergence C2).

@@ -545,6 +545,25 @@ describe("the nested window: released subagents only", () => {
     expect(ids(sessions).filter((id) => id !== "lead")).toEqual(["mine"]);
   });
 
+  // A session a person dragged under the lead (adopted_at) rides its card
+  // however many newer children the lead has, as the same slim row from every
+  // feeder: the server's adopted_at, and is_subagent false, since it runs its
+  // own process and reads its own placement.
+  test("an adopted session older than 20 newer children rides the lead's card from every feeder", async () => {
+    const busy = Array.from({ length: 25 }, (_, i) => sub(`busy${i}`, i + 1));
+    const adopted = { _id: "conversations_adopted", user_id: ME, parent_conversation_id: "conversations_lead", adopted_at: EPOCH - H,
+      updated_at: EPOCH - 300 * 60_000, started_at: EPOCH - 300 * 60_000 - H, title: "adopted", ...live };
+    const db = () => nestedWorld([adopted, ...busy]);
+    const { sessions } = await computeInboxSessions({ db: db() }, ME as any, { includeLiveness: false });
+    const listed = sessions.find((r: any) => r._id === "conversations_adopted");
+    expect(listed).toMatchObject({ owner_session_id: "conversations_lead", owned_by_me: false, adopted_at: EPOCH - H, is_subagent: false });
+    // The 20 newest plain children ride with it; the older ones do not.
+    expect(sessions.filter((r: any) => String(r._id).startsWith("conversations_busy"))).toHaveLength(20);
+    expect((await collectInboxSessionsByIds({ db: db() }, ME as any, ["conversations_adopted"])).sessions[0]).toEqual(listed);
+    const page = await collectInboxSessionsPaginated({ db: db() }, ME as any, { paginationOpts: { numItems: 50, cursor: null } });
+    expect(page.page.find((r: any) => r._id === "conversations_adopted")).toEqual(listed);
+  });
+
   // A child a role took, or one someone released, has left its parent's card
   // (isParentOwnedChild): neither read sends it under the lead stamped as the
   // lead's. Neither is mine, so no seat of its own masks the check.

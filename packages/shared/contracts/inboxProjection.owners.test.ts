@@ -7,6 +7,7 @@ import {
   inWorkingSet,
   isUnderRole,
   isInboxMember,
+  ridesParentCard,
   personWorkState,
   rideLeadPlacements,
   rollupParentIdOf,
@@ -121,6 +122,24 @@ describe("agent owners answer: a wait files as working, With <owner>", () => {
     expect(placeProjectableRow(working, false, EPOCH)).toEqual({ bucket: "working", work_state: "working" });
     const done = on(waiting("d", { org_role_id: "r", agent_status: "done" }));
     expect(placeProjectableRow(done, false, EPOCH).bucket).toBe("done");
+  });
+});
+
+// The one rule for which children ride their parent's card, asked by the
+// server's feeders and the web nest alike.
+describe("ridesParentCard", () => {
+  const child = { owners_model: true, owner_session_id: "p", owned_by_me: false, implicit_owner: null, message_count: 3 };
+  test("a child its parent still owns, none of the viewer's rows, rides the card", () => {
+    expect(ridesParentCard(child, "me")).toBe(true);
+  });
+  test("a role, a release, an owner seat or a wait that reached the viewer takes it off; so does no owner session or no model", () => {
+    expect(ridesParentCard({ ...child, org_role_id: "r" }, "me")).toBe(false);
+    expect(ridesParentCard({ ...child, parent_released_at: 5 }, "me")).toBe(false);
+    expect(ridesParentCard({ ...child, owned_by_me: true }, "me")).toBe(false);
+    expect(ridesParentCard({ ...child, wait_up_person: "me", wait_up_count: 3 }, "me")).toBe(false);
+    expect(ridesParentCard({ ...child, wait_up_person: "me", wait_up_count: 2 }, "me")).toBe(true);
+    expect(ridesParentCard({ ...child, owner_session_id: null }, "me")).toBe(false);
+    expect(ridesParentCard({ ...child, owners_model: undefined }, "me")).toBe(false);
   });
 });
 

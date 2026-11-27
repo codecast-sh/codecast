@@ -125,16 +125,28 @@ recent seat. A row only the escalated window seats costs the scan no reads:
 it skips the children scan and the liveness read, because a current
 escalation waits on a person by definition.
 
-A listed session's children that it still owns (no role, not released) come
-with it as child rows stamped `owner_session_id` and `owned_by_me: false`, in
-the viewer's own inbox read only (not the team board or the CLI's list). They
-are the children scan the read already runs for each listed row (its newest 20
-on `by_parent_conversation_id`); each one still costs its own row build and
-owner-row read. They are members of nobody's inbox: the client nests them
-under that session's card only (`ownedChildrenOf` in web
-`store/inboxStore.ts`, which keeps the same newest 20 and skips killed, closed,
-stashed and snoozed ones), where the card's subagent line and rows draw them,
-and the team board gives them no card of their own while that card is on it.
+A listed session's children that it still owns come with it as slim child
+rows stamped `owner_session_id` and `owned_by_me: false`, in the viewer's own
+inbox read only (not the team board or the CLI's list). One rule decides which
+(shared `ridesParentCard`): no role took it, nobody released it, and it is
+none of the viewer's inbox rows (an owner seat or a wait that reached them).
+The inbox read, the crawl and `getInboxSessionsByIds` send the same slim row,
+and the web nest asks the same rule, so a child a role takes leaves the card
+on every side. They are the children scan the read already runs for each
+listed row (its newest 20 on `by_parent_conversation_id`), plus, when that
+page is full, one read of the row's adopted workers (`by_parent_adopted`, up
+to 50), so a session dropped on the card stays there however many newer
+children it has; the CLI's list and the team board skip that read. Each
+child still costs its own row build and owner-row read. The slim row carries
+`adopted_at`, and an adopted one's `is_subagent` is false: it reads its own
+placement, not the subagent Done rule. They are members of nobody's inbox:
+the client nests them under that session's card only (`ownedChildrenOf` in
+web `store/inboxStore.ts`, which keeps the same newest 20 plus the adopted
+ones and skips killed, closed, stashed and snoozed ones), where the card's
+subagent line and rows draw them, and the team board gives them no card of
+their own while that card is on it. An adopt paints the parent link and
+`adopted_at` on the press, under the owners locks its acknowledgement
+settles, so the target's card draws the session at once.
 
 The scan and `getInboxSessionsByIds` admit an escalated row only through
 `checkConversationAccess` (`privacy.conversationAccessMemo` for the scan, the
@@ -276,6 +288,11 @@ subagents and 201 standing escalations.
 |---|---|---|
 | Flag off | 1076 | 1757–1792 |
 | Flag on | 1107 | 1838–1873 |
+
+The adopted-workers read runs only for a row whose children page is full, in
+the web's own read: with every listed row's page full it would add one call
+per row (the flag-on web read went from 1110 to 1854, still under budget),
+and the CLI's never runs it.
 
 Measure from `packages/convex`:
 

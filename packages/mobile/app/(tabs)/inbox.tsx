@@ -501,7 +501,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit, onO
         // Full rows: the nested ones the filter keeps, as the rail lists them.
         keepSub: showSubagents ? subagentKeepOf(subagentFilter, coarseNow, currentSessionId) : undefined,
       });
-      return flatAllItems(flat, subsByParent, { collapsed: !!collapsedSections?.all, color: Theme.cyan });
+      return flatAllItems(flat, subsByParent, { collapsed: !!collapsedSections?.all, color: Theme.cyan, meId: useInboxStore.getState().currentUser?._id?.toString() ?? null });
     }
     // Label / plan lenses: pinned stays its own top section (pin is urgency,
     // not theme); the active set regroups by label or plan, with unfiled

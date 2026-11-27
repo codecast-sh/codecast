@@ -126,6 +126,7 @@ import {
   isNestedIdentity,
   isAssignedAwayFromViewer,
   underOwnersModel,
+  ridesParentCard,
   isInboxMember,
   escalatedAsks,
   agentAnswersRow,
@@ -2923,7 +2924,7 @@ function computeInboxScope(
 ): Record<string, InboxSession> {
   if (scope === "team" && teamInboxIds.size > 0) {
     const out: Record<string, InboxSession> = {};
-    const ownedIds = ownedChildrenOf(sessions).ids;
+    const ownedIds = ownedChildrenOf(sessions, meId).ids;
     for (const id in sessions) {
       if (!Object.hasOwn(sessions, id)) continue;
       const s = sessions[id];
@@ -4497,22 +4498,29 @@ export function lastPlacedInbox(
 }
 
 // Rows a session owns under the owners model (owner_session_id), read once
-// per sessions object: the rail nests them under that session's card even
-// though they are in nobody's inbox, and the team board gives them no card of
-// their own. Only what the inbox read sends with the parent (its newest
-// OWNED_CHILD_HORIZON children by creation, enrichInboxSessionRow; the cache
-// keeps older ones), and never a killed, closed or stashed one. A snoozed one
-// is skipped where it nests (placeInboxRows), since snoozing ends on a clock.
+// per sessions object and viewer: the rail nests them under that session's
+// card even though they are in nobody's inbox, and the team board gives them
+// no card of their own. Only what the inbox read sends with the parent (its
+// newest OWNED_CHILD_HORIZON children by creation, and past them up to
+// ADOPTED_CHILD_CAP sessions a person dragged under it, enrichInboxSessionRow;
+// the cache keeps older ones), and never a killed, closed or stashed one. A
+// snoozed one is skipped where it nests (placeInboxRows), since snoozing ends
+// on a clock.
 const OWNED_CHILD_HORIZON = 20;
+const ADOPTED_CHILD_CAP = 50;
 type OwnedChildren = { list: InboxSession[]; ids: ReadonlySet<string> };
-const ownedChildrenCache = new WeakMap<object, OwnedChildren>();
+const ownedChildrenCache = new WeakMap<object, Map<string, OwnedChildren>>();
 /** A row its session owns rather than the viewer (owners model): it rides
- *  that session's card, never a card of its own. */
-export function isOwnedChildRow(s: InboxSession): boolean {
-  return !!s.owner_session_id && underOwnersModel(s) && !s.owned_by_me && !s.implicit_owner;
+ *  that session's card, never a card of its own. The server's rule for the
+ *  slim child row (shared ridesParentCard): no role took it, nobody released
+ *  it, and it is none of the viewer's inbox rows (an owner seat, or a wait
+ *  that reached them). */
+export function isOwnedChildRow(s: InboxSession, meId: string | null | undefined): boolean {
+  return ridesParentCard(s, meId);
 }
-function ownedChildrenOf(sessions: Record<string, InboxSession>): OwnedChildren {
-  const hit = ownedChildrenCache.get(sessions);
+function ownedChildrenOf(sessions: Record<string, InboxSession>, meId: string | null | undefined): OwnedChildren {
+  const key = meId ?? "";
+  const hit = ownedChildrenCache.get(sessions)?.get(key);
   if (hit) return hit;
   const byParent = new Map<string, InboxSession[]>();
   for (const id in sessions) {
@@ -4526,17 +4534,26 @@ function ownedChildrenOf(sessions: Record<string, InboxSession>): OwnedChildren 
   const list: InboxSession[] = [];
   const created = (s: InboxSession) => s.started_at ?? s.updated_at ?? 0;
   for (const [parent, kids] of byParent) {
-    if (kids.length > OWNED_CHILD_HORIZON) kids.sort((a, b) => created(b) - created(a));
-    for (const s of kids.slice(0, OWNED_CHILD_HORIZON)) {
+    let sent = kids;
+    if (kids.length > OWNED_CHILD_HORIZON) {
+      kids.sort((a, b) => created(b) - created(a));
+      const newest = kids.slice(0, OWNED_CHILD_HORIZON);
+      const adopted = kids.slice(OWNED_CHILD_HORIZON).filter((s) => s.adopted_at != null)
+        .sort((a, b) => (b.adopted_at ?? 0) - (a.adopted_at ?? 0)).slice(0, ADOPTED_CHILD_CAP);
+      sent = adopted.length ? [...newest, ...adopted] : newest;
+    }
+    for (const s of sent) {
       // Only a child nested under its owner: the inbox sends those with their
       // parent; a spawned worker reaches the store only as a stale crawl row.
-      if (String(s.owner_session_id ?? "") !== parent || !isOwnedChildRow(s)) continue;
+      if (String(s.owner_session_id ?? "") !== parent || !isOwnedChildRow(s, meId)) continue;
       if (s.inbox_killed_at || s.inbox_stashed_at || isClosedSession(s)) continue;
       list.push(s);
     }
   }
   const out = { list, ids: new Set(list.map((s) => s._id)) };
-  ownedChildrenCache.set(sessions, out);
+  let byViewer = ownedChildrenCache.get(sessions);
+  if (!byViewer) ownedChildrenCache.set(sessions, (byViewer = new Map()));
+  byViewer.set(key, out);
   return out;
 }
 
@@ -4816,7 +4833,7 @@ export function placeInboxRows(
   // one is in scope (computeInboxScope keeps it) and still rides the card;
   // with the card absent it stands as its own row, so it never vanishes.
   const ownedNested = new Set<string>();
-  for (const child of ownedChildrenOf(state.sessions).list) {
+  for (const child of ownedChildrenOf(state.sessions, meId).list) {
     const owner = String(child.owner_session_id);
     if (!allIds.has(owner) || nestedUnder.has(child._id)) continue;
     if (child._id !== focusedId && (scoped[child._id] || (child.inbox_snoozed_until ?? 0) > now)) continue;
@@ -6316,13 +6333,21 @@ export function flatViewSessions(
   return nestOwnedChildren(hoisted, subsByParent, keepOwned);
 }
 
-/** The rows of a flat list (flatViewSessions) drawn under their parent's card:
- *  nested under a card (subsByParent) the list also holds, where the list
- *  hoists them. The rest stand as cards of their own. */
-export function drawnUnderParentIds(list: readonly InboxSession[], subsByParent: ReadonlyMap<string, readonly InboxSession[]>): Set<string> {
+/** The rows of a flat list (flatViewSessions) drawn under their parent's card,
+ *  exactly where the list puts them: nested under a card (subsByParent) the
+ *  list also holds, or hoisted under a listed parent by the nest rule
+ *  (hoistNestedUnderParent), whichever section each was placed in, so a
+ *  teammate pinned on its own still reads as drawn under its lead. Pass the
+ *  list's own `nestWorkers`. The rest stand as cards of their own. */
+export function drawnUnderParentIds(list: readonly InboxSession[], subsByParent: ReadonlyMap<string, readonly InboxSession[]>, nestWorkers = false): Set<string> {
   const present = new Set(list.map((s) => s._id));
   const out = new Set<string>();
   for (const [parent, subs] of subsByParent) if (present.has(parent)) for (const sub of subs) if (present.has(sub._id)) out.add(sub._id);
+  const nestParentOf = inboxNestParentOf(list, nestWorkers);
+  for (const s of list) {
+    const p = nestParentOf(s);
+    if (p && p !== s._id && present.has(p)) out.add(s._id);
+  }
   return out;
 }
 
@@ -6330,9 +6355,9 @@ export function drawnUnderParentIds(list: readonly InboxSession[], subsByParent:
  *  draws, less the children their sessions own drawn under that card
  *  (`underParent`, drawnUnderParentIds), which add to no count, as the
  *  grouped headers leave them out (placeInboxRows ownedNested). */
-export function flatHeaderCount(list: readonly InboxSession[], underParent: ReadonlySet<string>): number {
+export function flatHeaderCount(list: readonly InboxSession[], underParent: ReadonlySet<string>, meId: string | null | undefined): number {
   let n = 0;
-  for (const s of list) if (!(underParent.has(s._id) && isOwnedChildRow(s))) n++;
+  for (const s of list) if (!(underParent.has(s._id) && isOwnedChildRow(s, meId))) n++;
   return n;
 }
 
@@ -10318,7 +10343,8 @@ function retireAckedLockInDraft(draft: any, key: string, restore = true): void {
 // releaseSettledFieldLocks and the owners read's apply).
 export const OWNERS_LOCK_FIELDS: Readonly<Record<string, readonly string[]>> = {
   sessionOwners: ["people_ids", "role", "parent_session"],
-  sessions: ["owned_by_me", "implicit_owner", "org_role_id", "owner_session_id"],
+  // An adopt's parent link and stamp too: the server's adopted_at is its own clock.
+  sessions: ["owned_by_me", "implicit_owner", "org_role_id", "owner_session_id", "parent_conversation_id", "adopted_at"],
 };
 
 function isOwnersLockKey(key: string): boolean {

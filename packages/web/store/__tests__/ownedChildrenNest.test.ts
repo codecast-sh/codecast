@@ -149,9 +149,9 @@ describe("flat views list owned children under their card", () => {
     const p = place([lead(), row(OTHER, { updated_at: T0 - 1000 }), busy(CHILD, PARENT), finished(ORPHAN, PARENT)]);
     const list = flatViewSessions(p.sorted, p.subsByParent, { mode: "recent", showSubagents: true, keepSub: () => true });
     expect(list).toHaveLength(4);
-    expect(flatHeaderCount(list, drawnUnderParentIds(list, p.subsByParent))).toBe(2);
+    expect(flatHeaderCount(list, drawnUnderParentIds(list, p.subsByParent), ME)).toBe(2);
     const alone = list.filter((s) => s._id !== PARENT);
-    expect(flatHeaderCount(alone, drawnUnderParentIds(alone, p.subsByParent))).toBe(3);
+    expect(flatHeaderCount(alone, drawnUnderParentIds(alone, p.subsByParent), ME)).toBe(3);
   });
 
   it("the other modes list only the open one, under its card", () => {
