@@ -11,7 +11,8 @@ import { anyApi } from "convex/server";
 import schema from "./schema";
 import { allModules } from "./testModules.testkit";
 import { hashToken } from "./apiTokens";
-import { openFlowStopIncidents, openIncidentIfShared, stopOf, stopStationOf } from "./flowStops";
+import { heldByIncident, openFlowStopIncidents, openIncidentIfShared, stopOf, stopStationOf } from "./flowStops";
+import { holdsFlowStop } from "@codecast/shared/contracts/signalFingerprint";
 import { addDepCore, moveTaskStatus } from "./tasks";
 import { mergeProblemInto } from "./signals";
 import { supersedeCore } from "./taskLinks";
@@ -309,6 +310,49 @@ describe("a pipeline stop shared by two changes is one incident", () => {
     for (const task of ids.tasks.slice(0, 2)) expect(((await get(task)) as any).blocked_by ?? []).toEqual([]);
   });
 
+  test("a run with no repository records its stop but no key: no signal, no incident, so two repositories' breakages never meet", async () => {
+    const { t, ids, redMain, get, signals } = await world();
+    // Its session has no remote and the run no pull request.
+    await t.run((ctx: any) => ctx.db.patch(ids.conv, { git_remote_url: undefined }));
+    await redMain(ids.runs[0]);
+    await redMain(ids.runs[1]);
+    for (const r of ids.runs.slice(0, 2)) {
+      expect(await get(r)).toMatchObject({ status: "failed", stop_station: "land__wait_main" });
+      expect(((await get(r)) as any).stop_fingerprint).toBeUndefined();
+      expect(((await get(r)) as any).incident_task_id).toBeUndefined();
+    }
+    expect(await signals("flowstop::main_red")).toEqual([]);
+    expect(await t.run((ctx: any) => ctx.db.query("signals").collect())).toEqual([]);
+  });
+
+  test("the cause is handed to @release by its own owner, not by whichever stopped run read first", async () => {
+    const { t, ids, report, drain, redMain, cause } = await world({ release: false });
+    await redMain(ids.runs[0]);
+    await redMain(ids.runs[1]);
+    const incident = await cause(ids.runs[1]);
+    expect(incident.assignee).toBeUndefined();
+    // @release appears, then a teammate's run stops the same way: the newest stop, so the first run read. Its runner
+    // reports as Ana's token, and the run is Bo's by the time its stop is filed.
+    const { bo, release } = await t.run(async (ctx: any) => {
+      const bo = await ctx.db.insert("users", { name: "Bo" });
+      await ctx.db.insert("team_memberships", { user_id: bo, team_id: ids.team, role: "member", joined_at: T0 });
+      const release = await ctx.db.insert("org_roles", { name: "Release", handle: "release", host_user_id: ids.me, team_id: ids.team, scope: { project_ids: [], plan_ids: [] }, status: "active", created_at: T0, updated_at: T0 });
+      return { bo, release };
+    });
+    const bos = ids.runs[2];
+    for (const [node, status] of [["land__pr", "completed"], ["land__ci", "failed"], ["land__wait_main", "failed"], ["land__red_main", "failed"]] as const) {
+      await report(bos, { current_node_id: node, node_id: node, node_status: "running" });
+      await report(bos, { current_node_id: node, node_id: node, node_status: status, outcome: status === "failed" ? "failure" : "success" });
+    }
+    await report(bos, { current_node_id: "stopped", node_id: "stopped", node_status: "failed", run_status: "failed", fail_reason: "Stopped: main stayed red" });
+    await t.run((ctx: any) => ctx.db.patch(bos, { user_id: bo }));
+    await drain();
+    const handed: any[] = await t.run((ctx: any) => ctx.db.query("task_history").collect());
+    const hand = handed.filter((h) => String(h.task_id) === String(incident._id) && h.field === "assignee");
+    expect(hand.map((h) => [h.new_value, String(h.user_id)])).toEqual([[String(release), String(incident.user_id)]]);
+    expect(String(incident.user_id)).not.toBe(String(bo));
+  });
+
   test("@release is found from the team the cause is routed to, not from its access key", async () => {
     const { t, ids, redMain, cause } = await world({ release: false });
     await redMain(ids.runs[0]);
@@ -455,15 +499,21 @@ describe("closing an incident", () => {
     for (const r of ids.runs.slice(0, 2)) expect(await get(r)).toMatchObject({ status: "running", current_node_id: "land__wait_main" });
   });
 
-  test("marked a duplicate of a task a person filed, or superseded by one: the task takes its stops, is listed, and resumes its runs when it closes", async () => {
+  test("marked a duplicate of a task a person filed, or superseded by one: the task takes its runs but not its stops, stays line work, is listed, and resumes its runs when it closes", async () => {
     for (const how of ["duplicate", "superseded"] as const) {
-      const { t, ids, redMain, get, close, cause, drain } = await world();
+      const { t, ids, redMain, get, close, cause, drain, signals } = await world();
       await redMain(ids.runs[0]);
       await redMain(ids.runs[1]);
       const incident = await cause(ids.runs[0]);
-      // A plain task: no cause, no keys of its own.
+      // A plain task: no cause, no keys of its own, handed to @release under a project its line looks after.
+      const role = await t.run(async (ctx: any) => {
+        const project = await ctx.db.insert("projects", { user_id: ids.me, team_id: ids.team, workspace: ids.ws, title: "App", status: "active", created_at: T0, updated_at: T0 });
+        await ctx.db.patch(ids.release, { scope: { project_ids: [project], plan_ids: [] } });
+        return await ctx.db.get(ids.release);
+      });
       const survivor = await t.run((ctx: any) => ctx.db.insert("tasks", {
-        user_id: ids.me, team_id: ids.team, workspace: ids.ws, short_id: "ct-950", title: "Main is red", status: "open", task_type: "bug", priority: "medium", source: "human", created_at: T0, updated_at: T0,
+        user_id: ids.me, team_id: ids.team, workspace: ids.ws, short_id: "ct-950", title: "Main is red", status: "open", task_type: "bug", priority: "medium", source: "human",
+        assignee: String(ids.release), project_id: role.scope.project_ids[0], created_at: T0, updated_at: T0,
       }));
       if (how === "duplicate") {
         // As `cast task update --duplicate-of ct-950 -s dropped` writes it: the mark, then the drop.
@@ -478,11 +528,34 @@ describe("closing an incident", () => {
         expect([how, ((await get(r)) as any).resume_queued]).toEqual([how, undefined]);
       }
       for (const task of ids.tasks.slice(0, 2)) expect([how, ((await get(task)) as any).blocked_by]).toEqual([how, ["ct-950"]]);
+      // Its stops stay with the closed cause, so the task holds no flowstop key: Ground and the line still see it as
+      // ordinary work, and @release's line starts a hand on it.
+      expect([how, ((await signals("flowstop:acme/app:main_red")) as any[]).map((r) => String(r.task_id))]).toEqual([how, [String(incident._id), String(incident._id)]]);
+      expect([how, holdsFlowStop(((await get(survivor)) as any).cause?.fingerprints)]).toEqual([how, false]);
+      expect([how, (await t.run((ctx: any) => rankedCandidates(ctx, role))).map((c: any) => c.task.short_id)]).toEqual([how, ["ct-950"]]);
+      // Its runs are held by it, so the sweep lists them under it, not as failed runs.
+      for (const r of ids.runs.slice(0, 2)) expect([how, await t.run(async (ctx: any) => heldByIncident(ctx, await ctx.db.get(r)))]).toEqual([how, true]);
       const listed = await t.run((ctx: any) => openFlowStopIncidents(ctx, ids.ws));
       expect([how, listed.map((i) => [i.short_id, i.runs.map((r) => r.task_short_id).sort()])]).toEqual([how, [["ct-950", ["ct-901", "ct-902"]]]]);
       await close(survivor);
       for (const r of ids.runs.slice(0, 2)) expect([how, await get(r)]).toMatchObject([how, { status: "running", current_node_id: "land__wait_main" }]);
     }
+  });
+
+  test("superseded by one of the changes it stops: that change's own run is never held by its own task", async () => {
+    const { t, ids, redMain, get, cause, drain } = await world();
+    await redMain(ids.runs[0]);
+    await redMain(ids.runs[1]);
+    const incident = await cause(ids.runs[0]);
+    // ct-901, one of the stopped changes, takes the incident over.
+    await t.run((ctx: any) => supersedeCore(ctx, ids.me, incident.short_id, "ct-901"));
+    await drain();
+    expect(String(((await get(ids.runs[1])) as any).incident_task_id)).toBe(String(ids.tasks[0]));
+    // Its own run keeps the closed cause's mark, which holds nothing: the sweep lists it as its own failed run.
+    expect(String(((await get(ids.runs[0])) as any).incident_task_id)).toBe(String(incident._id));
+    expect(await t.run(async (ctx: any) => heldByIncident(ctx, await ctx.db.get(ids.runs[0])))).toBe(false);
+    expect(await t.run(async (ctx: any) => heldByIncident(ctx, await ctx.db.get(ids.runs[1])))).toBe(true);
+    expect((await t.run((ctx: any) => openFlowStopIncidents(ctx, ids.ws))).map((i) => [i.short_id, i.runs.map((r) => r.task_short_id)])).toEqual([["ct-901", ["ct-902"]]]);
   });
 });
 

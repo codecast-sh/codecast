@@ -31,7 +31,7 @@ import { commitSignal, heldSignals, moveProblemSignals, normalizeSignal, openCau
 import { addDepCore, handTask } from "./tasks";
 import { resumeFailedRunCore } from "./failedRunResume";
 import { isTerminalTaskStatus } from "@codecast/shared/tasks";
-import { FLOW_STOP_SOURCE, flowStopFingerprint } from "@codecast/shared/contracts/signalFingerprint";
+import { FLOW_STOP_SOURCE, flowStopFingerprint, holdsFlowStop } from "@codecast/shared/contracts/signalFingerprint";
 import { extractRepoFromRemoteUrl } from "@codecast/shared/contracts";
 
 const STOP_PREFIX = "Stopped: ";
@@ -138,7 +138,9 @@ export async function recordRunStop(ctx: any, runId: Id<"workflow_runs">, now: n
   // Only a stop of the shared pipeline is keyed, by the breakage its exit names, never by the flow: every flow
   // composing one segment, and every exit meaning one breakage, meet in one cause. A stop about this change keeps no
   // key a later stop could match.
-  const fingerprint = breakage ? flowStopFingerprint((await repositoryOfRun(ctx, run)) ?? "", breakage) : undefined;
+  // A run with no repository has no key either: one keyed by its breakage alone would meet every repository's.
+  const repository = breakage ? await repositoryOfRun(ctx, run) : null;
+  const fingerprint = breakage && repository ? flowStopFingerprint(repository, breakage) : undefined;
   await ctx.db.patch(run._id, { stop_station: station, stop_fingerprint: fingerprint });
   if (!fingerprint) return null;
 
@@ -232,7 +234,8 @@ export async function openIncidentIfShared(ctx: any, causeId: Id<"tasks">, now: 
   if (!cause.assignee) {
     // Routing, so the team the cause flows to (team_id), never its access key.
     const release = await liveRoleByHandle(ctx, cause.team_id ? { team_id: cause.team_id } : { scope_user_id: cause.user_id }, RELEASE_HANDLE);
-    if (release) await handTask(ctx, cause, String(release._id), runs[0].user_id, `The same stop on ${tasks.size} changes`, now);
+    // Handed by the cause's owner, the system's own act, not by whichever run happened to read first.
+    if (release) await handTask(ctx, cause, String(release._id), cause.user_id, `The same stop on ${tasks.size} changes`, now);
   }
   // One run's edge never fails the stop (or the close) that got here. A task the cause already waits on (the fix
   // @release set it blocked by, stopping at the same exit) is the incident's own work, like the cause itself: never
@@ -254,9 +257,12 @@ export async function openIncidentIfShared(ctx: any, causeId: Id<"tasks">, now: 
   return true;
 }
 
-/** Whether a run marked with an incident is still stopped by it: failed at a stop under one of the cause's keys. */
+/** Whether a run marked with a task is still stopped by it: failed at a shared stop, under one of the cause's keys when
+ *  the task is a run-stop cause. A task a person filed holds the runs a cause it superseded passed on by the mark alone
+ *  (settleIncidentRuns), since taking their keys would make it an incident nobody works on. */
 const stoppedBy = (run: Doc<"workflow_runs">, cause: Pick<Doc<"tasks">, "cause">) =>
-  run.status === "failed" && isFlowStop(run.fail_reason) && !!run.stop_fingerprint && (cause.cause?.fingerprints ?? []).includes(run.stop_fingerprint);
+  run.status === "failed" && isFlowStop(run.fail_reason) && !!run.stop_fingerprint &&
+  (!holdsFlowStop(cause.cause?.fingerprints) || cause.cause!.fingerprints.includes(run.stop_fingerprint));
 
 /** Whether the incident a run is marked with still holds it: that cause open and still the run's stop. A mark left from
  *  a closed incident, or a run that failed again for another reason, holds nothing. */
@@ -288,11 +294,15 @@ export async function settleIncidentRuns(ctx: any, cause: Doc<"tasks">, now = Da
   const next = closed?.status === "dropped" ? closed.duplicate_of ?? closed.superseded_by : undefined;
   const survivor = next ? await taskByRef(ctx, next) : null;
   if (closed && survivor && survivor._id !== cause._id && survivor.workspace === closed.workspace && !isTerminalTaskStatus(survivor.status)) {
-    // Its stops and their keys go with the runs (a merge moved them already), so the survivor still stops them
-    // (stoppedBy), the sweep lists it, and its close resumes them, even when it is a task a person filed.
-    await moveProblemSignals(ctx, closed.user_id, closed, survivor, now);
-    for (const run of runs) await ctx.db.patch(run._id, { incident_task_id: survivor._id });
-    await openIncidentIfShared(ctx, survivor._id, now);
+    // The runs go to the survivor, which stops them (stoppedBy), is listed (openFlowStopIncidents), and resumes them
+    // when it closes. Its stops and their keys go too only when it is a run-stop cause itself (a merge moved them
+    // already): on a task a person filed they would make it an incident, which Ground and the line leave alone
+    // (holdsFlowStop), so the fix would never be worked. A run of the survivor's own task is its own work: it never
+    // waits on itself.
+    const keyed = holdsFlowStop(survivor.cause?.fingerprints);
+    if (keyed) await moveProblemSignals(ctx, closed.user_id, closed, survivor, now);
+    for (const run of runs) if (String(run.task_id) !== String(survivor._id)) await ctx.db.patch(run._id, { incident_task_id: survivor._id });
+    if (keyed) await openIncidentIfShared(ctx, survivor._id, now);
     return [];
   }
   const scheduled: Id<"workflow_runs">[] = [];
@@ -353,11 +363,13 @@ export async function openFlowStopIncidents(ctx: any, workspace: string): Promis
     .take(WORKSPACE_STOPS_READ);
   const out: FlowStopIncident[] = [];
   const seen = new Set<string>();
+  const listed = new Set<string>();
   for (const row of rows) {
     if (!row.task_id || seen.has(String(row.task_id))) continue;
     seen.add(String(row.task_id));
-    const cause: Doc<"tasks"> | null = await ctx.db.get(row.task_id);
-    if (!cause || isTerminalTaskStatus(cause.status)) continue;
+    const cause = await holderOf(ctx, await ctx.db.get(row.task_id));
+    if (!cause || listed.has(String(cause._id))) continue;
+    listed.add(String(cause._id));
     const marked: Doc<"workflow_runs">[] = await ctx.db.query("workflow_runs").withIndex("by_incident_status", (q: any) => q.eq("incident_task_id", cause._id).eq("status", "failed")).take(INCIDENT_RUNS_READ);
     const runs: FlowStopIncident["runs"] = [];
     for (const r of marked) {
@@ -369,6 +381,22 @@ export async function openFlowStopIncidents(ctx: any, workspace: string): Promis
     out.push({ task_id: cause._id, short_id: cause.short_id, title: cause.title, status: cause.status, assignee: cause.assignee ?? null, runs });
   }
   return out;
+}
+
+/** Hops followed from a dropped cause to the task holding its runs now. */
+const SUCCESSOR_HOPS = 5;
+
+/** The open task holding a cause's runs: the cause itself, else the task it was dropped as a duplicate of or superseded
+ *  by, in its workspace (settleIncidentRuns moved the runs there, and a task a person filed keeps no stops to find it by). */
+async function holderOf(ctx: any, task: Doc<"tasks"> | null): Promise<Doc<"tasks"> | null> {
+  for (let hops = 0; task && hops <= SUCCESSOR_HOPS; hops++) {
+    if (!isTerminalTaskStatus(task.status)) return task;
+    const next = task.status === "dropped" ? task.duplicate_of ?? task.superseded_by : undefined;
+    const survivor: Doc<"tasks"> | null = next ? await taskByRef(ctx, next) : null;
+    if (!survivor || survivor._id === task._id || survivor.workspace !== task.workspace) return null;
+    task = survivor;
+  }
+  return null;
 }
 
 export const openIncidentsForCli = query({

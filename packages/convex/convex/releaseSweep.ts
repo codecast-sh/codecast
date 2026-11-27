@@ -12,7 +12,7 @@
 //     error no stop exit caught), or a stop at a shared exit still held. A stop
 //     about the change itself (rejected, findings) is its own run's to act on;
 //   - team machines online and still below a floor raised half an hour ago or
-//     more (teamCliFloor.teamFleet);
+//     more (teamCliFloor.teamFleet), for a caller who may read the fleet;
 //   - sessions whose change is live everywhere and that nothing keeps, yet are
 //     still in the inbox (retireOnLive.liveRetireRefusal answers null), in a
 //     workspace with the `retire_on_live` feature on.
@@ -32,7 +32,7 @@ import { parseWorkspaceKey } from "./lib/accessKeys";
 import { canAccessConversation } from "./lib/access";
 import { heldByIncident, isFlowStop, openFlowStopIncidents, stopStationOf, type FlowStopIncident } from "./flowStops";
 import { commitBySha, targetDeploys, targetRows } from "./deployTargetsState";
-import { teamFleet } from "./teamCliFloor";
+import { mayForceTeamFleet, teamFleet } from "./teamCliFloor";
 import { liveRetireRefusal } from "./retireOnLive";
 import { workspaceKeyHasFeature } from "./lib/teamFeatureGuard";
 import { isTerminalTaskStatus } from "@codecast/shared/tasks";
@@ -54,8 +54,11 @@ export const LATE_COMMITS_READ = 200;
 export const LATE_PAGE = 10;
 /** Newest landed commits read per repository for their sessions, LATE_PAGE to a query. */
 export const RETIRE_COMMITS_READ = 40;
-/** Sessions judged for retirement in one sweep: each judgment reads its commits, edits and liveness. */
-const RETIRE_SESSIONS_MAX = 12;
+/** Unretired sessions one sweep lists; judged that many at a time. */
+export const RETIRE_SESSIONS_MAX = 12;
+/** Sessions judged for retirement in one sweep, each in a query of its own: each reads its commits, edits and
+ *  liveness, and on a busy repository most are kept, so the listed ones can sit past the first few judged. */
+export const RETIRE_JUDGMENTS_MAX = 40;
 /** A target with no deploy open and none in a week is dormant (deployReach): it ships rarely and holds nothing up. */
 const DORMANT_MS = 7 * DAY;
 
@@ -71,8 +74,13 @@ export type Unretired = { conversation_id: Id<"conversations">; short_id: string
 export const SWEEP_KINDS = ["incidents", "late_targets", "failed_runs", "laggards", "unretired"] as const;
 export type SweepKind = (typeof SWEEP_KINDS)[number];
 /** `failed_kinds`: the kinds whose read failed this time, each listed empty, so one kind's failure never fails the rest.
- *  `unretired_skipped`: the sessions whose retirement judgment failed this time, left out of `unretired`. */
-export type ReleaseSweep = { workspace: string; checked_at: number; incidents: SweepIncident[]; late_targets: LateTarget[]; failed_runs: FailedRun[]; laggards: Laggard[]; unretired: Unretired[]; unretired_skipped: number; failed_kinds: SweepKind[] };
+ *  `unretired_skipped`: the sessions whose retirement judgment failed this time, left out of `unretired`.
+ *  `unretired_more` / `failed_runs_more`: the list stopped at its cap (or its judging budget) with more left unread.
+ *  `laggards` is empty for a caller who may not read the team's fleet (mayForceTeamFleet). */
+export type ReleaseSweep = {
+  workspace: string; checked_at: number; incidents: SweepIncident[]; late_targets: LateTarget[]; failed_runs: FailedRun[]; laggards: Laggard[]; unretired: Unretired[];
+  unretired_skipped: number; unretired_more: boolean; failed_runs_more: boolean; failed_kinds: SweepKind[];
+};
 
 /** A name a sweep may carry (a target, repository, flow, station, device id): identifier characters only, else null. */
 const safeName = (s: string | null | undefined): string | null => (s && /^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$/.test(s) ? s : null);
@@ -140,14 +148,15 @@ async function lateTargets(ctx: ActionCtx, workspace: string, now: number): Prom
   }))).filter((t): t is LateTarget => t !== null);
 }
 
-async function failedRuns(ctx: any, workspace: string, now: number): Promise<FailedRun[]> {
+/** The failed runs, and whether the read stopped at its cap with more failed runs in the window unread. */
+async function failedRuns(ctx: any, workspace: string, now: number): Promise<{ rows: FailedRun[]; more: boolean }> {
   const rows: Doc<"workflow_runs">[] = await ctx.db
     .query("workflow_runs")
     .withIndex("by_workspace_status_updated", (q: any) => q.eq("workspace", workspace).eq("status", "failed").gt("updated_at", now - FAILED_RUN_WINDOW_MS))
     .order("desc")
-    .take(FAILED_RUNS_READ);
+    .take(FAILED_RUNS_READ + 1);
   const out: FailedRun[] = [];
-  for (const run of rows) {
+  for (const run of rows.slice(0, FAILED_RUNS_READ)) {
     // A queued resume is already acted on; a run with no task cannot be resumed.
     if (run.resume_queued || !run.task_id || isCancelled(run.fail_reason)) continue;
     // An open incident's runs are listed under it, while it still stops them; a stale mark hides nothing.
@@ -169,14 +178,16 @@ async function failedRuns(ctx: any, workspace: string, now: number): Promise<Fai
       failed_at: run.updated_at,
     });
   }
-  return out;
+  return { rows: out, more: rows.length > FAILED_RUNS_READ };
 }
 
-async function laggards(ctx: any, workspace: string, viewer: Id<"users">, now: number): Promise<Laggard[]> {
+/** The team's machines below a floor: its fleet, so only for whoever may read it (teamCliFloor.mayForceTeamFleet, as
+ *  the fleet query asks); anyone else is shown none. */
+async function laggards(ctx: any, workspace: string, viewer: Id<"users">, now: number, fromSession?: string): Promise<Laggard[]> {
   const ws = parseWorkspaceKey(workspace);
   if (ws?.type !== "team") return [];
   const team: Doc<"teams"> | null = await ctx.db.get(ws.teamId);
-  if (!team) return [];
+  if (!team || !(await mayForceTeamFleet(ctx, viewer, team._id, fromSession, now))) return [];
   const global = await ctx.db.query("system_config").withIndex("by_key", (q: any) => q.eq("key", "min_cli_version")).unique();
   // A floor with no time (set before it was kept) counts as raised long ago.
   const floors = [
@@ -244,28 +255,36 @@ export const retireJudge = internalQuery({
   },
 });
 
-/** The unretired sessions, and how many could not be judged: one session's failed judgment (a read past a limit) drops
- *  that session alone, never the kind. */
-async function unretired(ctx: ActionCtx, scope: SweepScope, now: number): Promise<{ rows: Unretired[]; skipped: number }> {
+/** The unretired sessions, how many could not be judged, and whether more may be past the list: candidates are judged
+ *  in order, RETIRE_SESSIONS_MAX at a time, until that many are listed or RETIRE_JUDGMENTS_MAX were judged. One
+ *  session's failed judgment (a read past a limit) drops that session alone, never the kind. */
+async function unretired(ctx: ActionCtx, scope: SweepScope, now: number): Promise<{ rows: Unretired[]; skipped: number; more: boolean }> {
   const byRepo: Id<"conversations">[][] = await Promise.all(scope.repositories.map((repository) => retireCandidatesOf(ctx, repository, scope.viewer, now)));
-  const sessions = [...new Set(byRepo.flat())].slice(0, RETIRE_SESSIONS_MAX);
-  const judged = await Promise.allSettled(sessions.map((conversation_id): Promise<Unretired | null> => ctx.runQuery(internal.releaseSweep.retireJudge, { workspace: scope.workspace, conversation_id, now })));
+  const sessions = [...new Set(byRepo.flat())];
   const rows: Unretired[] = [];
   let skipped = 0;
-  judged.forEach((j, i) => {
-    if (j.status === "fulfilled") {
-      if (j.value) rows.push(j.value);
-      return;
-    }
-    skipped++;
-    console.error(`[releaseSweep.sweep] ${sessions[i]} not judged: ${j.reason instanceof Error ? j.reason.message : String(j.reason)}`);
-  });
-  return { rows, skipped };
+  let next = 0;
+  while (rows.length < RETIRE_SESSIONS_MAX && next < Math.min(sessions.length, RETIRE_JUDGMENTS_MAX)) {
+    const batch = sessions.slice(next, Math.min(next + RETIRE_SESSIONS_MAX, RETIRE_JUDGMENTS_MAX));
+    next += batch.length;
+    const judged = await Promise.allSettled(batch.map((conversation_id): Promise<Unretired | null> => ctx.runQuery(internal.releaseSweep.retireJudge, { workspace: scope.workspace, conversation_id, now })));
+    judged.forEach((j, i) => {
+      if (j.status === "fulfilled") {
+        if (j.value) rows.push(j.value);
+        return;
+      }
+      skipped++;
+      console.error(`[releaseSweep.sweep] ${batch[i]} not judged: ${j.reason instanceof Error ? j.reason.message : String(j.reason)}`);
+    });
+  }
+  // More: a listed session cut at the cap, or candidates left unjudged.
+  return { rows: rows.slice(0, RETIRE_SESSIONS_MAX), skipped, more: rows.length > RETIRE_SESSIONS_MAX || next < sessions.length };
 }
 
-/** Who sweeps which workspace, the repositories its targets name, and whether it retires sessions on live at all. */
-type SweepScope = { workspace: string; viewer: Id<"users">; repositories: string[]; retires: boolean };
-const scopeArgs = { api_token: v.string(), workspace: v.optional(v.union(v.literal("personal"), v.literal("team"))), team_id: v.optional(v.id("teams")) };
+/** Who sweeps which workspace (and from which session, which may speak for its role: mayForceTeamFleet), the
+ *  repositories its targets name, and whether it retires sessions on live at all. */
+type SweepScope = { workspace: string; viewer: Id<"users">; from_session?: string; repositories: string[]; retires: boolean };
+const scopeArgs = { api_token: v.string(), workspace: v.optional(v.union(v.literal("personal"), v.literal("team"))), team_id: v.optional(v.id("teams")), from_session: v.optional(v.string()) };
 
 export const scope = internalQuery({
   args: scopeArgs,
@@ -276,6 +295,7 @@ export const scope = internalQuery({
     return {
       workspace: db.workspaceKey,
       viewer: auth.userId,
+      ...(args.from_session ? { from_session: args.from_session } : {}),
       repositories: [...new Set((await targetRows(ctx, db.workspaceKey)).map((t) => t.repository))],
       retires: await workspaceKeyHasFeature(ctx, db.workspaceKey, "retire_on_live"),
     };
@@ -294,12 +314,12 @@ export const incidents = internalQuery({
 
 export const failedRunsOf = internalQuery({
   args: { workspace: v.string(), now: v.number() },
-  handler: async (ctx, { workspace, now }): Promise<FailedRun[]> => await failedRuns(ctx, workspace, now),
+  handler: async (ctx, { workspace, now }): Promise<{ rows: FailedRun[]; more: boolean }> => await failedRuns(ctx, workspace, now),
 });
 
 export const laggardsOf = internalQuery({
-  args: { workspace: v.string(), viewer: v.id("users"), now: v.number() },
-  handler: async (ctx, { workspace, viewer, now }): Promise<Laggard[]> => await laggards(ctx, workspace, viewer, now),
+  args: { workspace: v.string(), viewer: v.id("users"), now: v.number(), from_session: v.optional(v.string()) },
+  handler: async (ctx, { workspace, viewer, now, from_session }): Promise<Laggard[]> => await laggards(ctx, workspace, viewer, now, from_session),
 });
 
 export const sweep = action({
@@ -309,6 +329,8 @@ export const sweep = action({
     const s: SweepScope = await ctx.runQuery(internal.releaseSweep.scope, args);
     const failed = new Set<SweepKind>();
     let unretiredSkipped = 0;
+    let unretiredMore = false;
+    let failedRunsMore = false;
     // Each kind on its own: one that fails (a read past a limit) is listed empty and named, the others still answer.
     const kind = async <T>(name: SweepKind, read: () => Promise<T[]>): Promise<T[]> => {
       try {
@@ -322,16 +344,24 @@ export const sweep = action({
     const [incidents, late_targets, failed_runs, laggards, unretiredRows] = await Promise.all([
       kind("incidents", (): Promise<SweepIncident[]> => ctx.runQuery(internal.releaseSweep.incidents, { workspace: s.workspace })),
       kind("late_targets", () => lateTargets(ctx, s.workspace, now)),
-      kind("failed_runs", (): Promise<FailedRun[]> => ctx.runQuery(internal.releaseSweep.failedRunsOf, { workspace: s.workspace, now })),
-      kind("laggards", (): Promise<Laggard[]> => ctx.runQuery(internal.releaseSweep.laggardsOf, { workspace: s.workspace, viewer: s.viewer, now })),
+      kind("failed_runs", async () => {
+        const { rows, more }: { rows: FailedRun[]; more: boolean } = await ctx.runQuery(internal.releaseSweep.failedRunsOf, { workspace: s.workspace, now });
+        failedRunsMore = more;
+        return rows;
+      }),
+      kind("laggards", (): Promise<Laggard[]> => ctx.runQuery(internal.releaseSweep.laggardsOf, { workspace: s.workspace, viewer: s.viewer, now, from_session: s.from_session })),
       kind("unretired", async () => {
         // With retire on live off, a live, finished session in the inbox is the expected state, not an exception.
         if (!s.retires) return [];
-        const { rows, skipped } = await unretired(ctx, s, now);
+        const { rows, skipped, more } = await unretired(ctx, s, now);
         unretiredSkipped = skipped;
+        unretiredMore = more;
         return rows;
       }),
     ]);
-    return { workspace: s.workspace, checked_at: now, incidents, late_targets, failed_runs, laggards, unretired: unretiredRows, unretired_skipped: unretiredSkipped, failed_kinds: SWEEP_KINDS.filter((k) => failed.has(k)) };
+    return {
+      workspace: s.workspace, checked_at: now, incidents, late_targets, failed_runs, laggards, unretired: unretiredRows,
+      unretired_skipped: unretiredSkipped, unretired_more: unretiredMore, failed_runs_more: failedRunsMore, failed_kinds: SWEEP_KINDS.filter((k) => failed.has(k)),
+    };
   },
 });

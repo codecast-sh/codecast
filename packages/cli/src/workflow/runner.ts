@@ -1430,10 +1430,11 @@ async function executeFanout(
       if (k.startsWith(`${branch.id}.`)) state.context[k] = v;
     }
     // The branch's own report ends its node, which stops its hand (workflow_runs.stopStationHands).
-    // Its words are what its node shows, as a station's outside a fan-out (a Check that was Skipped says why).
+    // Its words are what its node shows, as a station's outside a fan-out (a Check that was Skipped says why). A
+    // branch that waited out its machine slot never ran: failed, as the fan-in counts it, with its words saying why.
     if (options.runId) {
       const result_preview = stationPreview(branch, ctx);
-      await reportProgress(options, { current_node_id: node.id, node_id: branch.id, node_status: outcome === "failure" ? "failed" : "completed", outcome, session_id: ctx[`${branch.id}.session_id`], ...(result_preview ? { result_preview } : {}) });
+      await reportProgress(options, { current_node_id: node.id, node_id: branch.id, node_status: outcome === "failure" || outcome === NO_SLOT ? "failed" : "completed", outcome, session_id: ctx[`${branch.id}.session_id`], ...(result_preview ? { result_preview } : {}) });
     }
     state.visitCounts[branch.id] = (state.visitCounts[branch.id] || 0) + 1;
     state.completed.push(branch.id);
