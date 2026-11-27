@@ -6,7 +6,7 @@
 import { fnv1a32 } from "./inboxProjection";
 
 /** What a signal can say it saw (LE3). The door, the CLI and a repo's line profile share this list. */
-export const SIGNAL_KINDS = ["bug", "regression", "prompt_miss", "ux", "cohesion", "request"] as const;
+export const SIGNAL_KINDS = ["bug", "regression", "prompt_miss", "ux", "cohesion", "request", "flowstop"] as const;
 export type SignalKind = (typeof SIGNAL_KINDS)[number];
 
 /** An eval finding: a surface and the check (a gate, a verdict) or freeze id it concerns. */
@@ -44,6 +44,42 @@ export function groupFingerprint(prefix: string | undefined, kind: string, fp: s
 
 function hex8(s: string): string {
   return fnv1a32(s).toString(16).padStart(8, "0");
+}
+
+/**
+ * A run's stop words with what differs from run to run taken out: urls, paths,
+ * session, task, deploy and pull request ids, shas, durations and numbers. Two
+ * runs stopped by one breakage then say the same thing ("Land sent the change
+ * back 3 times" and "... 5 times").
+ */
+export function normalizeStopText(text: string): string {
+  return text
+    .replace(/^\s*Stopped:\s*/i, "")
+    .replace(/https?:\/\/\S+/g, "<url>")
+    .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "<id>")
+    .replace(/[^\s()'"`,;]*\/[^\s()'"`,;]*/g, "<path>")
+    .replace(/\b[a-z]{2}-\d+\b/gi, "<id>")
+    .replace(/#\d+\b/g, "<id>")
+    .replace(/\bjx[0-9a-z]{5,}\b/gi, "<id>")
+    .replace(/\b(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b/gi, "<sha>")
+    .replace(/\b(?=[a-z0-9]*\d)(?=[a-z0-9]*[a-z])[a-z0-9]{8,}\b/gi, "<id>")
+    .replace(/\b\d+(?:\.\d+)?\s?(?:ms|s|m|h|d|secs?|seconds?|mins?|minutes?|hrs?|hours?|days?)\b/gi, "<duration>")
+    .replace(/\d+(?:\.\d+)?/g, "<n>")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+/** The source of the signal a run's stop files (convex flowStops.ts). */
+export const FLOW_STOP_SOURCE = "flow";
+
+/**
+ * A run stopped at a station of its flow (workflow_runs.stop_fingerprint): one
+ * key per repository, flow, station and stop words, so the same stop on many
+ * changes reaches one cause.
+ */
+export function flowStopFingerprint(repository: string, flow: string, station: string, stopText: string): string {
+  return `flowstop:${repository.trim().toLowerCase()}:${flow.trim()}:${station.trim()}:${hex8(normalizeStopText(stopText))}`;
 }
 
 /** A Sentry issue mirrored as a group: the issue id is already Sentry's grouping. */

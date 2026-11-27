@@ -43,7 +43,7 @@ import { noticeCauseReopened } from "./lineNotices";
 import { titleSimilarity } from "./taskMining";
 import { callModel } from "./lib/anthropic";
 import { isTerminalTaskStatus } from "@codecast/shared/tasks";
-import { SIGNAL_KINDS, type SignalKind } from "@codecast/shared/contracts/signalFingerprint";
+import { FLOW_STOP_SOURCE, SIGNAL_KINDS, type SignalKind } from "@codecast/shared/contracts/signalFingerprint";
 import { LINE_SIGNAL_CAP, LINE_SIGNAL_WINDOW_MS, lineProfileContentKey, lineProfileUnchanged } from "@codecast/shared/contracts/lineProfile";
 import { lineFinderValidator, lineProfileFactsValidator } from "./lib/lineProfileValidator";
 import { isPlaced, placeSignal, scopeProject, type Placement } from "./lib/signalPlacement";
@@ -619,9 +619,11 @@ export async function commitSignal(ctx: any, db: WorkDb, userId: Id<"users">, si
  * one (`cast signal add`, a cause filed from the line page), the lesson the
  * line's learn station files from a person's card answer (LE12), a case
  * against a judge, made from a finding someone found wrong (LL11), and a step
- * of the line's deploy stage that failed (deploys.md DP9).
+ * of the line's deploy stage that failed (deploys.md DP9), and a run its flow
+ * stopped (flowStops.ts), whose cause becomes an incident once a second change
+ * stops the same way.
  */
-const CAUSE_OPENING_SOURCES = new Set(["person", "lesson", JUDGE_CASE_SOURCE, "deploy"]);
+const CAUSE_OPENING_SOURCES = new Set(["person", "lesson", JUDGE_CASE_SOURCE, "deploy", FLOW_STOP_SOURCE]);
 
 /**
  * The explicit conversion step (LE4). A signal no open cause holds opens a new
@@ -744,6 +746,7 @@ const KIND_WORDS: Record<string, string> = {
   ux: "a usability report",
   cohesion: "a consistency report",
   request: "a request",
+  flowstop: "a stopped run",
 };
 const kindWords = (kind: string) => KIND_WORDS[kind] ?? "a report";
 
