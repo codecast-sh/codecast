@@ -539,7 +539,7 @@ function readClassifierFacts(user_id: string, workspace: string, window_start: n
     });
     if (!facts.tasks.length) facts.tasks = chunk.tasks;
     facts.sessions.push(...chunk.sessions);
-    const asked = new Set(chunk.sessions.map((x) => x.id));
+    const asked = new Set(chunk.sessions.filter((x) => x.asks.length).map((x) => x.id));
     facts.sessions_read.push(...read.input.sessions.map((s) => ({ id: read.conversations[s.id] ?? s.id, title: s.title, kind: s.kind, asked: asked.has(read.conversations[s.id] ?? s.id) })));
     if (!read.more || read.read_to <= cursor) return facts;
     cursor = read.read_to;

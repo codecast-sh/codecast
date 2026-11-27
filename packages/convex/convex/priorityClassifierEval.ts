@@ -56,13 +56,14 @@ export type ClassifierEvalResult = {
 /**
  * The session a child took its placement from when live created it
  * (lib/priorityLinks inheritLink's callers): a fork (forkConversation, or the
- * daemon's parent message), a handoff, or a worker `cast spawn` started as a
- * subagent (spawn.ts). A Task-tool subagent the daemon synced gets none.
+ * daemon's parent message), a handoff, or a subagent spawn.ts started (a
+ * `cast spawn` worker, or a ship session, which may have no spawner). A
+ * Task-tool subagent the daemon synced gets none.
  */
 function inheritsFrom(conv: Doc<"conversations">): string | null {
   if (conv.forked_from) return String(conv.forked_from);
   if (conv.handed_off_from_conversation_id) return String(conv.handed_off_from_conversation_id);
-  if (conv.parent_conversation_id && (conv.parent_message_uuid || (conv.is_subagent && conv.spawned_by_conversation_id))) return String(conv.parent_conversation_id);
+  if (conv.parent_conversation_id && (conv.parent_message_uuid || (conv.is_subagent && (conv.spawned_by_conversation_id || conv.ship_target_key)))) return String(conv.parent_conversation_id);
   return null;
 }
 
