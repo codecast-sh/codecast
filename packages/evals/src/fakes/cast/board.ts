@@ -240,6 +240,24 @@ const prioritiesCreate = (p: Parsed, ctx: Ctx): Answer => {
   return ok(`ok Created ${id}: ${title}`);
 };
 
+/** `plan drop`: a plan this run created is abandoned; one the record holds is left to the guard. */
+const planDrop = (p: Parsed, ctx: Ctx): Answer | null => {
+  const id = String(p.args[0]);
+  const plan = ctx.w.plans[id];
+  if (!plan) return null;
+  plan.status = 'abandoned';
+  return ok(`ok Plan ${id} abandoned`);
+};
+
+/** `priorities set-aside|done|restore`, on a priority this run created, as prod words it. */
+const priorityState = (status: string, said: string) => (p: Parsed, ctx: Ctx): Answer | null => {
+  const id = String(p.args[0]).trim().toLowerCase();
+  const pri = ctx.w.priorities[id];
+  if (!pri) return null;
+  pri.status = status;
+  return ok(`ok ${id} ${said}`);
+};
+
 const planCreate = (p: Parsed, ctx: Ctx): Answer => {
   const title = text(p.args[0]).trim();
   if (!title) return fail('Error: a plan needs a title');
@@ -259,7 +277,7 @@ export function underOf(p: Parsed): { under?: string } | Answer {
   return { under: String(p.opts.under).trim().toLowerCase() };
 }
 
-export const BOARD_WRITES = ['board apply', 'board rm', 'board cursor', 'board comment', 'board checkpoint', 'priorities create', 'plan create', ...Object.keys(BOARD_VERBS).map((v) => `board ${v}`)];
+export const BOARD_WRITES = ['board apply', 'board rm', 'board cursor', 'board comment', 'board checkpoint', 'priorities create', 'priorities set-aside', 'priorities done', 'priorities restore', 'plan create', 'plan drop', ...Object.keys(BOARD_VERBS).map((v) => `board ${v}`)];
 
 export const BOARD_HANDLERS: Record<string, (p: Parsed, ctx: Ctx) => Answer | null> = {
   'board read': boardRead,
@@ -276,5 +294,9 @@ export const BOARD_HANDLERS: Record<string, (p: Parsed, ctx: Ctx) => Answer | nu
   goals,
   'plan ls': planLs,
   'plan create': planCreate,
+  'plan drop': planDrop,
+  'priorities set-aside': priorityState('set_aside', 'set aside'),
+  'priorities done': priorityState('done', 'done'),
+  'priorities restore': priorityState('active', 'active'),
   'task ls': taskLs,
 };

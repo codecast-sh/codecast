@@ -76,5 +76,10 @@ describe('board fake', () => {
     expect(ask(w, ['task', 'ls', '-q', 'budget']).out).toContain('ct-5');
     expect(ask(w, ['task', 'ls', '-q', 'budget']).out).not.toContain('ct-6');
     expect(ask(w, ['priorities', 'ls']).out).toContain('pri-301');
+    expect(ask(w, ['task', 'drop', t.id]).out).toBe(`ok Dropped ${t.id}\n`);
+    expect(t.status).toBe('dropped');
+    expect(ask(w, ['plan', 'drop', 'pl-1201']).out).toBe('ok Plan pl-1201 abandoned\n');
+    expect(ask(w, ['priorities', 'set-aside', 'pri-301']).out).toBe('ok pri-301 set aside\n');
+    expect([w.plans['pl-1201']!.status, w.priorities['pri-301']!.status]).toEqual(['abandoned', 'set_aside']);
   });
 });

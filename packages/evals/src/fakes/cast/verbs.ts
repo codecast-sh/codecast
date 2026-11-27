@@ -168,6 +168,16 @@ const taskUpdate: Handler = (p, ctx) => {
   return ok(`ok Updated ${id}`);
 };
 
+/** `task drop`: the task is cancelled, as prod words it. */
+const taskDrop: Handler = (p, ctx) => {
+  const id = String(p.args[0]);
+  const t = taskRef(ctx, id);
+  if (!t) return null;
+  if (t === 'missing') return fail(`Error: Task not found: ${id}`);
+  if (t !== 'outside') t.status = 'dropped';
+  return ok(`ok Dropped ${id}`);
+};
+
 const taskStart: Handler = (p, ctx) => {
   const id = String(p.args[0]);
   const t = taskRef(ctx, id);
@@ -431,7 +441,7 @@ const chatDm: Handler = (p, ctx) => {
 };
 
 /** The writes the fake answers, as an agent types them: what a harness note under --fakes tells the agent it may run. */
-export const FAKED_WRITES = ['send', 'state', 'task create', 'task comment', 'task update', 'task start', 'task handoff', 'task verdict', 'trigger add', 'trigger complete', 'brief edit', 'role wake', 'decide', 'chat send', 'chat dm', ...BOARD_WRITES];
+export const FAKED_WRITES = ['send', 'state', 'task create', 'task comment', 'task update', 'task drop', 'task start', 'task handoff', 'task verdict', 'trigger add', 'trigger complete', 'brief edit', 'role wake', 'decide', 'chat send', 'chat dm', ...BOARD_WRITES];
 
 /** Each modelled command path, joined by spaces. */
 export const VERBS: Record<string, Handler> = {
@@ -440,6 +450,7 @@ export const VERBS: Record<string, Handler> = {
   'task create': taskCreate,
   'task comment': taskComment,
   'task update': taskUpdate,
+  'task drop': taskDrop,
   'task start': taskStart,
   'task handoff': taskHandoff,
   'task verdict': taskVerdict,
