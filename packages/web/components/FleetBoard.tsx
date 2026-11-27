@@ -39,8 +39,7 @@ import { useIsModernStyle } from "../hooks/useVisualStyle";
 import { isModernStyle } from "../lib/visualStyle";
 import { ModernFleetBody } from "./fleet/ModernFleetBoard";
 import { hostedStopOf } from "../lib/hostedNotice";
-import { activityFactsSig, railActivityKind } from "../lib/railActivity";
-import { sessionShipMap } from "../hooks/useSessionShipState";
+import { dormantSplitSig, rowActivity } from "../lib/railActivity";
 import { isHostedAgentType } from "@codecast/shared/contracts";
 import { modernDialog, modernScrim } from "./ui/modernLook";
 import { lazyNamed } from "../lib/lazyNamed";
@@ -397,11 +396,6 @@ export function FleetBoard() {
     (st) => st.currentSessionId,
     (st) => st.pendingSessionCreates,
     (st) => st.blockedReviveRequestedAt,
-    // What splits the Dormant band into Working, Shipping and Sleeping (lib/railActivity).
-    (st) => activityFactsSig(st.sessions),
-    (st) => sessionShipMap(st as never),
-    (st) => st.agentTasks,
-    (st) => st.foreignTriggers,
   ]);
   const titlebarRef = useTitlebarHead<HTMLDivElement>();
   // Time-driven freshness (elapsed clocks, liveness TTL, blocked-state aging)
@@ -459,15 +453,19 @@ export function FleetBoard() {
   // Modern bands the rail's own sections in the status vocabulary
   // (fleet/ModernFleetBoard); Classic and Minimal keep the bands above.
   const modern = useIsModernStyle();
+  // What splits the Dormant band into Working, Shipping and Sleeping
+  // (lib/railActivity), as one signature over just those rows: the board
+  // wakes when a tile's split moves, never on a run or deploy that leaves it.
+  const splitSig = useInboxStore((st) => (modern ? dormantSplitSig(st, categorized.dormant, coarseNow) : ""));
   const modernOpts = useMemo(() => ({
     queued: s.sessionsWithQueuedMessages,
     pendingSendIds,
     reviveAt: s.blockedReviveRequestedAt,
     now: coarseNow,
     stopped: (row: InboxSession) => (isHostedAgentType(row.agent_type) ? hostedStopOf(row, useInboxStore.getState().messages[row._id]) : null),
-    activityOf: (row: InboxSession) => railActivityKind(useInboxStore.getState() as never, row, coarseNow),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- the split's facts wake the board through the subscription above
-  }), [s.sessionsWithQueuedMessages, pendingSendIds, s.blockedReviveRequestedAt, coarseNow, activityFactsSig(s.sessions), sessionShipMap(s as never), s.agentTasks, s.foreignTriggers]);
+    activityOf: (row: InboxSession) => rowActivity(useInboxStore.getState(), row, coarseNow).state,
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- splitSig is the split's dep
+  }), [s.sessionsWithQueuedMessages, pendingSendIds, s.blockedReviveRequestedAt, coarseNow, splitSig]);
 
   const total = bands.needsYou.length + bands.running.length + bands.finished.length;
 

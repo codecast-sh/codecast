@@ -10,6 +10,7 @@ import type { SessionShip } from "../../lib/ship/sessionShip";
 import type { LinkedPr } from "../../lib/sessionPullRequests";
 import type { CoOwners } from "../../lib/coOwners";
 import type { PriorityRankLabel } from "../../store/priorityOrder";
+import type { ActivityKind } from "../../lib/sessionStatus";
 
 // The props of the inbox session card (SessionCardView): the row, its chrome
 // toggles, its live facts and the handlers every gesture leaves through.
@@ -89,6 +90,8 @@ export type SessionCardViewProps = {
    *  drawn outside a status section. The pin's declared
    *  status shows only where it agrees. Omitted: the declared status stands. */
   placedStatus?: ThreadStateStatus | null;
+  /** Where no section decides the word: a Dormant row's split (lib/railActivity dormantActivityOf). */
+  activity?: ActivityKind | null;
   forkColorKey?: string;
   // Force the compact child-row look for a session that isn't itself a
   // subagent — the trigger view renders a trigger's sessions as sub rows under

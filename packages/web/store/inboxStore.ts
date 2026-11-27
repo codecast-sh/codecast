@@ -5703,7 +5703,7 @@ export { ORG_LENS_MODES, groupSessionsForOrgLens, isOrgLensMode, orgLensAvailabl
 import { ORG_LENS_MODES, isOrgLensMode, groupSessionsForOrgLens, orgLensAvailable, orgLensSourcesOf, type OrgLensMode, type OrgLensSources, type OrgLensState } from "./orgLens";
 import { priorityPlaceReader, sortByPriority, type PriorityRankEntry, type PriorityStanding } from "./priorityOrder";
 import { hostedStopOf, splitHostedStops } from "../lib/hostedNotice";
-import { SESSION_STATUSES, sessionStatusOf, type SessionStatus, type StatusLive } from "../lib/sessionStatus";
+import { SESSION_STATUSES, sessionStatusOf, type ActivityKind, type SessionStatus, type StatusLive } from "../lib/sessionStatus";
 import { nestOwnedChildren, ownedChildrenOf, resolveShowSubagents, resolveSubagentFilter, subagentKept, withOpenOwnedChild, type SubagentFilter, type SubagentRow, type SubagentRowsMode } from "./subagentCards";
 export { cardOfNested, drawnUnderParentIds, flatHeaderCount, fullRowsCounts, isOwnedChildRow, resolveShowSubagents, resolveSubagentFilter, resolveSubagentRows, SUBAGENT_FILTER_STATES, subagentKept, subagentPasses, type SubagentFilter, type SubagentRow, type SubagentRowsMode } from "./subagentCards";
 import { dropOrphanSubagents, hoistNestedUnderParent, inboxNestParentOf, isSpawnedWorker, nestedSessionIds } from "./inboxNesting";
@@ -5921,9 +5921,13 @@ export function subagentLiveOf(session: InboxSession, now: number, state: Subage
 /** A subagent's state: the verdict its own card shows nested (the rail's
  *  per-row placement, no section, the card's live facts), so Folded, Compact
  *  and Full rows agree. */
-export function subagentStatusOf(session: InboxSession, now: number, live: StatusLive = subagentLiveOf(session, now)): SessionStatus {
-  return sessionStatusOf({ row: session, section: null, placement: railRowPlacement(session, now), now, live, nested: true });
+export function subagentStatusOf(session: InboxSession, now: number, live: StatusLive = subagentLiveOf(session, now), activityOf?: SubagentActivityOf): SessionStatus {
+  const placement = railRowPlacement(session, now);
+  return sessionStatusOf({ row: session, section: null, placement, now, live, nested: true, activity: activityOf?.(session, placement.bucket) });
 }
+
+/** A nested row's split when its placement files it Dormant (lib/railActivity dormantActivityOf), handed in by a caller that holds the store. */
+export type SubagentActivityOf = (session: InboxSession, bucket: string) => ActivityKind | null;
 
 /** The filter as a test on one nested row, the open one always kept: what
  *  Full rows keep in the flat views (flatViewSessions keepSub). */
@@ -5934,14 +5938,14 @@ export function subagentKeepOf(filter: SubagentFilter, now: number, focusedId?: 
 /** A card's children with their states: each once, only those the filter
  *  keeps (and `keepId`, the open one, whatever its state), most urgent state
  *  first and newest first within a state. */
-export function subagentRowsOf(children: readonly InboxSession[], now: number, filter: SubagentFilter, keepId?: string | null): SubagentRow[] {
+export function subagentRowsOf(children: readonly InboxSession[], now: number, filter: SubagentFilter, keepId?: string | null, activityOf?: SubagentActivityOf): SubagentRow[] {
   const seen = new Set<string>();
   const rows: SubagentRow[] = [];
   for (const session of children) {
     const id = String(session._id);
     if (seen.has(id)) continue;
     seen.add(id);
-    const status = subagentStatusOf(session, now);
+    const status = subagentStatusOf(session, now, undefined, activityOf);
     if (id !== keepId && !subagentKept(session, status, now, filter)) continue;
     rows.push({ session, status });
   }

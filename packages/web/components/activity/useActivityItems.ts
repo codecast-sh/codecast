@@ -12,7 +12,7 @@
 // hooks already tick on.
 import { useMemo, useRef } from "react";
 import { isHostedAgentType } from "@codecast/shared/contracts";
-import { railRowPlacement, useTrackedStore, type InboxSession, type SessionDecisionItem } from "../../store/inboxStore";
+import { railRowPlacement, useInboxStore, useTrackedStore, type InboxSession, type SessionDecisionItem } from "../../store/inboxStore";
 import { makeCollectionSig } from "../../store/wakeSig";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useViewerIdentity } from "../../hooks/useTeamRoster";
@@ -23,7 +23,8 @@ import { cleanTitle } from "../../lib/conversationProcessor";
 import { sessionCardTitle } from "../../lib/sessionCard";
 import { sessionCardSummary } from "../../lib/sessionSummary";
 import { sessionCardLine } from "../../lib/sessionCardLine";
-import { sessionStatusOf, type SessionStatus } from "../../lib/sessionStatus";
+import type { SessionStatus } from "../../lib/sessionStatus";
+import { placedStatusOf } from "../../lib/railActivity";
 import { threadStateView } from "../../lib/threadState";
 import type { Conversation } from "../../lib/conversationRow";
 import type { ExternalEventRecord } from "../../lib/externalEventRecord";
@@ -97,7 +98,7 @@ export function useActivityItems(rows: readonly Conversation[], opts: { teamId: 
       if (own) {
         const hosted = isHostedAgentType(own.agent_type);
         const live = { asking: !!sessionOutcomes?.decisions.some((d) => d.pending && d.askedOfViewer), blocked: !!own.pending_api_error };
-        status = sessionStatusOf({ row: own, placement: railRowPlacement(own, now), now, live, hosted });
+        status = placedStatusOf(useInboxStore.getState(), { row: own, placement: railRowPlacement(own, now), now, live, hosted });
         const card = sessionCardLine({
           row: own,
           status,

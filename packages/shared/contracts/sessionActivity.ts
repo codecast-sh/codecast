@@ -15,7 +15,8 @@
 // waits. Pure and isomorphic: the
 // web rail, the phone and the server's `cast sessions` all call it.
 import { ACTIVE_AGENT_STATUSES } from "./agentStatus";
-import type { WaitingOn } from "./inboxProjection";
+import { rowHeartbeatAliveAt, trustedStatusAt, type WaitingOn } from "./inboxProjection";
+import { openTasksVouchForWaiting } from "./openTasks";
 import {
   isArmedTrigger,
   runningWorkflowName,
@@ -40,6 +41,10 @@ export interface ShipInput {
   pr?: string | null;
   /** The deploy target, as "web". */
   target?: string | null;
+  /** The step is held for a person: `you` (a gate the viewer answers, a deploy the viewer presses) asks for attention; `other` waits on someone else. */
+  holder?: "you" | "other" | null;
+  /** What the hold says ("Your call", "Waiting for green main"), in place of the stage's own words. */
+  words?: string | null;
 }
 
 export interface SessionActivityRow extends DormantWakeSession {
@@ -66,7 +71,7 @@ export interface SessionActivityInput<T extends DormantTriggerRow> {
 }
 
 export type WorkingActivity = { state: "working"; kind: WorkKind; verb: WorkVerb | null; count: number; words: string };
-export type ShippingActivity = { state: "shipping"; stage: ShipStage; failed: boolean; words: string; pr?: string; target?: string };
+export type ShippingActivity = { state: "shipping"; stage: ShipStage; failed: boolean; words: string; holder?: "you" | "other"; pr?: string; target?: string };
 export type SleepingActivity<T extends DormantTriggerRow = DormantTriggerRow> =
   /** `on` is null for a task blocker or wait whose task the caller could not name; `wake` then carries it. */
   | { state: "sleeping"; flavor: "waiting"; on: Omit<WaitingOn, "at"> | null; since: number | null; wake: Extract<DormantWake<T>, { kind: "blocker" | "wait" }> | null; hibernated: boolean }
@@ -79,14 +84,31 @@ export type SleepingActivity<T extends DormantTriggerRow = DormantTriggerRow> =
   | { state: "sleeping"; flavor: "unconfirmed"; wake: Extract<DormantWake<T>, { kind: "unconfirmed" | "run_unreported" }>; hibernated: boolean };
 export type SessionActivity<T extends DormantTriggerRow = DormantTriggerRow> = WorkingActivity | ShippingActivity | SleepingActivity<T>;
 
+export type ChildRunningRow = {
+  agent_status?: string | null;
+  producing_until?: number | null;
+  updated_at?: number;
+  last_heartbeat?: number | null;
+  open_tasks?: unknown[] | null;
+  open_tasks_at?: number | null;
+  inbox_killed_at?: number | null;
+  inbox_dismissed_at?: number | null;
+};
+
 /**
  * How many of a session's child rows are running. Today it reads the facts the
  * child rows carry (an active agent_status, or producing ahead); ct-102250
  * (pl-1134) will write the authoritative running status on the child's own
- * row, and this is the one place that reads it then.
+ * row, and this is the one place that reads it then. A child counts only while
+ * it is alive, as every other reader judges it: its heartbeat inside the
+ * window and its status the trusted one (trustedStatusAt), never a closed row.
  */
-export function childrenRunningOf(children: ReadonlyArray<{ agent_status?: string | null; producing_until?: number | null }>, now: number): number {
-  return children.filter((c) => (c.agent_status != null && ACTIVE_AGENT_STATUSES.has(c.agent_status)) || (c.producing_until != null && now < c.producing_until)).length;
+export function childrenRunningOf(children: ReadonlyArray<ChildRunningRow>, now: number): number {
+  return children.filter((c) => {
+    if (c.inbox_killed_at || c.inbox_dismissed_at || !rowHeartbeatAliveAt(c, now)) return false;
+    const status = trustedStatusAt({ ...c, updated_at: c.updated_at ?? 0 }, now);
+    return (status != null && ACTIVE_AGENT_STATUSES.has(status)) || (c.producing_until != null && now < c.producing_until);
+  }).length;
 }
 
 // ── Verbs ────────────────────────────────────────────────────────────────────
@@ -150,7 +172,8 @@ function shipping(ship: ShipInput): ShippingActivity {
     state: "shipping",
     stage: ship.stage,
     failed: !!ship.failed,
-    words: shipWords(ship),
+    words: ship.words || shipWords(ship),
+    ...(ship.holder ? { holder: ship.holder } : {}),
     ...(ship.pr ? { pr: ship.pr } : {}),
     ...(ship.target ? { target: ship.target } : {}),
   };
@@ -266,9 +289,10 @@ function shipOfTriggers(triggers: DormantTriggerRow[]): ShipInput | null {
 
 // ── The split ────────────────────────────────────────────────────────────────
 
-function workingOf<T extends DormantTriggerRow>(input: SessionActivityInput<T>, commands: DormantWatch[], liveRun: boolean): WorkingActivity | null {
+type OpenTask = NonNullable<SessionActivityRow["open_tasks"]>[number];
+
+function workingOf<T extends DormantTriggerRow>(input: SessionActivityInput<T>, open: OpenTask[], commands: DormantWatch[], liveRun: boolean): WorkingActivity | null {
   const { row, now } = input;
-  const open = row.open_tasks ?? [];
   const work = (kind: WorkKind, verb: WorkVerb | null, count: number, words: string): WorkingActivity => ({ state: "working", kind, verb, count, words });
 
   const workflowName = (!input.runShips && runningWorkflowName(row)) || open.find((t) => t.kind === "workflow")?.description || (open.some((t) => t.kind === "workflow") ? "workflow run" : null);
@@ -364,7 +388,11 @@ export function sessionActivity<T extends DormantTriggerRow>(input: SessionActiv
   const { row, now } = input;
   const filed = personFiledOf<T>(row, now);
   if (filed) return filed;
-  const commands = input.watches?.length ? input.watches : (row.open_tasks ?? []).filter((t) => t.kind !== "agent" && t.kind !== "workflow");
+  // The daemon's report of open background work counts only while it vouches
+  // for it, the classifier's own rule: a report from a machine that stopped
+  // heartbeating is leftovers, not work.
+  const open = openTasksVouchForWaiting(row.open_tasks_at, row.open_tasks?.length ?? 0, rowHeartbeatAliveAt(row, now)) ? row.open_tasks ?? [] : [];
+  const commands = input.watches?.length ? input.watches : open.filter((t) => t.kind !== "agent" && t.kind !== "workflow");
   const liveRun = serverParkOf(row, now)?.kind === "run";
-  return workingOf(input, commands, liveRun) ?? shippingOf(input, commands, liveRun) ?? sleepingOf(input, commands);
+  return workingOf(input, open, commands, liveRun) ?? shippingOf(input, commands, liveRun) ?? sleepingOf(input, commands);
 }

@@ -18,10 +18,10 @@ import {
 import type { DormantTriggerRow } from "@codecast/shared/contracts/dormantWake";
 import { segmentTopOf } from "@codecast/shared/contracts/flowPool";
 import type { InboxSession } from "../store/inboxStore";
-import { makeCollectionSig } from "../store/wakeSig";
 import { sessionShipMap, type ShipState } from "../hooks/useSessionShipState";
-import type { SessionShip } from "./ship/sessionShip";
-import type { ActivityKind } from "./sessionStatus";
+import { shipHref, type SessionShip } from "./ship/sessionShip";
+import { runHref } from "./decisionLinks";
+import { sessionStatusOf, type ActivityKind, type SessionStatus, type SessionStatusInput, type StatusPlacement } from "./sessionStatus";
 
 export type RailActivityState = ShipState & {
   sessions: Record<string, InboxSession>;
@@ -45,17 +45,27 @@ export function shipStageOfNode(nodeId: string | null | undefined): ShipStage {
 /** "Deploying · web, cli" → "web, cli". */
 const targetOfWords = (words: string): string | null => words.split(" · ")[1] ?? null;
 
+/** Who a held step waits on: the viewer ("Your call", "Waiting on you",
+ *  "Waiting for you to deploy") or someone else ("Waiting for green main",
+ *  "Waiting for Ashot to deploy"). Null while the step is plain progress. */
+function holderOf(ship: SessionShip): "you" | "other" | null {
+  if (ship.tone === "you" || (ship.tone === "wait" && /\byou\b/i.test(ship.words))) return "you";
+  return ship.tone === "wait" ? "other" : null;
+}
+
 /**
  * Where a session's change is, as sessionActivity reads it: only a change in
  * flight. A run still going names its station (sent back to the session for a
- * fix, it failed there); a landed change going out names its deploy. Live,
- * merged, stopped or a failed deploy nobody is fixing is not shipping.
+ * fix, it failed there), and a step held for a person says the hold in its
+ * own words; a landed change going out names its deploy. Live, merged,
+ * stopped or a failed deploy nobody is fixing is not shipping.
  */
 export function shipInputOf(ship: SessionShip | null | undefined, run: Run | null | undefined, pr: string | null): ShipInput | null {
   if (!ship) return null;
   if (run?.status && LIVE_RUN.has(run.status)) {
     const stage = shipStageOfNode(run.current_node_id);
-    return { stage, failed: ship.words === "Fixing", pr, target: stage === "deploy" ? targetOfWords(ship.words) : null };
+    const holder = holderOf(ship);
+    return { stage, failed: ship.words === "Fixing", pr, target: stage === "deploy" ? targetOfWords(ship.words) : null, ...(holder ? { holder, words: ship.words } : {}) };
   }
   if (ship.tone === "working" && /^Deploy/.test(ship.words)) return { stage: "deploy", pr, target: targetOfWords(ship.words) };
   return null;
@@ -118,6 +128,7 @@ export function rowActivity<T extends DormantTriggerRow = DormantTriggerRow>(sta
   const run = ship?.run ? (state.workflowRuns?.[ship.run] as Run | undefined) : undefined;
   const pr = row.pr_status && row.pr_status.state !== "merged" ? `#${row.pr_status.number}` : null;
   const workers = workersBySpawner(state.sessions).get(row._id) ?? [];
+  // childrenRunningOf is the one judge of a running child (alive, not closed).
   const running = workers.filter((w) => childrenRunningOf([w], now) > 0);
   const ownRun = row.workflow_run_id ? (state.workflowRuns?.[row.workflow_run_id] as Run | undefined) : undefined;
   return sessionActivity<T>({
@@ -131,24 +142,49 @@ export function rowActivity<T extends DormantTriggerRow = DormantTriggerRow>(sta
   });
 }
 
-/** The section a Dormant row draws in. */
-export const railActivityKind = (state: RailActivityState, row: InboxSession, now: number): ActivityKind => rowActivity(state, row, now).state;
+/** Everything a row's line draws from its activity, as one string: what a
+ *  surface subscribes to, so it wakes when the words, stage or wake move and
+ *  never on a run, deploy or heartbeat that changed none of them. */
+export function activitySig(a: SessionActivity): string {
+  if (a.state === "working") return `w|${a.words}`;
+  if (a.state === "shipping") return `s|${a.stage}|${a.failed ? 1 : 0}|${a.holder ?? ""}|${a.words}`;
+  const wake = a.wake;
+  const wakeKey = !wake ? ""
+    : wake.kind === "trigger" ? `trigger:${wake.row.task.run_at ?? ""}:${wake.row.task.status}:${wake.others}`
+    : wake.kind === "claim" ? `claim:${wake.back}:${wake.what ?? ""}`
+    : wake.kind === "snoozed" ? `snoozed:${wake.at}`
+    : wake.kind === "unconfirmed" ? `unconfirmed:${wake.since}`
+    : wake.kind === "background" ? `background:${wake.count}:${wake.what}`
+    : wake.kind;
+  const on = a.flavor === "waiting" && a.on ? `${a.on.kind}:${a.on.ref}:${a.since ?? ""}` : "";
+  return `z|${a.flavor}|${a.hibernated ? 1 : 0}|${on}|${wakeKey}`;
+}
 
-/** The row facts sessionActivity reads, as one signature over the collection:
- *  a surface subscribes to it (with sessionShipMap and the trigger rosters)
- *  so a split moves when its facts do, never on a heartbeat. */
-export const activityFactsSig = makeCollectionSig<InboxSession>((s) => [
-  s._id,
-  s.agent_status ?? "",
-  s.producing_until ?? "",
-  (s.open_tasks ?? []).map((t) => `${t.kind}:${(t as { description?: string }).description ?? ""}:${((t as { command?: string }).command ?? "").slice(0, 80)}`).join(","),
-  s.workflow_run_id ?? "",
-  s.workflow_run_status ?? "",
-  s.spawned_by_conversation_id ?? "",
-  s.parked_wake_kind ?? "",
-  s.armed_trigger_kind ?? "",
-  s.pr_status ? `${s.pr_status.number}:${s.pr_status.state}` : "",
-  s.waiting_on ? `${s.waiting_on.kind}:${s.waiting_on.ref}:${s.waiting_on.at ?? ""}` : "",
-  s.hibernated_at ?? "",
-  s.spawned_by_conversation_id ? s.title ?? "" : "",
-].join("|"));
+/** The split of a set of Dormant rows, as one signature (id and activitySig per row). */
+export function dormantSplitSig<T extends DormantTriggerRow>(state: RailActivityState, rows: readonly InboxSession[], now: number, triggersOf?: (row: InboxSession) => T[]): string {
+  let out = "";
+  for (const row of rows) out += `${row._id}=${activitySig(rowActivity(state, row, now, triggersOf?.(row)))};`;
+  return out;
+}
+
+/**
+ * The split a row's status word reads where no section decides it (a board
+ * tile, a /sessions row, a flat or nested card, a window row, an activity
+ * item): its placement's bucket, and for a Dormant one what it is really
+ * doing. Every such surface asks this, so none can drift from the rail.
+ */
+export function dormantActivityOf(state: RailActivityState, row: InboxSession, bucket: string | null | undefined, now: number): ActivityKind | null {
+  return bucket === "dormant" ? rowActivity(state, row, now).state : null;
+}
+
+/** A row's status where no section decides: sessionStatusOf over its placement, with a Dormant one split. */
+export function placedStatusOf(state: RailActivityState, input: Omit<SessionStatusInput, "activity" | "section"> & { placement: StatusPlacement | null }): SessionStatus {
+  return sessionStatusOf({ ...input, activity: dormantActivityOf(state, input.row as InboxSession, input.placement?.bucket, input.now) });
+}
+
+/** Where a Shipping row held for the viewer goes to act: the run that asks, or the deploy it waits on. */
+export function shipActionHref(state: RailActivityState, rowId: string): string | null {
+  const ship = sessionShipMap(state).get(rowId);
+  if (!ship) return null;
+  return shipHref(ship) ?? (ship.run ? runHref(ship.run) : null);
+}

@@ -107,6 +107,7 @@ export function ModernSessionCardView({
   placeDevice,
   thumbSrc,
   ship = null,
+  activity = null,
   linkedPrs,
   onSelect,
   onClose,
@@ -158,6 +159,7 @@ export function ModernSessionCardView({
     // standing as its own card (an escalated wait, open while its parent is
     // off the list) reads its section.
     nested: nested && underParent,
+    activity,
   });
   const meta = SESSION_STATUS[status];
   // Under the owners model a wait its agent owner answers says who has it.

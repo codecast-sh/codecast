@@ -17,7 +17,9 @@
 import type { ReactNode, MouseEvent } from "react";
 import { X } from "lucide-react";
 import type { SessionActivity } from "@codecast/shared/contracts/sessionActivity";
-import type { InboxSession } from "../../store/inboxStore";
+import Link from "next/link";
+import { useInboxStore, type InboxSession } from "../../store/inboxStore";
+import { shipActionHref } from "../../lib/railActivity";
 import { EntityIdPill } from "../EntityIdPill";
 import { ChangeTrack } from "../changes/ChangeChip";
 import { CHANGE_STAGES, type Lifecycle, type StageState } from "../../lib/changes/lifecycle";
@@ -82,13 +84,21 @@ type ActivityParts = {
 };
 
 /** What a row's line says, shared by the rail's under-line and the header chip. */
-function activityParts(activity: RowActivity, session: InboxSession, now: number): ActivityParts {
+function activityParts(activity: RowActivity, session: InboxSession, now: number, actionHref: string | null): ActivityParts {
   const parts = (p: Partial<ActivityParts> & Pick<ActivityParts, "label" | "body">): ActivityParts => ({ warn: false, right: null, title: null, trigger: null, ...p });
   if (activity.state === "working") return parts({ label: "What is running", body: <span className="truncate">{activity.words}</span>, title: activity.words });
   if (activity.state === "shipping") {
+    // A step held for the viewer asks them to act: the attention colour, and
+    // the words open where they act (the run's gate, the deploy). A hold on
+    // someone else stays neutral.
+    const mine = activity.holder === "you";
+    const words = mine && actionHref
+      ? <Link href={actionHref} data-ship-action className="truncate underline-offset-2 hover:underline">{activity.words}</Link>
+      : <span className="truncate">{activity.words}</span>;
     return parts({
-      label: "Where the change is",
-      body: <><span className="truncate">{activity.words}</span><ShipBar stage={activity.stage} failed={activity.failed} /></>,
+      label: mine ? "What the change waits on you for" : "Where the change is",
+      warn: mine,
+      body: <>{words}<ShipBar stage={activity.stage} failed={activity.failed} /></>,
       title: activity.words,
     });
   }
@@ -142,6 +152,10 @@ function Arrow({ label, warn }: { label: string; warn: boolean }) {
   );
 }
 
+/** Where a step held for the viewer sends them to act; read only while one is. */
+const useShipAction = (activity: RowActivity, sessionId: string): string | null =>
+  useInboxStore((st) => (activity.state === "shipping" && activity.holder === "you" ? shipActionHref(st, sessionId) : null));
+
 const CHIP_STATUS = { working: "working", shipping: "shipping", sleeping: "dormant" } as const satisfies Record<RowActivity["state"], SessionStatus>;
 
 /** The conversation header's chip: the row's state, its mark and word, then what its under-line says. Pressing a trigger's chip opens that trigger. */
@@ -151,7 +165,7 @@ export function ActivityChip({ session, activity, now, onOpenTrigger }: {
   now: number;
   onOpenTrigger: (row: TriggerRow) => void;
 }) {
-  const { label, warn, body, right, title, trigger } = activityParts(activity, session, now);
+  const { label, warn, body, right, title, trigger } = activityParts(activity, session, now, useShipAction(activity, session._id));
   const status = CHIP_STATUS[activity.state];
   const tone = warn ? "text-sol-yellow/90" : "text-sol-text-dim";
   const kind = activity.state === "sleeping" ? activity.flavor : activity.state;
@@ -191,7 +205,7 @@ export function ActivityUnderLine({ session, activity, now, isActive, onOpen, on
   onOpen: (session: InboxSession) => void;
   onOpenSchedule: (row: TriggerRow) => void;
 }) {
-  const { label, warn, body, right, title, trigger } = activityParts(activity, session, now);
+  const { label, warn, body, right, title, trigger } = activityParts(activity, session, now, useShipAction(activity, session._id));
   const tone = warn ? "text-sol-yellow/90" : "text-sol-text-dim";
   const open = (e: MouseEvent) => {
     if ((e.target as HTMLElement).closest("a,button")) return;

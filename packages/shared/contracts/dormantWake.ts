@@ -76,6 +76,8 @@ export interface DormantWakeSession {
    *  draw shells and Monitors; a Workflow run or background Agent appears only
    *  here. */
   open_tasks?: Array<{ kind: string; description?: string; command?: string }> | null;
+  /** When the daemon last published that report: with its heartbeat, whether it still vouches for it (openTasksVouchForWaiting). */
+  open_tasks_at?: number | null;
 }
 
 /** A background shell or Monitor a surface watches live (web useLiveWatchRows). */

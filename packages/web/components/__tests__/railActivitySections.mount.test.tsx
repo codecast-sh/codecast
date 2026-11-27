@@ -115,9 +115,16 @@ const run = (_id: string, spawner: string, extra: Record<string, unknown>) => ({
   _id, spawner_conversation_id: spawner, takes_change: true, status: "running", created_at: NOW - HOUR, updated_at: NOW - 60_000, ...extra,
 });
 
-function seed() {
+const LIVE_AGENT = id("liveagent");
+const HELD = id("heldforyou");
+
+function seed(extra: { rows?: Record<string, unknown>[]; ui?: Record<string, unknown> } = {}) {
   __resetInboxPlacementCacheForTests();
   const rows = [
+    // A row whose agent is producing: the Working bucket's own, ahead of the split's.
+    { ...parked(LIVE_AGENT, "Live agent"), agent_status: "working", is_idle: false, updated_at: NOW - 5_000, agent_status_updated_at: NOW - 5_000 },
+    // Its change run waits at a gate the viewer answers: Shipping, but the viewer's move.
+    parked(HELD, "Ship gate for you"),
     parked(REVIEWERS, "Priorities redesign", {
       open_tasks: [
         { kind: "agent", description: "Review the list rewrite" },
@@ -137,26 +144,31 @@ function seed() {
     parked(SNOOZED, "Snoozed reviewer", {
       inbox_snoozed_until: NOW + 3 * HOUR,
       open_tasks: [{ kind: "agent", description: "Review the diff" }],
+      open_tasks_at: NOW - 60_000,
     }),
+    ...(extra.rows ?? []),
   ];
   const sessions: Record<string, unknown> = {};
-  for (const r of rows) sessions[r._id] = r;
+  for (const r of rows) sessions[(r as { _id: string })._id] = r;
   useInboxStore.setState({
     sessions,
     conversations: {},
     pending: {},
     pendingMessages: {},
-    sessionDecisions: {},
+    sessionDecisions: {
+      gate: { _id: "gate", conversation_id: "elsewhere", question: "Ship it?", status: "answered", user_id: "me", created_at: NOW - HOUR },
+    },
     collapsedSections: {},
     workflowRuns: {
       r1: run("r1", SHIPPER, { current_node_id: "ci", current_node_label: "CI" }),
       r2: run("r2", FAILED, { current_node_id: "ci_conflict", waiting_on_session: { node_id: "ci_conflict", conversation_id: FAILED } }),
+      r3: run("r3", HELD, { status: "paused", current_node_id: "decide", gate_decision_id: "gate", gate_decision_status: "pending" }),
     },
     agentTasks: {
       t1: { _id: "t1", title: "Distill new huddles", status: "scheduled", run_at: NOW + 44 * 60_000, schedule_type: "recurring", originating_conversation_id: SCHEDULED, created_at: NOW - HOUR },
     },
     currentUser: { _id: "me", name: "Jason" },
-    clientState: { ui: { inbox_scope: "mine", show_old: true } },
+    clientState: { ui: { inbox_scope: "mine", show_old: true, ...extra.ui } },
   } as any);
 }
 
@@ -189,7 +201,7 @@ beforeEach(() => {
 
 test("a row whose subagents run draws in Working, a full card with the dot, its line naming the work", async () => {
   const { host, unmount } = await mountInbox();
-  expect(sectionIds(host, "working")).toEqual([REVIEWERS]);
+  expect(sectionIds(host, "working")).toEqual([LIVE_AGENT, REVIEWERS]);
   const card = host.querySelector(`[data-session-id="${REVIEWERS}"]`)!;
   expect(card.getAttribute("data-mc-status")).toBe("working");
   expect(card.closest("[data-dormant-section]")).toBeNull();
@@ -202,7 +214,7 @@ test("a row whose subagents run draws in Working, a full card with the dot, its 
 
 test("a row whose change is in CI draws in Shipping, compact, with the rocket, neutral words and the bar", async () => {
   const { host, unmount } = await mountInbox();
-  expect(sectionIds(host, "shipping").sort()).toEqual([SHIPPER, FAILED].sort());
+  expect(sectionIds(host, "shipping").sort()).toEqual([SHIPPER, FAILED, HELD].sort());
   const head = host.querySelector(`[data-inbox-section="shipping"]`)!;
   expect(head.closest("[data-dormant-section]")).not.toBeNull();
   expect(head.closest("[data-mc-sec]")!.querySelector("[data-status-mark]")!.getAttribute("data-status-mark")).toBe("shipping");
@@ -295,13 +307,81 @@ test("the conversation header's chip says what the row says", async () => {
   const stalled = await chipText(STALLED);
   expect(stalled.kind).toBe("stalled");
   expect(stalled.text).toContain("Sleeping·nothing scheduled");
+  // A row the rail draws in Working on its own (or under Needs You) carries no chip.
+  expect((await chipText(LIVE_AGENT)).kind).toBeNull();
+});
+
+test("a ship step held for the viewer keeps Shipping's place but asks for them, and opens where they act", async () => {
+  const { host, unmount } = await mountInbox();
+  const line = lineOf(host, HELD)!;
+  expect(line.getAttribute("data-activity-line")).toBe("shipping");
+  const action = line.querySelector("[data-ship-action]")!;
+  expect(action.textContent).toBe("Your call");
+  expect(action.getAttribute("href")).toBe("/workflows/runs/r3");
+  // The attention colour, unlike a plain shipping line.
+  expect(line.innerHTML).toContain("text-sol-yellow");
+  expect(lineOf(host, SHIPPER)!.querySelector("[data-ship-action]")).toBeNull();
+  await unmount();
+});
+
+test("a worker counts only while it is alive: a dead one leaves its spawner Sleeping", async () => {
+  const LEAD = id("lead");
+  const worker = (alive: boolean) => ({
+    ...parked(id("worker"), "Implement the rail", { spawned_by_conversation_id: LEAD }),
+    agent_status: "working", is_idle: false, updated_at: NOW - 10_000, agent_status_updated_at: NOW - 10_000,
+    last_heartbeat: alive ? NOW - 5_000 : NOW - 3 * HOUR,
+  });
+  seed({ rows: [parked(LEAD, "Lead of one worker"), worker(true)] });
+  let m = await mountInbox();
+  expect(sectionIds(m.host, "working")).toContain(LEAD);
+  expect(lineOf(m.host, LEAD)!.textContent).toContain("building · 1 worker");
+  await m.unmount();
+
+  seed({ rows: [parked(LEAD, "Lead of one worker"), worker(false)] });
+  m = await mountInbox();
+  expect(sectionIds(m.host, "working")).not.toContain(LEAD);
+  expect(sectionIds(m.host, "dormant")).toContain(LEAD);
+  await m.unmount();
+});
+
+test("each section's header counts the rows it draws", async () => {
+  const { host, unmount } = await mountInbox();
+  const count = (key: string) => Number(host.querySelector(`[data-inbox-section="${key}"]`)!.getAttribute("data-inbox-section-count"));
+  for (const key of ["working", "shipping", "dormant"]) expect([key, count(key)]).toEqual([key, sectionIds(host, key).length]);
+  await unmount();
+});
+
+test("the flat Recent view says the same word for a split row", async () => {
+  seed({ ui: { inbox_view_mode: "recent" } });
+  const { host, unmount } = await mountInbox();
+  const status = (sid: string) => host.querySelector(`[data-session-id="${sid}"]`)?.getAttribute("data-mc-status");
+  expect(status(REVIEWERS)).toBe("working");
+  expect(status(SHIPPER)).toBe("shipping");
+  expect(status(STALLED)).toBe("dormant");
+  await unmount();
+});
+
+test("the board and /sessions take the rail's split for the same rows", async () => {
+  const { placeInboxRows } = await import("../../store/inboxStore");
+  const { splitStatusBands } = await import("../../lib/statusBands");
+  const { rowActivity, placedStatusOf } = await import("../../lib/railActivity");
+  const { railRowPlacement } = await import("../../store/inboxStore");
+  const st = useInboxStore.getState();
+  const placed = placeInboxRows(st as any, { now: NOW });
+  const bands = splitStatusBands(placed, { queued: new Set(), pendingSendIds: new Set(), now: NOW, activityOf: (row) => rowActivity(st, row, NOW).state });
+  expect(bands.working.map((t) => t.session._id)).toContain(REVIEWERS);
+  expect(bands.shipping.map((t) => t.session._id).sort()).toEqual([SHIPPER, FAILED, HELD].sort());
+  expect(bands.dormant.map((t) => t.session._id)).toContain(STALLED);
+  // /sessions, the window list and the activity feed read placedStatusOf.
+  const row = st.sessions[SHIPPER];
+  expect(placedStatusOf(st, { row, placement: railRowPlacement(row, NOW), now: NOW })).toBe("shipping");
 });
 
 test("the keyboard walk visits Working, Shipping and Sleeping in the order they draw", async () => {
   const { host, unmount } = await mountInbox();
   const split = useInboxStore.getState().dormantSplitNav!;
   expect([...split.working]).toEqual([REVIEWERS]);
-  expect([...split.shipping].sort()).toEqual([SHIPPER, FAILED].sort());
+  expect([...split.shipping].sort()).toEqual([SHIPPER, FAILED, HELD].sort());
   const drawn = [...sectionIds(host, "working"), ...sectionIds(host, "shipping"), ...sectionIds(host, "dormant")];
   const walked = computeVisualOrder(useInboxStore.getState() as any).map((s) => s._id);
   expect(walked).toEqual(drawn);

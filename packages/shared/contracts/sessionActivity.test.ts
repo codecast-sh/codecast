@@ -11,8 +11,11 @@ const timed = (id: string, run_at: number, status = "scheduled") => ({ id, task:
 const event = (event_type: string, pr_number?: number, status = "scheduled") => ({ id: event_type, task: { status, schedule_type: "event", event_filter: { event_type, pr_number } } });
 
 type Row = { id: string } & DormantTriggerRow;
+// A row whose daemon is heartbeating and reported its open work a minute ago,
+// so the report vouches for what it names.
+const LIVE = { updated_at: NOW - 60_000, last_heartbeat: NOW - 5_000, open_tasks_at: NOW - 60_000 };
 const act = (over: Partial<SessionActivityInput<Row>> & { row?: SessionActivityInput<Row>["row"] }) =>
-  sessionActivity<Row>({ row: { updated_at: NOW - 60_000 }, triggers: [], now: NOW, ...over });
+  sessionActivity<Row>({ triggers: [], now: NOW, ...over, row: { ...LIVE, ...over.row } });
 
 const agent = (description: string) => ({ kind: "agent", description });
 const shell = (command: string, description?: string) => ({ kind: "background", command, description });
@@ -256,15 +259,52 @@ describe("sleeping: only a wait stands", () => {
 });
 
 describe("childrenRunningOf", () => {
+  const alive = { updated_at: NOW - 30_000, last_heartbeat: NOW - 5_000 };
   test("counts children with an active status or still producing", () => {
     expect(childrenRunningOf([
-      { agent_status: "working" },
-      { agent_status: "compacting" },
-      { agent_status: "idle", producing_until: NOW + 1 },
-      { agent_status: "idle", producing_until: NOW - 1 },
-      { agent_status: "stopped" },
-      {},
+      { ...alive, agent_status: "working" },
+      { ...alive, agent_status: "compacting" },
+      { ...alive, agent_status: "idle", producing_until: NOW + 1 },
+      { ...alive, agent_status: "idle", producing_until: NOW - 1 },
+      { ...alive, agent_status: "stopped" },
+      { ...alive },
     ], NOW)).toBe(3);
+  });
+
+  test("a child counts only while it is alive and not closed", () => {
+    // Its machine died: the row still says working, but its heartbeat lapsed.
+    expect(childrenRunningOf([{ agent_status: "working", updated_at: NOW - 30_000, last_heartbeat: NOW - 3 * HOUR }], NOW)).toBe(0);
+    expect(childrenRunningOf([{ agent_status: "working", updated_at: NOW - 30_000 }], NOW)).toBe(0);
+    expect(childrenRunningOf([{ ...alive, agent_status: "working", inbox_killed_at: NOW - 1_000 }], NOW)).toBe(0);
+    expect(childrenRunningOf([{ ...alive, agent_status: "working", inbox_dismissed_at: NOW - 1_000 }], NOW)).toBe(0);
+    // A working status the daemon stopped refreshing decays (the trust rule), whatever the heartbeat.
+    expect(childrenRunningOf([{ agent_status: "working", updated_at: NOW - 3 * HOUR, last_heartbeat: NOW - 5_000 }], NOW)).toBe(0);
+  });
+
+  test("a parent whose only worker died reads Sleeping, not Working", () => {
+    const dead = [{ agent_status: "working", updated_at: NOW - 30_000, last_heartbeat: NOW - 3 * HOUR }];
+    expect(act({ childrenRunning: childrenRunningOf(dead, NOW), childWork: ["Implement the rail"] }).state).toBe("sleeping");
+  });
+});
+
+describe("open background work counts only while the daemon vouches for it", () => {
+  const work = { open_tasks: [agent("Review the diff"), shell("bun test")] };
+  test("a report from a machine that stopped heartbeating is not work", () => {
+    expect(act({ row: work }).state).toBe("working");
+    expect(act({ row: { ...work, last_heartbeat: NOW - 3 * HOUR } }).state).toBe("sleeping");
+    expect(act({ row: { ...work, last_heartbeat: null } }).state).toBe("sleeping");
+    // A report never published is no report.
+    expect(act({ row: { ...work, open_tasks_at: null } }).state).toBe("sleeping");
+    // Nor does a dead machine's leftover deploy watch read Shipping.
+    expect(act({ row: { open_tasks: [shell("gh pr checks 263 --watch")], last_heartbeat: NOW - 3 * HOUR } }).state).toBe("sleeping");
+  });
+});
+
+describe("a ship step held for a person", () => {
+  test("keeps Shipping's place and says the hold, with who holds it", () => {
+    expect(act({ ship: { stage: "review", holder: "you", words: "Your call" } })).toMatchObject({ state: "shipping", stage: "review", words: "Your call", holder: "you" });
+    expect(act({ ship: { stage: "deploy", holder: "other", words: "Waiting for green main" } })).toMatchObject({ words: "Waiting for green main", holder: "other" });
+    expect(act({ ship: { stage: "ci", pr: "#263" } })).toEqual({ state: "shipping", stage: "ci", failed: false, words: "CI running · #263", pr: "#263" });
   });
 });
 

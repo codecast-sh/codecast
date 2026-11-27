@@ -51,8 +51,7 @@ import { TriggerRunList, useTriggerRuns, openRunInStore, type TriggerRun } from 
 import { TriggerRowItem, TriggerHomeHeader, SchedChildArrow, SchedHealthDot, SchedFireBadge } from "./TriggerRow";
 import { DormantClaimRow } from "./inbox/DormantWakeRows";
 import { ActivityUnderLine, type RowActivity } from "./inbox/ActivityLine";
-import { activityFactsSig, rowActivity } from "../lib/railActivity";
-import { sessionShipMap } from "../hooks/useSessionShipState";
+import { dormantSplitSig, rowActivity } from "../lib/railActivity";
 import { WAKE_BADGE, RUNNING_BADGE_TONE } from "../lib/triggerBadges";
 import { schedAccent, type SchedAccent } from "../lib/triggerAccent";
 // Who is speaking on each row (docs/architecture/session-characters.md S3).
@@ -1776,11 +1775,6 @@ function SessionListPanelImpl({
     s => resolveInboxViewMode(s),
     // Open browser tabs per session (the Browser view): changes only when a daemon reports.
     s => s.browserTabs,
-    // What splits Dormant into Working, Shipping and Sleeping (lib/railActivity):
-    // the row facts it reads, as a signature, and every session's ship state
-    // (one map ref, rebuilt only when runs, deploys or reach change).
-    s => activityFactsSig(s.sessions),
-    s => sessionShipMap(s as never),
   ]);
   const titlebarRef = useTitlebarHead<HTMLDivElement>();
   const router = useRouter();
@@ -2211,8 +2205,10 @@ function SessionListPanelImpl({
   // draws under Working, its change on the way to live under Shipping, and
   // only a wait stays in Sleeping. Placement is untouched. The keyboard walk
   // reads the same split (setDormantSplitNav, published below).
-  const activitySig = s.sessions ? activityFactsSig(s.sessions) : "";
-  const shipMapRef = sessionShipMap(s as never);
+  // The panel wakes on the split's own signature (each Dormant row's words,
+  // stage and wake, lib/railActivity activitySig), never on a run, deploy or
+  // worker heartbeat that changes none of them.
+  const splitSig = useInboxStore((st) => dormantSplitSig(st, statusDormant, coarseNow, scheduleBarRowsFor));
   const dormantSplit = useMemo(() => {
     const st = useInboxStore.getState();
     const activity = new Map<string, RowActivity>();
@@ -2220,13 +2216,13 @@ function SessionListPanelImpl({
     const shipping: InboxSession[] = [];
     const sleeping: InboxSession[] = [];
     for (const row of statusDormant) {
-      const a = rowActivity(st as never, row, coarseNow, scheduleBarRowsFor(row));
+      const a = rowActivity(st, row, coarseNow, scheduleBarRowsFor(row));
       activity.set(row._id, a);
       (a.state === "working" ? working : a.state === "shipping" ? shipping : sleeping).push(row);
     }
     return { activity, working, shipping, sleeping };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- the signatures are the deps
-  }, [statusDormant, coarseNow, schedulePartition, activitySig, shipMapRef, scheduleBarRowsFor]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the split's signature is the dep
+  }, [statusDormant, splitSig]);
   const railWorking = useMemo(
     () => (dormantSplit.working.length ? byPriority([...filteredWorking, ...dormantSplit.working]) : statusWorking),
     [dormantSplit.working, byPriority, filteredWorking, statusWorking],
@@ -2239,10 +2235,13 @@ function SessionListPanelImpl({
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the id signature is the dep
   }, [dormantNavSig]);
-  // The header numbers once Dormant is split: a moved card takes the rows
-  // nested under it (and counted in Dormant) along, as countOf counts them.
+  useMountEffect(() => () => useInboxStore.getState().setDormantSplitNav(null));
+  // The header numbers once Dormant is split: a moved card takes along the
+  // rows nested under it that Dormant's count holds, the ones the "Which ones"
+  // filter keeps (fullRowsCounts' own rule).
   const movedWeight = (rows: InboxSession[]) => showSubagents
-    ? rows.reduce((n, r) => n + 1 + (globalSubByParent.get(r._id) ?? []).filter((sub) => placed.nestedSectionOf.get(sub._id) === "dormant").length, 0)
+    ? rows.reduce((n, r) => n + 1 + (globalSubByParent.get(r._id) ?? []).filter((sub) =>
+      placed.nestedSectionOf.get(sub._id) === "dormant" && (sub._id === activeSessionId || keptSubIds.has(sub._id))).length, 0)
     : rows.length;
   const plus = (base: number | undefined, n: number) => (base === undefined ? undefined : base + n);
   const filteredDismissed = useMemo(() => {
@@ -3732,7 +3731,7 @@ function SessionListPanelImpl({
             it and when. */}
         <div className="inbox-compact" data-dormant-section>
           <div data-sv-rail>
-            {renderSection("Shipping", dormantSplit.shipping, "text-sol-text-muted", "shipping", undefined, { key: "shipping", floor: true, count: movedWeight(dormantSplit.shipping) })}
+            {renderSection("Shipping", dormantSplit.shipping, "text-sol-text-muted", "shipping", undefined, { key: "shipping", floor: true, count: countOf(statusDormant, dormant, "dormant") === undefined ? undefined : movedWeight(dormantSplit.shipping) })}
           </div>
         </div>
         <div className="inbox-compact" data-dormant-section>

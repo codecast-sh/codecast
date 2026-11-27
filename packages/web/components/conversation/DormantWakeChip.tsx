@@ -3,14 +3,13 @@
 // carries (components/inbox/ActivityLine), beside the status pill. Working
 // says what its own work is, Shipping where its change is, Sleeping what wakes
 // it.
-import { useTrackedStore, useInboxStore, placeInboxRows, waitsOnViewer, type InboxSession } from "../../store/inboxStore";
+import { useTrackedStore, useInboxStore, placeInboxRows, type InboxSession } from "../../store/inboxStore";
 import { rowSigExcluding } from "../../store/wakeSig";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useTriggers } from "../../hooks/useSyncTriggers";
-import { sessionShipMap } from "../../hooks/useSessionShipState";
 import type { TaskRow } from "../triggerTasks";
 import { useSessionTriggerRows } from "../../hooks/useDormantWake";
-import { activityFactsSig, rowActivity } from "../../lib/railActivity";
+import { activitySig, rowActivity } from "../../lib/railActivity";
 import { ActivityChip } from "../inbox/ActivityLine";
 
 const LIVENESS_FIELDS = new Set(["updated_at", "last_heartbeat", "last_metrics_at", "last_active_at", "last_message_at"]);
@@ -24,22 +23,23 @@ export function DormantWakeChip({ conversationId }: { conversationId: string | u
   const now = useCoarseNow(30_000);
   const session = conversationId ? s.sessions[conversationId] : undefined;
   if (!session) return null;
-  // The inbox's own placement (riders take their lead's bucket), read the way
-  // the panel reads it so the call lands on its memo.
-  const bucket = placeInboxRows(s, { focusedId: s.currentSessionId ?? null, now }).placements.get(session._id)?.bucket;
-  const meId = s.currentUser?._id?.toString?.() ?? null;
-  const dormant = bucket === "dormant" || (bucket === "needs_input" && !waitsOnViewer(session, meId));
-  return dormant ? <DormantWakeChipBody session={session} /> : null;
+  // Only a row the rail draws in the sections the split makes (its Dormant
+  // list: the bucket, plus a wait the viewer cannot answer), read off the
+  // panel's own placement so the call lands on its memo. A row the rail draws
+  // under Needs You carries no chip.
+  const drawn = placeInboxRows(s, { focusedId: s.currentSessionId ?? null, now }).dormant.some((r) => r._id === session._id);
+  return drawn ? <DormantWakeChipBody session={session} /> : null;
 }
 
 function DormantWakeChipBody({ session }: { session: InboxSession }) {
   "use no memo"; // rowActivity reads the store's runs, workers and rosters through getState; compiled, the words would freeze
   const { tasks, ready } = useTriggers();
   const rows = useSessionTriggerRows(session, (ready || tasks.length > 0 ? tasks : undefined) as TaskRow[] | undefined);
-  // Wake when the facts the split reads move: the workers' rows and the ship state.
-  useTrackedStore([(st) => activityFactsSig(st.sessions), (st) => sessionShipMap(st as never)]);
   const now = useCoarseNow(30_000);
-  const activity = rowActivity(useInboxStore.getState() as never, session, now, rows);
+  // Wake when what the chip says moves (its activity's signature), never on a
+  // run, deploy or worker heartbeat that leaves it the same.
+  useInboxStore((st) => activitySig(rowActivity(st, session, now, rows)));
+  const activity = rowActivity(useInboxStore.getState(), session, now, rows);
   return (
     <ActivityChip
       session={session}
