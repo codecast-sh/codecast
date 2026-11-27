@@ -431,12 +431,14 @@ export const CLIENT_SYNC_REGISTRY = {
   // place differently, so a field lock could never retire; the server's push
   // settles the paint, and a refused write is put back by its caller
   // (store/prioritiesSlice). steps, counts, sessions, links (each step's
-  // sessions and plans) and plan are joined objects.
+  // sessions and plans), mapped_links (a teammate's, past the link budget)
+  // and plan are joined objects: a push that changes only one of them must
+  // still land (store/__tests__/prioritiesSync.test.ts).
   priorities: {
     persistence: { kind: "collection", key: "priorities" },
     indexes: "_id, workspace",
     hydration: { phase: "deferred" },
-    sync: { deepFields: ["steps", "counts", "sessions", "links", "plan"] },
+    sync: { deepFields: ["steps", "counts", "sessions", "links", "mapped_links", "plan"] },
     feeds: ["priorities.list"],
   },
   // The rank, id and title of each of the viewer's active priorities in
