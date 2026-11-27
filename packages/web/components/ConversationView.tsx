@@ -4518,7 +4518,8 @@ const ConversationViewInner = (
                   if (e.key === "Enter") { e.currentTarget.blur(); }
                   if (e.key === "Escape") { useInboxStore.setState({ renamingSessionId: null }); }
                 }}
-                className="text-xs sm:text-sm font-medium text-sol-text-secondary flex-1 min-w-0 bg-transparent border-b border-sol-cyan focus:outline-none"
+                data-cc-conv-rename
+                className="text-xs sm:text-sm font-medium text-sol-text-secondary flex-1 bg-transparent border-b border-sol-cyan focus:outline-none"
               />
             ) : (
               <ConversationHeaderTitle

@@ -154,6 +154,10 @@
   min-width: clamp(6rem, 32cqi, 22rem);
 }
 [data-sv-convhead] [data-squeeze~="7"] .cc-panel__title { min-width: 0; }
+/* A rename in progress never yields: with no floor the input shrank to
+   nothing beside the chips, the row never overflowed, and the squeeze never
+   shed anything for it, so the person typed into an invisible box. */
+[data-sv-convhead] [data-cc-conv-rename] { min-width: clamp(10rem, 40cqi, 24rem); }
 /* Past the title, the action cluster gives way from its start, never the
    menu at its end (see the level ladder above). The title still yields
    first: its shrink weight dwarfs the cluster's. */

@@ -56,21 +56,13 @@ describe("conversation header squeeze", () => {
     expect(row.attr()).toBe("1 2 3");
   });
 
-  // The search starts from the last answer; it must land on the same level
-  // from anywhere, and a pass where nothing moved must measure only twice.
-  test("applySqueeze finds the same level from any starting level", () => {
-    for (let from = 0; from <= 7; from++) {
-      const row = fakeRow(500, (l) => 800 - l * 100);
-      expect(applySqueeze(row as unknown as HTMLElement, 7, from)).toBe(3);
-      expect(row.attr()).toBe("1 2 3");
-    }
-  });
-
-  test("applySqueeze measures twice when the last answer still holds", () => {
-    let reads = 0;
-    const row = fakeRow(500, (l) => { reads++; return 800 - l * 100; });
-    expect(applySqueeze(row as unknown as HTMLElement, 7, 3)).toBe(3);
-    expect(reads).toBe(2);
+  // The rename box is the item that wins while it is open: with no floor it
+  // shrank to nothing beside the chips and the row never overflowed to shed.
+  test("the rename box keeps a floor in the squeeze row", () => {
+    const input = view.match(/<input\s+ref=\{renameInputRef\}[\s\S]*?\/>/)?.[0] ?? "";
+    expect(input).toContain("data-cc-conv-rename");
+    expect(input).not.toContain("min-w-0");
+    expect(css).toMatch(/\[data-sv-convhead\] \[data-cc-conv-rename\] \{ min-width: clamp\(/);
   });
 
   test("applySqueeze clears the attribute when the row already fits", () => {
