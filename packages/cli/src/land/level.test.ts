@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { levelCheckout } from "./level.js";
-import { replayOnto } from "./replay.js";
+import { isAncestor, replayOnto } from "./replay.js";
 
 const dirs: string[] = [];
 afterEach(() => { for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true }); });
@@ -338,5 +338,23 @@ describe("a level that moves the branch last (--ref-last, the personal Ship's La
     expect(r.ok).toBe(false);
     expect(sh(shared, "rev-parse", "HEAD")).toBe(committed);
     expect([read(shared, "a.txt"), read(shared, "b.txt")]).toEqual(["a\n", "one\ntwo\nthree mine\n"]);
+  });
+});
+
+describe("isAncestor", () => {
+  test("a commit is its own ancestor, an older one is, a newer one is not, and git's own failure is never a no", async () => {
+    const { shared, upstream } = setup({ "a.txt": "a\n" });
+    const base = sh(shared, "rev-parse", "HEAD");
+    upstream({ "a.txt": "A\n" });
+    const tip = sh(shared, "rev-parse", "origin/main");
+    expect(await isAncestor(shared, base, base)).toBe(true);
+    expect(await isAncestor(shared, base, tip)).toBe(true);
+    expect(await isAncestor(shared, tip, base)).toBe(false);
+    // ct-102217: a commit the checkout lacks read as "not an ancestor", and the run called its worktree reset.
+    const missing = "e04b9a619ca51c70a9f8edc6a769d3f0add70f3f";
+    expect(await isAncestor(shared, missing, missing)).toBe(true);
+    const err = await isAncestor(shared, missing, tip).then(() => null, (e: Error) => e.message);
+    expect(err).toContain("git could not tell whether e04b9a619c");
+    expect(err).toMatch(/not a valid (commit|object) name|bad object/i);
   });
 });

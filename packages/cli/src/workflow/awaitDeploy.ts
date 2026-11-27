@@ -332,7 +332,8 @@ export async function awaitDeploy(input: { sha: string; base: string; plan: Depl
         states.set(d.target, s);
       }
       const failed = [...states.values()].filter((s): s is Extract<TargetState, { state: "failed" }> => s.state === "failed");
-      if (failed.length) return { code: 1, line: `The deploy that carried ${short} failed: ${failed.map((s) => `${s.target} ${s.deploy.short_id}${s.deploy.note ? ` (${s.deploy.note.split("\n")[0]})` : ""}`).join(", ")}.` };
+      // The stop is not final: a later deploy that takes the commit live ends the run at Live (convex deployCarries.completeLiveRuns).
+      if (failed.length) return { code: 1, line: `The deploy that carried ${short} failed: ${failed.map((s) => `${s.target} ${s.deploy.short_id}${s.deploy.note ? ` (${s.deploy.note.split("\n")[0]})` : ""}`).join(", ")}. A later deploy that takes it live ends this run at Live.` };
       // Once a target's release has ended with no deploy carrying the commit, it will get none.
       const unsent = duties.filter((d) => ended.get(d.target) && states.get(d.target)!.state === "waiting");
       if (unsent.length) {

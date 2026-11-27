@@ -21,8 +21,11 @@ const COMMIT_REF = /^([^/\s#@]+\/[^/\s#@]+)@([0-9a-f]{7,40})$/i;
 /** A full sha alone: a run knows the commit it merged but not the repository's name, which the commit's own row carries. */
 const BARE_SHA = /^[0-9a-f]{40}$/i;
 
-/** The deploys of each target the change touches, with a place on main for every one that went out after the live one. */
-async function reachOf(ctx: any, userId: any, repository: string, change: ReachChange, files: string[] | null): Promise<DeployReach | null> {
+/**
+ * The deploys of each target the change touches, with a place on main for every one that went out after the live one.
+ * `canRead` says which workspaces' targets count: the viewer's (a query), or the run's own (deployCarries.liveStoppedRuns).
+ */
+export async function reachOf(ctx: any, canRead: (workspace: string) => Promise<boolean>, repository: string, change: ReachChange, files: string[] | null): Promise<DeployReach | null> {
   const rows: Doc<"deploy_targets">[] = (await ctx.db.query("deploy_targets").withIndex("by_repository_name", (q: any) => q.eq("repository", repository)).take(50))
     .filter((t: Doc<"deploy_targets">) => !t.retired_at);
   const access = new Map<string, boolean>();
@@ -37,7 +40,7 @@ async function reachOf(ctx: any, userId: any, repository: string, change: ReachC
   const targets: Array<{ target: string; deploys: ReachDeploy[] }> = [];
   for (const t of rows) {
     if (someNamePaths && t.paths.length === 0) continue;
-    if (!access.has(t.workspace)) access.set(t.workspace, await workspaceGrantsAccess(ctx, userId, t.workspace));
+    if (!access.has(t.workspace)) access.set(t.workspace, await canRead(t.workspace));
     if (!access.get(t.workspace) || !commitTouchesTarget(t.paths, files)) continue;
     // Reach reads back to the first live deploy that held the change; an older one only names which deploy took it out.
     const deploys = (await targetDeploys(ctx, t.workspace, t.name, REACH_DEPLOYS)).filter((d) => !d.repository || d.repository === repository);
@@ -84,7 +87,7 @@ export const get = query({
       const sha = row.merge_commit_sha ?? null;
       const commit = sha ? await commitBySha(ctx, repository, sha) : null;
       const files = row.files?.length ? row.files.map((f) => f.filename) : commit?.files?.map((f) => f.filename) ?? null;
-      const reach = await reachOf(ctx, userId, repository, { sha, main_at: commit?.main_at ?? null, merged_at: row.merged_at ?? null }, files);
+      const reach = await reachOf(ctx, (w) => workspaceGrantsAccess(ctx, userId, w), repository, { sha, main_at: commit?.main_at ?? null, merged_at: row.merged_at ?? null }, files);
       return reach ? { ...reach, _id: ref, ref } : null;
     }
     const c = COMMIT_REF.exec(ref);
@@ -119,7 +122,7 @@ async function commitReach(ctx: any, userId: any, ref: string, sha: string, repo
     const mine = repository ? rows : rows.filter((r) => r.repository && normalizeRepository(r.repository) === repo);
     const commit = mine.find((r) => r.main_at != null);
     if (!commit || !(await accessibleCommits(ctx, userId, mine)).length) continue;
-    const reach = await reachOf(ctx, userId, repo, { sha: commit.sha, main_at: commit.main_at!, merged_at: commit.main_at! }, commit.files?.map((f) => f.filename) ?? null);
+    const reach = await reachOf(ctx, (w) => workspaceGrantsAccess(ctx, userId, w), repo, { sha: commit.sha, main_at: commit.main_at!, merged_at: commit.main_at! }, commit.files?.map((f) => f.filename) ?? null);
     if (reach) return { ...reach, _id: ref, ref };
   }
   return null;

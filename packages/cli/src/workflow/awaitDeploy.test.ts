@@ -327,7 +327,7 @@ describe("awaitDeploy", () => {
 
   test("a failed deploy that would carry it ends the wait at once", async () => {
     const f = fake(() => [{ name: "backend", history: [{ ...dp("dp-7", "failed"), note: "convex push refused\nmore" }] }]);
-    expect(await awaitDeploy({ sha: SHA, base: "main", plan: deployDuties(declared, ["api/b.ts"]), intervalMs: MIN }, f.io)).toEqual({ code: 1, line: "The deploy that carried 1a2b3c4 failed: backend dp-7 (convex push refused)." });
+    expect(await awaitDeploy({ sha: SHA, base: "main", plan: deployDuties(declared, ["api/b.ts"]), intervalMs: MIN }, f.io)).toEqual({ code: 1, line: "The deploy that carried 1a2b3c4 failed: backend dp-7 (convex push refused). A later deploy that takes it live ends this run at Live." });
   });
 
   test("a release that ended without sending a target fails it rather than wait for its deadline", async () => {
@@ -359,7 +359,7 @@ describe("awaitDeploy", () => {
 
   test("a gated send that failed at a green head is a real failure", async () => {
     const f = fake((tick) => [{ name: "cli", history: tick >= 1 ? [{ ...dp("dp-3", "failed"), note: "cut failed" }] : [] }], { send: async () => ({ code: 1, last: "FAIL" }) });
-    expect(await awaitDeploy({ sha: SHA, base: "main", plan: deployDuties(declared, ["cli/c.ts"]), intervalMs: MIN }, f.io)).toEqual({ code: 1, line: "The deploy that carried 1a2b3c4 failed: cli dp-3 (cut failed)." });
+    expect(await awaitDeploy({ sha: SHA, base: "main", plan: deployDuties(declared, ["cli/c.ts"]), intervalMs: MIN }, f.io)).toEqual({ code: 1, line: "The deploy that carried 1a2b3c4 failed: cli dp-3 (cut failed). A later deploy that takes it live ends this run at Live." });
   });
 
   test("a target held by its after target starts its own deadline only once that one is live", async () => {

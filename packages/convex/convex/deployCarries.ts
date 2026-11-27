@@ -1,12 +1,22 @@
 // What a deploy carried: the shipped fixes a workspace merged over the merge
 // window, and the rule that assigns them to the deploy that sent them out. Read
 // by deploys.ts (a marker's carries, the waiting set) and by deploysBackfill.ts.
+// A deploy that goes live also completes the change runs that stopped at Deploy
+// waiting for it (completeLiveRuns).
 
+import { v } from "convex/values";
+import { internalMutation } from "./functions";
 import type { Doc, Id } from "./_generated/dataModel";
 import { extractTaskShortIds } from "./lib/gitRefs";
 import type { DeployRow } from "@codecast/shared/contracts/causeHistory";
-import { mainAtOf } from "./deployTargetsState";
+import { formatSessionMessage } from "@codecast/shared/contracts";
+import { commitBySha, mainAtOf } from "./deployTargetsState";
 import { DAY, carriedBy, normalizeDeployTarget, type DeployMerge } from "@codecast/shared/contracts/deploys";
+import { reachOf } from "./deployReach";
+import { runWorkflowOf } from "./lib/runGraph";
+import { patchTask } from "./lib/taskWrite";
+import { enqueuePendingMessage } from "./pendingMessages";
+import { settleRunTask } from "./workflow_runs";
 
 /** How far back merges are read for the waiting set and a marker's carries. */
 const MERGE_WINDOW_MS = 90 * DAY;
@@ -214,3 +224,158 @@ export async function carriesForMarker(ctx: any, row: Doc<"deploys">, now: numbe
   }
   return carries.sort((a, b) => (a.merged_at ?? 0) - (b.merged_at ?? 0));
 }
+
+// ── runs a later deploy took live ────────────────────────────────────────────
+
+/** How long after it stopped a run at Deploy is still completed by a deploy that carries its change. */
+const STOPPED_RUN_WINDOW_MS = 14 * DAY;
+/**
+ * Commits of a live deploy's range whose runs it reads, newest first. A range is the commits since the target's
+ * previous live deploy, normally a handful; a target's first placed deploy has no lower bound, and past this cap its
+ * oldest commits are left out. The commit at the deploy's own sha is always read.
+ */
+const STOPPED_RUN_COMMITS_MAX = 500;
+
+type StoppedRun = Pick<Doc<"workflow_runs">, "status" | "current_node_id" | "merge" | "node_statuses">;
+
+/**
+ * The Deploy segment a run stopped in (`deploy`, `direct_deploy`): its change merged, its wait failed, and the run
+ * ended at the segment's Deploy failed or Deploy stuck. Null for a run that stopped anywhere else.
+ */
+export function deployStopOf(run: StoppedRun): string | null {
+  if (run.status !== "failed" || !run.merge?.sha) return null;
+  const m = /^(.+)__(failed|stuck)$/.exec(run.current_node_id ?? "");
+  if (!m) return null;
+  return run.node_statuses.some((n) => n.node_id === `${m[1]}__wait` && n.status === "failed") ? m[1] : null;
+}
+
+type GraphShape = { nodes: Array<{ id: string; type: string; script?: string }>; edges: Array<{ from: string; to: string; condition?: string }> };
+
+/**
+ * Where the run would have gone had its Deploy wait seen the change live: the segment's Live and the exit right after
+ * it. Null when the segment's wait is not `cast flow await-deploy`, or Live leads on to a station that never ran.
+ */
+export function liveExitOf(graph: GraphShape, prefix: string): { live: string; exit: string } | null {
+  const wait = graph.nodes.find((n) => n.id === `${prefix}__wait`);
+  if (!wait?.script?.includes("await-deploy")) return null;
+  const live = graph.edges.find((e) => e.from === wait.id && (e.condition ?? "").trim() === "outcome = success")?.to;
+  const liveNode = live ? graph.nodes.find((n) => n.id === live) : null;
+  if (!live || !liveNode) return null;
+  if (liveNode.type === "exit") return { live, exit: live };
+  const next = graph.edges.filter((e) => e.from === live);
+  const exit = next.length === 1 && !next[0].condition ? graph.nodes.find((n) => n.id === next[0].to) : null;
+  return exit?.type === "exit" ? { live, exit: exit.id } : null;
+}
+
+/**
+ * The run as its Deploy wait would have left it had it seen the change live: the wait completed with the live
+ * deploys, the stop it ended at gone, the segment's Live and the exit after it completed.
+ */
+export function liveRunPatch(run: StoppedRun, prefix: string, to: { live: string; exit: string }, line: string, now: number): Pick<Doc<"workflow_runs">, "status" | "current_node_id" | "node_statuses"> {
+  const statuses = run.node_statuses
+    .filter((n) => n.node_id !== run.current_node_id && n.node_id !== to.live && n.node_id !== to.exit)
+    .map((n) => (n.node_id === `${prefix}__wait` ? { ...n, status: "completed" as const, outcome: "success", result_preview: line, completed_at: now } : n));
+  const done = (node_id: string, result?: string) => ({ node_id, status: "completed" as const, outcome: "success", ...(result ? { result_preview: result } : {}), started_at: now, completed_at: now });
+  statuses.push(done(to.live, to.live === to.exit ? undefined : JSON.stringify({ exit: "live" })));
+  if (to.exit !== to.live) statuses.push(done(to.exit));
+  return { status: "completed", current_node_id: to.exit, node_statuses: statuses };
+}
+
+/**
+ * A deploy went live: every run of its workspace that stopped at Deploy (failed or stuck, its change merged) and whose
+ * change is now live on every target it touches is over at Live, as its wait would have ended had it seen this
+ * deploy. Its task settles as a completed run's does, the blocker its stop left on the task goes, and the session
+ * that heard it stop hears that it is over, once. A run that stopped anywhere else, or whose change some target still
+ * lacks, stays as it is. Returns the runs completed.
+ */
+export async function completeLiveRuns(ctx: any, deployId: Id<"deploys">, now = Date.now()): Promise<Id<"workflow_runs">[]> {
+  const d: Doc<"deploys"> | null = await ctx.db.get(deployId);
+  if (!d || d.status !== "live" || !d.sha || !d.repository) return [];
+  const runs = await runsMergedInto(ctx, d);
+  const done: Id<"workflow_runs">[] = [];
+  for (const run of runs) {
+    if (run.updated_at < now - STOPPED_RUN_WINDOW_MS) continue;
+    const prefix = deployStopOf(run);
+    // A run a person queued to resume is theirs to finish.
+    if (!prefix || run.resume_queued) continue;
+    // This deploy holds the change (its own commit, or a cut on main at or after the merge's place); else it is not
+    // what took the change live, and the deploy that does answers for it.
+    const commit = await commitBySha(ctx, d.repository, run.merge!.sha);
+    if (!commit?.main_at || !(sameSha(d.sha, commit.sha) || (d.cut_at != null && commit.main_at <= d.cut_at))) continue;
+    const files = commit.files?.map((f) => f.filename) ?? null;
+    const reach = await reachOf(ctx, async (w) => w === run.workspace, d.repository, { sha: commit.sha, main_at: commit.main_at, merged_at: commit.main_at }, files);
+    if (reach?.state !== "live") continue;
+    const graph = await runWorkflowOf(ctx, run);
+    const to = graph ? liveExitOf(graph as unknown as GraphShape, prefix) : null;
+    if (!to) continue;
+    const live = reach.targets.filter((t) => t.state === "live" && t.deploy);
+    const line = `Live: ${commit.sha.slice(0, 7)} on ${live.map((t) => `${t.target} ${t.deploy!.short_id}`).join(", ")}.`;
+    const patch = liveRunPatch(run, prefix, to, line, now);
+    await ctx.db.patch(run._id, { ...patch, fail_reason: undefined, updated_at: now });
+    done.push(run._id);
+    const task = run.task_id ? await ctx.db.get(run.task_id) : null;
+    if (task) {
+      // The stop marked the task blocked with its reason (settleRunTask); that reason no longer stands.
+      if (run.fail_reason && task.execution_concerns === run.fail_reason) {
+        await patchTask(ctx, task, { execution_concerns: undefined, ...(task.execution_status === "blocked" ? { execution_status: undefined } : {}), updated_at: now });
+      }
+      await settleRunTask(ctx, { ...run, ...patch }, "completed", undefined, now);
+    }
+    await tellStoppedSession(ctx, run, task, graph?.label || graph?.name || "change", line);
+  }
+  return done;
+}
+
+/**
+ * The failed runs of a live deploy's workspace that merged a commit it carries: the commit at its own sha, and when it
+ * is placed on main the commits after its target's previous live deploy and at or before its cut, found by merge sha.
+ */
+async function runsMergedInto(ctx: any, d: Doc<"deploys">): Promise<Doc<"workflow_runs">[]> {
+  // A run's merge.sha is the full sha its merge pushed; a deploy's own sha may be short, so each is read as a prefix.
+  const shas = new Set<string>([d.sha!.toLowerCase()]);
+  if (d.cut_at != null) {
+    const from = await previousCut(ctx, d);
+    const range: Doc<"commits">[] = await ctx.db
+      .query("commits")
+      .withIndex("by_repository_main", (q: any) => (from != null ? q.eq("repository", d.repository).gt("main_at", from) : q.eq("repository", d.repository)).lte("main_at", d.cut_at))
+      .order("desc")
+      .take(STOPPED_RUN_COMMITS_MAX);
+    for (const c of range) shas.add(c.sha.toLowerCase());
+  }
+  const runs = new Map<string, Doc<"workflow_runs">>();
+  for (const s of shas) {
+    const rows: Doc<"workflow_runs">[] = await ctx.db
+      .query("workflow_runs")
+      .withIndex("by_workspace_merge_sha", (q: any) => q.eq("workspace", d.workspace).gte("merge.sha", s).lt("merge.sha", `${s}~`))
+      .take(20);
+    for (const r of rows) if (r.status === "failed") runs.set(String(r._id), r);
+  }
+  return [...runs.values()];
+}
+
+/**
+ * Tell the session that heard the run stop (the one its runner's end message reached, found by that send's client
+ * id) that the run is over at Live, once. A killed session is left alone, and a stop that reached nobody tells nobody.
+ */
+async function tellStoppedSession(ctx: any, run: Doc<"workflow_runs">, task: Doc<"tasks"> | null, flow: string, line: string): Promise<void> {
+  const candidates = [run.spawner_conversation_id, run.primary_conversation_id, task?.created_from_conversation, ...(task?.conversation_ids ?? []).slice(-5)];
+  const ended = `run:${run._id}:end:`;
+  const clientId = `run:${run._id}:live`;
+  for (const id of new Set(candidates.filter(Boolean).map(String))) {
+    const told = await ctx.db.query("pending_messages").withIndex("by_conversation_client_id", (q: any) => q.eq("conversation_id", id).gte("client_id", ended).lt("client_id", `${ended}~`)).first();
+    if (!told) continue;
+    const again = await ctx.db.query("pending_messages").withIndex("by_conversation_client_id", (q: any) => q.eq("conversation_id", id).eq("client_id", clientId)).first();
+    const conversation = await ctx.db.get(id);
+    if (again || !conversation || conversation.inbox_killed_at) return;
+    const content = `The ${flow} run${task?.short_id ? ` on ${task.short_id}` : ""} is over: Live. ${line} It had stopped at Deploy; a later deploy took the change live. Nothing more is waiting on this session for it.`;
+    // A send refused (a hosted session the run's owner does not own) leaves the run completed all the same.
+    await enqueuePendingMessage(ctx, conversation, run.user_id, { content: formatSessionMessage("unknown", content, { name: "codecast" }), client_id: clientId }).catch(() => {});
+    return;
+  }
+}
+
+/** completeLiveRuns, after the write that took the deploy live (deploys.ts onDeployStatus). */
+export const completeRunsOnLive = internalMutation({
+  args: { deploy: v.id("deploys") },
+  handler: async (ctx, args) => ({ completed: (await completeLiveRuns(ctx, args.deploy)).map(String) }),
+});

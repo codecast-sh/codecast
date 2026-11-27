@@ -630,7 +630,8 @@ async function branchCarry(root: string, runDir: string, before: FrozenChange, h
   let from: string | null = null;
   let nearest = Infinity;
   for (const h of candidates) {
-    if (!(await isAncestor(root, h, head))) continue;
+    // A tip origin held that this checkout no longer has (a reflog entry pruned since) holds nothing here.
+    if (!(await isAncestor(root, h, head).catch(() => false))) continue;
     const ahead = Number(await git(root, ["rev-list", "--count", `${h}..${head}`]));
     if (ahead < nearest) [from, nearest] = [h, ahead];
   }

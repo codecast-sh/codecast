@@ -111,7 +111,7 @@ export function runEndStatus(
 }
 
 /** A run ended: its task's status through the one status path, and the ship notice. */
-async function settleRunTask(ctx: Ctx & { runMutation?: any }, run: any, runStatus: "completed" | "failed" | "running", failReason: string | undefined, now: number) {
+export async function settleRunTask(ctx: Ctx & { runMutation?: any }, run: any, runStatus: "completed" | "failed" | "running", failReason: string | undefined, now: number) {
   const task = await ctx.db.get(run.task_id);
   if (!task) return;
   if (runStatus === "failed") {
