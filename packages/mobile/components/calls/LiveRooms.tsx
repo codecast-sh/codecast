@@ -16,6 +16,7 @@ import { useActiveTeam } from "@/hooks/useWorkspaceArgs";
 import { callsOnInWorkspace } from "@/lib/calls/callsGate";
 import { liveRoomOnlyMine, personalViewerOf } from "@codecast/web/lib/calls/personalCalls";
 import { findSessionRow } from "@codecast/web/lib/calls/findSessionRow";
+import { sessionRoomConversationId } from "@codecast/shared/contracts";
 
 // Live now, phone-shaped: the huddles running anywhere in your teams, listed
 // where you would walk past them. A room is a door — one tap walks into a
@@ -42,17 +43,24 @@ export function useLiveRooms(enabled: boolean): LiveRoomRow[] {
   const myRoomKey = useSyncExternalStore(subscribeCall, () => getCallSnapshot().roomKey, () => null);
   const rows = useLiveRoomRows(myRoomKey);
   const personalViewer = useInboxStore(personalViewerOf);
+  // Whose session each owner-only room is, as "id:owner" pairs (web's
+  // useLiveNowRooms): a session row that lands after its room wakes this.
+  const ownersSig = useInboxStore((st: any) =>
+    personalViewerOf(st) === null
+      ? ""
+      : rows
+          .flatMap((r) => {
+            const id = r.ownerOnly ? sessionRoomConversationId(r.roomKey) : null;
+            return id ? [`${id}:${findSessionRow(st, id)?.user_id ?? ""}`] : [];
+          })
+          .join("|"),
+  );
   return useMemo(() => {
     if (!enabled) return NO_ROWS;
     if (personalViewer === null) return rows;
-    // Whose session: read when the rooms change; an owner's own sessions are in their store.
-    const st = useInboxStore.getState();
-    const ownerOf = (id: string) => {
-      const row = findSessionRow(st, id);
-      return row?.user_id ? String(row.user_id) : null;
-    };
-    return rows.filter((r) => liveRoomOnlyMine(r, personalViewer, ownerOf));
-  }, [enabled, personalViewer, rows]);
+    const owners = new Map(ownersSig ? ownersSig.split("|").map((p) => p.split(":") as [string, string]) : []);
+    return rows.filter((r) => liveRoomOnlyMine(r, personalViewer, (id) => owners.get(id) || null));
+  }, [enabled, personalViewer, rows, ownersSig]);
 }
 
 const NO_ROWS: LiveRoomRow[] = [];
