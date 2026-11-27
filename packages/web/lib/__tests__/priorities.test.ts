@@ -4,7 +4,7 @@
 import { describe, expect, test } from "bun:test";
 import type { PriorityStep } from "@codecast/shared/contracts/priorities";
 import {
-  behindLabel, listMeta, listRows, passDue, milestoneStartHref, nextPassLabel, ownerGroups, paintMerge, paintMove, paintSessionMove, paintSessionNotThis, paintStatus, paintTier, pastBadge, prioritySig,
+  behindLabel, listMeta, listRows, passDue, milestoneStartHref, nextPassLabel, ownerGroups, paintDrop, paintMerge, paintMove, paintSessionMove, paintSessionNotThis, paintStatus, paintTier, pastBadge, prioritySig,
   withLiveRanks, writeOrRestore,
   type PriorityRow,
 } from "../priorities";
@@ -118,6 +118,20 @@ describe("a session's move, \"not this\" and a merge relink its inbox row at onc
     paintSessionNotThis(w.s as any, "jx7c-two", w.two);
     expect(w.s.sessions["c-two"]).toMatchObject({ priority_id: null, priority_step_key: null });
     expect(rankOf(w, "c-two")).toBeNull();
+  });
+
+  test("\"not this priority\" on a teammate's mapped-only row takes the session off its milestone at once", () => {
+    const theirs = row("pri-5", { mine: false, user_id: "ash" as any, steps: [step("s1", "critical")], mapped_links: [linked("s1", "c-five") as any], sessions: [{ short_id: "jx7c-five", title: "c-five", step_key: "s1", updated_at: 0 }], session_count: 1 });
+    const s = { priorities: { [theirs._id]: theirs }, sessions: { "c-five": { _id: "c-five", priority_id: theirs._id, priority_step_key: "s1" } } };
+    paintSessionNotThis(s as any, "jx7c-five", theirs);
+    expect(theirs.mapped_links![0].sessions).toEqual([]);
+    expect(s.sessions["c-five"]).toMatchObject({ priority_id: null, priority_step_key: null });
+  });
+
+  test("dropping a milestone takes its mapped links with it", () => {
+    const theirs = row("pri-6", { steps: [step("s1", "critical"), step("s2", "critical")], mapped_links: [linked("s1", "c-six") as any, linked("s2", "c-seven") as any] });
+    paintDrop({ priorities: { [theirs._id]: theirs } } as any, theirs, "s1");
+    expect(theirs.mapped_links!.map((l) => l.key)).toEqual(["s2"]);
   });
 
   test("a merge carries every conversation on the merged priority to its new milestone keys", () => {

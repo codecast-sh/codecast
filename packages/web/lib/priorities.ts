@@ -148,9 +148,9 @@ export function paintedRow(s: PaintState, shortId: string): PriorityRow | undefi
   return (lookup(s.priorities, shortId) as PriorityRow | undefined) ?? detailOf(s, shortId)?.base;
 }
 
-/** Its milestones' links where its surfaces read them: the row's, else the detail's (a teammate's or a past priority). */
+/** Its milestones' links where its surfaces read them: the row's (full, else a teammate's mapped ones), else the detail's (a past priority). */
 function linksOf(s: PaintState, row: PriorityRow): PriorityMilestoneLinks[] {
-  return row.links ?? detailOf(s, row.short_id)?.links ?? [];
+  return row.links ?? row.mapped_links ?? detailOf(s, row.short_id)?.links ?? [];
 }
 
 /** A move on a priority the list does not hold (the phone opens one page): its own rank steps, as the server's echo will say. */
@@ -199,6 +199,7 @@ export function paintRename(row: PriorityRow, stepKey: string, title: string): v
 export function paintDrop(s: PaintState, row: PriorityRow, stepKey: string): void {
   row.steps = row.steps.filter((st) => st.key !== stepKey);
   if (row.links) row.links = row.links.filter((l) => l.key !== stepKey);
+  if (row.mapped_links) row.mapped_links = row.mapped_links.filter((l) => l.key !== stepKey);
   const detail = detailOf(s, row.short_id);
   if (detail?.links) detail.links = detail.links.filter((l) => l.key !== stepKey);
   row.counts = criticalCounts(row.steps);
