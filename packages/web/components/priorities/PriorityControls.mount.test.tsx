@@ -394,9 +394,9 @@ test("a teammate's priority shows no write control: no toggles, no milestone or 
     expect(mate.querySelector("[data-session-menu]")).toBeNull();
     await key(priorityMenu("pri-4"), "Enter");
     expect([...document.querySelectorAll('[role="menuitem"]')].map((n) => n.getAttribute("data-act"))).toEqual(["copy-link"]);
-    // A rank is the viewer's own order: a teammate's priority has none, in its menu or its rank cell.
-    expect(document.querySelector("[data-menu-rank-by]")).toBeNull();
-    expect(mate.querySelector("[data-rank-source]")).toBeNull();
+    // A teammate's priority shows the owner's real rank, in its menu and its rank cell.
+    expect(document.querySelector("[data-menu-rank-by]")?.textContent).toBe("#1 · ranked by AI");
+    expect(mate.querySelector("[data-rank-source]")?.textContent).toBe("1");
   } finally {
     await page.unmount();
   }
@@ -478,10 +478,10 @@ test("the page and the card of a teammate's priority show no write control", asy
   try {
     await page.waitFor(() => !!page.container.querySelector("[data-critical-path]"));
     for (const sel of ["[data-correct-priority]", "[data-milestone-toggle]", "[data-milestone-menu]", "[data-delete-correction]"]) expect(page.container.querySelector(sel)).toBeNull();
-    // An active priority with no rank shows no badge, never "Set aside".
+    // A teammate's active priority shows the owner's real rank, never "Set aside".
     const meta = page.container.querySelector("[data-priority-meta]")!;
-    expect(meta.querySelector("[data-rank]")).toBeNull();
-    expect(meta.querySelector("[data-rank-by]")).toBeNull();
+    expect(meta.querySelector("[data-rank]")?.textContent).toBe("#1");
+    expect(meta.querySelector("[data-rank-by]")?.textContent).toBe("ranked by AI");
     expect(meta.textContent).not.toContain("Set aside");
     // Each milestone is a status mark, not a box that looks pressable.
     expect(page.container.querySelector('[data-critical-path] [data-milestone="s1"] [data-milestone-mark="open"]')).not.toBeNull();
@@ -497,10 +497,10 @@ test("the page and the card of a teammate's priority show no write control", asy
   }
 }, 60_000);
 
-test("the card: provenance once, and the owner marks its Next milestone done from it", async () => {
+test("the card: the rank badge, and the owner marks an open critical milestone done from it", async () => {
   const card = await mount(<PriorityCard row={stored("pri-3")} />);
   try {
-    expect(card.text()).toContain("#3 ranked by AI");
+    expect(card.container.querySelector("[data-rank-mark]")?.textContent).toBe("3");
     await press(card.container.querySelector('[data-milestone-toggle="s1"]')!);
     expect(stored("pri-3").steps[0].done).toBe(true);
     expect(await dispatched("setPriorityStepDone")).toEqual([["pri-3", "s1", true]]);

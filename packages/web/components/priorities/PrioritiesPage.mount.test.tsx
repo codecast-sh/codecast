@@ -152,10 +152,12 @@ test("a teammate's priority offers no action, and a teammate's ask on the viewer
     try {
       expect(order(team.container)).toEqual(["pri-1", "pri-2", "pri-3", "pri-4", "pri-5"]);
       expect(team.container.querySelectorAll("[data-action]")).toHaveLength(0);
-      // A rank is the viewer's own order: no #N, no rank on hover, and no "0 today" nudge a top three gets.
-      for (const id of ["pri-1", "pri-2", "pri-3"]) {
-        expect(block(team.container, id).querySelector("[data-rank-source], [data-rank-handle]")).toBeNull();
-        expect(block(team.container, id).querySelector('[title^="#"]')).toBeNull();
+      // A teammate's rank is the owner's real one, shown with who placed it, but never a handle to drag; and no "0 today" nudge a top three gets.
+      for (const [id, rank] of [["pri-1", "1"], ["pri-2", "2"], ["pri-3", "3"]]) {
+        const mark = block(team.container, id).querySelector("[data-rank-source]")!;
+        expect(mark.textContent).toBe(rank);
+        expect(mark.getAttribute("title")).toBe(`#${rank} · ranked by AI`);
+        expect(block(team.container, id).querySelector("[data-rank-handle]")).toBeNull();
       }
       expect(zeroToday(team.container)).toEqual([]);
     } finally {
