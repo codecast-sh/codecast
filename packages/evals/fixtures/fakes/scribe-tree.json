@@ -3656,6 +3656,210 @@
 }
 ],
 "runsBare": true
+},
+{
+"path": [
+"plan",
+"drop"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [
+{
+"name": "plan_id",
+"required": true,
+"variadic": false,
+"description": "Plan short ID"
+}
+],
+"runsBare": true
+},
+{
+"path": [
+"priorities",
+"done"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "--json",
+"description": "The updated priority as JSON",
+"type": "boolean",
+"long": "--json"
+},
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [
+{
+"name": "id",
+"required": true,
+"variadic": false
+}
+],
+"runsBare": true
+},
+{
+"path": [
+"priorities",
+"restore"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "--json",
+"description": "The updated priority as JSON",
+"type": "boolean",
+"long": "--json"
+},
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [
+{
+"name": "id",
+"required": true,
+"variadic": false
+}
+],
+"runsBare": true
+},
+{
+"path": [
+"priorities",
+"set-aside"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "--json",
+"description": "The updated priority as JSON",
+"type": "boolean",
+"long": "--json"
+},
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [
+{
+"name": "id",
+"required": true,
+"variadic": false
+}
+],
+"runsBare": true
+},
+{
+"path": [
+"task",
+"drop"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "-m, --message <text>",
+"description": "Reason for dropping; '-' reads it from stdin (heredoc-friendly)",
+"type": "value",
+"long": "--message",
+"short": "-m"
+},
+{
+"flags": "--cascade",
+"description": "Also drop this task's open subtasks",
+"type": "boolean",
+"long": "--cascade"
+},
+{
+"flags": "--only-parent",
+"description": "Drop just this task, leaving open subtasks in place",
+"type": "boolean",
+"long": "--only-parent"
+},
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [
+{
+"name": "short_id",
+"required": true,
+"variadic": false,
+"description": "Task short ID"
+}
+],
+"runsBare": true
 }
 ]
 }
