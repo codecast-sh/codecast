@@ -423,9 +423,10 @@ export const CLIENT_SYNC_REGISTRY = {
     localFirst: true,
     feeds: ["weeklyCards.listMine"],
   },
-  // Each person's priorities in the active workspace (convex priorities.list,
-  // shared/contracts/priorities PriorityRow). A snapshot: list returns the
-  // workspace's complete visible set. Not localFirst: a rank paints new
+  // Each person's priorities in every workspace the viewer holds (convex
+  // priorities.list with no workspace, shared/contracts/priorities
+  // PriorityRow). A snapshot: list returns the complete visible set across
+  // them, one subscription for /priorities and the inbox. Not localFirst: a rank paints new
   // positions on the owner's other rows, which the server's own ordering may
   // place differently, so a field lock could never retire; the server's push
   // settles the paint, and a refused write is put back by its caller
