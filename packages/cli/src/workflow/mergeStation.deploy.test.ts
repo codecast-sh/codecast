@@ -156,6 +156,55 @@ describe("cast flow merge: before-merge steps", () => {
     } finally { s.done(); }
   }, T);
 
+  // A personal workspace with no GitHub App, published checkout or deploy targets for the repository is refused its
+  // lease, and a server older than the lease has none: a merge that deploys nothing has no turn to keep, so it merges.
+  const unleasable = {
+    "the server will not lease the repository to the run's workspace": "Run run_1 cannot lease o/r: neither its workspace nor any of your teams works on it.",
+    "the server has no lease route": "this codecast server has no /cli/repo-lease route — it needs a newer deployment.",
+  };
+  for (const [why, refusal] of Object.entries(unleasable)) {
+    test(`${why}: a merge with no before-merge step merges without the lease, saying so once`, async () => {
+      const s = setup();
+      try {
+        const head = s.branch("web/page.ts", "page\n");
+        s.ci(head);
+        s.answers["/cli/repo-lease"] = () => { throw new Error(refusal); };
+        const r = await s.run();
+        expect(r.code).toBe(0);
+        expect(s.git(s.work, "rev-parse", "origin/main")).toBe(r.line);
+        expect(s.logged.filter((l) => l.includes("without the repository's turn"))).toEqual([`warning: merging without the repository's turn: ${refusal}`]);
+        expect(s.posts.filter((p) => p.path === "/cli/repo-lease").map((p) => p.body.op)).toEqual(["take"]);
+      } finally { s.done(); }
+    }, T);
+
+    test(`${why}: a merge with a before-merge step refuses (exit 2), deploying and merging nothing`, async () => {
+      const s = setup();
+      try {
+        s.profile("deploy");
+        const head = s.branch("api/route.ts", "export {}\n");
+        s.ci(head);
+        s.answers["/cli/repo-lease"] = () => { throw new Error(refusal); };
+        const ran: string[] = [];
+        const r = await s.run({ runStep: async (cmd) => { ran.push(cmd); return { code: 0, output: "" }; } });
+        expect(r).toEqual({ code: 2, line: `convex must go out before the merge, and only under the lease on o/r's deploys, which could not be taken: ${refusal}` });
+        expect(ran).toEqual([]);
+        expect(s.merged()).toBe(false);
+      } finally { s.done(); }
+    }, T);
+  }
+
+  test("any other refusal of the lease refuses the merge (exit 2), even with no before-merge step", async () => {
+    const s = setup();
+    try {
+      const head = s.branch("web/page.ts", "page\n");
+      s.ci(head);
+      s.answers["/cli/repo-lease"] = () => { throw new Error("No run run_1 you can lease a repository for."); };
+      const r = await s.run();
+      expect(r).toEqual({ code: 2, line: "could not take the lease on o/r's deploys: No run run_1 you can lease a repository for." });
+      expect(s.merged()).toBe(false);
+    } finally { s.done(); }
+  }, T);
+
   test("a wait in line past its budget exits 4 having done nothing, keeping its place: the next visit asks with the same token", async () => {
     const s = setup();
     try {

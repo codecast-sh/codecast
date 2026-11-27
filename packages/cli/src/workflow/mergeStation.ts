@@ -43,7 +43,7 @@ import { deploysFor, runShell, shipKeyRefusal, shipSpec, type Log } from "../lan
 import type { ShipDeployStep } from "../workspace/types.js";
 import { keepEnds } from "./keepEnds";
 import { CI_APPROVAL_FILE } from "./changeVerdicts";
-import { LEASE_LINE_MS, LeaseLineWait, holdRepoLease, leaseHolder, type RepoLease } from "../land/repoLease.js";
+import { LEASE_LINE_MS, LeaseLineWait, holdRepoLease, leaseAccessRefused, leaseHolder, leaseRouteMissing, type RepoLease } from "../land/repoLease.js";
 import { acquiredTree, mainCheckout, noteLanded, noteRestoring, sweepScratchTrees, takeMergeLock, trackStep, type ScratchTree } from "./mergeScratch";
 import { chainBetween, recordRebase, verifyRebaseChain, type RebaseLink, type RegeneratedRebase } from "./rebaseRecord";
 import { GENERATED_FILE, generatorsFor, readGenerators, writtenBy, type Generator } from "./generatedFiles";
@@ -231,15 +231,25 @@ async function mergeStation(args: MergeStationArgs): Promise<MergeStationResult>
   const holding = holdRepoLease(args.post, { repository: args.repository, holder: leaseHolder(`the merge of PR #${pr} (run ${args.runId})`), runId: args.runId, log, signal: stopping.signal, waitMs: args.leaseLineMs ?? LEASE_LINE_MS, keepPlace: true, ...(kept ? { token: kept } : {}) });
   const offSignals = stopOnSignal(args, stopping, () => holding.then((l) => l.release(), () => {}));
   let lease: RepoLease;
+  // Why the merge goes on without the lease: the server will not lease this repository to the run's workspace (a
+  // personal one with no GitHub App, published checkout or deploy targets for it), or has no lease at all. The lease
+  // orders deploys, so such a merge goes on only when it sends none; one with a before-merge step still refuses.
+  let unleased: string | null = null;
   try { lease = await holding; }
   catch (err) {
-    offSignals();
     if (err instanceof LeaseLineWait) {
+      offSignals();
       fs.writeFileSync(tokenFile, err.token);
       return { code: 4, line: `${err.message}; nothing was done, and the run asks again in the same place` };
     }
-    return refuse(`could not take the lease on ${args.repository}'s deploys: ${message(err)}`);
+    if (!leaseAccessRefused(err, args.repository) && !leaseRouteMissing(err)) {
+      offSignals();
+      return refuse(`could not take the lease on ${args.repository}'s deploys: ${message(err)}`);
+    }
+    unleased = message(err);
+    lease = { assertHeld: async () => true, retake: async () => true, release: async () => {} };
   }
+  const needsLease = (steps: ShipDeployStep[]) => `${steps.map((s) => s.name).join(", ")} must go out before the merge, and only under the lease on ${args.repository}'s deploys, which could not be taken: ${unleased}`;
   // The checkout's lock still matters under the lease: a lease lost without its holder dying (a laptop asleep past it)
   // goes to the next in line, and two stations of one checkout must still never share a scratch sweep or deploy at once.
   let unlock: () => void;
@@ -315,6 +325,7 @@ async function mergeStation(args: MergeStationArgs): Promise<MergeStationResult>
       const main = mainSteps(exec, at, fresh);
       if (main.refused) return refuse(`merged as ${short(already)}, but its before-merge deploys were not checked: ${main.refused}`);
       const steps = deploysFor(main.steps, files);
+      if (steps.length && unleased) return refuse(`merged as ${short(already)}, but ${needsLease(steps)}`);
       if (steps.length) {
         const sent = await sendFromMain(steps, already);
         return await recordLanded(args, url, already, sent.outcomes);
@@ -409,6 +420,7 @@ async function mergeStation(args: MergeStationArgs): Promise<MergeStationResult>
       const main = mainSteps(exec, at, onto);
       if (main.refused) return await fail(2, main.refused);
       const steps = deploysFor(main.steps, files);
+      if (steps.length && unleased) return await fail(2, needsLease(steps));
       if (steps.length) {
         await work.setup();
         setUpFrom ||= tip;
@@ -433,6 +445,7 @@ async function mergeStation(args: MergeStationArgs): Promise<MergeStationResult>
     }
 
     if (!(await leaseHeld())) return await fail(2, lostLease("the merge"));
+    if (unleased) log(`warning: merging without the repository's turn: ${unleased}`);
     const landed = mergePullRequest(exec, at, { pr: String(pr), branch, head, into, wait: args.wait });
     if ("reason" in landed) return await fail(2, landed.reason);
     writeMergeJson(args, url, landed.sha);

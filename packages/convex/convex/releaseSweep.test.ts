@@ -96,16 +96,28 @@ describe("cast release sweep's read", () => {
 
   test("a run failed in the last two hours, outside any incident, is listed at its station; cancelled, older, re-run and closed ones are not", async () => {
     const w = await world();
-    await w.run(await w.task("ct-601"), {});
+    // Each a crash, so each near miss is left out for its own reason, not for being a stop.
+    const crash = { fail_reason: "Runner exited: the machine went to sleep" };
+    await w.run(await w.task("ct-601"), crash);
     await w.run(await w.task("ct-602"), { fail_reason: "Cancelled by user" });
-    await w.run(await w.task("ct-603"), { updated_at: NOW - 3 * HOUR });
+    await w.run(await w.task("ct-603"), { ...crash, updated_at: NOW - 3 * HOUR });
     const rerun = await w.task("ct-604");
-    await w.run(rerun, {});
+    await w.run(rerun, crash);
     await w.run(rerun, { status: "running", fail_reason: undefined, updated_at: NOW });
-    await w.run(await w.task("ct-605", "done"), {});
-    await w.run(await w.task("ct-606"), { resume_queued: { since: NOW - MIN, at_node: "land__ci" } });
+    await w.run(await w.task("ct-605", "done"), crash);
+    await w.run(await w.task("ct-606"), { ...crash, resume_queued: { since: NOW - MIN, at_node: "land__ci" } });
     const s: any = await w.sweep();
     expect(s.failed_runs.map((r: any) => [r.task_short_id, r.station, r.flow])).toEqual([["ct-601", "land__ci", "change"]]);
+  });
+
+  test("of stops, only one at a shared exit still held is the sweep's: a stop about the change itself is its own run's", async () => {
+    const w = await world();
+    await w.run(await w.task("ct-701"), { fail_reason: "Stopped: The reviewer rejected the change: no tests", stop_station: "land__review" });
+    await w.run(await w.task("ct-702"), { fail_reason: "Stopped: Review found 3 findings", stop_station: "land__review" });
+    await w.run(await w.task("ct-703"), { fail_reason: "Stopped: main stayed red", stop_station: "land__wait_main", stop_fingerprint: "flowstop:acme/app:change:land__red_main" });
+    await w.run(await w.task("ct-704"), { fail_reason: "Station land__ci failed: exit code 137" });
+    const s: any = await w.sweep();
+    expect(s.failed_runs.map((r: any) => [r.task_short_id, r.station]).sort()).toEqual([["ct-703", "land__wait_main"], ["ct-704", "land__ci"]]);
   });
 
   test("an online team machine below a floor raised half an hour ago lags; below a floor raised just now, offline, or on it, it does not", async () => {
