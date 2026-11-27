@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { Rocket } from "lucide-react";
 import { SESSION_STATUS, type SessionStatus, type StatusMarkShape } from "../../lib/sessionStatus";
 
 // The status vocabulary's visual half (lib/sessionStatus): the mark and the
@@ -7,7 +8,7 @@ import { SESSION_STATUS, type SessionStatus, type StatusMarkShape } from "../../
 // Marks are shapes as well as colours, and none of them moves: a list draws
 // one per row, and one animating mark per row re-layers the page every frame.
 
-const SHAPES: Record<StatusMarkShape, ReactNode> = {
+const SHAPES: Record<Exclude<StatusMarkShape, "rocket">, ReactNode> = {
   // Working: the steady dot.
   dot: <circle cx="5" cy="5" r="3.5" fill="currentColor" />,
   // Needs you: a dot held in a ring, for something waiting on you.
@@ -31,6 +32,9 @@ const SHAPES: Record<StatusMarkShape, ReactNode> = {
 /** A state's mark, in its colour. */
 export function SessionStatusMark({ status, size = 10, className = "" }: { status: SessionStatus; size?: number; className?: string }) {
   const meta = SESSION_STATUS[status];
+  // Shipping wears the Ship button's rocket (ShipControl), a touch larger so
+  // its strokes read at the size of the filled marks.
+  if (meta.mark === "rocket") return <Rocket data-status-mark={status} aria-hidden width={size + 2} height={size + 2} strokeWidth={2.25} className={`shrink-0 ${meta.text} ${className}`} />;
   return (
     <svg data-status-mark={status} viewBox="0 0 10 10" width={size} height={size} aria-hidden className={`shrink-0 ${meta.text} ${className}`}>
       {SHAPES[meta.mark]}

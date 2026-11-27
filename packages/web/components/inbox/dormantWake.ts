@@ -11,8 +11,8 @@ export { dormantWakeOf, isLivePark, serverParkOf, type DormantWakeSession } from
 
 export type DormantWake = SharedDormantWake<TriggerRow>;
 
-// The words for a wake, shared by the inbox card's child line (DormantWakeRow)
-// and the conversation header's chip (DormantWakeChip), so both say the same.
+// The words for a wake, shared by a Sleeping row's under-line and the
+// conversation header's chip (both through ActivityLine), so both say the same.
 export interface DormantWakeLabel {
   what: string;
   /** When it wakes; a trigger carries its task instead, drawn as its live countdown badge. */
