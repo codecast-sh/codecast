@@ -65,7 +65,7 @@ const evals = (over: Record<string, unknown> = {}) => ({
   why: ["Then Calibrate the grader", "a line nobody typed", "calibrate the grader"],
   merges: ["pri-2"],
   steps: [
-    { key: "s1", title: "Grader faults under 5%", tier: "critical", refs: [], why: ["get grader faults under five percent"] },
+    { key: "s1", title: "Grader faults under 5%", tier: "critical", refs: [] },
     { key: "pri-2/s1", title: "Calibrate the grader", tier: "critical", refs: [] },
   ],
   sessions: [{ session: "jx7team", step: "s1" }, { session: "jx7old", step: "pri-2/s1" }],
@@ -102,7 +102,8 @@ describe("the request", () => {
     expect(on.system).toContain("verbatim");
     expect(on.output_schema).toBe(PRIORITY_PASS_SCHEMA_WHY as any);
     expect((PRIORITY_PASS_SCHEMA_WHY.properties.priorities.items.properties as any).why).toBeDefined();
-    expect((PRIORITY_PASS_SCHEMA_WHY.properties.priorities.items.properties.steps.items.properties as any).why).toBeDefined();
+    // Only a priority's why, never a step's: the reply must fit max_tokens, and the card shows only the merge's evidence.
+    expect((PRIORITY_PASS_SCHEMA_WHY.properties.priorities.items.properties.steps.items.properties as any).why).toBeUndefined();
   });
 });
 

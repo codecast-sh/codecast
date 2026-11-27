@@ -80,7 +80,7 @@ export type PriorityProposal = {
   serves: string | null;
   /** Proposed position among the person's active priorities (1 = first); a priority the person placed keeps its place whatever this says. */
   rank: number;
-  steps: Array<{ key?: string; title: string; tier: PriorityStepTier; refs: PriorityRef[]; done_judged?: boolean; why?: string[] }>;
+  steps: Array<{ key?: string; title: string; tier: PriorityStepTier; refs: PriorityRef[]; done_judged?: boolean }>;
   /** Conversation short ids the pass maps to this priority, each with the step it serves (a step key or title). */
   sessions: Array<{ session: string; step?: string }>;
   /** Asked only behind the priority cards experiment: excerpts copied verbatim from what the person typed (or a call's action item) that justify the change; each step carries its own. */
