@@ -61,7 +61,8 @@ export function ModernDecisionDock({ question, excerpt, kicker, aside, options, 
   text: string;
   onText: (text: string) => void;
   /** Absent when the ask takes no typed answer. */
-  onAnswerText?: (text: string) => void;
+  /** Return asks about the question with the words; ⌘ or Ctrl with Return answers with them. */
+  onAnswerText?: (text: string, mode: "ask" | "answer") => void;
   onOpen: () => void;
   /** Its options can be pressed from here. */
   answerable: boolean;
@@ -158,9 +159,10 @@ export function ModernDecisionDock({ question, excerpt, kicker, aside, options, 
         </div>
       )}
       {onAnswerText && (
-          <form className={`flex min-w-0 items-center gap-2 ${drawn ? "mt-2" : ""}`} onSubmit={(e) => { e.preventDefault(); if (text.trim()) onAnswerText(text.trim()); }}>
+          <form className={`flex min-w-0 items-center gap-2 ${drawn ? "mt-2" : ""}`} onSubmit={(e) => { e.preventDefault(); if (text.trim()) onAnswerText(text.trim(), "ask"); }}>
             <Input
               value={text}
+              onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && text.trim()) { e.preventDefault(); onAnswerText(text.trim(), "answer"); } }}
               onChange={(e) => onText(e.target.value)}
               placeholder="Answer in your own words"
               aria-label="Answer in your own words"

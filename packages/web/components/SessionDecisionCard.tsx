@@ -9,7 +9,8 @@ import { PermissionStack } from "./PermissionCard";
 import { useInboxStore, getProjectName } from "../store/inboxStore";
 import { type DecisionStepper } from "../hooks/useDecisionQueue";
 import { useDecisionCardKeys } from "./decisionCardKeys";
-import { queueTier, messagesSinceAsk, optionPageSlugs, findDecisionAnchorMessage, decisionDraftKey, type QueueItem } from "../lib/decisionQueue";
+import { isMac } from "../shortcuts";
+import { queueTier, messagesSinceAsk, optionPageSlugs, findDecisionAnchorMessage, decisionDraftKey, type FreeTextMode, type QueueItem } from "../lib/decisionQueue";
 import { isOnThreadRoute } from "../lib/openSessionAtMessage";
 import { decisionHref, ladderRecommendation, ladderRecommenders } from "../lib/decisionLinks";
 import { DecisionAnswerControls } from "./decisions/DecisionAnswerControls";
@@ -19,6 +20,8 @@ import { DecisionOptionList, RecommendedMark, TypeAnswerButton } from "./decisio
 import { OptionPages } from "./decisions/OptionPages";
 import { ChangeCardHeadline, ChangeCardVerdictBar, ChangeCardView } from "./decisions/ChangeCardView";
 import { DecisionDiscussion } from "./decisions/DecisionDiscussion";
+import { discussDecision } from "../lib/decisionThread";
+import { toast } from "sonner";
 import { PassDecision } from "./decisions/PassDecision";
 import { DecisionBody, DecisionFacts, DecisionLadder, hasDecisionBody } from "./decisions/DecisionSections";
 import { GateRunChip } from "./decisions/DecisionCompactCard";
@@ -256,11 +259,29 @@ export function SessionDecisionCard({ item, stepper, asks, onPick, startSize, al
     if (gated(index)) void Promise.resolve(sent).then((r) => r !== NOT_CONFIRMED && onDone(), () => {});
     else onDone();
   }, [answerItem, onDone, held, gated]);
-  const answerFreeText = useCallback((text: string) => {
-    if (!text.trim()) return;
-    answerItemFreeText(text);
+  // Typed words are as often a question about the options as an answer, and
+  // answering with a question closed the card on it. On a `cast decide` card,
+  // Return asks: the words go to the asking session in the card's thread, the
+  // card stays, and the reply lands under them. ⌘Return settles the question
+  // with the words. A gate on a run takes only its options (typed words reach
+  // the run as a question back), so there they always ask. A terminal prompt
+  // has no thread and a hosted conversation's ask is its owner's approval:
+  // both take the words as the answer.
+  const threaded = !!decideId && !hosted;
+  const gateOnly = threaded && !!decisionRow?.workflow_run_id;
+  const answerFreeText = useCallback((text: string, mode: FreeTextMode = "ask") => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    if (threaded && decideId && (mode === "ask" || gateOnly)) {
+      void discussDecision(decideId, trimmed).then((why) => { if (why) toast.error(why); });
+      setOtherText("");
+      setOtherOpen(false);
+      return;
+    }
+    answerItemFreeText(trimmed);
+    toast.success("Answer sent", { description: trimmed.length > 140 ? `${trimmed.slice(0, 140)}…` : trimmed });
     onDone();
-  }, [answerItemFreeText, onDone]);
+  }, [threaded, gateOnly, decideId, setOtherText, answerItemFreeText, onDone]);
   const dismiss = useCallback(() => { dismissItem(); onDone(); }, [dismissItem, onDone]);
   // A `cast decide` row can be handed on; a terminal prompt and a hosted
   // assistant's ask (only its owner answers) cannot. A trial's stays put, and so does a priority card (THE RULE on isPriorityCard).
@@ -621,6 +642,8 @@ export function SessionDecisionCard({ item, stepper, asks, onPick, startSize, al
         </div>
       )}
       <RunFallbackLine run={decisionRow?.status === "pending" ? decisionRow.run : undefined} className="mt-3" />
+      {/* Off a run, the thread shows once something was asked in it: the words asked from the box and the session's reply stay on the card. */}
+      {threaded && !gateOnly && <DecisionDiscussion decisionId={decideId!} compact bare className="mt-3" />}
       {otherOpen && (
         <div className="mt-3">
           <textarea
@@ -628,11 +651,18 @@ export function SessionDecisionCard({ item, stepper, asks, onPick, startSize, al
             value={otherText}
             onChange={(e) => setOtherText(e.target.value)}
             rows={3}
-            placeholder={hosted ? LANE_COPY.approval.typeAnswer : "Answer in your own words; this goes to the agent as a message."}
+            placeholder={hosted ? LANE_COPY.approval.typeAnswer : threaded ? "Ask the session that asked, or answer in your own words" : "Answer in your own words; this goes to the agent as a message."}
             className="w-full bg-sol-card border border-sol-border rounded px-2 py-1.5 text-sm text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-blue/50"
           />
           <div className="flex items-center gap-2 mt-1 text-meta text-sol-text-dim">
-            <KeyCap size="xs">return</KeyCap><span>send</span>
+            {threaded ? (
+              <>
+                <KeyCap size="xs">return</KeyCap><span>ask</span>
+                {!gateOnly && <><KeyCap size="xs">{isMac ? "⌘" : "ctrl"}</KeyCap><KeyCap size="xs">return</KeyCap><span>answer with this</span></>}
+              </>
+            ) : (
+              <><KeyCap size="xs">return</KeyCap><span>send</span></>
+            )}
             <KeyCap size="xs">esc</KeyCap><span>cancel</span>
           </div>
         </div>

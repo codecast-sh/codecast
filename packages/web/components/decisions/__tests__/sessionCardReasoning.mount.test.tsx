@@ -368,22 +368,80 @@ test("the rows opened past the first few stay open from one ask to the next", as
   await act(() => root.unmount());
 });
 
-// Talking a run's gate over with its session is answering it in your own
-// words: "Discuss with …" opens the same box, so the text reaches the agent
-// as the answer and the question closes, instead of a comment that leaves
-// the sheet over the transcript.
-test("on a run gate, Discuss with the session opens the own-words answer", async () => {
+// A run's gate takes only its options: typed words reach the run as a
+// question back, so answering with them closed the card and the words were
+// seen nowhere. On a gate they go to the asking session in the card's thread:
+// the card stays, the words stay on it, and no answer is recorded.
+test("on a run gate, words typed in the own-words box go to the thread and the card stays", async () => {
   const { useInboxStore } = await import("../../../store/inboxStore");
   useInboxStore.getState().syncTable("sessionDecisions", [{
     _id: "d5", short_id: "sd-5", conversation_id: "c1", status: "pending", blocking: true, created_at: Date.now() - 60_000,
     question: "Ship it?", options: [{ label: "Ship" }, { label: "Wait" }], workflow_run_id: "run1",
   } as any]);
+  const calls: string[] = [];
+  const real = useInboxStore.getState();
+  useInboxStore.setState({
+    commentOnDecision: (async (_id: string, text: string) => { calls.push(`comment:${text}`); }) as any,
+    askDecisionSession: (async () => { calls.push("ask"); }) as any,
+    answerDecision: (async () => { calls.push("answer"); }) as any,
+  });
   const gate = { ...item(true), key: "decide:d5", decisionId: "d5", question: "Ship it?" };
-  const { pane, unmount } = await mount(<SessionDecisionCard item={gate} stepper={null} />);
+  const done: string[] = [];
+  const stepper: any = { position: 1, total: 1, onDone: () => done.push("done"), onSkip: () => {}, onPrev: () => {} };
+  const { pane, unmount } = await mount(<SessionDecisionCard item={gate} stepper={stepper} />);
   expect(pane.querySelector("textarea")).toBeNull();
   const discuss = pane.querySelector<HTMLButtonElement>("[data-decision-ask]")!;
   expect(discuss.textContent).toContain("Discuss with");
   await act(() => { discuss.click(); });
-  expect(pane.querySelector("textarea")!.getAttribute("placeholder")).toContain("Answer in your own words");
+  const box = pane.querySelector("textarea")!;
+  expect(box.getAttribute("placeholder")).toContain("session that asked");
+  const setValue = Object.getOwnPropertyDescriptor(dom.window.HTMLTextAreaElement.prototype, "value")!.set!;
+  await act(() => { setValue.call(box, "why not follow the main address only?"); box.dispatchEvent(new dom.window.Event("input", { bubbles: true })); });
+  await act(async () => { box.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true })); await new Promise((r) => setTimeout(r, 0)); });
+  expect(calls).toEqual(["comment:why not follow the main address only?", "ask"]);
+  expect(done).toEqual([]);
+  expect(pane.querySelector("[data-session-decision]")).not.toBeNull();
+  useInboxStore.setState({ commentOnDecision: real.commentOnDecision, askDecisionSession: real.askDecisionSession, answerDecision: real.answerDecision });
+  useInboxStore.getState().clearDraft("decision:d5");
+  unmount();
+});
+
+// Off a run, typed words are as often a question about the options as an
+// answer. Return asks the session in the card's thread and the card stays;
+// ⌘Return settles the question with the words, as Return once did.
+test("on an ordinary decision, Return asks and keeps the card; ⌘Return answers with the words", async () => {
+  const { useInboxStore } = await import("../../../store/inboxStore");
+  useInboxStore.getState().syncTable("sessionDecisions", [{
+    _id: "d6", short_id: "sd-6", conversation_id: "c1", status: "pending", blocking: true, created_at: Date.now() - 60_000,
+    question: "Which shim?", options: [{ label: "Swift" }, { label: "Fork" }],
+  } as any]);
+  const calls: string[] = [];
+  const real = useInboxStore.getState();
+  useInboxStore.setState({
+    commentOnDecision: (async (_id: string, text: string) => { calls.push(`comment:${text}`); }) as any,
+    askDecisionSession: (async () => { calls.push("ask"); }) as any,
+    answerDecision: (async (_id: string, input: any) => { calls.push(`answer:${input.text}`); }) as any,
+  });
+  const card = { ...item(true), key: "decide:d6", decisionId: "d6", question: "Which shim?" };
+  const done: string[] = [];
+  const stepper: any = { position: 1, total: 1, onDone: () => done.push("done"), onSkip: () => {}, onPrev: () => {} };
+  const { pane, unmount } = await mount(<SessionDecisionCard item={card} stepper={stepper} />);
+  const typeAndPress = async (text: string, mods: KeyboardEventInit = {}) => {
+    if (!pane.querySelector("textarea")) {
+      await act(() => { pane.querySelector<HTMLElement>("[data-session-decision]")!.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "t", bubbles: true })); });
+    }
+    const box = pane.querySelector("textarea")!;
+    const setValue = Object.getOwnPropertyDescriptor(dom.window.HTMLTextAreaElement.prototype, "value")!.set!;
+    await act(() => { setValue.call(box, text); box.dispatchEvent(new dom.window.Event("input", { bubbles: true })); });
+    await act(async () => { box.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, ...mods })); await new Promise((r) => setTimeout(r, 0)); });
+  };
+  await typeAndPress("tradeoffs between 1 and 3?");
+  expect(calls).toEqual(["comment:tradeoffs between 1 and 3?", "ask"]);
+  expect(done).toEqual([]);
+  await typeAndPress("go with Swift, revisit after the spike", { metaKey: true });
+  expect(calls.at(-1)).toBe("answer:go with Swift, revisit after the spike");
+  expect(done).toEqual(["done"]);
+  useInboxStore.setState({ commentOnDecision: real.commentOnDecision, askDecisionSession: real.askDecisionSession, answerDecision: real.answerDecision });
+  useInboxStore.getState().clearDraft("decision:d6");
   unmount();
 });
