@@ -12,6 +12,7 @@ import { Ban, Check, CircleDot, Clock, CornerDownLeft, Minus, UserRound, X, type
 import { MONO_VEHICLE as MONO, VEHICLE_GLYPH } from "../../lib/changes/vehicleGlyph";
 import type { ChangeLinks } from "../../lib/changes/rows";
 import { HoverCard } from "../ui/HoverCard";
+import { Mark } from "../Mark";
 import { useNowWhen } from "../../hooks/useCoarseNow";
 import { STAGE_LABEL, nowElapsed, vehicleName, type ChangeVehicle, type Lifecycle, type LifecycleStage, type StageState } from "../../lib/changes/lifecycle";
 import "./changes.css";
@@ -49,12 +50,16 @@ const NODE: Record<StageState, LucideIcon | null> = {
   idle: null,
 };
 
-/** The now's state as a glyph in its tone: what a reference says where a row would say a word. Idle has none. */
-function NowGlyph({ lifecycle }: { lifecycle: Lifecycle }) {
+/**
+ * The now's state as a glyph in its tone: what a reference says where a row would say a word. Idle has none. `mark`:
+ * registered for the icon legend, quiet, since the pill around it opens the change's hover card.
+ */
+function NowGlyph({ lifecycle, mark = false }: { lifecycle: Lifecycle; mark?: boolean }) {
   const Icon = NODE[lifecycle.now.state];
+  const glyph = Icon ? <Icon className="chg-now" aria-hidden strokeWidth={lifecycle.now.state === "failed" ? 3 : 2.5} /> : null;
   return (
     <>
-      {Icon ? <Icon className="chg-now" aria-hidden strokeWidth={lifecycle.now.state === "failed" ? 3 : 2.5} /> : null}
+      {glyph && mark ? <Mark id={`change.now.${lifecycle.now.state}`} quiet>{glyph}</Mark> : glyph}
       <span className="sr-only">{lifecycle.now.word}{lifecycle.now.detail ? `, ${lifecycle.now.detail}` : ""}</span>
     </>
   );
@@ -189,8 +194,8 @@ export const ChangeChip = memo(function ChangeChip({ lifecycle, label, links, wr
 export const ChangeSegment = memo(function ChangeSegment({ lifecycle }: { lifecycle: Lifecycle }) {
   return (
     <span className="chg-seg" data-tone={lifecycle.now.tone} data-change-segment={lifecycle.now.stage}>
-      <ChangeTrack lifecycle={lifecycle} />
-      <NowGlyph lifecycle={lifecycle} />
+      <Mark id="change.track" quiet><ChangeTrack lifecycle={lifecycle} /></Mark>
+      <NowGlyph lifecycle={lifecycle} mark />
     </span>
   );
 });

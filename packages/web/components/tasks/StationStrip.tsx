@@ -30,6 +30,7 @@ import {
   type LineTask,
 } from "../../lib/taskLine";
 import { modernPill } from "../ui/modernLook";
+import { Mark } from "../Mark";
 
 // The task page as the line (docs/architecture/the-line.md L3, L5, L10): the
 // team's statuses in order as a strip, the current one highlighted, a held
@@ -216,10 +217,10 @@ export function TaskLineChip({ task, className = "", watch = true }: { task: Tas
   return (
     <span
       className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-meta shrink-0 truncate max-w-[14rem] ${held ? "border-sol-yellow/40 text-sol-yellow" : tone === "paused" ? "border-sol-orange/40 text-sol-orange" : "border-sol-violet/40 text-sol-violet"} ${className}`}
-      title={held ? "A blocking decision holds this task at its station" : "In its flow: the run's current node"}
+      title={held ? "A blocking decision holds this task at its station" : undefined}
       data-task-line-chip={held ? "held" : "run"}
     >
-      {held ? <span className="w-1.5 h-1.5 rounded-full bg-sol-yellow animate-pulse" /> : <GitBranch className="w-3 h-3" />}
+      {held ? <span className="w-1.5 h-1.5 rounded-full bg-sol-yellow animate-pulse" /> : <Mark id="task.in_flow"><GitBranch className="w-3 h-3" /></Mark>}
       {text}
     </span>
   );

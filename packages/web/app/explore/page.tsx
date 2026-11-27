@@ -177,7 +177,7 @@ export default function ExplorePage() {
                 onClick={() => setAgentType("claude_code")}
                 className="gap-1"
               >
-                <AgentTypeIcon agentType="claude_code" className="w-3 h-3" />
+                <AgentTypeIcon agentType="claude_code" labeled className="size-4" />
                 Claude Code
               </Button>
               <Button
@@ -186,7 +186,7 @@ export default function ExplorePage() {
                 onClick={() => setAgentType("codex")}
                 className="gap-1"
               >
-                <AgentTypeIcon agentType="codex" className="w-3 h-3" />
+                <AgentTypeIcon agentType="codex" labeled className="size-4" />
                 Codex
               </Button>
               <Button
@@ -195,7 +195,7 @@ export default function ExplorePage() {
                 onClick={() => setAgentType("cursor")}
                 className="gap-1"
               >
-                <AgentTypeIcon agentType="cursor" className="w-3 h-3" />
+                <AgentTypeIcon agentType="cursor" labeled className="size-4" />
                 Cursor
               </Button>
               <Button
@@ -204,7 +204,7 @@ export default function ExplorePage() {
                 onClick={() => setAgentType("gemini")}
                 className="gap-1"
               >
-                <AgentTypeIcon agentType="gemini" className="w-3 h-3" />
+                <AgentTypeIcon agentType="gemini" labeled className="size-4" />
                 Gemini
               </Button>
             </div>

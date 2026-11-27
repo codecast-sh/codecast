@@ -91,6 +91,7 @@ import { useUpgradesOpen } from "./simple/billing";
 import type { NoticeKind } from "@codecast/shared/contracts/assistant";
 import { LabelChipsRow } from "./LabelChipsRow";
 import { DeviceIcon, deviceDisplayName, useRosterMachines } from "./DeviceBadge";
+import { Mark } from "./Mark";
 import { machineIdOfChipKey } from "../store/workProjects";
 import { RailFilterMenu } from "./RailFilterMenu";
 import { useIsModernFocused, useIsModernStyle } from "../hooks/useVisualStyle";
@@ -103,7 +104,6 @@ import { CompactPlanRow, PlanAskButton, PlanGroupFacts, PlanGroupMark, PlanTierH
 import { PLAN_TIERS, planTierFolded, planTierKey, planTierOf } from "../store/inboxStore";
 import { prioritiesAnywhere, priorityOrderSig, priorityPlaceReader, rankLabelOf, sortByPriority } from "../store/priorityOrder";
 import { useWorkspaceFeature } from "../lib/teamFeatures";
-import { PLAN_STATE_STATUS } from "../lib/sessionStatus";
 import type { PlanItem } from "../store/inboxStore";
 import { windowOrgTree } from "../store/orgSlice";
 import { useSyncPlansWithArgs } from "../hooks/useSyncPlans";
@@ -984,7 +984,7 @@ const CardBarStrip = memo(function CardBarStrip({ session, rows, activeSessionId
       <SchedChildArrow slot label={label} className={primary ? undefined : "text-sol-blue/70"} />
       {primary && (
         <>
-          <Zap className="w-2.5 h-2.5 shrink-0 text-sol-amber/70" fill="currentColor" strokeWidth={0} />
+          <Mark id="entity.trigger"><Zap className="w-2.5 h-2.5 shrink-0 text-sol-amber/70" fill="currentColor" strokeWidth={0} /></Mark>
           <SchedHealthDot accent={schedAccent(primary.task)} task={primary.task} />
           <span data-sched-title className={`text-meta text-sol-text-muted ${rows.length === 1 ? "truncate min-w-0" : "shrink-0 whitespace-nowrap"}`}>
             {rows.length === 1 ? taskDisplayTitle(primary.task) : `${rows.length} triggers`}
@@ -1014,7 +1014,7 @@ const CardBarStrip = memo(function CardBarStrip({ session, rows, activeSessionId
       {primary ? (
         <SchedFireBadge task={primary.task} className="ml-auto" />
       ) : (
-        <span className="ml-auto flex h-3.5 w-3.5 shrink-0 items-center justify-center" title="Running"><LivePulseDot still className="w-2 h-2" /></span>
+        <Mark id="inbox.running" className="ml-auto h-3.5 w-3.5"><LivePulseDot still className="w-2 h-2" /></Mark>
       )}
     </button>
   );
@@ -1078,11 +1078,10 @@ function WorkflowBar({ session, isActive }: { session: InboxSession; isActive: b
         disabled={opening}
         aria-busy={opening}
         onClick={open}
-        title="Jump to where this workflow started in the conversation"
       >
         <div className="flex gap-1.5 min-w-0">
           <SchedChildArrow slot label={ariaLabel} className="text-sol-cyan/70" />
-          <div className="min-w-0 flex-1">
+          <div className="min-w-0 flex-1" title="Jump to where this workflow started in the conversation">
             <div className="flex items-center gap-1.5 min-w-0">
               <span className="text-mark font-semibold uppercase tracking-wider text-sol-cyan/70 shrink-0">Workflow</span>
               <span className="text-xs truncate min-w-0 text-sol-text-muted font-normal">{session.workflow_run_name || "workflow run"}</span>
@@ -1136,14 +1135,13 @@ export function MonitorBars({ session, isActive }: {
             className="w-full text-left cursor-pointer pr-3 pl-2 py-1 hover:bg-sol-blue/[0.05] transition-colors"
             disabled={openingKey !== null}
             aria-busy={openingKey === row.toolUseId}
-            title="Jump to this task in the conversation"
             onClick={() => { void openWatchMessage(row); }}
           >
             <div className="flex gap-1.5 min-w-0">
               {/* Same corner arrow the schedule/subagent child rows carry, in
                   monitor blue: this watch runs inside the card above. */}
               <SchedChildArrow slot label={ariaLabel} className="text-sol-blue/70" />
-              <div className="min-w-0 flex-1">
+              <div className="min-w-0 flex-1" title="Jump to this task in the conversation">
                 {/* Header line: identity eyebrow, what's being watched, and the
                     live badge with how long the watch has been standing. */}
                 <div className="flex items-center gap-1.5 min-w-0">
@@ -1469,10 +1467,12 @@ function TriggerDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen, on
         aria-label={`Triggers: ${rows.length} armed`}
         className="w-full flex items-center gap-1.5 overflow-hidden px-3 py-1.5 bg-sol-bg hover:bg-sol-bg-alt/60 transition-colors"
       >
-        <svg className={`w-3 h-3 shrink-0 ${attention ? "text-sol-red" : "text-sol-amber"}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-          <circle cx="12" cy="12" r="9" />
-          <path d="M12 7.5V12l3 2" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
+        <Mark id="entity.trigger" labeled>
+          <svg className={`w-3 h-3 shrink-0 ${attention ? "text-sol-red" : "text-sol-amber"}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+            <circle cx="12" cy="12" r="9" />
+            <path d="M12 7.5V12l3 2" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </Mark>
         <span className="shrink-0 whitespace-nowrap text-mark font-semibold uppercase tracking-wider text-sol-amber">
           Triggers <span className="text-sol-amber/60 modern:text-sol-amber tabular-nums">{rows.length}</span>
         </span>
@@ -3324,7 +3324,7 @@ function SessionListPanelImpl({
               data-cc-keep
               data-blocked-pill={blockedHasNonSub ? "alert" : "workers"}
               onClick={openBlockedBanner}
-              title={
+              aria-label={
                 blockedHasNonSub
                   ? `${blockedSessions.length} session${blockedSessions.length === 1 ? "" : "s"} blocked on usage, login, connection, API errors, a full context window, or safety review — view blockers`
                   : `${blockedSessions.length} subagent worker${blockedSessions.length === 1 ? "" : "s"} blocked — view them`
@@ -3335,9 +3335,11 @@ function SessionListPanelImpl({
                   : "flex items-center gap-1 px-1.5 py-[3px] rounded-[5px] text-meta text-sol-text-dim border border-sol-border/60 hover:text-sol-text hover:border-sol-border transition-colors modern:h-6 modern:rounded-control modern:px-2 modern:py-0"
               }
             >
-              <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                <path d="M6 3h12M6 21h12M8 3v3.5c0 2 4 4 4 5.5s-4 3.5-4 5.5V21M16 3v3.5c0 2-4 4-4 5.5s4 3.5 4 5.5V21" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
+              <Mark id={blockedHasNonSub ? "inbox.blocked" : "inbox.blocked_workers"}>
+                <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                  <path d="M6 3h12M6 21h12M8 3v3.5c0 2 4 4 4 5.5s-4 3.5-4 5.5V21M16 3v3.5c0 2-4 4-4 5.5s4 3.5 4 5.5V21" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </Mark>
               {blockedSessions.length}
             </button>
           )}
@@ -3500,7 +3502,7 @@ function SessionListPanelImpl({
                   progress={group.plan?.progress}
                   movedAt={group.standing.movedAt}
                   now={coarseNow}
-                  status={tier === "quiet" ? PLAN_STATE_STATUS[group.standing.state].status : undefined}
+                  state={tier === "quiet" ? group.standing.state : undefined}
                   active={!!focusedId && group.items.some((x) => x._id === focusedId)}
                   onClick={() => handleSelect(group.items[0])}
                 />

@@ -35,6 +35,7 @@ import type { WorkState } from "@codecast/shared/contracts";
 import { AlertTriangle, ArrowUpRight, CheckCircle2, Copy, History, Pause, Pencil, Play, RotateCcw, Trash2, X, XCircle } from "lucide-react";
 import { ContextMenu, useContextMenu, CtxItem, CtxHeader, CtxSeparator } from "./ui/context-menu";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
+import { Mark } from "./Mark";
 import { StatusDot } from "./StatusDot";
 import { ORG_STATE_META } from "./org/orgMeta";
 import { useCoarseNow, useNowWhen } from "../hooks/useCoarseNow";
@@ -71,15 +72,16 @@ function schedBadgeTone(task: { status: string; run_at?: number }, now: number):
 // connectors line up under a card and the amber alone says "schedule".
 // `slot`: a bar under an inbox card, whose arrow sits centred in the card's
 // 20px icon column (and the bar's text, two px further on, on its title edge).
-export function SchedChildArrow({ label, className, slot = false }: { label: string; className?: string; slot?: boolean }) {
+export function SchedChildArrow({ label, className, slot = false, markId = "inbox.inside" }: { label: string; className?: string; slot?: boolean; markId?: string }) {
   return (
-    <span className={`flex items-center self-start mt-[3px] shrink-0 ${slot ? "w-5 justify-center mr-0.5" : ""} ${className ?? "text-sol-amber/70"}`} role="img" aria-label={label}>
-      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-        <title>{label}</title>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M6 4v12h12" />
-        <path strokeLinecap="round" strokeLinejoin="round" d="M14 12l4 4-4 4" />
-      </svg>
-    </span>
+    <Mark id={markId} className="self-start">
+      <span className={`flex items-center self-start mt-[3px] shrink-0 ${slot ? "w-5 justify-center mr-0.5" : ""} ${className ?? "text-sol-amber/70"}`} role="img" aria-label={label}>
+        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M6 4v12h12" />
+          <path strokeLinecap="round" strokeLinejoin="round" d="M14 12l4 4-4 4" />
+        </svg>
+      </span>
+    </Mark>
   );
 }
 
@@ -88,19 +90,19 @@ export function SchedChildArrow({ label, className, slot = false }: { label: str
 export function SchedHealthDot({ accent, task }: { accent: SchedAccent; task: { last_run_failed?: boolean } }) {
   if (accent === "running") {
     return (
-      <ShortcutTooltip label="Running now">
+      <Mark id="inbox.running">
         <span className="relative flex h-2 w-2 shrink-0 items-center justify-center">
           <span className="absolute inline-flex h-2 w-2 rounded-full bg-sol-green/40 animate-ping motion-reduce:animate-none" />
           <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-sol-green" />
         </span>
-      </ShortcutTooltip>
+      </Mark>
     );
   }
   if (accent === "attention") {
     return (
-      <ShortcutTooltip label={task.last_run_failed ? "Last run failed" : "Flagged for attention"}>
+      <Mark id={task.last_run_failed ? "inbox.run_failed" : "inbox.run_flagged"}>
         <span className="w-1.5 h-1.5 rounded-full bg-sol-red shrink-0" />
-      </ShortcutTooltip>
+      </Mark>
     );
   }
   return null;

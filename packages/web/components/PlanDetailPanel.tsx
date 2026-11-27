@@ -42,7 +42,9 @@ import {
   RotateCw,
   Play,
 } from "lucide-react";
-import { taskPriority } from "../lib/taskPriority";
+import { taskPriority, taskPriorityLevel } from "../lib/taskPriority";
+import { Mark } from "./Mark";
+import { taskStatusMarkId } from "../lib/marks/work";
 import Markdown from "react-markdown";
 import { entityRemarkPlugins } from "../lib/remarkEntityIds";
 import { EntityAwareCode, EntityAwareLink } from "./EntityIdPill";
@@ -129,11 +131,11 @@ export function PlanProgressBar({ progress }: { progress: { total: number; done:
       <div className="flex items-center justify-between mb-2.5">
         <div className="flex items-center gap-2">
           {isComplete ? (
-            <CheckCircle2 className="w-3.5 h-3.5 text-sol-green" />
+            <Mark id="task.done" labeled><CheckCircle2 className="w-3.5 h-3.5 text-sol-green" /></Mark>
           ) : in_progress > 0 ? (
-            <CircleDot className="w-3.5 h-3.5 text-sol-yellow animate-pulse" />
+            <Mark id="task.in_progress" labeled><CircleDot className="w-3.5 h-3.5 text-sol-yellow animate-pulse" /></Mark>
           ) : (
-            <Circle className="w-3.5 h-3.5 text-sol-text-dim" />
+            <Mark id="task.open" labeled><Circle className="w-3.5 h-3.5 text-sol-text-dim" /></Mark>
           )}
           <span className="text-xs font-semibold text-sol-text">
             {isComplete ? "Complete" : in_progress > 0 ? "In Progress" : "Planned"}
@@ -239,7 +241,7 @@ function CollapsibleDoc({ content }: { content: string }) {
         onClick={() => setExpanded(!expanded)}
         className="w-full flex items-center justify-center gap-1 py-2 text-xs text-sol-text-dim hover:text-sol-text border-t border-sol-border/20 transition-colors"
       >
-        <FileText className="w-3 h-3" />
+        <Mark id="entity.doc" labeled><FileText className="w-3 h-3" /></Mark>
         {expanded ? "Collapse document" : "Expand full document"}
         {expanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
       </button>
@@ -413,7 +415,7 @@ export function OrchestrationHeader({ tasks, sessions }: { tasks: any[]; session
     <div className={`mb-5 rounded-lg border overflow-hidden ${hasActiveWork ? "border-sol-green/30 bg-sol-green/5" : "border-sol-border/20 bg-sol-bg-alt/20"}`}>
       <div className="px-4 py-3">
         <div className="flex items-center gap-3 mb-2.5">
-          <Zap className={`w-4 h-4 ${hasActiveWork ? "text-sol-green" : "text-sol-text-dim"}`} />
+          <Mark id="plan.view.orchestration" labeled><Zap className={`w-4 h-4 ${hasActiveWork ? "text-sol-green" : "text-sol-text-dim"}`} /></Mark>
           <span className={`text-xs font-semibold uppercase tracking-wider ${hasActiveWork ? "text-sol-green" : "text-sol-text-dim"}`}>
             {hasActiveWork ? "Live Orchestration" : "Orchestration"}
           </span>
@@ -465,7 +467,7 @@ export function OrchestrationHeader({ tasks, sessions }: { tasks: any[]; session
             <div className="flex items-center gap-1.5">
               {remainingEstimated > 0 ? (
                 <>
-                  <Timer className="w-3 h-3 text-sol-text-dim" />
+                  <Mark id="plan.time" labeled><Timer className="w-3 h-3 text-sol-text-dim" /></Mark>
                   <span className="text-sm font-semibold tabular-nums text-sol-text">
                     {remainingEstimated < 60 ? `${remainingEstimated}m` : `${Math.floor(remainingEstimated / 60)}h ${remainingEstimated % 60}m`}
                   </span>
@@ -473,7 +475,7 @@ export function OrchestrationHeader({ tasks, sessions }: { tasks: any[]; session
                 </>
               ) : totalActual > 0 ? (
                 <>
-                  <Timer className="w-3 h-3 text-sol-green" />
+                  <Mark id="plan.time" labeled><Timer className="w-3 h-3 text-sol-green" /></Mark>
                   <span className="text-sm font-semibold tabular-nums text-sol-green">
                     {totalActual < 60 ? `${totalActual}m` : `${Math.floor(totalActual / 60)}h ${totalActual % 60}m`}
                   </span>
@@ -583,7 +585,7 @@ export function PlanTaskSection({ planShortId, tasks, sessions }: { planShortId:
     <div className="mb-6">
       <div className="flex items-center justify-between mb-2">
         <h2 className="flex items-center gap-2 text-sm font-medium text-sol-text">
-          <CheckCircle2 className="w-4 h-4 text-sol-text-dim" />
+          <Mark id="work.tasks" labeled><CheckCircle2 className="w-4 h-4 text-sol-text-dim" /></Mark>
           Tasks ({tasks.length})
           {sessions.length > 0 && (
             <span className="text-xs text-sol-text-dim font-normal ml-1">
@@ -677,11 +679,10 @@ export function PlanTaskSection({ planShortId, tasks, sessions }: { planShortId:
               <div className="flex items-center gap-2.5 px-3 py-2 group">
                 <button
                   onClick={() => cycleStatus(task.short_id, task.status)}
-                  title={`${tc.label} (click to cycle)`}
                   aria-label={`Status ${tc.label}; cycle`}
                   className="flex-shrink-0 p-1 -m-1 hover:scale-110 transition-transform"
                 >
-                  <TaskIcon className={`w-3.5 h-3.5 ${tc.color}`} />
+                  <Mark id={taskStatusMarkId(task.status)} hint="click to cycle"><TaskIcon className={`w-3.5 h-3.5 ${tc.color}`} /></Mark>
                 </button>
                 {/* The title opens the task; renaming happens on its page. */}
                 <Link href={taskHref(task.short_id)} className="flex-1 min-w-0 flex items-center gap-2 group/title">
@@ -707,11 +708,10 @@ export function PlanTaskSection({ planShortId, tasks, sessions }: { planShortId:
                 {PriorityIcon && pc && (
                   <button
                     onClick={() => cyclePriority(task.short_id, task.priority || "medium")}
-                    title={`${pc.label} priority (click to cycle)`}
                     aria-label={`${pc.label} priority; cycle`}
                     className="flex-shrink-0 p-1 -m-1 hover:scale-110 transition-transform"
                   >
-                    <PriorityIcon className={`w-3 h-3 ${pc.color}`} />
+                    <Mark id={`task.priority.${taskPriorityLevel(task.priority)}`} hint="click to cycle"><PriorityIcon className={`w-3 h-3 ${pc.color}`} /></Mark>
                   </button>
                 )}
                 {hasDetail ? (
@@ -758,10 +758,10 @@ export function PlanTaskSection({ planShortId, tasks, sessions }: { planShortId:
                   >
                     <button
                       onClick={(e) => { e.stopPropagation(); cycleStatus(task.short_id, task.status); }}
-                      title={`${tc.label} (click to cycle)`}
+                      aria-label={`Status ${tc.label}; cycle`}
                       className="flex-shrink-0 hover:scale-110 transition-transform"
                     >
-                      <TaskIcon className={`w-3.5 h-3.5 ${tc.color}`} />
+                      <Mark id={taskStatusMarkId(task.status)} hint="click to cycle"><TaskIcon className={`w-3.5 h-3.5 ${tc.color}`} /></Mark>
                     </button>
                     <Link href={taskHref(task.short_id)} onClick={(e) => e.stopPropagation()} className="min-w-0 flex items-center gap-2.5 group/title">
                       <ShortId id={task.short_id} className="text-xs text-sol-text-dim" />
@@ -884,7 +884,7 @@ export function OrchestrationTab({ tasks, sessions }: { tasks: any[]; sessions: 
                 return (
                   <div key={task._id} className="flex items-start gap-3 py-2 pl-1 pr-3 relative">
                     <div className="relative z-10 flex-shrink-0 mt-0.5 bg-sol-bg rounded-full p-0.5">
-                      <TaskIcon className={`w-4 h-4 ${tc.color}`} />
+                      <Mark id={taskStatusMarkId(task.status)} labeled><TaskIcon className={`w-4 h-4 ${tc.color}`} /></Mark>
                     </div>
                     <div className="flex-1 min-w-0">
                       <Link href={taskHref(task.short_id)} className="flex items-center gap-2 min-w-0 group/title">
@@ -1161,7 +1161,7 @@ export function PlanDetailPanel({ planId, closeHref }: { planId: string; /** Whe
                 : "text-sol-text-dim border-transparent hover:text-sol-text-muted"
             }`}
           >
-            <CheckCircle2 className="w-3.5 h-3.5" />
+            <Mark id="plan.view.overview" labeled><CheckCircle2 className="w-3.5 h-3.5" /></Mark>
             Overview
           </button>
           <button
@@ -1172,7 +1172,7 @@ export function PlanDetailPanel({ planId, closeHref }: { planId: string; /** Whe
                 : "text-sol-text-dim border-transparent hover:text-sol-text-muted"
             }`}
           >
-            <Zap className={`w-3.5 h-3.5 ${hasActiveSessions ? "text-sol-green" : ""}`} />
+            <Mark id="plan.view.orchestration" labeled><Zap className={`w-3.5 h-3.5 ${hasActiveSessions ? "text-sol-green" : ""}`} /></Mark>
             Orchestration
             {hasActiveSessions && (
               <span className="w-1.5 h-1.5 rounded-full bg-sol-green" />
@@ -1186,7 +1186,7 @@ export function PlanDetailPanel({ planId, closeHref }: { planId: string; /** Whe
                 : "text-sol-text-dim border-transparent hover:text-sol-text-muted"
             }`}
           >
-            <Layers className="w-3.5 h-3.5" />
+            <Mark id="plan.view.board" labeled><Layers className="w-3.5 h-3.5" /></Mark>
             Board
           </button>
           <button
@@ -1197,7 +1197,7 @@ export function PlanDetailPanel({ planId, closeHref }: { planId: string; /** Whe
                 : "text-sol-text-dim border-transparent hover:text-sol-text-muted"
             }`}
           >
-            <GitBranch className="w-3.5 h-3.5" />
+            <Mark id="plan.view.graph" labeled><GitBranch className="w-3.5 h-3.5" /></Mark>
             Graph
           </button>
         </div>

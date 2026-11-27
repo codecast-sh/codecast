@@ -49,6 +49,9 @@ import { useClaudeBackend } from "../hooks/useSessionCommands";
 import { useInboxStore } from "../store/inboxStore";
 import { ownersModelOnFor } from "../store/sessionOwnersSlice";
 import { SdkBackendPill } from "./ClaudeBackendControl";
+import { Mark } from "./Mark";
+
+const TERMINAL_DOT = { online: "inbox.terminal_live", offline: "inbox.terminal_quiet" };
 
 export function TmuxAttachPill({
   tmuxSession,
@@ -141,13 +144,16 @@ export function TmuxAttachPill({
           }}
           className={`inline-flex items-center gap-1 pl-2 pr-1.5 py-0.5 text-meta font-medium transition-colors border-0 ${pillColors} ${splitOpen ? "bg-sol-green/25" : ""} ${!tmuxSession ? "cursor-default" : ""}`}
         >
-          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-          </svg>
+          {/* Quiet: the pill's own tooltip says what a press does. */}
+          <Mark id="inbox.terminal" quiet>
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+            </svg>
+          </Mark>
           {/* Naming the machine is what makes the pill honest at a glance — a
               bare "tmux" reads as "here" no matter where the pane really is. */}
           <span className="cq-sq2">{foreign ? machineName : "tmux"}</span>
-          {tmuxSession && <DeviceDot online={isLive} />}
+          {tmuxSession && <DeviceDot online={isLive} quiet marks={TERMINAL_DOT} />}
         </button>
       </ShortcutTooltip>
       {canSplit && !ownersOn && (

@@ -43,6 +43,7 @@ import { LivePulseHalo } from "../../components/LivenessDot";
 import { planLivenessState } from "../../lib/liveness";
 import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 import { PageHeader } from "../../components/ui/page-header";
+import { Mark } from "../../components/Mark";
 import { Button } from "../../components/ui/button";
 import { modernButton, modernTab, modernTabList } from "../../components/ui/modernLook";
 
@@ -100,6 +101,7 @@ function SidebarPlanItem({
   onContextMenu: (e: MouseEvent) => void;
 }) {
   const status = STATUS_CONFIG[plan.status as PlanStatus] || STATUS_CONFIG.draft;
+  const statusMark = `plan.${STATUS_CONFIG[plan.status as PlanStatus] ? plan.status : "draft"}`;
   const StatusIcon = status.icon;
   const sessionCount = plan.session_ids?.length || 0;
   const activeAgents = plan.active_agents || 0;
@@ -118,9 +120,9 @@ function SidebarPlanItem({
     >
       <div className="flex items-center gap-2 min-w-0">
         {liveness === "active" ? (
-          <LivePulseHalo><StatusIcon className={`w-3.5 h-3.5 ${status.color}`} /></LivePulseHalo>
+          <LivePulseHalo><Mark id={statusMark}><StatusIcon className={`w-3.5 h-3.5 flex-shrink-0 ${status.color}`} /></Mark></LivePulseHalo>
         ) : (
-          <StatusIcon className={`w-3.5 h-3.5 flex-shrink-0 ${status.color}`} />
+          <Mark id={statusMark}><StatusIcon className={`w-3.5 h-3.5 flex-shrink-0 ${status.color}`} /></Mark>
         )}
         <span className={`text-sm truncate ${isSelected ? "text-sol-text font-medium" : "text-sol-text"}`}>
           {plan.title}
@@ -130,20 +132,20 @@ function SidebarPlanItem({
         <ShortId id={plan.short_id} className="text-meta text-sol-text-dim" />
         <MiniProgressBar progress={plan.progress} />
         {activeAgents > 0 && (
-          <span className="flex items-center gap-0.5 text-meta text-sol-green" title={`${activeAgents} active ${activeAgents === 1 ? "agent" : "agents"}`}>
-            <Zap className="w-2.5 h-2.5" />
+          <span className="flex items-center gap-0.5 text-meta text-sol-green">
+            <Mark id="work.agents"><Zap className="w-2.5 h-2.5" /></Mark>
             {activeAgents}
           </span>
         )}
         {taskCount > 0 && (
-          <span className="flex items-center gap-0.5 text-meta text-sol-text-dim tabular-nums" title={`${taskCount} ${taskCount === 1 ? "task" : "tasks"}`}>
-            <ListChecks className="w-2.5 h-2.5" />
+          <span className="flex items-center gap-0.5 text-meta text-sol-text-dim tabular-nums">
+            <Mark id="work.tasks"><ListChecks className="w-2.5 h-2.5" /></Mark>
             {taskCount}
           </span>
         )}
         {sessionCount > 0 && (
           <span className="flex items-center gap-0.5 text-meta text-sol-text-dim">
-            <MessageSquare className="w-2.5 h-2.5" />
+            <Mark id="work.sessions"><MessageSquare className="w-2.5 h-2.5" /></Mark>
             {sessionCount}
           </span>
         )}
@@ -209,7 +211,7 @@ function StatusGroup({
         className="w-full flex items-center gap-2 px-3 py-1.5 bg-sol-bg-alt/40 border-b border-sol-border/15 hover:bg-sol-bg-alt/60 transition-colors"
       >
         <ChevronRight className={`w-3 h-3 text-sol-text-dim transition-transform ${collapsed ? "" : "rotate-90"}`} />
-        <Icon className={`w-3 h-3 ${config.color}`} />
+        <Mark id={`plan.${status}`} labeled><Icon className={`w-3 h-3 ${config.color}`} /></Mark>
         <span className="text-mark font-medium text-sol-text-dim uppercase tracking-wide">
           {config.label}
         </span>
@@ -367,7 +369,7 @@ export default function PlansPage() {
                   {/* The tab bar already says "Plans"; repeating it here was the
                       doubled title. Identity stays as the glyph alone. */}
                   <div className="flex items-center gap-2">
-                    <MapIcon className="w-4 h-4 text-sol-cyan" />
+                    <Mark id="entity.plan"><MapIcon className="w-4 h-4 text-sol-cyan" /></Mark>
                     <h2 className="sr-only">Plans</h2>
                   </div>
                   <div className="flex items-center gap-1.5">
@@ -464,7 +466,7 @@ export default function PlansPage() {
                           onClick={() => setShowDone(true)}
                           className="w-full flex items-center gap-2 px-3 py-1.5 bg-sol-bg-alt/20 border-b border-sol-border/15 hover:bg-sol-bg-alt/40 transition-colors text-meta text-sol-text-dim"
                         >
-                          <CheckCircle2 className="w-3 h-3" />
+                          <Mark id="plan.done" labeled><CheckCircle2 className="w-3 h-3" /></Mark>
                           Show completed plans
                         </button>
                       )}
@@ -535,7 +537,7 @@ function MobileList({
         legacy={
           <div ref={titlebarRef} className="px-4 py-3 border-b border-sol-border/30 flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <MapIcon className="w-4 h-4 text-sol-cyan" />
+              <Mark id="entity.plan"><MapIcon className="w-4 h-4 text-sol-cyan" /></Mark>
               <h1 className="text-base font-semibold text-sol-text">Plans</h1>
             </div>
             {toggle}

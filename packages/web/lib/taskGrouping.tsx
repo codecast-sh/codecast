@@ -34,6 +34,8 @@ import { resolveAssigneeInfo, assigneeLabelOf } from "./liveEntities";
 import { arrangeChain, type ChainNode } from "./taskChain";
 import { AssigneeFace } from "../components/identity/AssigneeFace";
 import { ProjectLeadChip } from "../components/charter/ProjectLeadChip";
+import { Mark } from "../components/Mark";
+import { taskStatusMarkId } from "./marks/work";
 
 /** What an axis needs from the page to draw a header (projects aren't on the
  *  task row, and the label header offers a one-click filter). */
@@ -171,7 +173,7 @@ export const TASK_AXES: Record<string, TaskAxis> = {
       const Icon = cfg?.icon;
       return {
         label: cfg?.label || b.key,
-        icon: Icon ? <Icon className={`w-3.5 h-3.5 ${cfg.color}`} /> : undefined,
+        icon: Icon ? <Mark id={taskStatusMarkId(status?.category)} labeled><Icon className={`w-3.5 h-3.5 ${cfg.color}`} /></Mark> : undefined,
       };
     },
     // Every task has a status, so this bucket never fills.
@@ -190,7 +192,7 @@ export const TASK_AXES: Record<string, TaskAxis> = {
       const project = ctx.projects[b.key];
       return {
         label: project?.title || b.key,
-        icon: <FolderKanban className="w-3.5 h-3.5 text-sol-cyan" />,
+        icon: <Mark id="entity.project"><FolderKanban className="w-3.5 h-3.5 text-sol-cyan" /></Mark>,
         // Who leads the project (org-roles-run-work.md R4) sits with the link,
         // outside the header's toggle button: the chip is itself a link.
         extra: project ? (
@@ -220,7 +222,7 @@ export const TASK_AXES: Record<string, TaskAxis> = {
       const plan = b.sample!.plan!;
       return {
         label: plan.title || b.key,
-        icon: <ListChecks className="w-3.5 h-3.5 text-sol-cyan" />,
+        icon: <Mark id="entity.plan"><ListChecks className="w-3.5 h-3.5 text-sol-cyan" /></Mark>,
         badge: (
           <span
             className={`text-meta px-1.5 py-0 rounded border ${
@@ -277,7 +279,7 @@ export const TASK_AXES: Record<string, TaskAxis> = {
       const row = initiativeOfTask(b.sample, ctx);
       return {
         label: row?.title || b.key,
-        icon: <Flag className="w-3.5 h-3.5" style={{ color: INITIATIVE_ACCENT }} />,
+        icon: <Mark id="entity.goal"><Flag className="w-3.5 h-3.5" style={{ color: INITIATIVE_ACCENT }} /></Mark>,
         badge: row ? <HealthChip health={row.health} at={row.health_at} now={Date.now()} /> : undefined,
         extra: row ? (
           <span className="flex items-center gap-2 flex-shrink-0">
@@ -331,7 +333,7 @@ export const TASK_AXES: Record<string, TaskAxis> = {
       const session = b.sample!.origin_session!;
       return {
         label: session.title || b.key.slice(0, 8),
-        icon: <MessageSquare className="w-3.5 h-3.5 text-sol-cyan" />,
+        icon: <Mark id="entity.session"><MessageSquare className="w-3.5 h-3.5 text-sol-cyan" /></Mark>,
         extra: session.conversation_id ? (
           <Link
             href={`/sessions/${session.conversation_id}`}
@@ -359,7 +361,7 @@ export const TASK_AXES: Record<string, TaskAxis> = {
       const day = callDay(call?.started_at);
       return {
         label: call?.title || "Call",
-        icon: <Phone className="w-3.5 h-3.5 text-sol-magenta" />,
+        icon: <Mark id="entity.call"><Phone className="w-3.5 h-3.5 text-sol-magenta" /></Mark>,
         badge: day ? <span className="text-meta text-sol-text-dim normal-case tracking-normal">{day}</span> : undefined,
         extra: (
           <Link href={`/calls/${call?.short_id || b.key}`} onClick={(e) => e.stopPropagation()} className={HEADER_LINK}>

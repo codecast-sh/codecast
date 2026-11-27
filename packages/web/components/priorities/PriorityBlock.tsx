@@ -24,6 +24,7 @@ import { cn } from "../../lib/utils";
 import { branchesOf, type LinkLookups } from "../../hooks/usePriorityModels";
 import { usePriorityWrites } from "../../hooks/usePriorities";
 import type { LinkKind } from "./parts";
+import { Mark } from "../Mark";
 import { ActionButton, AnswerSecondary, BranchChip, DayStrip, DeployChip, InSession, KindCount, MilestoneMark, PlanChip, PrChip, SessionChip, SessionSlot, TaskChip } from "./parts";
 import { LooksDone, MilestoneMenu, MilestoneTitleInput, MilestoneToggle, PriorityMenu, SessionMenu } from "./controls";
 
@@ -150,28 +151,30 @@ function Progress({ model, layout, onToggle }: { model: PriorityModel; layout: L
   const body = (
     <>
       {layout === "wide" && (
-        <span className="flex gap-[2px]">
-          {Array.from({ length: t }, (_, i) => <i key={i} className={cn("block h-[7px] w-[7px] rounded-[1.5px]", i < d ? "bg-sol-green" : "bg-sol-text/15")} />)}
-        </span>
+        <Mark id="priority.critical" hint={onToggle ? "click to show them" : undefined}>
+          <span className="flex gap-[2px]">
+            {Array.from({ length: t }, (_, i) => <i key={i} className={cn("block h-[7px] w-[7px] rounded-[1.5px]", i < d ? "bg-sol-green" : "bg-sol-text/15")} />)}
+          </span>
+        </Mark>
       )}
       <span data-progress className="text-meta tabular-nums text-sol-text-muted">{d}/{t}</span>
     </>
   );
   return onToggle
-    ? <button type="button" data-progress-toggle onClick={onToggle} title={`${d} of ${t} critical milestones done: show them`} className={cn("flex items-center gap-1.5 rounded px-1 hover:bg-sol-bg-alt", TOUCH_AREA)}>{body}</button>
-    : <span className="flex items-center gap-1.5 px-1" title={`${d} of ${t} critical milestones done`}>{body}</span>;
+    ? <button type="button" data-progress-toggle onClick={onToggle} aria-label={`${d} of ${t} critical milestones done: show them`} className={cn("flex items-center gap-1.5 rounded px-1 hover:bg-sol-bg-alt", TOUCH_AREA)}>{body}</button>
+    : <span className="flex items-center gap-1.5 px-1">{body}</span>;
 }
 
 /** Stalled, in words and a diamond so it reads without colour. */
 function StalledMark({ days, className }: { days: number; className?: string }) {
-  return <span data-stalled className={cn("shrink-0 items-center gap-1 whitespace-nowrap text-mark font-semibold text-sol-text", className)}><i aria-hidden className="block size-[6px] rotate-45 border border-sol-text" />Stalled {days}d</span>;
+  return <span data-stalled className={cn("shrink-0 items-center gap-1 whitespace-nowrap text-mark font-semibold text-sol-text", className)}><Mark id="priority.stalled" labeled><i aria-hidden className="block size-[6px] rotate-45 border border-sol-text" /></Mark>Stalled {days}d</span>;
 }
 
 /** Stalled as its mark alone, beside the strip of a compact row that has no room for the words. */
 function StalledIcon({ days, className }: { days: number; className?: string }) {
   return (
-    <span data-stalled role="img" aria-label={`Stalled ${days}d`} title={`Stalled ${days}d`} className={cn("size-3 shrink-0 items-center justify-center", className)}>
-      <i aria-hidden className="block size-[6px] rotate-45 border border-sol-text" />
+    <span data-stalled role="img" aria-label={`Stalled ${days}d`} className={cn("size-3 shrink-0 items-center justify-center", className)}>
+      <Mark id="priority.stalled"><i aria-hidden className="block size-[6px] rotate-45 border border-sol-text" /></Mark>
     </span>
   );
 }
@@ -187,8 +190,8 @@ const lastLanded = (days: number | null) => (days == null ? "none yet" : days ==
 /** "N landed · last Nd", where the momentum column has no room for words beside its strip: under it, on the row's meta line. */
 function MomentumWords({ model, stalled, className }: { model: PriorityModel; stalled?: boolean; className?: string }) {
   return (
-    <span data-momentum-words title={`${model.landed10} critical milestones landed in 10 days`} className={cn("whitespace-nowrap text-mark tabular-nums", className)}>
-      <span className="text-sol-text">{model.landed10} landed</span>
+    <span data-momentum-words className={cn("whitespace-nowrap text-mark tabular-nums", className)}>
+      <span title={`${model.landed10} critical milestones landed in 10 days`} className="text-sol-text">{model.landed10} landed</span>
       {/* `stalled`: a stalled priority says so here, in place of how long since. */}
       <span className="text-sol-text-dim"> · {stalled && model.stalledDays != null ? <StalledMark days={model.stalledDays} className="ml-0.5 inline-flex align-middle" /> : lastLanded(model.lastLandedDays)}</span>
     </span>
@@ -199,7 +202,7 @@ function MomentumWords({ model, stalled, className }: { model: PriorityModel; st
 function Momentum({ model, todayIndex, peak, layout }: { model: PriorityModel; todayIndex: number; peak: number; layout: ListLayout }) {
   if (layout === "phone") return <DayStrip counts={model.counts} todayIndex={todayIndex} peak={peak} size="mini" />;
   return (
-    <span data-momentum className="flex items-center gap-2" title={`${model.landed10} critical milestones landed in 10 days`}>
+    <span data-momentum className="flex items-center gap-2">
       <DayStrip counts={model.counts} landed={model.landed} todayIndex={todayIndex} peak={peak} />
       <span className="hidden min-w-0 items-center gap-1 whitespace-nowrap text-mark [@container(min-width:44rem)]:flex">
         <span className="tabular-nums text-sol-text">{model.landed10} landed</span>
@@ -478,10 +481,11 @@ function kindCounts(m: MilestoneModel, filters: ListFilters, lookups: LinkLookup
   ].filter((k) => k.n > 0);
 }
 
-const RAIL: Record<RailPart, string> = {
-  head: "top-1/2 bottom-0 border-t-2 rounded-tl-[3px]",
-  mid: "inset-y-0",
-  end: "top-0 bottom-1/2 border-b-2 rounded-bl-[3px]",
+/** Where each part of the bracket sits in its line, and its edges. */
+const RAIL: Record<RailPart, { at: string; edge: string }> = {
+  head: { at: "top-1/2 bottom-0", edge: "border-t-2 rounded-tl-[3px]" },
+  mid: { at: "inset-y-0", edge: "" },
+  end: { at: "top-0 bottom-1/2", edge: "border-b-2 rounded-bl-[3px]" },
 };
 
 function MilestoneLine({ model, m, layout, filters, rail, open, onToggle, now, lookups }: {
@@ -562,7 +566,13 @@ function MilestoneLine({ model, m, layout, filters, rail, open, onToggle, now, l
               {/* One row that never wraps (LineChips). Under a coarse pointer the line is 48px, so each chip's 44px press area fits inside its clip.
                   The cell takes the line's whole height, and the bracket rail with it, however tall the title makes the line. */}
               <span data-line-chips-cell className="relative flex min-w-0 items-start gap-1.5 self-stretch">
-                {rail && <span aria-hidden data-rail={rail} className={cn("pointer-events-none absolute left-0 w-1.5 border-l-2 border-sol-text-dim/70", RAIL[rail])} />}
+                {/* It takes the pointer, so a hover names it; a press on it opens the line, as anywhere on the line.
+                    At least 12px tall, so the legend's copy of it reads as a bracket too. */}
+                {rail && (
+                  <span aria-hidden data-rail={rail} className={cn("absolute left-0 flex w-1.5", RAIL[rail].at)}>
+                    <Mark id="priority.bracket"><span className={cn("block h-full min-h-3 w-1.5 border-l-2 border-sol-text-dim/70", RAIL[rail].edge)} /></Mark>
+                  </span>
+                )}
                 <LineChips model={model} m={m} railed={rail} filters={filters} lookups={lookups} />
               </span>
             </div>
@@ -600,7 +610,8 @@ export function SessionRow({ s, now, menu }: { s: SessionLine; now: number; menu
   const asks = asksPerson(s);
   return (
     <li data-session-row={s.conversation_id} className="group/session flex min-w-0 items-center gap-2 py-0.5 [@media(pointer:coarse)]:min-h-11">
-      {asks ? <AnswerSecondary s={s} /> : <SessionChip s={s} className="max-w-[22rem]" />}
+      {/* Its state's word follows the chip. */}
+      {asks ? <AnswerSecondary s={s} /> : <SessionChip s={s} className="max-w-[22rem]" labeled />}
       <span className="shrink-0 whitespace-nowrap text-meta text-sol-text-dim">
         {/* A closed session's chip already says so. */}
         {!asks && !isClosedSession(s) && <span className="text-sol-text-muted">{STATE_WORD[s.state]} · </span>}
@@ -675,13 +686,13 @@ export function MilestoneDetail({ model, m, now, lookups, touch, olderHref }: {
     ),
     plans.length > 0 && (
       <TypeRow key="plan" label="Plan" tall>
-        {plans.map(({ plan, prefix }) => <PlanChip key={plan.short_id} plan={plan} prefix={prefix} showSize={!!prefix} className={cn("max-w-[24rem]", COARSE_TALL)} />)}
+        {plans.map(({ plan, prefix }) => <PlanChip key={plan.short_id} plan={plan} prefix={prefix} showSize={!!prefix} labeled className={cn("max-w-[24rem]", COARSE_TALL)} />)}
       </TypeRow>
     ),
     m.tasks.length > 0 && <TypeRow key="tasks" label="Tasks" tall>{m.tasks.map((t) => <TaskChip key={t} id={t} className={cn("max-w-[24rem]", COARSE_TALL)} />)}</TypeRow>,
     m.prs.length > 0 && <TypeRow key="prs" label="PRs">{m.prs.map((p) => <PrChip key={p} pr={p} state={lookups.prState(p)} />)}</TypeRow>,
-    branches.length > 0 && <TypeRow key="branches" label="Branches">{branches.map((b) => <BranchChip key={b} name={b} />)}</TypeRow>,
-    deploys.length > 0 && <TypeRow key="deploys" label="Deploys">{deploys.map((d) => <DeployChip key={d.id} d={d} now={now} />)}</TypeRow>,
+    branches.length > 0 && <TypeRow key="branches" label="Branches">{branches.map((b) => <BranchChip key={b} name={b} labeled />)}</TypeRow>,
+    deploys.length > 0 && <TypeRow key="deploys" label="Deploys">{deploys.map((d) => <DeployChip key={d.id} d={d} now={now} labeled />)}</TypeRow>,
   ].filter(Boolean);
   return (
     <div data-milestone-detail className="mb-2 ml-2 border-l border-sol-border/60 pl-3 pt-1">

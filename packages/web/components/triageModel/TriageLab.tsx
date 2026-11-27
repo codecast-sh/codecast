@@ -140,10 +140,10 @@ export function TriageLab() {
           <TriageRowView triage={result.triage} title={scenario?.title ?? "Custom session"} project="codecast" activityAt={now - 4 * 60_000} now={now} />
           <div className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4">
             <Readout label="Lane">
-              <span className={`flex items-center gap-1.5 ${LANE_TEXT[result.triage.lane]}`}><SessionStatusMark status={LANE_STATUS[result.triage.lane]} />{laneWord(result.triage.lane)}</span>
+              <span className={`flex items-center gap-1.5 ${LANE_TEXT[result.triage.lane]}`}><SessionStatusMark status={LANE_STATUS[result.triage.lane]} markId={`triage.${result.triage.lane}`} labeled />{laneWord(result.triage.lane)}</span>
             </Readout>
             <Readout label="Ask">
-              {result.triage.ask ? <span className={`flex items-center gap-1.5 ${ASK_TEXT[result.triage.ask]}`}><SessionStatusMark status={ASK_STATUS[result.triage.ask]} />{askWord(result.triage.ask)}</span> : <span className="text-sol-text-dim">None</span>}
+              {result.triage.ask ? <span className={`flex items-center gap-1.5 ${ASK_TEXT[result.triage.ask]}`}><SessionStatusMark status={ASK_STATUS[result.triage.ask]} markId={`triage.${result.triage.ask}`} labeled />{askWord(result.triage.ask)}</span> : <span className="text-sol-text-dim">None</span>}
             </Readout>
             <Readout label="Reason"><ReasonChip triage={result.triage} /></Readout>
             <Readout label="Shelf">
@@ -161,7 +161,7 @@ export function TriageLab() {
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
             {TRIAGE_LANES.map((lane) => (
               <div key={lane} className="flex flex-col gap-2">
-                <span className={`flex items-center gap-1.5 text-sm font-medium ${LANE_TEXT[lane]}`}><SessionStatusMark status={LANE_STATUS[lane]} />{laneWord(lane)}</span>
+                <span className={`flex items-center gap-1.5 text-sm font-medium ${LANE_TEXT[lane]}`}><SessionStatusMark status={LANE_STATUS[lane]} markId={`triage.${lane}`} labeled />{laneWord(lane)}</span>
                 {lane === "you" ? (
                   TRIAGE_ASKS.map((ask) => (
                     <div key={ask} className="flex flex-col gap-1 pl-3">
