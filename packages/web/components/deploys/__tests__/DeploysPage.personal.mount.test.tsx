@@ -248,7 +248,7 @@ test("a stopped run's long reason folds to three lines until Show all, and Show 
   seed();
   const review = `Review said: ${"the reviewer asked for changes. ".repeat(40)}`;
   const s = useInboxStore.getState() as any;
-  useInboxStore.setState({ shippingRuns: { ...s.shippingRuns, "r-dance": { ...run("r-dance", "/code/dance", NOW - 2 * H, "Snap capture"), status: "failed", fail_reason: review } } } as any);
+  useInboxStore.setState({ shippingRuns: { ...s.shippingRuns, "r-dance": { ...run("r-dance", "/code/dance", NOW - H / 6, "Snap capture"), status: "failed", fail_reason: review } } } as any); // stopped 10 minutes ago: older stops fold into Quiet runs
   // jsdom lays nothing out: a folded reason reads as taller than its box, an open one as fitting.
   const proto = dom.window.HTMLElement.prototype as any;
   const had = [Object.getOwnPropertyDescriptor(proto, "scrollHeight"), Object.getOwnPropertyDescriptor(proto, "clientHeight")];
