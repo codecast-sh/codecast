@@ -3,7 +3,7 @@
 // the rest of the team. Those four live per person in session_viewer_triage
 // and are laid over the row each viewer reads; the conversation's own stamps
 // stay for what ends it for everyone (Done, kill). A leaf module.
-import { closeWakeFields, pinHideFields } from "@codecast/shared/contracts";
+import { closeWakeFields, pinHideFields, settleHideFields, viewerStallHideFields } from "@codecast/shared/contracts";
 import type { Id } from "../_generated/dataModel";
 
 type Db = { db: any };
@@ -122,9 +122,28 @@ export async function hideViewerClosesOnWake(ctx: Db, conversation: any): Promis
  *  the rule the row follows (pinHideFields). True when it brought any back. */
 export async function resurfaceViewerTriageOnPin(ctx: Db, conversation: any, status: string, returnsOnDone: boolean): Promise<boolean> {
   if (status !== "blocked" && status !== "done") return false;
+  return patchTriageRows(ctx, conversation, (row) => pinHideFields(row, status, returnsOnDone));
+}
+
+/** A team session that stalls (an open question, a permission prompt, a dead
+ *  process) comes back for each person who hid it, a close included
+ *  (viewerStallHideFields), as the row's own hide does on a stall
+ *  (notifications performNeedsInputCheck). True when it brought any back. */
+export async function resurfaceViewerTriageOnStall(ctx: Db, conversation: any): Promise<boolean> {
+  return patchTriageRows(ctx, conversation, viewerStallHideFields);
+}
+
+/** A woken turn that ended with no pin brings a team session back for each
+ *  person whose close a machine woke, by the rule the row follows
+ *  (settleHideFields). True when it brought any back. */
+export async function resurfaceViewerClosesOnSettle(ctx: Db, conversation: any, opts: { returnsOnDone: boolean; asked: boolean }): Promise<boolean> {
+  return patchTriageRows(ctx, conversation, (row) => settleHideFields(row, opts));
+}
+
+async function patchTriageRows(ctx: Db, conversation: any, fieldsOf: (row: any) => Record<string, undefined> | null): Promise<boolean> {
   let any = false;
   for (const row of await triageRowsOf(ctx, conversation)) {
-    const fields = pinHideFields(row, status, returnsOnDone);
+    const fields = fieldsOf(row);
     if (!fields) continue;
     await ctx.db.patch(row._id, { ...fields, updated_at: Date.now() });
     any = true;
