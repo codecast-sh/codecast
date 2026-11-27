@@ -124,10 +124,14 @@ describe("cast dev never calls another checkout's server its own", () => {
     for (const child of running) { try { process.kill(-child.pid!, "SIGKILL"); } catch { /* gone */ } }
   });
 
-  /** The first of `n` consecutive free ports, from a random start so concurrent runs do not collide. */
+  /**
+   * The first of `n` consecutive free ports, from a random start so concurrent runs do not collide. The range stays
+   * below every OS's ephemeral range (Linux 32768+, macOS and Windows 49152+): isPortFree probes 127.0.0.1, and on
+   * Linux an outbound connection holding the port on another address still refuses the 0.0.0.0 bind `serve` makes.
+   */
   async function freePorts(n: number): Promise<number> {
     for (let tries = 0; tries < 50; tries++) {
-      const base = 41_000 + Math.floor(Math.random() * 18_000);
+      const base = 20_000 + Math.floor(Math.random() * 12_000);
       const free = await Promise.all(Array.from({ length: n }, (_, i) => isPortFree(base + i)));
       if (!free.includes(false)) return base;
     }
@@ -142,10 +146,15 @@ describe("cast dev never calls another checkout's server its own", () => {
 
   /** A server answering `body` on `port`, run from `cwd` in its own process group like cast dev's. */
   async function serve(cwd: string, port: number, body: string, hostname = "0.0.0.0"): Promise<ChildProcess> {
-    const child = spawn("bun", ["-e", `Bun.serve({ port: ${port}, hostname: "${hostname}", fetch: () => new Response("${body}") })`], { cwd, detached: true, stdio: "ignore" });
+    const child = spawn("bun", ["-e", `Bun.serve({ port: ${port}, hostname: "${hostname}", fetch: () => new Response("${body}") })`], { cwd, detached: true, stdio: ["ignore", "ignore", "pipe"] });
     running.push(child);
+    let stderr = "";
+    child.stderr!.on("data", (chunk) => { stderr += chunk; });
     const url = `http://${hostname.includes(":") ? `[${hostname}]` : "127.0.0.1"}:${port}/`;
-    await pollUntil(() => fetch(url).then((r) => r.ok, () => false), `${body} server on ${port}`, { ms: 15_000, every: 100 });
+    await pollUntil(() => {
+      if (child.exitCode !== null) throw new Error(`${body} server on ${port} exited ${child.exitCode}: ${stderr.trim()}`);
+      return fetch(url).then((r) => r.ok, () => false);
+    }, `${body} server on ${port}`, { ms: 15_000, every: 100 });
     return child;
   }
 
