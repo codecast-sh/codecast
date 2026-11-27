@@ -696,17 +696,26 @@ function ownersChangeArgs(conversationId: string, change: unknown): Record<strin
   return { ...c, ...(restore !== undefined ? { restore } : {}), session_id: conversationId };
 }
 
+// A core that returns its refusal, thrown: the mutation rolls back and the
+// client's permanent-refusal path undoes the paint and toasts the reason.
+function refuseLoudly<T extends object>(r: T | { error: string }): T {
+  if ("error" in r) throw new Error(r.error);
+  return r;
+}
+
 const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // Decisions (docs/architecture/decisions-as-documents.md D2 / D5). The web
   // patches sessionDecisions and decisionStacks on the draft first; these are
   // the server writes the optimistic rows reconcile against.
   reopenDecision: async (ctx, userId, [decisionId]: [string]) => reopenCore(ctx, userId, decisionId as Id<"session_decisions">),
-  // A person hands an open question to a teammate or a role, with a note; refused by return.
-  passDecision: async (ctx, userId, [decisionId, to, note]: [string, PassTarget, string | undefined]) => passCore(ctx, userId, decisionId, to, note),
+  // A person hands an open question to a teammate or a role, with a note.
+  // The three hand-offs throw a refusal: a returned one acks as a success, so
+  // the card painted as handed off while the server kept it in the person's queue.
+  passDecision: async (ctx, userId, [decisionId, to, note]: [string, PassTarget, string | undefined]) => refuseLoudly(await passCore(ctx, userId, decisionId, to, note)),
   // A person sends it up to the owner's manager, else the admins, with a required note.
-  escalateDecision: async (ctx, userId, [decisionId, note]: [string, string]) => escalateCore(ctx, userId, decisionId, note),
+  escalateDecision: async (ctx, userId, [decisionId, note]: [string, string]) => refuseLoudly(await escalateCore(ctx, userId, decisionId, note)),
   // A person takes a pass or an escalation back: the decision is routed as its session would route it now.
-  unassignDecision: async (ctx, userId, [decisionId]: [string]) => unassignCore(ctx, userId, decisionId),
+  unassignDecision: async (ctx, userId, [decisionId]: [string]) => refuseLoudly(await unassignCore(ctx, userId, decisionId)),
   // Who decides for which areas, from the map "Change areas" previewed; and Share out's previewed moves (decisionAreas.ts, decisionShareOut.ts).
   applyDecisionAreas: async (ctx, userId, [teamId, map]: [string, AreaAssignment[]]) => applyAreasCore(ctx, userId, teamId as Id<"teams">, map),
   shareOutDecisions: async (ctx, userId, [teamId, moves]: [string, Array<{ decision_id: string; to: string }>]) => shareOutCore(ctx, userId, teamId as Id<"teams">, moves),

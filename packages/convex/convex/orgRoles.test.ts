@@ -213,6 +213,24 @@ describe("orgRoles.reparent", () => {
     const renamed = await performUpdateRole(ctx, ME as any, { role_id: a._id, name: "Z" });
     expect(renamed.name).toBe("Z");
   });
+
+  // A renamed role's decision cards still said they came from its old name:
+  // they print the standing session's title, which kept the name it was seated under.
+  test("a rename retitles the standing session still titled after the role, and leaves one a person retitled", async () => {
+    const db = fixtures();
+    const ctx = ctxOf(db);
+    const a = await performCreateRole(ctx, ME as any, { name: "Head of Alignment", handle: "alignment", team_id: TEAM });
+    const b = await performCreateRole(ctx, ME as any, { name: "Head of Deals", handle: "deals", team_id: TEAM });
+    for (const [role, title] of [[a, "Head of Alignment"], [b, "My deals desk"]] as const) {
+      await db.insert("anchors", { _id: `anchor-${role.handle}`, conversation_id: `conv-${role.handle}` });
+      await db.insert("conversations", { _id: `conv-${role.handle}`, user_id: ME, team_id: TEAM, status: "active", title, title_is_custom: true, standing_role_id: role._id });
+      await db.patch(role._id, { anchor_id: `anchor-${role.handle}` });
+    }
+    await performUpdateRole(ctx, ME as any, { role_id: a._id, name: "Constitution lead", handle: "constitution" });
+    await performUpdateRole(ctx, ME as any, { role_id: b._id, name: "Deals lead" });
+    expect((await db.get("conv-alignment")).title).toBe("Constitution lead");
+    expect((await db.get("conv-deals")).title).toBe("My deals desk");
+  });
 });
 
 describe("orgRoles.reparentSession + retire", () => {
