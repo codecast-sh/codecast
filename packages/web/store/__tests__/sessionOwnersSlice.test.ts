@@ -130,6 +130,33 @@ describe("applySessionOwners", () => {
     expect(facts().parent_conversation_id).toBeNull();
   });
 
+  test("a take-over remembers where it came from, and its undo puts the parent and the role back", async () => {
+    const P = "p".repeat(32);
+    const evals = { role_id: ROLE, short_id: "or-1", handle: "evals", name: "Eval Suite lead" };
+    applySessionOwnersRead(S, read({ people: [], role: evals, parent_session: { conversation_id: P, short_id: "p1", title: "Parent" } }));
+    useInboxStore.getState().applySessionOwners(S, { take_over: true }, { role: ROLE, restore_parent: true, remove: [ME] });
+    const taken = (useInboxStore.getState() as any).sessionOwners[S];
+    expect(taken.released_parent).toEqual({ conversation_id: P, short_id: "p1", title: "Parent" });
+    expect(taken.released_role).toEqual(evals);
+    expect(performUndo()).toBe(true);
+    expect(facts().parent_conversation_id).toBe(P);
+    expect(facts().org_role_id).toBe(ROLE);
+    expect(owners()).toEqual([]);
+    const back = (useInboxStore.getState() as any).sessionOwners[S];
+    expect(back.released_parent).toBeNull();
+    expect(back.released_role).toBeNull();
+  });
+
+  test("put back from the read alone: the released parent owns it again and you stay", () => {
+    const P = "p".repeat(32);
+    applySessionOwnersRead(S, read({ released_parent: { conversation_id: P, short_id: "p1", title: "Parent" } }));
+    expect(facts().parent_conversation_id).toBeNull();
+    useInboxStore.getState().applySessionOwners(S, { restore_parent: true }, { release_parent: true });
+    expect(facts().parent_conversation_id).toBe(P);
+    expect(owners()).toEqual([ME]);
+    expect((useInboxStore.getState() as any).sessionOwners[S].released_parent).toBeNull();
+  });
+
   test("removing the only agent brings the implicit starter back, as the server does", () => {
     applySessionOwnersRead(S, read({ people: [], role: { role_id: ROLE, short_id: "or-1", handle: "evals", name: "Eval Suite lead" } }));
     expect(owners()).toEqual([]);
@@ -248,5 +275,26 @@ describe("applySessionOwners", () => {
     useInboxStore.getState().applySessionOwners(CHILD, { add: [ME] }, { remove: [ME] });
     for (let i = 0; i < 100 && (useInboxStore.getState() as any).sessionOwners[CHILD]; i++) await new Promise((r) => setTimeout(r, 10));
     expect((useInboxStore.getState() as any).sessionOwners[CHILD]).toBeUndefined();
+  });
+});
+
+describe("a session not created yet (a local stub)", () => {
+  const STUB = "localstub123";
+  const state = (features: Record<string, unknown> | null) => ({
+    sessions: { [STUB]: { _id: STUB, session_id: STUB } },
+    sessionOwners: {},
+    teams: [{ _id: "t1", features }],
+    clientState: { ui: { active_team_id: "t1" } },
+  });
+
+  test("follows the owners model of the workspace it is created in", () => {
+    expect(ownersModelOnFor(state({ session_owners: true }) as any, STUB)).toBe(true);
+    expect(ownersModelOnFor(state({ session_owners: false }) as any, STUB)).toBe(false);
+  });
+
+  test("a server row without the stamp does not borrow the workspace's flag", () => {
+    const s = state({ session_owners: true }) as any;
+    s.sessions = { [S]: { _id: S } };
+    expect(ownersModelOnFor(s, S)).toBe(false);
   });
 });

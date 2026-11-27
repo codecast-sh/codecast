@@ -1573,8 +1573,12 @@ export default defineSchema({
     // stamps sessions from before the field.
     role_started: v.optional(v.boolean()),
     // When a person took it over from the session it works for: the parent
-    // (parent_conversation_id) no longer owns it.
+    // (parent_conversation_id) no longer owns it, until someone puts it back
+    // (restore_parent).
     parent_released_at: v.optional(v.number()),
+    // The role an owners change took off it (a take-over, or the role's ×):
+    // the owners menu suggests it first. Cleared when that role owns it again.
+    released_role_id: v.optional(v.id("org_roles")),
     // When a person dragged this standalone session under its parent
     // (parent_conversation_id): it works for the parent but still runs its own
     // process, so a revive or recovery treats it as top level. Cleared on detach.

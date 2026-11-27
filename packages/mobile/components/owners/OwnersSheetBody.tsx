@@ -74,6 +74,7 @@ export function OwnersSheetBody({ conversationId, view, onClose }: {
       <Text style={styles.sectionLabel}>Owners · whose inbox</Text>
       {m.rows.map(ownerRow)}
       {m.notice ? <Text style={styles.notice} accessibilityRole="alert">{m.notice}</Text> : null}
+      {view.pending ? <Text style={styles.rowHint} testID="owners-pending">Owners can change once it starts</Text> : null}
       {m.readOnly ? (
         !view.mine && m.meId ? (
           <TouchableOpacity style={styles.row} activeOpacity={0.6} onPress={addMe} accessibilityRole="button" testID="owners-add-me">
@@ -99,12 +100,15 @@ export function OwnersSheetBody({ conversationId, view, onClose }: {
           </View>
           {m.candidates.map((c, i) => {
             const isRole = c.kind === 'role';
-            const name = isRole ? c.role.name : c.person.name;
-            const reason = isRole ? (!m.q && !m.moreRoles ? m.reasonOf(c.role) : null) ?? charterLine(c.role.charter) : null;
-            const firstTeammate = !isRole && i === 0;
-            const firstRole = isRole && (i === 0 || m.candidates[i - 1].kind === 'person');
+            const name = c.kind === 'role' ? c.role.name : c.kind === 'session' ? c.title : c.person.name;
+            const reason = c.origin ?? (c.kind === 'role' ? (!m.q && !m.moreRoles ? m.reasonOf(c.role) : null) ?? charterLine(c.role.charter) : null);
+            const prev = m.candidates[i - 1];
+            const firstOrigin = !!c.origin && i === 0;
+            const firstTeammate = c.kind === 'person' && prev?.kind !== 'person';
+            const firstRole = isRole && !c.origin && (!prev || prev.kind !== 'role' || !!prev.origin);
             return (
               <View key={c.key}>
+                {firstOrigin && <Text style={styles.sectionLabel}>Where it came from</Text>}
                 {firstRole && <Text style={styles.sectionLabel}>{m.q || m.moreRoles ? 'Roles' : 'Suggested roles'}</Text>}
                 {firstTeammate && (
                   <>
@@ -123,13 +127,13 @@ export function OwnersSheetBody({ conversationId, view, onClose }: {
                   activeOpacity={0.6}
                   onPress={() => { tap(); m.add(c); }}
                   accessibilityRole="button"
-                  accessibilityLabel={`Add ${name}${isRole ? `, @${c.role.handle}` : ''}${reason ? `, ${reason}` : ''}`}
+                  accessibilityLabel={`Add ${name}${c.kind === 'role' ? `, @${c.role.handle}` : ''}${reason ? `, ${reason}` : ''}`}
                   testID={`owner-candidate-${c.key}`}
                 >
-                  {isRole ? <OwnerFace role={roleOwnerOf(c.role)} size={22} /> : <PersonFace name={c.person.name} image={c.person.image} size={22} />}
+                  {c.kind === 'role' ? <OwnerFace role={roleOwnerOf(c.role)} size={22} /> : c.kind === 'session' ? <ParentSessionFace sessionId={c.id} size={22} /> : <PersonFace name={c.person.name} image={c.person.image} size={22} />}
                   <View style={styles.rowText}>
                     <Text style={styles.rowLabel} numberOfLines={1}>
-                      {name}{isRole ? <Text style={styles.handle}>  @{c.role.handle}</Text> : null}
+                      {name}{c.kind === 'role' ? <Text style={styles.handle}>  @{c.role.handle}</Text> : null}
                     </Text>
                     {reason ? <Text style={styles.rowHint} numberOfLines={1}>{reason}</Text> : null}
                   </View>

@@ -24,7 +24,8 @@ import {
   sessionOwnerFactsOf,
   type OwnerRowSnapshot,
 } from "./sessionOwners";
-import { mayEditOwners, ownersOf } from "@codecast/shared/contracts/sessionOwners";
+import { mayEditOwners, ownersOf, releasedParentOf } from "@codecast/shared/contracts/sessionOwners";
+import { isClosedSession } from "@codecast/shared/contracts";
 import { assertHumanOwner, assertRoleMayOwn, ownerCandidatesFor, ownersChangeFor, resolveOwnerRef, writeOwnersChange, type OwnerCandidate } from "./lib/ownersChange";
 export { OWNER_CANDIDATE_CAP, type OwnerCandidate } from "./lib/ownersChange";
 import { teamFeatureOffMessage } from "./lib/teamFeatureGuard";
@@ -190,8 +191,9 @@ export type ReparentSessionTarget =
   // contracts/sessionOwners): people by ref, rows put back by an undo, the
   // role (a ref replaces it, null takes it off) and the parent's release.
   // `take_over` takes every agent owner off and makes the caller an owner;
-  // `adopt_parent` (a session ref) makes it that session's worker.
-  | { kind: "owners"; add?: string[]; remove?: string[]; restore?: OwnerRowSnapshot[]; role?: string | null; release_parent?: boolean; take_over?: boolean; adopt_parent?: string; detach_parent?: boolean };
+  // `adopt_parent` (a session ref) makes it that session's worker;
+  // `restore_parent` puts back the parent a release or take-over let go.
+  | { kind: "owners"; add?: string[]; remove?: string[]; restore?: OwnerRowSnapshot[]; role?: string | null; release_parent?: boolean; restore_parent?: boolean; take_over?: boolean; adopt_parent?: string; detach_parent?: boolean };
 
 export type ReparentSessionResult = OwnerMutationResult & {
   org_role_id: Id<"org_roles"> | null;
@@ -329,13 +331,13 @@ async function reparentSessionCore(
   const sharedWith: Id<"users">[] = [];
   let owners: OwnerInfo[];
   let roleId: Id<"org_roles"> | undefined = conversation.org_role_id;
-  // An adopt, or its undo's detach, hands the session's standing wait on
+  // An adopt, its undo's detach, or a restore hands the session's standing wait on
   // (writeOwnersChange): the line telling it so must not answer that wait.
   let adopted = false;
 
   if (ownersModel) {
     const change = await ownersChangeFor(ctx, authUserId, conversation, args.target, targetRole);
-    adopted = !!(change.adoptParent || change.detachParent);
+    adopted = !!(change.adoptParent || change.detachParent || change.restoreParent);
     const res = await writeOwnersChange(ctx, authUserId, conversation, change, {
       // The chart's drop on a role keeps its own access rule (mayFileUnderRole).
       checkEdit: args.target.kind !== "role",
@@ -670,7 +672,7 @@ export async function performRemoveSessionOwner(
 export async function performApplyOwnersChange(
   ctx: { db: any },
   authUserId: Id<"users">,
-  args: { session_id: string; add?: string[]; remove?: string[]; restore?: OwnerRowSnapshot[]; role?: string | null; release_parent?: boolean; take_over?: boolean; adopt_parent?: string; detach_parent?: boolean; note?: string; from_session?: string },
+  args: { session_id: string; add?: string[]; remove?: string[]; restore?: OwnerRowSnapshot[]; role?: string | null; release_parent?: boolean; restore_parent?: boolean; take_over?: boolean; adopt_parent?: string; detach_parent?: boolean; note?: string; from_session?: string },
 ): Promise<ReparentSessionResult> {
   const { session_id, note, from_session, ...change } = args;
   return performReparentSession(ctx, authUserId, { session_id, target: { kind: "owners", ...change }, handoff: note, from_session });
@@ -828,6 +830,8 @@ export const applyOwnersChange = mutation({
     // A role ref (@handle, or-N, id) replaces the role; null takes it off.
     role: v.optional(v.union(v.string(), v.null())),
     release_parent: v.optional(v.boolean()),
+    // Put back the parent a release or take-over let go.
+    restore_parent: v.optional(v.boolean()),
     // Take it over: every agent owner comes off and the caller becomes an owner.
     take_over: v.optional(v.boolean()),
     // Make it the worker of this session (a session ref): the dragger's own row comes off.
@@ -865,6 +869,13 @@ export type OwnersModelRead = {
   people: OwnerInfo[];
   role: { role_id: string; short_id: string | null; handle: string; name: string } | null;
   parent_session: { conversation_id: string; short_id: string; title: string | null } | null;
+  /** Where it came from, which the owners menu offers back first: the parent
+   *  a person released it from (alive, so it can take it back), the role an
+   *  owners change took off it, and the session that spawned it (`adoptable`:
+   *  the viewer may make it that session's worker). */
+  released_parent: { conversation_id: string; short_id: string; title: string | null } | null;
+  released_role: { role_id: string; short_id: string | null; handle: string; name: string } | null;
+  spawned_by: { conversation_id: string; short_id: string; title: string | null; adoptable: boolean } | null;
   implicit_starter: (OwnerInfo & { implicit: true }) | null;
   /** The human who started it (shared SessionOwnerFacts.starter) and whether
    *  a role started it: what a client needs to paint an owners change by the
@@ -920,17 +931,35 @@ async function ownersModelRead(ctx: { db: any }, authUserId: Id<"users">, conver
   const implicit_starter = starter ? { ...starterInfo(conversation, starter), implicit: true as const } : null;
   const roleDoc = o.role ? await ctx.db.get(o.role) : null;
   const parent = o.parentSession ? await ctx.db.get(o.parentSession) : null;
-  // A parent the viewer cannot read is named by its id alone.
-  const parentAccess = parent ? await checkConversationAccess(ctx, authUserId, parent) : null;
-  const readable = parentAccess === "owner" || parentAccess === "team";
+  // A session the viewer cannot read is named by its id alone.
+  const titleFor = async (c: any) => {
+    const access = await checkConversationAccess(ctx, authUserId, c);
+    return access === "owner" || access === "team" ? c.title ?? null : null;
+  };
+  const sessionRef = async (c: any) => ({ conversation_id: String(c._id), short_id: c.short_id ?? String(c._id).slice(0, 7), title: await titleFor(c) });
+  const alive = (c: any) => !!c && !c.inbox_killed_at && !isClosedSession(c);
+  // A person's release, never a dead parent's (deadParentAt): only a live one can take it back.
+  const releasedLink = conversation.parent_released_at != null ? releasedParentOf(facts) : null;
+  const releasedDoc = releasedLink ? await ctx.db.get(releasedLink) : null;
+  const releasedRoleDoc = conversation.released_role_id && String(conversation.released_role_id) !== o.role ? await ctx.db.get(conversation.released_role_id) : null;
+  // A spawned peer (no parent link, started as itself) its spawner may adopt.
+  const spawner = !conversation.parent_conversation_id && conversation.spawned_by_conversation_id ? await ctx.db.get(conversation.spawned_by_conversation_id) : null;
+  const movable = !conversation.is_subagent && !conversation.is_workflow_sub && !conversation.parent_message_uuid;
+  const spawnerAdoptable = !!spawner && movable && alive(spawner) && String(spawner._id) !== String(conversation._id)
+    && (await ownersModelOn(ctx, spawner)) && mayEditOwners(await sessionOwnerFactsOf(ctx, spawner), String(authUserId));
   return {
     session_owners: true,
     owners: implicit_starter ? [...people, implicit_starter] : people,
     people,
     role: roleDoc ? { role_id: String(roleDoc._id), short_id: roleDoc.short_id ?? null, handle: roleDoc.handle, name: roleDoc.name } : null,
     parent_session: o.parentSession
-      ? { conversation_id: o.parentSession, short_id: parent?.short_id ?? o.parentSession.slice(0, 7), title: readable ? parent?.title ?? null : null }
+      ? { conversation_id: o.parentSession, short_id: parent?.short_id ?? o.parentSession.slice(0, 7), title: parent ? await titleFor(parent) : null }
       : null,
+    released_parent: alive(releasedDoc) ? await sessionRef(releasedDoc) : null,
+    released_role: releasedRoleDoc && releasedRoleDoc.status !== "retired"
+      ? { role_id: String(releasedRoleDoc._id), short_id: releasedRoleDoc.short_id ?? null, handle: releasedRoleDoc.handle, name: releasedRoleDoc.name }
+      : null,
+    spawned_by: spawner ? { ...(await sessionRef(spawner)), adoptable: spawnerAdoptable } : null,
     implicit_starter,
     starter_id: facts.starter,
     role_started: !!facts.role_started,

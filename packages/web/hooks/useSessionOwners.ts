@@ -14,7 +14,7 @@
 
 import { useInboxStore } from "../store/inboxStore";
 import { isInboxMember, underOwnersModel } from "@codecast/shared/contracts";
-import { ownerFactsOf, ownerIdsOf, ownersHomeOf, ownersModelOnFor, ownersReadOf, seatRoleOf, type SessionOwnersRow } from "../store/sessionOwnersSlice";
+import { isLocalStubSession, ownerFactsOf, ownerIdsOf, ownersHomeOf, ownersModelOnFor, ownersReadOf, seatRoleOf, type SessionOwnersRow } from "../store/sessionOwnersSlice";
 import { useOrgRoles } from "./useOrgRoles";
 import { teamMembersOf } from "../lib/activeTeam";
 import type { DraftRole, OwnersDraft } from "../lib/ownersDraft";
@@ -67,6 +67,8 @@ export type SessionOwnersView = {
   agent: { kind: "role"; role: OwnerRoleFace } | { kind: "session"; id: string; title: string } | null;
   mine: boolean;
   canEdit: boolean;
+  /** Not created on the server yet: you own it, and nobody can change that until it exists. */
+  pending: boolean;
   /** The owners as the menu stages them. */
   draft: OwnersDraft;
   read: SessionOwnersRow | null;
@@ -75,7 +77,7 @@ export type SessionOwnersView = {
 };
 
 const OFF: SessionOwnersView = {
-  on: false, meId: null, people: [], role: null, parent: null, agent: null, mine: false, canEdit: false,
+  on: false, meId: null, people: [], role: null, parent: null, agent: null, mine: false, canEdit: false, pending: false,
   draft: { people: [], role: null, parent: null }, read: null, runnerId: null, personOf: (id) => ({ _id: id, name: "Teammate" }),
 };
 
@@ -91,7 +93,9 @@ export function useSessionOwners(conversationId: string): SessionOwnersView {
   const read = ownersReadOf(s, conversationId);
   const facts = ownerFactsOf(s, conversationId);
   const meId = currentUser?._id ? String(currentUser._id) : null;
-  const ids = ownerIdsOf(s, conversationId) ?? [];
+  // A stub has no read: whoever is creating it owns it.
+  const pending = !read && isLocalStubSession(s, conversationId);
+  const ids = pending ? (meId ? [meId] : []) : ownerIdsOf(s, conversationId) ?? [];
   const personOf = (id: string): OwnerPerson => {
     if (id === meId && currentUser) return { _id: id, name: memberName(currentUser), image: currentUser.image || currentUser.github_avatar_url || undefined };
     const m = roster.find((x) => String(x._id) === id);
@@ -123,7 +127,8 @@ export function useSessionOwners(conversationId: string): SessionOwnersView {
     // The inbox row's stamps decide (a change paints them); with no inbox row
     // under the model, the owners read.
     mine: !!meId && (home && underOwnersModel(home) ? isInboxMember(home, meId) : ids.includes(meId)),
-    canEdit: read ? read.can_edit : !!meId && (ids.includes(meId) || runnerId === meId),
+    canEdit: read ? read.can_edit : !pending && !!meId && (ids.includes(meId) || runnerId === meId),
+    pending,
     draft: { people: ids, role, parent: parentId },
     read,
     runnerId,

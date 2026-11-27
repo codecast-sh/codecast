@@ -172,6 +172,7 @@ export async function ownersChangeFor(
     ...(target.restore?.length ? { restore: target.restore } : {}),
     ...(target.role === undefined ? {} : { role: target.role === null ? null : String((await resolveOwnerRole(ctx, authUserId, conversation, target.role))._id) }),
     ...(target.release_parent ? { releaseParent: true } : {}),
+    ...(target.restore_parent ? await restorableParent(ctx, conversation) : {}),
     ...(target.take_over ? { takeOver: true } : {}),
     ...(target.adopt_parent || target.detach_parent ? assertMovableWorker(conversation) : {}),
     ...(target.adopt_parent ? { adoptParent: await adoptableParentId(ctx, authUserId, conversation, target.adopt_parent) } : {}),
@@ -218,6 +219,17 @@ export async function adoptableParentId(ctx: { db: any }, authUserId: Id<"users"
     link = (await ctx.db.get(link as Id<"conversations">))?.parent_conversation_id;
   }
   return String(target._id);
+}
+
+// Putting the parent back: only a released one that can still answer it.
+// A parent that died reads as released (deadParentAt) but has nobody to
+// answer, so it is refused here rather than restored in name only.
+export async function restorableParent(ctx: { db: any }, conversation: any): Promise<{ restoreParent: true }> {
+  if (!conversation.parent_conversation_id || conversation.parent_released_at == null) throw new Error("It has no session to go back to");
+  const parent = await ctx.db.get(conversation.parent_conversation_id);
+  if (!parent || parent.inbox_killed_at) throw new Error("The session it came from was killed; it cannot take it back");
+  if (isClosedSession(parent)) throw new Error("The session it came from is closed; it cannot take it back");
+  return { restoreParent: true };
 }
 
 // A restored row (an undo of a remove) is held to the add rules: a teammate
@@ -295,6 +307,9 @@ export async function writeOwnersChange(
   if (will.role !== was.role) {
     patch.org_role_id = will.role ?? undefined;
     patch.org_role_hold = will.role ? opts.hold : undefined;
+    // The role it lost is the one the owners menu offers back first.
+    if (was.role) patch.released_role_id = was.role;
+    else if (String(conversation.released_role_id ?? "") === will.role) patch.released_role_id = undefined;
   }
   if (change.adoptParent) {
     // A worker of another session now: the parent owns it (released only
@@ -313,7 +328,7 @@ export async function writeOwnersChange(
   if (facts.role_started && !next.role_started) patch.role_started = undefined;
   if (Object.keys(patch).length) await ctx.db.patch(conversation._id, patch);
   // Its standing wait was settled for the agent owner it had: the new one hears it.
-  if (change.adoptParent || change.detachParent) await rehandWait(ctx, conversation);
+  if (change.adoptParent || change.detachParent || (change.restoreParent && next.parent_released_at == null)) await rehandWait(ctx, conversation);
   // The session reports to the person this change named last.
   const named = [...(change.add ?? []), ...(added.includes(authUserId) ? [String(authUserId)] : [])].filter((id) => will.people.includes(id));
   await syncPrimaryOwnerCache(ctx, conversation._id, named[named.length - 1] as Id<"users"> | undefined);
