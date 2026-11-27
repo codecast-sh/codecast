@@ -565,10 +565,10 @@ export function AttachedImagePinCount({ conversationId, picture }: { conversatio
 // note, it shrank the picture), and without this nothing in the composer
 // showed the notes go with the send. The list stays within the thumbnail
 // row's height, so it takes no room from the picture. A click on a note opens
-// its editor on the picture.
-export function AttachedImageNotes({ conversationId, picture }: { conversationId: string; picture: ComposerPicture }) {
-  const comments = useInboxStore(useShallow((s) => s.reviewComments[conversationId] ?? EMPTY_COMMENTS));
-  const pins = pinsOn(comments, [picture]);
+// its editor on the picture. No picture open, no list.
+export function AttachedImageNotes({ conversationId, picture }: { conversationId: string; picture: ComposerPicture | undefined }) {
+  const comments = useInboxStore(useShallow((s) => (picture ? s.reviewComments[conversationId] ?? EMPTY_COMMENTS : EMPTY_COMMENTS)));
+  const pins = picture ? pinsOn(comments, [picture]) : EMPTY_COMMENTS;
   if (!pins.length) return null;
   const numbers = pinNumbers(comments);
   return (

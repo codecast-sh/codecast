@@ -3061,10 +3061,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                 </div>
               )}
               {branchMapNode}
-              {/* Hidden under the image preview: the preview fits the space above
-                  the composer, so a tray growing with each note shrank the image.
-                  The picture's notes list beside its thumbnail instead
-                  (AttachedImageNotes). */}
+              {/* Hidden under the image preview, which a growing tray shrank; AttachedImageNotes lists its notes instead. */}
               {!bareComposer && lightboxImageIndex === null && <ReviewBar conversationId={conversationId} />}
               {!bareComposer && queuedMessages.length > 0 && (
                 <div className="flex flex-col gap-1 pb-2 mb-2 border-b border-sol-border/50">
@@ -3174,9 +3171,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                       </button>
                     </div>
                   ))}
-                  {!bareComposer && lightboxImageIndex !== null && pastedImages[lightboxImageIndex] && (
-                    <AttachedImageNotes conversationId={conversationId} picture={pastedImages[lightboxImageIndex]} />
-                  )}
+                  {!bareComposer && <AttachedImageNotes conversationId={conversationId} picture={lightboxImageIndex === null ? undefined : pastedImages[lightboxImageIndex]} />}
                   {selectedImageIndex !== null && (
                     <span className="text-meta text-sol-text-dim ml-1 flex items-center gap-2">
                       <span className="inline-flex items-center gap-1"><KeyCap size="xs">←</KeyCap><KeyCap size="xs">→</KeyCap> navigate</span>

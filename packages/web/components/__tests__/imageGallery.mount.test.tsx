@@ -212,8 +212,8 @@ test("notes pinned on the open composer picture list beside its thumbnail, numbe
   await act(() => rows[1].click());
   expect(useInboxStore.getState().reviewEditingId).toBe(second);
 
-  // A picture with no notes shows neither.
+  // A picture with no notes shows neither, and with no picture open there is no list.
   const three = { previewUrl: "blob:three" };
-  await act(() => root!.render(<><AttachedImagePinCount conversationId="C" picture={three} /><AttachedImageNotes conversationId="C" picture={three} /></>));
+  await act(() => root!.render(<><AttachedImagePinCount conversationId="C" picture={three} /><AttachedImageNotes conversationId="C" picture={three} /><AttachedImageNotes conversationId="C" picture={undefined} /></>));
   expect(container!.innerHTML).toBe("");
 });
