@@ -145,11 +145,12 @@ describe("evalPass", () => {
     expect(model.prompts).toHaveLength(1);
     expect(model.prompts[0]).toContain("(none yet)");
     expect(model.prompts[0]).not.toContain("before the window");
-    expect(r.sessions_read).toEqual([{ id: "jx7team", title: "Session jx7team" }]);
+    // The replay names sessions by conversation id across chunks (a short id is shared by other conversations).
+    expect(r.sessions_read).toEqual([{ id: String(w.teamConv), title: "Session jx7team" }]);
     expect(r.cost_usd).toBeGreaterThan(0);
     expect(r.resume).toBeUndefined();
     expect(r.priorities).toHaveLength(1);
-    expect(r.priorities[0]).toMatchObject({ short_id: "pri-1", title: "Trusted evals", status: "active", sessions: [{ id: "jx7team", step_key: "s1" }] });
+    expect(r.priorities[0]).toMatchObject({ short_id: "pri-1", title: "Trusted evals", status: "active", sessions: [{ id: String(w.teamConv), step_key: "s1" }] });
 
     expect((await w.priorities()).map((p: any) => p.short_id)).toEqual(["pri-60"]);
     expect((await w.conversation(w.teamConv))?.priority_id).toBeUndefined();
@@ -171,9 +172,9 @@ describe("evalPass", () => {
     expect(model.prompts[1]).toContain('pri-1 · "Trusted evals"');
     expect(model.prompts[1]).toContain("get grader faults under ten percent");
     expect(model.prompts[1]).not.toContain("start the grader work");
-    expect(r.outputs.map((o: any) => o.sessions)).toEqual([["jx7old"], ["jx7team"]]);
+    expect(r.outputs.map((o: any) => o.sessions)).toEqual([[String(w.oldConv)], [String(w.teamConv)]]);
     expect(r.priorities).toHaveLength(1);
-    expect(r.priorities[0].sessions.map((s: any) => s.id).sort()).toEqual(["jx7old", "jx7team"]);
+    expect(r.priorities[0].sessions.map((s: any) => s.id).sort()).toEqual([String(w.oldConv), String(w.teamConv)].sort());
     expect(await w.priorities()).toEqual([]);
     expect(await w.runs()).toEqual([]);
   });

@@ -169,17 +169,41 @@ describe("a short id other conversations share", () => {
     expect(String(mine).startsWith(stored) && !String(theirs).startsWith(stored)).toBe(true);
   });
 
-  test("a stored step ref reads as the name of the one shown session it can mean, and stays as stored when it can mean two", () => {
-    const names = sessionNames();
+  test("names: a short id goes to the first conversation named, or to the one a stored ref holds it for; the rest get longer prefixes", async () => {
     const conv = (id: string, short_id: string) => ({ _id: id, short_id }) as any;
-    expect(names.name(conv("jx7abcd1x", "jx7abcd"))).toBe("jx7abcd");
-    expect(names.name(conv("jx7abcd2y", "jx7abcd"))).toBe("jx7abcd2");
-    expect(names.name(conv("jx7zzzz9q", "jx7zzzz"))).toBe("jx7zzzz");
-    expect(names.ids).toEqual({ jx7abcd: "jx7abcd1x", jx7abcd2: "jx7abcd2y", jx7zzzz: "jx7zzzz9q" });
-    expect(names.ref("jx7abcd2")).toBe("jx7abcd2");
-    expect(names.ref("jx7abcd1")).toBe("jx7abcd");
-    expect(names.ref("jx7zzzz")).toBe("jx7zzzz");
-    expect(names.ref("jx7nope")).toBe("jx7nope");
+    const names = sessionNames();
+    expect(await names.name(conv("jx7abcd1x", "jx7abcd"))).toBe("jx7abcd");
+    expect(await names.name(conv("jx7abcd2y", "jx7abcd"))).toBe("jx7abcd2");
+    expect(await names.name(conv("jx7abcd1x", "jx7abcd"))).toBe("jx7abcd");
+    expect(names.ids).toEqual({ jx7abcd: "jx7abcd1x", jx7abcd2: "jx7abcd2y" });
+    // A stored ref holds jx7abcd for jx7abcd9z, which this input does not show: neither shown one may take it.
+    const held = sessionNames(async (short) => (short === "jx7abcd" ? "jx7abcd9z" : null));
+    expect(await held.name(conv("jx7abcd1x", "jx7abcd"))).toBe("jx7abcd1");
+    expect(await held.name(conv("jx7abcd9z", "jx7abcd"))).toBe("jx7abcd");
+  });
+
+  test("a step ref stored before as a bare short id keeps meaning its older conversation when a newer one sharing the short id is touched", async () => {
+    const w = await world();
+    const shared = { user_id: w.ana, team_id: w.acme, is_private: false, team_visibility: "full" };
+    const { ids: [older, newer], shortId } = await dupes(w, [shared, shared]);
+    await w.t.run((ctx) => ctx.db.insert("priorities", {
+      user_id: w.ana, workspace: w.team, short_id: "pri-1", title: "Trusted evals", summary: "Grader faults falling", status: "active", ai_rank: 1,
+      steps: [{ key: "s1", title: "Grader faults under 10%", tier: "critical", tier_set_by: "pass", refs: [{ kind: "session", id: shortId }], done: false }],
+      first_seen_at: w.now - DAY, last_active_at: w.now - DAY, pass_at: w.now - DAY, created_at: w.now - DAY, updated_at: w.now - DAY,
+    } as any));
+    await w.send(w.ana, newer!, w.now - 2 * H, "something else");
+    const read = await w.t.query(pass.passInputs, { user_id: w.ana, workspace: w.team });
+    const newerName = read.input.sessions.find((s: any) => read.conversations[s.id] === newer).id;
+    expect(newerName).not.toBe(shortId);
+    expect(read.conversations[shortId]).toBeUndefined();
+    expect(read.input.priorities[0].steps[0].refs).toEqual([{ kind: "session", id: shortId }]);
+    // The model echoes the step as shown and puts the newer session under it: the stored ref still means the older one.
+    model.reply = () => JSON.stringify({ priorities: [proposal({ short_id: "pri-1", steps: [{ key: "s1", title: "Grader faults under 10%", tier: "critical", refs: [{ kind: "session", id: shortId }] }], sessions: [{ session: newerName, step: "s1" }] })], unassigned: [] });
+    expect((await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team })).status).toBe("ok");
+    const [row] = await w.priorities();
+    expect(row.steps[0].refs).toEqual([{ kind: "session", id: shortId }]);
+    expect((await w.conversation(newer!)).priority_id).toBe(row._id);
+    expect((await w.conversation(older!)).priority_id).toBe(row._id);
   });
 
   test("two of the person's own sessions sharing a short id get two names, and each maps to its own conversation", async () => {

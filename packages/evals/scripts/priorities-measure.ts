@@ -106,7 +106,7 @@ export async function score(golden: Golden, produced: Produced[], read: Map<stri
   const labeled = new Set([...Object.keys(golden.session_labels), ...golden.standing_sessions]);
   // Out of scope only when it has sessions and the golden set labels none of them; a sessionless one (from calls, or emptied) is scored.
   const unlabeled = produced.filter((p) => p.sessions.length > 0 && !p.sessions.some((s) => labeled.has(labelId(s)))).map((p) => p.key);
-  const standingLike = produced.filter((p) => p.sessions.length && p.sessions.filter((s) => standing.has(s)).length / p.sessions.length > 0.5).map((p) => p.key);
+  const standingLike = produced.filter((p) => p.sessions.length && p.sessions.filter((s) => standing.has(labelId(s))).length / p.sessions.length > 0.5).map((p) => p.key);
   // Out of the golden set's scope: never offered to the judge, so one cannot take a labeled priority's slot.
   const candidates = produced.filter((p) => !standingLike.includes(p.key) && !unlabeled.includes(p.key));
 

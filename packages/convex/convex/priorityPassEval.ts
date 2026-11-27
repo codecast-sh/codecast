@@ -16,6 +16,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { runModelCall } from "./modelCalls";
 import { mergePriorities, priorityPassRequest, type MergePlan, type PassPriority, type PassTask, type PriorityPassInput } from "./lib/priorityPass";
 import { parsePriorityPassOutput } from "./lib/priorityPassParse";
+import type { PriorityStep } from "@codecast/shared/contracts/priorities";
 import { LATE_MARGIN_MS, MINUTE, type PassInputs } from "./priorityPassInputs";
 import { PASS_TIMEOUT_MS, callScope, fittingPrefix, runShare } from "./priorityPassRun";
 
@@ -89,6 +90,31 @@ export function applyPlanInMemory(state: EvalState, plan: MergePlan, input: Prio
   return { priorities: [...byId.values()], next_id };
 }
 
+/**
+ * A chunk's session names both ways. The replay's state names sessions by
+ * conversation id, since each passInputs call names them afresh
+ * (sessionNames); a chunk's input shows them by its own names, and its plan is
+ * stored back by conversation id. A conversation the chunk did not name keeps
+ * its id as its name.
+ */
+function chunkNames(read: PassInputs) {
+  const byConv = new Map(Object.entries(read.conversations).map(([name, id]) => [String(id), name]));
+  const toConv = (name: string) => String(read.conversations[name] ?? name);
+  const toName = (conv: string) => byConv.get(conv) ?? conv;
+  const refs = (steps: PriorityStep[], f: (id: string) => string) => steps.map((st) => ({ ...st, refs: st.refs.map((r) => (r.kind === "session" ? { ...r, id: f(r.id) } : r)) }));
+  return {
+    toConv,
+    shown: (priorities: PassPriority[]): PassPriority[] => priorities.map((p) => ({ ...p, steps: refs(p.steps, toName), sessions: p.sessions.map((x) => ({ ...x, id: toName(x.id) })) })),
+    stored: (plan: MergePlan): MergePlan => ({
+      ...plan,
+      creates: plan.creates.map((c) => ({ ...c, steps: refs(c.steps, toConv) })),
+      updates: plan.updates.map((u) => (u.patch.steps ? { ...u, patch: { ...u.patch, steps: refs(u.patch.steps, toConv) } } : u)),
+      sessions: plan.sessions.map((x) => ({ ...x, session: toConv(x.session) })),
+      unmap: plan.unmap.map(toConv),
+    }),
+  };
+}
+
 /** The pass from empty over [window_start, window_end] for one person in one workspace, written nowhere. `chunk` caps the sessions one model call reads; `system` replaces the pass's system prompt for this replay, to try a prompt before it ships. */
 export const evalPass = internalAction({
   args: { user_id: v.id("users"), workspace: v.string(), window_start: v.number(), window_end: v.number(), chunk: v.optional(v.number()), resume: v.optional(v.any()), system: v.optional(v.string()) },
@@ -111,20 +137,21 @@ export const evalPass = internalAction({
         state = { ...state, cursor_at: read.read_to };
         continue;
       }
+      const names = chunkNames(read);
       const tasks = new Map(state.tasks.map((t) => [t.short_id, t]));
       for (const s of read.input.sessions) for (const t of s.tasks) tasks.set(t.short_id, t);
       const stepTaskIds = new Set(state.priorities.flatMap((p) => p.steps.flatMap((s) => s.refs.filter((r) => r.kind === "task").map((r) => r.id))));
       // A calibration run starts from empty: the person's real corrections and session placements name priorities it never made.
       const full: PriorityPassInput = {
         ...read.input,
-        priorities: state.priorities,
+        priorities: names.shown(state.priorities),
         step_tasks: [...stepTaskIds].flatMap((id) => tasks.get(id) ?? []),
         sessions: read.input.sessions.map(({ placed: _p, not_for: _n, ...session }) => session),
         corrections: [],
       };
       const { input, readTo, left } = runShare(read, full, Math.min(fittingPrefix(full), args.chunk ?? Infinity));
       if (left && readTo <= state.cursor_at) throw new Error(`calibration stuck at cursor ${state.cursor_at}: the next chunk would read the same sessions`);
-      for (const s of input.sessions) readIds.set(s.id, s.title);
+      for (const s of input.sessions) readIds.set(names.toConv(s.id), s.title);
       const { req, omitted: cut } = priorityPassRequest(input);
       omitted.push(...cut);
       const reply = await runModelCall(
@@ -141,8 +168,9 @@ export const evalPass = internalAction({
       const { output, dropped } = parsePriorityPassOutput(reply.json, input);
       if (!output) throw new Error(`calibration chunk ${outputs.length + 1}: unreadable reply: ${dropped.join("; ")}`);
       const plan = mergePriorities(input, output);
-      outputs.push({ cursor_at: state.cursor_at, read_to: readTo, sessions: input.sessions.map((s) => s.id), output, dropped, plan, cost_usd: reply.cost_usd });
-      state = { ...applyPlanInMemory(state, plan, input), tasks: [...tasks.values()], cursor_at: readTo };
+      outputs.push({ cursor_at: state.cursor_at, read_to: readTo, sessions: input.sessions.map((s) => names.toConv(s.id)), output, dropped, plan, cost_usd: reply.cost_usd });
+      const storedInput = { ...input, sessions: input.sessions.map((x) => ({ ...x, id: names.toConv(x.id) })) };
+      state = { ...applyPlanInMemory(state, names.stored(plan), storedInput), tasks: [...tasks.values()], cursor_at: readTo };
       if (!left) return done();
     }
   },

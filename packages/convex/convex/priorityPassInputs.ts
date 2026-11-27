@@ -16,6 +16,7 @@ import { isRestricted } from "./chatAccess";
 import { isStandingSession } from "./lib/orgOwnership";
 import { isRunLog, parseRoomKey } from "@codecast/shared/contracts";
 import { vendorRefusalFromDb } from "./lib/vendorGuard";
+import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { effectivePriorityOrder, rankSourceOf } from "@codecast/shared/contracts/priorities";
 import { PRIORITY_PASS_CAPS, type PassCall, type PassCorrection, type PassPriority, type PassSession, type PassTask, type PriorityPassInput } from "./lib/priorityPass";
 
@@ -94,34 +95,38 @@ function longerThanRivals(base: string, own: string, rivals: string[]): string {
 }
 
 /**
- * Names the conversations one pass input shows, with no reads: each by its
- * short id, or, when one named before it shares that short id (about a
- * quarter of sessions share theirs with some conversation, often a workflow
- * station agent of the same person), by the shortest longer prefix of its id.
- * `ids` maps every name back to its conversation. `ref` reads a stored step
- * ref as a name: itself when named here, else the one named conversation it
- * can mean (a short id, or a longer prefix of its id), else as stored.
+ * Names the conversations one pass input shows: each by its short id, or, when
+ * one named before it shares that short id (about a quarter of sessions share
+ * theirs with some conversation, often a workflow station agent of the same
+ * person), or a stored step ref holds that short id for another conversation
+ * (`reservedFor`, read only for a short id some stored ref holds), by the
+ * shortest longer prefix of its id. `ids` maps every name back to its
+ * conversation. A stored ref is shown as stored: it names its conversation by
+ * itself, or is no name here and resolves as readers resolve it.
  */
-export function sessionNames() {
+export function sessionNames(reservedFor: (shortId: string) => Promise<string | null> = async () => null) {
   const ids: Record<string, Id<"conversations">> = {};
   const named = new Map<string, { name: string; short: string }>();
-  const name = (conv: Doc<"conversations">): string => {
+  const name = async (conv: Doc<"conversations">): Promise<string> => {
     const own = String(conv._id);
     const had = named.get(own);
     if (had) return had.name;
-    const short = conv.short_id ?? own;
-    const rivals = [...named].filter(([, n]) => n.short === short).map(([id]) => id);
-    const out = conv.short_id ? longerThanRivals(short, own, rivals) : own;
+    if (!conv.short_id) {
+      named.set(own, { name: own, short: own });
+      ids[own] = conv._id;
+      return own;
+    }
+    const short = conv.short_id;
+    const holder = await reservedFor(short);
+    // The conversation a stored ref holds the short id for bears it; every other one sharing it was kept off it.
+    const rivals = holder === own ? [] : [...named].filter(([, n]) => n.short === short).map(([id]) => id);
+    if (holder && holder !== own) rivals.push(holder);
+    const out = longerThanRivals(short, own, rivals);
     named.set(own, { name: out, short });
     ids[out] = conv._id;
     return out;
   };
-  const ref = (stored: string): string => {
-    if (ids[stored]) return stored;
-    const can = [...named].filter(([own, n]) => n.short === stored || (stored.length > n.short.length && own.startsWith(stored)));
-    return can.length === 1 ? can[0]![1].name : stored;
-  };
-  return { ids, name, ref };
+  return { ids, name };
 }
 /** The person's own session, counting in this workspace (lib/prioritySessionVisibility: its team's only while listed there). */
 export const inWorkspace = async (vis: SessionVisibility, conv: Doc<"conversations">, userId: Id<"users">, workspace: string) =>
@@ -297,12 +302,12 @@ async function correctionsFor(ctx: { db: any }, userId: Id<"users">, workspace: 
 }
 
 /** A standing role's seat, a worker another session started (with its parent's id), or the person's own session. */
-async function sessionKind(ctx: { db: any }, conv: Doc<"conversations">, name: (conv: Doc<"conversations">) => string): Promise<Pick<PassSession, "kind" | "parent">> {
+async function sessionKind(ctx: { db: any }, conv: Doc<"conversations">, name: (conv: Doc<"conversations">) => Promise<string>): Promise<Pick<PassSession, "kind" | "parent">> {
   if (isStandingSession(conv)) return { kind: "role" };
   // A fork (parent_message_uuid) is the person's own session from that point on, not a worker.
   if (!conv.parent_conversation_id || conv.parent_message_uuid) return { kind: "session" };
   const parent: Doc<"conversations"> | null = await ctx.db.get(conv.parent_conversation_id);
-  return { kind: "worker", parent: parent ? name(parent) : String(conv.parent_conversation_id) };
+  return { kind: "worker", parent: parent ? await name(parent) : String(conv.parent_conversation_id) };
 }
 
 /**
@@ -470,12 +475,21 @@ export const passInputs = internalQuery({
     const oldestFirst = [...touched.values()].sort((a, b) => firstAfter(a, cursor_at) - firstAfter(b, cursor_at));
     const prBudget = { left: PR_ROWS_READ, seen: new Map<string, { ref: string; merged: boolean }>() };
     const shortId = shortIds(ctx);
-    const names = sessionNames();
+    // The person's priorities in this workspace, read first: a short id a stored step ref holds is that ref's conversation's to bear.
+    const rows = await livePriorities(ctx, args.user_id, args.workspace, now, PRIORITIES_READ);
+    const storedRefs = new Set(rows.flatMap((p) => p.steps.flatMap((st) => st.refs.filter((r) => r.kind === "session").map((r) => r.id))));
+    const holders = new Map<string, Promise<string | null>>();
+    const names = sessionNames((shortId) => {
+      if (!storedRefs.has(shortId)) return Promise.resolve(null);
+      // As readers resolve a stored ref (priorityRead ownedConv): the owner's own, oldest first.
+      if (!holders.has(shortId)) holders.set(shortId, findConversationByAnyRefWhere(ctx, shortId, (c) => String(c.user_id) === String(args.user_id), (c) => c._creationTime).then((c) => (c ? String(c._id) : null)));
+      return holders.get(shortId)!;
+    });
     const sessions: PassSession[] = [];
     for (const t of oldestFirst) {
       const conv = t.conv;
       sessions.push({
-        id: names.name(conv),
+        id: await names.name(conv),
         ...(await sessionKind(ctx, conv, names.name)),
         title: conv.title ?? "",
         first_prompt: conv.first_prompt ?? "",
@@ -491,8 +505,7 @@ export const passInputs = internalQuery({
       });
     }
 
-    // The person's priorities in this workspace, with their newest sessions.
-    const rows = await livePriorities(ctx, args.user_id, args.workspace, now, PRIORITIES_READ);
+    // The person's priorities in this workspace (read above), with their newest sessions.
     // A group the rank backfill has not reached: each active row's place as it shows (and as the backfill will write it), so the pass slots around it.
     const legacyPlace = new Map<string, Pick<PassPriority, "person_pos" | "ai_rank">>();
     if (rows.some((p) => p.status === "active" && p.rank_set_by != null)) {
@@ -517,6 +530,14 @@ export const passInputs = internalQuery({
           left = true;
         } else if (await mayRead(c)) readable.push(c);
       }
+      // Named one at a time: whether a name must be longer depends on those named before it.
+      const sessionsOf: PassPriority["sessions"] = [];
+      for (const c of readable) {
+        sessionsOf.push({
+          id: await names.name(c), title: c.title ?? "", step_key: c.priority_step_key ?? null, last_active: c.thread_state_at ?? c.updated_at,
+          ...(c.priority_set_by === "person" ? { by_person: true } : c.priority_set_by === "link" || c.priority_set_by === "classifier" ? { linked_by: c.priority_set_by } : {}),
+        });
+      }
       priorities.push({
         short_id: p.short_id,
         title: p.title,
@@ -529,18 +550,13 @@ export const passInputs = internalQuery({
         serves: p.serves ?? null,
         steps: p.steps,
         last_active_at: p.last_active_at,
-        sessions: readable.map((c) => ({
-          id: names.name(c), title: c.title ?? "", step_key: c.priority_step_key ?? null, last_active: c.thread_state_at ?? c.updated_at,
-          ...(c.priority_set_by === "person" ? { by_person: true } : c.priority_set_by === "link" || c.priority_set_by === "classifier" ? { linked_by: c.priority_set_by } : {}),
-        })),
+        sessions: sessionsOf,
         // Its title and summary may come from a session it no longer holds: the pass writes them again.
         ...(p.needs_rewrite || left ? { needs_rewrite: true } : {}),
         ...(p.step_key_max ? { step_key_max: p.step_key_max } : {}),
       });
       for (const s of p.steps) for (const r of s.refs) if (r.kind === "task") stepTaskIds.add(r.id);
     }
-    // Once every shown session is named: a stored step ref reads as the name of the session it means.
-    for (const pp of priorities) pp.steps = pp.steps.map((st) => ({ ...st, refs: st.refs.map((r) => (r.kind === "session" ? { ...r, id: names.ref(r.id) } : r)) }));
     const step_tasks: PassTask[] = [];
     for (const short_id of stepTaskIds) {
       const t: Doc<"tasks"> | null = await ctx.db.query("tasks").withIndex("by_short_id", (q: any) => q.eq("short_id", short_id)).first();

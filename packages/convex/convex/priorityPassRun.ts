@@ -337,16 +337,18 @@ export const applyPlan = internalMutation({
       }
       return findConversationByAnyRefWhere(ctx, ref, (c) => inWorkspace(vis, c, args.user_id, args.workspace), (c) => c._creationTime);
     };
-    // Each step's session refs are stored as storedSessionId of the conversation they name, so later reads land on it.
+    // A step's new session ref is stored as storedSessionId of the conversation it names, so later reads land on it; one
+    // the row already holds stays as it is, with no read (the input showed stored refs as stored).
     const storedRefs = new Map<string, Promise<string>>();
     const storedRef = (ref: string) => {
       if (!storedRefs.has(ref)) storedRefs.set(ref, conversationOf(ref).then((c) => (c ? storedSessionId(ctx, c) : ref)));
       return storedRefs.get(ref)!;
     };
-    const storeRefs = (steps: PriorityStep[]) =>
-      Promise.all(steps.map(async (st) => ({ ...st, refs: await Promise.all(st.refs.map(async (r) => (r.kind === "session" ? { ...r, id: await storedRef(r.id) } : r))) })));
-    for (const c of plan.creates) c.steps = await storeRefs(c.steps);
-    for (const u of plan.updates) if (u.patch.steps) u.patch.steps = await storeRefs(u.patch.steps);
+    const sessionRefs = (steps: PriorityStep[]) => new Set(steps.flatMap((st) => st.refs.filter((r) => r.kind === "session").map((r) => r.id)));
+    const storeRefs = (steps: PriorityStep[], held: Set<string>) =>
+      Promise.all(steps.map(async (st) => ({ ...st, refs: await Promise.all(st.refs.map(async (r) => (r.kind === "session" && !held.has(r.id) ? { ...r, id: await storedRef(r.id) } : r))) })));
+    for (const c of plan.creates) c.steps = await storeRefs(c.steps, new Set());
+    for (const u of plan.updates) if (u.patch.steps) u.patch.steps = await storeRefs(u.patch.steps, sessionRefs((await mine(u.short_id))?.steps ?? []));
 
     for (const c of plan.creates) {
       const { ref, ...w } = c;
