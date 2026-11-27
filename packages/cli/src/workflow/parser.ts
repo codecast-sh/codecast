@@ -266,7 +266,7 @@ function shippedSlugOf(src: string, raw: RawGraph): string | null {
 }
 
 const STRING_FIELDS = ["prompt", "script", "doc", "card", "stop", "goal", "guide"];
-const ID_FIELDS = ["asker", "answerer", "retry_target", "no_slot"];
+const ID_FIELDS = ["asker", "answerer", "retry_target", "no_slot", "resume"];
 
 /**
  * A segment's params (`params="except above=50"`): `$except` in its stations
@@ -367,7 +367,7 @@ function expandFlows(raw: RawGraph, dir: string | undefined, read: ReadFile, res
         const said = String(a.label ?? sid).replace(/[^\w .,:()-]/g, "");
         const exitId = `${p}${sid}`;
         // A routed stop keeps the segment's words for why, read as $stop_reason by whatever the node routes to.
-        nodes.set(exitId, { shape: "parallelogram", label: said, script: `echo '{"exit": "${sid}"}'${failing ? "; exit 1" : ""}`, segment: id, segment_label: segLabel, ...marks, segment_exit: failing ? "stop" : "done", ...(failing ? { stop: rewrite(String(a.stop)), ...(a.shared !== undefined ? { shared: a.shared } : {}) } : {}) });
+        nodes.set(exitId, { shape: "parallelogram", label: said, script: `echo '{"exit": "${sid}"}'${failing ? "; exit 1" : ""}`, segment: id, segment_label: segLabel, ...marks, segment_exit: failing ? "stop" : "done", ...(failing ? { stop: rewrite(String(a.stop)), ...(a.shared !== undefined ? { shared: a.shared } : {}), ...(copy.resume !== undefined ? { resume: copy.resume } : {}) } : {}) });
         // `<node>.exit` in the node's own conditions reads which exit the segment took.
         const which = (c: string) => c.replace(new RegExp(`(^|[^\\w.])${id}\\.exit\\b`, "g"), `$1${exitId}.json.exit`);
         for (const e of out.filter((e) => (failing ? mentionsFailure(e) : !mentionsFailure(e)))) edges.push({ ...e, from: exitId, ...(e.condition ? { condition: which(e.condition) } : {}) });
@@ -502,6 +502,7 @@ export function validateWorkflow(graph: WorkflowGraph): string[] {
         if (problem) errors.push(`${node.id} [machine_slot="${node.machine_slot}"]: ${problem}`);
       }
     }
+    if (node.resume !== undefined && !node.stop) errors.push(`${node.id} [resume="${node.resume}"]: only a stop exit (stop=) says where a run stopped there resumes`);
     if (node.no_slot !== undefined && node.machine_slot === undefined) errors.push(`${node.id} [no_slot="${node.no_slot}"]: only a station that takes a machine slot (machine_slot=) can end no_slot`);
     if (node.type === "call" && !node.prompt) {
       errors.push(`Call node '${node.id}' has no prompt attribute`);
