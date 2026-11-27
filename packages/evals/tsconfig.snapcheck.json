@@ -1,0 +1,1 @@
+{ "extends": "./tsconfig.json", "include": ["scripts/priorities-snapshots.ts", "src/**/*", "../cli/src/bundledAssets.d.ts", "../cli/src/browser/assets.d.ts", "../cli/src/computer/assets.d.ts"] }
