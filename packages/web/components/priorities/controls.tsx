@@ -18,7 +18,7 @@ import { Popover, PopoverAnchor, PopoverContent } from "../ui/popover";
 import { Button } from "../ui/button";
 import { SwitchReview, type SwitchLedger } from "../consequential/ConsequentialSwitch";
 import { usePriorities, usePriorityWrites } from "../../hooks/usePriorities";
-import { priorityHref, rankProvenance } from "../../lib/priorities";
+import { milestoneLinksOf, priorityHref, rankProvenance } from "../../lib/priorities";
 import { COARSE_TALL, type SessionLine } from "../../lib/priorityList";
 import { cn } from "../../lib/utils";
 import { useMountEffect } from "../../hooks/useMountEffect";
@@ -98,8 +98,8 @@ const copyLink = (shortId: string) => {
  * once, plus the ones each link counts but does not carry: what the rows
  * draw, so a merge and a drop count the same way.
  */
-function linkedSessionCount(row: Pick<PriorityRow, "links">, stepKey?: string): number {
-  const links = (row.links ?? []).filter((l) => stepKey == null || l.key === stepKey);
+function linkedSessionCount(row: Pick<PriorityRow, "links" | "mapped_links">, stepKey?: string): number {
+  const links = milestoneLinksOf(row).filter((l) => stepKey == null || l.key === stepKey);
   const ids = new Set(links.flatMap((l) => l.sessions.map((s) => s.conversation_id)));
   return ids.size + links.reduce((n, l) => n + l.sessions_more, 0);
 }

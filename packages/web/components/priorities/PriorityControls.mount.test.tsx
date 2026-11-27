@@ -637,6 +637,22 @@ test("Drop and Merge count linked sessions the same way, from the links; Drop sa
   }
 }, 60_000);
 
+test("Merge counts the sessions of one of the viewer's own rows past the list's link budget, from its mapped links", async () => {
+  // Past OWN_LINKED the list sends the viewer's own row mapped links only (convex priorityRead listFor).
+  const { links: _full, ...rest } = stored("pri-1") as any;
+  useInboxStore.setState((st: any) => ({ priorities: { ...st.priorities, [rest._id]: { ...rest, session_count: 9, mapped_links: [links("s1", [FEED], { sessions_more: 2 }), links("s2", [FEED])] } } }));
+  const page = await mount(<Live />);
+  try {
+    expect(stored("pri-1").links).toBeUndefined();
+    await openSub(priorityMenu("pri-1"), '[data-act="merge"]');
+    await press(item('[data-merge-into="pri-2"]'));
+    await page.waitFor(() => !!document.querySelector('[data-switch-review="Merge priority"]'));
+    expect(document.querySelector('[data-switch-review="Merge priority"]')!.textContent).toContain("3sessions move");
+  } finally {
+    await page.unmount();
+  }
+}, 60_000);
+
 test("a push that changes only a milestone's looks done repaints its line", async () => {
   const page = await mount(<Live />);
   try {
