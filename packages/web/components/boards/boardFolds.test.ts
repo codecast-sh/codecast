@@ -44,6 +44,12 @@ describe("what a fold hides", () => {
     expect(folds.endOf("a")?.key).toBe("f");
     expect(folds.endOf("out")?.key).toBe("out");
   });
+  test("pins and fit read a held key as its pill; the pill counts held elements, arrows aside", () => {
+    const folds = boardFolds(folded, byKeyOf(folded));
+    expect(folds.resolved.get("a")?.key).toBe("f");
+    expect(folds.resolved.get("ab")?.key).toBe("f");
+    expect(folds.resolved.get("out")?.key).toBe("out");
+  });
   test("a fold inside a fold hands its ends to the outer, visible pill", () => {
     const outer = el("o", "frame", { x: -100, y: -100, w: 1000, h: 800, collapsed: { w: 1000, h: 800, holds: ["f"] } });
     const els = [...folded, outer];

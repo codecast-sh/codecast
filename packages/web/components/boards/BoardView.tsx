@@ -90,7 +90,7 @@ const NOOP_EDIT = { editing: false, onEditInput: NOOP, onEditDone: NOOP };
 
 type PromptState = { mode: PromptMode; at: Pt; world?: Pt; anchor?: string | null };
 
-export default function BoardView({ doc, live, selection, setSelection, mode, snapshot, toScreen, setExports }: LiveViewProps) {
+export default function BoardView({ doc, live, selection: selectionIn, setSelection, mode, snapshot, toScreen, setExports }: LiveViewProps) {
   const readOnly = mode === "view";
   const liveEls = useLiveElements(doc._id);
   const rawEls = (snapshot ?? liveEls) as BoardEl[];
@@ -130,6 +130,11 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
   foldsRef.current = folds;
   const ordered = useMemo(() => drawOrder(shown), [shown]);
   const frameHover = useFrameHover(shown);
+  // The selection never holds what a fold hides: nothing folded away is moved, deleted or edited through a stale pick.
+  const selection = useMemo(() => (folds.hidden.size ? selectionIn.filter((k) => !folds.hidden.has(k)) : selectionIn), [selectionIn, folds]);
+  useWatchEffect(() => {
+    if (selection.length !== selectionIn.length) setSelection(selection);
+  }, [selection, selectionIn]);
 
   const [tool, setToolState] = useState<BoardTool>("select");
   const [shapeKind, setShapeKind] = useState("rect");
@@ -173,7 +178,8 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
   }, []);
 
   // ── Camera: first paint fits the content; cursors follow every frame ──────
-  useBoardOpeningFit({ cam, live, elements: shown, byKey, threads, chromeInsets });
+  // A pin on a held element stands on its pill (folds.resolved), for fitting as for drawing.
+  useBoardOpeningFit({ cam, live, elements: shown, byKey: folds.resolved, threads, chromeInsets });
 
   const screenOf = useCallback((pos: ArtifactPosition & { key?: string }) => {
     const root = cam.rootRef.current;
@@ -218,16 +224,22 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
   useWatchEffect(() => {
     live.setPresence({ position: lastPointer.current ? { point: lastPointer.current } : undefined, selection });
   }, [selection.join(",")]);
+  // Someone else's pick of something folded away draws nothing.
   const remote = useMemo<RemoteSelection[]>(() => others
-    .filter((p) => p.selection?.length)
-    .map((p) => ({ actor: p.actor, name: p.kind === "agent" ? `✳ ${p.name}` : p.name, color: p.color, keys: p.selection!, agent: p.kind === "agent" })), [others]);
+    .map((p) => ({ p, keys: (p.selection ?? []).filter((k) => !folds.hidden.has(k)) }))
+    .filter(({ keys }) => keys.length)
+    .map(({ p, keys }) => ({ actor: p.actor, name: p.kind === "agent" ? `✳ ${p.name}` : p.name, color: p.color, keys, agent: p.kind === "agent" })), [others, folds]);
 
   // ── Edit in place ──────────────────────────────────────────────────────────
   const startEdit = useCallback((key: string) => {
     const el = byKeyRef.current.get(key);
-    if (readOnly || !el || !editField(el)) return;
+    if (readOnly || !el || !editField(el) || foldsRef.current.hidden.has(key)) return;
     setEditing(key);
   }, [readOnly]);
+  // Text being typed into an element that just folded away is done.
+  useWatchEffect(() => {
+    if (editing && folds.hidden.has(editing)) { live.commit(); setEditing(null); }
+  }, [editing, folds]);
   const editHandlers = useMemo(() => {
     if (!editing) return NOOP_EDIT;
     return {
@@ -351,14 +363,14 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
   // The people on the board: a frame titled with one of their names is an agenda frame.
   const organize = () => layout.organize([me?.name, ...others.filter((p) => p.kind !== "agent").map((p) => p.name)].filter((n): n is string => typeof n === "string" && !!n));
   const frameActionsRef = useRef<BoardFrameActions | null>(null);
-  frameActionsRef.current = { docId: String(doc._id), readOnly, reflow: layout.reflow, toggleFold: layout.toggleFold, kindOf: (key) => byKeyRef.current.get(key)?.kind };
+  frameActionsRef.current = { docId: String(doc._id), readOnly, reflow: layout.reflow, toggleFold: layout.toggleFold, get: (key) => byKeyRef.current.get(key) };
   // Stable while the board stays the same board and mode, so memoized frames do not redraw on every render.
   const frameActions = useMemo<BoardFrameActions>(() => ({
     docId: String(doc._id),
     readOnly,
     reflow: (k) => frameActionsRef.current!.reflow(k),
     toggleFold: (k) => frameActionsRef.current!.toggleFold(k),
-    kindOf: (k) => frameActionsRef.current!.kindOf(k),
+    get: (k) => frameActionsRef.current!.get(k),
   }), [doc._id, readOnly]);
   const copy = (cut: boolean) => {
     if (!selectedEls.length) return;
@@ -422,7 +434,7 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
   };
   const fitTo = (selectionOnly: boolean) => {
     const els = selectionOnly && selectedEls.length ? selectedEls : shown;
-    cam.fit(fitBox(els, byKey, selectionOnly ? [] : pinPoints(threads, byKey).values()), { maxZ: selectionOnly ? 2 : 1, insets: chromeInsets() });
+    cam.fit(fitBox(els, folds.resolved, selectionOnly ? [] : pinPoints(threads, folds.resolved).values()), { maxZ: selectionOnly ? 2 : 1, insets: chromeInsets() });
   };
 
   const keysActive = useBoardKeys({
@@ -603,7 +615,7 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
   const { barAt, editAt, announce } = useBoardSelectionChrome({ selectedEls, byKey, obstacles, editing, readOnly, viewport: cam.viewport });
 
   const openThread = threads.find((t) => t.root.key === thread);
-  const threadAt = openThread ? (() => { const p = pinPoints(threads, byKey).get(openThread.root.key); return p ? cam.toScreen(p) : null; })() : null;
+  const threadAt = openThread ? (() => { const p = pinPoints(threads, folds.resolved).get(openThread.root.key); return p ? cam.toScreen(p) : null; })() : null;
   const zoomPct = Math.round(vcam.z * 100);
   const empty = live.ready && elements.length === 0 && !snapshot && !prompt;
   const teamId = (doc as typeof doc & { team_id?: string }).team_id;
@@ -699,7 +711,7 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
           showHandles={!pressing}
         />
         {session.voting && <BoardVoteDots els={shown} me={myId} open={session.voting.open} />}
-        <CommentPins threads={threads} byKey={byKey} open={thread} onOpen={(k) => setThread(thread === k ? null : k)} />
+        <CommentPins threads={threads} byKey={folds.resolved} open={thread} onOpen={(k) => setThread(thread === k ? null : k)} />
       </div>
       </BoardFrameContext.Provider>
 

@@ -20,8 +20,8 @@ export type BoardFrameActions = {
   reflow(key: string): void;
   /** Collapse an open frame, expand a folded one. */
   toggleFold(key: string): void;
-  /** What a key is, for the pill's count (arrows are not counted). */
-  kindOf(key: string): string | undefined;
+  /** The board's element by key, folded away or not: the pill counts what it holds. */
+  get(key: string): BoardEl | undefined;
 };
 
 export const BoardFrameContext = createContext<BoardFrameActions>({
@@ -29,7 +29,7 @@ export const BoardFrameContext = createContext<BoardFrameActions>({
   readOnly: true,
   reflow: () => {},
   toggleFold: () => {},
-  kindOf: () => undefined,
+  get: () => undefined,
 });
 
 /** The object's chip, or the frame's own title when the object can't be read. */
