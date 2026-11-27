@@ -127,8 +127,8 @@ function GoalBody({ goal, goals }: { goal: InitiativeRow; goals: InitiativeRow[]
         )}
         <RNText style={objectStyles.title}>{goal.title}</RNText>
         <RNView style={objectStyles.chips}>
-          <FactChip icon={status.icon} label={status.label} color={status.color} onPress={pickStatus} testID="goal-status" />
-          {goal.health !== 'none' && <FactChip icon={health.icon} label={health.label} color={health.color} />}
+          <FactChip mark={<GoalStatusMark status={goal.status} size={11} />} label={status.label} color={status.color} onPress={pickStatus} testID="goal-status" />
+          {goal.health !== 'none' && <FactChip mark={<HealthDot health={goal.health} />} label={health.label} color={health.color} />}
           {ownerRole && <FactChip icon="user-o" label={`@${ownerRole.handle}`} color={Theme.textSecondary} link onPress={() => router.push(`/org/${ownerRole.short_id}` as never)} />}
           {ownerName && <FactChip icon="user-o" label={ownerName} color={Theme.textSecondary} />}
           {target && <FactChip icon="calendar-o" label={target.label} color={target.color} />}
