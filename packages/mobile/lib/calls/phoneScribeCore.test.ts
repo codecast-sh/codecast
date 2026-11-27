@@ -17,7 +17,7 @@ async function settle() {
 
 /** A phone scribe wired to fakes: the server, the call, the mic tap and the
  *  recognizer all write what happened, in order, to `log`. */
-function harness(opts: { roomKey?: string; openTap?: () => Promise<any>; muted?: boolean } = {}) {
+function harness(opts: { roomKey?: string; openTap?: () => Promise<any>; muted?: boolean; pacing?: (t: () => readonly string[]) => any } = {}) {
   const log: string[] = [];
   let clock = 1_000_000;
   const timers: Array<{ at: number; fn: () => void }> = [];
@@ -83,6 +83,7 @@ function harness(opts: { roomKey?: string; openTap?: () => Promise<any>; muted?:
     },
     flush: async () => void log.push("flush"),
     release: async () => void log.push("release"),
+    pacing: opts.pacing ?? (() => ({ busy: () => false, addressed: () => false })),
     now: () => clock,
     later: (fn, ms) => void timers.push({ at: clock + ms, fn }),
   });
@@ -260,5 +261,15 @@ describe("phone scribe", () => {
     h.scribe.reconcile();
     await settle();
     expect(h.taps[0].closed).toBe(false);
+  });
+
+  test("the run is paced by the agents its routes feed, as web's is", async () => {
+    let targets: (() => readonly string[]) | null = null;
+    const h = harness({ pacing: (t) => ((targets = t), { busy: () => true, addressed: () => false }) });
+    h.scribe.reconcile();
+    h.live(null);
+    await settle();
+    h.live({ startedBy: ME, routes: [{ kind: "session", target: "c1" }, { kind: "doc", target: "d1" }] });
+    expect(targets!()).toEqual(["c1"]);
   });
 });

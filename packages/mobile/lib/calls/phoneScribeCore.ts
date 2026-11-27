@@ -2,7 +2,8 @@
 // store, the getLive watch, the mic tap and the server. lib/calls/phoneScribe
 // binds it to the real ones; tests bind it to fakes. No React Native here.
 import type { AsrPcmSession } from "@codecast/web/lib/calls/asrPipe";
-import type { AsrPipeOpener, ConvexHandle, ScribeEngine } from "@codecast/web/lib/calls/scribeEngine";
+import type { AsrPipeOpener, ConvexHandle, ScribeEngine, ScribePacing } from "@codecast/web/lib/calls/scribeEngine";
+import { feedTargetsOf } from "@codecast/web/lib/calls/scribePacing";
 import { decidePhoneScribe } from "./phoneScribeRule";
 
 export type PhoneCallView = {
@@ -35,6 +36,8 @@ export type PhoneScribeDeps = {
   openSession(o: Parameters<AsrPipeOpener>[0]): AsrPcmSession;
   flush(transcriptId: string): Promise<unknown>;
   release(roomKey: string): Promise<unknown>;
+  /** How the run waits on the agents it feeds (web's storePacing). */
+  pacing(feedTargets: () => readonly string[]): ScribePacing;
   now(): number;
   later(fn: () => void, ms: number): void;
 };
@@ -170,7 +173,8 @@ export function createPhoneScribe(d: PhoneScribeDeps) {
   }
 
   async function begin(roomKey: string, meId: string): Promise<void> {
-    const id = await engine.start({ convex: d.convex, roomKey, auto: true }).catch(() => null);
+    const pacing = d.pacing(() => feedTargetsOf(live));
+    const id = await engine.start({ convex: d.convex, roomKey, auto: true, pacing }).catch(() => null);
     if (!id) {
       retryAt = d.now() + RETRY_MS;
       d.later(reconcile, RETRY_MS);
