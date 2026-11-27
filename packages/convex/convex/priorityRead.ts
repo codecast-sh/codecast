@@ -176,6 +176,7 @@ function rowFor(viewer: Id<"users">, p: Priority, owner: Owner, position: number
     session_count_more: more,
     sessions: mapped.filter((c): c is PrioritySession => c !== null).slice(0, limit),
     correction_pending: pending,
+    ...(p.from_call ? { from_call: String(p.from_call) } : {}),
   };
 }
 

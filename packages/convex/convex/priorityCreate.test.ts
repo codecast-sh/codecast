@@ -66,6 +66,14 @@ describe("cast priorities create", () => {
     expect((await priority("pri-2")).ai_rank).toBe(2);
   });
 
+  test("reading it says which call it was made in, so that call's board can mark it new", async () => {
+    const { create, as, call, ben } = await world();
+    await create({ title: "From the call", from_call: "cl-7" });
+    await create({ title: "Not from a call" });
+    expect((await as(String(ben)).query(pri.show, { short_id: "pri-1" }))?.from_call).toBe(String(call));
+    expect((await as(String(ben)).query(pri.show, { short_id: "pri-2" }))?.from_call).toBeUndefined();
+  });
+
   test("names a teammate as owner by handle, placed in their own order", async () => {
     const { create, priority, ana, ws } = await world();
     await create({ title: "Mine" });
