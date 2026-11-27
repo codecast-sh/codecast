@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { openTaskStart } from "./backgroundTaskStart.js";
 import { scanOpenBackgroundTasks } from "./backgroundTaskScan.js";
-import { claudeSessionProcessAlive } from "./sessionProcessMatcher.js";
+import { claudeSessionProcessAlive } from "./claudeSessionAlive.js";
 import { SubagentFinishTracker, parentTaskNotice, readSubagentRunFacts, subagentParentAlive, subagentRunState, type SubagentRunFacts, type SubagentStatusSink } from "./subagentFinish.js";
 
 const FILE = "/p/proj/parent-uuid/subagents/agent-abc.jsonl";

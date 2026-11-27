@@ -3,7 +3,8 @@ import { hasDeliverableMessage } from "./lib/closeAside";
 import { sanitizeConvexObjectKeys } from "./lib/convexFieldNames";
 import { noteWriteCause } from "./lifecycleEvents";
 import { isClaudeSubagentSessionId } from "@codecast/shared/contracts/claudeSubagentSession";
-import { launchedHeadless, legacyRunsInParent, runsInParentProcess } from "@codecast/shared/contracts/runsInParent";
+import { launchedHeadless, runsInParentProcess } from "@codecast/shared/contracts/runsInParent";
+import { rebindRunsInParentPatch, runsInParentAtCreate } from "./lib/runsInParentStamp";
 import { wakeFieldsOf } from "./wakeCost";
 import { cliSessionClassifier, recencyRankOf, type RecencyRank } from "./cliSessionClassifier";
 import { mutation, query, internalMutation, internalQuery, type QueryCtx, type MutationCtx } from "./functions";
@@ -1457,10 +1458,7 @@ export const createConversation = mutation({
     // cache), so without this the row is born looking like a normal session
     // and teammates get a "started coding" push for it.
     is_subagent: v.optional(v.boolean()),
-    // Daemon-asserted: the transcript runs inside its parent's process (a
-    // subagents/ transcript, a codex child running in its lead). An older
-    // daemon sends none, and the row is stamped by the legacy rule.
-    runs_in_parent: v.optional(v.boolean()),
+    runs_in_parent: v.optional(v.boolean()), // the daemon's word (lib/runsInParentStamp)
     // The trigger this transcript is a spawned run of (the daemon's scheduler
     // started it), so the row is born nested (stampRunConversation) instead
     // of being a loose inbox card until the run is linked.
@@ -1634,9 +1632,7 @@ export const createConversation = mutation({
       is_subagent: (args.is_subagent === true && !args.parent_message_uuid) ||
         (!!parentConversationId && !args.parent_message_uuid) ||
         (args.agent_type === "claude_code" && !args.parent_message_uuid && isClaudeSubagentSessionId(args.session_id)) || undefined,
-      // An older daemon sends no answer: the legacy rule over what this row is.
-      runs_in_parent: args.runs_in_parent ?? (!args.parent_message_uuid &&
-        legacyRunsInParent({ agent_type: args.agent_type, session_id: args.session_id, parent_conversation_id: parentConversationId, cli_flags: args.cli_flags })),
+      runs_in_parent: runsInParentAtCreate(args, parentConversationId),
       agent_team_name: args.agent_team_name,
       agent_name: args.agent_name,
       git_commit_hash: args.git_commit_hash,
@@ -8885,9 +8881,7 @@ async function enrichInboxSessionRow(
     // Launched as a program (cli_flags --print, never sent): what a close of
     // its lead reads (shared goesDownWithLead).
     headless_launch: launchedHeadless(conv),
-    // Whether it runs inside its parent's process, resolved for legacy rows:
-    // what every process gate reads (shared runsInParentProcess).
-    runs_in_parent: runsInParentProcess(conv),
+    runs_in_parent: runsInParentProcess(conv), // every process gate reads it
     // The daemon's own status: every reader derives what it means at its own
     // clock (trustedStatusAt), since a verdict does not replay (ct-56054).
     agent_status: maps.agentStatusMap.get(conv._id.toString()) ?? null,
@@ -9024,9 +9018,7 @@ async function enrichInboxSessionRow(
     // The owners model (lib/inboxOwners): its marker, implicit starter and
     // owning session only where the model applies, which every placement reads.
     ...(await inboxOwnerRowFields(ctx, conv)),
-    // A person took it over from its parent, on or off the model: who hears
-    // it reads this (shared answersToParent).
-    parent_released_at: conv.parent_released_at ?? null,
+    parent_released_at: conv.parent_released_at ?? null, // who hears it (answersToParent)
     user_id: conv.user_id,
     acting_user_id: (conv as any).acting_user_id ?? null,
     is_anchor: !!(conv as any).anchor_id,
@@ -9187,8 +9179,7 @@ async function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: nu
     // two emission paths stay byte-consistent when the client dedups by _id. This
     // path is for confirmed children, so is_subagent is forced true (covers the
     // parent_message_uuid-less child that has no is_subagent flag of its own),
-    // except for a session a person dragged under the parent (adopted_at): it
-    // runs its own process and reads its own placement.
+    // except for one a person dragged there (adopted_at): it has its own placement.
     ...subagentLinkFields({ is_subagent: child.is_subagent === true || child.adopted_at == null, parent_conversation_id: parentId }),
     spawned_by_conversation_id: child.spawned_by_conversation_id?.toString() || null,
     agent_team_name: child.agent_team_name ?? null,
@@ -13690,13 +13681,7 @@ export const updateSessionId = mutation({
       throw new Error("Not found");
     }
 
-    const patch: Record<string, any> = { session_id: args.session_id };
-    // A Claude Code subagent resumed under a UUID of its own (the daemon's
-    // promotion, subagentPromotion.ts) runs in its own process from now on.
-    const subagentId = (session_id: string) => conv.agent_type === "claude_code" && legacyRunsInParent({ agent_type: conv.agent_type, session_id });
-    if (subagentId(conv.session_id ?? "") && !subagentId(args.session_id)) {
-      patch.runs_in_parent = false;
-    }
+    const patch: Record<string, any> = { session_id: args.session_id, ...rebindRunsInParentPatch(conv, args.session_id) };
     if (args.project_path) patch.project_path = args.project_path;
     if (args.git_root) patch.git_root = args.git_root;
     if (args.git_remote_url) patch.git_remote_url = args.git_remote_url;

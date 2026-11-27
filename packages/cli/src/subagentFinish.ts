@@ -13,7 +13,7 @@
 import { promises as fsp } from "node:fs";
 import * as path from "node:path";
 import { scanOpenBackgroundTasks } from "./backgroundTaskScan.js";
-import { claudeSessionProcessAlive } from "./sessionProcessMatcher.js";
+import { claudeSessionProcessAlive } from "./claudeSessionAlive.js";
 
 /** How long a subagent transcript must be quiet before its state is read. */
 export const FINISH_QUIET_MS = 15_000;
