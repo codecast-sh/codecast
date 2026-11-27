@@ -24399,13 +24399,9 @@ export function trackSessionPaneForTests(
 }
 
 /** Test seam: what the daemon believes about one session's pane. `beating` is
- *  the load-bearing one — a parked session that stops beating is deleted by the
- *  server's stale-row cron within the hour. */
-/** Test seam: stop the park ledger writing to the file a test's restore named. */
-export function detachParkLedgerForTests(): void {
-  hibernatedSessions.detach();
-}
-
+ *  the load-bearing one — the server keeps a parked session's row (the stale
+ *  reap skips hibernated rows), but a run wake on it counts only while it
+ *  beats, so one that stops beating files under Needs You. */
 export function sessionParkStateForTests(sessionId: string): {
   parked: boolean;
   beating: boolean;
@@ -24418,6 +24414,11 @@ export function sessionParkStateForTests(sessionId: string): {
     paneTracked: resumeSessionCache.has(sessionId),
     status: lastSentAgentStatus.get(sessionId),
   };
+}
+
+/** Test seam: stop the park ledger writing to the file a test's restore named. */
+export function detachParkLedgerForTests(): void {
+  hibernatedSessions.detach();
 }
 
 /**
