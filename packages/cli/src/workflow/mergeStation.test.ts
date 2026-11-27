@@ -23,9 +23,10 @@ describe("cast flow merge", () => {
       const merge = s.gh().calls.find((c) => c[1] === "merge")!;
       expect(merge.slice(0, 6)).toEqual(["pr", "merge", String(PR), "--squash", "--match-head-commit", head]);
       expect(merge).not.toContain("--admin");
-      expect(s.posts.map((p) => p.path)).toEqual(["/cli/workflow-runs/merge-proof", "/cli/workflow-runs/clear", "/cli/line/merge/check", "/cli/line/merge/record"]);
+      // Every merge takes its turn under the repository's lease, asked again before the merge and released after it.
+      expect(s.posts.map((p) => p.path === "/cli/repo-lease" ? `lease ${p.body.op}` : p.path)).toEqual(["/cli/workflow-runs/merge-proof", "/cli/workflow-runs/clear", "/cli/line/merge/check", "lease take", "lease renew", "/cli/line/merge/record", "lease release"]);
       expect(s.posts[1].body).toEqual({ run_id: "run_1", head_sha: head, why: `CI green on ${head.slice(0, 10)} against ${s.main().slice(0, 10)} and the review said ship` });
-      expect(s.posts[3].body).toEqual({ run_id: "run_1", sha: r.line, branch: BRANCH, into: "main", pr_url: PR_URL });
+      expect(s.posts[5].body).toEqual({ run_id: "run_1", sha: r.line, branch: BRANCH, into: "main", pr_url: PR_URL });
       expect(s.trees.every((t) => !existsSync(t))).toBe(true);
     } finally { s.done(); }
   }, T);

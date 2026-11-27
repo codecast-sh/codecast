@@ -1,8 +1,9 @@
-// The server's lease on a repository's before-merge deploys through the push
-// that lands them (convex repoLeases.ts), from any machine: the Merge station
-// holds it from its first before-merge step to the landed sha, and `cast ship
-// checkout` from its first before-push deploy to its push. A holder renews it
-// every minute; a holder that dies frees it within the lease's ten minutes.
+// The server's lease on a repository's merges and the deploys that go with them
+// (convex repoLeases.ts), from any machine, granted in the order takers asked:
+// the Merge station holds it from before its rebase to the landed sha, `cast
+// ship checkout` from its first before-push deploy to its push, and `cast repo
+// lease` around a command. A holder renews it every minute; a holder that dies
+// frees it within the lease's ten minutes.
 //
 // A holder can lose it without dying: a laptop that sleeps past the lease
 // comes back to a lease someone else took. So the background renewal marks the
@@ -38,14 +39,25 @@ const errorText = (err: unknown) => { const e = err as { message?: string; code?
 /** Who holds a lease, as a person waiting on it reads it: what, on which machine. */
 export const leaseHolder = (what: string) => `${what} on ${os.hostname()}`;
 
-/** Take the repository's lease, waiting (one line per new holder) while another holds it. */
-/** `runId`: the flow run whose station holds it, whose workspace scopes the lease; without one the repository's team does. */
-export async function holdRepoLease(post: LeasePost, o: { repository: string; holder: string; runId?: string; log: (line: string) => void; pollMs?: number; renewMs?: number; staleMs?: number; now?: () => number }): Promise<RepoLease> {
+const ordinal = (n: number) => `${n}${n % 100 >= 11 && n % 100 <= 13 ? "th" : ["th", "st", "nd", "rd"][n % 10] ?? "th"}`;
+
+/** Take the repository's lease, waiting in line (one line per new place or holder) while another holds it. */
+/** `runId`: the flow run whose station holds it, whose workspace scopes the lease; without one the repository's team does.
+ *  `signal`: stops the wait, leaving the line, and throws. */
+export async function holdRepoLease(post: LeasePost, o: { repository: string; holder: string; runId?: string; log: (line: string) => void; signal?: AbortSignal; pollMs?: number; renewMs?: number; staleMs?: number; now?: () => number }): Promise<RepoLease> {
   const now = o.now ?? Date.now;
   const token = randomUUID();
   const ask = (op: "take" | "renew" | "release") => post("/cli/repo-lease", { repository: o.repository, op, token, holder: o.holder, ...(o.runId ? { run_id: o.runId } : {}) });
+  const pause = () => new Promise<void>((res) => {
+    const t = setTimeout(res, o.pollMs ?? POLL_MS);
+    o.signal?.addEventListener("abort", () => { clearTimeout(t); res(); }, { once: true });
+  });
   let told = "";
   for (;;) {
+    if (o.signal?.aborted) {
+      await ask("release").catch(() => {});
+      throw new Error(`stopped waiting for the lease on ${o.repository}`);
+    }
     // A post that failed on the way (the network, the gateway) is asked again: going on would deploy beside a holder.
     // A missing route (an older server) or a refusal ends the wait with the error.
     const r = await ask("take").catch((err) => {
@@ -54,14 +66,15 @@ export async function holdRepoLease(post: LeasePost, o: { repository: string; ho
       if (said !== told) { told = said; o.log(said); }
       return null;
     });
-    if (r === null) { await new Promise((res) => setTimeout(res, o.pollMs ?? POLL_MS)); continue; }
+    if (r === null) { await pause(); continue; }
     if (r?.held) break;
-    if (r?.holder !== told) {
-      told = r?.holder ?? "";
+    const place = `${r?.position ? `${ordinal(r.position)} in line ` : ""}behind ${r?.holder || "another holder"}`;
+    if (place !== told) {
+      told = place;
       const since = Math.max(0, Math.round((now() - Number(r?.since ?? now())) / 60_000));
-      o.log(`waiting for ${told || "another holder"} to finish its deploys and merge in ${o.repository} (holding it ${since}m)`);
+      o.log(`waiting for the lease on ${o.repository}: ${place} (${since}m)`);
     }
-    await new Promise((res) => setTimeout(res, o.pollMs ?? POLL_MS));
+    await pause();
   }
   let lastHeld = now();
   let lost = false;

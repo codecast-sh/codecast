@@ -2,9 +2,10 @@
 // push that lands them (docs/architecture/flows.md, the Merge station). A
 // whole-tree deploy (convex) from one machine between another's deploy and
 // its merge takes the other's backend back out of production; a local lock
-// orders one checkout only. The Merge station holds this lease from its first
-// before-merge step to the landed sha, and `cast ship checkout` from its
-// first before-push deploy to its push.
+// orders one checkout only. The Merge station holds this lease from before its
+// rebase to the landed sha, so merges land one at a time in the order they
+// asked, each rebased on the one before; `cast ship checkout` holds it from its
+// first before-push deploy to its push, and `cast repo lease` around a command.
 //
 // DP13's "one deploy of a target going out at a time" is a deploys row with
 // commits, queued on the machine that publishes the target, so it cannot
@@ -23,12 +24,23 @@ import { teamKey } from "./deployTargetsCi";
 
 /** How long a lease holds without a renewal: a holder renews every minute, so a dead one frees it within this. */
 export const LEASE_MS = 10 * 60_000;
+/** How long a waiter keeps its place without asking again. A waiter asks every 5s, so one that stopped (killed, asleep)
+ *  drops out within this and never holds up the line behind it, as a dead holder would for a whole lease. */
+export const WAITER_STALE_MS = 60_000;
+
+type Waiter = { token: string; holder: string; since: number; seen_at: number };
 
 export type LeaseAnswer =
   | { held: true; expires_at: number }
-  | { held: false; holder: string; since: number; expires_at: number }
+  // `position`: the taker's place in line, the holder being 1st; `holder` is whoever is in front.
+  | { held: false; holder: string; since: number; expires_at: number; position?: number }
   | { released: boolean };
 
+/**
+ * The lease is granted in the order takers asked: a take while it is held (or while others wait) joins the line on
+ * the row, and is granted only once it is first in line and the lease is free. A released lease with a line keeps
+ * its row, free (no token), until the first in line asks again.
+ */
 export async function leaseCore(
   ctx: any,
   userId: Id<"users">,
@@ -39,22 +51,41 @@ export async function leaseCore(
   const { workspace, teamId } = await leaseWorkspace(ctx, userId, repository, args);
   // One lease per repository, whoever takes it: every workspace connected to it deploys the same production.
   const row = await ctx.db.query("repo_leases").withIndex("by_repository", (q: any) => q.eq("repository", repository)).first();
-  const mine = !!row && row.token === args.token;
+  const mine = !!row && !!row.token && row.token === args.token;
+  const line: Waiter[] = (row?.waiters ?? []).filter((w: Waiter) => now - w.seen_at <= WAITER_STALE_MS);
   if (args.op === "release") {
-    if (mine) await ctx.db.delete(row._id);
+    if (mine) await (line.length ? ctx.db.patch(row._id, { token: "", expires_at: now, waiters: line }) : ctx.db.delete(row._id));
+    // A waiter that gives up leaves the line.
+    else if (line.some((w) => w.token === args.token)) {
+      const left = line.filter((w) => w.token !== args.token);
+      await ctx.db.patch(row._id, { waiters: left.length ? left : undefined });
+    }
     return { released: mine };
   }
   const live = !!row && row.expires_at > now;
-  if (live && !mine) return { held: false, holder: row.holder, since: row.acquired_at, expires_at: row.expires_at };
   // A renewal extends only this holder's own row, lapsed or not. With no row (another holder took it, merged and
   // released it while this one slept) or another's token, the lease is gone: renewing must never take it back.
   if (args.op === "renew" && !mine) return { held: false, holder: row?.holder ?? "nobody", since: row?.acquired_at ?? now, expires_at: row?.expires_at ?? now };
   const expires_at = now + LEASE_MS;
-  if (mine) await ctx.db.patch(row._id, { expires_at });
-  else {
-    if (row) await ctx.db.delete(row._id);
-    await ctx.db.insert("repo_leases", { workspace, ...(teamId ? { team_id: teamId } : {}), repository, token: args.token, holder: (args.holder ?? "someone").slice(0, 200), holder_user_id: userId, acquired_at: now, expires_at });
+  if (mine) {
+    await ctx.db.patch(row._id, { expires_at });
+    return { held: true, expires_at };
   }
+  const holder = (args.holder ?? "someone").slice(0, 200);
+  const queued = line.some((w) => w.token === args.token)
+    ? line.map((w) => (w.token === args.token ? { ...w, seen_at: now } : w))
+    : [...line, { token: args.token, holder, since: now, seen_at: now }];
+  const ahead = queued.findIndex((w) => w.token === args.token);
+  if (live || ahead > 0) {
+    await ctx.db.patch(row._id, { waiters: queued });
+    const front = live ? { holder: row.holder, since: row.acquired_at } : { holder: `${queued[0].holder} (next in line)`, since: queued[0].since };
+    return { held: false, ...front, expires_at: row.expires_at, position: ahead + (live ? 2 : 1) };
+  }
+  const rest = queued.slice(1);
+  const lease = { workspace, repository, token: args.token, holder, holder_user_id: userId, acquired_at: now, expires_at };
+  // A patch's undefined clears the field: the last holder's team and a line that is now empty.
+  if (row) await ctx.db.patch(row._id, { ...lease, team_id: teamId, waiters: rest.length ? rest : undefined });
+  else await ctx.db.insert("repo_leases", { ...lease, ...(teamId ? { team_id: teamId } : {}) });
   return { held: true, expires_at };
 }
 
