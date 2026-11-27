@@ -2065,6 +2065,10 @@ export type ClientUI = {
   // id): the switcher's dot lights only for threads waiting on them that
   // moved after it (useSwitchWorkspace stamps it).
   workspace_seen_at?: Record<string, number>;
+  // How the person's huddles start in each workspace, by workspace key
+  // (lib/calls/huddleSettings): on the board, and with Scribe invited.
+  huddleBoardView?: Record<string, boolean>;
+  huddleAutoScribe?: Record<string, boolean>;
   // When the person finished or skipped the setup flow (/start). Until it
   // is set, a first-run inbox with no team sends them there once.
   setup_done_at?: number;
