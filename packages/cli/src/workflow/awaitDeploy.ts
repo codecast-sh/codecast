@@ -29,6 +29,8 @@ export type DeployTargetRow = {
   /** The machine that publishes it, where its sends run, and who that is (absent from an older server). */
   device_id?: string | null;
   publisher?: { name: string | null; machine: string | null } | null;
+  /** What the target exempts (tests), as its last publish said; absent from an older server. */
+  unless?: string[];
 };
 
 export type TargetState =
@@ -227,7 +229,7 @@ function publisherWords(p: DeployTargetRow["publisher"]): string {
 }
 
 /** A release's result line for one target (`FAIL  cli  …`), when its output holds one. */
-const resultLine = (line: string, target: string) => new RegExp(`^\\s*(FAIL|live|-)\\s+${target}\\b`).test(line);
+const resultLine = (line: string, target: string) => new RegExp(`^\\s*(FAIL|live|-)\\s+${target}(\\s|$)`).test(line);
 
 /** A release's last lines, as far as they speak of one target: the others' lines ("- mobile not named") say nothing of it. */
 function ownLines(last: string, target: string): string {
@@ -386,7 +388,7 @@ export async function awaitDeploy(input: { sha: string; base: string; plan: Depl
           }
           return `cast deploy sent no deploy of ${d.target} (${said})`;
         });
-        const next = away.length ? ` ${short} is on main and goes out with ${away.join(" and ")}'s next deploy; the run ends at Live once every target it touches carries it.` : "";
+        const next = away.length ? ` ${short} is on main and goes out with ${away.join(" and ")}'s next deploy.` : "";
         if (away.length === why.length) return { code: 1, line: `This run could not send ${away.join(" or ")}: ${why.join("; ")}.${next}` };
         return { code: 1, line: `No deploy carries ${short}: ${why.join("; ")}.${next}` };
       }

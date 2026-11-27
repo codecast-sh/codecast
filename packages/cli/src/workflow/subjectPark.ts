@@ -134,9 +134,10 @@ export async function notLiveYet(cwd: string, landed: { sha: string; files: stri
   const { checkoutTargets } = await import("../lineDeploy.js");
   const declared = await checkoutTargets(cwd).catch(() => []);
   const unlisted = declared.filter((d) => !listed.some((t) => t.name === d.name)).map((d) => ({ name: d.name, paths: d.paths }));
-  // What a target exempts (its tests) is the checkout's to say: the server's row does not hold it.
-  const unless = (name: string) => declared.find((d) => d.name === name)?.unless;
-  const touched = [...listed, ...unlisted].filter((t) => targetTouches({ paths: t.paths, unless: unless(t.name) }, landed.files));
+  // What a target exempts (its tests), as the server's row has it, the rule its reach reads; an older server's row
+  // holds none, and the checkout's file says it then.
+  const unless = (t: DeployTargetRow) => t.unless ?? declared.find((d) => d.name === t.name)?.unless;
+  const touched = [...listed, ...unlisted].filter((t) => targetTouches({ paths: t.paths, unless: unless(t) }, landed.files));
   const states = await Promise.all(touched.map((t) => targetState(t, (sha) => holds(cwd, landed.sha, sha))));
   const waiting = states.filter((s) => s.state !== "live").map((s) => s.target);
   return waiting.length ? `its change is not live yet on ${waiting.join(", ")}` : null;

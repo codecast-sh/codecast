@@ -6,9 +6,9 @@ import * as path from "node:path";
 import { notLiveYet } from "./subjectPark";
 
 // Whether a landed change is live, as a parked subject asks it: a target the change's files touch only through what
-// its `unless` exempts (tests) is not waited on. The checkout's deploy.toml says what each target exempts. Synthetic
-// repository and server only.
-describe("notLiveYet reads what each target exempts from the checkout", () => {
+// its `unless` exempts (tests) is not waited on. The server's row says what each target exempts, the checkout's
+// deploy.toml when the row holds nothing (an older server). Synthetic repository and server only.
+describe("notLiveYet reads what each target exempts", () => {
   test("a change of only a target's tests is live without it; a shipped file waits on it", async () => {
     const repo = fs.mkdtempSync(path.join(os.tmpdir(), "subject-park-"));
     const git = (...args: string[]) => spawnSync("git", ["-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", ...args], { encoding: "utf-8" }).stdout.trim();
@@ -25,6 +25,10 @@ describe("notLiveYet reads what each target exempts from the checkout", () => {
       const call = async () => ({ targets: [{ name: "cli", paths: ["cli/**"], live: null }] });
       expect(await notLiveYet(repo, { sha, files: ["cli/src/a.test.ts"] }, call)).toBeNull();
       expect(await notLiveYet(repo, { sha, files: ["cli/src/a.test.ts", "cli/src/a.ts"] }, call)).toBe("its change is not live yet on cli");
+      // A row that holds `unless` speaks for itself, as the server's reach reads it.
+      const published = async () => ({ targets: [{ name: "cli", paths: ["cli/**"], unless: ["**/*.spec.ts"], live: null }] });
+      expect(await notLiveYet(repo, { sha, files: ["cli/src/a.spec.ts"] }, published)).toBeNull();
+      expect(await notLiveYet(repo, { sha, files: ["cli/src/a.test.ts"] }, published)).toBe("its change is not live yet on cli");
     } finally {
       fs.rmSync(repo, { recursive: true, force: true });
     }

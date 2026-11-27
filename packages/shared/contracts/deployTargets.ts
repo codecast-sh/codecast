@@ -259,6 +259,11 @@ function targetFromEntry(e: unknown, ship: readonly ShipStepRef[]): DeployTarget
   const unlessRaw = r["unless"] ?? [];
   const unless = typeof unlessRaw === "string" ? [unlessRaw] : unlessRaw;
   if (!Array.isArray(unless) || unless.some((w) => typeof w !== "string")) throw new DeployTargetError(`target ${name}: 'unless' must be a string or a list of strings`);
+  // globMatch reads braces as themselves, so `packages/{web,cli}/**` would match nothing and miss every deploy.
+  for (const [key, globs] of [["when", when], ["unless", unless]] as const) {
+    const braced = (globs as string[]).find((g) => g.includes("{"));
+    if (braced) throw new DeployTargetError(`target ${name}: '${key}' glob "${braced}" uses braces, which deploy paths do not expand: list each path on its own`);
+  }
   const command = ((r["run"] as string | undefined) ?? step?.run ?? "").trim();
   const runs = (r["runs"] ?? "here") as DeployTargetRuns;
   if (!(DEPLOY_TARGET_RUNS as readonly string[]).includes(runs)) throw new DeployTargetError(`target ${name}: runs must be one of ${DEPLOY_TARGET_RUNS.join(", ")}`);

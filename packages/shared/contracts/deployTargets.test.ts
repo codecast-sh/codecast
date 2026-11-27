@@ -114,5 +114,8 @@ describe("a release's order and steps (DP15)", () => {
     expect(Object.keys(publishableTarget(t)).sort()).toEqual(["command", "live", "name", "paths", "policy", "runs", "ship_stage", "unless"]);
     expect(() => parse([{ name: "cli", run: "x", gate: 3 }])).toThrow("'gate' must be a string");
     expect(() => parse([{ name: "cli", run: "x", unless: [3] }])).toThrow("'unless' must be a string or a list of strings");
+    // Braces would match nothing (a missed deploy), so the file is refused, naming the target and the key.
+    expect(() => parse([{ name: "web", runs: "push", when: ["packages/{web,shared}/**"] }])).toThrow(`target web: 'when' glob "packages/{web,shared}/**" uses braces`);
+    expect(() => parse([{ name: "cli", run: "x", when: "cli/**", unless: "**/*.{test,spec}.ts" }])).toThrow("target cli: 'unless' glob");
   });
 });

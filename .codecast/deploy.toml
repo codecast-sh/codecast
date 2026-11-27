@@ -72,8 +72,9 @@ finish = "cast force-update $version"
 [[target]]
 name = "mobile"
 when = ["packages/mobile/**", "packages/shared/**", "packages/web/**", "platform/**"]
-# Not web's __tests__/ or __fixtures__/: web code imports some (evals views, previews).
-unless = ["**/*.test.ts", "**/*.test.tsx", "**/*.test.js", "**/*.test.cjs", "**/*.test.mjs", "packages/mobile/**/__tests__/**", "packages/mobile/**/__fixtures__/**", "packages/shared/**/__fixtures__/**", "**/*.testkit.ts", "**/Tests/**"]
+# Not web's or shared's __tests__/ and __fixtures__/: web code imports some (evals views, previews), and those
+# reach shared's exported fixtures.
+unless = ["**/*.test.ts", "**/*.test.tsx", "**/*.test.js", "**/*.test.cjs", "**/*.test.mjs", "packages/mobile/**/__tests__/**", "packages/mobile/**/__fixtures__/**", "**/*.testkit.ts", "**/Tests/**"]
 run = "packages/mobile/scripts/ota.sh $sha"
 policy = "release"
 after = ["backend"]
