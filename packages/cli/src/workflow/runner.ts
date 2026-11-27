@@ -43,6 +43,7 @@ import { carriedFailureNote } from "./unpushedCommits.js";
 import { webBaseUrl } from "../config/readLocalConfig.js";
 import { checkoutChangeOf, failureExcerpt, findingRoots, gateAnswerMessage, runEndMessage, runWorktreePath, sentBackWords, subjectOf, writerBrief, writersNamed, type Subject, type Writer } from "./subjectStation.js";
 import { notLiveYet, startSubjectParker, subjectOtherWork, subjectRow, subjectSettled, subjectTakenOver, type SubjectParker } from "./subjectPark.js";
+import { SubjectTurn } from "./subjectTurn.js";
 import { lineRunsRoot } from "./runDirs.js";
 import { releaseEndedRunTree, restoreRunTree, stopRunBrowser, usesRunTree } from "./runWorktree.js";
 
@@ -481,10 +482,11 @@ async function executeSubjectNode(node: WorkflowNode, graph: WorkflowGraph, cont
   const waiting = (on: Record<string, any> | null) => options.runId ? reportProgress(options, { current_node_id: node.id, node_id: node.id, node_status: "running", waiting_on_session: on }) : Promise.resolve();
   const on = { node_id: node.id, conversation_id: subject.conversationId, since: Date.now(), note: (context["stop_reason"] || brief).slice(0, 600) };
   await waiting(on);
+  const turn = await new SubjectTurn({ cwd, branch: readFrozenChange(context["run_dir"])?.branch ?? context["branch"] ?? null, shortId: subject.shortId, say: (note) => waiting({ ...on, note }) }).begin();
   // It answers only with a turn after the brief reached it: a detached run's caller can still be mid-turn when a fast
   // check fails, and that turn's end is no answer. Where the delivery cannot be read, the send is when it arrived.
   const outcome = await waitOnStation(node, graph, context, cwd, options, undefined, {
-    ...subject, sentAtCount: row.message_count ?? 0, sentAt, awaitDelivery: true, unreadDeliveryAt: sentAt - CLOCK_SKEW_MS,
+    ...subject, sentAtCount: row.message_count ?? 0, sentAt, awaitDelivery: true, unreadDeliveryAt: sentAt - CLOCK_SKEW_MS, turn,
     onPerson: (pin) => waiting(pin === null ? on : { ...on, since: Date.now(), note: pin.slice(0, 600), blocked: true }),
   });
   await waiting(null);
@@ -594,7 +596,7 @@ async function briefWriters(node: WorkflowNode, graph: WorkflowGraph, context: R
     const own = { ...context };
     const onPerson = (pin: string | null) => waiting(pin === null ? on : { node_id: node.id, conversation_id: w.conversationId, since: Date.now(), note: `${w.shortId}: ${pin}`.slice(0, 600), blocked: true });
     // A cancel read during one writer's wait ends the others' too.
-    const outcome = await waitOnStation(node, graph, own, cwd, options, undefined, { ...w, abort, onPerson }).catch((err) => { abort.stopped = true; throw err; });
+    const outcome = await waitOnStation(node, graph, own, cwd, options, undefined, { ...w, abort, onPerson, turn: new SubjectTurn({ cwd, branch: null, shortId: w.shortId, say: () => {} }) }).catch((err) => { abort.stopped = true; throw err; });
     const stopped = own["wait_aborted"] === "1";
     if (outcome !== "success" && !stopped) abort.stopped = true;
     return { w, own, outcome, stopped };
@@ -744,8 +746,8 @@ async function waitOnStation(
   // (`awaitDelivery`); where that cannot be read, the subject's brief counts as arriving at `unreadDeliveryAt`, and a
   // checkout's writer's as never read (below). A writer's wait ends early once `abort` says another writer's has
   // stopped the station. `onPerson` reports a blocked pin the station waits under (its text), and null once the
-  // session is back at work.
-  subject?: Subject & { sentAtCount: number; sentAt: number; awaitDelivery?: boolean; unreadDeliveryAt?: number; abort?: { stopped: boolean }; onPerson?: (pin: string | null) => Promise<unknown> },
+  // session is back at work. `turn` reads the subject's turn from its agent and its pushes (subjectTurn.ts).
+  subject?: Subject & { sentAtCount: number; sentAt: number; awaitDelivery?: boolean; unreadDeliveryAt?: number; abort?: { stopped: boolean }; onPerson?: (pin: string | null) => Promise<unknown>; turn: SubjectTurn },
 ): Promise<NodeOutcome> {
   if (!options.convexSiteUrl || !options.apiToken) {
     console.log(`  ${c.red}✗ session nodes need an authenticated CLI (cast auth)${c.reset}`);
@@ -912,7 +914,7 @@ async function waitOnStation(
       }
       continue;
     }
-    const state: string = row.work_state || "idle";
+    const state: string = subject ? subject.turn.state(row) : row.work_state || "idle";
     if (row.is_live) wasLive = true;
     // A transcript that moved or a working status is work, and so is a wait the hand declared: its background work
     // still running (waiting), its own dormant pin (heldDormant, below), or a daemon gone dark under it. Those are held
@@ -1025,7 +1027,7 @@ async function waitOnStation(
         }
         briefAt = at ?? subject.unreadDeliveryAt ?? null;
       }
-      if (state === "working" || grew || AGENT_AT_WORK.has(row.agent_status ?? "") || (row.message_count ?? 0) < subject.sentAtCount + 2) {
+      if (await subject.turn.atWork(row, grew, subject.sentAtCount)) {
         subjectQuiet = 0;
         continue;
       }
