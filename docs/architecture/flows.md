@@ -992,6 +992,30 @@ the person's checkout, else at Fix not frozen. Each way back to the session
 session behind it stops where it would brief one: Conflict, Found work, Deploy
 failed.
 
+### Machine slots: heavy stations take turns on one machine
+
+A Ship runs on the asking machine's daemon, so every Ship started there runs
+its Local CI on that one machine. A command station marked
+`machine_slot="<name>"` takes a place in that named slot of the machine before
+its script runs (`machineSlot.ts`; the names and their caps are
+`machineCaps.ts` MACHINE_SLOTS, `local_ci` 2 unless `cast config
+local_ci.per_machine` or `CAST_LOCAL_CI_MAX` says otherwise; any other name, or
+the attribute on a station that is not a command, fails validation). Each
+place is a lock held by a live pid under `~/.codecast/slots/<name>/`, so a
+holder that died frees it on the next try. The station also waits while the
+machine is short of memory (`watcherMemory.ts underPressure`: the kernel's
+pressure level, or swap filling while little is available), never by a count
+of processes. It waits up to its `timeout`, and the script's clock starts
+only once it holds a place. A wait that runs out is the outcome `no_slot`
+(`workflow/stationSlot.ts`), which the graph routes like any other; a station
+with no edge for it ends the run there. Codecast's `change` routes Local CI's
+`no_slot` on to Pull request, as a red Local CI already goes after its fix: CI
+judges the change. A station placed with `before=` or `after=` makes its own
+pass and fail routes and may write only edges for its other outcomes, such as
+`no_slot`. `cast slot run --name <n> [--wait <dur>] -- <cmd...>` takes the
+same places for any command (exit 75 when the wait runs out), and `cast slot
+ls` and `cast queue` list each slot's holders and waiters.
+
 ## FL5. A Claude Code workflow becomes a flow
 
 A session that ran a dynamic workflow (the Workflow tool's `agent`,
