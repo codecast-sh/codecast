@@ -3,7 +3,7 @@
 // are tested here, over the same models the screens build (web
 // lib/priorityList buildModels).
 import { describe, expect, it } from 'bun:test';
-import { buildModels, lastDays, sessionRowMark } from '@codecast/web/lib/priorityList';
+import { buildModels, lastDays, milestonesByState, sessionRowMark, sessionRowStatus } from '@codecast/web/lib/priorityList';
 import { milestoneStartHref, type PriorityWrites } from '@codecast/web/lib/priorities';
 import { parseComposeLink } from '@codecast/web/lib/composeLink';
 import { buildSections, pageControls } from '@codecast/web/lib/prioritySections';
@@ -136,6 +136,24 @@ describe('an open milestone', () => {
     expect(c.live.map((s) => s.short_id)).toEqual(['a', 'w', 'd', 'i']);
     expect(c.closed.map((s) => s.short_id).sort()).toEqual(['f', 'k']);
     expect(c.more).toBe(2);
+  });
+
+  it('closed sessions put the shipped first, each keeping the sidebar order; a shipped one draws done, its live state wins when it is live', () => {
+    const r = row({ links: [link('s1'), link('s2', [
+      session('k', 'killed', { last_active_at: NOW }),
+      session('x', 'killed', { last_active_at: NOW - 2 * HOUR }),
+      session('f', 'done', { last_active_at: NOW - 3 * HOUR }),
+      session('w', 'working'),
+    ]), link('s3'), link('s4'), link('p1'), link('p2')], shipped_sessions: ['conv-x', 'conv-w'] });
+    const c = connectedOf(ms(r, 's2'));
+    expect(c.closed.map((s) => s.short_id)).toEqual(['x', 'f', 'k']);
+    expect(c.closed.map((s) => sessionRowStatus(s))).toEqual([{ mark: 'done', shipped: true }, { mark: 'done', shipped: false }, { mark: 'killed', shipped: false }]);
+    expect(sessionRowStatus(c.live[0])).toEqual({ mark: 'working', shipped: false });
+  });
+
+  it("the priority's screen orders every milestone by state, critical before polish within one, done last", () => {
+    const m = model(row(), ['conv-a']);
+    expect(milestonesByState(m.milestones).map((x) => `${x.key}:${x.state.kind}`)).toEqual(['s2:needs_you', 's3:dormant', 's4:start', 'p1:start', 's1:done', 'p2:done']);
   });
 
   it("a session's row draws the mark its inbox draws (Done's check, the stash tray, an error) while the milestone reads it as idle", () => {

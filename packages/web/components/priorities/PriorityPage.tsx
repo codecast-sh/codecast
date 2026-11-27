@@ -2,9 +2,10 @@
 // /priorities/pri-N: one priority's own page, the thing a reference opens and
 // Share sends. It is the list's row made bigger: the title (the owner
 // double-clicks it to rename), ten days of typing across the page with a date
-// under each, the priority's plan once, then its milestones as the list draws
-// them (components/priorities/PriorityBlock Milestones) with every open one
-// expanded, and the owner's corrections to the pass when there are any. The
+// under each, the priority's plan once, then its milestones in one list by
+// state with no Done or Polish sections, every one expanded and its sessions
+// unfolded (components/priorities/PriorityBlock Milestones `expand`), and the
+// owner's corrections to the pass when there are any. The
 // row is the store's (priorityDetails, fed from priorities.show); typing per
 // day is an enrichment read beside it, as on the list. The owner's controls
 // are the list's (components/priorities/controls): Correct… and ⋯ beside

@@ -15,7 +15,7 @@ import { CHROME_FONT_CAP, themedStyles, useTheme } from '@/constants/Theme';
 import { codeFont } from '@/constants/fonts';
 import { CODECAST_BASE_URL } from '@codecast/shared/entities';
 import type { PriorityRow, PriorityStep } from '@codecast/shared/contracts/priorities';
-import { sessionRowMark, type MilestoneModel, type PriorityModel, type SessionLine } from '@codecast/web/lib/priorityList';
+import { milestonesByState, sessionRowStatus, type MilestoneModel, type PriorityModel, type SessionLine } from '@codecast/web/lib/priorityList';
 import { SESSION_STATUS } from '@codecast/web/lib/sessionStatus';
 import { milestoneLinksOf, priorityHref } from '@codecast/web/lib/priorities';
 import { priorityWrites } from '@codecast/web/lib/priorityWrites';
@@ -139,16 +139,24 @@ export function PendingMark() {
 // ── Milestones ──────────────────────────────────────────────────────────
 
 /**
- * A priority's milestones: its open critical ones, then DONE n and POLISH
- * x/y. A closed section is its head, sharing one line with the next closed
- * one; an open one is its head over its milestones. `expand` opens every
- * open milestone (the priority's screen), whose connected list then leaves
- * out the priority's plan (the screen shows it once above).
+ * A priority's milestones. On the list: its open critical ones, then DONE n
+ * and POLISH x/y; a closed section is its head, sharing one line with the
+ * next closed one; an open one is its head over its milestones. On the
+ * priority's screen (`expand`), as on web's page: no sections, every
+ * milestone in one list by state (milestonesByState), each open, its
+ * sessions unfolded.
  */
 export function Milestones({ model, now, lookups, own, expand = false }: { model: PriorityModel; now: number; lookups: LinkLookups; own: OwnOf; expand?: boolean }) {
   const [openSections, setOpenSections] = useState<ReadonlySet<SectionKind>>(new Set());
+  if (expand) {
+    return (
+      <RNView testID={`priorities-milestones-${model.row.short_id}`}>
+        {milestonesByState(model.milestones).map((m, i) => <MilestoneLine key={m.key} model={model} m={m} now={now} lookups={lookups} own={own} defaultOpen page first={i === 0} />)}
+      </RNView>
+    );
+  }
   const { open, sections } = milestoneSections(model);
-  const line = (m: MilestoneModel) => <MilestoneLine key={m.key} model={model} m={m} now={now} lookups={lookups} own={own} defaultOpen={expand && m.state.kind !== 'done'} />;
+  const line = (m: MilestoneModel) => <MilestoneLine key={m.key} model={model} m={m} now={now} lookups={lookups} own={own} defaultOpen={false} />;
   const toggle = (kind: SectionKind) => setOpenSections((s) => {
     const next = new Set(s);
     if (!next.delete(kind)) next.add(kind);
@@ -191,13 +199,16 @@ function SectionWords({ label, count, open }: { label: string; count: string; op
   );
 }
 
-function MilestoneLine({ model, m, now, lookups, own, defaultOpen }: {
+function MilestoneLine({ model, m, now, lookups, own, defaultOpen, page = false, first = false }: {
   model: PriorityModel;
   m: MilestoneModel;
   now: number;
   lookups: LinkLookups;
   own: OwnOf;
   defaultOpen: boolean;
+  /** On the priority's screen: room above it (but the first), a polish one says so beside its title, and its sessions are not folded. */
+  page?: boolean;
+  first?: boolean;
 }) {
   const Theme = useTheme();
   const { row } = model;
@@ -216,7 +227,7 @@ function MilestoneLine({ model, m, now, lookups, own, defaultOpen }: {
   }));
 
   return (
-    <RNView testID={`priorities-milestone-${row.short_id}-${m.key}`}>
+    <RNView testID={`priorities-milestone-${row.short_id}-${m.key}`} style={page && !first ? styles.pageLine : undefined}>
       {/* Each control is its own element (a pressable row would fold them into one for VoiceOver): the mark, the title (which opens the line), Looks done?, the ⋯. */}
       <RNView style={[styles.line, open && { backgroundColor: Theme.bgAlt }]}>
         <MilestoneMark row={row} m={m} />
@@ -235,8 +246,9 @@ function MilestoneLine({ model, m, now, lookups, own, defaultOpen }: {
             {step.title}
           </RNText>
         </TouchableOpacity>
-        {(m.looksDone || m.correctionPending) && (
+        {(m.looksDone || m.correctionPending || (page && m.tier === 'polish')) && (
           <RNView style={styles.marks}>
+            {page && m.tier === 'polish' && <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={styles.pending} testID={`priorities-polish-${m.key}`}>Polish</RNText>}
             {m.looksDone && row.mine && (
               <TouchableOpacity onPress={() => writes.setStepDone(row.short_id, step.key, true)} style={styles.looksDone} accessibilityRole="button" testID={`priorities-looks-done-${m.key}`}>
                 <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={styles.looksDoneText}>Looks done?</RNText>
@@ -247,7 +259,7 @@ function MilestoneLine({ model, m, now, lookups, own, defaultOpen }: {
         )}
         {row.mine && <More label={`More for ${step.title}`} onPress={menu} testID={`priorities-milestone-menu-${m.key}`} />}
       </RNView>
-      {open && <Connected model={model} m={m} now={now} lookups={lookups} own={own} />}
+      {open && <Connected model={model} m={m} now={now} lookups={lookups} own={own} flat={page} />}
     </RNView>
   );
 }
@@ -257,16 +269,18 @@ function MilestoneLine({ model, m, now, lookups, own, defaultOpen }: {
 /**
  * Everything an open milestone is connected to, grouped by kind under a
  * labelled count: Sessions (sorted the way the sidebar files them, closed
- * ones folded), Tasks, Pull requests, Branches, Plans, Deploys. Each row
- * opens its native screen; the session's owner or the priority's fixes
+ * ones last: folded on the list, listed on the priority's screen (`flat`),
+ * the shipped first), Tasks, Pull requests, Branches, Plans, Deploys. Each
+ * row opens its native screen; the session's owner or the priority's fixes
  * its link from its ⋯.
  */
-function Connected({ model, m, now, lookups, own }: {
+function Connected({ model, m, now, lookups, own, flat = false }: {
   model: PriorityModel;
   m: MilestoneModel;
   now: number;
   lookups: LinkLookups;
   own: OwnOf;
+  flat?: boolean;
 }) {
   const Theme = useTheme();
   const router = useRouter();
@@ -298,13 +312,14 @@ function Connected({ model, m, now, lookups, own }: {
     <RNView style={styles.connected} testID={`priorities-connected-${m.key}`}>
       <Group label="Sessions" n={nSessions} kind="sessions">
         {c.live.map(session)}
-        {c.closed.length > 0 && (
+        {flat && c.closed.map(session)}
+        {!flat && c.closed.length > 0 && (
           <TouchableOpacity onPress={() => setClosedOpen((o) => !o)} style={styles.item} accessibilityRole="button" accessibilityState={{ expanded: closedOpen }} testID={`priorities-closed-${m.key}`}>
             <Feather name={closedOpen ? 'chevron-down' : 'chevron-right'} size={12} color={Theme.textDim} />
             <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={styles.meta}>{c.closed.length} closed</RNText>
           </TouchableOpacity>
         )}
-        {closedOpen && c.closed.map(session)}
+        {!flat && closedOpen && c.closed.map(session)}
         {c.more > 0 && (
           <RNView style={styles.item}>
             <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={styles.meta}>+{c.more} older {c.more === 1 ? 'session' : 'sessions'}</RNText>
@@ -377,7 +392,7 @@ function SessionRow({ s, now, onPress, menu }: { s: SessionLine; now: number; on
   // A workflow step's title names its task or plan by id: read the store's title for it.
   const ref = workflowRef(s.title);
   const refTitle = useInboxStore((st) => (ref ? (lookup(ref.startsWith('pl-') ? (st as any).plans : st.tasks, ref)?.title as string | undefined) ?? '' : ''));
-  const mark = sessionRowMark(s);
+  const { mark, shipped } = sessionRowStatus(s);
   const asks = mark === 'needs_you';
   // Every row draws its inbox's mark; a workflow run says what it is with a small glyph beside its word (web Connected).
   return (
@@ -385,7 +400,7 @@ function SessionRow({ s, now, onPress, menu }: { s: SessionLine; now: number; on
       testID={`priorities-session-${s.short_id}`}
       icon={<SessionStatusMark status={mark} size={12} />}
       title={sessionLabel(s, () => refTitle || undefined)}
-      meta={<>{s.workflow ? <><Feather name={KIND_ICON.workflow} size={11} color={Theme.textDim} accessibilityLabel="Workflow run" /> </> : null}<RNText style={asks ? { color: Theme.yellow, fontWeight: '600' } : undefined}>{SESSION_STATUS[mark].word}</RNText> · {age(s.last_active_at, now)}</>}
+      meta={<>{s.workflow ? <><Feather name={KIND_ICON.workflow} size={11} color={Theme.textDim} accessibilityLabel="Workflow run" /> </> : null}<RNText style={asks ? { color: Theme.yellow, fontWeight: '600' } : undefined}>{shipped ? 'Shipped' : SESSION_STATUS[mark].word}</RNText> · {age(s.last_active_at, now)}</>}
       onPress={onPress}
       menu={menu ? <More label={`Fix the link to ${sessionLabel(s)}`} onPress={menu} testID={`priorities-session-menu-${s.short_id}`} /> : undefined}
     />
@@ -477,6 +492,7 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   sectionHead: { flexDirection: 'row', alignItems: 'center', gap: 5, minHeight: 44 },
 
   line: { flexDirection: 'row', alignItems: 'center', minHeight: 48, borderRadius: 8 },
+  pageLine: { marginTop: 12 },
   lineOpener: { flex: 1, minWidth: 0, minHeight: 44, justifyContent: 'center', paddingVertical: 4 },
   lineTitle: { fontSize: 14, color: Theme.text, lineHeight: 19 },
   lineDone: { color: Theme.textDim },

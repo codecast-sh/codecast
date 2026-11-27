@@ -3906,6 +3906,8 @@ export default defineSchema({
   })
     .index("by_repository_main", ["repository", "main_at"])
     .index("by_conversation_id", ["conversation_id"])
+    // Whether any of a session's commits reached main, in one read (priorityRead's shipped).
+    .index("by_conversation_main", ["conversation_id", "main_at"])
     .index("by_timestamp", ["timestamp"])
     .index("by_sha", ["sha"])
     .index("by_repository", ["repository"])

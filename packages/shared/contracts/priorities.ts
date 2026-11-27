@@ -237,6 +237,12 @@ export type PriorityDetail = Omit<PriorityRow, "steps"> & {
   other_sessions: PrioritySession[];
   /** The owner's corrections, newest first (empty for a teammate). */
   corrections: PriorityCorrection[];
+  /**
+   * The closed (done or killed) linked sessions, by conversation id, one of
+   * whose commits reached its repository's default branch: their work shipped.
+   * Only `show` asks (one read per closed session it sends), never the list.
+   */
+  shipped_sessions: string[];
 };
 
 /** Typed messages per local day: one lane per priority, and "unassigned" for sessions no priority holds. */

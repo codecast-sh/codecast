@@ -71,7 +71,7 @@ function priorityRecord(now: number, viewerId: string, workspace: string) {
     counts: { critical_done: 2, critical_total: 4 }, workspace, user_id: viewerId, owner: "Dana Viewer", owner_image: null, mine: true,
     first_seen_at: now - 30 * hour, last_active_at: now - hour, done_at: null, session_count: 1, session_count_more: false, sessions: [], correction_pending: false,
     links: [link("s1", []), link("s2", [session]), link("s3", []), link("s4", []), link("s5", [])], plan: null,
-    other_sessions: [], corrections: [],
+    other_sessions: [], corrections: [], shipped_sessions: [],
   };
   return detailRowOf(show, undefined, undefined, now);
 }

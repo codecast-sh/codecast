@@ -542,7 +542,20 @@ export async function showFor(ctx: Ctx, viewer: Id<"users">, shortId: string): P
     steps: steps.map((s) => ({ ...s, sessions: sessions.filter((c) => c.step_key === s.key) })),
     other_sessions: sessions.filter((c) => !steps.some((s) => s.key === c.step_key)),
     corrections: corrections.map(correctionOut),
+    shipped_sessions: await shippedOf(ctx, linked.links),
   };
+}
+
+/**
+ * The closed sessions `links` sends whose work reached main: one indexed read
+ * each (commits.by_conversation_main, main_at set; undefined sorts below every
+ * number). Only `show` asks, one priority's at most LINK_STEP_SESSIONS a
+ * milestone: the list, across every priority, never does.
+ */
+async function shippedOf(ctx: Ctx, links: readonly PriorityMilestoneLinks[]): Promise<string[]> {
+  const closed = [...new Set(links.flatMap((l) => l.sessions.filter(isClosedSession).map((s) => s.conversation_id)))];
+  const landed = await Promise.all(closed.map((id) => ctx.db.query("commits").withIndex("by_conversation_main", (q: any) => q.eq("conversation_id", id).gt("main_at", 0)).first()));
+  return closed.filter((_, i) => landed[i]);
 }
 
 

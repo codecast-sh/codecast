@@ -4,7 +4,7 @@
 // session states. Nothing here is stored: each milestone's state, the ten
 // days of typing.
 import type { PriorityHistory, PriorityLinkedSession, PriorityPlanRef, PriorityRow, PrioritySessionState, PriorityStep } from "@codecast/shared/contracts/priorities";
-import { milestoneStateOf, orderSessions, type MilestoneState, type MilestoneStateKind } from "@codecast/shared/contracts/priorityDerive";
+import { isClosedSession, milestoneStateOf, orderByState, orderSessions, type MilestoneState, type MilestoneStateKind } from "@codecast/shared/contracts/priorityDerive";
 import type { SessionStatus } from "./sessionStatus";
 import type { DrawnMark } from "../store/inboxMark";
 import { milestoneLinksOf } from "./priorities";
@@ -111,10 +111,50 @@ const lineOf = (s: PriorityLinkedSession, live: (conversationId: string) => Draw
  * mark), and the conversation it opens (`target`: its own, or the lead it
  * rides, where the answer is; `href` is web's route to it).
  */
-export type SessionLine = PriorityLinkedSession & { target: string; href: string; mark?: SessionStatus };
+export type SessionLine = PriorityLinkedSession & {
+  target: string;
+  href: string;
+  mark?: SessionStatus;
+  /** Closed, and its work reached main: the priority's own page knows it (show's shipped_sessions); the list never asks. */
+  shipped?: true;
+};
 
 /** The mark a session's row draws (both apps): its inbox's mark (Done's check, the stash tray, an error), else its own state's. */
 export const sessionRowMark = (s: Pick<SessionLine, "mark" | "state">): SessionStatus => s.mark ?? s.state;
+
+/**
+ * The mark a session's row draws on a milestone: its own (sessionRowMark),
+ * except that a settled one (Done or Closed) whose work reached main (its
+ * `shipped`) draws done, so shipped work never reads as merely closed.
+ */
+export function sessionRowStatus(s: Pick<SessionLine, "mark" | "state" | "shipped">): { mark: SessionStatus; shipped: boolean } {
+  const mark = sessionRowMark(s);
+  const shipped = !!s.shipped && (mark === "done" || mark === "killed");
+  return { mark: shipped ? "done" : mark, shipped };
+}
+
+/** A session as its row draws it on a milestone (both apps). */
+export type SessionRow = { s: SessionLine; mark: SessionStatus; shipped: boolean };
+
+/**
+ * A milestone's sessions as rows (both apps): the live ones in the sidebar's
+ * order (needs you, working, sleeping, idle, then the most recent), then the
+ * closed ones, the shipped before the rest, each keeping that order. The list
+ * folds the closed ones; the priority's own page lists them after the live.
+ */
+export function sessionRows(sessions: readonly SessionLine[]): { live: SessionRow[]; closed: SessionRow[] } {
+  const rows = orderByState(sessions).map((s) => ({ s, ...sessionRowStatus(s) }));
+  return {
+    live: rows.filter((r) => !isClosedSession(r.s)),
+    closed: rows.filter((r) => isClosedSession(r.s)).sort((a, b) => Number(!a.shipped) - Number(!b.shipped)),
+  };
+}
+
+const PAGE_ORDER: Record<MilestoneStateKind, number> = { needs_you: 0, working: 1, dormant: 2, idle: 3, start: 4, none: 5, done: 6 };
+
+/** The priority's own page (both apps): every milestone in one list by state, needs you first and done last, critical before polish within one, then the pass's order. */
+export const milestonesByState = (list: readonly MilestoneModel[]): MilestoneModel[] =>
+  [...list].sort((a, b) => PAGE_ORDER[a.state.kind] - PAGE_ORDER[b.state.kind] || Number(a.tier === "polish") - Number(b.tier === "polish"));
 
 export type MilestoneModel = {
   key: string;
@@ -159,12 +199,17 @@ export function buildModels(
   const lanes = new Map((history?.lanes ?? []).map((l) => [l.short_id ?? l.key, l]));
   return rows.map((row) => {
     const links = new Map(milestoneLinksOf(row).map((l) => [l.key, l]));
+    // A priority's own page lays show's answer on (lib/priorityDetail PriorityView); a list row has none.
+    const shipped = new Set((row as { shipped_sessions?: readonly string[] }).shipped_sessions ?? []);
     // Anyone who reads a priority still in play may start on it (the server links the session to its milestone).
     const canStart = row.status === "active";
     // Reads never return a dropped milestone; a row cached before that rule is held to it here.
     const milestones = row.steps.filter((step) => !step.dropped).map((step): MilestoneModel => {
       const l = links.get(step.key);
-      const sessions = orderSessions((l?.sessions ?? []).map((s) => lineOf(s, live)));
+      const sessions = orderSessions((l?.sessions ?? []).map((s) => {
+        const line = lineOf(s, live);
+        return shipped.has(s.conversation_id) ? { ...line, shipped: true as const } : line;
+      }));
       return {
         key: step.key,
         tier: step.tier,

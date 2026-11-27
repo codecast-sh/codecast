@@ -4,7 +4,8 @@
 // (withLiveRanks), so the store's own writes (a move, a tier, set aside) paint
 // on the card and the page at once. `priorityDetails` (fed from
 // priorities.show) holds only what `show` alone returns: the owner's
-// corrections, the sessions whose milestone is gone, and links and plan where
+// corrections, the sessions whose milestone is gone, which closed linked
+// sessions shipped (one read each, so only `show` asks), and links and plan where
 // the list row has none (a teammate's or a past priority). A priority the list
 // does not hold (another workspace's, a teammate's past the list's cap) keeps
 // its row as `base` on the detail row, its only home. Imported by the phone
@@ -15,7 +16,7 @@ import { cachedAt } from "./detailRows";
 import { lookup } from "./liveEntities";
 
 /** The priority as one surface reads it: the list row with what only `show` has laid on. */
-export type PriorityView = PriorityRow & { corrections: PriorityCorrection[]; other_sessions: PrioritySession[] };
+export type PriorityView = PriorityRow & { corrections: PriorityCorrection[]; other_sessions: PrioritySession[]; shipped_sessions: string[] };
 
 /** A `priorityDetails` row: keyed by the priority's _id. */
 export type PriorityDetailRow = {
@@ -23,6 +24,8 @@ export type PriorityDetailRow = {
   short_id: string;
   corrections: PriorityCorrection[];
   other_sessions: PrioritySession[];
+  /** The closed linked sessions whose work reached main (show's shipped_sessions). */
+  shipped_sessions: string[];
   /** Only for a priority whose list row carries no links. */
   links?: PriorityMilestoneLinks[];
   plan?: PriorityPlanRef | null;
@@ -33,8 +36,8 @@ export type PriorityDetailRow = {
 
 /** How one `show` answer lands: only what the list row (if the store holds one) lacks. */
 export function detailRowOf(show: PriorityDetail, listed: PriorityRow | undefined, prev: PriorityDetailRow | undefined, now: number): PriorityDetailRow {
-  const { corrections, other_sessions, links, plan, steps, ...rest } = show;
-  const row: PriorityDetailRow = { _id: String(show._id), short_id: show.short_id, corrections, other_sessions, _cachedAt: cachedAt(prev, now) };
+  const { corrections, other_sessions, shipped_sessions, links, plan, steps, ...rest } = show;
+  const row: PriorityDetailRow = { _id: String(show._id), short_id: show.short_id, corrections, other_sessions, shipped_sessions: shipped_sessions ?? NO_IDS, _cachedAt: cachedAt(prev, now) };
   if (!listed?.links) {
     row.links = links;
     row.plan = plan ?? null;
@@ -46,6 +49,7 @@ export function detailRowOf(show: PriorityDetail, listed: PriorityRow | undefine
 
 const NONE: PriorityCorrection[] = [];
 const NO_SESSIONS: PrioritySession[] = [];
+const NO_IDS: string[] = [];
 const views = new WeakMap<PriorityRow, Map<PriorityDetailRow | null, PriorityView>>();
 
 /** The list row (else the detail's base) with the detail laid on; the same object while neither changes. */
@@ -64,6 +68,7 @@ export function priorityView(list: PriorityRow | undefined, detail: PriorityDeta
       plan: fromDetail ? detail!.plan ?? null : base.plan,
       corrections: detail?.corrections ?? NONE,
       other_sessions: detail?.other_sessions ?? NO_SESSIONS,
+      shipped_sessions: detail?.shipped_sessions ?? NO_IDS,
     };
     // One view per detail row the base has met: a detail row is replaced on every push, so the old entries go.
     byDetail.clear();

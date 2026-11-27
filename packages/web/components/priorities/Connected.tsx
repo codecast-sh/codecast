@@ -1,22 +1,24 @@
 // An open milestone: everything it is connected to, grouped by kind under a
 // labelled count. Sessions sort the way the sidebar files them (needs you,
-// working, sleeping, idle, then the most recent), closed ones folded under
-// "› n closed"; tasks in the app's task-status vocabulary (dropped struck
-// through); then pull requests, branches, plans and deploys. Each row opens
-// its thing; the session's owner or the priority's fixes its link from its ⋯.
+// working, sleeping, idle, then the most recent), closed ones last: on the
+// list folded under "› n closed", on the priority's own page (`flat`) listed
+// with the rest, the shipped ones first. A settled session whose work reached
+// main reads Shipped, with Done's mark (lib/priorityList sessionRows). Then
+// tasks in the app's task-status vocabulary (dropped struck through), pull
+// requests, branches, plans and deploys. Each row opens its thing; the
+// session's owner or the priority's fixes its link from its ⋯.
 import { useState, type ReactNode } from "react";
 import Link from "next/link";
 import { ChevronRight, GitBranch, GitMerge, GitPullRequest, GitPullRequestClosed, Map as MapIcon, Workflow } from "lucide-react";
 import type { PriorityPlanRef } from "@codecast/shared/contracts/priorities";
 import { entityRoute } from "@codecast/shared/entities";
-import { isClosedSession, orderByState } from "@codecast/shared/contracts/priorityDerive";
 import { SessionStatusMark } from "../inbox/SessionStatusMark";
 import { Mark } from "../Mark";
 import { taskStatusMarkId } from "../../lib/marks/work";
 import { taskVisual } from "../TaskStatusBadge";
 import { useEntityResolution } from "../../lib/entityDisplay";
-import { ago, sessionRowMark, type MilestoneModel, type PriorityModel, type SessionLine } from "../../lib/priorityList";
-import { SESSION_STATUS } from "../../lib/sessionStatus";
+import { ago, sessionRows, type MilestoneModel, type PriorityModel, type SessionLine } from "../../lib/priorityList";
+import { SESSION_STATUS, type SessionStatus } from "../../lib/sessionStatus";
 import { cn } from "../../lib/utils";
 import { branchesOf, type LinkLookups } from "../../hooks/usePriorityModels";
 import { SessionMenu } from "./controls";
@@ -42,16 +44,16 @@ function useSessionLabel(s: Pick<SessionLine, "title">): string {
   return `${m[1]}: ${named || m[3] || "work"}`;
 }
 
-export function Connected({ model, m, now, lookups }: {
+export function Connected({ model, m, now, lookups, flat }: {
   model: PriorityModel;
   m: MilestoneModel;
   now: number;
   lookups: LinkLookups;
+  /** The priority's own page: closed sessions listed after the live ones, not folded. */
+  flat?: boolean;
 }) {
   const [closedOpen, setClosedOpen] = useState(false);
-  const sessions = orderByState(m.sessions);
-  const live = sessions.filter((s) => !isClosedSession(s));
-  const closed = sessions.filter(isClosedSession);
+  const { live, closed } = sessionRows(m.sessions);
   const plans: Array<{ plan: PriorityPlanRef; partOf?: boolean }> = [
     // Only a plan of the milestone's own: the priority's plan would repeat under every milestone.
     ...(m.plan && m.plan.short_id !== model.plan?.short_id ? [{ plan: m.plan }] : []),
@@ -65,18 +67,18 @@ export function Connected({ model, m, now, lookups }: {
     const started = s.started_by_viewer ?? s.mine;
     return model.row.mine || started ? <SessionMenu row={model.row} s={s} stepKey={m.key} unlinkOnly={!(model.row.mine && started)} /> : undefined;
   };
-  const nSessions = sessions.length + m.more;
+  const nSessions = m.sessions.length + m.more;
   const empty = nSessions + m.tasks.length + m.prs.length + branches.length + plans.length + deploys.length === 0;
   return (
     <ul data-connected className="mb-2 ml-3 border-l border-sol-border/60 py-1 pl-4" onClick={stop}>
       <Group kind="sessions" label="Sessions" n={nSessions}>
-        {live.map((s) => <SessionItem key={s.conversation_id} s={s} now={now} menu={menu(s)} />)}
-        {closed.length > 0 && (
+        {(flat ? [...live, ...closed] : live).map((r) => <SessionItem key={r.s.conversation_id} {...r} now={now} menu={menu(r.s)} />)}
+        {!flat && closed.length > 0 && (
           <li>
             <button type="button" data-closed-sessions aria-expanded={closedOpen} onClick={() => setClosedOpen((o) => !o)} className={cn(ROW, "text-meta text-sol-text-dim hover:text-sol-text")}>
               <ChevronRight className={cn("size-3 transition-transform", closedOpen && "rotate-90")} aria-hidden />{closed.length} closed
             </button>
-            {closedOpen && <ul>{closed.map((s) => <SessionItem key={s.conversation_id} s={s} now={now} menu={menu(s)} />)}</ul>}
+            {closedOpen && <ul>{closed.map((r) => <SessionItem key={r.s.conversation_id} {...r} now={now} menu={menu(r.s)} />)}</ul>}
           </li>
         )}
         {m.more > 0 && (
@@ -133,9 +135,8 @@ function Item({ icon, title, meta, href, menu, ...data }: { icon: ReactNode; tit
   );
 }
 
-function SessionItem({ s, now, menu }: { s: SessionLine; now: number; menu?: ReactNode }) {
+function SessionItem({ s, mark, shipped, now, menu }: { s: SessionLine; mark: SessionStatus; shipped: boolean; now: number; menu?: ReactNode }) {
   const label = useSessionLabel(s);
-  const mark = sessionRowMark(s);
   const asks = mark === "needs_you";
   // Every row draws its inbox's mark; a workflow run says what it is with a small glyph beside its word.
   return (
@@ -143,12 +144,13 @@ function SessionItem({ s, now, menu }: { s: SessionLine; now: number; menu?: Rea
       data-session-row={s.conversation_id}
       data-state={s.state}
       data-row-mark={mark}
+      data-shipped={shipped || undefined}
       href={s.href}
       icon={<SessionStatusMark status={mark} size={12} labeled />}
       title={label}
       meta={<>
         {s.workflow && <Mark id="inbox.flow" className="mr-1 align-[-2px]"><Workflow data-workflow-hint className="size-3 text-sol-text-dim" aria-label="Workflow run" /></Mark>}
-        <span className={asks ? "font-medium text-sol-yellow" : undefined}>{SESSION_STATUS[mark].word}</span> · {age(s.last_active_at, now)}
+        <span className={asks ? "font-medium text-sol-yellow" : undefined}>{shipped ? "Shipped" : SESSION_STATUS[mark].word}</span> · {age(s.last_active_at, now)}
       </>}
       menu={menu}
     />

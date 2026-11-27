@@ -259,6 +259,35 @@ describe("reads", () => {
     expect(states.jx7agan).toBe("idle");
   });
 
+  test("show names the closed sessions one of whose commits reached main; not a closed one whose commits never did, nor a live one; the list never says", async () => {
+    const { t, as, ada, acme, ws, p1 } = await world();
+    const ids = await t.run(async (ctx) => {
+      const conv = (short_id: string, fields: Record<string, unknown>) => ctx.db.insert("conversations", {
+        user_id: ada, team_id: acme, agent_type: "claude_code", session_id: short_id, short_id, title: `Session ${short_id}`,
+        started_at: NOW, updated_at: NOW, message_count: 3, is_private: false, team_visibility: "full", status: "active",
+        priority_id: p1, priority_step_key: "s2", ...fields,
+      } as any);
+      const commit = (conversation_id: Id<"conversations">, sha: string, main_at?: number) => ctx.db.insert("commits", {
+        conversation_id, sha, message: "m", author_name: "Ada", author_email: "a@x", timestamp: NOW, files_changed: 1, insertions: 1, deletions: 0, repository: "o/r",
+        ...(main_at ? { main_at } : {}),
+      } as any);
+      const shipped = await conv("jx7ship", { inbox_killed_at: NOW });
+      await commit(shipped, "aaa1", NOW - DAY);
+      await commit(shipped, "aaa2");
+      const kept = await conv("jx7kept", { inbox_killed_at: NOW });
+      await commit(kept, "bbb1");
+      const live = await conv("jx7live", {});
+      await commit(live, "ccc1", NOW - DAY);
+      return { shipped: String(shipped), kept: String(kept), live: String(live) };
+    });
+    const shown = await as(ada).query(pri.show, { short_id: "pri-1" });
+    const sent = shown.links.find((l: any) => l.key === "s2").sessions.map((s: any) => s.conversation_id);
+    expect(sent).toEqual(expect.arrayContaining([ids.shipped, ids.kept, ids.live]));
+    expect(shown.shipped_sessions).toEqual([ids.shipped]);
+    const [row] = await rowsOf(as(ada), { workspace: ws });
+    expect(row.shipped_sessions).toBeUndefined();
+  });
+
   test("history names today's sessions no priority holds, for the No priority share", async () => {
     const { as, ada, ws } = await world();
     const res = await as(ada).query(pri.history, { days: 10, workspace: ws });

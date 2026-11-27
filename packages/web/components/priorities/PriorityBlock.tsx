@@ -11,7 +11,7 @@ import Link from "next/link";
 import { ChevronRight } from "lucide-react";
 import { pastBadge, priorityHref, rankProvenance, type PriorityRow } from "../../lib/priorities";
 import type { ListLayout, MilestoneModel, PriorityModel } from "../../lib/priorityList";
-import { TOUCH_AREA } from "../../lib/priorityList";
+import { TOUCH_AREA, milestonesByState } from "../../lib/priorityList";
 import { cn } from "../../lib/utils";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import type { LinkLookups } from "../../hooks/usePriorityModels";
@@ -243,11 +243,12 @@ function SectionHead({ kind, label, count, open, onClick, className }: { kind: s
 type Section = { kind: string; label: string; count: string; open: boolean; toggle: () => void; rows: MilestoneModel[] };
 
 /**
- * A priority's milestones: the open critical ones and any that need you, then Done and Polish. A
- * closed section is its head, sharing one line with the next closed one; an
- * open one is its head, caret and all, over its milestones. `expand` opens
- * every open milestone (the priority's page); `focus` opens the one a link
- * named, and the section that holds it.
+ * A priority's milestones. On the list: the open critical ones and any that
+ * need you, then Done and Polish. A closed section is its head, sharing one
+ * line with the next closed one; an open one is its head, caret and all, over
+ * its milestones; `focus` opens the one a link named, and the section that
+ * holds it. On the priority's page (`expand`): no sections, every milestone
+ * in one list by state (lib/priorityList milestonesByState), each open.
  */
 export function Milestones({ model, layout, now, lookups, expand, focus }: {
   model: PriorityModel;
@@ -264,7 +265,8 @@ export function Milestones({ model, layout, now, lookups, expand, focus }: {
   const done = model.milestones.filter((m) => m.tier === "critical" && !unfolded(m));
   const [doneOpen, setDoneOpen] = useState(() => done.some((m) => m.key === focus));
   const [polishOpen, setPolishOpen] = useState(() => polish.some((m) => m.key === focus));
-  const line = (m: MilestoneModel) => <MilestoneRow key={m.key} model={model} m={m} layout={layout} now={now} lookups={lookups} defaultOpen={(expand && m.state.kind !== "done") || m.key === focus} />;
+  if (expand) return <ul data-milestone-list>{milestonesByState(model.milestones).map((m) => <MilestoneRow key={m.key} model={model} m={m} layout={layout} now={now} lookups={lookups} defaultOpen page />)}</ul>;
+  const line = (m: MilestoneModel) => <MilestoneRow key={m.key} model={model} m={m} layout={layout} now={now} lookups={lookups} defaultOpen={m.key === focus} />;
   const sections: Section[] = [];
   if (done.length) sections.push({ kind: "done", label: "Done", count: `${done.length}`, open: doneOpen, toggle: () => setDoneOpen((o) => !o), rows: done });
   const polishFolded = polish.filter((m) => !unfolded(m));
@@ -289,13 +291,15 @@ export function Milestones({ model, layout, now, lookups, expand, focus }: {
   );
 }
 
-function MilestoneRow({ model, m, layout, now, lookups, defaultOpen = false }: {
+function MilestoneRow({ model, m, layout, now, lookups, defaultOpen = false, page = false }: {
   model: PriorityModel;
   m: MilestoneModel;
   layout: ListLayout;
   now: number;
   lookups: LinkLookups;
   defaultOpen?: boolean;
+  /** On the priority's own page: room above it, a polish one says so beside its title, and its sessions are not folded. */
+  page?: boolean;
 }) {
   const { row } = model;
   const { step } = m;
@@ -307,7 +311,7 @@ function MilestoneRow({ model, m, layout, now, lookups, defaultOpen = false }: {
   // Whether the row was open before a double-click's first click: the rename starts with the row exactly as it was.
   const openBeforeClick = useRef(open);
   return (
-    <li data-milestone={m.key} data-state={m.state.kind}>
+    <li data-milestone={m.key} data-state={m.state.kind} data-tier={m.tier} className={page ? "mt-3 first:mt-0" : undefined}>
       <div
         role="button"
         tabIndex={0}
@@ -350,8 +354,9 @@ function MilestoneRow({ model, m, layout, now, lookups, defaultOpen = false }: {
             )}
             {row.mine && !renaming && <MilestoneMenu row={row} step={step} onRename={() => setRenaming(true)} reveal="group-hover/line:opacity-100" />}
           </span>
-          {(m.looksDone || m.correctionPending) && (
+          {(m.looksDone || m.correctionPending || (page && m.tier === "polish")) && (
             <span data-milestone-marks className="flex shrink-0 items-center gap-2">
+              {page && m.tier === "polish" && <span data-polish className="text-mark text-sol-text-dim">Polish</span>}
               {m.looksDone && <LooksDone row={row} step={step} />}
               {m.correctionPending && <PendingMark />}
             </span>
@@ -359,7 +364,7 @@ function MilestoneRow({ model, m, layout, now, lookups, defaultOpen = false }: {
         </span>
         <ChevronRight aria-hidden data-line-chevron className={cn("size-3.5 shrink-0 text-sol-text-dim opacity-0 transition group-hover/line:opacity-100", open && "rotate-90 opacity-100")} />
       </div>
-      {open && <Connected model={model} m={m} now={now} lookups={lookups} />}
+      {open && <Connected model={model} m={m} now={now} lookups={lookups} flat={page} />}
     </li>
   );
 }
