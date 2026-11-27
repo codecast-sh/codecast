@@ -280,7 +280,7 @@ export function createSessionOwnersSlice(): SessionOwnersSliceActions {
       if (!next.parentSession && read.parent_session) {
         // Released, it is where the session came from: the menu offers it back.
         // Offered back only when the viewer may put it back, as the server reads it.
-        if ((change.release_parent || change.take_over) && mayHandToIn(this, read.parent_session.conversation_id)) read.released_parent = { ...read.parent_session };
+        if (!change.adopt_parent && (change.release_parent || change.take_over) && mayHandToIn(this, read.parent_session.conversation_id)) read.released_parent = { ...read.parent_session };
         read.parent_session = null;
       }
       if (change.restore_parent && next.parentSession && read.released_parent?.conversation_id === next.parentSession) {
@@ -290,9 +290,16 @@ export function createSessionOwnersSlice(): SessionOwnersSliceActions {
       // The role a change took off is the one the menu offers back first.
       if (roleBefore && roleBefore.role_id !== next.role) read.released_role = roleBefore;
       else if (next.role && read.released_role?.role_id === next.role) read.released_role = null;
-      if (change.adopt_parent && next.parentSession === change.adopt_parent && read.parent_session?.conversation_id !== next.parentSession) {
-        const home = ownersHomeOf(this, next.parentSession);
-        read.parent_session = { conversation_id: next.parentSession, short_id: home?.short_id ?? next.parentSession.slice(0, 7), title: home?.title ?? null };
+      if (change.adopt_parent) {
+        const target = change.adopt_parent;
+        const home = ownersHomeOf(this, target);
+        const ref = { conversation_id: target, short_id: home?.short_id ?? target.slice(0, 7), title: home?.title ?? null };
+        if (next.parentSession === target && read.parent_session?.conversation_id !== target) read.parent_session = ref;
+        // Nested there already released (an undo putting a released link
+        // back): that session is where it came from. Otherwise it has a
+        // parent again and came from nowhere else.
+        const released = change.release_parent && mayHandToIn(this, target) ? ref : null;
+        if ((read.released_parent?.conversation_id ?? null) !== (released?.conversation_id ?? null)) read.released_parent = released;
       }
       // The inbox row's stamps, as the server will stamp them for the viewer:
       // the row moves in or out of the inbox, and its agent stops or starts

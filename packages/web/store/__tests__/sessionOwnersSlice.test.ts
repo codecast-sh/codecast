@@ -157,6 +157,19 @@ describe("applySessionOwners", () => {
     expect((useInboxStore.getState() as any).sessionOwners[S].released_parent ?? null).toBeNull();
   });
 
+  test("a drag of a released session and its undo keep where it came from: the old parent, never the drop target", () => {
+    const O = "o".repeat(32);
+    const T = "t".repeat(32);
+    useInboxStore.setState((st: any) => ({ sessions: { ...st.sessions, [O]: { _id: O, user_id: ME, owners_model: true, title: "Old" }, [T]: { _id: T, user_id: ME, owners_model: true, title: "Target" } } }));
+    applySessionOwnersRead(S, read({ released_parent: { conversation_id: O, short_id: "o1", title: "Old" } }));
+    useInboxStore.getState().applySessionOwners(S, { adopt_parent: T, add: [ME] }, null);
+    expect((useInboxStore.getState() as any).sessionOwners[S].released_parent).toBeNull();
+    expect(facts().parent_conversation_id).toBe(T);
+    useInboxStore.getState().applySessionOwners(S, { adopt_parent: O, release_parent: true }, null);
+    expect((useInboxStore.getState() as any).sessionOwners[S].released_parent?.conversation_id).toBe(O);
+    expect(facts().parent_conversation_id).toBeNull();
+  });
+
   test("put back from the read alone: the released parent owns it again and you stay", () => {
     const P = "p".repeat(32);
     applySessionOwnersRead(S, read({ released_parent: { conversation_id: P, short_id: "p1", title: "Parent" } }));
