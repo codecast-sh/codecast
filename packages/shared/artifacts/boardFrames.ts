@@ -12,14 +12,18 @@
 // Held elements keep their coordinates and travel with the pill, so they
 // reappear where they were relative to the frame when it opens.
 //
-// Every *Ops function returns one batch of set ops: apply it with a single
+// A growing frame never swallows anything: at the top level, whatever it
+// newly covers (frames and loose elements alike) moves down just clear of it,
+// cascading. A shrink moves nothing; only organizeOps closes gaps.
+//
+// Every *Ops function returns one batch of set ops, holding only fields that change: apply it with a single
 // `live.apply(ops)` (one undo step, one synced change).
 //
 //   hiddenKeys(view)                 keys held by any folded frame (nested folds included)
 //   carriedKeys(view, keys)          what moves with a selection: frame contents, nested frames, held keys, arrows whose ends both move
 //   moveFrameOps(view, key, dx, dy)  move a frame (or any selection) with everything it carries
 //   collapseFrameOps(view, key)      fold into a title pill; the enclosing frame reflows
-//   expandFrameOps(view, key)        unfold; the enclosing frame reflows, or at the top level the frames it now covers move down
+//   expandFrameOps(view, key)        unfold; the enclosing frame reflows, or at the top level what it now covers moves down
 //   reflowFrameOps(view, key)        lay out a frame's children and size it to fit, then settle its level the same way
 //   organizeOps(view, opts)          the whole board: agenda frames in the top row, other frames below, loose items gridded under them
 import type { ArtifactElement, ArtifactOp, Json } from "./core";
@@ -183,7 +187,9 @@ function readingSort(nodes: readonly Node[]): Node[] {
   for (const n of byY) {
     const row = rows[rows.length - 1];
     const mid = n.box.y + n.box.h / 2;
-    if (row && Math.abs(mid - (row[0].box.y + row[0].box.h / 2)) < Math.min(row[0].box.h, n.box.h) / 2) row.push(n);
+    const tol = Math.min(row?.[0].box.h ?? 0, n.box.h) / 2;
+    // A row is middles that line up, or tops that do (a reflowed row aligns tops), so reflowing twice keeps the order.
+    if (row && (Math.abs(mid - (row[0].box.y + row[0].box.h / 2)) < tol || Math.abs(n.box.y - row[0].box.y) < tol)) row.push(n);
     else rows.push([n]);
   }
   return rows.flatMap((r) => r.sort((a, b) => a.box.x - b.box.x || a.key.localeCompare(b.key)));
@@ -300,30 +306,34 @@ class FrameLayout {
     return sameBox(before, n.box) ? null : before;
   }
 
-  /** After a frame changed size: its enclosing frame reflows; at the top level, the push rule. */
-  settle(n: Node, before: Box) {
+  /**
+   * After a frame changed size: its enclosing frame reflows; at the top level,
+   * the push rule, judging what is newly covered against `judge` (the box the
+   * frame had before the change; for an expand, the box it had before folding).
+   */
+  settle(n: Node, before: Box, judge: Box = before) {
     if (sameBox(before, n.box)) return;
     const p = n.parent;
     if (p && p !== this.root) {
       const pBefore = { ...p.box };
       this.reflow(p);
       this.settle(p, pBefore);
-    } else this.push(n, before);
+    } else this.push(n, judge);
   }
 
   /**
-   * Push rule: top-level frames a grown frame newly overlaps move down just
-   * clear of it, and so on for what they then overlap. A shrink overlaps
-   * nothing new, so it moves nothing; loose elements never move.
+   * Push rule: whatever at the top level a grown frame newly overlaps (frames
+   * and loose elements alike) moves down just clear of it, and so on for what
+   * that then overlaps, so a frame never swallows a person's sticky. A shrink
+   * overlaps nothing new, so it moves nothing.
    */
   push(grown: Node, before: Box) {
-    const frames = this.root.kids.filter((k) => k.el.kind === "frame");
     const queue: { n: Node; before: Box }[] = [{ n: grown, before }];
     for (let guard = 0; queue.length && guard < 10_000; guard++) {
       const { n: p, before: pb } = queue.shift()!;
-      for (const s of frames) {
+      for (const s of this.root.kids) {
         if (s === p || s === grown || !overlap(p.box, s.box) || overlap(pb, s.box)) continue;
-        const dy = p.box.y + p.box.h + FRAME_SPACING - s.box.y;
+        const dy = p.box.y + p.box.h + (s.el.kind === "frame" ? FRAME_SPACING : FRAME_GAP) - s.box.y;
         if (dy <= 0) continue;
         const sb = { ...s.box };
         this.translate(s, 0, dy);
@@ -340,12 +350,14 @@ class FrameLayout {
       for (const r of x.riders) holds.add(r);
     };
     walk(n);
-    // Arrows go into the fold when both ends do: attached to a held element, or a free end inside the frame.
+    // Arrows go into the fold when both ends do: attached to a held element (or one a held fold hides), or a free end inside the frame.
+    const inside = new Set(holds);
+    for (const k of holds) for (const h of heldDeep(k, this.collapsedOf)) inside.add(h);
     for (const c of this.els.values()) {
       if (c.kind !== "connector" || this.hidden.has(c.key)) continue;
       const held = (end: 1 | 2) => {
         const ref = end === 1 ? c.from : c.to;
-        if (typeof ref === "string") return holds.has(ref);
+        if (typeof ref === "string") return inside.has(ref);
         const p = freeEnd(c, end);
         return !!p && inBox(p, before);
       };
@@ -363,6 +375,7 @@ class FrameLayout {
   expand(n: Node) {
     const c = this.collapsedOf(n.key)!;
     const before = { ...n.box };
+    const unfolded = { ...n.box, w: c.w, h: c.h };
     this.collapsedOverride.set(n.key, null);
     this.setFields(n.key, { collapsed: null });
     this.resize(n, c.w, c.h);
@@ -380,7 +393,7 @@ class FrameLayout {
       const maxX = Math.max(...n.kids.map((k) => k.box.x + k.box.w)), maxY = Math.max(...n.kids.map((k) => k.box.y + k.box.h));
       this.resize(n, Math.max(n.box.w, maxX + FRAME_PAD - n.box.x), Math.max(n.box.h, maxY + FRAME_PAD - n.box.y));
     }
-    this.settle(n, before);
+    this.settle(n, before, unfolded);
   }
 
   organize(people: readonly string[]) {
@@ -480,7 +493,15 @@ class FrameLayout {
       shiftEnds(c, endDelta(freeEnd(c, 1)), endDelta(freeEnd(c, 2)));
     }
     for (const [k, f] of this.fields) put(k, f);
-    return [...out].map(([k, set]) => ({ k, set }));
+    // Only what changes: a reflow of a frame already laid out writes nothing.
+    const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+    const ops: ArtifactOp[] = [];
+    for (const [k, f] of out) {
+      const el = this.els.get(k);
+      const set = Object.fromEntries(Object.entries(f).filter(([field, v]) => !el || !same(el[field], v)));
+      if (Object.keys(set).length) ops.push({ k, set });
+    }
+    return ops;
   }
 }
 
