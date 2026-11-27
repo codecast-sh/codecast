@@ -2069,6 +2069,9 @@ export type ClientUI = {
   // (lib/calls/huddleSettings): on the board, and with Scribe invited.
   huddleBoardView?: Record<string, boolean>;
   huddleAutoScribe?: Record<string, boolean>;
+  // The workspaces where the person has been shown the board's "Next time"
+  // banner: it shows once per person per workspace, ever.
+  huddleNextTimeSeen?: Record<string, true>;
   // When the person finished or skipped the setup flow (/start). Until it
   // is set, a first-run inbox with no team sends them there once.
   setup_done_at?: number;
@@ -7938,6 +7941,14 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   pinCallBoard: (roomKey: string) => Promise<{ doc_id: string } | undefined>;
   /** The call's board for this person's board view, made if the call has none, never pinned (callStage.openCallBoard). */
   openCallBoard: (roomKey: string) => Promise<{ doc_id: string } | undefined>;
+  /** Ask for the call's Scribe (transcripts.inviteScribe); resolves to the claim answer, so the claimer spawns the agent.
+   *  `auto`: the person's standing setting, refused once somebody removed Scribe from the call. */
+  inviteScribe: (
+    roomKey: string,
+    auto?: boolean,
+  ) => Promise<{ claimed: true; claim_id: number; transcript_id: string } | { claimed: false; existing: "joining" | "listening" | "removed" } | undefined>;
+  /** Show the call's Scribe out (transcripts.removeScribe); with `claim`, only give back this client's failed claim. */
+  removeScribe: (roomKey: string, claim?: number) => Promise<unknown>;
   setTeamFeature: (teamId: string, feature: string, enabled: boolean) => void;
   setTeamBudget: (teamId: string, capUsd: number) => void;
   setTeamPolicy: (teamId: string, policy: Record<string, unknown>) => void;
@@ -16797,6 +16808,15 @@ const inboxStoreConfig = (set: any, get: any) => ({
   }),
   openCallBoard: asyncAction(function (this: Draft, roomKey: string) {
     return { roomKey };
+  }),
+  // The call's Scribe. What a surface shows while the press is on its way is
+  // useScribe's press (the live transcript is a query, not a store row), so
+  // the draft has nothing to paint; these carry the press to the server.
+  inviteScribe: asyncAction(function (this: Draft, roomKey: string, auto?: boolean) {
+    return { roomKey, auto };
+  }),
+  removeScribe: asyncAction(function (this: Draft, roomKey: string, claim?: number) {
+    return { roomKey, claim };
   }),
   setRoomTranscribeOff: asyncAction(function (this: Draft, roomKey: string, off: boolean) {
     const row = (this.callRooms[roomKey] ??= { _id: roomKey, locked: false, transcribe_off: false, transcribe_off_at: null });

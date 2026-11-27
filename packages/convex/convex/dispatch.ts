@@ -3452,6 +3452,14 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   openCallBoard: async (ctx, _userId, [roomKey]: [string]) => {
     return await ctx.runMutation!(api.callStage.openCallBoard, { room_key: roomKey });
   },
+  // The call's Scribe (web useScribe): the claim answer goes back to the
+  // inviter, who spawns the agent only when it claimed the slot.
+  inviteScribe: async (ctx, _userId, [roomKey, auto]: [string, boolean?]) => {
+    return await ctx.runMutation!(api.transcripts.inviteScribe, { room_key: roomKey, ...(auto ? { auto: true } : {}) });
+  },
+  removeScribe: async (ctx, _userId, [roomKey, claim]: [string, number?]) => {
+    return await ctx.runMutation!(api.transcripts.removeScribe, { room_key: roomKey, ...(claim !== undefined ? { claim } : {}) });
+  },
   setRoomTranscribeOff: async (ctx, _userId, [roomKey, off]: [string, boolean]) => {
     return await ctx.runMutation!(api.calls.setRoomTranscribeOff, { room_key: roomKey, off: !!off });
   },

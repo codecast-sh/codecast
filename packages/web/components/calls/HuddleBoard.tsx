@@ -6,7 +6,7 @@ import { useState, useSyncExternalStore } from "react";
 import { ChevronDown, PenLine, SquareKanban, SquareArrowOutUpRight, X } from "lucide-react";
 import { useInboxStore } from "../../store/inboxStore";
 import { useMountEffect } from "../../hooks/useMountEffect";
-import { boardBannerState, setHuddleSettings, useHuddleSetting, type BannerMemo } from "../../lib/calls/huddleSettings";
+import { boardBannerState, markNextTimeSeen, setHuddleSettings, useHuddleSetting, useNextTimeSeen, type BannerMemo } from "../../lib/calls/huddleSettings";
 import type { ParticipantTile } from "../../lib/calls/callMedia";
 import { pinShare } from "../../lib/calls/stagePins";
 import type { StagePinRow } from "../../hooks/useStagePins";
@@ -139,12 +139,13 @@ export function BoardBanner({
   const memo = useSyncExternalStore(subscribeBanners, () => bannerMemos.get(callKey) ?? EMPTY, () => EMPTY);
   const boardViewOn = useHuddleSetting("huddleBoardView", workspace);
   const autoScribeOn = useHuddleSetting("huddleAutoScribe", workspace);
-  const state = boardBannerState({ present: scribe.present, memo, boardViewOn, autoScribeOn });
+  const nextSeen = useNextTimeSeen(workspace);
+  const state = boardBannerState({ present: scribe.present, memo, boardViewOn, autoScribeOn, nextSeen });
   if (state === "invite") {
     return (
       <div className={BANNER} role="status" data-banner="invite">
         <PenLine className="h-3.5 w-3.5 shrink-0 text-sol-violet" />
-        <span className="min-w-0 truncate">Scribe lays out this huddle as you talk</span>
+        <span className="min-w-0 truncate">Scribe can diagram your huddles as you talk</span>
         <button
           type="button"
           onClick={() => {
@@ -167,6 +168,12 @@ export function BoardBanner({
         workspace={workspace}
         workspaceName={workspaceName}
         autoScribeOn={autoScribeOn}
+        onShown={() => {
+          // Shown once is shown for good in this workspace; it stays up for
+          // the rest of this call (nextShown) until saved or closed.
+          noteBanner(callKey, { nextShown: true });
+          markNextTimeSeen(workspace);
+        }}
         onClose={() => noteBanner(callKey, { nextClosed: true })}
       />
     );
@@ -174,7 +181,20 @@ export function BoardBanner({
   return null;
 }
 
-function NextTimeBanner({ workspace, workspaceName, autoScribeOn, onClose }: { workspace: string; workspaceName: string; autoScribeOn: boolean; onClose: () => void }) {
+function NextTimeBanner({
+  workspace,
+  workspaceName,
+  autoScribeOn,
+  onShown,
+  onClose,
+}: {
+  workspace: string;
+  workspaceName: string;
+  autoScribeOn: boolean;
+  onShown: () => void;
+  onClose: () => void;
+}) {
+  useMountEffect(onShown);
   const [boardView, setBoardView] = useState(true);
   const [autoScribe, setAutoScribe] = useState(true);
   // Saving "Invite Scribe" on starts an agent in every huddle: that goes
