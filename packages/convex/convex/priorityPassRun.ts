@@ -491,9 +491,10 @@ export const applyPlan = internalMutation({
 
     const { move, recount } = sessionMover(ctx);
 
-    // The person's placement, a known link and the classifier's stand, and a priority they said a session is not part of never gets it.
+    // The person's placement and a known link's stand, and a priority they said a session is not part of never gets it.
+    // The pass may revise a classifier's filing, a first guess from a session's opening.
     const refused = (conv: Doc<"conversations">, to?: Id<"priorities">) =>
-      (!!conv.priority_set_by && conv.priority_set_by !== "pass") || (!!to && (conv.priority_not ?? []).some((id) => String(id) === String(to)));
+      conv.priority_set_by === "person" || conv.priority_set_by === "link" || (!!to && (conv.priority_not ?? []).some((id) => String(id) === String(to)));
     for (const s of plan.sessions) {
       const conv = await conversationOf(s.session);
       const priority = await resolve(s.priority);
@@ -515,7 +516,7 @@ export const applyPlan = internalMutation({
     }
     await letGoStrays(ctx, vis, move, args, strays ?? [], new Set(plan.rewritten));
     // A merged priority's sessions the plan did not list (the input shows only its newest) go to the survivor, step unknown;
-    // one the person placed (or a link or the classifier mapped) keeps that there, and one they said is not part of the survivor lets go.
+    // one the person placed or a link mapped keeps its milestone there, a classifier's keeps its mark, and one they said is not part of the survivor lets go.
     // Every one of them, however many, a page now and the rest by scheduled runs: a merge leaves none behind on a merged priority.
     for (const [from, { into, step_keys }] of mergedInto) await moveMergedSessionsNow(ctx, from, into, step_keys, { user_id: args.user_id, workspace: args.workspace });
 

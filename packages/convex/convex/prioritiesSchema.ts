@@ -131,8 +131,9 @@ export const priorityTables = {
   }).index("by_user_workspace", ["user_id", "workspace"]),
 
   // One ask of the per-session classifier (priorityClassifier.ts): written
-  // "pending" when it is asked (a session's first title or pin, or a re-run
-  // after a new priority or milestone), settled with what it chose. No
+  // "pending" when it is asked (the person's first message in a session, then
+  // a message, title or pin while it is unfiled, or a re-run after a new
+  // priority or milestone), settled with what it chose. No
   // content: the choice, its cost and, while pending, the worst case it holds
   // against the pair's daily cap.
   priority_classifications: defineTable({
@@ -140,8 +141,8 @@ export const priorityTables = {
     workspace: v.string(),
     conversation_id: v.id("conversations"),
     at: v.number(),
-    /** What asked: its title, its pin (once more after a "new"), or a re-run after a new priority or milestone. */
-    trigger: v.union(v.literal("title"), v.literal("pin"), v.literal("rerun")),
+    /** What asked: a message the person typed, its title or a pin (the first, then each while unfiled), or a re-run after a new priority or milestone. */
+    trigger: v.union(v.literal("message"), v.literal("title"), v.literal("pin"), v.literal("rerun")),
     status: v.union(v.literal("pending"), v.literal("placed"), v.literal("new"), v.literal("skipped"), v.literal("error")),
     model: v.string(),
     held_usd: v.number(),

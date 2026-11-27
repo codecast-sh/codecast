@@ -184,7 +184,7 @@ export const TEAM_FEATURES: TeamFeatureDescriptor[] = [
   {
     key: "priority_classifier",
     name: "Priorities: place sessions at once",
-    desc: "A session is placed under one of its person's milestones when it first gets a title or pin, instead of at the next priorities pass. Needs Priorities on.",
+    desc: "A session is placed under one of its person's milestones from their first message in it, instead of at the next priorities pass, which may still move it. Needs Priorities on.",
     short: "Sessions placed under a milestone at once",
     inDevelopment: true,
     snippets: [],

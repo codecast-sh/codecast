@@ -1,8 +1,11 @@
 // When the per-session classifier runs (priorityClassifier.ts has the call):
-// once when a session first gets a title or pin; once more on its first pin
-// after an answer of "new" (a pin says more than an opening title); and again
-// over the pair's sessions it left unassigned once a pass creates a priority
-// or milestone, so an early "new" is not permanent. Only behind the
+// at the person's first typed message, so the session shows its priority in
+// seconds; then at its title, its pins and the person's later messages only
+// while its last answer was "new", and never once it is filed (Study 1,
+// ct-102386: the first message and the title decide most sessions, and
+// reading on after a filing breaks as many answers as it fixes; the pass, not
+// the classifier, revises a filing). Again over the pair's sessions it left
+// unassigned once a pass creates a priority or milestone. Only behind the
 // priority_classifier feature, which needs priorities on as well.
 //
 // Every ask writes a pending priority_classifications row holding the call's
@@ -75,7 +78,7 @@ export async function spentToday(ctx: { db: any }, userId: Id<"users">, workspac
 const roomToday = async (ctx: { db: any }, userId: Id<"users">, workspace: string) => ({ left: CLASSIFIER_DAILY_USD - (await spentToday(ctx, userId, workspace, Date.now())) });
 
 /** What asked: the session's title, its pin, or a re-run after a new priority or milestone. */
-export type ClassifyTrigger = "title" | "pin" | "rerun";
+export type ClassifyTrigger = "message" | "title" | "pin" | "rerun";
 
 /** Asks about one session `delayMs` from now, when the pair's day has room for its hold. Returns whether it asked. */
 async function enqueue(ctx: { db: any; scheduler: any }, conv: Doc<"conversations">, workspace: string, trigger: ClassifyTrigger, delayMs: number, room: { left: number }): Promise<boolean> {
@@ -89,30 +92,36 @@ async function enqueue(ctx: { db: any; scheduler: any }, conv: Doc<"conversation
   return true;
 }
 
-/** The most of one session's asks read to decide whether to ask again. */
-const ASKS_READ = 20;
+/** The most asks one session gets, read in one index range to decide whether to ask again. */
+export const ASKS_PER_SESSION = 12;
+
+/** A pending ask older than this died before it settled (a call gives up after a minute): it no longer holds the next. */
+export const PENDING_STALE_MS = 10 * MINUTE;
 
 /**
- * Whether a title or pin asks: the session's first ask, or its first pin
- * after the last ask answered "new" (a pin asks at most once).
+ * Whether a typed message, title or pin asks: the session's first ask, or a
+ * later one while the last settled answer was "new" and no live ask is
+ * pending, up to ASKS_PER_SESSION. A filed session never reaches here
+ * (askClassifier).
  */
-export function asksNow(asks: Array<Pick<Doc<"priority_classifications">, "status" | "trigger" | "at">>, trigger: "title" | "pin"): boolean {
+export function asksNow(asks: Array<Pick<Doc<"priority_classifications">, "status" | "at">>, now: number): boolean {
   if (!asks.length) return true;
-  const last = asks.reduce((a, b) => (b.at > a.at ? b : a));
-  return trigger === "pin" && last.status === "new" && !asks.some((a) => a.trigger === "pin");
+  if (asks.length >= ASKS_PER_SESSION || asks.some((a) => a.status === "pending" && a.at > now - PENDING_STALE_MS)) return false;
+  const settled = asks.filter((a) => a.status !== "pending");
+  return !settled.length || settled.reduce((a, b) => (b.at > a.at ? b : a)).status === "new";
 }
 
 /**
- * A session got a title or a pin: while it is mapped nowhere and asksNow
+ * The person typed into a session, or it got a title or a pin: while it is mapped nowhere and asksNow
  * says so, the classifier places it (classifierReads). A context with no
  * scheduler asks for nothing.
  */
-export async function askClassifier(ctx: { db: any; scheduler?: any }, conv: Doc<"conversations">, trigger: "title" | "pin"): Promise<boolean> {
+export async function askClassifier(ctx: { db: any; scheduler?: any }, conv: Doc<"conversations">, trigger: "message" | "title" | "pin"): Promise<boolean> {
   if (!ctx.scheduler || conv.priority_id || !classifierReads(conv) || !(await prioritiesPossibleFor(ctx, conv))) return false;
   const workspace = await sessionVisibility(ctx).workspaceOf(conv);
   if (!(await classifierOn(ctx, conv.user_id, workspace))) return false;
-  const asks = await ctx.db.query("priority_classifications").withIndex("by_conversation_at", (q: any) => q.eq("conversation_id", conv._id)).take(ASKS_READ);
-  if (!asksNow(asks, trigger)) return false;
+  const asks = await ctx.db.query("priority_classifications").withIndex("by_conversation_at", (q: any) => q.eq("conversation_id", conv._id)).take(ASKS_PER_SESSION);
+  if (!asksNow(asks, Date.now())) return false;
   return enqueue({ db: ctx.db, scheduler: ctx.scheduler }, conv, workspace, trigger, 0, await roomToday(ctx, conv.user_id, workspace));
 }
 

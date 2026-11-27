@@ -1,8 +1,8 @@
 // The pass runs on activity (priorityPassSchedule.ts, lib/priorityPassSchedule.ts):
 // a burst of asks becomes one pass PASS_DEBOUNCE_MS after its last ask, steady
-// activity waits no longer than PASS_MAX_WAIT_MS, automatic passes of a pair
-// start PASS_MIN_GAP_MS apart, every trigger kind asks, and no 3-hourly cron
-// remains. Also the `cast state --serves` hint reaching the pass's input.
+// activity waits no longer than PASS_MAX_WAIT_MS, no fixed gap holds a pass
+// (only spend paces them), a classifier's "new" pulls one to PASS_SOON_MS,
+// every trigger kind asks, and no 3-hourly cron remains. Also the `cast state --serves` hint reaching the pass's input.
 import { afterEach, describe, expect, setDefaultTimeout, setSystemTime, test } from "bun:test";
 import type { Id } from "./_generated/dataModel";
 import { api, internal } from "./_generated/api";
@@ -11,7 +11,8 @@ import crons from "./crons";
 import { performSetThreadState } from "./conversations";
 import { patchTask } from "./lib/taskWrite";
 import { priorityPassRequest } from "./lib/priorityPass";
-import { PASS_DEBOUNCE_MS, PASS_MAX_WAIT_MS, PASS_MIN_GAP_MS, passActivity, passOn, sessionActivity } from "./lib/priorityPassSchedule";
+import { PASS_DEBOUNCE_MS, PASS_MAX_WAIT_MS, PASS_SOON_MS, passActivity, passOn, passSoon, sessionActivity } from "./lib/priorityPassSchedule";
+import { LATE_MARGIN_MS } from "./priorityPassInputs";
 import { askClassifier, classifierOn } from "./lib/priorityClassifierHook";
 import { inheritLink, linkFromPlan, linkFromTask, linkSession, pullRequestMoved, taskStatusChanged } from "./lib/priorityLinks";
 import { answerAsksForPass } from "./sessionDecisions";
@@ -97,36 +98,52 @@ describe("debounce", () => {
 });
 
 describe("rate limit", () => {
-  test("after a pass starts, the next one waits PASS_MIN_GAP_MS however soon activity comes", async () => {
+  test("after a pass starts, the next follows the next burst's debounce: no fixed gap holds it", async () => {
     const w = await world();
     const t0 = Date.now();
     await pinAt(w, w.teamConv, t0, "First");
     expect(await fireAt(w, t0 + PASS_DEBOUNCE_MS)).toBe("started");
     const started = t0 + PASS_DEBOUNCE_MS;
     await pinAt(w, w.teamConv, started + 5 * MIN, "Second");
-    expect(await fireAt(w, started + 5 * MIN + PASS_DEBOUNCE_MS)).toBe("waiting");
-    expect((await scheduleOf(w, w.ana, w.team))!.due_at).toBe(started + PASS_MIN_GAP_MS);
-    // More activity while the gap holds the pass neither moves it nor adds a job.
-    await pinAt(w, w.teamConv, started + 30 * MIN, "Third");
-    expect((await scheduleOf(w, w.ana, w.team))!.due_at).toBe(started + PASS_MIN_GAP_MS);
-    expect(await jobs(w, "priorityPassSchedule:fire")).toHaveLength(1);
-    expect(await jobs(w, "priorityPassSchedule:request", "")).toHaveLength(2);
-    expect(await fireAt(w, started + PASS_MIN_GAP_MS)).toBe("started");
+    expect(await fireAt(w, started + 5 * MIN + PASS_DEBOUNCE_MS)).toBe("started");
     expect(model.prompts).toHaveLength(2);
   });
 
-  test("a pass run by hand (`cast priorities run`) holds the next automatic one for the gap too", async () => {
+  test("a pass run by hand (`cast priorities run`) does not hold the next automatic one", async () => {
     const w = await world();
     const t0 = Date.now();
     await w.t.run((ctx) => ctx.db.insert("priority_pass_runs", { user_id: w.ana, workspace: w.team, started_at: t0 - 20 * MIN, finished_at: t0 - 19 * MIN, status: "ok", cost_usd: 0.02, cursor_at: t0 - 25 * MIN, model: "m", counts: { created: 0, updated: 0, merged: 0, mapped_sessions: 0 } }));
     await pinAt(w, w.teamConv, t0, "After the manual run");
-    expect(await fireAt(w, t0 + PASS_DEBOUNCE_MS)).toBe("waiting");
-    const [job] = await jobs(w, "priorityPassSchedule:fire");
-    expect(Math.round(job.scheduledTime)).toBe(t0 - 20 * MIN + PASS_MIN_GAP_MS);
-    // The list says when it will really run.
-    const asAna = w.t.withIdentity({ subject: `${w.ana}|session` });
-    expect((await asAna.query((api as any).priorities.list, { workspace: w.team })).next_pass_at).toBe(t0 - 20 * MIN + PASS_MIN_GAP_MS);
+    expect(await fireAt(w, t0 + PASS_DEBOUNCE_MS)).toBe("started");
   });
+
+  test("a classifier's \"new\" pulls a pass pending later to PASS_SOON_MS, and the later job stands down", async () => {
+    const w = await world();
+    const t0 = Date.now();
+    await pinAt(w, w.teamConv, t0, "Something");
+    expect((await scheduleOf(w, w.ana, w.team))!.due_at).toBe(t0 + PASS_DEBOUNCE_MS);
+    setSystemTime(new Date(t0 + MIN));
+    await w.t.run((ctx) => passSoon(ctx as any, w.ana, w.team));
+    await settle(w);
+    const row = (await scheduleOf(w, w.ana, w.team))!;
+    expect(row.due_at).toBe(t0 + MIN + PASS_SOON_MS);
+    const [soon, later] = (await jobs(w, "priorityPassSchedule:fire")).sort((a: any, b: any) => a.scheduledTime - b.scheduledTime);
+    expect(soon.args[0].token).toBe(row.token);
+    const fire = async (job: any, at: number) => {
+      setSystemTime(new Date(at));
+      const out = await w.t.mutation(fn.priorityPassSchedule.fire, job.args[0]);
+      await settle(w);
+      return out;
+    };
+    expect(await fire(soon, t0 + MIN + PASS_SOON_MS)).toBe("started");
+    // The job that was due at the debounce finds another owning the row.
+    expect(await fire(later, t0 + PASS_DEBOUNCE_MS)).toBe("superseded");
+    expect(model.prompts).toHaveLength(1);
+    // That pass read the session whose "new" asked for it: PASS_SOON_MS clears the pass's late margin.
+    expect(PASS_SOON_MS).toBeGreaterThan(LATE_MARGIN_MS);
+    expect(model.prompts[0]).toContain("Something");
+  });
+
   /**
    * Two days of pins from a person (every 20 minutes) and a role (every 5),
    * with due jobs fired on time and each pass priced by `costOf` (hours since
@@ -190,8 +207,8 @@ describe("rate limit", () => {
     const refill = (dollars: number) => (dollars / 0.05) * H;
     const near = (got: number, want: number) => expect(Math.abs(got - want)).toBeLessThan(1_000);
     expect(allowed([], now)).toBe(-Infinity);
-    // Cheap passes: the bucket always holds one, so the floor decides.
-    expect(allowed([at(H, 0.01), at(3 * H, 0.01)], now)).toBe(now - H + PASS_MIN_GAP_MS);
+    // Cheap passes: the bucket always holds one, so the next may start at once.
+    expect(allowed([at(H, 0.01), at(3 * H, 0.01)], now)).toBe(now);
     // $0.23 a pass: the bucket holds $0.30 (the ceiling's room beside a day's refill). After one pass $0.12 is left, $0.11 short.
     near(allowed([at(H, 0.23)], now), now + refill(0.11));
     // A chain's runs are one pass.
@@ -201,7 +218,7 @@ describe("rate limit", () => {
     // A pass dearer than the room holds one pass, and the refill slows to keep the day under the ceiling ($0.90 a day).
     near(allowed([at(H, 0.6)], now), now + (0.6 / (0.9 / 24) - 1) * H);
     // A catch-up spends its own allowance.
-    expect(allowed([at(H, 2, true)], now)).toBe(now - H + PASS_MIN_GAP_MS);
+    expect(allowed([at(H, 2, true)], now)).toBe(now);
     // A pass at or past the whole ceiling: the refill is clamped to 5% of it a day, so the wait is long but finite and ahead.
     for (const cost of [1.5, 3]) {
       const next = allowed([at(H, cost)], now);

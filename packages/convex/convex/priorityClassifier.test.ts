@@ -1,11 +1,11 @@
 // The per-session classifier (priorityClassifier.ts, lib/priorityClassifierHook.ts):
-// a session's first title or pin asks it once, behind its flag; it reads only
+// a session's first typed message, title or pin asks it, behind its flag, and
+// later ones ask again only while its last answer was "new"; it reads only
 // the person's active priorities in the session's own workspace, with each
 // milestone's tasks, plan and project; it never reads a role's seat or a
 // machine's run; it writes through linkSession as the classifier's, under the
-// person and known links and over the pass, which plans around what they
-// placed; a fork takes its parent's strength; "new" leaves the session alone
-// until its first pin asks once more; a pass that creates a priority or
+// person and known links and at the pass's strength, so the pass may revise
+// it; a fork takes its parent's strength; a "new" asks for a pass soon; a pass that creates a priority or
 // milestone asks again about what it left; and the calibration replay asks as
 // live would, when live would.
 import { describe, expect, setDefaultTimeout, setSystemTime, afterEach, test } from "bun:test";
@@ -16,7 +16,7 @@ import { performSetThreadState } from "./conversations";
 import { inheritLink, linkSession } from "./lib/priorityLinks";
 import { mergePriorities } from "./lib/priorityPass";
 import { parsePriorityPassOutput } from "./lib/priorityPassParse";
-import { CLASSIFIER_DAILY_USD, RERUN_DELAY_MS, RERUN_MAX } from "./lib/priorityClassifierHook";
+import { ASKS_PER_SESSION, CLASSIFIER_DAILY_USD, PENDING_STALE_MS, RERUN_DELAY_MS, RERUN_MAX, asksNow } from "./lib/priorityClassifierHook";
 import { PRIORITY_CLASSIFIER_SYSTEM, parseClassifierReply, type ClassifierInput } from "./lib/priorityClassifier";
 import { DAY, H, pass, proposal, stubModel, world } from "./priorityPassRun.testkit";
 import { applyPlan } from "./priorityPassRun";
@@ -97,8 +97,20 @@ describe("when it asks", () => {
     expect(conv?.priority_step_key).toBeUndefined();
   });
 
-  test('after a "new", the first pin asks once more; later pins do not', async () => {
+  test('the first typed message asks; after a "new", each later message, title or pin asks again until one files the session, and none after', async () => {
     const w = await classifierWorld();
+    const typed = async (text: string) => {
+      const at = Date.now();
+      const message = await w.t.run((ctx) => ctx.db.insert("messages", { conversation_id: w.teamConv, role: "user", content: text, timestamp: at } as any));
+      await w.t.mutation(fn.userSends.record, { conversation_id: w.teamConv, message_id: message, user_id: w.ana, words: 3, by_person: true, timestamp: at });
+      await drain(w);
+    };
+    model.reply = (p) => {
+      // It reads what the person typed (the per-send log).
+      expect(p).toContain("look into the flaky grader");
+      return answer("new");
+    };
+    await typed("look into the flaky grader");
     model.reply = () => answer("new");
     await title(w, w.teamConv, "Look into something");
     model.reply = (p) => {
@@ -106,17 +118,25 @@ describe("when it asks", () => {
       return answer("pri-1/s1");
     };
     await pin(w, w.teamConv, "Grader retries in");
+    // Filed: later pins and messages ask nothing.
     await pin(w, w.teamConv, "Grader retries merged");
-    expect(classifierPrompts()).toHaveLength(2);
-    expect((await classifications(w, w.teamConv)).map((r) => [r.trigger, r.status])).toEqual([["title", "new"], ["pin", "placed"]]);
+    await typed("now the timeout path");
+    expect(classifierPrompts()).toHaveLength(3);
+    expect((await classifications(w, w.teamConv)).map((r) => [r.trigger, r.status])).toEqual([["message", "new"], ["title", "new"], ["pin", "placed"]]);
     expect(await w.conversation(w.teamConv)).toMatchObject({ priority_id: w.grader, priority_step_key: "s1", priority_set_by: "classifier" });
+  });
 
-    // A session whose first ask was its pin, answered "new", is not asked again by a later pin.
-    model.prompts = [];
-    model.reply = () => answer("new");
-    await pin(w, w.oldConv, "Billing question answered");
-    await pin(w, w.oldConv, "Billing export too");
-    expect(classifierPrompts()).toHaveLength(1);
+  test("asksNow: a live pending ask holds the next; one that died (older than PENDING_STALE_MS) does not; a filing or the cap stops asks", () => {
+    const now = 1_000_000_000;
+    const ask = (status: "pending" | "new" | "placed", ago: number) => ({ status, at: now - ago });
+    expect(asksNow([], now)).toBe(true);
+    expect(asksNow([ask("new", 60_000)], now)).toBe(true);
+    expect(asksNow([ask("new", 120_000), ask("pending", 30_000)], now)).toBe(false);
+    // The pending ask's job died before it settled: the session is asked again, by its last settled answer.
+    expect(asksNow([ask("new", PENDING_STALE_MS + 120_000), ask("pending", PENDING_STALE_MS + 60_000)], now)).toBe(true);
+    expect(asksNow([ask("pending", PENDING_STALE_MS + 1)], now)).toBe(true);
+    expect(asksNow([ask("new", 120_000), ask("placed", 60_000)], now)).toBe(false);
+    expect(asksNow(Array.from({ length: ASKS_PER_SESSION }, (_, i) => ask("new", (i + 1) * 60_000)), now)).toBe(false);
   });
 
   test("flag off: no ask, no model call, and a pass's new priority schedules no re-run", async () => {
@@ -217,7 +237,7 @@ describe("what it reads", () => {
   });
 });
 
-describe("precedence: the person > a known link > the classifier > the pass", () => {
+describe("precedence: the person > a known link > the classifier and the pass", () => {
   test("a person's placement or a known link made while the call ran stands", async () => {
     const w = await classifierWorld();
     model.reply = () => answer("pri-1/s1");
@@ -243,7 +263,7 @@ describe("precedence: the person > a known link > the classifier > the pass", ()
     expect(await w.conversation(w.oldConv)).toMatchObject({ priority_id: w.grader, priority_set_by: "link" });
   });
 
-  test("the pass neither moves nor unmaps a session the classifier or a known link placed; it still moves its own", async () => {
+  test("the pass revises a classifier's filing (a first guess) and its own, but neither moves nor unmaps a known link's", async () => {
     const w = await classifierWorld();
     const own = await w.t.run(async (ctx) => {
       await ctx.db.patch(w.teamConv, { priority_id: w.grader, priority_step_key: "s1", priority_set_by: "classifier" } as any);
@@ -257,7 +277,9 @@ describe("precedence: the person > a known link > the classifier > the pass", ()
       user_id: w.ana, workspace: w.team, started_at: Date.now(), from_cursor: 1, cursor_at: 2, model: "m",
       plan: { creates: [], updates: [], merges: [], sessions: [{ session: "jx7team", priority: "pri-2", step_key: "s1" }, { session: "jx7free", priority: "pri-2", step_key: "s1" }], unmap: ["jx7old"], notes: [], rewritten: [] },
     });
-    expect(await w.conversation(w.teamConv)).toMatchObject({ priority_id: w.grader, priority_step_key: "s1", priority_set_by: "classifier" });
+    const moved = await w.conversation(w.teamConv);
+    expect(moved).toMatchObject({ priority_id: w.deploys, priority_step_key: "s1" });
+    expect(moved?.priority_set_by).toBeUndefined();
     expect(await w.conversation(w.oldConv)).toMatchObject({ priority_id: w.grader, priority_set_by: "link" });
     expect(await w.conversation(own)).toMatchObject({ priority_id: w.deploys, priority_step_key: "s1" });
   });
@@ -383,8 +405,8 @@ describe("a fork, spawn worker or handoff takes its parent's strength", () => {
   });
 });
 
-describe("the pass plans around sessions a link or the classifier placed", () => {
-  test("its input shows them fixed, and its plan neither claims nor unmaps them", async () => {
+describe("the pass plans around sessions a link placed", () => {
+  test("its input shows a link's fixed and a classifier's as its own to revise, and its plan neither claims nor unmaps the link's", async () => {
     const w = await classifierWorld();
     await w.t.run(async (ctx) => {
       await ctx.db.patch(w.teamConv, { priority_id: w.grader, priority_step_key: "s1", priority_set_by: "classifier" } as any);
@@ -394,20 +416,21 @@ describe("the pass plans around sessions a link or the classifier placed", () =>
     await w.send(w.ana, w.oldConv, w.now - 2 * H, "deploy notes");
     const { input } = await w.t.query(pass.passInputs, { user_id: w.ana, workspace: w.team });
     const placed = Object.fromEntries(input.sessions.map((s: any) => [s.id, s.placed]));
-    expect(placed).toMatchObject({ jx7team: { priority: "pri-1", step_key: "s1", by: "classifier" }, jx7old: { priority: "pri-1", step_key: null, by: "link" } });
+    expect(placed).toMatchObject({ jx7old: { priority: "pri-1", step_key: null, by: "link" } });
+    expect(placed.jx7team).toBeUndefined();
     const held = input.priorities.find((p: any) => p.short_id === "pri-1").sessions;
-    expect(held.map((s: any) => [s.id, s.linked_by]).sort()).toEqual([["jx7old", "link"], ["jx7team", "classifier"]]);
+    expect(held.map((s: any) => [s.id, s.linked_by ?? null]).sort()).toEqual([["jx7old", "link"], ["jx7team", null]]);
 
     // A reply that moves one into a new priority and lists the other as unassigned plans neither.
     const reply = { priorities: [proposal({ title: "Other", steps: [{ key: "n1", title: "Other step", tier: "critical", refs: [] }], sessions: [{ session: "jx7team", step: "n1" }] })], unassigned: [{ session: "jx7old", kind: "one_off" }] };
     const { output } = parsePriorityPassOutput(reply, input);
     const plan = mergePriorities(input, output!);
-    expect(plan.sessions.map((s) => s.session)).not.toContain("jx7team");
+    expect(plan.sessions.map((s) => s.session)).toContain("jx7team");
     expect(plan.unmap).not.toContain("jx7old");
 
     await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team });
     const prompt = model.prompts.find((p) => p.includes("## Session jx7team"))!;
-    expect(prompt).toContain("Placed by the classifier on pri-1/s1: it stays there.");
+    expect(prompt).not.toContain("Placed by the classifier");
     expect(prompt).toContain("Linked by what started it on pri-1: it stays there.");
   });
 });
@@ -513,7 +536,7 @@ describe('"new" and the re-run', () => {
     }];
     model.reply = (p) => {
       if (p.includes("retry the flaky grader")) {
-        // As of its first title: no later typed message, no pin, no serves hint.
+        // As of its first typed message: no later message, no pin yet, no serves hint.
         for (const later of ["LATER typed message", "Grader retries landed", "serves"]) expect(p).not.toContain(later);
         expect(p).toContain('task ct-11 "Retry flaky grader calls" (in_progress)');
         return answer("pri-1/s1");
@@ -527,11 +550,11 @@ describe('"new" and the re-run', () => {
     const shortOf = new Map<string, string>(await w.t.run(async (ctx) => (await ctx.db.query("conversations").collect()).map((c: any) => [String(c._id), c.short_id] as [string, string])));
     const short = (id: string | null) => (id ? shortOf.get(id) ?? id : null);
     expect(r.placements.map((p: any) => [short(p.session), p.choice, p.asks.map((a: any) => a.trigger), short(p.inherited_from ?? null)])).toEqual([
-      ["jx7team", { priority: "pri-1", step: "s1" }, ["title"], null],
+      ["jx7team", { priority: "pri-1", step: "s1" }, ["message"], null],
       ["jx7work", { priority: "pri-1", step: "s1" }, [], "jx7team"],
       ["jx7sub", { priority: "pri-1", step: "s1" }, [], "jx7team"],
       ["jx7ship", { priority: "pri-1", step: "s1" }, [], "jx7team"],
-      ["jx7old", "new", ["title", "pin"], null],
+      ["jx7old", "new", ["message", "pin"], null],
     ]);
     expect(classifierPrompts().filter((p) => p.includes("Billing export shipped"))).toHaveLength(1);
     expect(r.sessions_read.map((s: any) => short(s.id)).sort()).toEqual(["jx7old", "jx7role", "jx7ship", "jx7sub", "jx7task", "jx7team", "jx7work"]);

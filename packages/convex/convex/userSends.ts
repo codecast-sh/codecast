@@ -3,6 +3,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { internalMutation, query } from "./functions";
 import type { Doc, Id } from "./_generated/dataModel";
 import { recordSendFor } from "./lib/userSend";
+import { askClassifier } from "./lib/priorityClassifierHook";
 import { createTeamFeedFilter } from "./privacy";
 import { dayBounds } from "./lib/teamDay";
 import { isTestArtifactPath } from "@codecast/shared/contracts";
@@ -20,7 +21,8 @@ export const record = internalMutation({
   },
   handler: async (ctx, { conversation_id, message_id, by_person, timestamp, ...send }): Promise<void> => {
     const conversation = await ctx.db.get(conversation_id);
-    if (conversation) await recordSendFor(ctx, conversation, send, by_person, timestamp, message_id);
+    // A message the person typed (not a picked card option) is when the classifier first reads a session (lib/priorityClassifierHook).
+    if (conversation && (await recordSendFor(ctx, conversation, send, by_person, timestamp, message_id))) await askClassifier(ctx, conversation, "message");
   },
 });
 
