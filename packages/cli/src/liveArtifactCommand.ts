@@ -21,6 +21,7 @@ import {
   type ArtifactOp,
   type ArtifactPosition,
   type ArtifactSpec,
+  type VerbContext,
 } from "@codecast/shared/artifacts";
 import { apiPost, type PublishDeps } from "./castApi.js";
 import { renameDoc, setDocArchived, setDocProject, shareDoc, unshareDoc, type DocPost } from "./docActions.js";
@@ -71,6 +72,27 @@ type Session = { session_id?: string };
 function session(deps: PublishDeps): Session {
   const id = deps.detectCurrentSessionId();
   return id ? { session_id: id } : {};
+}
+
+/** Where a codecast id's title is read: a priority, goal, plan or task. */
+const TITLE_ROUTES: Record<string, (id: string) => [string, Record<string, string>]> = {
+  pri: (id) => ["/cli/priorities/show", { short_id: id }],
+  in: (id) => ["/cli/initiatives/get", { id }],
+  pl: (id) => ["/cli/plans/get", { short_id: id }],
+  ct: (id) => ["/cli/work/get", { short_id: id }],
+};
+
+/** Titles for the ids a verb names; one that can't be read is left out, so the verb falls back to the id. */
+export async function refTitles(post: (path: string, body: Record<string, any>) => Promise<any>, refs: readonly string[]): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  for (const ref of new Set(refs)) {
+    const route = TITLE_ROUTES[ref.split("-")[0]];
+    if (!route) continue;
+    const [path, body] = route(ref);
+    const title = await post(path, body).then((r) => r?.title, () => undefined);
+    if (typeof title === "string" && title.trim()) out[ref] = title.trim();
+  }
+  return out;
 }
 
 /** The artifact's current elements (one layer or merged), read page by page. */
@@ -620,8 +642,14 @@ function registerGroup(program: Command, deps: LiveDeps, cli: string) {
         const id = parseDocRef(ref);
         const a = await readOwn(id);
         const view = artifactView(spec.type, a.title, a.elements);
+        // A session writing is an agent (the server writes as it); titles for the ids the verb names are read first.
+        const refs = verb.refs?.(args) ?? [];
+        const ctx: VerbContext = {
+          agent: !!deps.detectCurrentSessionId(),
+          ...(refs.length ? { titles: await refTitles((path, body) => apiPost(deps, path, body, { read: true, exitOnError: false }), refs) } : {}),
+        };
         // The group's --json is the verb's too: a read verb formats its own output.
-        const result = verb.run(view, options.json ? [...args, "--json"] : args, verb.stdin ? readStdin() : undefined);
+        const result = verb.run(view, options.json ? [...args, "--json"] : args, verb.stdin ? readStdin() : undefined, ctx);
         // A read-only verb returns no ops and its output in `status`: print it, write nothing, move no cursor.
         if (result.ops.length === 0) {
           if (result.status) console.log(result.status);

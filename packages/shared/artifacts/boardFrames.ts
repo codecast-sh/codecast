@@ -23,8 +23,9 @@
 //   hiddenKeys(view)                 keys held by any folded frame (nested folds included)
 //   carriedKeys(view, keys)          what moves with a selection: frame contents, nested frames, held keys, arrows whose ends both move
 //   moveFrameOps(view, key, dx, dy)  move a frame (or any selection) with everything it carries
-//   collapseFrameOps(view, key)      fold into a title pill; the enclosing frame reflows
-//   expandFrameOps(view, key)        unfold; the enclosing frame reflows, or at the top level what it now covers moves down
+//   collapseFrameOps(view, key, o)   fold into a title pill; the enclosing frame reflows (unless o.reflowParent is false)
+//   expandFrameOps(view, key, o)     unfold; the enclosing frame reflows (unless o.reflowParent is false), or at the top level what it now covers moves down
+//   enclosingFrameKeys(view, key)    the open frames around a visible element, innermost first
 //   reflowFrameOps(view, key)        lay out a frame's children and size it to fit, then settle its level the same way
 //   organizeOps(view, opts)          the whole board: agenda frames in the top row, other frames below, loose items gridded under them
 import type { ArtifactElement, ArtifactOp, Json } from "./core";
@@ -217,6 +218,8 @@ class FrameLayout {
   private readonly fields = new Map<string, Record<string, Json>>();
   private readonly collapsedOverride = new Map<string, FrameCollapsed | null>();
   hidden: Set<string>;
+  /** False: a size change inside a frame leaves that frame (and those around it) as they are. */
+  reflowParent = true;
 
   constructor(view: View) {
     this.els = new Map(view.elements.map((e) => [e.key, e]));
@@ -324,6 +327,7 @@ class FrameLayout {
     if (sameBox(before, n.box)) return;
     const p = n.parent;
     if (p && p !== this.root) {
+      if (!this.reflowParent) return;
       const pBefore = { ...p.box };
       this.reflow(p);
       this.settle(p, pBefore);
@@ -512,16 +516,28 @@ class FrameLayout {
   }
 }
 
-export function collapseFrameOps(view: View, key: string): ArtifactOp[] {
+/** reflowParent: false folds or unfolds without reflowing the enclosing frame (an agent leaving a person's frame as it was). */
+export type FoldOpts = { reflowParent?: boolean };
+
+export function collapseFrameOps(view: View, key: string, opts: FoldOpts = {}): ArtifactOp[] {
   const l = new FrameLayout(view);
+  l.reflowParent = opts.reflowParent !== false;
   l.collapse(l.frameNode(key, "open"));
   return l.ops();
 }
 
-export function expandFrameOps(view: View, key: string): ArtifactOp[] {
+export function expandFrameOps(view: View, key: string, opts: FoldOpts = {}): ArtifactOp[] {
   const l = new FrameLayout(view);
+  l.reflowParent = opts.reflowParent !== false;
   l.expand(l.frameNode(key, "folded"));
   return l.ops();
+}
+
+/** The open frames enclosing a visible element, innermost first (empty at the top level or for a hidden key). */
+export function enclosingFrameKeys(view: View, key: string): string[] {
+  const out: string[] = [];
+  for (let p = new FrameLayout(view).nodes.get(key)?.parent; p && p.key; p = p.parent) out.push(p.key);
+  return out;
 }
 
 export function reflowFrameOps(view: View, key: string): ArtifactOp[] {
