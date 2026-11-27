@@ -601,6 +601,11 @@ export const setRoutes = mutation({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
     const t = await requireOwnLiveTranscript(ctx, userId, args.transcript_id);
+    for (const prior of t.routes) {
+      if (!args.routes.some((r) => r.kind === prior.kind && r.target === prior.target)) {
+        await assertMayDropOwnRoute(ctx, t, userId, prior.kind, prior.target);
+      }
+    }
     // Keep delivery watermarks (and who added what) for routes that survive
     // the edit, so changing one route never re-sends another's history.
     const routes = args.routes.map((r) => {
@@ -704,6 +709,7 @@ export const removeRoute = mutation({
     if (!t) throw new Error("Transcript not found");
     const route = t.routes.find((r) => r.kind === args.kind && r.target === args.target);
     if (!route) return;
+    await assertMayDropOwnRoute(ctx, t, userId, args.kind, args.target);
     // The scribe and the adder may take a route back at any time. While the
     // huddle runs, so may anyone in it, through addRoute's door: an agent in
     // the room hears everyone, so everyone it hears may show it out.
@@ -730,10 +736,24 @@ export const removeAgentFromRoom = internalMutation({
     for (const r of t.routes) {
       if (r.kind !== "session") continue;
       const conv = await findConversationByAnyRefWhere(ctx, r.target, () => true);
-      if (conv && String(conv._id) === args.conversation_id) return await dropRoute(ctx, t, r.kind, r.target);
+      if (conv && String(conv._id) === args.conversation_id) {
+        await assertMayDropOwnRoute(ctx, t, args.user_id, r.kind, r.target);
+        return await dropRoute(ctx, t, r.kind, r.target);
+      }
     }
   },
 });
+
+/** In a room that is a session owner's alone, that session's own route is
+ *  the owner's to take off: it is their door to the record (canReadCall), so
+ *  a guest who scribes after a handover cannot shut them out of it. A dead
+ *  session's route still leaves through dropDeadRoute. */
+async function assertMayDropOwnRoute(ctx: any, t: Doc<"transcripts">, userId: Id<"users">, kind: string, target: string): Promise<void> {
+  const own = ownRoomTarget(t.room_key);
+  if (kind !== "session" || target !== own || !(await isOwnerOnlyRoom(ctx, t.room_key))) return;
+  const conversation = await ctx.db.get(own as Id<"conversations">);
+  if (String(conversation?.user_id) !== String(userId)) throw new Error("Only the session's owner can take its own route off");
+}
 
 /** Take one route off a transcript and let the fed sessions follow. */
 async function dropRoute(ctx: any, t: Doc<"transcripts">, kind: string, target: string): Promise<void> {
@@ -1543,10 +1563,10 @@ export function huddleDigestTarget(
  *  stretches (and tells an agent it can snap a frame). A chat room gets a message the
  *  reader can unfold into the transcript (chat.postCallDigest); a session room
  *  gets its agent woken with the summary and the command that reads the whole
- *  transcript, never the transcript itself. A chat digest is posted as the
- *  scribe; a session's is sent as the session's owner, who may always write
- *  to it, since the scribe can be someone rung in from outside the session
- *  (a phone hands its seat to a desktop guest, releaseScribe). */
+ *  transcript, never the transcript itself. Delivery acts as the scribe,
+ *  except into a session whose room is its owner's alone: there it speaks as
+ *  the owner, the same as the live words (ownRouteAdder), since the scribe
+ *  can be someone rung in who may not write to that session. */
 async function scheduleHuddleDigest(
   ctx: any,
   t: Doc<"transcripts">,
@@ -1585,9 +1605,8 @@ async function scheduleHuddleDigest(
     });
     return;
   }
-  const conversation = await ctx.db.get(target.conversationId as Id<"conversations">);
   await ctx.scheduler.runAfter(0, internal.transcripts.deliverToSession, {
-    as_user: conversation?.user_id ?? t.started_by,
+    as_user: await ownRouteAdder(ctx, t.room_key, t.started_by),
     to: target.conversationId,
     body: formatHuddleSummaryTag(String(t._id), digest, {
       callRef: t.short_id ?? null,

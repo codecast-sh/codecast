@@ -379,7 +379,7 @@ describe("review fixes", () => {
 describe("a scribe handover in an owner-only session huddle", () => {
   /** Ana's phone holds the huddle on her private session; Cy is rung in at a
    *  desktop; the phone hands the seat back and Cy's start takes the run. */
-  async function handover(w: World) {
+  async function handover(w: World, opts: { end?: boolean } = { end: true }) {
     const { t, as, ids } = w;
     const room = sessionRoomKey(ids.routed);
     const transcriptId = await startHuddle(w, room);
@@ -389,7 +389,7 @@ describe("a scribe handover in an owner-only session huddle", () => {
     await as(ids.cy).mutation(api.calls.joinRoom, { room_key: room, deliberate: true });
     expect(await as(ids.ana).mutation(api.transcripts.releaseScribe, { room_key: room })).toEqual({ released: true });
     expect((await as(ids.cy).mutation(api.transcripts.start, { room_key: room, auto: true })).role).toBe("scribe");
-    await t.run(async (ctx) => ctx.db.patch(transcriptId, { status: "ended", ended_at: Date.now(), summary_status: "pending" }));
+    if (opts.end) await t.run(async (ctx) => ctx.db.patch(transcriptId, { status: "ended", ended_at: Date.now(), summary_status: "pending" }));
     return { room, transcriptId };
   }
 
@@ -430,6 +430,21 @@ describe("a scribe handover in an owner-only session huddle", () => {
     expect(String(own?.added_by)).toBe(String(ids.ana));
   });
 
+  test("only the session's owner takes its own route off; the guest scribing cannot", async () => {
+    const w = await world();
+    const { t, as, ids } = w;
+    const { transcriptId } = await handover(w, { end: false });
+    const own = String(ids.routed);
+    await expect(as(ids.cy).mutation(api.transcripts.removeRoute, { transcript_id: transcriptId, kind: "session", target: own })).rejects.toThrow("Only the session's owner");
+    await expect(as(ids.cy).mutation(api.transcripts.setRoutes, { transcript_id: transcriptId, routes: [] })).rejects.toThrow("Only the session's owner");
+    // The scribe may still drop any other route, keeping the own one.
+    const keep = (await t.run(async (ctx) => ctx.db.get(transcriptId)))!.routes.filter((r) => r.kind === "session").map(({ kind, target, mode }) => ({ kind, target, mode, sent_seq: 0 }));
+    await as(ids.cy).mutation(api.transcripts.setRoutes, { transcript_id: transcriptId, routes: keep });
+    expect((await t.run(async (ctx) => ctx.db.get(transcriptId)))!.routes.map((r) => r.target)).toEqual([own]);
+    await as(ids.ana).mutation(api.transcripts.removeRoute, { transcript_id: transcriptId, kind: "session", target: own });
+    expect((await t.run(async (ctx) => ctx.db.get(transcriptId)))!.routes).toEqual([]);
+  });
+
   test("a stranger to the room learns nothing from releaseScribe", async () => {
     const w = await world();
     const { t, as, ids } = w;
@@ -458,4 +473,21 @@ test("a teammate's private huddle stays closed to a session owner who makes the 
   await endCall(w, transcript_id);
   expect(await as(ids.ana).query(api.transcripts.webGetCall, { transcript_id: transcript_id! })).toBeNull();
   expect((await as(ids.ana).query(api.transcripts.webListCalls, {})).map((c: any) => c._id)).not.toContain(transcript_id);
+});
+
+test("a huddle teammates held about a team-visible session is summarized into it as its scribe", async () => {
+  const w = await world();
+  const { t, as, ids } = w;
+  const room = sessionRoomKey(ids.shared);
+  await as(ids.ben).mutation(api.calls.joinRoom, { room_key: room, deliberate: true });
+  const { transcript_id } = await as(ids.ben).mutation(api.transcripts.start, { room_key: room });
+  await t.run(async (ctx) => {
+    await ctx.db.insert("transcript_segments", { transcript_id: transcript_id!, seq: 1, speaker_id: String(ids.ben), speaker_name: "Ben", text: "about Ana's work", t0: 0, t1: 1000 });
+    await ctx.db.patch(transcript_id!, { last_seq: 1, status: "ended", ended_at: Date.now(), summary_status: "pending" });
+  });
+  await t.mutation(internal.transcripts.setSummary, { transcript_id: transcript_id!, summary_status: "done", summary: "Ben and Cy talked." });
+  const sends = await t.run(async (ctx) =>
+    (await ctx.db.system.query("_scheduled_functions").collect()).filter((f: any) => f.name.includes("deliverToSession") && String(f.args[0].body).includes("Ben and Cy talked.")),
+  );
+  expect(sends.map((f: any) => String(f.args[0].as_user))).toEqual([String(ids.ben)]);
 });
