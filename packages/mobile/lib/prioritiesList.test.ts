@@ -293,6 +293,9 @@ describe('the menus press web\'s writes', () => {
     expect(sessionMenu(row({ mine: false }), { short_id: 'b', mine: true }, 's3', writes, noMove)!.map((i) => i.label)).toEqual(['Not this priority']);
     expect(sessionMenu(row(), { short_id: 'b', mine: false }, 's3', writes, noMove)!.map((i) => i.label)).toEqual(['Not this priority']);
     expect(sessionMenu(row({ mine: false }), { short_id: 'b', mine: false }, 's3', writes, noMove)).toBeNull();
+    // A co-owned session (mine, started by someone else): the server refuses its unlink on a teammate's priority, so no menu.
+    expect(sessionMenu(row({ mine: false }), { short_id: 'b', mine: true, started_by_viewer: false }, 's3', writes, noMove)).toBeNull();
+    expect(sessionMenu(row(), { short_id: 'b', mine: true, started_by_viewer: false }, 's3', writes, noMove)!.map((i) => i.label)).toEqual(['Not this priority']);
   });
 
   it("a session moves to this priority's other open milestones (critical first), then the owner's others", () => {

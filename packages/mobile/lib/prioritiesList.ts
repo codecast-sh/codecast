@@ -215,10 +215,12 @@ export function milestoneMenu(row: PriorityRow, step: PriorityStep, writes: Prio
  * milestone, off this priority, or to another milestone; when one of them is
  * someone else's, off this priority alone.
  */
-export function sessionMenu(row: Pick<PriorityRow, 'short_id' | 'mine'>, s: Pick<SessionLine, 'short_id' | 'mine'>, stepKey: string | null, writes: PriorityWrites, ui: { moveTo: () => void }): SheetItem[] | null {
-  if (!row.mine && !s.mine) return null;
+export function sessionMenu(row: Pick<PriorityRow, 'short_id' | 'mine'>, s: Pick<SessionLine, 'short_id' | 'mine' | 'started_by_viewer'>, stepKey: string | null, writes: PriorityWrites, ui: { moveTo: () => void }): SheetItem[] | null {
+  // As the server takes it (doSessionNotThis, doSessionMove): the session's starter, never a co-owner.
+  const started = s.started_by_viewer ?? s.mine;
+  if (!row.mine && !started) return null;
   const notThis: SheetItem = { label: 'Not this priority', icon: 'x-circle', onPress: () => writes.sessionNotThis(s.short_id, row.short_id) };
-  if (!(row.mine && s.mine)) return [notThis];
+  if (!(row.mine && started)) return [notThis];
   return [
     ...(stepKey ? [{ label: 'Not this milestone', icon: 'minus-circle' as const, onPress: () => writes.moveSession(s.short_id, row.short_id, row.short_id, null) }] : []),
     notThis,

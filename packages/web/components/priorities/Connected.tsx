@@ -59,8 +59,12 @@ export function Connected({ model, m, now, lookups }: {
   ];
   const branches = branchesOf(m, lookups);
   const deploys = lookups.deploysOf(m, model.row.workspace);
-  // The session's owner or the priority's may unlink it; moving it between milestones needs both to be the viewer's.
-  const menu = (s: SessionLine) => (model.row.mine || s.mine ? <SessionMenu row={model.row} s={s} stepKey={m.key} unlinkOnly={!(model.row.mine && s.mine)} /> : undefined);
+  // As the server takes it (doSessionNotThis, doSessionMove): the session's starter or the priority's owner may unlink it, never a
+  // co-owner; moving it between milestones needs both to be the viewer's.
+  const menu = (s: SessionLine) => {
+    const started = s.started_by_viewer ?? s.mine;
+    return model.row.mine || started ? <SessionMenu row={model.row} s={s} stepKey={m.key} unlinkOnly={!(model.row.mine && started)} /> : undefined;
+  };
   const nSessions = sessions.length + m.more;
   const empty = nSessions + m.tasks.length + m.prs.length + branches.length + plans.length + deploys.length === 0;
   return (

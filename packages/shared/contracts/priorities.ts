@@ -190,6 +190,8 @@ export type PriorityLinkedSession = {
   state: PrioritySessionState;
   /** The viewer's own (or co-owned): only these ask the viewer anything; another's needs-you reads idle. */
   mine: boolean;
+  /** The viewer started it (its user_id, not a co-owner's share): they may say Not this priority of it (priorityWrite doSessionNotThis); absent from a server that predates it. */
+  started_by_viewer?: boolean;
   /** A step a workflow run spawned, not a session a person drives. */
   workflow: boolean;
   why: PriorityLinkWhy[];

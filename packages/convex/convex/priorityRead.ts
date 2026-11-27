@@ -388,6 +388,7 @@ async function linksFor(r: Reader, reads: LinkReads, p: Priority, steps: Priorit
         title: c.title ?? "",
         state: linkedSessionState(c, now),
         mine,
+        started_by_viewer: String(c.user_id) === String(r.viewer),
         workflow: isWorkflowSession(c as any),
         why,
         last_active_at: Math.floor(c.updated_at / LINK_ACTIVE_ROUND_MS) * LINK_ACTIVE_ROUND_MS,

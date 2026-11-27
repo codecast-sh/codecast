@@ -223,10 +223,10 @@ test("a teammate's session that asks reads Needs you on their milestone, as the 
 }, 60_000);
 
 
-test("the session menu on a teammate's milestone: the viewer's own session may leave their priority, and nothing else; a teammate's session on it has no menu", async () => {
+test("the session menu on a teammate's milestone: a session the viewer started may leave their priority, and nothing else; a teammate's or a co-owned one has no menu", async () => {
   const theirs = row(10, "Shared grader", 1, [step("s1", "Pair on it", "critical")], {
     ...mate,
-    mapped_links: [links("s1", [sess("minesess", "My pairing", "dormant", 1), sess("samsess", "Sam's run", "dormant", 2, { mine: false })])],
+    mapped_links: [links("s1", [sess("minesess", "My pairing", "dormant", 1, { started_by_viewer: true }), sess("samsess", "Sam's run", "dormant", 2, { mine: false }), sess("coowned", "Co-owned run", "dormant", 3, { started_by_viewer: false })])],
   });
   const page = await mount(view({ rows: [...ROWS, theirs] }));
   try {
