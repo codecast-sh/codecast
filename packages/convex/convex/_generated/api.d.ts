@@ -792,6 +792,7 @@ import type * as reviews from "../reviews.js";
 import type * as roleCheckRepair from "../roleCheckRepair.js";
 import type * as roleFailover from "../roleFailover.js";
 import type * as roleIcons from "../roleIcons.js";
+import type * as runsInParentBackfill from "../runsInParentBackfill.js";
 import type * as savedViews from "../savedViews.js";
 import type * as screenRecordings from "../screenRecordings.js";
 import type * as scribeSeat from "../scribeSeat.js";
@@ -1716,6 +1717,7 @@ declare const fullApi: ApiFromModules<{
   roleCheckRepair: typeof roleCheckRepair;
   roleFailover: typeof roleFailover;
   roleIcons: typeof roleIcons;
+  runsInParentBackfill: typeof runsInParentBackfill;
   savedViews: typeof savedViews;
   screenRecordings: typeof screenRecordings;
   scribeSeat: typeof scribeSeat;

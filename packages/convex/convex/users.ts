@@ -3673,6 +3673,7 @@ export const startSession = mutation({
     const privacy = await resolveCreationPrivacy(ctx, userId, args.project_path);
 
     const conversationId = await ctx.db.insert("conversations", {
+      runs_in_parent: false,
       user_id: userId,
       agent_type: args.agent_type === "claude" ? "claude_code" : args.agent_type,
       session_id: sessionId,

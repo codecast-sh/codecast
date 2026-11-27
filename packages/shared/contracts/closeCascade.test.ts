@@ -32,6 +32,13 @@ describe("goesDownWithLead", () => {
     expect(goesDownWithLead({ session_id: "019a0000-codex-top", agent_type: "codex" })).toBe(false);
     expect(goesDownWithLead({})).toBe(false);
   });
+  // The stored fact decides over the session id: a child promoted to its own
+  // process outlives its lead, and a teammate still goes down with it.
+  test("runs_in_parent decides when the row holds it", () => {
+    expect(goesDownWithLead({ ...taskSub, runs_in_parent: false })).toBe(false);
+    expect(goesDownWithLead({ ...spawned, runs_in_parent: true })).toBe(true);
+    expect(goesDownWithLead({ ...teammate, runs_in_parent: false })).toBe(true);
+  });
 });
 
 describe("closeAdoptionWindow", () => {

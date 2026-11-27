@@ -6,7 +6,8 @@
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { convexTest } from "convex-test";
 import { closeInFlightReason, IN_FLIGHT_FACT_KEYS } from "@codecast/shared/contracts";
-import { closeLeavesStanding, launchedHeadless, standsApartFromLead, stillHolds } from "@codecast/shared/contracts/closeCascade";
+import { closeLeavesStanding, standsApartFromLead, stillHolds } from "@codecast/shared/contracts/closeCascade";
+import { launchedHeadless } from "@codecast/shared/contracts/runsInParent";
 import schema from "./schema";
 import { allModules } from "./testModules.testkit";
 import { cascadeTakesDown, closeSetsAsideOnServer, holdFactsOnServer, inFlightFactsOnServer, nestedGroupOf } from "./lib/closeAside";

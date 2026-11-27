@@ -12907,6 +12907,9 @@ async function processSessionFilePass(
             forkOrHandoff: !!parentMessageUuid || isPlanHandoff,
             teammate: !!teamInfo,
           }) || undefined,
+          // A subagent transcript runs inside its parent's process; a headless
+          // `claude -p` child runs its own.
+          runsInParent: subagentTranscript,
           agentTaskId,
           agentTeamName: teamInfo?.teamName,
           agentName: teamInfo?.agentName,
@@ -13038,6 +13041,7 @@ async function processSessionFilePass(
         startedAt: firstMsgTimestamp,
         gitInfo,
         isSubagent: subagentTranscript || undefined,
+        runsInParent: subagentTranscript,
       }, errMsg);
 
       return;
@@ -13214,6 +13218,7 @@ async function processSessionFilePass(
         gitInfo,
         parentConversationId: recreateParent,
         isSubagent: subagentTranscript || undefined,
+        runsInParent: subagentTranscript,
       });
       conversationId = finishCreate(conversationId);
       conversationCache[sessionId] = conversationId;
@@ -13976,6 +13981,10 @@ async function processCodexSessionPass(
             // still no inbox card (headlessRuns.ts); a later pass can link it.
             isSubagent: !!nativeParentSessionId || !!parentConversationId
               || headlessRunStaysOutOfInbox({ headless: isCodexProgramLaunch(codexMetadata), triggerRun: !!agentTaskId }) || undefined,
+            // A program-launched child of a lead (a thread_spawn thread inside
+            // its process, or a `codex exec` it ran) runs in the lead; a codex
+            // started through /cli/spawn is a server-created row, never here.
+            runsInParent: isCodexProgramLaunch(codexMetadata) && (!!nativeParentSessionId || !!parentConversationId),
             // The mark the claude path stamps for `claude -p`.
             cliFlags: codexLaunchFlags(codexMetadata),
             // Same stamp as the claude path: without it every codex session

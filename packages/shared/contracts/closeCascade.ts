@@ -7,32 +7,18 @@
 // Kept out of the contracts barrel: the CLI's boot graph never needs it
 // (packages/cli bench/bootGraph.guard.test.ts).
 import { closeInFlightReason, isClosedSession, type ClosedFields, type InFlightFacts } from "./closedSession";
-import { isClaudeSubagentSessionId } from "./claudeSubagentSession";
 import { isOrphanOrSubagent } from "./inboxMembership";
+import { runsInParentProcess, type RunsInParentFacts } from "./runsInParent";
 
-/** Whether a close of its lead takes this child down with it. Three kinds go:
- *  a Claude Code subagent (isClaudeSubagentSessionId), which runs inside the
- *  lead's process and cannot outlive it; an agent-team teammate, which is the
- *  lead's team (agent_team_name; the "team-lead" row is the lead itself); and
- *  a codex child the daemon linked from the lead's own transcript. The daemon
- *  stamps those --print (codexLaunchFlags: a thread_spawn thread inside the
- *  lead's process, or a `codex exec` the lead ran), and no row field tells the
- *  two apart, so both go down as before. A codex child started through
- *  /cli/spawn (`cast spawn`, a flow station) carries no --print and has its own
- *  process, so it stays up, as does every other spawned child. */
-export function goesDownWithLead(row: { session_id?: string | null; agent_type?: string | null; parent_conversation_id?: unknown; spawned_by_conversation_id?: unknown; cli_flags?: string | null; headless_launch?: boolean | null; agent_team_name?: string | null; agent_name?: string | null }): boolean {
-  if (row.session_id && isClaudeSubagentSessionId(row.session_id)) return true;
-  if (row.agent_type === "codex" && !!row.parent_conversation_id && !row.spawned_by_conversation_id && launchedHeadless(row)) return true;
+/** Whether a close of its lead takes this child down with it. Two kinds go:
+ *  a child that runs inside the lead's process (runsInParentProcess: a Claude
+ *  Code subagent, a codex child running in the lead) and cannot outlive it;
+ *  and an agent-team teammate, which is the lead's team (agent_team_name; the
+ *  "team-lead" row is the lead itself). Every other spawned child has its own
+ *  process and stays up. */
+export function goesDownWithLead(row: RunsInParentFacts & { agent_team_name?: string | null; agent_name?: string | null }): boolean {
+  if (runsInParentProcess(row)) return true;
   return !!row.agent_team_name && row.agent_name !== "team-lead";
-}
-
-/** The session was launched as a program (its cli_flags carry --print). Only
- *  the server holds cli_flags: every row it sends a client carries this
- *  verdict instead, as headless_launch (convex conversations.ts row builders,
- *  syncLog buildCargo), so both sides answer from the one rule. */
-export function launchedHeadless(row: { cli_flags?: string | null; headless_launch?: boolean | null }): boolean {
-  if (typeof row.headless_launch === "boolean") return row.headless_launch;
-  return /(^|\s)--print(\s|$)/.test(row.cli_flags ?? "");
 }
 
 /** A child a close of its lead leaves up that would otherwise only ever show
@@ -40,6 +26,7 @@ export function launchedHeadless(row: { cli_flags?: string | null; headless_laun
  *  hidden or adopted. Whether the close adopts it waits on what it still holds
  *  (closeLeavesStanding). */
 export function standsApartFromLead(child: ClosedFields & {
+  runs_in_parent?: boolean | null;
   session_id?: string | null;
   agent_type?: string | null;
   spawned_by_conversation_id?: unknown;

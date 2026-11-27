@@ -3,7 +3,7 @@ import { hasDeliverableMessage } from "./lib/closeAside";
 import { sanitizeConvexObjectKeys } from "./lib/convexFieldNames";
 import { noteWriteCause } from "./lifecycleEvents";
 import { isClaudeSubagentSessionId } from "@codecast/shared/contracts/claudeSubagentSession";
-import { launchedHeadless } from "@codecast/shared/contracts/closeCascade";
+import { launchedHeadless, runsInParentProcess } from "@codecast/shared/contracts/runsInParent";
 import { wakeFieldsOf } from "./wakeCost";
 import { cliSessionClassifier, recencyRankOf, type RecencyRank } from "./cliSessionClassifier";
 import { mutation, query, internalMutation, internalQuery, type QueryCtx, type MutationCtx } from "./functions";
@@ -1457,6 +1457,10 @@ export const createConversation = mutation({
     // cache), so without this the row is born looking like a normal session
     // and teammates get a "started coding" push for it.
     is_subagent: v.optional(v.boolean()),
+    // Daemon-asserted: the transcript runs inside its parent's process (a
+    // subagents/ transcript, a codex child running in its lead). An older
+    // daemon sends none, and the row is stamped from its session id.
+    runs_in_parent: v.optional(v.boolean()),
     // The trigger this transcript is a spawned run of (the daemon's scheduler
     // started it), so the row is born nested (stampRunConversation) instead
     // of being a loose inbox card until the run is linked.
@@ -1553,6 +1557,7 @@ export const createConversation = mutation({
       ) {
         patch.is_subagent = true;
       }
+      if (args.runs_in_parent !== undefined && existing.runs_in_parent === undefined) patch.runs_in_parent = args.runs_in_parent;
       if (args.agent_team_name && !existing.agent_team_name) {
         patch.agent_team_name = args.agent_team_name;
         if (args.agent_name && !existing.agent_name) patch.agent_name = args.agent_name;
@@ -1629,6 +1634,8 @@ export const createConversation = mutation({
       is_subagent: (args.is_subagent === true && !args.parent_message_uuid) ||
         (!!parentConversationId && !args.parent_message_uuid) ||
         (args.agent_type === "claude_code" && !args.parent_message_uuid && isClaudeSubagentSessionId(args.session_id)) || undefined,
+      runs_in_parent: args.runs_in_parent ??
+        (args.agent_type === "claude_code" && !args.parent_message_uuid && isClaudeSubagentSessionId(args.session_id)),
       agent_team_name: args.agent_team_name,
       agent_name: args.agent_name,
       git_commit_hash: args.git_commit_hash,
@@ -1769,6 +1776,7 @@ export async function insertStartedConversation(
     message_count: 0,
     ...privacy,
     status: "active",
+    runs_in_parent: false,
     ...fields.extra,
   });
   await ctx.db.patch(conversationId, {
@@ -5997,6 +6005,7 @@ export const forkConversation = mutation({
     const now = Date.now();
     const newConversationId = await ctx.db.insert("conversations", {
       user_id: authUserId,
+      runs_in_parent: false,
       team_id: forkTeamId,
       agent_type: original.agent_type,
       session_id: `forked-${original.session_id}-${crypto.randomUUID()}`,
@@ -6325,6 +6334,7 @@ export const forkFromMessage = mutation({
 
     const newConversationId = await ctx.db.insert("conversations", {
       user_id: userId,
+      runs_in_parent: false,
       team_id: isAgentSwitch ? original.team_id : forkTeamId,
       agent_type: agentType,
       session_id: forkSessionId,
@@ -8874,6 +8884,9 @@ async function enrichInboxSessionRow(
     // Launched as a program (cli_flags --print, never sent): what a close of
     // its lead reads (shared goesDownWithLead).
     headless_launch: launchedHeadless(conv),
+    // Whether it runs inside its parent's process, resolved for legacy rows:
+    // what every process gate reads (shared runsInParentProcess).
+    runs_in_parent: runsInParentProcess(conv),
     // The daemon's own status: every reader derives what it means at its own
     // clock (trustedStatusAt), since a verdict does not replay (ct-56054).
     agent_status: maps.agentStatusMap.get(conv._id.toString()) ?? null,
@@ -9044,7 +9057,6 @@ async function inboxOwnerRowFields(ctx: any, conv: any): Promise<Record<string, 
     role_started: conv.role_started ?? null,
     owners_changed_at: conv.owners_changed_at ?? null,
     parent_released_at: conv.parent_released_at ?? null,
-    adopted_at: conv.adopted_at ?? null,
     wait_up_at: conv.wait_up_at ?? null,
     wait_up_count: conv.wait_up_count ?? null,
     wait_up_person: conv.wait_up_person?.toString() ?? null,
@@ -9142,6 +9154,7 @@ async function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: nu
     inbox_closed_at: child.inbox_closed_at ?? null,
     inbox_adopted_at: child.inbox_adopted_at ?? null,
     headless_launch: launchedHeadless(child),
+    runs_in_parent: runsInParentProcess(child),
     // The child's own rest verdict, carried like every other stamp above (the
     // is_deferred/is_pinned twins over it are hardcoded because a child never
     // holds those). Without these three the verdict is write-only on a
@@ -14145,6 +14158,7 @@ export async function resolveRestartTarget(
   const agentType = toConvexAgentType(fromConvexAgentType(ghost.agent_type));
   const newId = await ctx.db.insert("conversations", {
     user_id: userId,
+    runs_in_parent: false,
     team_id: teamId,
     agent_type: agentType,
     session_id: sessionId,

@@ -1219,6 +1219,13 @@ export default defineSchema({
     // workflow/subjectPark.ts).
     last_person_turn_at: v.optional(v.number()),
     is_subagent: v.optional(v.boolean()),
+    // True when this session has no process of its own: it runs inside its
+    // parent's (a Claude Code Task/Agent subagent transcript under
+    // <session>/subagents/, or a codex child running inside its lead). Every
+    // process gate reads it through runsInParentProcess (@codecast/shared
+    // contracts/runsInParent). Written true or false on every new row; absent
+    // only on legacy rows until runsInParentBackfill stamps them.
+    runs_in_parent: v.optional(v.boolean()),
     // Started with nobody watching (`cast spawn --unattended`, a role's hand).
     // Read through isUnattendedConversation (@codecast/shared), which also
     // counts workers, workflow stations, trigger runs and standing sessions.
@@ -1590,8 +1597,9 @@ export default defineSchema({
     // the owners menu suggests it first. Cleared when that role owns it again.
     released_role_id: v.optional(v.id("org_roles")),
     // When a person dragged this standalone session under its parent
-    // (parent_conversation_id): it works for the parent but still runs its own
-    // process, so a revive or recovery treats it as top level. Cleared on detach.
+    // (parent_conversation_id): the inbox places it with that parent.
+    // Placement only: whether it has a process of its own is runs_in_parent.
+    // Cleared on detach.
     adopted_at: v.optional(v.number()),
     // Stamped on every owner write under the feature (people, role, parent
     // release), so a client holding the owners refetches them.

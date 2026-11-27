@@ -12,7 +12,7 @@
 // Cargo (docs/architecture/sync-log-cargo.md): rows carry the changed fields as
 // a merge patch plus an access stamp; getRange projects each row per caller.
 import { v } from "convex/values";
-import { launchedHeadless } from "@codecast/shared/contracts/closeCascade";
+import { launchedHeadless } from "@codecast/shared/contracts/runsInParent";
 import { query } from "./_generated/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import type { ChangeEntity, ChangeScope } from "./changeLog";

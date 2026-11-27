@@ -114,6 +114,8 @@ describe("createConversation retry preserves subagent params", () => {
     expect(directCalls.length).toBe(1);
     expect(directCalls[0].parentConversationId).toBe(PARENT_CONV);
     expect(directCalls[0].isSubagent).toBe(true);
+    // A subagents/ transcript runs inside its parent's process.
+    expect(directCalls[0].runsInParent).toBe(true);
     expect(directCalls[0].subagentDescription).toBe("TEST research");
 
     // …and the queued retry op is those SAME params, not a reduced rebuild.
@@ -168,6 +170,7 @@ describe("a sidechain transcript outside subagents/ is still a subagent", () => 
 
     expect(directCalls.length).toBe(1);
     expect(directCalls[0].isSubagent).toBe(true);
+    expect(directCalls[0].runsInParent).toBe(true);
     expect(directCalls[0].parentConversationId).toBe(PARENT_CONV);
 
     fs.rmSync(base, { recursive: true, force: true });
@@ -205,6 +208,7 @@ describe("a recreated subagent keeps its parent", () => {
 
     expect(creates.length).toBe(1);
     expect(creates[0].isSubagent).toBe(true);
+    expect(creates[0].runsInParent).toBe(true);
     expect(creates[0].parentConversationId).toBe(PARENT_CONV);
 
     fs.rmSync(base, { recursive: true, force: true });

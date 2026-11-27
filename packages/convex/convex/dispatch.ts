@@ -1367,6 +1367,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       }
     }
     const conversationId = await ctx.db.insert("conversations", {
+      runs_in_parent: false,
       user_id: runnerUserId,
       ...(runnerUserId !== userId ? { author_user_id: userId } : {}),
       team_id: resolvedTeamId,
