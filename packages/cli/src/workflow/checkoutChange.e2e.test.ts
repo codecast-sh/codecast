@@ -479,6 +479,37 @@ describe("a finding goes to the writers of the files it names", () => {
   }, 1_200_000);
 });
 
+// ct-102477, the checkout path: a writer reset the run's worktree; the stage's words appended to the stop cut off the
+// one restart, so the session heard "Run it again with cast flow run change" and `cast workflow show` a fresh run.
+describe("a worktree a writer reset off the checkout's change", () => {
+  test("stops naming who moved it and the one restart, and every surface reads that restart", async () => {
+    const { root } = checkoutWorld();
+    const graph = changeFlow(GOOD_CHECK);
+    const tree = path.join(root, ".codecast", "worktrees", "change-ct-9");
+    const s = sessions({ [A]: () => { git(tree, "reset", "-q", "--hard", "origin/main"); write(tree, "src/a.ts", "export const a = 'good';\n"); git(tree, "commit", "-qam", "trimmed"); } });
+    const runDir = lineRunDir(root, runSlug(graph, { task_id: "ct-9" }, "run"));
+    const change = await freezeCheckoutChange(root, { branch: "codecast/change-ct-9", worktree: "change-ct-9", roster });
+    writeFrozenChange(runDir, { ...change, session: CALLER.slice(0, 7), conversation: CALLER });
+    git(root, "worktree", "add", "-q", tree, "codecast/change-ct-9");
+    console.log = process.env.SHOW_RUN ? origLog : () => {};
+    let outcome: string;
+    try {
+      outcome = await runWorkflow(graph, { cwd: root, taskId: "ct-9", runId: "run-9", runSession: "conv_run", apiToken: "tok", convexSiteUrl: "https://convex.test", pollIntervalMs: 1, subjectParkMs: 1 });
+    } finally {
+      console.log = origLog;
+    }
+    expect(outcome).toBe("failed");
+    const fail = s.calls.find((c) => c.route === "/cli/workflow-runs/progress" && c.body.run_status === "failed")!.body.fail_reason as string;
+    expect(fail).toMatch(/^Could not freeze the checkout's change again: Something reset or rebased the run's worktree to [0-9a-f]{10}, off the change as last frozen \([0-9a-f]{10}\), so the run left it as it is\. To ship that worktree's branch as it stands now, run it again on this task: `cast flow run change --task ct-9 --branch codecast\/change-ct-9`\.$/);
+    const { ownRestartOf } = await import("@codecast/shared/contracts/runRestart");
+    expect(ownRestartOf(fail)).toBe("cast flow run change --task ct-9 --branch codecast/change-ct-9");
+    const { restartHint } = await import("./runsCli");
+    expect(restartHint({ task_short_id: "ct-9", workflow_slug: "change", takes_change: true, current_node_id: "fix_check", fail_reason: fail })).toBe("to ship the run's worktree as it stands now, run it again: cast flow run change --task ct-9 --branch codecast/change-ct-9");
+    const end = s.calls.filter((c) => c.route === "/cli/messages/send" && c.body.to === CALLER).at(-1)!.body.body as string;
+    expect(end).toBe(`The Change run on ct-9 stopped at Fix check: ${fail}`);
+  }, 1_200_000);
+});
+
 type Row = { work_state: string; message_count: number; pin?: { status: string; state: string; at: number } };
 type Ctl = { row: (id: string) => Row; deliver: (id: string) => void; settle: (id: string, pin?: { status: string; state: string }, grow?: number) => void };
 

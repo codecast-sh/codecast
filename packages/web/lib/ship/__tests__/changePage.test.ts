@@ -146,6 +146,15 @@ describe("B: the head is structure, never a station's free text", () => {
     expect(act({ ...noci, current_node_id: "checks", fail_reason: "runner crashed", node_statuses: [st("pr", "completed", 1), st("checks", "failed", 2)] })).toMatchObject({ kind: "again" });
   });
 
+  // ct-102477: the same unplanned failure whose runner words name its one restart (a worktree something moved) offers
+  // no Ship again: that rebuilds the branch the restart would ship.
+  test("a failure whose words name its one restart never offers Ship again", () => {
+    const why = "Could not freeze the checkout's change again: Something reset or rebased the run's worktree to d87da407ea, off the change as last frozen (61d7c6b4cb), so the run left it as it is. To ship that worktree's branch as it stands now, run it again on this task: `cast flow run change --task ct-1 --branch codecast/change-ct-1`.";
+    const moved = run({ status: "failed", current_node_id: "checks", fail_reason: why, node_statuses: [st("pr", "completed", 1), st("checks", "failed", 2)] });
+    expect(journeyOf(change, moved, [], null).now).toMatchObject({ fix: "again", whole: true });
+    expect(act(moved)).not.toMatchObject({ kind: "again" });
+  });
+
   test("an earlier round's failure is not this stop", () => {
     const r = run({ status: "failed", current_node_id: "stopped", fail_reason: "Stopped: x", node_statuses: [...U_ROUND, st("land__changes", "failed", 7, { result_preview: '{"exit": "changes"}' }), st("fix", "completed", 8), st("land__pr", "failed", 10, { result_preview: "push refused" }), st("land__unpushed", "failed", 11, { result_preview: '{"exit": "unpushed"}' }), st("stopped", "failed", 12)] });
     // The run recorded its PR in an earlier round, so its way out is not said as No pull request.

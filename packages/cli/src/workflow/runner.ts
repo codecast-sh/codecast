@@ -7,6 +7,7 @@ import { NO_CAUSE_HISTORY } from "@codecast/shared/contracts/causeHistory";
 import { gateDoc } from "@codecast/shared/contracts/changeCard";
 import { PERSONAL_FLOW_SLUG } from "@codecast/shared/contracts/flowPool";
 import { worktreeMovedRestart, worktreeMovedRestartWords } from "@codecast/shared/contracts/runRestart";
+import { runSenderName } from "@codecast/shared/contracts/runSender";
 import { ParkedClock, taskWaiting } from "./parkedClock.js";
 import { HandWatch, handTimeouts, steadyTail } from "./handWatch.js";
 import { diskFullFailReason, requeueAfterDiskFull } from "../diskFull.js";
@@ -468,7 +469,7 @@ async function executeSubjectNode(node: WorkflowNode, graph: WorkflowGraph, cont
   await recordBriefTree(cwd, context);
   // Taken before the send: only a pin the session sets after this can be its answer (waitOnStation).
   const sentAt = Date.now();
-  const sent = await sendToSubject(options, subject, brief, subjectSendKey(options, context, node.id), true);
+  const sent = await sendToSubject(options, context, subject, brief, subjectSendKey(options, context, node.id), true);
   if (!sent) {
     context["last_error"] = `Could not send ${node.label} to session ${subject.shortId}.${found}`;
     context["station_dead"] = node.id;
@@ -510,8 +511,10 @@ async function executeSubjectNode(node: WorkflowNode, graph: WorkflowGraph, cont
 function refreezeWords(err: unknown, graph: WorkflowGraph, options: RunOptions): string {
   const said = err instanceof Error ? err.message : String(err);
   if (!(err instanceof Error && "frozenTip" in err && "branch" in err) || !options.taskId) return said;
-  // The personal Ship runs as `change` in the workspace it ships (subjectStation.ts runEndMessage).
-  const flow = graph.name === PERSONAL_FLOW_SLUG ? "change" : graph.name;
+  // The flow by the slug the run was started with (its row's), else as a push names it (filePush.ts). The personal Ship
+  // runs as `change` in the workspace it ships (subjectStation.ts runEndMessage).
+  const slug = options.flowSlug || graph.name.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+  const flow = slug === PERSONAL_FLOW_SLUG ? "change" : slug;
   return `${said}. ${worktreeMovedRestartWords(worktreeMovedRestart(flow, options.taskId, String(err.branch)))}`;
 }
 
@@ -551,7 +554,7 @@ async function briefWriters(node: WorkflowNode, graph: WorkflowGraph, context: R
   const names = writers.map((w) => `${w.shortId} (${[...w.files, ...(w.unclaimed ?? [])].join(", ")})`).join(", ");
   const dead = (why: string): NodeOutcome => { context["last_error"] = `${why}${found}`; context["station_dead"] = node.id; return "failure"; };
   // A writer briefed for a run that will not wait on it hears so, quietly, keyed so a retry is not a second message.
-  const callOff = (ws: Writer[], why: string) => Promise.all(ws.map((w) => sendToSubject(options, w,
+  const callOff = (ws: Writer[], why: string) => Promise.all(ws.map((w) => sendToSubject(options, context, w,
     `The ${graph.label || graph.name} run${options.taskId ? ` on ${options.taskId}` : ""} stopped at ${node.label} (${why}) and no longer waits on the brief it sent you. Nothing more is waiting on this session for it.`,
     subjectSendKey(options, context, `${node.id}:${w.shortId}:off`), true)));
   const rows = [];
@@ -564,7 +567,7 @@ async function briefWriters(node: WorkflowNode, graph: WorkflowGraph, context: R
   const waits: Array<Writer & { sentAtCount: number; sentAt: number; awaitDelivery: true }> = [];
   for (const [i, w] of writers.entries()) {
     const sentAt = Date.now();
-    if (!(await sendToSubject(options, w, writerBrief(brief, w), subjectSendKey(options, context, `${node.id}:${w.shortId}`), true))) {
+    if (!(await sendToSubject(options, context, w, writerBrief(brief, w), subjectSendKey(options, context, `${node.id}:${w.shortId}`), true))) {
       await callOff(waits, `the brief to ${w.shortId} could not be sent`);
       return dead(`Could not send ${node.label} to session ${w.shortId}.`);
     }
@@ -619,7 +622,10 @@ async function briefWriters(node: WorkflowNode, graph: WorkflowGraph, context: R
     recordNodeOutput(context, node.id, said);
     context[`${node.id}.briefed`] = writers.map((w) => w.shortId).join(" ");
   } catch (err) {
-    return dead(`Could not freeze the checkout's change again: ${refreezeWords(err, graph, options)}`);
+    // The stage's words stay out of a refreeze's own failure: it is about the worktree, and a restart it names ends it.
+    context["last_error"] = `Could not freeze the checkout's change again: ${refreezeWords(err, graph, options)}`;
+    context["station_dead"] = node.id;
+    return "failure";
   }
   return "success";
 }
@@ -658,9 +664,11 @@ function subjectSendKey(options: RunOptions, context: Record<string, string>, wh
  * person's answer and on a new attempt, and a resume repeats the visit it stopped in, so a second Revise brief keyed
  * on them was dropped as a duplicate and its station waited out its timeout.
  */
-async function sendToSubject(options: RunOptions, subject: Subject, body: string, key: string, quiet: boolean): Promise<any> {
+async function sendToSubject(options: RunOptions, context: Record<string, string>, subject: Subject, body: string, key: string, quiet: boolean): Promise<any> {
   const clientId = `${key}:${crypto.randomUUID().slice(0, 8)}`;
-  const send = (q: boolean) => cliCall(options, "/cli/messages/send", { to: subject.conversationId, ...(options.runSession ? { from: options.runSession } : {}), body, wake: true, client_id: clientId, ...(q ? { quiet: true } : {}) });
+  // From the run's own session; a run with none names itself as the server's word that it went live does (runSender.ts).
+  const from = options.runSession ? { from: options.runSession } : context["flow_label"] ? { name: runSenderName(context["flow_label"], options.taskId) } : {};
+  const send = (q: boolean) => cliCall(options, "/cli/messages/send", { to: subject.conversationId, ...from, body, wake: true, client_id: clientId, ...(q ? { quiet: true } : {}) });
   return (quiet ? await send(true) : null) ?? await send(false);
 }
 
@@ -676,7 +684,7 @@ async function tellSubject(options: RunOptions, context: Record<string, string>,
     console.log(`${c.dim}  ${subject.shortId} is parked or stopped: not woken to hear this${c.reset}`);
     return;
   }
-  await sendToSubject(options, subject, body, subjectSendKey(options, context, opts.key), !!opts.quiet);
+  await sendToSubject(options, context, subject, body, subjectSendKey(options, context, opts.key), !!opts.quiet);
 }
 
 /**
@@ -1515,7 +1523,7 @@ export function gatePayload(node: WorkflowNode, graph: WorkflowGraph, context: R
 
 /**
  * A card a run that merges a change asks names the repository it merges into, first: its session may sit in another
- * repository, and a person reads the card cold (sd-5046 asked about a union-mobile change from a codecast session). A
+ * repository, and a person reads the card cold (a card about another repository's change read as this one's). A
  * question that already names the repository stands.
  */
 function inRepo(question: string, context: Record<string, string>): string {
@@ -1668,6 +1676,8 @@ export { answersGate, buildNodePrompt, expandAgentPrompt, expandPromptVars, PRES
 // ─── Main runner ──────────────────────────────────────────
 
 export interface RunOptions {
+  /** The flow's slug as the run's row has it, which a restart the run names runs it by (refreezeWords). */
+  flowSlug?: string;
   autoApprove?: boolean;
   dryRun?: boolean;
   goalOverride?: string;
@@ -2273,6 +2283,8 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
   initialContext["project_path"] = cwd;
   Object.assign(initialContext, facts);
   initialContext["default_branch"] = detectDefaultBranch(cwd);
+  // What the run's messages are signed with when it has no session of its own (sendToSubject).
+  initialContext["flow_label"] = graph.label || graph.name;
   // The repository the run merges into, which its cards name (gatePayload).
   initialContext["repo_name"] = repoNameOf(cwd);
   // Where a reviewer's diff starts ($diff_base...$branch): the default branch as the remote has it (a local one can

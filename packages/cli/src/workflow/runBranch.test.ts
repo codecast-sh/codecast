@@ -114,30 +114,24 @@ describe("another run's worktree holding the branch (ct-98893)", () => {
     expect(fs.readFileSync(path.join(treeOf(OTHER), "scratch-debug.log"), "utf8")).toBe("junk\n");
   });
 
-  // ct-102477: the refusal said only "a process still works in it", and the ended run's own leftovers dead-ended a rerun.
-  test("a process in an ended run's worktree is named; one the run left behind is stopped and the tree released", async () => {
+  // ct-102477: the refusal said only "a process still works in it". It names each process and stops none: a detached
+  // dev server or daemon there looks the same as one the run left behind.
+  test("a process in an ended run's worktree refuses, named by pid, command and when it started, and nothing is stopped", async () => {
     await runTreeOn(OTHER);
     const runs = path.join(lineRunDir(repo, OTHER), "runs");
     fs.mkdirSync(runs, { recursive: true });
     fs.writeFileSync(path.join(runs, "r1.json"), "{}");
     const ended = fs.statSync(path.join(runs, "r1.json")).mtimeMs;
-    // A session's shell there, started after the run ended: refused, named, nothing stopped.
-    const shell = { pid: 4242, command: "/bin/zsh", orphan: false, startedAt: ended + 1000 };
-    await expect(claimRunBranch(repo, "change-ct-3", BRANCH, { task: "ct-3", rewrites: false, live: live(), now: later(), processes: async () => [shell] }))
-      .rejects.toThrow(`${BRANCH} is checked out by worktree ${OTHER}, and a process still works in it: pid 4242 (/bin/zsh), not the ended run's. Something other than the ended run is using it: stop it (kill 4242), or release the worktree with cast ws destroy ${OTHER}, then run this again`);
-    expect(fs.existsSync(treeOf(OTHER))).toBe(true);
-    // A test server the run's Local CI left: an orphan from before the run ended, a real process, stopped on the way.
-    const orphan = spawn("/bin/sh", ["-c", "sleep 60"], { cwd: treeOf(OTHER), stdio: "ignore" });
-    const leftover = { pid: orphan.pid!, command: "sleep 60", orphan: true, startedAt: ended - 1000 };
-    const gone = new Promise((r) => orphan.on("exit", r));
+    const child = spawn("/bin/sh", ["-c", "sleep 60"], { cwd: treeOf(OTHER), stdio: "ignore" });
+    const procs = [{ pid: child.pid!, command: "sleep 60", startedAt: ended - 1000 }, { pid: 4242, command: "/bin/zsh", startedAt: ended + 1000 }];
     try {
-      const notice = await quiet(() => claimRunBranch(repo, "change-ct-3", BRANCH, { task: "ct-3", rewrites: false, live: live(), now: later(), processes: async () => (orphan.exitCode === null && orphan.signalCode === null ? [leftover] : []) }));
-      expect(notice).toBe(`Released worktree ${OTHER}, which an ended run left holding ${BRANCH} (stopped what the ended run left working in it: pid ${orphan.pid} (sleep 60))`);
-      await gone;
-      expect(orphan.signalCode).toBe("SIGTERM");
-      expect(fs.existsSync(treeOf(OTHER))).toBe(false);
+      await expect(claimRunBranch(repo, "change-ct-3", BRANCH, { task: "ct-3", rewrites: false, live: live(), now: later(), processes: async () => procs }))
+        .rejects.toThrow(`${BRANCH} is checked out by worktree ${OTHER}, and 2 processes still work in it: pid ${child.pid} (sleep 60, started before the run ended); pid 4242 (/bin/zsh, started after the run ended). Stop them if they are not needed (kill ${child.pid} 4242), or release the worktree with cast ws destroy ${OTHER}, then run this again`);
+      expect(child.exitCode).toBeNull();
+      expect(child.signalCode).toBeNull();
+      expect(fs.existsSync(treeOf(OTHER))).toBe(true);
     } finally {
-      orphan.kill("SIGKILL");
+      child.kill("SIGKILL");
     }
   }, 60_000);
 
@@ -147,7 +141,7 @@ describe("another run's worktree holding the branch (ct-98893)", () => {
     try {
       await new Promise((r) => setTimeout(r, 300));
       const got = await treeProcesses(repo);
-      expect(got?.find((p) => p.pid === child.pid)).toMatchObject({ command: "/bin/sleep 30", orphan: false });
+      expect(got?.find((p) => p.pid === child.pid)).toMatchObject({ command: "/bin/sleep 30" });
       expect(got?.find((p) => p.pid === child.pid)!.startedAt).toBeGreaterThan(Date.now() - 120_000);
     } finally {
       child.kill("SIGKILL");

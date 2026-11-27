@@ -22663,6 +22663,8 @@ workflow
         return (top.status === 0 ? top.stdout.trim() : dir).split("/").pop() || "";
       };
       const slug = choice.kind === "repo" ? repoLineSlug(repoKey()) : graph.name.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+      // The run's own words name it by this slug when they say how to run it again (runner.ts refreezeWords).
+      runOpts.flowSlug = slug;
       // the-line.md L8 node fidelity: the one serializer carries definition,
       // reviewer, timeout, temperature, doc and category per node.
       const { graphToPushPayload, runRegistrationIsFatal } = await import("./workflow/runner.js");
@@ -22840,6 +22842,7 @@ workflow
       planId: run.plan_short_id,
       spawnerSession: run.spawner_conversation_id || undefined,
       runSession: run.primary_conversation_id || undefined,
+      flowSlug: wf?.slug || undefined,
       ...(resume ? { resume: run } : {}),
       // A run re-pinned onto newer flow versions starts its next station in a fresh runner on them (runner.ts pinnedElsewhere).
       loadedFlowVersions: flowVersionsKey(run.flow_versions),

@@ -105,6 +105,10 @@ test("a stop whose runner words name its restart prints that restart, the one th
   expect(told).toBe(`The Ship run on ct-9 stopped at Fix Local CI: ${fail_reason}`);
   expect(told).toContain("Something reset or rebased the run's worktree to d87da407ea");
   expect(told).not.toContain("Run it again with `cast flow run change` once it is ready");
+  // Words a stage appends after the restart leave it standing; a task id and branch of any shape are read whole.
+  const appended = `Could not freeze the checkout's change again: ${worktreeMovedWords("d87da407ea0000", "61d7c6b4cb0000")}. ${worktreeMovedRestartWords(worktreeMovedRestart("our-ship", "TK-12", "fix/a+b_c@2"))} Local CI said: red`;
+  expect(restartHint({ ...run, fail_reason: appended }, null)).toBe("to ship the run's worktree as it stands now, run it again: cast flow run our-ship --task TK-12 --branch fix/a+b_c@2");
+  expect(runEndMessage({ name: "change", label: "Ship" } as any, { taskId: "ct-9", endLabel: "Fix Local CI", failed: true, failReason: appended })).not.toContain("once it is ready");
   // The same words quoted after another stop's own (a finding that pastes them) name nothing.
   expect(restartHint({ ...run, fail_reason: `Stopped: the reviewer said: ${fail_reason}` }, null)).toBe("once the change is fixed, run it again: cast flow run change --task ct-9");
 });

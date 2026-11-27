@@ -78,15 +78,16 @@ describe("the session is the run's subject", () => {
     const { root } = world("bad\n");
     const tree = path.join(root, ".codecast", "worktrees", "change-ct-9");
     const s = server(() => { git(tree, "reset", "-q", "--hard", "main"); fs.writeFileSync(path.join(tree, "a.txt"), "good\n"); git(tree, "commit", "-qam", "trimmed"); });
-    const { outcome } = await start(root);
+    // The restart runs the flow by the slug its run was started with, whatever the graph is called.
+    const { outcome } = await start(root, undefined, { run: { flowSlug: "our-ship" } });
     expect(outcome).toBe("failed");
     const end = s.sent().at(-1)!.body;
-    expect(end).toMatch(/stopped at Fix check: Could not freeze session \S+'s change again: Something reset or rebased the run's worktree to [0-9a-f]{10}, off the change as last frozen \([0-9a-f]{10}\), so the run left it as it is\. To ship that worktree's branch as it stands now, run it again on this task: `cast flow run \S+ --task ct-9 --branch codecast\/change-ct-9`\.$/);
+    expect(end).toMatch(/stopped at Fix check: Could not freeze session \S+'s change again: Something reset or rebased the run's worktree to [0-9a-f]{10}, off the change as last frozen \([0-9a-f]{10}\), so the run left it as it is\. To ship that worktree's branch as it stands now, run it again on this task: `cast flow run our-ship --task ct-9 --branch codecast\/change-ct-9`\.$/);
     expect(end).not.toContain("once it is ready");
     // The run's reason is what `cast workflow show` and the run page read: they name the same restart.
     const { ownRestartOf } = await import("@codecast/shared/contracts/runRestart");
     const failed = s.calls.find((c) => c.route === "/cli/workflow-runs/progress" && c.body.run_status === "failed")!.body;
-    expect(ownRestartOf(failed.fail_reason)).toMatch(/^cast flow run \S+ --task ct-9 --branch codecast\/change-ct-9$/);
+    expect(ownRestartOf(failed.fail_reason)).toBe("cast flow run our-ship --task ct-9 --branch codecast/change-ct-9");
   }, 60_000);
 
   test("a session that pins dormant naming the run as its wake has answered: the run goes on (ct-85419)", async () => {

@@ -90,6 +90,8 @@ export function writersNamed(
   change: { paths: string[]; writers?: Record<string, { conversation: string; session: string }> },
   text: string,
   roots: string[] = [],
+  /** Read only the lines that say something failed, and those beside them: a finding with none names nobody. */
+  opts: { failingOnly?: boolean } = {},
 ): { writers: Writer[]; unclaimed: string[] } {
   const base = (p: string) => p.slice(p.lastIndexOf("/") + 1);
   const sharing = new Map<string, number>();
@@ -107,7 +109,7 @@ export function writersNamed(
   const lines = findingLines(text, roots);
   const namedIn = (subset: string[]) => change.paths.filter((p) => subset.some((l) => tests.get(p)!.some((t) => t.test(l))));
   const strong = namedIn(lines.filter((l) => l.failing).map((l) => l.line));
-  const named = strong.length ? strong : namedIn(lines.map((l) => l.line));
+  const named = strong.length || opts.failingOnly ? strong : namedIn(lines.map((l) => l.line));
   const byWriter = new Map<string, Writer>();
   const unclaimed: string[] = [];
   for (const p of named) {

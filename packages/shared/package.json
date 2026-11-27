@@ -108,6 +108,7 @@
     "./contracts/flowPool": "./contracts/flowPool.ts",
     "./contracts/flowStagePlan": "./contracts/flowStagePlan.ts",
     "./contracts/runRestart": "./contracts/runRestart.ts",
+    "./contracts/runSender": "./contracts/runSender.ts",
     "./contracts/ownResults": "./contracts/ownResults.ts",
     "./contracts/repoFlows": "./contracts/repoFlows.ts",
     "./contracts/flowEdit": "./contracts/flowEdit.ts",

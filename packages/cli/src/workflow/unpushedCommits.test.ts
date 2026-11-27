@@ -67,6 +67,25 @@ describe("the checkout's unpushed commits", () => {
     expect(unpushedBody(change.unpushed)).toMatch(/^This change also carries 1 commit the checkout it was made in had not pushed\. They ship with it:\n- `[0-9a-f]{9}` Code editor \(session jx7d599, 2 files\)$/);
   });
 
+  // A commit squash-merged upstream while still unpushed here by sha: the cut's replay drops it, so the dry run does too.
+  test("one upstream already holds is named by neither the dry run nor the change", async () => {
+    const other = path.join(dir, "other");
+    run(dir, "clone", "-q", path.join(dir, "origin.git"), "other");
+    for (const [f, t] of [["editor/a.ts", "export const a = 1;\n"], ["editor/b.ts", "export const b = 1;\n"]]) {
+      fs.mkdirSync(path.dirname(path.join(other, f)), { recursive: true });
+      fs.writeFileSync(path.join(other, f), t);
+    }
+    run(other, "add", "-A");
+    run(other, "commit", "-q", "-m", "Code editor (#12)");
+    run(other, "push", "-q", "origin", "HEAD:main");
+    run(root, "fetch", "-q", "origin");
+    expect((await unpushedCommits(root, "HEAD", "origin/main")).map((c) => c.subject)).toEqual(["Code editor"]);
+    const preview = await previewSessionChange(root, SESSION, null, { fetch: false });
+    expect(preview.unpushed).toEqual([]);
+    const change = await freezeSessionChange(root, SESSION, { branch: "codecast/change-ct-3", worktree: "change-ct-3", fetched: true });
+    expect(change.unpushed).toBeUndefined();
+  });
+
   test("a checkout with nothing unpushed names none", async () => {
     run(root, "push", "-q", "origin", "HEAD:main");
     run(root, "fetch", "-q", "origin");
@@ -79,18 +98,20 @@ describe("the checkout's unpushed commits", () => {
 
 describe("a brief's failures in carried files", () => {
   const change = { paths: ["src/fix.test.ts"], unpushed: [{ sha: "4cf50f18b0000000", subject: "Code editor", session: "jx7d599", files: ["editor/a.ts", "editor/b.ts", "src/fix.test.ts"] }] };
+  const tail = "If this change caused the failure, fix it; otherwise say so in your reply.";
 
-  test("only there: says they are not this session's edits and names the commit and session", () => {
+  test("only there: names the commit and session, and leaves the session to fix it if its change caused it", () => {
     const note = carriedFailureNote(change, "test-cli fail\n  editor/a.ts:12:3 error: expected 1, received 2");
-    expect(note).toBe("The failing files named here are not this session's edits: they are in commits the change carries from the checkout, editor/a.ts (commit 4cf50f18b, session jx7d599). Those are that session's to fix; say so in your reply rather than change them.");
+    expect(note).toBe(`The failing files named here are only in commits the change carries from the checkout, not in this session's edits: editor/a.ts (commit 4cf50f18b by session jx7d599). ${tail}`);
   });
 
   test("beside the change's own: names only the carried ones", () => {
     const note = carriedFailureNote(change, "error in editor/b.ts\nerror in src/fix.test.ts");
-    expect(note).toBe("Some failing files are not this session's edits but in commits the change carries from the checkout: editor/b.ts (commit 4cf50f18b, session jx7d599).");
+    expect(note).toBe(`Some of the failing files are only in commits the change carries from the checkout, not in this session's edits: editor/b.ts (commit 4cf50f18b by session jx7d599). ${tail}`);
   });
 
-  test("none there, or nothing carried: says nothing", () => {
+  test("a finding whose lines say nothing failed attributes nothing away, nor does one with nothing carried", () => {
+    expect(carriedFailureNote(change, "ran editor/a.ts\nall done")).toBe("");
     expect(carriedFailureNote(change, "error in src/fix.test.ts")).toBe("");
     expect(carriedFailureNote({ paths: ["src/fix.test.ts"] }, "error in editor/a.ts")).toBe("");
   });

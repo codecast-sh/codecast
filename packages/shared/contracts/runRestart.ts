@@ -16,10 +16,11 @@ export const worktreeMovedRestart = (flow: string, task: string, branch: string)
 export const worktreeMovedRestartWords = (command: string) => `To ship that worktree's branch as it stands now, run it again on this task: \`${command}\`.`;
 
 // Only a reason that opens with the runner's own words for this stop names it: outside text quoted into another
-// stop's reason (a reviewer's finding, a script's output) never does.
-const OWN = /^Could not freeze (?:session [\w-]+'s|the checkout's) change again: Something reset or rebased the run's worktree to [0-9a-f]+, off the change as last frozen \([0-9a-f]+\), so the run left it as it is\. To ship that worktree's branch as it stands now, run it again on this task: `(cast flow run [\w.-]+ --task ct-\d+ --branch [\w./-]+)`\.$/;
+// stop's reason (a reviewer's finding, a script's output) never does, and nothing before the restart is outside text
+// (two shas). Words a stage appends after it leave it standing.
+const OWN = /^Could not freeze (?:session [\w-]+'s|the checkout's) change again: Something reset or rebased the run's worktree to [0-9a-f]+, off the change as last frozen \([0-9a-f]+\), so the run left it as it is\. To ship that worktree's branch as it stands now, run it again on this task: `(cast flow run [^\s`]+ --task [^\s`]+ --branch [^\s`]+)`\./;
 
 /** The restart a failed run's own reason names (the command), or null for any other reason. */
 export function ownRestartOf(failReason: string | null | undefined): string | null {
-  return OWN.exec((failReason ?? "").trim())?.[1] ?? null;
+  return OWN.exec((failReason ?? "").trimStart())?.[1] ?? null;
 }

@@ -34,7 +34,7 @@ import { BRIEF_TREE, branchChangePaths, heldDir, type FrozenChange } from "./flo
 import { readRebaseChain } from "./rebaseRecord.js";
 import { originSupersedes, originTip } from "./originBranch.js";
 import { ownVersion, sessionTranscripts, type Writer } from "./ownLines.js";
-import { unpushedCommits } from "./unpushedCommits.js";
+import { shippingUnpushed, unpushedCommits } from "./unpushedCommits.js";
 import { worktreeMovedWords } from "@codecast/shared/contracts/runRestart";
 import type { RunHands } from "../lineTrialBranch.js";
 export { frozenChangeContext, writeFrozenChange, type FrozenChange } from "./flowChangeFile.js";
@@ -192,7 +192,7 @@ export async function previewSessionChange(root: string, session: string, only?:
   const paths = kept.filter((p) => !unchanged.has(p));
   const cut = cuts.size ? { ...frozen, changes: frozen.changes.map((c) => (cuts.has(c.path) ? { ...c, blob: cuts.get(c.path)! } : c)) } : frozen;
   const landed = await landedOn(root, cut, upstream, paths);
-  const unpushed = await unpushedCommits(root, frozen.base, upstream);
+  const unpushed = await shippingUnpushed(root, frozen.base, upstream);
   return { frozen: cut, upstream, session: idOf(mine), conversation: mine.conversationId ?? null, agentSession: mine.sessionId, paths, shared, held, landed, unmatched, unpushed };
 }
 
@@ -271,7 +271,7 @@ export async function previewCheckoutChange(root: string, opts: { roster?: Roste
     ...plan.groups.filter((g) => g.ship).flatMap((g) => g.paths).flatMap((p) => { const v = verdict(p); return typeof v === "string" ? [{ path: p, why: v }] : []; }),
   ];
   const landed = await landedOn(root, fa.frozen, upstream, groups.flatMap((g) => g.paths));
-  return { frozen: fa.frozen, upstream, groups, held, landed, unpushed: await unpushedCommits(root, fa.frozen.base, upstream) };
+  return { frozen: fa.frozen, upstream, groups, held, landed, unpushed: await shippingUnpushed(root, fa.frozen.base, upstream) };
 }
 
 /**
