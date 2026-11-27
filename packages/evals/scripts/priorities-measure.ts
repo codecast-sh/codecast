@@ -262,6 +262,60 @@ export function heldOut(golden: Golden, every: number): Set<string> {
 /** Characters a typed word takes, space included, for a words:N cadence. */
 const CHARS_PER_WORD = 6;
 
+/** A session's reads kept by a words:N cadence: the first, then each once N more words were typed since the last kept. All with no N. */
+export function keptReads(asks: EvalAsk[], wordsPer: number | null): EvalAsk[] {
+  if (!wordsPer) return asks;
+  let since = Infinity;
+  return asks.filter((a) => {
+    since += a.chars ?? 0;
+    if (since < wordsPer * CHARS_PER_WORD) return false;
+    since = 0;
+    return true;
+  });
+}
+
+export type ReplayRead = { session: string; title: string; choice: ClassifierChoice | null; asks: Array<{ trigger: string; choice: ClassifierChoice | null; reason: string }>; inherited_from?: string };
+
+/**
+ * A re-reading cadence over a window's sessions, in time order across them as
+ * live would see it: each kept read files the session where `read` says (the
+ * latest read stands, so a session moves, or leaves on a "new"), and sees the
+ * placements made before it; a session with no reads takes its parent's
+ * placement at its first activity. `priorities` holds the placements as they
+ * end.
+ */
+export async function replayReads(
+  sessions: EvalSession[],
+  priorities: PassPriority[],
+  wordsPer: number | null,
+  read: (priorities: PassPriority[], session: EvalAsk['session']) => Promise<{ choice: ClassifierChoice | null; reason: string }>,
+): Promise<ReplayRead[]> {
+  const placementOf = (id: string) => {
+    for (const p of priorities) for (const s of p.sessions) if (s.id === id) return { priority: p.short_id, step: s.step_key };
+    return null;
+  };
+  const events = sessions.flatMap((s) => (s.asks.length ? keptReads(s.asks, wordsPer).map((a) => ({ at: a.at, s, a })) : [{ at: s.last_active, s, a: null as EvalAsk | null }]));
+  const rows = new Map<string, ReplayRead>();
+  for (const { s, a } of events.sort((x, y) => x.at - y.at)) {
+    let row = rows.get(s.id);
+    if (!a) {
+      const inherited = s.parent ? placementOf(s.parent) : null;
+      if (!inherited) continue;
+      row = { session: s.id, title: s.title, choice: inherited, asks: [], inherited_from: s.parent! };
+    } else {
+      const reply = await read(priorities, a.session);
+      row ??= { session: s.id, title: s.title, choice: null, asks: [] };
+      row.asks.push({ trigger: a.trigger, ...reply });
+      row.choice = reply.choice;
+    }
+    rows.set(s.id, row);
+    for (const p of priorities) p.sessions = p.sessions.filter((x) => x.id !== s.id);
+    const choice = row.choice;
+    if (choice && choice !== 'new') priorities.find((x) => x.short_id === choice.priority)?.sessions.unshift({ id: s.id, title: s.title, step_key: choice.step, last_active: s.last_active });
+  }
+  return [...rows.values()];
+}
+
 /**
  * How each labeled session's reads went, in order: whether its first read
  * filed it right (what shows at once), and the share of its reads that did
@@ -443,7 +497,7 @@ function reportClassifier(golden: Golden, run: PassRun, out: string, rescoredFro
     `as the pass scores it ${fmt(s.metrics.as_pass)} placement and standing; the pass's seeded run: 0.86 (compare at --holdout 0)`,
     `asks            ${placements.filter((p) => p.asks.length).length} sessions asked (${placements.filter((p) => p.asks.length > 1).length} again at their first pin) · ${placements.filter((p) => p.inherited_from).length} inherited from their parent · ${placements.filter((p) => p.choice && p.choice !== 'new').length} placed, ${placements.filter((p) => p.choice === 'new').length} new, ${placements.filter((p) => !p.choice).length} unreadable`,
     `first read      ${fmt(reads.first)} labeled sessions filed right at their first read (cadence ${args.cadence ?? 'first'})`,
-    `over its life   ${reads.life == null ? '  -  ' : reads.life.toFixed(2)}  mean share of a session's reads that filed it right (${reads.reads} reads over ${reads.sessions} sessions)`,
+    `over its life   ${reads.life == null ? '  -  ' : reads.life.toFixed(2)}  mean share of a session's reads that filed it right (${reads.reads} reads over ${reads.sessions} sessions)${args.cadence && args.cadence !== 'first' ? '; every replayed read sees the first generated title' : ''}`,
     `cost            classifier $${run.passUsd.toFixed(3)}`,
     ...s.results.filter((r) => !r.correct && r.kind !== 'standing').map((r) => `  wrong ${r.kind.padEnd(9)} ${r.session} "${r.title}" · golden ${r.label} "${titleOf.get(r.label)}" · placed ${r.produced ? `${r.produced} "${producedTitle.get(r.produced)}"` : 'nowhere'}`),
     `verdict         ${s.pass ? 'PASS' : 'FAIL'} (combined)`,
@@ -565,12 +619,14 @@ function readClassifierFacts(user_id: string, workspace: string, window_start: n
         workspace,
         sessions: wanted.slice(i, i + per),
         tasks: facts.tasks.length ? [] : taskIds,
-        ...(everyMessage ? { every_message: true } : {}),
+        ...(everyMessage ? { every_message: true, until: window_end } : {}),
       });
       if (!facts.tasks.length) facts.tasks = part.tasks;
       chunk.sessions.push(...part.sessions);
     }
     facts.sessions.push(...chunk.sessions);
+    const cut = chunk.sessions.filter((x) => x.truncated).length;
+    if (cut) console.error(`${workspace}: ${cut} session(s) had more typed messages in the window than one read scans; read over their first part`);
     const asked = new Set(chunk.sessions.filter((x) => x.asks.length).map((x) => x.id));
     facts.sessions_read.push(...read.input.sessions.map((s) => ({ id: read.conversations[s.id] ?? s.id, title: s.title, kind: s.kind, asked: asked.has(read.conversations[s.id] ?? s.id) })));
     if (!read.more || read.read_to <= cursor) return facts;
@@ -635,40 +691,8 @@ async function runClassifierLocal(golden: Golden, goldenPath: string, arg: (name
       return null;
     };
     if (cadence !== 'first') {
-      const unfile = (id: string) => { for (const p of priorities) p.sessions = p.sessions.filter((x) => x.id !== id); };
-      // Each session's reads, kept by the cadence: every message, or the first and then each once N more words came.
-      const kept = (asks: EvalAsk[]) => {
-        if (!wordsPer) return asks;
-        let since = Infinity;
-        return asks.filter((a) => {
-          since += a.chars ?? 0;
-          if (since < Number(wordsPer) * CHARS_PER_WORD) return false;
-          since = 0;
-          return true;
-        });
-      };
-      type Event = { at: number; s: (typeof w.facts.sessions)[number]; a: EvalAsk | null };
-      const events: Event[] = w.facts.sessions.flatMap((s) => (s.asks.length ? kept(s.asks).map((a) => ({ at: a.at, s, a })) : [{ at: s.last_active, s, a: null }]));
-      const bySession = new Map<string, (typeof placements)[number]>();
-      // In time order across sessions, as live would see them: each read sees the placements made before it.
-      for (const { s, a } of events.sort((x, y) => x.at - y.at)) {
-        let row = bySession.get(s.id);
-        if (!a) {
-          const inherited = s.parent ? placementOf(s.parent) : null;
-          if (!inherited) continue;
-          row = { session: s.id, title: s.title, choice: inherited, asks: [], inherited_from: s.parent! };
-        } else {
-          const reply = await ask({ person: w.facts.person, priorities: classifierPriorities(priorities, tasks), session: a.session });
-          row ??= { session: s.id, title: s.title, choice: null, asks: [] };
-          row.asks.push({ trigger: a.trigger, ...reply });
-          row.choice = reply.choice;
-        }
-        bySession.set(s.id, row);
-        unfile(s.id);
-        const choice = row.choice;
-        if (choice && choice !== 'new') priorities.find((x) => x.short_id === choice.priority)?.sessions.unshift({ id: s.id, title: s.title, step_key: choice.step, last_active: s.last_active });
-      }
-      placements.push(...bySession.values());
+      placements.push(...(await replayReads(w.facts.sessions, priorities, wordsPer ? Number(wordsPer) : null, (held, session) =>
+        ask({ person: w.facts.person, priorities: classifierPriorities(held, tasks), session }))));
     } else for (const s of w.facts.sessions) {
       const inherited = s.parent ? placementOf(s.parent) : null;
       let choice: ClassifierChoice | null = inherited;

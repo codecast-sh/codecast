@@ -6,8 +6,9 @@
 // window read, and false "done" split into real, stale-golden and a done part
 // of an open golden step.
 import { describe, expect, test } from 'bun:test';
+import type { ClassifierChoice } from '../../convex/convex/lib/priorityClassifier';
 
-import { SEED_BASE, classifierSeed, heldOut, score, scoreClassifier, scoreReads, seedState, type Golden, type Judge, type Match, type Produced, type StepPair, type TaskStatus } from './priorities-measure';
+import { SEED_BASE, classifierSeed, heldOut, keptReads, replayReads, score, scoreClassifier, scoreReads, seedState, type Golden, type Judge, type Match, type Produced, type StepPair, type TaskStatus } from './priorities-measure';
 
 const golden: Golden = {
   person: 'Ana',
@@ -215,6 +216,39 @@ describe('the classifier replay', () => {
     expect(s.not_read).toEqual(['s9']);
     expect(s.pass).toBe(false);
     expect(s.results.filter((r) => !r.correct).map((r) => [r.session, r.kind])).toEqual([['s2', 'placement'], ['s3', 'new']]);
+  });
+
+  test('words:N keeps the first read, then each once N more words were typed since the last kept', () => {
+    const at = (n: number, chars: number) => ({ trigger: 'message' as const, at: n, chars, session: {} as any });
+    const asks = [at(1, 30), at(2, 300), at(3, 600), at(4, 6), at(5, 300)];
+    expect(keptReads(asks, null).map((a) => a.at)).toEqual([1, 2, 3, 4, 5]);
+    // 100 words is 600 characters: 2 (300) is short of it, 3 (900 since 1) passes, 4 and 5 (306 since 3) do not.
+    expect(keptReads(asks, 100).map((a) => a.at)).toEqual([1, 3]);
+  });
+
+  test('a cadence replay reads sessions in time order across them, the latest read standing, and children inherit at their first activity', async () => {
+    const seed = classifierSeed(golden, 0, new Set());
+    const read = (at: number) => ({ trigger: 'message' as const, at, chars: 10, session: { title: `at ${at}` } as any });
+    const sessions = [
+      { id: 'a', title: 'A', last_active: 1, parent: null, asks: [read(1), read(4)] },
+      { id: 'b', title: 'B', last_active: 2, parent: null, asks: [read(2)] },
+      { id: 'kid', title: 'Kid', last_active: 3, parent: 'a', asks: [] },
+    ];
+    const answers: Record<string, ClassifierChoice> = { 'at 1': { priority: `pri-${SEED_BASE + 1}`, step: null }, 'at 2': 'new', 'at 4': { priority: `pri-${SEED_BASE + 2}`, step: null } };
+    const seen: string[] = [];
+    const rows = await replayReads(sessions, seed, null, async (held, session) => {
+      // What each read sees: where the other sessions sit at that moment.
+      seen.push(`${session.title}: ${held.flatMap((p) => p.sessions.map((x) => `${x.id}@${p.short_id}`)).join(',')}`);
+      return { choice: answers[session.title], reason: '' };
+    });
+    expect(seen).toEqual([`at 1: `, `at 2: a@pri-${SEED_BASE + 1}`, `at 4: kid@pri-${SEED_BASE + 1},a@pri-${SEED_BASE + 1}`]);
+    expect(rows.map((r) => [r.session, r.choice, r.asks.length, r.inherited_from ?? null])).toEqual([
+      ['a', { priority: `pri-${SEED_BASE + 2}`, step: null }, 2, null],
+      ['b', 'new', 1, null],
+      ['kid', { priority: `pri-${SEED_BASE + 1}`, step: null }, 0, 'a'],
+    ]);
+    // A moved session leaves its old priority; one read as "new" sits nowhere.
+    expect(seed.map((p) => p.sessions.map((x) => x.id))).toEqual([['kid'], ['a'], [], []]);
   });
 
   test('reads: a session is right at its first read, and over its life by the share of its reads that filed it right', () => {
