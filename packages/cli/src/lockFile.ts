@@ -353,14 +353,18 @@ export function listFileSlots(dir: string): { holding: SlotEntry[]; waiting: Slo
 export async function acquireFileSlot(
   dir: string,
   slots: number,
-  opts: { waitMs?: number; onWait?: () => void; describe?: string; what?: string } = {},
+  opts: {
+    waitMs?: number; onWait?: () => void; describe?: string; what?: string;
+    /** Whether the machine can take one more now (memory, say): asked before every try, and a no waits as a full cap does. */
+    ready?: () => boolean;
+  } = {},
 ): Promise<() => void> {
   const deadline = Date.now() + (opts.waitMs ?? Number.POSITIVE_INFINITY);
   const ticket = path.join(dir, "waiting", `${process.pid}-${Math.random().toString(36).slice(2, 8)}.json`);
   const leave = () => fs.rmSync(ticket, { force: true });
   try {
     for (;;) {
-      for (let i = 0; i < slots; i++) {
+      if (opts.ready?.() !== false) for (let i = 0; i < slots; i++) {
         try {
           return await acquireFileLock(path.join(dir, `slot-${i}.lock`), { waitMs: 0, staleMs: Number.POSITIVE_INFINITY, describe: opts.describe, what: opts.what });
         } catch {
