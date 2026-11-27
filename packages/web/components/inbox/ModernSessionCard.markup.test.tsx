@@ -16,6 +16,7 @@ import { offlineConvexClient } from "../../test-helpers/offlineConvex";
 import { IdentityPrefsOverride } from "../../hooks/useIdentityPrefs";
 import { identityPrefsOf } from "../../lib/sessionIdentity";
 import { ThemeContext } from "../ThemeProvider";
+import { SESSION_STATUS, type SessionStatus } from "../../lib/sessionStatus";
 
 process.env.TZ = "UTC";
 const NOW = Date.UTC(2026, 8, 30, 18, 0);
@@ -104,7 +105,14 @@ function render(overrides: Partial<InboxSession> & Record<string, unknown>, prop
 }
 
 const attr = (html: string, name: string) => html.match(new RegExp(`${name}="([^"]*)"`))?.[1] ?? null;
-const word = (html: string) => html.match(/data-status-word="[^"]*"[^>]*>([^<]*)</)?.[1] ?? null;
+// The state as the card says it: the word when line 2 draws one (who holds a
+// wait), else the word its mark stands for (line 2 drops a word the mark says).
+const word = (html: string) => {
+  const drawn = html.match(/data-status-word="[^"]*"[^>]*>([^<]*)</)?.[1];
+  if (drawn) return drawn;
+  const status = attr(html, "data-mc-status") as SessionStatus | null;
+  return status ? SESSION_STATUS[status].word : null;
+};
 
 describe("the Modern session card", () => {
   test("is the Modern view, keeping the attributes other code selects on", () => {

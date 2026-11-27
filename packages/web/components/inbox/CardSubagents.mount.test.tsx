@@ -100,10 +100,11 @@ test("Folded: no line when the filter keeps nothing", () => {
   expect(document.getElementById("root")!.innerHTML).toBe("");
 });
 
-test("Compact rows: one row each, most urgent first, mark, title and state word", () => {
+test("Compact rows: one row each, most urgent first, mark and title, the state's word in its name", () => {
   render(React.createElement(parts.CardSubagentRows, { rows: rowsOf(kids, NOW, "active_done"), activeSessionId: null, onOpen }));
   const rows = [...document.querySelectorAll<HTMLElement>("[data-sv-subagent-row]")];
-  expect(rows.map((r) => r.textContent)).toEqual(["Deploy workerNeeds you", "Read docsWorking", "Search authWorking", "Map routesDone"]);
+  expect(rows.map((r) => r.textContent)).toEqual(["Deploy worker", "Read docs", "Search auth", "Map routes"]);
+  expect(rows.map((r) => r.getAttribute("aria-label"))).toEqual(["Deploy worker, Needs you", "Read docs, Working", "Search auth, Working", "Map routes, Done"]);
   expect(rows.map((r) => r.querySelector("[data-status-mark]")?.getAttribute("data-status-mark"))).toEqual(["needs_you", "working", "working", "done"]);
 });
 
