@@ -1,9 +1,11 @@
+import { useState } from "react";
 import { X } from "lucide-react";
 import { useConvex } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../../store/inboxStore";
 import { useDocPresence } from "../../hooks/useDocPresence";
 import { MessageInput } from "../MessageInput";
+import { dictatingIn } from "../../lib/dictation/useDictation";
 import "../chat/chat.css";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { useConversationSpeaker } from "../../hooks/useLiveIdentityRow";
@@ -76,13 +78,18 @@ export function CommentComposer({
     forceBroadcast: draft.trim().length > 0,
   });
   const typing = present.filter((p) => p.draft_text && p.draft_text.trim());
+  // While this box records, Esc cancels the recording, so the foot says so.
+  const [dictating, setDictating] = useState(false);
 
   if (!authed) return <div className="cc-cmt-signedout">Sign in to comment.</div>;
 
   // Esc backs out (capture phase, before MessageInput sees it): cancel a reply
   // first, otherwise close. Enter posts the comment as usual.
   const onKeyDownCapture = (e: React.KeyboardEvent) => {
-    if (e.key !== "Escape") return;
+    // A recording in this box takes Esc first: it cancels the dictation. An
+    // Esc a menu already took (the mic's language menu, portalled but inside
+    // this tree) closed that menu and nothing more.
+    if (e.key !== "Escape" || e.defaultPrevented || dictatingIn(e.target)) return;
     if (replyTo && onCancelReply) { e.preventDefault(); e.stopPropagation(); onCancelReply(); }
     else if (onClose) { e.preventDefault(); e.stopPropagation(); onClose(); }
   };
@@ -124,6 +131,7 @@ export function CommentComposer({
           autoFocusInput={autoFocus}
           mentionTeamId={mentionTeamId}
           chatMentionMode={chatMentionMode}
+          onDictatingChange={setDictating}
           onGateSend={async (text, images) => {
             const content = await withImages(text, images, (ids) => (convex ? convex.query(api.images.getImageUrls, { storageIds: ids }) : Promise.resolve({})));
             if (!content.trim()) return;
@@ -135,9 +143,16 @@ export function CommentComposer({
 
       {onClose && (
         <div className="cc-cmt-composer-foot">
-          <button type="button" className="cc-comment-btn" onMouseDown={(e) => e.preventDefault()} onClick={onClose}>
-            Cancel <KeyCap size="xs">Esc</KeyCap>
-          </button>
+          {dictating ? (
+            // Not a second Cancel beside the box's ✕: what Esc does now.
+            <span className="cc-comment-btn" data-dictation-esc-hint>
+              <KeyCap size="xs">Esc</KeyCap> cancels dictation
+            </span>
+          ) : (
+            <button type="button" className="cc-comment-btn" onMouseDown={(e) => e.preventDefault()} onClick={onClose}>
+              Cancel <KeyCap size="xs">Esc</KeyCap>
+            </button>
+          )}
         </div>
       )}
     </div>

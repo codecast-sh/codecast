@@ -4,7 +4,7 @@ import {
   useMemo,
   useRef,
   useEffect } from "react";
-import { StyleSheet, ScrollView, TouchableOpacity, View as RNView, type TextInput as RNTextInput } from 'react-native';
+import { StyleSheet, ScrollView, TouchableOpacity, View as RNView, ActivityIndicator, type TextInput as RNTextInput } from 'react-native';
 import { Text as RNText, TextInput } from '@/components/Themed';
 import { useLocalSearchParams, useRouter } from "expo-router";
 import FontAwesome from "@expo/vector-icons/FontAwesome";
@@ -24,6 +24,8 @@ import { CollapsibleBody } from "@/components/CollapsibleBody";
 import { formatRelativeTime } from "@/components/SessionItem";
 import { taskGraphView, type BlockerRow, type PrKey } from "@/lib/taskGraphRows";
 import { showActionSheet } from "@/lib/popups";
+import { useDictation } from "@/lib/dictation";
+import { DICTATE_SEND_SLOP, DictateControls } from "@/components/DictateControls";
 import {
   STATUS_CONFIG,
   STATUS_ORDER,
@@ -63,6 +65,8 @@ export default function TaskDetailScreen() {
   const [titleDraft, setTitleDraft] = useState("");
   const titleInputRef = useRef<RNTextInput>(null);
   const [commentText, setCommentText] = useState("");
+  const commentInputRef = useRef<RNTextInput>(null);
+  const dictation = useDictation({ value: commentText, onChangeText: setCommentText, inputRef: commentInputRef });
   const [subtaskTitle, setSubtaskTitle] = useState("");
   const [addingSubtask, setAddingSubtask] = useState(false);
   const [showFiles, setShowFiles] = useState(false);
@@ -161,6 +165,10 @@ export default function TaskDetailScreen() {
     addTaskComment(task.short_id, text, "note");
     setCommentText("");
   }, [task, commentText, addTaskComment]);
+  // A send mid-dictation waits for the last words, then posts what the box
+  // holds (the latest handler, whose closure has them).
+  const addCommentRef = useRef(handleAddComment);
+  addCommentRef.current = handleAddComment;
 
   // "Not found" only once both the list and the detail have answered; until
   // then a row we have never cached is genuinely cold.
@@ -400,19 +408,33 @@ export default function TaskDetailScreen() {
           )}
           <RNView style={styles.commentInputRow}>
             <TextInput
+              ref={commentInputRef}
               style={styles.commentInput}
               value={commentText}
               onChangeText={setCommentText}
-              placeholder="Add a comment..."
+              onSelectionChange={dictation.onSelectionChange}
+              placeholder={dictation.placeholder("Add a comment...")}
               placeholderTextColor={Theme.textMuted0}
               multiline
             />
+            <RNView style={styles.commentDictate}>
+              {/* Send here is a bare glyph: ✕ and ✓ are bare too. */}
+              <DictateControls dictation={dictation} look="bare" />
+            </RNView>
             <TouchableOpacity
               style={[styles.commentSend, !commentText.trim() && { opacity: 0.3 }]}
-              onPress={handleAddComment}
+              onPress={() => dictation.send(() => addCommentRef.current())}
               disabled={!commentText.trim()}
+              // Beside the dictation controls, send's target starts at its own edge.
+              hitSlop={dictation.shown ? DICTATE_SEND_SLOP : 4}
+              accessibilityRole="button"
+              accessibilityLabel="Send"
+              accessibilityState={dictation.sendWaiting ? { busy: true } : undefined}
             >
-              <FontAwesome name="arrow-up" size={14} color={Theme.accent} />
+              {/* A send pressed mid-dictation waits here for the last words. */}
+              {dictation.sendWaiting
+                ? <ActivityIndicator size="small" color={Theme.accent} />
+                : <FontAwesome name="arrow-up" size={14} color={Theme.accent} />}
             </TouchableOpacity>
           </RNView>
         </RNView>
@@ -758,8 +780,17 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     minHeight: 40,
     maxHeight: 100,
   },
+  // As tall as the box's last line, so the arrow sits level with the mic; as
+  // wide as a spinner, so a waiting send does not shift the row.
   commentSend: {
-    paddingHorizontal: 10,
-    paddingVertical: 10,
+    width: 36,
+    height: 40,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  // Beside the box's last line, like send.
+  commentDictate: {
+    height: 40,
+    justifyContent: "center",
   },
 }));

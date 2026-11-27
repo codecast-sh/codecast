@@ -373,6 +373,7 @@ import { writeAsServerShape } from "./serverShape";
 import { replaceContents } from "./simSlot";
 import { attachProjectStubDraft, createInitiativeSlice, detachProjectStubDraft, moveProjectInGoals, moveProjectInLocks, rekeyInitiativeProjectDraft, type InitiativeSliceActions } from "./initiativeSlice";
 import { createProjectUpdatesSlice, type ProjectUpdatesSliceActions } from "./projectUpdatesSlice";
+import { createVoiceSettingsSlice, type MyVoiceprint, type VoiceSettingsSliceActions } from "./voiceSettingsSlice";
 import { createLineWorkflowSlice, type LineWorkflowSliceActions } from "./lineWorkflowSlice";
 import { createLineSlice, type LineSliceActions } from "./lineSlice";
 import { createPrioritiesSlice, type PrioritiesSliceActions } from "./prioritiesSlice";
@@ -2575,13 +2576,6 @@ type Draft = InboxStoreState;
 
 /** A line of a call as transcripts.webGetCall sends it. */
 type CallDetailSegment = { seq: number; speaker_id: string; speaker_name: string; text: string; t0: number; t1: number; at?: number };
-/** voiceprints.myVoiceprint, as the store holds it. */
-type MyVoiceprint = { count: number; seconds: number; last_added_at: number | null };
-function clearVoiceSamples(mine: MyVoiceprint) {
-  mine.count = 0;
-  mine.seconds = 0;
-  mine.last_added_at = null;
-}
 /** The callDetails row a speaker correction writes, if this device holds it. */
 function callDetailRow(draft: Draft, transcriptId: string): { speakers?: WireCallSpeaker[]; segments?: CallDetailSegment[] } | undefined {
   return ((draft as any).callDetails as Record<string, { speakers?: WireCallSpeaker[]; segments?: CallDetailSegment[] }> | undefined)?.[transcriptId];
@@ -6595,7 +6589,7 @@ function dropGuestKnock(draft: any, guestId: string): void {
 // RegisteredCollectionSlots: every collection in CLIENT_SYNC_REGISTRY gets a
 // typed `Record<string, any>` slot here by registration alone; the explicit
 // fields below narrow the ones with a real row type.
-interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSliceActions, ProjectUpdatesSliceActions, LineWorkflowSliceActions, LineSliceActions, PrioritiesSliceActions, TrialSliceActions, ExpectationsSliceActions, OpsSliceActions, LiveArtifactsSliceActions, MeetingBotsSliceActions, HuddleSliceActions, AgentConnectionsSliceActions, SessionOwnersSliceActions, ComposeSliceState, Omit<RegisteredCollectionSlots, keyof ChatSliceState | keyof OrgSliceState> {
+interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSliceActions, ProjectUpdatesSliceActions, VoiceSettingsSliceActions, LineWorkflowSliceActions, LineSliceActions, PrioritiesSliceActions, TrialSliceActions, ExpectationsSliceActions, OpsSliceActions, LiveArtifactsSliceActions, MeetingBotsSliceActions, HuddleSliceActions, AgentConnectionsSliceActions, SessionOwnersSliceActions, ComposeSliceState, Omit<RegisteredCollectionSlots, keyof ChatSliceState | keyof OrgSliceState> {
   sessions: Record<string, InboxSession>;
   pending: Record<string, PendingEntry>;
   currentSessionId: string | null;
@@ -8007,12 +8001,6 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   /** Move line `seq` to voice `key`, an existing one or nextSpeakerKey(speakers)
    *  for a new voice (transcripts.moveLineSpeaker). */
   moveCallLineSpeaker: (transcriptId: string, seq: number, key: string) => Promise<unknown>;
-  /** The viewer's voice recognition switch, `currentUser.voice_id_enabled`
-   *  (voiceprints.setVoiceIdEnabled). Off deletes every sample, so the
-   *  myVoiceprint counts go to zero on the press too. */
-  setVoiceIdEnabled: (enabled: boolean) => Promise<unknown>;
-  /** Delete every sample of the viewer's voice (voiceprints.deleteMyVoiceprints). */
-  deleteMyVoiceprints: () => Promise<unknown>;
   // Ephemeral media-plane state, written only by lib/calls/callManager. The
   // dock renders from THIS synchronously (local-first: joining paints
   // "connecting" before any server or SFU round-trip).
@@ -16955,16 +16943,8 @@ const inboxStoreConfig = (set: any, get: any) => ({
     }
     return { transcriptId, seq, key };
   }),
-  // Settings › Voice: the switch lives on currentUser (localFirst), the
-  // sample counts in the myVoiceprint singleton (localFirst).
-  setVoiceIdEnabled: asyncAction(function (this: Draft, enabled: boolean) {
-    if (this.currentUser) (this.currentUser as any).voice_id_enabled = enabled;
-    if (this.myVoiceprint && !enabled) clearVoiceSamples(this.myVoiceprint);
-    return { enabled };
-  }),
-  deleteMyVoiceprints: asyncAction(function (this: Draft) {
-    if (this.myVoiceprint) clearVoiceSamples(this.myVoiceprint);
-  }),
+  // Settings › Voice (voiceSettingsSlice).
+  ...createVoiceSettingsSlice(),
 
   // =====================
   // SELECTORS

@@ -33,6 +33,7 @@
 // subscribe/getSnapshot, and no audio machinery goes anywhere near React.
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { CALL_HEARTBEAT_MS, recRoomKey } from "@codecast/shared/contracts";
+import { DICTATION_RECORDING_BUSY, finishDictationEverywhere, holdsMicrophoneWhile } from "../dictation/crossWindow";
 import { useInboxStore } from "../../store/inboxStore";
 import { uploadBlobToStorage } from "../uploadBlob";
 import { mutateOnUnload } from "../keepaliveMutation";
@@ -78,6 +79,10 @@ const engine = createScribeEngine();
 let convex: ConvexHandle | null = null;
 let snapshot: RecorderStatus = IDLE;
 let phase: RecorderPhase = "idle";
+// Dictation, here or in another window, refuses to start while this holds the
+// microphone: stopping included, since the stream stays live through the
+// recognizer's graceful stop (the phone counts its `finishing` the same way).
+holdsMicrophoneWhile(() => (phase === "starting" || phase === "recording" || phase === "stopping" ? DICTATION_RECORDING_BUSY : null));
 let recTranscriptId: string | null = null;
 let startedAt = 0;
 let error: string | null = null;
@@ -186,6 +191,8 @@ export async function startRecording(): Promise<string | null> {
     setPhase("idle", "Recording is not ready yet — reload the page.");
     return null;
   }
+  // The room recording takes the microphone: a recording in a text box keeps its words and stops.
+  void finishDictationEverywhere();
   setPhase("starting");
 
   try {

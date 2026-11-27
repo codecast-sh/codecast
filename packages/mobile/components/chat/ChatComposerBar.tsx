@@ -13,11 +13,13 @@ import { MentionStrip, type MentionCandidate } from './MentionStrip';
 import { composerAttachments, type ChatAttachmentArg } from './chatUpload';
 import { useComposerField, nativeComposerText } from '@/lib/composerField';
 import { MessageComposer, ComposerTool, useComposerImages } from '@/components/session/MessageComposer';
+import { useUndoBarAnchor } from '@/hooks/useUndoBarAnchor';
 
 // The one chat composer on mobile — channel floor and thread alike. It draws
 // the session screen's composer card (MessageComposer), as web chat draws the
-// session's MessageInput, with chat's own tools in the bottom row: mention,
-// emoji, and in a thread whether the reply also goes to its channel.
+// session's MessageInput, with chat's own tools in the bottom row (mention,
+// emoji) and, in a thread, whether the reply also goes to its channel on a
+// line of its own under the card.
 //
 // It owns the draft, the attachment strip, the typing report and the edit
 // banner, and hands the parent a finished (content, attachments) pair. The
@@ -94,6 +96,9 @@ export function ChatComposerBar({
   const insets = useSafeAreaInsets();
   const keyboardUp = useKeyboardUp(!!atScreenBottom);
   const bottomPad = atScreenBottom && !keyboardUp ? Math.max(8, insets.bottom) : 8;
+  // At the screen's bottom the undo bar (dictation's notices included) sits
+  // above this bar, not over the box's first line.
+  const undoAnchor = useUndoBarAnchor(!!atScreenBottom);
 
   // ── Edit mode ─────────────────────────────────────────────────────────────
   // Entering an edit REPLACES the box (the previous draft is small on mobile
@@ -211,27 +216,31 @@ export function ChatComposerBar({
     <>
       <ComposerTool icon="at-sign" label="Mention someone" onPress={() => append('@')} />
       <ComposerTool icon="smile" label="Emoji" on={emojiOpen} onPress={() => setEmojiOpen((o) => !o)} />
-      {!!broadcastTo && (
-        <TouchableOpacity
-          style={[styles.broadcast, broadcast && styles.broadcastOn]}
-          onPress={() => { void Haptics.selectionAsync(); setBroadcast((b) => !b); }}
-          activeOpacity={0.6}
-          hitSlop={{ top: 8, bottom: 8 }}
-          accessibilityRole="checkbox"
-          accessibilityState={{ checked: broadcast }}
-          accessibilityLabel={`Also send to ${broadcastTo}`}
-        >
-          <Feather name={broadcast ? 'check-square' : 'square'} size={13} color={broadcast ? Theme.text : Theme.textMuted} />
-          <RNText style={[styles.broadcastText, broadcast && styles.broadcastTextOn]} numberOfLines={1}>
-            Also to {broadcastTo}
-          </RNText>
-        </TouchableOpacity>
-      )}
     </>
   );
 
+  // In a thread, whether the reply also goes to its channel: its own line under
+  // the card, not in the button row, where the mic and send left it "Also to…".
+  // It says where the message goes, so it stays whole, a long channel name too.
+  const broadcastEl = !editing && !!broadcastTo ? (
+    <TouchableOpacity
+      style={[styles.broadcast, broadcast && styles.broadcastOn]}
+      onPress={() => { void Haptics.selectionAsync(); setBroadcast((b) => !b); }}
+      activeOpacity={0.6}
+      hitSlop={{ top: 6, bottom: 6 }}
+      accessibilityRole="checkbox"
+      accessibilityState={{ checked: broadcast }}
+      accessibilityLabel={`Also send to ${broadcastTo}`}
+    >
+      <Feather name={broadcast ? 'check-square' : 'square'} size={13} color={broadcast ? Theme.text : Theme.textMuted} />
+      <RNText style={[styles.broadcastText, broadcast && styles.broadcastTextOn]} numberOfLines={2}>
+        Also to {broadcastTo}
+      </RNText>
+    </TouchableOpacity>
+  ) : null;
+
   return (
-    <RNView style={[styles.bar, { paddingBottom: bottomPad }]}>
+    <RNView ref={undoAnchor.ref} onLayout={undoAnchor.onLayout} collapsable={false} style={[styles.bar, { paddingBottom: bottomPad }]}>
       <MessageComposer
         field={{ ...field, onChangeText }}
         images={images}
@@ -244,6 +253,7 @@ export function ChatComposerBar({
         tools={tools}
         above={above}
       />
+      {broadcastEl}
     </RNView>
   );
 }
@@ -271,15 +281,18 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   emojiStripContent: { paddingHorizontal: 10, gap: 2 },
   emoji: { width: 40, height: 40, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   emojiText: { fontSize: 24 },
+  // Under the card, its box starting at the card's edge: 32pt, 44 with its slop.
   broadcast: {
     flexDirection: 'row',
     alignItems: 'center',
+    alignSelf: 'flex-start',
     gap: 6,
-    height: 32,
-    marginLeft: 6,
+    minHeight: 32,
+    marginTop: 4,
+    marginHorizontal: 10,
     paddingHorizontal: 10,
+    paddingVertical: 6,
     borderRadius: 16,
-    flexShrink: 1,
   },
   broadcastOn: { backgroundColor: Theme.bgHighlight },
   broadcastText: { fontSize: 13, color: Theme.textMuted, flexShrink: 1 },

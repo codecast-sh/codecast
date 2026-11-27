@@ -25,6 +25,8 @@ import { beginScreenRecording, discardScreenRecording, pickScreenRecording, reco
 import { formatCallTime } from '@codecast/shared/contracts';
 import type { useComposerField } from '@/lib/composerField';
 import { appAlert } from '@/lib/popups';
+import { useDictation } from '@/lib/dictation';
+import { DICTATE_SEND_SLOP, DictateControls, sendSlotIsStop } from '@/components/DictateControls';
 
 // A send with attachments and no text carries this as its content.
 export const IMAGE_ONLY_CONTENT = '[image]';
@@ -242,10 +244,17 @@ export function MessageComposer({
     setInputHeight(0);
     setExpanded(false);
   }, [epoch]);
-  const showStop = !canSend && !!stop;
+  // Speech into the box, through the same setter typing uses. A send pressed
+  // mid-recording waits for the last words, then sends what the box holds
+  // (the latest onSend, whose closure has them).
+  const dictation = useDictation({ value: message, onChangeText, inputRef, resetKey: epoch });
+  const onSendRef = useRef(onSend);
+  onSendRef.current = onSend;
+  const send = () => dictation.send(() => onSendRef.current());
+  const showStop = sendSlotIsStop(canSend, !!stop);
   // The suggestion owns the empty box: its text is the placeholder, so it
   // wraps and grows the box like typed words, and typing replaces it.
-  const ghost = !message && !showStop ? suggestion ?? null : null;
+  const ghost = !message && !showStop && !dictation.active ? suggestion ?? null : null;
   // The picked image open full screen, by its place in the strip.
   const [viewing, setViewing] = useState<number | null>(null);
 
@@ -349,6 +358,7 @@ export function MessageComposer({
           </TouchableOpacity>
         </RNView>
       )}
+      <DictateControls dictation={dictation} />
       {/* Never `disabled` — a disabled TouchableOpacity drops the tap, and on a
           new session the JS thread is often still catching up (create, cache
           write, keyboard) while the native field already shows text. Keep the
@@ -357,18 +367,26 @@ export function MessageComposer({
           stop: the same interrupt web's Escape sends. Typing turns it back
           into send, so a follow-up can always be queued. */}
       <NativePressable
-        style={[styles.sendButton, showStop ? styles.stopButton : !canSend && styles.sendButtonDisabled]}
-        onPress={showStop ? stop!.onPress : onSend}
+        style={[styles.sendButton, showStop ? styles.stopButton : !canSend && styles.sendButtonDisabled, dictation.sendWaiting && styles.sendButtonWaiting]}
+        onPress={showStop ? stop!.onPress : send}
         activeOpacity={0.7}
         delayPressIn={0}
-        hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+        // Beside the dictation controls, send's target starts at its own edge
+        // so a tap on ✓ or the chevron never sends.
+        hitSlop={dictation.shown ? DICTATE_SEND_SLOP : { top: 12, bottom: 12, left: 12, right: 12 }}
         pressRetentionOffset={{ top: 20, bottom: 20, left: 20, right: 20 }}
         accessibilityRole="button"
         accessibilityLabel={showStop ? stop!.label : 'Send'}
+        accessibilityState={dictation.sendWaiting ? { busy: true } : undefined}
       >
+        {/* A send pressed mid-dictation waits here for the last words. */}
         {showStop
           ? <FontAwesome name="stop" size={11} color="#fff" />
-          : <FontAwesome name={sendIcon} size={14} color="#fff" />}
+          : dictation.sendWaiting
+            // Theme.bg against the fill (blue mixed toward Theme.text): white
+            // is 2.3:1 on dark mode's pale blue, bg is over 4:1 in every palette.
+            ? <ActivityIndicator size="small" color={Theme.bg} />
+            : <FontAwesome name={sendIcon} size={14} color="#fff" />}
       </NativePressable>
     </RNView>
   );
@@ -392,9 +410,10 @@ export function MessageComposer({
           ]}
           value={message}
           onChangeText={onChangeText}
+          onSelectionChange={dictation.onSelectionChange}
           onFocus={onFocusChange ? () => onFocusChange(true) : undefined}
           onBlur={onFocusChange ? () => onFocusChange(false) : undefined}
-          placeholder={ghost?.text ?? placeholder}
+          placeholder={dictation.placeholder(ghost?.text ?? placeholder)}
           placeholderTextColor={ghost ? Theme.textMuted0 : placeholderColor ?? Theme.textMuted0}
           multiline
           maxLength={10000}
@@ -446,7 +465,8 @@ export function MessageComposer({
               style={styles.expandedInput}
               value={message}
               onChangeText={onChangeText}
-              placeholder={placeholder}
+              onSelectionChange={dictation.onSelectionChange}
+              placeholder={dictation.placeholder(placeholder)}
               placeholderTextColor={placeholderColor ?? Theme.textMuted0}
               multiline
               autoFocus
@@ -645,6 +665,11 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   },
   sendButtonDisabled: {
     backgroundColor: Theme.bgHighlight,
+  },
+  // The spinner is wider than the arrow: the button stays a 32pt circle.
+  sendButtonWaiting: {
+    paddingLeft: 6,
+    paddingRight: 6,
   },
   stopButton: {
     backgroundColor: mixColor(Theme.red, 80, Theme.text),

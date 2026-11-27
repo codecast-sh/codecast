@@ -64,6 +64,8 @@ import { formatCallTime } from "@codecast/shared/contracts";
 import { isRecordingFile, useScreenRecordingAttach } from "../hooks/useScreenRecordingAttach";
 import { useFileAttach } from "../hooks/useFileAttach";
 import { ComposerAttachButton } from "./chat/ComposerAttachButton";
+import { DictateControls } from "./dictation/DictateControls";
+import { composerChord, isReplayedKey, replayKey, useComposerDictation } from "../lib/dictation/useDictation";
 import type { ComposeEditorHandle } from "./editor/ComposeEditor";
 import { useMentionQuery, useMentionServerSearch, sessionMentionTeamId, SERVER_MENTION_TYPES, matchScore, filterMentionItems, channelMentionItems } from "../hooks/useMentionQuery";
 import { mentionContextFor } from "../lib/mentionContext";
@@ -241,6 +243,7 @@ const ForkReplyInput = memo(function ForkReplyInput({ userName, userAvatar, onFo
 /** Write the composer's text to its stored draft. An empty box with no image
  *  rows is a final (server-tombstoned) clear, so the draft dies everywhere and
  *  a server copy cannot resurrect on the next boot; with images it keeps them. */
+
 function commitDraftText(conversationId: string, text: string) {
   const store = useInboxStore.getState();
   const existing = store.getDraft(conversationId);
@@ -248,7 +251,7 @@ function commitDraftText(conversationId: string, text: string) {
   else store.setDraft(conversationId, { ...existing, draft_message: text || null });
 }
 
-export const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, onSendAndDismiss, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, isSessionStarting, isSessionReady, sessionId, agentType, agentStatus, deliveryStatus, pendingPermissionsCount, hasAskUserQuestion, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onForkTail, onSendEscape, onOpenNavigator, onPopulateInput, clearInputRef, permissionMode, permissionModePending, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onSideQuestion, onEscapeClose, onGateSend, onGoalCommand, skills, filePaths, mentionItemsRef, onMentionQuery, onSubmitWithIntent, onDidSend, branchControl, branchMapNode, threadStateNode, composerNode, sessionControl, composerFoot, bareComposer, hero, inline, chatMentionMode, mentionTeamId, composerPlaceholder, workingSinceTs, workingPhrase, escapeOwnedRef, escapeCloses, sharedDraft, maxLength, acceptFiles }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; isSessionStarting?: boolean; isSessionReady?: boolean; sessionId?: string; agentType?: string; agentStatus?: AgentStatus; deliveryStatus?: string; pendingPermissionsCount?: number; hasAskUserQuestion?: boolean; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; /** Branches the session from its latest message and returns the fork's id; the composer then sends into it. */ onForkTail?: () => Promise<string | null>; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string, opts?: { append?: boolean }) => void) | null>; /** Filled with a function that empties the composer and deletes its draft: text, images and the stored row. */ clearInputRef?: React.MutableRefObject<(() => void) | null>; permissionMode?: string; permissionModePending?: boolean; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; /** `/btw <question>`: a side answer about this session, never sent to the agent ("" for a bare `/btw`). Unset, `/btw` goes to the agent like any text. */ onSideQuestion?: (question: string) => Promise<string | null> | null; /** A panel open beside the composer (the Ask panel): an empty composer's Escape closes it instead of stopping the turn. */ onEscapeClose?: () => void; onGateSend?: (content: string, images?: Array<{ storageId?: string; previewUrl: string; mime: string; uploading: boolean }>) => void | Promise<void>; /** Codecast's own `/goal` command: true when it took the text (the composer then sends nothing). */ onGoalCommand?: (text: string) => boolean; skills?: SkillItem[]; filePaths?: string[]; mentionItemsRef?: React.MutableRefObject<MentionItem[]>; onMentionQuery?: (q: string) => void; onSubmitWithIntent?: (navigate: boolean) => void; onDidSend?: (info: { conversationId: string; content: string; clientId: string }) => void; /** Opens the branch map; present only when the session has forks. Drawn on the field's top edge. */ branchControl?: React.ReactNode; branchMapNode?: React.ReactNode; threadStateNode?: React.ReactNode; composerNode?: React.ReactNode; /** The session's agent/model control, at the right of the status line. */ sessionControl?: React.ReactNode; /** The framed surface's toolbar (attach, voice, options). Renders as a row under the field, and send moves into it. */ composerFoot?: React.ReactNode; bareComposer?: boolean; /** The new-session page's centred card (ComposerShell hero): always expanded, foot inside the box. */ hero?: boolean; /** The full session composer laid out inside another surface (a Threads card): full width, not pinned to the bottom, tighter. */ inline?: boolean; chatMentionMode?: boolean; mentionTeamId?: string; composerPlaceholder?: string; workingSinceTs?: number; workingPhrase?: string; escapeOwnedRef?: React.MutableRefObject<boolean>; /** Escape closes the surface around the composer (the compose sheet), so the status line offers no Escape hint. */ escapeCloses?: boolean; /** A session's own composer: becomes one shared draft while anyone else has this session's composer open (hooks/useSharedDraft). */ sharedDraft?: boolean; /** A session's composer: files other than images are uploaded and reach the agent as a local path (hooks/useFileAttach). */ acceptFiles?: boolean; /** The most characters the receiver takes (team chat's limit). Past it the send is held, the text stays in the box, and the count shows beside send. */ maxLength?: number }) {
+export const MessageInput = memo(function MessageInput({ conversationId, status, embedded, onSendAndAdvance, onSendAndDismiss, autoFocusInput, initialDraft, isWaitingForResponse, isThinking, isConversationLive, isSessionDisconnected, isSessionStarting, isSessionReady, sessionId, agentType, agentStatus, deliveryStatus, pendingPermissionsCount, hasAskUserQuestion, selectedMessageContent, selectedMessageUuid, onClearSelection, onForkFromMessage, onForkTail, onSendEscape, onOpenNavigator, onPopulateInput, clearInputRef, permissionMode, permissionModePending, onCycleMode, onMessageSent, onLightboxChange, onDropFiles, onWorkflowLaunch, onSideQuestion, onEscapeClose, onGateSend, onGoalCommand, skills, filePaths, mentionItemsRef, onMentionQuery, onSubmitWithIntent, onDidSend, branchControl, branchMapNode, threadStateNode, composerNode, sessionControl, composerFoot, bareComposer, hero, inline, chatMentionMode, mentionTeamId, composerPlaceholder, workingSinceTs, workingPhrase, escapeOwnedRef, escapeCloses, sharedDraft, maxLength, acceptFiles, onDictatingChange }: { conversationId: string; status?: string; embedded?: boolean; onSendAndAdvance?: () => void; onSendAndDismiss?: () => void; autoFocusInput?: boolean; initialDraft?: string; isWaitingForResponse?: boolean; isThinking?: boolean; isConversationLive?: boolean; isSessionDisconnected?: boolean; isSessionStarting?: boolean; isSessionReady?: boolean; sessionId?: string; agentType?: string; agentStatus?: AgentStatus; deliveryStatus?: string; pendingPermissionsCount?: number; hasAskUserQuestion?: boolean; selectedMessageContent?: string | null; selectedMessageUuid?: string | null; onClearSelection?: () => void; onForkFromMessage?: (uuid: string) => void; /** Branches the session from its latest message and returns the fork's id; the composer then sends into it. */ onForkTail?: () => Promise<string | null>; onSendEscape?: () => void; onOpenNavigator?: () => void; onPopulateInput?: React.MutableRefObject<((text: string, opts?: { append?: boolean }) => void) | null>; /** Filled with a function that empties the composer and deletes its draft: text, images and the stored row. */ clearInputRef?: React.MutableRefObject<(() => void) | null>; permissionMode?: string; permissionModePending?: boolean; onCycleMode?: () => void; onMessageSent?: () => void; onLightboxChange?: (active: boolean) => void; onDropFiles?: React.MutableRefObject<((files: File[]) => void) | null>; onWorkflowLaunch?: (goal: string) => Promise<void>; /** `/btw <question>`: a side answer about this session, never sent to the agent ("" for a bare `/btw`). Unset, `/btw` goes to the agent like any text. */ onSideQuestion?: (question: string) => Promise<string | null> | null; /** A panel open beside the composer (the Ask panel): an empty composer's Escape closes it instead of stopping the turn. */ onEscapeClose?: () => void; onGateSend?: (content: string, images?: Array<{ storageId?: string; previewUrl: string; mime: string; uploading: boolean }>) => void | Promise<void>; /** Codecast's own `/goal` command: true when it took the text (the composer then sends nothing). */ onGoalCommand?: (text: string) => boolean; skills?: SkillItem[]; filePaths?: string[]; mentionItemsRef?: React.MutableRefObject<MentionItem[]>; onMentionQuery?: (q: string) => void; onSubmitWithIntent?: (navigate: boolean) => void; onDidSend?: (info: { conversationId: string; content: string; clientId: string }) => void; /** Opens the branch map; present only when the session has forks. Drawn on the field's top edge. */ branchControl?: React.ReactNode; branchMapNode?: React.ReactNode; threadStateNode?: React.ReactNode; composerNode?: React.ReactNode; /** The session's agent/model control, at the right of the status line. */ sessionControl?: React.ReactNode; /** The framed surface's toolbar (attach, voice, options). Renders as a row under the field, and send moves into it. */ composerFoot?: React.ReactNode; bareComposer?: boolean; /** The new-session page's centred card (ComposerShell hero): always expanded, foot inside the box. */ hero?: boolean; /** The full session composer laid out inside another surface (a Threads card): full width, not pinned to the bottom, tighter. */ inline?: boolean; chatMentionMode?: boolean; mentionTeamId?: string; composerPlaceholder?: string; workingSinceTs?: number; workingPhrase?: string; escapeOwnedRef?: React.MutableRefObject<boolean>; /** Escape closes the surface around the composer (the compose sheet), so the status line offers no Escape hint. */ escapeCloses?: boolean; /** A session's own composer: becomes one shared draft while anyone else has this session's composer open (hooks/useSharedDraft). */ sharedDraft?: boolean; /** A session's composer: files other than images are uploaded and reach the agent as a local path (hooks/useFileAttach). */ acceptFiles?: boolean; /** The most characters the receiver takes (team chat's limit). Past it the send is held, the text stays in the box, and the count shows beside send. */ maxLength?: number; /** Told when a recording in this box starts and ends (a comment box's foot says what Esc does meanwhile). */ onDictatingChange?: (dictating: boolean) => void }) {
   const sacredKey = sessionId || conversationId;
   const sacredKeyRef = useRef(sacredKey);
   const convIdRef = useRef(conversationId);
@@ -1251,6 +1254,10 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       });
     }
   }, [conversationId, skills, onSideQuestion, queryMentions, cancelPendingDraft]);
+  // Dictation writes through the same setter a keystroke does (useComposerDictation).
+  // Dictated words open no picker: an Enter held through the finish must send.
+  const { dictation, focusBox: focusComposerBox } = useComposerDictation(textareaRef, messageRef, (val) => { handleMessageChange(val); setAcTrigger(null); }, conversationId);
+  useWatchEffect(() => { onDictatingChange?.(dictation.active); }, [onDictatingChange, dictation.active]);
 
   const isSelectionActive = !!(selectedMessageContent && selectedMessageUuid);
   const savedDraftRef = useRef<string | null>(null);
@@ -1314,9 +1321,9 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // gets to unwind that state instead of the whole dialog closing.
   useWatchEffect(() => {
     if (escapeOwnedRef) {
-      escapeOwnedRef.current = acTrigger !== null || selectedImageIndex !== null || selectedQueueIndex !== null || lightboxImageIndex !== null || handoffOpen;
+      escapeOwnedRef.current = acTrigger !== null || selectedImageIndex !== null || selectedQueueIndex !== null || lightboxImageIndex !== null || handoffOpen || dictation.active;
     }
-  }, [escapeOwnedRef, acTrigger, selectedImageIndex, selectedQueueIndex, lightboxImageIndex, handoffOpen]);
+  }, [escapeOwnedRef, acTrigger, selectedImageIndex, selectedQueueIndex, lightboxImageIndex, handoffOpen, dictation.active]);
   const setSessionHasQueuedMessages = useInboxStore((s) => s.setSessionHasQueuedMessages);
   useWatchEffect(() => {
     setSessionHasQueuedMessages(conversationId, queuedMessages.length > 0);
@@ -1334,6 +1341,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   const reviewComposer = useReviewComposer();
   const attachSend = reviewComposer?.conversationId === conversationId ? reviewComposer.attachSend : undefined;
   const handleSubmitRef = useRef<((e: React.FormEvent, forkTail?: boolean) => Promise<unknown>) | null>(null);
+  const handleKeyDownRef = useRef<((e: React.KeyboardEvent<HTMLTextAreaElement>) => void) | null>(null);
+  const sendFormRef = useRef<((e: React.FormEvent) => void) | null>(null);
   useWatchEffect(() => {
     if (!attachSend) return;
     attachSend(() => { void handleSubmitRef.current?.({ preventDefault: () => {} } as unknown as React.FormEvent); });
@@ -1344,7 +1353,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // the collapsed pill (narrow, fully rounded) bends that into an ellipse.
   const isExpanded = !!hero || composeMode || !!onSubmitWithIntent || !!onSendAndAdvance || isFocused || message.length > 0 || ghostVisible || pastedImages.length > 0 || fileAttach.files.length > 0 || queuedMessages.length > 0 || reviewCount > 0 || !!branchMapNode;
 
-  const toggleCompose = useCallback(() => {
+  const switchCompose = useCallback(() => {
     if (composeMode) {
       const md = composeRef.current?.getMarkdown() || "";
       setMessage(md);
@@ -1358,6 +1367,15 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       setComposeMode(true);
     }
   }, [composeMode, setMessage]);
+  const switchComposeRef = useRef(switchCompose);
+  switchComposeRef.current = switchCompose;
+  // The rich editor takes the text as it stands, so a recording's last words
+  // land in the box before it switches; switching first would drop them into
+  // a textarea that is no longer shown. Cancelled meanwhile, it stays put.
+  const toggleCompose = useCallback(() => {
+    if (dictation.running()) dictation.finishThen(() => switchComposeRef.current());
+    else switchCompose();
+  }, [switchCompose, dictation]);
 
   // Measured after every keystroke (the Safari height fallback, the resize
   // observer): set only on a change.
@@ -1789,8 +1807,10 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     return true;
   };
 
-  const handleSubmit = async (e: React.FormEvent, forkTail = false) => {
+  const handleSubmit = async (e: React.FormEvent, forkTail = false): Promise<unknown> => {
     e.preventDefault();
+    // Every send (Send and stash, fork, the review panel's) waits for a recording's last words, then runs as pressed.
+    if (dictation.running()) return new Promise((sent) => dictation.finishThen(() => sent(handleSubmitRef.current?.(e, forkTail))));
     if (allowanceOut) return false;
     submitRefusedRef.current = false;
     setAcTrigger(null);
@@ -2172,8 +2192,9 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
 
   // Hand off: the box empties the moment a teammate is picked (the marker is
   // drawn optimistically), and the text comes back only if the server refuses.
-  const handleHandoffPick = (target: { id: string; name: string }, keepSelf: boolean) => {
-    const raw = composeMode && composeRef.current ? composeRef.current.getMarkdown() : message;
+  const handleHandoffPick = (target: { id: string; name: string }, keepSelf: boolean): void => {
+    if (dictation.running()) return dictation.finishThen(() => handleHandoffPick(target, keepSelf));
+    const raw = composeMode && composeRef.current ? composeRef.current.getMarkdown() : messageRef.current;
     const text = raw.trim();
     sendingRef.current = true;
     cancelPendingDraft();
@@ -2225,7 +2246,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
 
   // ⌘↵ in a session: queue the composer's text behind the running turn.
   // `stop` also stops that turn, so the text goes in as soon as it has.
-  const queueComposerText = (stop = false) => {
+  const queueComposerText = (stop = false): void => {
+    if (dictation.running()) return dictation.finishThen(() => queueComposerText(stop));
     const text = messageRef.current.trim();
     if (!text || takeSideQuestion(text)) return;
     sendingRef.current = true;
@@ -2261,6 +2283,10 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // While dictating, a bare Esc cancels it, and every Enter chord but a new
+    // line and every Esc chord wait for the last words, then go through this
+    // handler again as the key they were.
+    if (dictation.running() && dictation.keyDown(e, replayKey(e, handleKeyDownRef), composerChord)) return;
     if (caught && e.key === "Escape") {
       e.preventDefault();
       e.stopPropagation();
@@ -2272,7 +2298,9 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       setHandoffOpen(true);
       return;
     }
-    if (acTrigger && acItems.length > 0) {
+    // A replayed Enter is the send pressed before any picker opened.
+    if (acTrigger && isReplayedKey(e)) setAcTrigger(null);
+    else if (acTrigger && acItems.length > 0) {
       if (e.key === "ArrowDown") {
         e.preventDefault();
         setAcIndex(i => Math.min(i + 1, acItems.length - 1));
@@ -2589,13 +2617,22 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // must honor the compose-popup contract the same way plain Enter does in
   // handleKeyDown: send, then dismiss the popup with fire-and-forget intent.
   // Outside the popup (no onSubmitWithIntent) this is exactly handleSubmit.
-  const handleFormSubmit = (e: React.FormEvent) => {
+  const sendForm = (e: React.FormEvent) => {
     void handleSubmit(e);
     if (submitRefusedRef.current) return;
     onSubmitWithIntent?.(false);
   };
+  const handleFormSubmit = (e: React.FormEvent) => {
+    // Waits here, not in handleSubmit, so the popup is dismissed only once the
+    // send has gone; the send after it is sendForm itself, never this again.
+    e.preventDefault();
+    if (dictation.running()) dictation.finishThen(() => sendFormRef.current?.(e));
+    else sendForm(e);
+  };
 
   handleSubmitRef.current = handleSubmit;
+  handleKeyDownRef.current = handleKeyDown;
+  sendFormRef.current = sendForm;
   // Length is compared before the trim, so a message under the limit (every
   // ordinary keystroke) costs one number comparison here.
   const typedLength = maxLength != null && message.length > maxLength ? message.trim().length : 0;
@@ -2695,6 +2732,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
           </button>
         </ShortcutTooltip>
       )}
+      {/* Just before send, in whichever row holds it; the rich editor has no mic. */}
+      {!composeMode && <DictateControls dictation={dictation} size={bareComposer ? "bare" : "dock"} onMenuClosed={focusComposerBox} />}
     </>
   );
 
@@ -3234,7 +3273,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                     onPaste={handlePaste}
                     onFocus={() => setIsFocused(true)}
                     onBlur={() => { setIsFocused(false); setAcTrigger(null); }}
-                    placeholder={ghostVisible ? "" : composerPlaceholder ?? (bareComposer ? "Comment…" : onGateSend ? "Send a message to continue the workflow..." : onWorkflowLaunch ? "Goal override (optional) — press send to run workflow..." : reviewCount > 0 ? (batchWords.placeholder ?? `Send ${batchWords.quotes} quote${batchWords.quotes !== 1 ? "s" : ""} as-is, or add a reply first...`) : hostedConversation ? (allowanceOut ? allowanceOut : hostedComposerWords(hostedLast, hostedAwaitsOk)) : agentStatus === "permission_blocked" ? ((pendingPermissionsCount ?? 0) > 0 ? "Approve or deny permission to continue..." : hasAskUserQuestion ? "Answer the question to continue..." : "Send a message...") : "Send a message...")}
+                    placeholder={dictation.listening ? "Listening…" : ghostVisible ? "" : composerPlaceholder ?? (bareComposer ? "Comment…" : onGateSend ? "Send a message to continue the workflow..." : onWorkflowLaunch ? "Goal override (optional) — press send to run workflow..." : reviewCount > 0 ? (batchWords.placeholder ?? `Send ${batchWords.quotes} quote${batchWords.quotes !== 1 ? "s" : ""} as-is, or add a reply first...`) : hostedConversation ? (allowanceOut ? allowanceOut : hostedComposerWords(hostedLast, hostedAwaitsOk)) : agentStatus === "permission_blocked" ? ((pendingPermissionsCount ?? 0) > 0 ? "Approve or deny permission to continue..." : hasAskUserQuestion ? "Answer the question to continue..." : "Send a message...") : "Send a message...")}
                     dim={isSelectionActive && !isSelectionEditedRef.current}
                   />
                   {shared.active && <SharedCarets inputRef={textareaRef} text={message} rows={shared.others} editors={shared.editors} />}
@@ -3243,7 +3282,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                       ref={suggestionRef}
                       conversationId={conversationId}
                       idle={!isWaitingForResponse && !isThinking && !(agentStatus && ACTIVE_AGENT_STATUSES.has(agentStatus))}
-                      hidden={!!message || pastedImages.length > 0}
+                      hidden={!!message || pastedImages.length > 0 || dictation.active}
                       onAccept={(t) => {
                         setMessage(t);
                         messageRef.current = t;

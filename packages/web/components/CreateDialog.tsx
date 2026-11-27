@@ -29,6 +29,7 @@ export function CreateDialog({
   submitOnEnter = false,
   width = "md",
   footerStart,
+  onKeyDownCapture,
   children,
 }: {
   /** The kind's glyph, already sized and colored by the caller. */
@@ -43,6 +44,9 @@ export function CreateDialog({
   width?: "md" | "lg";
   /** Secondary controls on the footer's left: "Create another", "Add from Slack". */
   footerStart?: ReactNode;
+  /** Keys anywhere in the dialog, ahead of its own Escape and submit (a
+   *  recording in the dialog takes Esc and Cmd/Ctrl+Enter). */
+  onKeyDownCapture?: (e: KeyboardEvent) => void;
   children: ReactNode;
 }) {
   const workspaceName = useInboxStore((s) => {
@@ -95,11 +99,15 @@ export function CreateDialog({
         // on the overlay's own scrollbar is not a press on the backdrop.
         if (e.target === e.currentTarget && e.clientX < e.currentTarget.clientWidth) onClose();
       }}
+      onKeyDownCapture={onKeyDownCapture}
       onKeyDown={(e) => {
         if (e.key === "Tab") {
           trapFocus(e);
         } else if (e.key === "Escape") {
           e.stopPropagation();
+          // A menu open inside the dialog (Radix, portalled out of it) closes
+          // on this Esc and marks it handled; the dialog stays.
+          if (e.defaultPrevented) return;
           onClose();
         } else if (e.key === "Enter" && !e.shiftKey && (e.metaKey || e.ctrlKey || submitOnEnter)) {
           // A plain Enter an inner control already took (a picker choosing a

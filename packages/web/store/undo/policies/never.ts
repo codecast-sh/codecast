@@ -365,6 +365,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   confirmCallSpeaker: never("speaker correction: confirms a suggested speaker, and the same speaker controls rename them"),
   moveCallLineSpeaker: never("speaker correction: moves one line to another voice, and the same control moves it back"),
   setVoiceIdEnabled: never("settings: turning it off deletes every voice sample, which the server cannot bring back"),
+  setDictationEnabled: never("settings: the same switch in Settings › Voice turns it back"),
   deleteMyVoiceprints: DELETE,
   deleteCallFrameShare: SHARING,
   setObjectShareLink: SHARING,

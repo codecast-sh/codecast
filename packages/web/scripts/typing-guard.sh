@@ -4,7 +4,8 @@
 # Each test holds one cause of slow typing in the composer to its budget:
 #   composerTypingBudget  a keystroke commits once, writes nothing to the store,
 #                         changes nothing in the DOM tree (the textarea's text
-#                         node included) and reads no layout (7,000 sessions)
+#                         node included) and reads no layout (7,000 sessions);
+#                         again with dictation on, where the mic must not redraw
 #   holdTextareaTextNode  a held controlled textarea changes value, not its
 #                         text node, which on a page of :has() rules re-styles
 #                         the page

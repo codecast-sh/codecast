@@ -1,8 +1,10 @@
-// Settings › Voice: whether codecast may learn the viewer's voice from the
-// recordings where they are named, how much it holds, and a way to delete it.
-// The switch has one home, currentUser.voice_id_enabled; the counts are the
-// myVoiceprint singleton. Both are written on the store's draft, so a flip or
-// a delete shows in the same tick (setVoiceIdEnabled, deleteMyVoiceprints).
+// Settings › Voice: whether the composers offer a mic (dictation), whether
+// codecast may learn the viewer's voice from the recordings where they are
+// named, how much it holds, and a way to delete it. The switches have one home
+// each, currentUser.dictation_enabled and currentUser.voice_id_enabled; the
+// counts are the myVoiceprint singleton. All are written on the store's draft,
+// so a flip or a delete shows in the same tick (setDictationEnabled,
+// setVoiceIdEnabled, deleteMyVoiceprints).
 import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { isParkedDispatchError } from '@codecast/web/store/mutativeMiddleware';
 import { useMyVoiceprint } from '@codecast/web/hooks/useSyncCalls';
@@ -12,12 +14,14 @@ import { formatRelativeTime } from '@/components/sessionFormat';
 import { View as RNView } from 'react-native';
 import { Text as RNText } from '@/components/Themed';
 import { appAlert } from '@/lib/popups';
+import { vendorBlockOf } from '@/lib/dictation';
 import { showNotice } from '@/lib/undoBar';
 import { useSettingsUser } from './SettingsPages';
 import { SettingsScroll, SettingsGroup, ToggleRow, NavRow, settingsStyles } from './SettingsUI';
 
 export function voiceDetail(user: any): string {
-  return user?.voice_id_enabled ? 'On' : 'Off';
+  const on = [user?.dictation_enabled === true && 'Dictation', !!user?.voice_id_enabled && 'Recognition'].filter(Boolean);
+  return on.length ? on.join(', ') : 'Off';
 }
 
 export function VoicePage() {
@@ -28,6 +32,12 @@ export function VoicePage() {
   const failed = (e: unknown) => {
     if (!isParkedDispatchError(e)) showNotice("Couldn't save. Try again");
   };
+
+  const dictation = user?.dictation_enabled === true;
+  // A team that may not send speech to OpenAI strikes every mic; the switch
+  // stays the person's own, so it keeps working and the line says why.
+  const dictationBlocked = useInboxStore(vendorBlockOf);
+  const setDictation = (v: boolean) => void useInboxStore.getState().setDictationEnabled(v).catch(failed);
 
   const set = (v: boolean) => void useInboxStore.getState().setVoiceIdEnabled(v).catch(failed);
   const flip = (v: boolean) => {
@@ -58,6 +68,9 @@ export function VoicePage() {
 
   return (
     <SettingsScroll>
+      <SettingsGroup footnote={dictationBlocked ?? 'A mic in the message boxes types what you say.'}>
+        <ToggleRow label="Dictation" value={dictation} onValueChange={setDictation} />
+      </SettingsGroup>
       <SettingsGroup footnote="Stores samples of your voice. Only you see them.">
         <ToggleRow label="Recognize my voice" value={on} onValueChange={flip} />
       </SettingsGroup>
