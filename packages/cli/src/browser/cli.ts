@@ -51,7 +51,7 @@ import { DesktopPaneUnavailable, withDesktopPanePage } from "./desktopPane.js";
 import { registerEngineCommands } from "./cliEngine.js";
 import { hideCloneControls, registerAdvancedClone } from "./advanced.js";
 import { startLocalBrowser, startManagedBrowser, stopRemoteManagedBrowser } from "./managedBrowser.js";
-import { ENGINE_MIN_VERSION, ENGINE_PACKAGE, engineFitness, ensureEngine } from "./engine.js";
+import { resolveEngine } from "./engine.js";
 import { sameDocument } from "./url.js";
 import { loadSitePolicy } from "./policy.js";
 import { auditLanding, refuseNavigation, signInLandingNote } from "./siteGuard.js";
@@ -62,7 +62,7 @@ import { provisionCredentials } from "./credentials.js";
 import { bridgeEndpoint, requestBrowserProfile } from "./bridge/host.js";
 import { BROWSER_START_HELP, prepareRealBrowserStart, registerBridgeCommands, targetFlags } from "./bridge/commands.js";
 import {
-  hostOwnsBrowser, selectHostBrowser, prepareHostChrome, isPaneMode, isRealMode, listRealTargets, ownedRealTab, realTabOwnership, rememberRealTab, requireRealBridge, resolveRealTarget, withRealPage, realModeHint,
+  selectHostBrowser, prepareHostChrome, isPaneMode, isRealMode, listRealTargets, ownedRealTab, realTabOwnership, rememberRealTab, requireRealBridge, resolveRealTarget, withRealPage, realModeHint,
 } from "./bridge/real.js";
 import { runBrowserSync, DEFAULT_SYNC_WAIT_S } from "./sync.js";
 import { cloudHostSignInHint } from "../cloud/browserSync.js";
@@ -211,41 +211,14 @@ function pageLine(url: string, title: string): string {
 
 
 /**
- * Should the engine drive, or our built-in CDP driver?
- *
- * The engine wins whenever it is present, and `cast browser start` installs it,
- * so in practice it always is. `CAST_BROWSER_LEGACY=1` forces the built-in
- * driver — kept as an escape hatch for diagnosing an engine problem without
- * uninstalling anything, and as the honest answer for a machine that cannot
- * install it at all.
+ * Should the engine drive, or our built-in CDP driver? The engine, installed on
+ * first use when it is missing (resolveEngine). `CAST_BROWSER_LEGACY=1` forces
+ * the built-in driver — an escape hatch for diagnosing an engine problem
+ * without uninstalling anything, and the fallback for a machine that cannot
+ * install the engine at all.
  */
 function useEngine(): boolean {
-  if (process.env.CAST_BROWSER_LEGACY === "1") return false;
-  const fit = engineFitness();
-  if (fit.ok) return true;
-  // A cloud host is provisioned without the engine, and nobody there runs the
-  // laptop's first-time install; without it agents get the older driver's
-  // smaller verb set (no read, no do). Install it once, on first use.
-  if (fit.reason === "missing" && hostOwnsBrowser()) {
-    try {
-      ensureEngine();
-      return true;
-    } catch (err) {
-      process.stderr.write(`  ${fmt.warning("!")} ${(err as Error).message.split("\n")[0]}; using the built-in driver.\n`);
-      return false;
-    }
-  }
-  // Say why, once, on stderr — so a machine quietly running the older driver is
-  // diagnosable without anyone having to read this function. "missing" is the
-  // ordinary first-run state and needs no announcement; a version we refuse to
-  // drive does.
-  if (fit.reason === "too-old") {
-    process.stderr.write(
-      `  ${fmt.warning("!")} browser engine ${fit.version} is older than ${ENGINE_MIN_VERSION}; using the built-in driver.\n` +
-        `    Upgrade with: npm install -g ${ENGINE_PACKAGE}@latest\n`,
-    );
-  }
-  return false;
+  return resolveEngine({ warn: (line) => process.stderr.write(`  ${fmt.warning("!")} ${line}\n`) });
 }
 
 
