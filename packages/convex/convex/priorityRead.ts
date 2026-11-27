@@ -35,6 +35,8 @@ const SHOW_SESSIONS = 200;
 const LINK_MAPPED_READ = 10;
 const LINK_TASK_SESSIONS = 2;
 const LINK_STEP_SESSIONS = 6;
+/** A closed linked session's newest commits read for one that reached main (shipped). */
+const SHIPPED_READ = 50;
 /** A linked session's last activity, to the 10 minutes: a heartbeat or a streamed message re-runs the list but leaves its answer as it was. */
 const LINK_ACTIVE_ROUND_MS = 10 * 60_000;
 /** The most of today's unassigned sessions a history names. */
@@ -211,6 +213,8 @@ type LinkReads = {
   mine: (c: Doc<"conversations">) => Promise<boolean>;
   /** The milestone keys of a priority's pending corrections ("" for one on the priority itself). */
   pending: (p: Priority) => Promise<Set<string>>;
+  /** One of the session's commits reached its repository's default branch (commits.main_at, stamped by the push webhook, which links a squash merge through its Codecast-Session trailer). */
+  shipped: (c: Doc<"conversations">) => Promise<boolean>;
 };
 
 /** The reads links make, each once per list call. A plan answers only when the viewer may read it. */
@@ -233,6 +237,11 @@ function linkReads(ctx: Ctx, r: Reader): LinkReads {
     const id = ctx.db.normalizeId("conversations", ref);
     return id ? await ctx.db.get(id) : await ctx.db.query("conversations").withIndex("by_short_id", (q: any) => q.eq("short_id", ref)).first();
   });
+  // The newest SHIPPED_READ of its commits: a session whose work landed has its landing among them.
+  const shipped = memo(async (id): Promise<boolean> => {
+    const rows = await ctx.db.query("commits").withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", id)).order("desc").take(SHIPPED_READ);
+    return rows.some((c: Doc<"commits">) => c.main_at != null);
+  });
   // A step's session ref is the priority owner's own conversation; it was stored unshared then (storedSessionId), so oldest first.
   const ownedConvs = memo((key): Promise<Doc<"conversations"> | null> => {
     const [owner, ref] = key.split(" ");
@@ -249,6 +258,7 @@ function linkReads(ctx: Ctx, r: Reader): LinkReads {
     }),
     listed: (c) => listed(String(c._id)),
     mine: (c) => mine(String(c._id)),
+    shipped: (c) => shipped(String(c._id)),
     // Corrections are their owner's alone: no one else learns one is waiting.
     pending: async (p) => {
       if (!isOwner(r.viewer, p)) return new Set();
@@ -316,6 +326,8 @@ async function linksFor(r: Reader, reads: LinkReads, p: Priority, steps: Priorit
     for (const { c, why } of bySteps.get(s.key)!.values()) {
       const mine = await reads.mine(c);
       const state = linkedSessionState(c, now);
+      // Only a closed one is asked: a live session's state says more than whether some of it landed.
+      const shipped = isClosedSession({ state }) && (await reads.shipped(c));
       sessions.push({
         short_id: c.short_id ?? String(c._id),
         conversation_id: String(c._id),
@@ -325,6 +337,7 @@ async function linksFor(r: Reader, reads: LinkReads, p: Priority, steps: Priorit
         workflow: isWorkflowSession(c as any),
         why,
         last_active_at: Math.floor(c.updated_at / LINK_ACTIVE_ROUND_MS) * LINK_ACTIVE_ROUND_MS,
+        ...(shipped ? { shipped: true as const } : {}),
       });
     }
     // The server never cuts a live session from what it reads (the LINK_MAPPED_READ newest mapped per priority, and

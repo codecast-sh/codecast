@@ -9,8 +9,9 @@
 // the page at /priorities/pri-N is the
 // list row made bigger: its title (the owner double-clicks it to rename),
 // Correct…, Share with Copy ID and ⋯, the ten days, the plan once, its
-// milestones as the list draws them with every open one expanded, and the
-// corrections; no meta line, AI summary, Next box or Linked section.
+// milestones in one list by state with every one expanded and its sessions
+// unfolded (closed last, shipped ones reading done), and the corrections; no
+// meta line, AI summary, Next box, Linked section, or Done and Polish heads.
 // Run: cd packages/web && bun test --isolate components/priorities/PriorityRef.mount.test.tsx
 import { afterEach, expect, test } from "bun:test";
 import { describeFailures, fixtureId, installDom, installMissingBackend, seedViewer, TEAM_ID, VIEWER_ID } from "../../test-helpers/missingBackend";
@@ -232,7 +233,7 @@ test("pri-N alone on its line is the card its pill opens", async () => {
   }
 });
 
-test("the page shows each milestone's state as the list does, and opens every open one, the polish one that needs you too; done ones stay folded", async () => {
+test("the page lists every milestone in one list by state, critical before polish, done last; each open, the polish one marked; no Done or Polish heads", async () => {
   const both = [sess("evalmap", "Session mapping eval", "needs_you", 7), sess("build", "Priorities feature build", "needs_you", 3)];
   answers["priorities:show"] = { ...DETAIL, links: DETAIL.links.map((l: any) => (l.key === "s4" ? { ...l, sessions: both } : l)) };
   const page = await inRouter(<PriorityPage id="pri-60" />, "/priorities/pri-60");
@@ -240,9 +241,46 @@ test("the page shows each milestone's state as the list does, and opens every op
     await page.waitFor(() => !!page.container.querySelector('[data-milestones] [data-milestone="s4"] [data-state-action="needs_you"]'));
     // The most recent ask is the one to answer.
     expect(page.container.querySelector('[data-milestones] [data-milestone="s4"] [data-state-action="needs_you"]')!.getAttribute("href")).toBe(`/conversation/${fixtureId("build")}`);
-    const open = [...page.container.querySelectorAll("[data-milestones] li[data-milestone]")].filter((li) => li.querySelector("[data-connected]"));
-    expect(open.map((li) => li.getAttribute("data-milestone"))).toEqual(["s2", "s4", "p1"]);
-    expect(page.container.querySelector('[data-milestones] [data-section="done"]')!.textContent).toBe("Done 2");
+    const rows = [...page.container.querySelectorAll("[data-milestones] li[data-milestone]")];
+    expect(rows.map((li) => `${li.getAttribute("data-milestone")}:${li.getAttribute("data-state")}`)).toEqual(["s2:needs_you", "s4:needs_you", "p1:needs_you", "s1:done", "s3:done"]);
+    // Every one open, done ones too, and one list: no section heads.
+    expect(rows.map((li) => li.querySelector("[role=button]")!.getAttribute("aria-expanded"))).toEqual(["true", "true", "true", "true", "true"]);
+    expect(page.container.querySelector("[data-milestones] [data-section], [data-milestones] [data-sections]")).toBeNull();
+    // A polish milestone says so beside its title; a critical one says nothing.
+    expect(rows.filter((li) => li.querySelector("[data-polish]")).map((li) => li.getAttribute("data-milestone"))).toEqual(["p1"]);
+    // Room above each milestone but the first.
+    expect(rows[1].className).toContain("mt-3");
+    expect(rows[0].className).toContain("first:mt-0");
+  } finally {
+    answers["priorities:show"] = DETAIL;
+    await page.unmount();
+  }
+}, 60_000);
+
+test("the page lists a milestone's closed sessions after the live ones, never folded; a closed one whose work reached main reads Shipped", async () => {
+  const s2 = [
+    sess("build", "Priorities feature build", "needs_you", 3),
+    sess("plain", "Abandoned spike", "killed", 1),
+    sess("shipped", "Visual design polish", "killed", 30, { shipped: true }),
+    sess("settled", "Mapping notes", "done", 2),
+  ];
+  answers["priorities:show"] = { ...DETAIL, links: DETAIL.links.map((l: any) => (l.key === "s2" ? { ...l, sessions: s2 } : l)) };
+  const page = await inRouter(<PriorityPage id="pri-60" />, "/priorities/pri-60");
+  try {
+    await page.waitFor(() => !!page.container.querySelector('[data-milestone="s2"] [data-connected] [data-session-row]'));
+    const box = page.container.querySelector('[data-milestone="s2"] [data-connected]')!;
+    expect(box.querySelector("[data-closed-sessions]")).toBeNull();
+    const rows = [...box.querySelectorAll("[data-session-row]")];
+    // Live first, then the closed: shipped before merely settled or closed, each in the sidebar's order.
+    expect(rows.map((r) => r.getAttribute("data-session-row"))).toEqual([fixtureId("build"), fixtureId("shipped"), fixtureId("settled"), fixtureId("plain")]);
+    expect(rows.map((r) => r.getAttribute("data-row-mark"))).toEqual(["needs_you", "done", "done", "killed"]);
+    const shipped = rows[1];
+    expect(shipped.hasAttribute("data-shipped")).toBe(true);
+    expect(shipped.textContent).toContain("Shipped");
+    expect(shipped.textContent).not.toContain("Closed");
+    expect(rows[2].textContent).toContain("Done");
+    expect(rows[3].textContent).toContain("Closed");
+    expect(box.querySelector('[data-group="sessions"]')!.textContent).toContain("Sessions4");
   } finally {
     answers["priorities:show"] = DETAIL;
     await page.unmount();
@@ -265,27 +303,24 @@ test("the page opened at a milestone (the list's \"+N older sessions\") brings t
   }
 }, 60_000);
 
-test("the page opened at a done or a polish milestone opens the section that holds it, then brings it into view", async () => {
+test("the page opened at a done or a polish milestone shows it open and brings it into view", async () => {
   const proto = (window as any).HTMLElement.prototype;
   const real = proto.scrollIntoView;
   const seen: string[] = [];
   proto.scrollIntoView = function (this: Element) { seen.push(this.getAttribute("data-milestone") ?? ""); };
-  // p1 with nothing asking, so it folds behind POLISH.
+  // p1 with nothing asking: on the list it would fold behind POLISH.
   answers["priorities:show"] = { ...DETAIL, links: DETAIL.links.map((l: any) => (l.key === "p1" ? { ...l, sessions: [] } : l)) };
   try {
-    for (const [key, section] of [["s3", "done"], ["p1", "polish"]] as const) {
+    for (const key of ["s3", "p1"]) {
       seen.length = 0;
       const at = await inRouter(<PriorityPage id="pri-60" />, `/priorities/pri-60?milestone=${key}`);
       try {
         await at.waitFor(() => !!at.container.querySelector("[data-milestones]"));
-        expect(at.container.querySelector(`[data-section-open="${section}"]`)).not.toBeNull();
         const li = at.container.querySelector(`[data-milestones] li[data-milestone="${key}"]`)!;
         expect(li).not.toBeNull();
         // Opened at it, the milestone shows what it is connected to.
         expect(li.querySelector("[role=button]")!.getAttribute("aria-expanded")).toBe("true");
         expect(seen).toEqual([key]);
-        // The other section stays closed.
-        expect(at.container.querySelector(`[data-section-open="${section === "done" ? "polish" : "done"}"]`)).toBeNull();
       } finally {
         await at.unmount();
       }
@@ -345,12 +380,11 @@ test("the page: title, Correct…, Share and ⋯; ten days; the plan once; miles
     expect(list.querySelector('[data-group="plans"]')).toBeNull();
     expect(list.textContent).not.toContain(PLAN.title);
 
-    // The milestones as the list draws them: the open ones expanded with their connected items, the polish one that
-    // needs you among them, done folded; POLISH holds nothing else, so it has no head.
-    expect([...list.querySelectorAll("li[data-milestone]")].map((li) => `${li.getAttribute("data-milestone")}:${li.getAttribute("data-state")}`)).toEqual(["s2:needs_you", "s4:needs_you", "p1:needs_you"]);
+    // Every milestone in one list by state, each expanded with its connected items; no Done or Polish heads.
+    expect([...list.querySelectorAll("li[data-milestone]")].map((li) => `${li.getAttribute("data-milestone")}:${li.getAttribute("data-state")}`)).toEqual(["s2:needs_you", "s4:needs_you", "p1:needs_you", "s1:done", "s3:done"]);
     expect(list.querySelector('[data-milestone="s4"] [data-correction-pending]')).not.toBeNull();
     expect(list.querySelectorAll('[data-milestone="s2"] [data-connected] [data-session-row]')).toHaveLength(2);
-    expect([...list.querySelectorAll("[data-section]")].map((h) => h.textContent)).toEqual(["Done 2"]);
+    expect(list.querySelector("[data-section]")).toBeNull();
 
     // Corrections, with the milestone each is about.
     const corrections = el.querySelector("[data-corrections]")!;
