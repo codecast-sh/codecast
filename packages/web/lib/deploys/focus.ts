@@ -94,13 +94,13 @@ export function commitMatches(c: Pick<QueueCommit, "sha" | "subject" | "tasks" |
   }
 }
 
-/** Whether a Ship run on its way is the thing the link names: its task, its pull request, the session that pressed Ship, or the branch it merged from. */
-export function runMatches(r: Pick<ShippingRun, "task_short_id" | "task_id" | "pr" | "spawner_conversation_id" | "merge">, f: DeployFocus | null): boolean {
+/** Whether a Ship run on its way is the thing the link names: its task, its pull request, the session that pressed Ship or the one it ran in, or the branch it merged from. */
+export function runMatches(r: Pick<ShippingRun, "task_short_id" | "task_id" | "pr" | "spawner_conversation_id" | "merge"> & { primary_conversation_id?: string | null }, f: DeployFocus | null): boolean {
   if (!f) return false;
   switch (f.kind) {
     case "task": return r.task_short_id === f.id || r.task_id === f.id;
     case "pr": return r.pr?.number === f.pr;
-    case "session": return sameSessionId(r.spawner_conversation_id, f.id);
+    case "session": return sameSessionId(r.spawner_conversation_id, f.id) || sameSessionId(r.primary_conversation_id, f.id);
     case "branch": return r.merge?.branch === f.name;
     default: return false;
   }

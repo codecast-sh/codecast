@@ -64,6 +64,21 @@ describe("a change waiting on main", () => {
     expect(changeSpot(input({ history: [going, LIVE] }))).toMatchObject({ kind: "waiting", held: { kind: "behind", deploy: "dp-5" } });
   });
 
+  test("an open deploy the queue cannot place holds it by name, never as going out with it", () => {
+    // A rollback, a redeploy of the live commit and a commit past a truncated queue: still waiting, held by that deploy.
+    for (const d of [deploy("dp-5", "requested", "00000000", NOW - 0.1 * H, { action: "rollback" }), deploy("dp-6", "running", "11111110", NOW - 0.1 * H, { action: "redeploy" }), deploy("dp-7", "running", "99999990", NOW - 0.1 * H)]) {
+      expect(changeSpot(input({ history: [d, LIVE] }))).toMatchObject({ kind: "waiting", held: { kind: "open", deploy: d.short_id, going: true } });
+    }
+    // A press with no commit yet is asked for: it holds the press, and says so, not "waits on Deploy".
+    const asked = deploy("dp-8", "requested", null, NOW);
+    expect(changeSpot(input({ history: [asked, LIVE], reach: { short_id: "dp-3", state: "failed" } })).held).toEqual({ kind: "open", deploy: "dp-8", going: false });
+  });
+
+  test("an open request from before the live deploy is stale: it holds nothing", () => {
+    const stale = deploy("dp-1969", "requested", null, NOW - 20 * H);
+    expect(changeSpot(input({ history: [LIVE, stale] })).held).toEqual({ kind: "press" });
+  });
+
   test("reach that says it waits, on a commit the queue does not list, still waits (with no place)", () => {
     const spot = changeSpot(input({ focus: { kind: "sha", sha: "9999999" }, reach: { short_id: "", state: "waiting" } }));
     expect(spot).toMatchObject({ kind: "waiting", place: null, of: 3, since: "dp-1" });
@@ -86,6 +101,9 @@ describe("a change a deploy holds", () => {
     const old = deploy("dp-0", "live", "0000000a", NOW - 20 * H);
     expect(changeSpot(input({ focus: { kind: "sha", sha: "0000000" }, focusDeploys: [old] }))).toEqual({ kind: "deploy", deploy: "dp-0", word: "went_out" });
     expect(changeSpot(input({ focus: { kind: "deploy", id: "dp-1" }, focusDeploys: [LIVE] }))).toEqual({ kind: "deploy", deploy: "dp-1", word: "live" });
+    // An open deploy asked for before the live one never went out, whatever its status says.
+    const stale = deploy("dp-2406", "running", "2dc5ee90", NOW - 20 * H);
+    expect(changeSpot(input({ focus: { kind: "deploy", id: "dp-2406" }, focusDeploys: [stale] }))).toEqual({ kind: "deploy", deploy: "dp-2406", word: "superseded" });
   });
 });
 
@@ -100,6 +118,10 @@ describe("a change not on main", () => {
   test("says where its Ship run stopped, never that it is absent", () => {
     const spot = changeSpot(input({ focus: { kind: "session", id: "conv1" }, shipping: { moving: [run()], dropped: [] } }));
     expect(spot).toMatchObject({ kind: "run", word: "Stopped at Merge", dropped: false });
+  });
+
+  test("the session a run ran in finds it as well as the one that pressed Ship", () => {
+    expect(changeSpot(input({ focus: { kind: "session", id: "ranin01" }, shipping: { moving: [run({ primary_conversation_id: "ranin01" })], dropped: [] } }))).toMatchObject({ kind: "run" });
   });
 
   test("a run with no movement for a week reads as parked; one still moving says its state", () => {
@@ -133,9 +155,11 @@ describe("an open deploy takes a waiting change", () => {
     expect(openTakes(deploy("dp-7", "running", "ccccccc0", NOW), queue, b)).toBe(true);
     expect(openTakes(deploy("dp-7", "running", "aaaaaaa0", NOW), queue, b)).toBe(false);
   });
-  test("at an unlisted commit, what had reached main when it was asked for", () => {
-    expect(openTakes(deploy("dp-7", "running", "fffffff0", NOW), queue, b)).toBe(true);
-    expect(openTakes(deploy("dp-2406", "running", "fffffff0", NOW - 4 * 24 * H), queue, b)).toBe(false);
+  test("at a commit the queue does not list, nobody knows: it claims nothing, however recently it was asked for", () => {
+    // A rollback to an older commit, a redeploy of the live one, a commit past a truncated queue, main's head.
+    expect(openTakes(deploy("dp-5", "requested", "00000000", NOW, { action: "rollback" }), queue, b)).toBe(false);
+    expect(openTakes(deploy("dp-6", "running", "11111110", NOW, { action: "redeploy" }), queue, b)).toBe(false);
+    expect(openTakes(deploy("dp-7", "running", "fffffff0", NOW), queue, b)).toBe(false);
   });
   test("a finished deploy takes nothing", () => {
     expect(openTakes(deploy("dp-7", "live", "ccccccc0", NOW), queue, b)).toBe(false);

@@ -190,20 +190,36 @@ export function teamRowOfView(v: DeployView & { after?: TeamDeployRow["after"] }
 
 export const isOpen = (d: Pick<TeamDeployRow, "status">) => d.status === "requested" || d.status === "running";
 
+/** An open deploy that is sending something: running, or asked for at a commit. One asked for with no commit yet (a
+ *  press a machine has not picked up, or a stale request) is only asked for: it sends nothing anyone can name. */
+export const isGoing = (d: Pick<TeamDeployRow, "status" | "sha">) => d.status === "running" || (d.status === "requested" && !!d.sha);
+
+/** Why a target's open deploy holds its press, in the words every surface uses (Deploys page, PR page). */
+export const openWords = (d: Pick<TeamDeployRow, "short_id" | "status" | "sha">) => `${d.short_id || "A deploy"} is ${isGoing(d) ? "going out" : "asked for"}`;
+
 /** A target's deploys, newest first. */
 export function deploysOf(t: Pick<DeployTargetRow, "name" | "repository">, deploys: ReadonlyArray<TeamDeployRow>): TeamDeployRow[] {
   return deploys.filter((d) => d.target === t.name && (!d.repository || !t.repository || d.repository === t.repository)).sort((a, b) => b.created_at - a.created_at);
 }
 
-/** What a target runs now, what is going out to it, and its history. */
 /** Whether a newer deploy of the target went live after this one was asked for. */
 export const supersededBy = (d: Pick<TeamDeployRow, "created_at">, live: Pick<TeamDeployRow, "created_at"> | null): boolean => !!live && live.created_at > d.created_at;
 
+/**
+ * The deploy open on a target now, from its deploys newest first: one actually going out before one only asked for (a
+ * press with no commit yet must not hide the deploy running beside it), and never one asked for before the live deploy
+ * (it never went out as asked; the server closes it as superseded).
+ */
+export function openOf<D extends Pick<TeamDeployRow, "status" | "sha" | "created_at">>(newestFirst: ReadonlyArray<D>, live: Pick<TeamDeployRow, "created_at"> | null): D | null {
+  const open = newestFirst.filter((d) => isOpen(d) && !supersededBy(d, live));
+  return open.find(isGoing) ?? open[0] ?? null;
+}
+
+/** What a target runs now, what is going out to it, and its history. */
 export function targetNow(t: Pick<DeployTargetRow, "name" | "repository">, deploys: ReadonlyArray<TeamDeployRow>) {
   const mine = deploysOf(t, deploys);
   const live = mine.filter((d) => d.status === "live").sort((a, b) => (b.live_at ?? b.created_at) - (a.live_at ?? a.created_at))[0] ?? null;
-  // A deploy asked for before the live one never went out as asked (the server closes it as superseded): not going out.
-  const open = mine.find((d) => isOpen(d) && !supersededBy(d, live)) ?? null;
+  const open = openOf(mine, live);
   const failed = mine[0]?.status === "failed" ? mine[0] : null;
   return { live, open, failed, history: mine };
 }

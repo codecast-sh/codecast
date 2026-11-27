@@ -57,7 +57,8 @@
 .dpp-auto { font-size: 12px; color: var(--sol-text-muted); }
 .dpp-back { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--dp-rule); background: var(--dp-card); color: var(--sol-text-muted); cursor: pointer; white-space: nowrap; }
 .dpp-back:hover { color: var(--sol-text); }
-.dpp-back:disabled { cursor: default; opacity: 0.6; }
+/* Held back (a deploy open, a pause): still readable in both themes, its dashed edge says it cannot be pressed now. */
+.dpp-back:disabled { cursor: default; border-style: dashed; color: var(--sol-text-muted); background: none; }
 .dpp-back[data-ci="failed"] { color: var(--sol-text); }
 
 

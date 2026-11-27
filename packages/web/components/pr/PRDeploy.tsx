@@ -142,7 +142,7 @@ export function PRDeployBand({ model }: { model: PrDeployModel }) {
             {row.note && <span className="pr-deploy-note text-sol-red" title={row.note}>{row.note}</span>}
             <span className="pr-deploy-act">
               {row.press ? (
-                <button type="button" className="pr-deploy-go" data-pr-deploy-go={row.target} onClick={() => press.open({ target: row.press!, action: "deploy", of: null })}>
+                <button type="button" className="pr-deploy-go" data-ci={row.press.queue.head_ci === "failed" ? "failed" : undefined} data-pr-deploy-go={row.target} onClick={() => press.open({ target: row.press!, action: "deploy", of: null })}>
                   {row.pressWords}
                 </button>
               ) : row.blocked ? (

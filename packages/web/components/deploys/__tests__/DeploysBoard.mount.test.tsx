@@ -300,6 +300,28 @@ test("Dropped opens on its own once the run a link points at is found there", ()
   unmount();
 });
 
+test("the deploy a link opens beside its change is drawn with its detail open, however far down the history it is", () => {
+  const { host, unmount } = mountWith(props({ openDeploy: "dp-3" }));
+  expect(card(host, "dp-3").querySelector('[data-deploy-detail="dp-3"]')).not.toBeNull();
+  unmount();
+});
+
+test("an open deploy asked for before the live one reads as never gone out", () => {
+  const stale = dep("dp-12", 8.5 * H, { status: "running", live_at: null, finished_at: null });
+  const { host, unmount } = mountWith(props({ deploys: [stale, ...many] }));
+  expect(card(host, "dp-12").querySelector("[data-deploy-state]")!.textContent).toBe("Never went out");
+  unmount();
+});
+
+test("a press asked for with no commit yet reads as asked for on the press it holds, never going out", () => {
+  const asked = dep("dp-13", 21 * H, { status: "requested", sha: null, live_at: null, finished_at: null });
+  const { host, unmount } = mountWith(props({ target, deploys: [asked, ...many] }));
+  const go = card(host, "next").querySelector("[data-deploy-go]")!;
+  expect(go.hasAttribute("disabled")).toBe(true);
+  expect(go.getAttribute("title")).toBe("dp-13 is asked for");
+  unmount();
+});
+
 test("a head with red CI is never the primary press: Deploy stays a plain button", () => {
   const red = { ...target, queue: { ...target.queue, head_ci: "failed", head_ci_url: "https://ci/red" } };
   const { host, unmount } = mountWith(props({ target: red, deploys: [live] }));

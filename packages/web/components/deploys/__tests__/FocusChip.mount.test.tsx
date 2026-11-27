@@ -115,11 +115,17 @@ test("a waiting change says its place since the live deploy and what holds it, a
   expect(press.words).toBe("waiting3 commits since dp-1waits on Deploy");
   expect(press.chip.querySelector('[data-spot-held="press"]')!.getAttribute("href")).toBe("#deploy-next");
   press.unmount();
+  // A deploy open that the queue cannot place is named for what it is, linked to its card; the place links to the change's row.
+  const open = mountSpot({ kind: "waiting", place: 2, of: 3, since: "dp-1", held: { kind: "open", deploy: "dp-8", going: false } });
+  expect(open.words).toBe("waiting2 of 3 since dp-1dp-8 asked for");
+  expect(open.chip.querySelector('[data-spot-held="open"]')!.getAttribute("href")).toBe("#deploy-dp-8");
+  expect(open.chip.querySelector("[data-spot-place]")!.getAttribute("href")).toBe("#deploy-next-change");
+  open.unmount();
 });
 
 test("a deploy that holds the change is named as a link to its card; a deploy link says the deploy's own state", () => {
   const live = mountSpot({ kind: "deploy", deploy: "dp-12", word: "live" });
-  expect(live.words).toBe("live since dp-12");
+  expect(live.words).toBe("live in dp-12");
   expect(live.chip.querySelector("[data-spot-deploy]")!.getAttribute("href")).toBe("#deploy-dp-12");
   expect(live.chip.getAttribute("data-state")).toBe("deployed");
   live.unmount();

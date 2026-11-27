@@ -113,9 +113,14 @@ describe("the session's targets read from the store", () => {
     expect(draw()).toContain("<span>waiting</span>");
   });
 
-  test("an open deploy cut after the change landed is taking it out", () => {
-    deployState = { targets: [waitingOn("passed")], deploys: [dep("dp-3388", "running", "a1e4faf5", T0 + H)] };
+  test("an open deploy at the change's commit, or one after it on main, is taking it out", () => {
+    deployState = { targets: [waitingOn("passed")], deploys: [dep("dp-3388", "running", "c0ffee00", T0 + H)] };
     expect(draw()).toContain("going out · dp-3388");
+  });
+
+  test("an open deploy at a commit nobody can place on main (a rollback, a redeploy, past the queue) is not carrying it", () => {
+    deployState = { targets: [waitingOn("passed")], deploys: [dep("dp-3389", "running", "a1e4faf5", T0 + H)] };
+    expect(draw()).toContain("<span>waiting</span>");
   });
 
   test("the Deploy press shows only where CI on what it would send is not red", () => {

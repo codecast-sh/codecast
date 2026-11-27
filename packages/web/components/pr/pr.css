@@ -288,6 +288,12 @@
 .pr-deploy-go:hover {
   filter: brightness(1.08);
 }
+/* Red CI on what it would send: never the primary press (the confirm still says CI failed). */
+.pr-deploy-go[data-ci="failed"] {
+  background: none;
+  color: var(--sol-text);
+  border-color: var(--sol-border);
+}
 .pr-deploy-go:focus-visible,
 .pr-deploy-open:focus-visible {
   outline: 2px solid var(--pr-accent);

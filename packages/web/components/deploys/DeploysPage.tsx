@@ -14,7 +14,7 @@ import { useDeployTargets } from "../../hooks/useSyncDeployTargets";
 import { useCheckouts, useSyncCheckouts } from "../../hooks/useSyncCheckouts";
 import { useDeployLines, useSyncDeployLines } from "../../hooks/useDeployLines";
 import { useShipping } from "../../hooks/useSyncShipping";
-import { orderTargets, productionOf, recordTargets, targetNow, targetTone, type DeployTargetRow, type TargetTone } from "../../lib/deploys/targets";
+import { isGoing, orderTargets, productionOf, recordTargets, targetNow, targetTone, type DeployTargetRow, type TargetTone } from "../../lib/deploys/targets";
 import type { BoardView } from "../../lib/deploys/board";
 import { useDeployPress } from "../../hooks/useDeployPress";
 import { FOCUS_PARAMS, focusRef, focusRepository, focusSettled, focusTarget, pickTarget, reachAnyDeploy, targetKey, type DeployFocus } from "../../lib/deploys/focus";
@@ -136,7 +136,7 @@ export function DeploysPage({ initialTarget, initialTeam, initialDeploy, initial
             return (
               <li key={t._id}>
                 <button type="button" className="dpp-target" aria-current={picked?._id === t._id ? "true" : undefined} data-tone={tone} data-paused={pause ? "" : undefined} data-focus-on={onFocus.has(t.name) ? "" : undefined} data-focus-off={onFocus.size && !onFocus.has(t.name) ? "" : undefined} onClick={() => setPicked(t._id)} title={pause ? `paused by ${pause.by}` : targetWords(t, n, tone)} data-deploy-target={t.name}>
-                  {pause ? <Pause className="dpp-mark" aria-label="Paused" /> : <ToneMark tone={tone} />}
+                  {pause ? <Pause className="dpp-mark" aria-label="Paused" /> : <ToneMark tone={tone} asked={!!n.open && !isGoing(n.open)} />}
                   <span className="dpp-target-name">{t.name}{repos.size > 1 ? <span className="dpp-repo">{t.repository.split("/").pop()}</span> : null}</span>
                   {waiting ? <span className="dpp-target-n" data-deploy-target-waiting={waiting}>{waiting}</span> : null}
                 </button>
@@ -168,14 +168,16 @@ function LinesFeed({ deployId }: { deployId: string }) {
 }
 
 function targetWords(t: DeployTargetRow, n: ReturnType<typeof targetNow>, tone: TargetTone): string {
-  if (tone === "going") return n.open?.status === "running" ? "going out" : "asked for";
+  if (tone === "going") return n.open && isGoing(n.open) ? "going out" : "asked for";
   if (tone === "failed") return "last deploy failed";
   if (tone === "unknown") return n.live ? "live" : "not tracked yet";
   if (tone === "current") return "up to date";
   return `${t.queue.commits} ${t.queue.commits === 1 ? "commit" : "commits"} waiting`;
 }
 
-function ToneMark({ tone }: { tone: TargetTone }) {
+function ToneMark({ tone, asked = false }: { tone: TargetTone; asked?: boolean }) {
+  // A deploy asked for with no commit yet sends nothing anyone can name: a still mark, never the spinner of one going out.
+  if (tone === "going" && asked) return <i className="dpp-mark dpp-mark-dot" aria-hidden />;
   if (tone === "going") return <Loader2 className="dpp-mark animate-spin" aria-hidden />;
   if (tone === "failed") return <X className="dpp-mark" strokeWidth={3} aria-hidden />;
   if (tone === "current") return <Check className="dpp-mark" strokeWidth={3} aria-hidden />;
