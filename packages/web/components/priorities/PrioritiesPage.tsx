@@ -92,7 +92,7 @@ export default function PrioritiesPage() {
 
   return (
     <PageFrame
-      header={<PrioritiesHeader legacy={legacy} count={rows.length ? listed : null} status={behindChip} />}
+      header={<PrioritiesHeader legacy={legacy} count={rows.length ? listed : null} status={behindChip} layout={layout} />}
       legacyColumn={LIST_COLUMN}
       column="w-full pb-16 [container-type:inline-size]"
     >

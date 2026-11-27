@@ -38,11 +38,11 @@ afterEach(async () => {
 });
 afterAll(() => { closeDomWindow(dom); restoreGlobals(); });
 
-async function mount() {
+async function mount(layout: "wide" | "phone" = "wide") {
   root = createRoot(host);
   await act(() => root!.render(
     <ThemeContext.Provider value={{ theme: "dark", toggleTheme: () => {}, visualStyle: "modern", setVisualStyle: () => {} }}>
-      <MemoryRouter initialEntries={["/priorities"]}><PrioritiesHeader legacy={null} count={4} /></MemoryRouter>
+      <MemoryRouter initialEntries={["/priorities"]}><PrioritiesHeader legacy={null} count={4} layout={layout} /></MemoryRouter>
     </ThemeContext.Provider>,
   ));
 }
@@ -73,3 +73,19 @@ for (const arrived of [false, true]) {
     expect(back!.closest(".ml-auto")!.querySelector("[data-legend-button]")).not.toBeNull();
   });
 }
+
+test("the glyph's box is as wide as the list's rank column on each layout: 20px wide, 16px on the phone", async () => {
+  target = null;
+  await mount("wide");
+  expect(host.querySelector("[data-priorities-glyph]")!.className.split(" ")).toContain("w-5");
+  await act(() => root!.unmount());
+  await mount("phone");
+  const phone = host.querySelector("[data-priorities-glyph]")!.className.split(" ");
+  expect(phone).toContain("w-4");
+  expect(phone).not.toContain("w-5");
+  // The list's own columns, so the two stay one edge (components/priorities/PriorityBlock).
+  const { readFileSync } = await import("node:fs");
+  const block = readFileSync(new URL("./PriorityBlock.tsx", import.meta.url), "utf8");
+  expect(block).toContain("grid-cols-[16px_minmax(0,1fr)_auto]");
+  expect(block).toContain("grid-cols-[20px_minmax(0,1fr)_auto]");
+});
