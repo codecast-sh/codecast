@@ -41,6 +41,8 @@ export async function retireOnLive(call: Call, args: RetireOnLiveArgs): Promise<
   if (other) return keep(other);
   const stray = await unclaimedChanges(root, upstream);
   if (stray) return keep(stray);
+  const unpushed = await unpushedCommits(root, upstream);
+  if (unpushed) return keep(unpushed);
   // The server kills it only if nothing moved since this read and nothing would be cut off (cliRetireSession).
   const retired = await call("/cli/sessions/retire", { session: args.conversation_id, expected_message_count: row.message_count ?? 0 });
   return retired?.retired ? { retired: true } : keep(retired?.reason ?? "it could not be retired");
@@ -58,6 +60,34 @@ export async function runRetireOnLiveCommand(siteUrl: string, apiToken: string, 
     }
   };
   return retireOnLive(call, commandArgs ? JSON.parse(commandArgs) : {});
+}
+
+/**
+ * Commits on the checkout's branch that its remote lacks and whose content main does not already hold, as a reason
+ * to keep. The checks above read only the working tree against HEAD, and the server counts an edit as landed when a
+ * landed commit touching its file is newer, so a session that committed more work locally after shipping would
+ * otherwise be retired with that work unpushed. A commit main holds by patch-id, or whose files read the same at
+ * HEAD as on main (a squash of it landed), is not work of its own.
+ */
+async function unpushedCommits(root: string, main: string): Promise<string | null> {
+  const tracked = (await gitTry(root, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"]))?.trim();
+  const remote = tracked || main;
+  const ahead = await gitTry(root, ["rev-list", `${remote}..HEAD`]);
+  const unmerged = await gitTry(root, ["rev-list", "--cherry-pick", "--right-only", "--no-merges", `${main}...HEAD`]);
+  if (ahead === null || unmerged === null) return "its checkout's commits could not be read against its remote";
+  const notOnMain = new Set(unmerged.split("\n").filter(Boolean));
+  const own = ahead.split("\n").filter((sha) => notOnMain.has(sha));
+  if (!own.length) return null;
+  const files = new Set<string>();
+  for (const sha of own) {
+    const touched = await gitTry(root, ["diff-tree", "--no-commit-id", "--name-only", "-r", sha]);
+    if (touched === null) return "its checkout's commits could not be read against its remote";
+    for (const f of touched.split("\n").filter(Boolean)) files.add(f);
+  }
+  const blob = (rev: string, f: string) => gitTry(root, ["rev-parse", "-q", "--verify", `${rev}:${f}`]).then((s) => s?.trim() ?? "");
+  const differs: string[] = [];
+  for (const f of files) if ((await blob("HEAD", f)) !== (await blob(main, f))) differs.push(f);
+  return differs.length ? `it has commits ${remote} lacks: ${differs.slice(0, 5).join(", ")}${differs.length > 5 ? ` and ${differs.length - 5} more` : ""}` : null;
 }
 
 /** Changed files in the checkout no session's edits account for, as a reason to keep, or null when there are none. */

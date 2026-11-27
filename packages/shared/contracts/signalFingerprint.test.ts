@@ -22,11 +22,11 @@ import {
 } from "./signalFingerprint";
 
 describe("flowStopFingerprint", () => {
-  test("one key per repository, flow and shared exit, with no stop words in it", () => {
-    const a = flowStopFingerprint("Acme/App", "change", "land__red_main");
-    expect(a).toBe("flowstop:acme/app:change:land__red_main");
-    expect(flowStopFingerprint("acme/app", "change", "land__unread")).not.toBe(a);
-    expect(flowStopFingerprint("acme/other", "change", "land__red_main")).not.toBe(a);
+  test("one key per repository and breakage, with no flow and no stop words in it", () => {
+    const a = flowStopFingerprint("Acme/App", "main_red");
+    expect(a).toBe("flowstop:acme/app:main_red");
+    expect(flowStopFingerprint("acme/app", "ci_unread")).not.toBe(a);
+    expect(flowStopFingerprint("acme/other", "main_red")).not.toBe(a);
   });
 });
 

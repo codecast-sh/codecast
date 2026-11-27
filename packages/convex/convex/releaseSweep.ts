@@ -1,6 +1,6 @@
 // The release sweep (pl-1146 piece 7): the exceptions a workspace's Release
 // Captain acts on, in one read, so its hourly check is gated on there being
-// a new one (`cast release sweep --keys` as the routine's `changes` precheck)
+// a new one (`cast release sweep --new` as the routine's `state` precheck)
 // and spends nothing on a quiet hour or on exceptions it already saw. Five kinds, each read the way the surface that owns
 // it reads it:
 //   - open run-stop incidents (flowStops.openFlowStopIncidents);

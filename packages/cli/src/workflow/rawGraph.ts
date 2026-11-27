@@ -290,7 +290,9 @@ export class Parser {
     if (attrs.agent) node.agent = String(attrs.agent);
     if (attrs.definition) node.definition = String(attrs.definition);
     if (attrs.isolated !== undefined) node.isolated = attrs.isolated === true || attrs.isolated === "true";
-    for (const k of ["parks", "machine", "fold", "shared"] as const) if (attrs[k] === true || attrs[k] === "true") node[k] = true;
+    for (const k of ["parks", "machine", "fold"] as const) if (attrs[k] === true || attrs[k] === "true") node[k] = true;
+    if (attrs.shared === true || attrs.shared === "true") node.shared = true;
+    else if (attrs.shared !== undefined && attrs.shared !== false && attrs.shared !== "false") node.shared = String(attrs.shared);
     if (attrs.asks_if) node.asks_if = String(attrs.asks_if);
     if (attrs.refresh !== undefined) node.refresh = attrs.refresh === true || attrs.refresh === "true";
     if (attrs.reviewer !== undefined) node.reviewer = attrs.reviewer === true || attrs.reviewer === "true";

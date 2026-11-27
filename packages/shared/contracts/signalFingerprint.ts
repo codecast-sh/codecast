@@ -57,13 +57,14 @@ export const holdsFlowStop = (fingerprints: ReadonlyArray<string> | undefined): 
 
 /**
  * A run stopped at an exit its flow marks shared (workflow_runs.stop_fingerprint):
- * one key per repository, flow and exit, so the same breakage on many changes
- * reaches one cause. The exit is the stop's identity; its words are no part of
- * the key, since they carry the change's own files and a model's prose and so
- * never read alike across changes.
+ * one key per repository and breakage, the name the exit gives it
+ * (`shared="main_red"`), so the same breakage on many changes reaches one cause
+ * whichever flow composed the exit and whichever of its exits said it. The
+ * stop's words are no part of the key, since they carry the change's own files
+ * and a model's prose and so never read alike across changes.
  */
-export function flowStopFingerprint(repository: string, flow: string, exit: string): string {
-  return `flowstop:${repository.trim().toLowerCase()}:${flow.trim()}:${exit.trim()}`;
+export function flowStopFingerprint(repository: string, breakage: string): string {
+  return `flowstop:${repository.trim().toLowerCase()}:${breakage.trim()}`;
 }
 
 /** A Sentry issue mirrored as a group: the issue id is already Sentry's grouping. */
