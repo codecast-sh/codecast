@@ -6,7 +6,7 @@ import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { hashToken } from "./apiTokens";
 import { daemonHeartbeat } from "./users";
-import { requestDeviceUpdate } from "./devices";
+import { performRequestDeviceUpdate, requestDeviceUpdate } from "./devices";
 import { selfUpdateBeatPatch, updateRequestFor } from "./lib/deviceUpdate";
 
 const USER = "users_1" as any;
@@ -116,6 +116,20 @@ describe("the request through heartbeats", () => {
     // A newer release than the one asked for also answers it.
     await beat(db, { version: "1.2.0", update_available: "" });
     expect(row(db).update_requested_at).toBeUndefined();
+  });
+
+  test("Settings > Daemon's Update names the release the page read, so a stale '' does not clear it (ct-102439)", async () => {
+    const db = await fixture({ can_self_update: true, update_available: "" });
+    await performRequestDeviceUpdate(ctx(db) as any, USER, "laptop", "1.1.0");
+    expect(row(db).update_requested_version).toBe("1.1.0");
+    await beat(db, { update_available: "" });
+    expect(row(db).update_state).toBe("requested");
+    await beat(db, { version: "1.1.0", update_available: "" });
+    expect(row(db).update_requested_at).toBeUndefined();
+    // A tab opened before the page named it sends no version, as before.
+    await performRequestDeviceUpdate(ctx(db) as any, USER, "laptop");
+    expect(row(db).update_state).toBe("requested");
+    await expect(performRequestDeviceUpdate(ctx(db) as any, USER, "laptop", "latest")).rejects.toThrow(/Not a release version/);
   });
 
   test("a daemon that restarts on another version than the one asked for ends the run as failed, saying so", async () => {

@@ -1694,8 +1694,8 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     performSetProviderKey(ctx as any, userId, deviceId, change),
   // Settings > Daemon's Update: the web paints the row's request; the row
   // itself is what the device's next beat picks up.
-  requestDeviceUpdate: async (ctx, userId, [deviceId]: [string]) =>
-    performRequestDeviceUpdate(ctx as any, userId, deviceId),
+  requestDeviceUpdate: async (ctx, userId, [deviceId, version]: [string, string?]) =>
+    performRequestDeviceUpdate(ctx as any, userId, deviceId, version ?? undefined),
   // Settings > Devices' name and icon: the web paints the roster row (or the
   // agent box's settings row); the device row is the server home.
   setDeviceAppearance: async (ctx, userId, [deviceId, change, ownerUserId]: [string, DeviceAppearanceChange, string | undefined]) =>

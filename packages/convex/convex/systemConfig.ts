@@ -2,6 +2,9 @@ import { query, mutation } from "./functions";
 import { v } from "convex/values";
 import { verifyApiToken } from "./apiTokens";
 import { isStaff } from "./lib/staff";
+import { userTeams } from "./lib/teamFeatureGuard";
+import { isBelowMinimum } from "@platform/flags";
+import type { Id } from "./_generated/dataModel";
 
 // Admin-gated upsert of a single system_config row. Shared by every "minimum
 // version" lever (CLI binary, desktop app) so the auth + upsert lives once.
@@ -52,9 +55,31 @@ export async function getSystemConfig(ctx: any, key: string): Promise<string | n
   return config?.value ?? null;
 }
 
+/** The highest of the given floors; null when none is set. */
+export function highestFloor(floors: Array<string | null | undefined>): string | null {
+  return floors.reduce<string | null>((top, f) => (f && (!top || isBelowMinimum(top, f)) ? f : top), null);
+}
+
+/**
+ * The CLI floor a user's machines are held to: the global min_cli_version
+ * raised by the floor of every team they belong to. A team floor never lowers
+ * the global one. Null when nothing is set.
+ */
+export async function effectiveMinCliVersion(ctx: any, userId: Id<"users"> | null | undefined): Promise<string | null> {
+  const global = await getSystemConfig(ctx, "min_cli_version");
+  if (!userId) return global;
+  const teams = await userTeams(ctx, userId);
+  return highestFloor([global, ...teams.map((t) => t?.min_cli_version)]);
+}
+
+// A daemon that sends its token gets its owner's floor (team floors included);
+// one that predates that sends no args and gets the global floor.
 export const getMinCliVersion = query({
-  args: {},
-  handler: async (ctx) => getSystemConfig(ctx, "min_cli_version"),
+  args: { api_token: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const auth = args.api_token ? await verifyApiToken(ctx, args.api_token) : null;
+    return effectiveMinCliVersion(ctx, auth?.userId);
+  },
 });
 
 export const setMinCliVersion = mutation({

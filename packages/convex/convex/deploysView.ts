@@ -38,6 +38,7 @@ export async function shapeView(ctx: any, d: Doc<"deploys">): Promise<DeployView
     _id: String(d._id),
     short_id: d.short_id,
     ...(d.client_key ? { client_key: d.client_key } : {}),
+    ...(d.team_id ? { team_id: String(d.team_id) } : {}),
     project_id: d.project_id ? String(d.project_id) : null,
     target: d.target,
     status: d.status,
