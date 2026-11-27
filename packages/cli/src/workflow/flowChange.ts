@@ -145,9 +145,15 @@ export async function previewSessionChange(root: string, session: string, only?:
   // A write is in a file's uncommitted diff only when it came after the file's last commit.
   const committedAt = await lastCommitTimes(root, frozen.changes.map((c) => c.path));
   const inDiff = (s: SessionEdits, p: string) => (s.edits.get(p) ?? 0) > (committedAt.get(p) ?? 0);
-  // A session that changed more than this change names the files that belong to it (globs, repo-relative).
-  const globs = (only ?? []).map((g) => new Bun.Glob(g));
-  const wrote = frozen.changes.map((c) => c.path).filter((p) => inDiff(mine, p) && (!globs.length || globs.some((g) => g.match(p))));
+  // A session that changed more than this change names the files that belong to it (paths or globs, repo-relative).
+  // An entry is its exact path first: a route file such as app/task/[id].tsx, read only as a glob, is a character
+  // class that matches nothing, and the file fell out of the change unseen (ct-102457).
+  const entries = (only ?? []).map((e) => ({ e, glob: new Bun.Glob(e) }));
+  const names = (entry: (typeof entries)[number], p: string) => entry.e === p || entry.glob.match(p);
+  const ownPaths = frozen.changes.map((c) => c.path).filter((p) => inDiff(mine, p));
+  const wrote = ownPaths.filter((p) => !entries.length || entries.some((entry) => names(entry, p)));
+  // An entry that names none of the session's changed files is said, never dropped in silence.
+  const unmatched = entries.filter((entry) => !ownPaths.some((p) => names(entry, p))).map(({ e }) => e);
   const held = wrote.filter((p) => heldWhy(p)).map((p) => ({ path: p, why: heldWhy(p)! }));
   const kept = wrote.filter((p) => !heldWhy(p)).sort();
   // A file another session also changed goes in with only this session's lines when every writer's replayed edits
@@ -179,7 +185,7 @@ export async function previewSessionChange(root: string, session: string, only?:
   const paths = kept.filter((p) => !unchanged.has(p));
   const cut = cuts.size ? { ...frozen, changes: frozen.changes.map((c) => (cuts.has(c.path) ? { ...c, blob: cuts.get(c.path)! } : c)) } : frozen;
   const landed = await landedOn(root, cut, upstream, paths);
-  return { frozen: cut, upstream, session: idOf(mine), conversation: mine.conversationId ?? null, agentSession: mine.sessionId, paths, shared, held, landed };
+  return { frozen: cut, upstream, session: idOf(mine), conversation: mine.conversationId ?? null, agentSession: mine.sessionId, paths, shared, held, landed, unmatched };
 }
 
 /**
