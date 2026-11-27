@@ -58,7 +58,6 @@ import {
   isAssignedAwayFromViewer,
   underOwnersModel,
   isInboxMember,
-  ridesParentCard,
   agentAnswersRow,
   agentOwnerOfRow,
   personWorkState,
@@ -91,6 +90,7 @@ import { nestParentIdOf, subagentLinkFields } from "./ccAccountsShared";
 import { isSessionOwner, ownerRowsForUser, ownPeerByItsSpawnersHuman, sessionOwnerRow, teamOwnerRowsForUser } from "./sessionOwners";
 import { isTeamOwnedConversation, overlayViewerTriage, recordViewerTriage, refuseHidingTeamSession, resurfaceViewerTriageOnPin } from "./lib/viewerTriage";
 import { inboxMemoGet, inboxOwnersOf, ownersModelOnMemo, userMembershipsMemo, withInboxOwners } from "./lib/inboxOwners";
+import { CHILDREN_HORIZON, nestedOnParentCard, parentOwnedChildFields, sentOnParentCard, withAdoptedChildren } from "./lib/ownedChildRows";
 import { releaseDeadParentChildrenLater } from "./lib/agentOwnerWaits";
 import { hideConversationForViewer, unhideConversationForViewer, viewerHiddenConversationIds } from "./inboxHides";
 import { approxMessageBytes, filterUserMessages, isImportNotice, isNavigableUserMessage, navPromptField, navPromptPatch, toNavigatorRow, type FilteredUserMessage } from "./userMessagesFilter";
@@ -8578,12 +8578,6 @@ export async function stampInboxViewerFields(
   }
 }
 
-// The children a listed row's read takes (newest by creation), and the cap on
-// the adopted workers it reads past them (enrichInboxSessionRow). The web nest
-// keeps the same set (store ownedChildrenOf).
-const CHILDREN_HORIZON = 20;
-const ADOPTED_CHILDREN_CAP = 50;
-
 async function enrichInboxSessionRow(
   ctx: any,
   conv: any,
@@ -8730,17 +8724,8 @@ async function enrichInboxSessionRow(
     // subagentIsProducing): a settled parent files as working until then
     // (classifyWorkState's childProducing).
     producingUntil = producingUntilOf(children, maps);
-    // A session a person dragged under this one (adopted_at) is on its card
-    // however many newer children it has: past a full page, its adopted
-    // workers are one more read (web ownedChildrenOf keeps the same set). A
-    // read that never draws children on a card skips it (skip.adopted).
-    const adopted = skip?.adopted || children.length < CHILDREN_HORIZON ? [] : await ctx.db
-      .query("conversations")
-      .withIndex("by_parent_adopted", (q: any) => q.eq("parent_conversation_id", conv._id).gte("adopted_at", 0))
-      .order("desc")
-      .take(ADOPTED_CHILDREN_CAP);
-    const seen = new Set(children.map((c: any) => c._id.toString()));
-    for (const c of [...children, ...adopted.filter((c: any) => !seen.has(c._id.toString()))]) {
+    // With the sessions a person dragged under it (lib/ownedChildRows).
+    for (const c of await withAdoptedChildren(ctx, conv._id, children, !!skip?.adopted)) {
       if ((c.is_subagent || (c.parent_conversation_id && !c.parent_message_uuid)) && c.message_count > 0) {
         subagentChildren.push(c);
       }
@@ -9074,36 +9059,6 @@ async function inboxOwnerRowFields(ctx: any, conv: any): Promise<Record<string, 
 function spellAbsentAsNull<T extends Record<string, any>>(row: T): T {
   for (const k of Object.keys(row)) if (row[k] === undefined) (row as any)[k] = null;
   return row;
-}
-
-// A child drawn on its parent's card, in the slim child row: its parent still
-// owns it (no role took it, nobody released it) and it is none of the viewer's
-// own inbox rows. An owner seat or a wait escalated to the viewer makes it one,
-// which the scan lists in the full row; released and role-owned children are
-// seated by their own windows. Every feeder of the row (the inbox read, the
-// crawl, byIds) asks this one rule, the shared ridesParentCard the web nest
-// asks too, so the row is written and drawn one way whichever delivered it.
-function nestedOnParentCard(child: any, viewerId: Id<"users">, myOwnerRow: any | null): boolean {
-  return ridesParentCard({ ...child, owners_model: true, implicit_owner: null, owned_by_me: !!myOwnerRow, owner_session_id: child.parent_conversation_id }, viewerId);
-}
-
-// The owners fields of such a child (inboxOwnerRowFields' shape), read off the
-// child alone: its parent owns it, so it has no implicit owner and costs no
-// owner read.
-function parentOwnedChildFields(child: any, parentId: Id<"conversations">): Record<string, unknown> {
-  return {
-    owners_model: true,
-    implicit_owner: null,
-    owner_session_id: parentId.toString(),
-    role_started: child.role_started ?? null,
-    owners_changed_at: child.owners_changed_at ?? null,
-    parent_released_at: null,
-    adopted_at: child.adopted_at ?? null,
-    wait_up_at: child.wait_up_at ?? null,
-    wait_up_count: child.wait_up_count ?? null,
-    wait_up_person: child.wait_up_person?.toString() ?? null,
-    needs_input_notified_key: child.needs_input_notified_key ?? null,
-  };
 }
 
 // Build a subagent child row (lighter — children carry no AUQ/plan context).
@@ -11836,17 +11791,6 @@ export const getInboxSessionsByIds = query({
 async function escalatedToCaller(ctx: any, conv: any, userId: Id<"users">): Promise<boolean> {
   if (!escalatedToViewer({ ...conv, owners_model: true }, userId.toString())) return false;
   return (await ownersModelOnMemo(ctx, conv)) && (await checkConversationAccess(ctx, userId, conv)) !== "denied";
-}
-
-// The row is one the inbox read sends as a child on its parent's card: a
-// subagent child (enrichInboxSessionRow's test, adopted ones standing alone)
-// under the owners model, whose parent is alive to own it, and
-// nestedOnParentCard. The owner fields are the full row's own read, memoized,
-// so asking costs nothing the full row would not.
-async function sentOnParentCard(ctx: any, conv: any, userId: Id<"users">, myOwnerRow: any | null): Promise<boolean> {
-  if (!conv.parent_conversation_id || !(conv.is_subagent || !conv.parent_message_uuid) || isAdoptedChild(conv)) return false;
-  if (!nestedOnParentCard(conv, userId, myOwnerRow)) return false;
-  return !!(await inboxOwnersOf(ctx, conv))?.owner_session_id;
 }
 
 // Auth-free body of getInboxSessionsByIds, exported for tests.
