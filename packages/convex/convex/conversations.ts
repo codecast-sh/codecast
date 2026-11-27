@@ -8943,6 +8943,8 @@ async function enrichInboxSessionRow(
     parked_wake_kind: conv.parked_wake_kind ?? null,
     // When the latest turn opened (see schema): a pin older than it parks nothing.
     last_turn_at: conv.last_turn_at ?? null,
+    // A person's newest turn (see schema): a Ship run reads it off /cli/inbox.
+    last_person_turn_at: conv.last_person_turn_at ?? null,
     // The pin rule's fallback for a row with no last_turn_at, as its answer:
     // last_user_message_at moves on every tool call, so shipping it would
     // resend the list on each one (rowPinPredatesTurn).
@@ -9103,6 +9105,7 @@ async function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: nu
     armed_trigger_kind: child.armed_trigger_kind ?? null,
     parked_wake_kind: child.parked_wake_kind ?? null,
     last_turn_at: child.last_turn_at ?? null,
+    last_person_turn_at: child.last_person_turn_at ?? null,
     pin_predates_user_message: pinPredatesUserMessage(child),
     last_turn_origin: child.last_turn_origin ?? null,
     loop_state: child.loop_state && child.loop_state.status !== "stopped" ? child.loop_state : null,
@@ -11196,6 +11199,9 @@ export function tallyInboxRows(
     agent_type?: string;
     agent_status?: string;
     hibernated_at?: number | null;
+    // A person's newest turn (see schema): the workflow runner reads it to see a
+    // person take its subject over (cli workflow/subjectPark.ts).
+    last_person_turn_at: number | null;
     work_state: WorkState;
     // The projection placement (shared placeInboxRow) and the fold flag, next
     // to the verdict the CLI has always tallied.
@@ -11313,6 +11319,7 @@ export function tallyInboxRows(
       agent_type: s.agent_type,
       agent_status: trustedStatusAt(s, now),
       hibernated_at: s.hibernated_at ?? null,
+      last_person_turn_at: s.last_person_turn_at ?? null,
       work_state,
       bucket,
       with_owner: agent ? (agent.kind === "role" ? `@${s.role?.handle ?? "role"}` : agent.id.slice(0, 7)) : null,

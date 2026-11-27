@@ -12,7 +12,7 @@ import { heapCapMb, heapDeath, isNativeFrame, tscNodeOptions, TSC_HEAP_MB } from
 import { CheckFailure, summarize } from "./checkOutcome.js";
 import { acquireFileLock } from "./lockFile.js";
 import { EXIT_BUSY } from "./infraExit.js";
-import { listWatchers, removeOwnState, stopWatcher, watcherIdentity, checkProject, lastLogLine, logPath, classifyWatchLine, filesNotAsChecked, unlistedChanges, buildInfoPath, IDLE_EXIT_MS, STUCK_PASS_MS, watcherExit, tscBinary, tscInTree, nearestTsconfig, outputPath, readCheckConfig, readWatchState, resolveProjects, slugOf, watchDir, watchReducer, writeWatchState, type WatchState } from "./check.js";
+import { listWatchers, removeOwnState, stopWatcher, watcherIdentity, WATCHER_PID_TRUST_MS, checkProject, lastLogLine, logPath, classifyWatchLine, filesNotAsChecked, unlistedChanges, buildInfoPath, IDLE_EXIT_MS, STUCK_PASS_MS, watcherExit, tscBinary, tscInTree, nearestTsconfig, outputPath, readCheckConfig, readWatchState, resolveProjects, slugOf, watchDir, watchReducer, writeWatchState, type WatchState } from "./check.js";
 import { tscFileVersion } from "./tscFileVersion.js";
 
 let isolation: IsolatedCodecastDir;
@@ -448,6 +448,27 @@ describe("a watcher stopped for --fresh", () => {
       expect(readWatchState(dir)).toBeNull();
     } finally {
       other.kill(9);
+    }
+  });
+
+  test("listing again asks ps only about a watcher pid it has not seen alive lately, and still drops one that changed program", () => {
+    const dir = watchDir("/tree", "web");
+    const watcher = Bun.spawn(["sleep", "30"]);
+    let asked = 0;
+    let isWatcher = true;
+    watcherIdentity.matches = (command, pid) => (pid === watcher.pid ? (asked++, isWatcher) : realIdentity(command, pid));
+    try {
+      writeWatchState(dir, { pid: watcher.pid, project: "web", tsconfig: "x", root: "/tree", startedAt: 1, inProgress: false, finishedAt: 1, errors: 0 });
+      const t0 = Date.now();
+      for (let i = 0; i < 5; i++) expect(listWatchers(t0 + i * 1_000).map((w) => w.pid)).toEqual([watcher.pid]);
+      expect(asked).toBe(1);
+      // Unseen for longer than the trust window: the pid could have died and been handed out again, so ps is asked.
+      isWatcher = false;
+      expect(listWatchers(t0 + 4_000 + WATCHER_PID_TRUST_MS)).toEqual([]);
+      expect(asked).toBe(2);
+      expect(readWatchState(dir)).toBeNull();
+    } finally {
+      watcher.kill(9);
     }
   });
 
