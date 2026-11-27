@@ -118,6 +118,19 @@ describe("B: the head is structure, never a station's free text", () => {
     expect(head(unread, null, union)).toMatchObject({ words: "Stopped at Land", waits: "CI unread" });
   });
 
+  // ct-102100: Union's pushed change.cast only extends outreach/line/change.cast, so the app reads no `stop` on its exit;
+  // the stop said to level the branch with origin first, yet the run page offered Ship again, which stops the same way.
+  test("a stop at an exit whose words live in an extended file is deliberate: its session, never Ship again", () => {
+    const extending = pushedFlow({ _id: "wf_union_ext", ...UNION_CHANGE_FLOW, source: 'digraph change {\n  graph [extends="../../outreach/line/change.cast", kind="line", takes="task,branch"]\n}' } as any) as any;
+    expect(extending.nodes.find((n: any) => n.id === "stopped").stop).toBeUndefined();
+    const r = run({ status: "failed", current_node_id: "stopped", fail_reason: "Stopped: The pull request could not be opened: line: origin's line-builder-mechanism (abb5c695d0) holds commits this checkout never had, and this checkout holds commits origin lacks; bring the change level with origin and send it again", node_statuses: [st("start", "completed", 1), st("land", "completed", 2), st("land__pr", "failed", 3, { result_preview: "line: origin's line-builder-mechanism (abb5c695d0) holds commits" }), st("land__unpushed", "failed", 4, { result_preview: '{"exit": "unpushed"}' }), st("stopped", "failed", 5)] });
+    expect(journeyOf(extending, r, [], null).now).toMatchObject({ kind: "stopped", fix: "run" });
+    expect(act(r, extending)).toEqual({ kind: "session", label: "Open session", href: "/conversation/subj" });
+    // A failure at that exit the runner did not call a stop still runs again.
+    const crashed = run({ ...r, fail_reason: "runner crashed" });
+    expect(act(crashed, extending)).toMatchObject({ kind: "again" });
+  });
+
   test("an earlier round's failure is not this stop", () => {
     const r = run({ status: "failed", current_node_id: "stopped", fail_reason: "Stopped: x", node_statuses: [...U_ROUND, st("land__changes", "failed", 7, { result_preview: '{"exit": "changes"}' }), st("fix", "completed", 8), st("land__pr", "failed", 10, { result_preview: "push refused" }), st("land__unpushed", "failed", 11, { result_preview: '{"exit": "unpushed"}' }), st("stopped", "failed", 12)] });
     // The run recorded its PR in an earlier round, so its way out is not said as No pull request.
