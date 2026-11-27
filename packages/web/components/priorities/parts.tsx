@@ -1,24 +1,20 @@
-// The small pieces every priority row draws: the ten-day strip, the one
-// primary action and the outlined secondary Answer, and the chips, one shape
-// and icon per type so each reads in grayscale (session: pill with its state
-// mark; plan: square with a target and a bar; task: a bare checkbox; PR: a
-// solid tag; branch: a dashed frame in mono; deploy: a filled pill with a
-// rocket). Labels are titles, never short ids; the id is in the tooltip.
+// The small pieces every priority draws: the ten-day strip, and a milestone's
+// state mark in the session language (components/inbox/SessionStatusMark).
+// Only two marks are actions, and only they are bordered: Needs you (yellow,
+// as the sidebar files it) opens the session to answer, and New session (the
+// New session button's pen, filled primary) opens the composer seeded with
+// the milestone's brief.
 import Link from "next/link";
-import { Check, GitBranch, GitMerge, GitPullRequest, GitPullRequestClosed, Reply, Rocket, Square, SquareCheck, Map as MapIcon, Workflow } from "lucide-react";
-import type { PriorityPlanRef, PriorityRow, PrioritySessionState } from "@codecast/shared/contracts/priorities";
-import type { NextAction } from "@codecast/shared/contracts/priorityDerive";
-import type { DeployInfo } from "../../lib/priorityList";
-export type { DeployInfo };
+import { SquarePen } from "lucide-react";
+import type { PriorityRow } from "@codecast/shared/contracts/priorities";
+import type { MilestoneStateKind } from "@codecast/shared/contracts/priorityDerive";
 import { SessionStatusMark } from "../inbox/SessionStatusMark";
-import { Mark } from "../Mark";
-import { deployMarkId } from "../../lib/marks/work";
-import { deployPillState } from "../../lib/deploys/deployPill";
 import { Button } from "../ui/button";
-import { useEntityResolution } from "../../lib/entityDisplay";
+import { HoverCard } from "../ui/HoverCard";
 import { lookup } from "../../lib/liveEntities";
 import { milestoneStartHref } from "../../lib/priorities";
-import { STATE_WORD, TOUCH_AREA, ago, type MilestoneModel, type SessionLine } from "../../lib/priorityList";
+import { dayDate } from "../../lib/priorityBreakdown";
+import { MILESTONE_STATE_WORD, TOUCH_AREA, type MilestoneModel } from "../../lib/priorityList";
 import type { SessionStatus } from "../../lib/sessionStatus";
 import { cn } from "../../lib/utils";
 import { useTrackedStore } from "../../store/inboxStore";
@@ -27,259 +23,108 @@ import { stableRefId } from "../../store/wakeSig";
 const stop = (e: React.MouseEvent) => e.stopPropagation();
 const NO_TASKS: string[] = [];
 
-/** Ten days as thin bars on the page's one scale, a stub for none; today outlined; a tick over a day a critical milestone landed. */
-export function DayStrip({ counts, todayIndex, landed, peak, size = "row" }: { counts: number[]; todayIndex: number; landed?: boolean[]; peak: number; size?: "row" | "mini" }) {
-  const max = size === "row" ? 16 : 10;
+/**
+ * Ten days as bars on the page's one scale (`peak`), shaded by how much was
+ * typed, today outlined. Hovering a day opens its card: the date and the
+ * messages. A list row's bars are 20px (7px on a narrow list), the day
+ * columns "Where your messages went" draws under the list; `page` spreads
+ * them across the page with a date under each.
+ */
+export function DayStrip({ counts, days, todayIndex, peak, page }: { counts: number[]; days: readonly string[]; todayIndex: number; peak: number; page?: boolean }) {
+  const max = page ? 56 : 24;
   const top = Math.max(1, peak);
-  const perDay = counts.map((c, i) => (i === todayIndex ? `${c} today` : String(c))).join(" · ");
   return (
-    <Mark id="priority.ten_days" hint={<span className="tabular-nums">{perDay}</span>}>
-      <span data-day-strip className="flex items-end gap-px" style={{ height: max + (landed ? 5 : 0) }}>
-        {counts.map((c, i) => {
-          const h = c <= 0 ? 1 : Math.max(2, Math.round((Math.min(c, top) / top) * max));
-          const today = i === todayIndex;
-          return (
-            <span key={i} className="flex flex-col items-center justify-end gap-[2px]">
-              {landed && <i className={cn("block h-[3px] w-[2px]", landed[i] ? "bg-sol-text" : "bg-transparent")} />}
+    <span data-day-strip className={cn("flex items-end", page ? "w-full gap-1.5" : "gap-1 [@container(max-width:40rem)]:gap-[2px]")}>
+      {counts.map((c, i) => {
+        const share = Math.sqrt(Math.min(c, top) / top);
+        const h = c <= 0 ? 2 : Math.max(5, Math.round(share * max));
+        const today = i === todayIndex;
+        const date = dayDate(days[i]);
+        return (
+          <HoverCard
+            key={days[i]}
+            side="bottom"
+            align="center"
+            className="w-auto"
+            triggerClassName={cn("flex flex-col items-center justify-end", page ? "min-w-0 flex-1" : "w-[20px] [@container(max-width:40rem)]:w-[7px]")}
+            card={
+              <div data-day-card className="flex items-baseline gap-3 whitespace-nowrap px-2.5 py-1.5 text-ui">
+                <span className="font-semibold text-sol-text">{date}</span>
+                <span className="tabular-nums text-sol-text-muted">{c} {c === 1 ? "message" : "messages"}</span>
+              </div>
+            }
+          >
+            <span data-day={days[i]} data-count={c} className="flex w-full flex-col justify-end" style={{ height: max + 2 }}>
               <i
-                className={cn("block rounded-[1px]", size === "row" ? "w-[5px]" : "w-[3px]", today ? "border border-sol-green bg-transparent" : c > 0 ? "bg-sol-green" : "bg-sol-text/10")}
-                style={{ height: today ? Math.max(4, h) : h }}
+                className={cn("block w-full rounded-[2px]", today && "border border-sol-green/80", c > 0 ? "bg-sol-green" : "bg-sol-text/10")}
+                style={{ height: h, opacity: c > 0 ? 0.45 + 0.55 * share : 1 }}
               />
             </span>
-          );
-        })}
-      </span>
-    </Mark>
+            {page && (
+              <span data-day-label className={cn("mt-1 whitespace-nowrap text-mark tabular-nums", today ? "font-semibold text-sol-text" : "text-sol-text-dim")}>
+                {/* A narrow page (a phone) has room for the day of the month alone. */}
+                {today ? "Today" : <><span className="[@container(max-width:40rem)]:hidden">{date.replace(/^\w+,?\s*/, "")}</span><span className="hidden [@container(max-width:40rem)]:inline">{date.replace(/^.*\s/, "")}</span></>}
+              </span>
+            )}
+          </HoverCard>
+        );
+      })}
+    </span>
   );
 }
 
-const MARK: Record<PrioritySessionState, SessionStatus> = { needs_you: "needs_you", working: "working", dormant: "dormant", idle: "idle", done: "idle", killed: "idle" };
+/** The session language's mark for each state a milestone can show without being an action. */
+const QUIET_MARK: Record<"working" | "dormant" | "idle" | "done", SessionStatus> = { working: "working", dormant: "dormant", idle: "idle", done: "done" };
 
-/** A workflow step's title as what it works on: "Review · ct-9 tidy" reads "Review: <task title>", never its id. */
-function useSessionLabel(s: Pick<SessionLine, "title">): string {
-  const m = /^([A-Z][A-Za-z]+) · ((?:ct|pl)-\d+)\s*(.*)$/.exec(s.title);
-  const ref = useEntityResolution(m?.[2] ?? "", m ? (m[2].startsWith("pl-") ? "plan" : "task") : undefined);
-  if (!m) return s.title || "Untitled session";
-  const named = (ref.entity as { title?: string } | null)?.title;
-  return `${m[1]}: ${named || m[3] || "work"}`;
-}
+/** The 24px box a state mark sits in, the milestone line's first column. */
+const BOX = "flex size-6 shrink-0 items-center justify-center";
 
-/** A session: a quiet pill, its state mark and its title (a closed one says so in a word after it). `labeled`: its state's word sits beside the chip. */
-export function SessionChip({ s, className, labeled }: { s: SessionLine; className?: string; labeled?: boolean }) {
-  const label = useSessionLabel(s);
-  const closed = s.state === "done" || s.state === "killed";
+/** The bordered yellow Needs you mark. `href`: the session to answer; without one it is the mark alone (the legend). */
+export function NeedsYouMark({ href, label }: { href?: string; label?: string }) {
+  const look = cn(BOX, "rounded-control border border-sol-yellow/70 bg-sol-yellow/15 shadow-sm");
+  if (!href) return <span className={look}><SessionStatusMark status="needs_you" size={13} /></span>;
   return (
-    <Link
-      href={s.href}
-      onClick={stop}
-      data-chip="session"
-      className={cn("inline-flex h-6 min-w-0 max-w-[17rem] shrink items-center gap-1.5 rounded-full border border-sol-border/60 px-2 text-meta text-sol-text-muted hover:border-sol-text-dim/60 hover:text-sol-text", TOUCH_AREA, className)}
-    >
-      {!closed && <SessionStatusMark status={MARK[s.state]} size={12} labeled={labeled} />}
-      {s.workflow && <Mark id="inbox.flow"><Workflow className="size-3 shrink-0 text-sol-text-dim" aria-hidden /></Mark>}
-      <span className="min-w-0 truncate" title={`${label} · ${STATE_WORD[s.state]}`}>{label}</span>
-      {closed && <span className="shrink-0 text-sol-text-dim">closed</span>}
+    <Link href={href} onClick={stop} data-state-action="needs_you" title={label} aria-label={label} className={cn(look, TOUCH_AREA, "hover:bg-sol-yellow/25")}>
+      <SessionStatusMark status="needs_you" size={13} />
     </Link>
   );
 }
 
-/** A session that asks, but is not the priority's action: an outlined Answer, then its name. */
-export function AnswerSecondary({ s, showName = true, tall }: { s: SessionLine; showName?: boolean; tall?: boolean }) {
-  const label = useSessionLabel(s);
+/** The filled primary pen, the New session button's icon. `href`: the composer to open; without one it is the mark alone (the legend). */
+export function NewSessionMark({ href }: { href?: string }) {
+  if (!href) return <Button asChild variant="primary" size="icon-sm" className="pointer-events-none size-6 shrink-0"><span><SquarePen aria-hidden /></span></Button>;
   return (
-    <span className="inline-flex min-w-0 items-center gap-1.5">
-      <Link
-        href={s.href}
-        onClick={stop}
-        data-answer="secondary"
-        title={label}
-        className={cn("inline-flex shrink-0 items-center gap-1 rounded-control border border-sol-text/70 font-semibold text-sol-text hover:bg-sol-text/[0.06]", tall ? "h-11 px-3 text-ui" : cn("h-6 px-2 text-meta", TOUCH_AREA))}
-      >
-        <Reply className="size-3" aria-hidden /> Answer
+    <Button asChild variant="primary" size="icon-sm" className={cn("size-6 shrink-0", TOUCH_AREA)}>
+      <Link href={href} onClick={stop} data-state-action="start" title="New session on this milestone" aria-label="New session on this milestone">
+        <SquarePen aria-hidden />
       </Link>
-      {showName && <span className="min-w-0 truncate text-meta text-sol-text-dim">{label}</span>}
+    </Button>
+  );
+}
+
+/** A quiet state as its mark alone: working, sleeping, idle, done. */
+function QuietMark({ kind }: { kind: keyof typeof QUIET_MARK }) {
+  return (
+    <span data-state={kind} role="img" aria-label={MILESTONE_STATE_WORD[kind]} title={MILESTONE_STATE_WORD[kind]} className={BOX}>
+      <SessionStatusMark status={QUIET_MARK[kind]} size={13} />
     </span>
   );
 }
 
-/** One session on a line: Answer when it asks, else its chip. */
-export function SessionSlot({ s, className }: { s: SessionLine; className?: string }) {
-  return s.state === "needs_you" ? <AnswerSecondary s={s} /> : <SessionChip s={s} className={className} />;
+/** A milestone's state in its line's first column (lib/priorityList MilestoneModel.state). */
+export function MilestoneStateMark({ row, m }: { row: Pick<PriorityRow, "short_id" | "plan">; m: Pick<MilestoneModel, "state" | "step" | "plan" | "tasks"> }) {
+  const { kind, session } = m.state;
+  if (kind === "needs_you") return <span data-state="needs_you" className="flex"><NeedsYouMark href={session?.href} label={`Needs you: ${session?.title || "open the session"}`} /></span>;
+  if (kind === "start") return <span data-state="start" className="flex"><StartMark row={row} m={m} /></span>;
+  // Nobody on it, and nothing to start (a past priority): no mark, the column kept.
+  if (kind === "none") return <span data-state="none" className={BOX} />;
+  return <QuietMark kind={kind} />;
 }
 
-const VERB = { answer: "Answer", open: "Open", resume: "Resume", start: "Start" } as const;
-
-/**
- * The priority's one primary action, then the session it acts on as quiet
- * text. Answer has its own look (a dark fill and a reply glyph) so it reads in
- * grayscale; Start opens a composer on the milestone.
- */
-export function ActionButton({ row, action, tall, showSession = true }: { row: PriorityRow; action: NextAction<MilestoneModel>; tall?: boolean; showSession?: boolean }) {
-  // Start's brief names the milestone's open tasks by title: the store's task
-  // rows, read again whenever one of them changes (a title, a close).
-  const taskIds = action.kind === "start" ? action.milestone.tasks : NO_TASKS;
+/** New session on a milestone: the composer seeded with its brief, which names its open tasks by title from the store's task rows. */
+function StartMark({ row, m }: { row: Pick<PriorityRow, "short_id" | "plan">; m: Pick<MilestoneModel, "step" | "plan" | "tasks"> }) {
+  const taskIds = m.tasks.length ? m.tasks : NO_TASKS;
+  // Read again whenever one of those tasks changes (a title, a close).
   const s = useTrackedStore([(st) => taskIds.map((id) => { const t = lookup(st.tasks, id); return t ? stableRefId(t) : 0; }).join(",")]);
-  const href = action.kind === "start" ? milestoneStartHref(row, action.milestone, (id) => lookup(s.tasks, id)) : action.session!.href;
-  const size = tall ? "h-11 px-4 text-ui" : TOUCH_AREA;
-  return (
-    // The words after the button ellipsize inside the chips cell; the button never shrinks.
-    <span data-action-group className="inline-flex min-w-0 items-center gap-2">
-      {action.kind === "answer" ? (
-        <Link
-          href={href}
-          onClick={stop}
-          data-action="answer"
-          className={cn("inline-flex h-7 shrink-0 items-center gap-1.5 rounded-control bg-sol-text px-2.5 text-meta font-semibold text-sol-bg hover:opacity-90", size)}
-        >
-          <Reply className="size-3.5" aria-hidden /> Answer
-        </Link>
-      ) : (
-        <Button asChild variant="primary" size="xs" className={cn("shrink-0", size)}>
-          <Link href={href} onClick={stop} data-action={action.kind}>{VERB[action.kind]}</Link>
-        </Button>
-      )}
-      {showSession && action.session && <InSession s={action.session} />}
-    </span>
-  );
-}
-
-/** "in ‹session›": where the action acts, as quiet words that ellipsize where the line is short. */
-export function InSession({ s }: { s: SessionLine }) {
-  const label = useSessionLabel(s);
-  return <span data-in-session className="min-w-0 shrink truncate text-meta text-sol-text-dim" title={label}>in <span className="text-sol-text-muted">{label}</span></span>;
-}
-
-/**
- * A plan: square corners and a hairline, a map glyph, its title, a small bar and the count.
- * `bar={false}` on a milestone's line, where the count says the progress and the room goes to the title.
- * `labeled`: a "Plan" heading sits beside it, so its glyph is named.
- */
-export function PlanChip({ plan, prefix, showSize, bar = true, labeled, className }: { plan: PriorityPlanRef; prefix?: string; showSize?: boolean; bar?: boolean; labeled?: boolean; className?: string }) {
-  const pct = plan.total ? Math.round((plan.done / plan.total) * 100) : 0;
-  return (
-    <Link
-      href={`/plans/${plan.short_id}`}
-      onClick={stop}
-      data-chip="plan"
-      className={cn("inline-flex h-6 min-w-[6rem] max-w-[15rem] shrink items-center gap-1.5 rounded-[3px] border border-sol-border px-1.5 text-meta text-sol-text hover:border-sol-text-dim/60", TOUCH_AREA, className)}
-    >
-      <Mark id="entity.plan" labeled={labeled}><MapIcon className="size-3 shrink-0 text-sol-text-dim" aria-hidden /></Mark>
-      {prefix && <span className="shrink-0 text-sol-text-dim">{prefix}</span>}
-      {/* A "Part of" chip keeps 6rem for the title: in a narrow row (a phone) the bar leaves first, then "(N tasks)". */}
-      <span data-plan-title title={`${plan.title} · ${plan.done}/${plan.total} done${plan.size > plan.total ? ` · ${plan.size} tasks` : ""}`} className={cn("min-w-0 truncate", showSize && "min-w-[6rem]")}>{plan.title}</span>
-      {bar && (
-        <span aria-hidden data-plan-bar className={cn("flex shrink-0", showSize && "[@container(max-width:24rem)]:hidden")}>
-          <Mark id="priority.plan_progress">
-            <span className="relative block h-[3px] w-6 overflow-hidden rounded-full bg-sol-text/15">
-              <span className="absolute inset-y-0 left-0 bg-sol-text-muted" style={{ width: `${pct}%` }} />
-            </span>
-          </Mark>
-        </span>
-      )}
-      <span className="shrink-0 tabular-nums text-sol-text-dim">{plan.done}/{plan.total}</span>
-      {/* A big plan a milestone is part of says how big, inside its chip: "Part of Platform program (140 tasks)". */}
-      {showSize && <span data-plan-size className="shrink-0 tabular-nums text-sol-text-dim [@container(max-width:17rem)]:hidden">({plan.size} tasks)</span>}
-    </Link>
-  );
-}
-
-/** A task: no frame, a checkbox (checked when done) and its title. */
-export function TaskChip({ id, className }: { id: string; className?: string }) {
-  const r = useEntityResolution(id, "task");
-  const task = r.entity as { title?: string; status?: string } | null;
-  const done = task?.status === "done";
-  const Box = done ? SquareCheck : Square;
-  return (
-    <Link href={`/tasks/${id}`} onClick={stop} data-chip="task" className={cn("inline-flex h-6 min-w-[5rem] max-w-[14rem] shrink items-center gap-1 px-0.5 text-meta text-sol-text hover:underline decoration-sol-text-dim/50", TOUCH_AREA, done && "text-sol-text-muted", className)}>
-      <Mark id={done ? "task.done" : "priority.task_todo"}><Box className="size-3.5 shrink-0 text-sol-text-dim" aria-hidden /></Mark>
-      <span className="min-w-0 truncate" title={task?.title ?? "Task"}>{task?.title || "Task"}</span>
-    </Link>
-  );
-}
-
-const PR_ICON = { open: GitPullRequest, merged: GitMerge, closed: GitPullRequestClosed } as const;
-
-/** A pull request: a solid-edged tag, the glyph for its state, its number and the state in words. Every one sits under a "PRs" heading, so its glyph is named. */
-export function PrChip({ pr, state }: { pr: string; state?: string }) {
-  const [repo, number] = pr.split("#");
-  const st = state === "merged" ? "merged" : state === "closed" ? "closed" : "open";
-  const Icon = PR_ICON[st];
-  // An unknown state claims none: the plain PR glyph.
-  const markId = state ? `pr.${st}` : "priority.pr";
-  return (
-    <a href={`https://github.com/${repo}/pull/${number}`} target="_blank" rel="noreferrer" onClick={stop} data-chip="pr"
-      className={cn("inline-flex h-[22px] shrink-0 items-center gap-1 rounded-[5px] border-[1.5px] border-sol-border bg-sol-bg px-1.5 text-meta tabular-nums text-sol-text", TOUCH_AREA)}>
-      <Mark id={markId} labeled><Icon className="size-3 text-sol-text-muted" aria-hidden /></Mark><span className="font-mono" title={pr}>#{number}</span>{state && <span className="text-sol-text-dim">{st}</span>}
-    </a>
-  );
-}
-
-export type LinkKind = "task" | "pr" | "branch" | "deploy";
-const KIND_COUNT: Record<LinkKind, { Icon: typeof Square; one: string; many: string; mark: string }> = {
-  task: { Icon: Square, one: "task", many: "tasks", mark: "work.tasks" },
-  pr: { Icon: GitPullRequest, one: "pull request", many: "pull requests", mark: "priority.pr_count" },
-  branch: { Icon: GitBranch, one: "branch", many: "branches", mark: "priority.branch_count" },
-  deploy: { Icon: Rocket, one: "deploy", many: "deploys", mark: "priority.deploy_count" },
-};
-
-/** How many links of one kind a closed line has, as its glyph and a count (the words in its tooltip): the open line lists them. */
-export function KindCount({ kind, n }: { kind: LinkKind; n: number }) {
-  const { Icon, one, many, mark } = KIND_COUNT[kind];
-  const words = `${n} ${n === 1 ? one : many}`;
-  return (
-    <span data-chip-count={kind} aria-label={words} className="inline-flex h-6 shrink-0 items-center gap-1 whitespace-nowrap rounded-full bg-sol-text/[0.05] px-1.5 text-meta tabular-nums text-sol-text-muted">
-      <Mark id={mark}><Icon className="size-3 shrink-0" aria-hidden /></Mark>{n}
-    </span>
-  );
-}
-
-/** A branch: a dashed frame, the branch glyph, its name in mono. `labeled`: a "Branches" heading sits beside it. */
-export function BranchChip({ name, labeled }: { name: string; labeled?: boolean }) {
-  return (
-    <span data-chip="branch" className="inline-flex h-[22px] min-w-[5rem] max-w-[13rem] shrink items-center gap-1 rounded-[3px] border border-dashed border-sol-text-dim/60 px-1.5 font-mono text-mark text-sol-text-muted">
-      <Mark id="git.branch" labeled={labeled}><GitBranch className="size-3 shrink-0" aria-hidden /></Mark>
-      <span className="min-w-0 truncate" title={name}>{name}</span>
-    </span>
-  );
-}
-
-
-/**
- * A deploy: a filled pill, a rocket in its state's color, where it went and how
- * long ago. `labeled`: a "Deploys" heading sits beside it, so a state said in
- * words names its rocket; a live one says so by color alone.
- */
-export function DeployChip({ d, now, labeled }: { d: DeployInfo; now: number; labeled?: boolean }) {
-  return (
-    <Link href="/deploys" onClick={stop} data-chip="deploy" className={cn("inline-flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-sol-text/[0.07] px-2 text-meta text-sol-text hover:bg-sol-text/[0.12]", TOUCH_AREA)}>
-      <Mark id={deployMarkId(deployPillState(d))} labeled={labeled && d.status !== "live"}><Rocket className={cn("size-3", d.status === "live" ? "text-sol-green" : d.status === "failed" ? "text-sol-red" : "text-sol-text-muted")} aria-hidden /></Mark>
-      <span title={`${d.target} · ${d.status}`}>{d.target}</span>
-      {/* Not live: the state in words, so it reads in grayscale. */}
-      {d.status !== "live" && <span data-deploy-state className="text-sol-text-muted">{d.status}</span>}
-      <span className="tabular-nums text-sol-text-dim">{ago(d.at, now)}</span>
-    </Link>
-  );
-}
-
-/**
- * A teammate's milestone: a status mark, not a box, since nothing here is
- * theirs to press. Open is a hollow ring, done a check; each says so.
- */
-export function MilestoneMark({ done }: { done: boolean }) {
-  return (
-    <Mark id={done ? "priority.milestone_done" : "priority.milestone_open"}>
-      <span data-milestone-mark={done ? "done" : "open"} role="img" aria-label={done ? "Done" : "Open"} className="flex size-[14px] shrink-0 items-center justify-center">
-        {done
-          ? <Check className="size-3.5 text-sol-green" strokeWidth={2.5} aria-hidden />
-          : <span aria-hidden className="block size-[8px] rounded-full border-[1.5px] border-sol-text-dim" />}
-      </span>
-    </Mark>
-  );
-}
-
-/** A milestone: a square checkbox, empty or checked. */
-export function MilestoneBox({ done }: { done: boolean }) {
-  return <Mark id={done ? "priority.milestone_done" : "priority.milestone_open"}>{done
-    ? <span aria-label="Done" className="flex size-[14px] shrink-0 items-center justify-center rounded-[3px] bg-sol-green text-sol-bg"><svg viewBox="0 0 10 10" className="size-[10px]" aria-hidden><path d="M2 5.2 4.1 7.3 8 3" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /></svg></span>
-    : <span aria-label="Open" className="block size-[14px] shrink-0 rounded-[3px] border-[1.5px] border-sol-text-dim" />}</Mark>;
+  return <NewSessionMark href={milestoneStartHref(row, m, (id) => lookup(s.tasks, id))} />;
 }

@@ -1,32 +1,49 @@
-// The phone's Priorities list (app/priorities.tsx) cannot load under bun
-// (React Native), so what it shows and what its menus press are tested here,
-// over the same models the screen builds (web lib/priorityList buildModels).
+// The phone's priorities (app/priorities.tsx, app/priority/[id].tsx) cannot
+// load under bun (React Native), so what they show and what their presses do
+// are tested here, over the same models the screens build (web
+// lib/priorityList buildModels).
 import { describe, expect, it } from 'bun:test';
-import { buildModels, landedByDay, lastDays } from '@codecast/web/lib/priorityList';
-import type { PriorityWrites } from '@codecast/web/lib/priorities';
-import { lineTrail, milestoneMenu, momentumWords, moveToItems, priorityMenu, sessionMenu, sessionTargets, shownLines, statsWords } from './prioritiesList';
+import { buildModels, lastDays } from '@codecast/web/lib/priorityList';
+import { milestoneStartHref, type PriorityWrites } from '@codecast/web/lib/priorities';
+import { parseComposeLink } from '@codecast/web/lib/composeLink';
+import {
+  age, connectedOf, dayBar, dayLabel, milestoneMark, workflowRef, milestoneMenu, milestoneSections, moveToItems, priorityMenu, sectionRuns, sessionLabel, sessionMenu, sessionTargets, startCompose,
+} from './prioritiesList';
+import { linkedCreateArgs, openCompose, useCompose } from './compose';
 
 const NOW = Date.now();
 const HOUR = 3_600_000;
+const PLAN = { short_id: 'pl-60', title: 'The plan', done: 1, total: 4, size: 4 };
+const BIG = { short_id: 'pl-9', title: 'The program', done: 61, total: 149, size: 149 };
 const step = (key: string, title: string, over: Record<string, unknown> = {}) => ({ key, title, tier: 'critical' as const, tier_set_by: 'pass' as const, refs: [], done: false, ...over });
 const session = (id: string, state: string, over: Record<string, unknown> = {}) => ({ short_id: id, conversation_id: `conv-${id}`, title: `Session ${id}`, state, mine: true, workflow: false, why: ['mapped' as const], last_active_at: NOW - HOUR, ...over });
-const link = (key: string, sessions: unknown[] = []) => ({ key, sessions, sessions_more: 0, plan: null, part_of: [], looks_done: false, correction_pending: false });
+const link = (key: string, sessions: unknown[] = [], over: Record<string, unknown> = {}) => ({ key, sessions, sessions_more: 0, plan: null, part_of: [], looks_done: false, correction_pending: false, ...over });
 const row = (over: Record<string, unknown> = {}) => ({
   _id: 'p7', short_id: 'pri-7', title: 'Priorities for Union', summary: '', status: 'active', rank: 2, person_pos: 2, ai_rank: 2, rank_source: 'person', serves: null,
   steps: [
     step('s1', 'Live behind a flag', { done: true, done_at: NOW - HOUR }),
     step('s2', 'Calibrate goal finding'),
     step('s3', 'Session mapping reaches 0.75'),
+    step('s4', 'Priorities page redesign'),
     step('p1', 'Pill hover card', { tier: 'polish' }),
-    step('p2', 'Notes are tidy', { tier: 'polish' }),
+    step('p2', 'Notes are tidy', { tier: 'polish', done: true }),
   ],
-  counts: { critical_done: 1, critical_total: 3 },
+  counts: { critical_done: 1, critical_total: 4 },
   workspace: 'team:t1', user_id: 'me', owner: 'Jason', mine: true, first_seen_at: NOW - 30 * HOUR, last_active_at: NOW, done_at: null,
   session_count: 3, session_count_more: false, sessions: [], correction_pending: false, plan: null,
-  links: [link('s1'), link('s2', [session('a', 'needs_you')]), link('s3', [session('b', 'dormant'), session('c', 'needs_you', { last_active_at: NOW - 2 * HOUR })]), link('p1'), link('p2', [session('d', 'needs_you', { last_active_at: NOW - 3 * HOUR })])],
+  links: [
+    link('s1'),
+    link('s2', [session('a', 'needs_you'), session('w', 'working', { last_active_at: NOW })]),
+    link('s3', [session('b', 'dormant')]),
+    link('s4'),
+    link('p1'),
+    link('p2'),
+  ],
   ...over,
 }) as any;
-const model = (r: any) => buildModels([r], undefined, () => undefined, lastDays(10, NOW), NOW)[0];
+/** `asking`: the conversations the sidebar files under Needs You (the inbox's live verdict); the rest keep the server's state. */
+const model = (r: any, asking: string[] = []) => buildModels([r], undefined, (id) => (asking.includes(id) ? 'needs_you' : undefined), lastDays(10, NOW))[0];
+const ms = (r: any, key: string, asking: string[] = []) => model(r, asking).milestones.find((x) => x.key === key)!;
 
 /** Every write a press makes, by name and arguments. */
 function recorder() {
@@ -34,66 +51,146 @@ function recorder() {
   const writes = new Proxy({}, { get: (_t, name: string) => (...args: unknown[]) => { calls.push([name, ...args]); } }) as PriorityWrites;
   return { calls, writes };
 }
-const noUi = { open: () => {}, moveTo: () => {}, mergeInto: () => {}, correct: () => {}, copyLink: () => {} };
+const noUi = { open: () => {}, rename: () => {}, moveTo: () => {}, mergeInto: () => {}, correct: () => {}, copyLink: () => {} };
 
-describe('the phone Priorities list', () => {
-  it('shows one line per open critical milestone, the done ones once progress is pressed', () => {
-    const m = model(row());
-    expect(shownLines(m, { done: false, polish: false }).critical.map((x) => x.key)).toEqual(['s2', 's3']);
-    expect(shownLines(m, { done: true, polish: false }).critical.map((x) => x.key)).toEqual(['s2', 's3', 's1']);
+describe("a milestone's mark", () => {
+  it('needs you wins over working, and is the session to answer', () => {
+    const mark = milestoneMark(ms(row(), 's2', ['conv-a']));
+    expect(mark).toMatchObject({ kind: 'needs_you', session: { short_id: 'a' }, label: 'Needs you: Session a' });
   });
 
-  it('keeps a collapsed polish line in sight when it asks the person, and opens the rest on Polish', () => {
-    const m = model(row());
-    expect(shownLines(m, { done: false, polish: false }).polish.map((x) => x.key)).toEqual(['p2']);
-    expect(shownLines(m, { done: false, polish: true }).polish.map((x) => x.key)).toEqual(['p1', 'p2']);
+  it("an ask the sidebar does not file under Needs You is not one: the line shows what else is on it", () => {
+    expect(milestoneMark(ms(row(), 's2'))).toEqual({ kind: 'quiet', status: 'working', label: 'Working' });
   });
 
-  it('puts the priority\'s one action on its line, and an outlined Answer or a state word on the others', () => {
-    const m = model(row());
-    // The most recently waiting session wins Answer: s2's, an hour ago, over s3's two hours ago.
-    expect(m.action?.kind).toBe('answer');
-    const trail = (key: string) => lineTrail(m, m.milestones.find((x) => x.key === key)!);
-    expect(trail('s2')).toMatchObject({ kind: 'action' });
-    expect(trail('s3')).toMatchObject({ kind: 'answer', session: { short_id: 'c' } });
-    expect(trail('s1')).toBeNull();
-    const calm = model(row({ links: [link('s1'), link('s2', [session('a', 'working')]), link('s3', [session('b', 'dormant')]), link('p1'), link('p2')] }));
-    expect(lineTrail(calm, calm.milestones.find((x) => x.key === 's3')!)).toEqual({ kind: 'state', word: 'Dormant' });
+  it('a sleeping session is a quiet moon; done is a check', () => {
+    expect(milestoneMark(ms(row(), 's3'))).toEqual({ kind: 'quiet', status: 'dormant', label: 'Sleeping' });
+    expect(milestoneMark(ms(row(), 's1'))).toEqual({ kind: 'quiet', status: 'done', label: 'Done' });
   });
 
-  it('offers a teammate\'s priority no action at all', () => {
-    const m = model(row({ mine: false, rank: null }));
-    expect(m.action).toBeNull();
-    expect(lineTrail(m, m.milestones.find((x) => x.key === 's2')!)?.kind).not.toBe('action');
+  it('an open milestone nobody is on is New session for the owner, nothing for a teammate', () => {
+    expect(milestoneMark(ms(row(), 's4')).kind).toBe('start');
+    expect(milestoneMark(ms(row({ mine: false, rank: null }), 's4'))).toEqual({ kind: 'none' });
   });
 
-  it('says the stats line as web\'s phone layout does', () => {
-    const days = lastDays(10, NOW);
-    const landed = landedByDay([row()], days);
-    expect(statsWords(landed, days, { total: 12, topPct: 50 })).toEqual({ landed: 1, today: '50% top 3 today' });
-    expect(statsWords(landed, days, { total: 0, topPct: 0 }).today).toBeNull();
-  });
-
-  it('says momentum, and stalled in place of how long since', () => {
-    expect(momentumWords({ landed10: 3, lastLandedDays: 2, stalledDays: null })).toBe('3 landed · last 2d');
-    expect(momentumWords({ landed10: 0, lastLandedDays: null, stalledDays: null })).toBe('0 landed · none yet');
-    expect(momentumWords({ landed10: 0, lastLandedDays: 9, stalledDays: 9 })).toBe('0 landed · stalled 9d');
+  it("someone else's ask never asks the viewer: it reads idle", () => {
+    const theirs = row({ links: [link('s1'), link('s2', [session('a', 'needs_you', { mine: false })]), link('s3'), link('s4'), link('p1'), link('p2')] });
+    expect(milestoneMark(ms(theirs, 's2'))).toEqual({ kind: 'quiet', status: 'idle', label: 'Idle' });
   });
 });
 
-describe('the list\'s menus press web\'s writes', () => {
+describe('DONE and POLISH', () => {
+  it('open critical milestones first, then Done n before Polish x/y', () => {
+    const { open, sections } = milestoneSections(model(row()));
+    expect(open.map((m) => m.key)).toEqual(['s2', 's3', 's4']);
+    expect(sections.map((s) => [s.kind, s.label, s.count, s.rows.map((m) => m.key)])).toEqual([
+      ['done', 'Done', '1', ['s1']],
+      ['polish', 'Polish', '1/2', ['p1', 'p2']],
+    ]);
+  });
+
+  it('a priority with nothing done and no polish has no sections', () => {
+    expect(milestoneSections(model(row({ steps: [step('s2', 'Calibrate goal finding')] }))).sections).toEqual([]);
+  });
+
+  it('closed sections share a line; an open one is its head over its milestones', () => {
+    const { sections } = milestoneSections(model(row()));
+    expect(sectionRuns(sections, new Set()).map((r) => [r.open, r.sections.map((s) => s.kind)])).toEqual([[false, ['done', 'polish']]]);
+    expect(sectionRuns(sections, new Set(['done'])).map((r) => [r.open, r.sections.map((s) => s.kind)])).toEqual([[true, ['done']], [false, ['polish']]]);
+    expect(sectionRuns(sections, new Set(['polish'])).map((r) => [r.open, r.sections.map((s) => s.kind)])).toEqual([[false, ['done']], [true, ['polish']]]);
+  });
+});
+
+describe('an open milestone', () => {
+  it('sorts sessions the way the sidebar files them and folds the closed ones', () => {
+    const r = row({ links: [link('s1'), link('s2', [
+      session('i', 'idle', { last_active_at: NOW }),
+      session('k', 'killed'),
+      session('w', 'working', { last_active_at: NOW - 3 * HOUR }),
+      session('a', 'needs_you', { last_active_at: NOW - 5 * HOUR }),
+      session('d', 'dormant'),
+      session('f', 'done'),
+    ], { sessions_more: 2 }), link('s3'), link('s4'), link('p1'), link('p2')] });
+    const c = connectedOf(ms(r, 's2', ['conv-a']), null);
+    expect(c.live.map((s) => s.short_id)).toEqual(['a', 'w', 'd', 'i']);
+    expect(c.closed.map((s) => s.short_id).sort()).toEqual(['f', 'k']);
+    expect(c.more).toBe(2);
+  });
+
+  it("names its own plan, else the priority's on the list; the priority's screen shows that once and passes none", () => {
+    const r = row({ plan: PLAN, links: [link('s1'), link('s2', [], { part_of: [BIG] }), link('s3', [], { plan: { ...PLAN, short_id: 'pl-61' } }), link('s4'), link('p1'), link('p2')] });
+    const m = model(r);
+    const s2 = m.milestones.find((x) => x.key === 's2')!;
+    expect(connectedOf(s2, m.plan).plans).toEqual([{ plan: PLAN, partOf: false }, { plan: BIG, partOf: true }]);
+    expect(connectedOf(s2, null).plans).toEqual([{ plan: BIG, partOf: true }]);
+    expect(connectedOf(m.milestones.find((x) => x.key === 's3')!, m.plan).plans.map((p) => p.plan.short_id)).toEqual(['pl-61']);
+  });
+
+  it('carries its tasks and pull requests; an "Eval request:" task is an ordinary task', () => {
+    const r = row({ steps: [step('s2', 'Work the open eval requests', { refs: [{ kind: 'task', id: 'ct-1' }, { kind: 'pr', id: 'acme/app#12' }] })], links: [link('s2')] });
+    const c = connectedOf(model(r).milestones[0], null);
+    expect(c.tasks).toEqual(['ct-1']);
+    expect(c.prs).toEqual(['acme/app#12']);
+    expect(Object.keys(c).sort()).toEqual(['closed', 'live', 'more', 'plans', 'prs', 'tasks']);
+  });
+
+  it("a workflow step's session reads as what it works on, never its id", () => {
+    expect(sessionLabel({ title: 'Review · ct-98544 tidy the list' }, (id) => (id === 'ct-98544' ? 'Tidy the priorities list' : undefined))).toBe('Review: Tidy the priorities list');
+    expect(sessionLabel({ title: 'Review · ct-98544 tidy the list' })).toBe('Review: tidy the list');
+    expect(sessionLabel({ title: 'Eval case scoping' })).toBe('Eval case scoping');
+    expect(sessionLabel({ title: '' })).toBe('Untitled session');
+  });
+
+  it("names the task or plan a workflow step's session works on, and nothing for another title", () => {
+    expect(workflowRef('Review · ct-98544 tidy the list')).toBe('ct-98544');
+    expect(workflowRef('Ship · pl-12')).toBe('pl-12');
+    expect(workflowRef('Eval case scoping')).toBeNull();
+  });
+
+  it('says how long ago', () => {
+    expect(age(NOW - 6 * 60_000, NOW)).toBe('6m ago');
+    expect(age(NOW, NOW)).toBe('just now');
+  });
+});
+
+describe('ten days', () => {
+  it('an empty day is a thin line; a busier one is taller and darker, capped at the shared peak', () => {
+    expect(dayBar(0, 10, 20)).toEqual({ height: 2, opacity: 1 });
+    const some = dayBar(2, 10, 20);
+    const peak = dayBar(10, 10, 20);
+    expect(some.height).toBeLessThan(peak.height);
+    expect(some.opacity).toBeLessThan(peak.opacity);
+    expect(peak).toEqual({ height: 20, opacity: 1 });
+    expect(dayBar(40, 10, 20)).toEqual(peak);
+  });
+
+  it('labels a day by its date, today as Today', () => {
+    expect(dayLabel('2026-11-07', false)).toBe('7');
+    expect(dayLabel('2026-11-26', true)).toBe('Today');
+  });
+});
+
+describe('the menus press web\'s writes', () => {
   const own = [row({ short_id: 'pri-1', rank: 1 }), row(), row({ short_id: 'pri-9', rank: 3 })];
 
-  it('the owner\'s priority ⋯ moves, closes, sets aside and corrects through the same writes', () => {
+  it("the owner's priority ⋯ renames, moves, closes, sets aside and corrects through the same writes", () => {
     const { calls, writes } = recorder();
-    const { title, items } = priorityMenu(row(), own, writes, noUi);
+    let renamed = false;
+    const { title, items } = priorityMenu(row(), own, writes, { ...noUi, rename: () => { renamed = true; } });
     expect(title).toBe('#2 · you placed it');
-    expect(items.map((i) => i.label)).toEqual(['Open', 'Move up', 'Move down', 'Move to #…', 'Mark done', 'Set aside', 'Merge into…', 'Correct…', 'Copy link']);
-    for (const label of ['Move up', 'Move down', 'Mark done', 'Set aside']) items.find((i) => i.label === label)!.onPress();
+    expect(items.map((i) => i.label)).toEqual(['Open', 'Rename', 'Move up', 'Move down', 'Move to #…', 'Mark done', 'Set aside', 'Merge into…', 'Correct…', 'Copy link']);
+    for (const label of ['Rename', 'Move up', 'Move down', 'Mark done', 'Set aside']) items.find((i) => i.label === label)!.onPress();
+    expect(renamed).toBe(true);
     expect(calls).toEqual([['move', 'pri-7', 'up'], ['move', 'pri-7', 'down'], ['markDone', 'pri-7'], ['setAside', 'pri-7']]);
   });
 
-  it('a teammate\'s priority ⋯ holds Open and Copy link alone', () => {
+  it("on the priority's own screen there is no Open", () => {
+    const { writes } = recorder();
+    const { open: _open, ...screenUi } = noUi;
+    expect(priorityMenu(row(), own, writes, screenUi).items.map((i) => i.label)).not.toContain('Open');
+  });
+
+  it("a teammate's priority ⋯ holds Open and Copy link alone", () => {
     const { writes } = recorder();
     expect(priorityMenu(row({ mine: false, rank: null }), [], writes, noUi).items.map((i) => i.label)).toEqual(['Open', 'Copy link']);
   });
@@ -115,7 +212,7 @@ describe('the list\'s menus press web\'s writes', () => {
     expect(calls).toEqual([['move', 'pri-7', 1]]);
   });
 
-  it('a milestone\'s ⋯: Done, Rename, tier, Drop, Correct', () => {
+  it("a milestone's ⋯: Done or Undone, Rename, tier, Drop, Correct", () => {
     const { calls, writes } = recorder();
     const s = row().steps[1];
     const items = milestoneMenu(row(), s, writes, { rename: () => {}, drop: () => {}, correct: () => {} });
@@ -126,7 +223,7 @@ describe('the list\'s menus press web\'s writes', () => {
     expect(milestoneMenu(row(), row().steps[0], writes, { rename: () => {}, drop: () => {}, correct: () => {} })[0].label).toBe('Undone');
   });
 
-  it('a session\'s ⋯ takes it off the milestone or the priority, or moves it', () => {
+  it("a session's ⋯ takes it off the milestone or the priority, or moves it", () => {
     const { calls, writes } = recorder();
     const items = sessionMenu(row(), { short_id: 'b' }, 's3', writes, { moveTo: () => {} });
     expect(items.map((i) => i.label)).toEqual(['Not this milestone', 'Not this priority', 'Move to…']);
@@ -135,11 +232,41 @@ describe('the list\'s menus press web\'s writes', () => {
     expect(calls).toEqual([['moveSession', 'b', 'pri-7', 'pri-7', null], ['sessionNotThis', 'b', 'pri-7']]);
   });
 
-  it('a session moves to this priority\'s other open milestones (critical first), then the owner\'s others', () => {
+  it("a session moves to this priority's other open milestones (critical first), then the owner's others", () => {
     const targets = sessionTargets(row(), own, 's3').map((t) => `${t.priority.short_id}/${t.step.key}`);
-    expect(targets.slice(0, 3)).toEqual(['pri-7/s2', 'pri-7/p1', 'pri-7/p2']);
+    expect(targets.slice(0, 3)).toEqual(['pri-7/s2', 'pri-7/s4', 'pri-7/p1']);
     expect(targets).not.toContain('pri-7/s1');
     expect(targets).toContain('pri-1/s2');
     expect(targets).toContain('pri-9/s3');
+  });
+});
+
+describe('New session', () => {
+  it("seeds web's brief and links the session to the priority, milestone and plan at creation", () => {
+    const r = row({
+      steps: [step('s1', 'Priorities live behind a flag', { done: true }), step('s2', 'Calibrate goal finding', { refs: [{ kind: 'task', id: 'ct-9001' }, { kind: 'task', id: 'ct-9002' }] })],
+      links: [link('s1'), link('s2', [], { plan: PLAN })],
+    });
+    const m = model(r).milestones[1];
+    expect(milestoneMark(m).kind).toBe('start');
+    const tasks: Record<string, { _id: string; title: string; status: string }> = { 'ct-9001': { _id: 'task-old', title: 'Old scorer', status: 'done' }, 'ct-9002': { _id: 'task-new', title: 'Write the scorer', status: 'open' } };
+    const { seed, start, task } = startCompose(r, m, (id) => tasks[id]);
+    expect(start).toEqual({ priority: 'pri-7', priority_step: 's2', plan: 'pl-60' });
+    // The milestone's first open task is bound too, as web's binds it; never a finished one.
+    expect(task).toEqual({ _id: 'task-new', short_id: 'ct-9002', title: 'Write the scorer', status: 'open' });
+    // The sheet's create carries all of it: createSession's priority, priority_step, plan and the task as its linked object.
+    expect(linkedCreateArgs(start, task)).toEqual({ priority: 'pri-7', priority_step: 's2', plan: 'pl-60', linked_object: { type: 'task', id: 'task-new' } });
+    expect(linkedCreateArgs(null, null)).toEqual({});
+    expect(seed).toBe('pri-7, milestone: Calibrate goal finding\nOpen tasks:\n- ct-9002 Write the scorer\nPlan: pl-60\nRun `cast priorities show pri-7` for current detail.');
+    // Exactly what web's New session link carries.
+    const web = parseComposeLink(new URL(milestoneStartHref(r, m, (id) => tasks[id]), 'https://app.test').searchParams)!;
+    expect(web.draft).toBe(seed);
+    expect([web.priority, web.step, web.plan]).toEqual([start.priority, start.priority_step, start.plan]);
+    // The sheet opens with the brief and holds the link for its create.
+    openCompose(seed, [], start, task);
+    expect(useCompose.getState()).toMatchObject({ open: true, seed, start, task });
+    openCompose('plain');
+    expect(useCompose.getState().start).toBeNull();
+    expect(useCompose.getState().task).toBeNull();
   });
 });

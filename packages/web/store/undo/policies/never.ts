@@ -285,6 +285,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   setPriorityAside: PRIORITY,
   restorePriority: PRIORITY,
   setPriorityStepDone: PRIORITY_DONE,
+  renamePriorityTitle: PRIORITY,
   renamePriorityStep: PRIORITY,
   markPriorityDone: PRIORITY_DONE,
   undoPriorityStepDone: PRIORITY_DONE,

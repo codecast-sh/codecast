@@ -161,6 +161,7 @@ describe("cast priorities on the wire", () => {
     await h.run("milestone", "undone", "pri-3/s1");
     await h.run("milestone", "rename", "pri-3/s2", "Judge", "window", "live");
     await h.run("milestone", "drop", "pri-3/s3");
+    await h.run("rename", "3", "Grader", "in", "prod");
     await h.run("done", "pri-3");
     await h.run("merge", "pri-3", "--into", "4");
     await h.run("session", "move", "jx7abc1", "pri-3/s2");
@@ -173,6 +174,7 @@ describe("cast priorities on the wire", () => {
       { path: "/cli/priorities/milestone", body: { short_id: "pri-3", step_key: "s1", done: false } },
       { path: "/cli/priorities/milestone", body: { short_id: "pri-3", step_key: "s2", title: "Judge window live" } },
       { path: "/cli/priorities/milestone", body: { short_id: "pri-3", step_key: "s3", drop: true } },
+      { path: "/cli/priorities/rename", body: { short_id: "pri-3", title: "Grader in prod" } },
       { path: "/cli/priorities/done", body: { short_id: "pri-3" } },
       { path: "/cli/priorities/merge", body: { short_id: "pri-3", into: "pri-4" } },
       { path: "/cli/priorities/session-move", body: { session: "jx7abc1", short_id: "pri-3", step_key: "s2" } },
@@ -182,7 +184,7 @@ describe("cast priorities on the wire", () => {
       { path: "/cli/priorities/correction-delete", body: { correction_id: "c1" } },
     ]);
     expect(h.logs).toEqual([
-      "ok pri-3/s1 done", "ok pri-3/s1 not done", "ok pri-3/s2 renamed", "ok pri-3/s3 dropped", "ok pri-3 done", "ok pri-3 merged into pri-4",
+      "ok pri-3/s1 done", "ok pri-3/s1 not done", "ok pri-3/s2 renamed", "ok pri-3/s3 dropped", "ok pri-3 renamed", "ok pri-3 done", "ok pri-3 merged into pri-4",
       "ok jx7abc1 -> pri-3/s2", "ok jx7abc2 -> pri-3", "ok jx7abc1 is not part of pri-3",
       "ok correction c1 on pri-3/s2: the next pass reads it", "ok correction c1 deleted",
     ]);

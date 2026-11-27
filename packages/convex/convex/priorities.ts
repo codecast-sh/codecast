@@ -7,7 +7,7 @@
 // readable, writable or run while the `priorities` feature is off there. Only the owner
 // changes a priority, and every change marks its field set by the person, so
 // the pass (lib/priorityPass.ts, priorityPassRun applyPlan) never overrides it:
-// a placed rank; a milestone's tier, done state, title and drop (steps are milestones);
+// a placed rank; its title; a milestone's tier, done state, title and drop (steps are milestones);
 // set aside, done and merge; a session's move and "not this". Corrections are
 // the person's words to the pass, read by every later pass until deleted.
 
@@ -25,7 +25,7 @@ import type { PriorityDetail, PriorityHistory, PriorityList, PriorityPinLine } f
 import type { Doc, Id } from "./_generated/dataModel";
 import { type Priority, type Result, cliWorkspace, criticalCounts, isOwner, listFor, showFor, tokenUser } from "./priorityRead";
 import { historyFor } from "./priorityHistory";
-import { type MilestoneChange, doCorrect, doCorrectionDelete, doMerge, doMilestone, doMove, doPriorityDone, doSessionMove, doSessionNotThis, doSetAside, doUndoPriorityDone } from "./priorityWrite";
+import { type MilestoneChange, doCorrect, doCorrectionDelete, doMerge, doMilestone, doMove, doPriorityDone, doRetitle, doSessionMove, doSessionNotThis, doSetAside, doUndoPriorityDone } from "./priorityWrite";
 
 function orThrow<T>(res: Result<T>): T {
   if (res && typeof res === "object" && "error" in res) throw new Error(res.error);
@@ -153,6 +153,11 @@ export const renameStep = mutation({
   handler: async (ctx, args) => orThrow(await doMilestone(ctx, await authed(ctx), args.short_id, args.step_key, { title: args.title })),
 });
 
+export const renameTitle = mutation({
+  args: { short_id: v.string(), title: v.string() },
+  handler: async (ctx, args) => orThrow(await doRetitle(ctx, await authed(ctx), args.short_id, args.title)),
+});
+
 export const dropStep = mutation({
   args: { short_id: v.string(), step_key: v.string() },
   handler: async (ctx, args) => orThrow(await doMilestone(ctx, await authed(ctx), args.short_id, args.step_key, { drop: true })),
@@ -262,6 +267,16 @@ export const cliMilestone = mutation({
     if (changes !== 1) return { error: "name exactly one change: done, title or drop" };
     const change: MilestoneChange = args.done !== undefined ? { done: args.done } : args.title !== undefined ? { title: args.title } : { drop: true };
     return doMilestone(ctx, viewer, args.short_id, args.step_key, change);
+  },
+});
+
+/** `cast priorities rename <id> <title>`. */
+export const cliRename = mutation({
+  args: { api_token: v.string(), short_id: v.string(), title: v.string() },
+  handler: async (ctx, args) => {
+    const viewer = await tokenUser(ctx, args.api_token);
+    if (!viewer) return { error: "Unauthorized" };
+    return doRetitle(ctx, viewer, args.short_id, args.title);
   },
 });
 

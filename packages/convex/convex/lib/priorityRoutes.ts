@@ -9,6 +9,7 @@ const MUTATIONS = {
   move: "cliMove",
   step: "cliSetStepTier",
   milestone: "cliMilestone",
+  rename: "cliRename",
   "set-aside": "cliSetAside",
   restore: "cliRestore",
   done: "cliDone",

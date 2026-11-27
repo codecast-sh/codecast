@@ -95,6 +95,8 @@ export type PassSession = {
 export type PassPriority = {
   short_id: string;
   title: string;
+  /** "person": they renamed it; its title stands. */
+  title_set_by?: PrioritySetBy;
   summary: string;
   /** Never "merged": a merged priority is not part of the pass. */
   status: Exclude<PriorityStatus, "merged">;
@@ -528,6 +530,7 @@ export function mergePriorities(input: PriorityPassInput, output: PriorityPassOu
       if (!gone) continue;
       if (gone.status === "set_aside") { plan.notes.push(`${m}: not merged into ${target}, the person set it aside`); continue; }
       if (gone.status_set_by === "person") { plan.notes.push(`${m}: not merged into ${target}, the person marked it done`); continue; }
+      if (gone.title_set_by === "person") { plan.notes.push(`${m}: not merged into ${target}, the person named it`); continue; }
       absorbed.push(gone);
       mergedAway.add(m);
     }
@@ -565,10 +568,13 @@ export function mergePriorities(input: PriorityPassInput, output: PriorityPassOu
     const heldPlace = prior?.person_pos == null ? Math.min(...absorbed.map((a) => a.person_pos ?? Infinity)) : Infinity;
     if (heldPlace !== Infinity) plan.notes.push(`${target}: took the person's place of the priority it absorbed`);
 
+    // A title the person set stands.
+    const title = prior?.title_set_by === "person" ? prior.title : prop.title;
+
     rows.push({
       target, prior, proposal: prop, absorbed, remap, stepKeyFor, order,
       write: {
-        title: prop.title, summary: prop.summary, status, ai_rank: prior?.ai_rank ?? null, serves: prop.serves, steps, last_active_at: 0, done_at: null, pass_at: now,
+        title, summary: prop.summary, status, ai_rank: prior?.ai_rank ?? null, serves: prop.serves, steps, last_active_at: 0, done_at: null, pass_at: now,
         ...(heldPlace !== Infinity ? { person_pos: heldPlace } : {}),
       },
     });
@@ -655,7 +661,7 @@ export function mergePriorities(input: PriorityPassInput, output: PriorityPassOu
       if (JSON.stringify(w[k]) !== JSON.stringify((r.prior as unknown as PriorityWrite)[k])) (patch as any)[k] = w[k];
     }
     if (r.proposal || Object.keys(patch).length) plan.updates.push({ short_id: r.prior.short_id, patch, seen_steps: r.prior.steps.map((s) => s.key) });
-    if (r.proposal && r.prior.needs_rewrite && (r.proposal.title !== r.prior.title || r.proposal.summary !== r.prior.summary)) plan.rewritten.push(r.prior.short_id);
+    if (r.proposal && r.prior.needs_rewrite && (w.title !== r.prior.title || r.proposal.summary !== r.prior.summary)) plan.rewritten.push(r.prior.short_id);
   }
 
   for (const [session, m] of sessionMap) {

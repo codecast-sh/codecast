@@ -181,6 +181,11 @@ export function paintUndoStepDone(row: PriorityRow, stepKey: string, setBy: Prio
   row.counts = criticalCounts(row.steps);
 }
 
+export function paintTitle(row: PriorityRow, title: string): void {
+  const next = title.trim();
+  if (next) row.title = next;
+}
+
 export function paintRename(row: PriorityRow, stepKey: string, title: string): void {
   const step = row.steps.find((s) => s.key === stepKey);
   const next = title.trim();
@@ -413,6 +418,8 @@ export type PriorityWrites = {
   setAside: (shortId: string) => void;
   restore: (shortId: string) => void;
   setStepDone: (shortId: string, stepKey: string, done: boolean) => void;
+  /** The person's title for one of their priorities: the pass keeps it. */
+  renamePriority: (shortId: string, title: string) => void;
   renameStep: (shortId: string, stepKey: string, title: string) => void;
   dropStep: (shortId: string, stepKey: string) => void;
   markDone: (shortId: string) => void;

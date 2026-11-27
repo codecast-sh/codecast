@@ -1,8 +1,8 @@
 // Priorities v2 (design doc s97cb1f047f6b8b6fyay8yxytx8jyd91): what is derived
-// on read, never stored. Which plan a priority or a milestone belongs to, the
-// one next action a priority offers (the same function for the list, the card
-// and the page), and how a step's sessions rank. Pure, so the server's list
-// and every client agree.
+// on read, never stored. Which plan a priority or a milestone belongs to, each
+// milestone's state in the session language (design doc
+// s970aanfa345d2w12zt9menbys8k0wan), and how a step's sessions rank. Pure, so
+// the server's list and every client agree.
 import type { PriorityPlanRef, PrioritySessionState } from "./priorities";
 
 // ── Plan attribution ─────────────────────────────────────────────────────
@@ -64,53 +64,47 @@ export function attributePlans(
   return { priority: priorityId ? planOf(priorityId)! : null, steps: out };
 }
 
-// ── Sessions and the next action ────────────────────────────────────────
+// ── Sessions and milestone states ───────────────────────────────────────
 
 /** `mine` false: someone else's session, which never asks the viewer anything. */
 export type ActionSession = { state: PrioritySessionState; workflow: boolean; last_active_at: number; mine?: boolean };
-export type ActionMilestone<S extends ActionSession = ActionSession> = { key: string; tier: "critical" | "polish"; done: boolean; sessions: S[] };
 
 /** Finished or closed: never the session a line leads with. */
 export const isClosedSession = (s: Pick<ActionSession, "state">) => s.state === "done" || s.state === "killed";
 export const asksPerson = (s: Pick<ActionSession, "state" | "mine">) => s.state === "needs_you" && s.mine !== false;
 
 const STATE_RANK: Record<PrioritySessionState, number> = { needs_you: 0, working: 1, dormant: 2, idle: 3, done: 4, killed: 5 };
+// Someone else's ask ranks as idle: it is not the viewer's to answer.
+const stateRank = (s: ActionSession) => (s.state === "needs_you" && !asksPerson(s) ? STATE_RANK.idle : STATE_RANK[s.state]);
 
 /** Sessions a person drives before workflow runs, closed runs last; then needs you > working > dormant > idle, then the most recent. */
 export function orderSessions<S extends ActionSession>(list: readonly S[]): S[] {
   const tier = (s: S) => (s.workflow ? (isClosedSession(s) ? 2 : 1) : 0);
-  // Someone else's ask ranks as idle: it is not the viewer's to answer.
-  const rank = (s: S) => (s.state === "needs_you" && !asksPerson(s) ? STATE_RANK.idle : STATE_RANK[s.state]);
-  return [...list].sort((a, b) => tier(a) - tier(b) || rank(a) - rank(b) || b.last_active_at - a.last_active_at);
+  return [...list].sort((a, b) => tier(a) - tier(b) || stateRank(a) - stateRank(b) || b.last_active_at - a.last_active_at);
 }
 
-/** The session a line leads with: the best that is not closed. */
-export function bestSession<S extends ActionSession>(list: readonly S[]): S | undefined {
-  return orderSessions(list).find((s) => !isClosedSession(s));
-}
+/** What a milestone's state mark says, in the session language: done, or its live sessions' best state, or, with none live, a new session to start (the owner's own active priority) or nothing to show. */
+export type MilestoneStateKind = "done" | "needs_you" | "working" | "dormant" | "idle" | "start" | "none";
+/** `session`: the one the state is about; for needs_you, the session to answer. */
+export type MilestoneState<S extends ActionSession = ActionSession> = { kind: MilestoneStateKind; session?: S };
 
-export type NextKind = "answer" | "open" | "resume" | "start";
-export type NextAction<M extends ActionMilestone> = { milestone: M; session?: M["sessions"][number]; kind: NextKind };
+/** Needs you (one that asks the viewer) > working > dormant > idle, closed last; then the most recent. Someone else's ask ranks as idle. */
+export function orderByState<S extends ActionSession>(list: readonly S[]): S[] {
+  return [...list].sort((a, b) => stateRank(a) - stateRank(b) || b.last_active_at - a.last_active_at);
+}
 
 /**
- * A priority's one primary action. When any open milestone has a session that
- * needs the person, Answer the one that waited most recently (one a person
- * drives before a workflow run's). Otherwise the first open critical
- * milestone: Open its working session, Resume a dormant or idle one, or Start
- * one when nothing is live.
+ * A milestone's one state (the same function for the list, the card, the
+ * page and the phone). Done is done; otherwise the best of its live sessions:
+ * needs you > working > dormant > idle, the session to answer being the most
+ * recent ask. With no live session, `canStart` (the owner's own active
+ * priority) makes it a new session to start, else nothing.
  */
-export function nextActionOf<M extends ActionMilestone>(milestones: readonly M[]): NextAction<M> | null {
-  const open = milestones.filter((m) => !m.done);
-  const asking = open.flatMap((m) => m.sessions.filter(asksPerson).map((s) => ({ m, s })));
-  if (asking.length) {
-    const { m, s } = asking.sort((a, b) => Number(a.s.workflow) - Number(b.s.workflow) || b.s.last_active_at - a.s.last_active_at)[0];
-    return { milestone: m, session: s, kind: "answer" };
-  }
-  const m = open.find((x) => x.tier === "critical");
-  if (!m) return null;
-  const session = bestSession(m.sessions);
-  if (!session) return { milestone: m, kind: "start" };
-  return { milestone: m, session, kind: session.state === "working" ? "open" : "resume" };
+export function milestoneStateOf<S extends ActionSession>(m: { done: boolean; sessions: readonly S[] }, { canStart }: { canStart: boolean }): MilestoneState<S> {
+  if (m.done) return { kind: "done" };
+  const best = orderByState(m.sessions.filter((s) => !isClosedSession(s)))[0];
+  if (!best) return { kind: canStart ? "start" : "none" };
+  return { kind: best.state === "needs_you" && !asksPerson(best) ? "idle" : (best.state as MilestoneStateKind), session: best };
 }
 
 /** A workflow step's session title ("Review · ct-98544 …", "Ship · pl-12"). */
