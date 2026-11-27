@@ -1,4 +1,4 @@
-import { Archive, Bot, ChevronsDownUp, EyeOff, Rows3, SlidersHorizontal, Star, Users, type LucideIcon } from "lucide-react";
+import { Activity, Archive, ChevronsDownUp, CircleCheck, EyeOff, Layers, List, Rows3, SlidersHorizontal, Star, Users, type LucideIcon } from "lucide-react";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import {
   DropdownMenu,
@@ -12,7 +12,21 @@ import {
 } from "./ui/dropdown-menu";
 
 import { resolveCardBars, type CardBarsMode } from "../lib/uiPrefDefaults";
+import { resolveSubagentFilter, resolveSubagentRows, type SubagentFilter, type SubagentRowsMode } from "../store/inboxStore";
 export type { CardBarsMode };
+
+const SUBAGENT_ROWS: { value: SubagentRowsMode; label: string; icon: LucideIcon }[] = [
+  { value: "folded", label: "One line", icon: ChevronsDownUp },
+  { value: "compact", label: "A short row each", icon: List },
+  { value: "full", label: "A card each", icon: Rows3 },
+  { value: "hidden", label: "Hidden", icon: EyeOff },
+];
+
+const SUBAGENT_FILTERS: { value: SubagentFilter; label: string; icon: LucideIcon }[] = [
+  { value: "active", label: "Working or waiting", icon: Activity },
+  { value: "active_done", label: "Also done", icon: CircleCheck },
+  { value: "all", label: "All", icon: Layers },
+];
 
 const CARD_BARS: { value: CardBarsMode; label: string; icon: LucideIcon }[] = [
   { value: "strip", label: "One line", icon: ChevronsDownUp },
@@ -42,8 +56,10 @@ export function InboxViewOptions(props: {
   teamScope: boolean;
   onTeamScope: (on: boolean) => void;
   subagentCount: number;
-  showSubagents: boolean;
-  onShowSubagents: (on: boolean) => void;
+  subagentRows: SubagentRowsMode;
+  onSubagentRows: (value: SubagentRowsMode) => void;
+  subagentFilter: SubagentFilter;
+  onSubagentFilter: (value: SubagentFilter) => void;
   oldCount: number;
   showOld: boolean;
   onShowOld: (on: boolean) => void;
@@ -55,11 +71,13 @@ export function InboxViewOptions(props: {
   onFavorites: (on: boolean) => void;
 }) {
   const p = props;
-  const hasList = p.showTeam || p.subagentCount > 0 || p.oldCount > 0;
-  if (!hasList && !p.showCardBars && !p.showFavorites) return null;
+  const hasList = p.showTeam || p.oldCount > 0;
+  const showSubagentRows = p.subagentCount > 0;
+  if (!hasList && !showSubagentRows && !p.showCardBars && !p.showFavorites) return null;
   const changed =
     (p.showTeam && p.teamScope) ||
-    (p.subagentCount > 0 && p.showSubagents) ||
+    // Against the one default rule (the resolvers'), not a literal.
+    (showSubagentRows && (p.subagentRows !== resolveSubagentRows({}) || p.subagentFilter !== resolveSubagentFilter({}))) ||
     (p.oldCount > 0 && p.showOld) ||
     // Against the one default rule (resolveCardBars), not a literal.
     (p.showCardBars && p.cardBars !== resolveCardBars({}));
@@ -85,19 +103,39 @@ export function InboxViewOptions(props: {
             <OptionLabel icon={Users} label="Team's sessions" />
           </DropdownMenuCheckboxItem>
         )}
-        {p.subagentCount > 0 && (
-          <DropdownMenuCheckboxItem checked={p.showSubagents} onCheckedChange={(on) => p.onShowSubagents(!!on)} onSelect={(e) => e.preventDefault()}>
-            <OptionLabel icon={Bot} label="Subagents" count={p.subagentCount} />
-          </DropdownMenuCheckboxItem>
-        )}
         {p.oldCount > 0 && (
           <DropdownMenuCheckboxItem checked={p.showOld} onCheckedChange={(on) => p.onShowOld(!!on)} onSelect={(e) => e.preventDefault()}>
             <OptionLabel icon={Archive} label="Old sessions" count={p.oldCount} />
           </DropdownMenuCheckboxItem>
         )}
-        {p.showCardBars && (
+        {showSubagentRows && (
           <>
             {hasList && <DropdownMenuSeparator />}
+            <DropdownMenuLabel className="flex text-mark uppercase tracking-wide text-sol-text-dim"><span className="flex-1">Subagents on cards</span><span className="tabular-nums normal-case">{p.subagentCount}</span></DropdownMenuLabel>
+            <DropdownMenuRadioGroup value={p.subagentRows} onValueChange={(v) => p.onSubagentRows(v as SubagentRowsMode)}>
+              {SUBAGENT_ROWS.map((option) => (
+                <DropdownMenuRadioItem key={option.value} value={option.value} onSelect={(e) => e.preventDefault()}>
+                  <OptionLabel icon={option.icon} label={option.label} />
+                </DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuRadioGroup>
+            {p.subagentRows !== "hidden" && (
+              <>
+                <DropdownMenuLabel data-sv-subagent-filter-label className="pt-1 pb-0.5 text-meta font-normal text-sol-text-dim">Which ones</DropdownMenuLabel>
+                <DropdownMenuRadioGroup value={p.subagentFilter} onValueChange={(v) => p.onSubagentFilter(v as SubagentFilter)}>
+                  {SUBAGENT_FILTERS.map((option) => (
+                    <DropdownMenuRadioItem key={option.value} value={option.value} onSelect={(e) => e.preventDefault()}>
+                      <OptionLabel icon={option.icon} label={option.label} />
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+              </>
+            )}
+          </>
+        )}
+        {p.showCardBars && (
+          <>
+            {(hasList || showSubagentRows) && <DropdownMenuSeparator />}
             <DropdownMenuLabel className="text-mark uppercase tracking-wide text-sol-text-dim">Triggers and runs on cards</DropdownMenuLabel>
             <DropdownMenuRadioGroup value={p.cardBars} onValueChange={(v) => p.onCardBars(v as CardBarsMode)}>
               {CARD_BARS.map((option) => (
@@ -110,7 +148,7 @@ export function InboxViewOptions(props: {
         )}
         {p.showFavorites && (
           <>
-            {(hasList || p.showCardBars) && <DropdownMenuSeparator />}
+            {(hasList || showSubagentRows || p.showCardBars) && <DropdownMenuSeparator />}
             <DropdownMenuCheckboxItem checked={p.favorites} onCheckedChange={(on) => p.onFavorites(!!on)}>
               <OptionLabel icon={Star} label="Favorites only" />
             </DropdownMenuCheckboxItem>

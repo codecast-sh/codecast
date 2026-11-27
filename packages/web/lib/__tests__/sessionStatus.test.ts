@@ -257,6 +257,97 @@ describe("the status vocabulary", () => {
   });
 });
 
+// A Claude Code subagent drawn under its parent runs inside its parent's turn
+// and hands its result back there: once its turn ended it waits on nobody. A
+// spawned worker is a session of its own, and one that stopped still waits on
+// the person; so does a subagent standing as its own card.
+describe("a nested subagent whose turn ended", () => {
+  const status = (r: InboxSession, section?: "needs_input", nested = true) =>
+    sessionStatusOf({ row: r, now: NOW, section: section ?? null, placement: railRowPlacement(r, NOW), nested });
+
+  test("a finished Claude Code subagent reads Done, not Needs you", () => {
+    const sub = row({ is_subagent: true, parent_conversation_id: "jx7parent" });
+    expect(railRowPlacement(sub, NOW).bucket).toBe("needs_input");
+    expect(status(sub)).toBe("done");
+  });
+
+  // The real shape: a child its owners-model parent owns, finished, with no
+  // live status. The agent-answers rule files its settled wait Working
+  // ("With <owner>"), which used to read Working in every mode.
+  test("a finished subagent its session owns reads Done, not the agent-answers Working", () => {
+    const sub = row({ is_subagent: true, parent_conversation_id: "jx7parent", owner_session_id: "jx7parent", owners_model: true, owned_by_me: false, status: "completed", agent_status: undefined, is_idle: undefined });
+    expect(sessionStatusOf({ row: sub, now: NOW, placement: railRowPlacement(sub, NOW) })).toBe("working");
+    expect(status(sub)).toBe("done");
+  });
+
+  // A long tool call (a build, a sleep) is quiet but not over: it stays
+  // Working through the grace the server's parent park uses, then reads Done.
+  test("a subagent quiet inside a long tool call reads Working until the producing grace runs out", () => {
+    const quiet = (ms: number, over: Partial<InboxSession> = {}) => row({ is_subagent: true, parent_conversation_id: "jx7parent", status: "active", agent_status: undefined, is_idle: undefined, updated_at: NOW - ms, agent_status_updated_at: NOW - ms, ...over });
+    expect(status(quiet(75_000))).toBe("working");
+    expect(status(quiet(4 * 60_000))).toBe("working");
+    expect(status(quiet(6 * 60_000))).toBe("done");
+    expect(status(quiet(75_000, { status: "completed" }))).toBe("done");
+  });
+
+  // A parent link the person made (an agent switch, a plan handoff) carries a
+  // parent message: that row is a full session of theirs, waiting on them.
+  test("an agent-switch continuation or a plan-handoff child waiting on the person keeps Needs you", () => {
+    for (const uuid of ["agent-switch", "plan-handoff"]) {
+      const child = row({ parent_conversation_id: "jx7parent", parent_message_uuid: uuid, updated_at: NOW - 6 * 60_000, agent_status_updated_at: NOW - 6 * 60_000 });
+      expect(railRowPlacement(child, NOW).bucket).toBe("needs_input");
+      expect(status(child)).toBe("needs_you");
+    }
+    // A Claude Code subagent's parent pointer has no parent message.
+    expect(status(row({ parent_conversation_id: "jx7parent", parent_message_uuid: null, updated_at: NOW - 6 * 60_000, agent_status_updated_at: NOW - 6 * 60_000 }))).toBe("done");
+  });
+
+  // A session a person dragged under another (adopted_at) runs its own
+  // process: drawn on its new parent's card, it reads its own placement, never
+  // the subagent Done rule, as the server's slim row says (is_subagent false).
+  test("an adopted session on its parent's card reads its own placement", () => {
+    const adopted = row({ parent_conversation_id: "jx7parent", owner_session_id: "jx7parent", owners_model: true, owned_by_me: false, is_subagent: false, adopted_at: NOW - 60_000, updated_at: NOW - 6 * 60_000, agent_status_updated_at: NOW - 6 * 60_000 } as any);
+    expect(status(adopted)).toBe(sessionStatusOf({ row: adopted, now: NOW, placement: railRowPlacement(adopted, NOW) }));
+    expect(status(adopted)).not.toBe("done");
+    expect(status({ ...adopted, adopted_at: null } as any)).toBe("done");
+  });
+
+  // The server's producing test (shared subagentProducing): one open tool call
+  // keeps it producing up to its 20-minute cap, so the card agrees with its
+  // parent's park.
+  test("a subagent inside one long tool call reads Working up to the call's cap", () => {
+    const inCall = (ms: number) => row({ is_subagent: true, parent_conversation_id: "jx7parent", status: "active", agent_status: undefined, is_idle: undefined, updated_at: NOW - ms, agent_status_updated_at: NOW - ms, tool_call_open_at: NOW - ms } as Partial<InboxSession>);
+    expect(status(inCall(10 * 60_000))).toBe("working");
+    expect(status(inCall(25 * 60_000))).toBe("done");
+  });
+
+  test("a subagent standing as its own card reads its placement", () => {
+    const sub = row({ is_subagent: true, parent_conversation_id: "jx7parent" });
+    expect(status(sub, undefined, false)).toBe("needs_you");
+    expect(status(row({ is_subagent: true, parent_conversation_id: "jx7parent", inbox_adopted_at: NOW - 1000 }), undefined, false)).toBe("needs_you");
+  });
+
+  test("a spawned worker waiting on the person still reads Needs you", () => {
+    expect(status(row({ is_subagent: true, spawned_by_conversation_id: "jx7parent" }))).toBe("needs_you");
+    expect(status(row({ spawned_by_conversation_id: "jx7parent", agent_status: "idle" }))).toBe("needs_you");
+  });
+
+  test("a subagent still producing, with a live status, a pending ask or a send keeps it", () => {
+    expect(status(row({ is_subagent: true, agent_status: "idle" }))).toBe("needs_you");
+    const busy = row({ is_subagent: true, agent_status: undefined, is_idle: false, updated_at: NOW - 2_000 });
+    expect(status(busy)).not.toBe("done");
+    const sub = row({ is_subagent: true });
+    expect(sessionStatusOf({ row: sub, now: NOW, placement: railRowPlacement(sub, NOW), live: { asking: true }, nested: true })).toBe("needs_you");
+    expect(sessionStatusOf({ row: sub, now: NOW, placement: railRowPlacement(sub, NOW), live: { pendingSend: true }, nested: true })).toBe("working");
+    expect(status(row({ is_subagent: true, pending_api_error: true, pending_api_error_kind: "limit" }))).toBe("error");
+    expect(status(row({ is_subagent: true, inbox_stashed_at: NOW - 1000 }))).toBe("stashed");
+  });
+
+  test("a section the row sits in still decides", () => {
+    expect(status(row({ is_subagent: true }), "needs_input")).toBe("needs_you");
+  });
+});
+
 describe("the card's second line", () => {
   test("a failure says what failed", () => {
     const r = row({ agent_status: "idle", pending_api_error: true, pending_api_error_kind: "limit", idle_summary: "Refactor the retry path" });

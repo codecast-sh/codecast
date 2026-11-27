@@ -250,11 +250,35 @@ describe("the Modern session card", () => {
   });
 
   test("a nested row (a subagent) reads its own state and keeps to its own facts", () => {
-    const html = render({ _id: "c-sub", is_subagent: true, parent_conversation_id: "c-lead", is_idle: false, agent_status: "working" } as never, { variant: "working" });
+    const html = render({ _id: "c-sub", is_subagent: true, parent_conversation_id: "c-lead", is_idle: false, agent_status: "working" } as never, { variant: "working", underParent: true });
     expect(html).toContain('data-mc="nested"');
     expect(html).toContain('aria-label="Subagent"');
     expect(word(html)).toBe("Working");
     expect(html).not.toContain('data-mc-chip="project"');
+  });
+
+  // Its parent not on the list, a subagent is drawn as a card of its own
+  // below whatever card precedes it; drawn nested it would read as that
+  // card's subagent.
+  test("a subagent standing as its own card draws as a full card", () => {
+    const html = render({ _id: "c-sub", is_subagent: true, parent_conversation_id: "c-lead", is_idle: false, agent_status: "working" } as never, { variant: "working" });
+    expect(html).toContain('data-mc="card"');
+    expect(html).not.toContain('data-mc="nested"');
+    expect(html).not.toContain('aria-label="Subagent"');
+    expect(html).not.toContain("pl-6");
+    expect(html).toContain('data-mc-chip="project"');
+    expect(word(html)).toBe("Working");
+  });
+
+  // Where the card is drawn decides, not what the row is: under its parent's
+  // card a subagent whose turn ended is Done; standing as its own card (an
+  // escalated wait seats it, or it is open with its parent off the list) it
+  // reads the section it sits in.
+  test("an owned subagent reads Done under its parent's card and its section standing alone", () => {
+    const kid = { _id: "c-owned", is_subagent: true, parent_conversation_id: "c-lead", owners_model: true, owned_by_me: false, owner_session_id: "c-lead", agent_status: undefined, status: "completed" } as never;
+    expect(word(render(kid, { variant: "default", underParent: true }))).toBe("Done");
+    expect(word(render(kid, { sectionStatus: "blocked" }))).toBe("Needs you");
+    expect(word(render(kid, { variant: "working" }))).toBe("With Webhook retry rewrite");
   });
 
   test("a flow station the person adopted draws as a full card named by its flow", () => {

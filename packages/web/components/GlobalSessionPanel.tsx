@@ -22,18 +22,18 @@ import type { ThreadStateStatus } from "@codecast/shared/contracts";
 import { ORG_STATE_META } from "./org/orgMeta";
 import { StatusDot } from "./StatusDot";
 import type { WorkState } from "@codecast/shared/contracts";
-import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, chipFilterSection, computeManualSortKey, isConvexId, placeInboxRows, placementDecisionsSig, getProjectName, pendingSendWakeSig, freshReviveRequestIds, isSessionHidden, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipFilterOpts, chipProjectFilters, passesFilterTerms, projectAxisKeys, projectOfFromState, groupSessionsForLabelView, groupSessionsByPlan, groupSessionsByMachine, groupSessionsForOrgLens, isOrgLensMode, orgLensAvailable, orgLensSourcesOf, orgLensWakeSig, ORG_LENS_MODES, sessionWorkState, personSessionWorkState, selectFavoriteSessions, isFavoriteInStore, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, chipFilterSection, computeManualSortKey, isConvexId, placeInboxRows, placementDecisionsSig, getProjectName, pendingSendWakeSig, isSessionHidden, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipFilterOpts, chipProjectFilters, passesFilterTerms, projectAxisKeys, projectOfFromState, groupSessionsForLabelView, groupSessionsByPlan, groupSessionsByMachine, groupSessionsForOrgLens, isOrgLensMode, orgLensAvailable, orgLensSourcesOf, orgLensWakeSig, ORG_LENS_MODES, sessionWorkState, personSessionWorkState, selectFavoriteSessions, isFavoriteInStore, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
 import { hiddenBucketTree, killAllIds } from "../store/hiddenBucketTree";
-import { sessionsWakeSig, teamInboxIdsOf, resolveInboxViewMode, resolveInboxOldestFirst, manualOrderKeysForDrop, resolveShowOld, resolveShowSubagents, sectionHeaderCount, classifySession, inboxNestParentOf, isSpawnedWorker, nestsWorkers, NEW_SESSION_HOLD_MS, ensureHydrated } from "../store/inboxStore";
+import { sessionsWakeSig, teamInboxIdsOf, resolveInboxViewMode, resolveInboxOldestFirst, manualOrderKeysForDrop, resolveShowOld, classifySession, inboxNestParentOf, drawnUnderParentIds, flatHeaderCount, cardOfNested, isSpawnedWorker, nestsWorkers, NEW_SESSION_HOLD_MS, ensureHydrated } from "../store/inboxStore";
 import { loadMoreKilledSessions } from "../hooks/killedShelf";
 import { makeCollectionSig } from "../store/wakeSig";
-import { useCoarseNow } from "../hooks/useCoarseNow";
+import { INBOX_CLOCK_MS, useCoarseNow } from "../hooks/useCoarseNow";
 import { LivePulseDot } from "./SessionActivityLine";
 import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
 import { useKillWithReview } from "../hooks/useKillWithReview";
-import { actedBlockedConversations, skippedBlockedWorkers, blockedHeadlineCause, isBlockedConversation, isCurrentBlock, isSubagentConversation, LOGIN_FLOW_STALE_MS, runsOwnFleet, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
+import { actedBlockedConversations, skippedBlockedWorkers, blockedHeadlineCause, isSubagentConversation, LOGIN_FLOW_STALE_MS, runsOwnFleet, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
 import { contextShareOf, formatShare, formatTokens, restartPlan, restartReloadsContext } from "@codecast/convex/convex/wakeCost";
-import { isClosedSession, withSafetyBlock } from "@codecast/shared/contracts";
+import { isClosedSession } from "@codecast/shared/contracts";
 import { contextWindowTokens, restartShareOfRemaining, formatCountdown } from "@codecast/shared/contracts";
 import { USER_RESTS, describeDecision, pendingProposal, type UserRest } from "@codecast/shared/contracts";
 import { sessionLiveAt } from "../lib/liveness";
@@ -75,7 +75,8 @@ import { useAccountPool, useSyncAccountPool } from "../hooks/useSyncAccountPool"
 import { localDeviceIdOf } from "../hooks/useLocalDeviceId";
 import { InboxViewOptions, type CardBarsMode } from "./InboxViewOptions";
 import { CardWorkersLine } from "./inbox/SessionCardParts";
-import { foldedRunning } from "../lib/foldedSubagents";
+import { railRowSelector } from "../lib/subagentRows";
+import { blockedInboxSessions, sectionWindow, staleInboxSessions, useCardSubagents } from "../hooks/useCardSubagents";
 import { resolveCardBars } from "../lib/uiPrefDefaults";
 import { inboxViewModes } from "../store/inboxViewModes";
 import { browserTabsByConversation, groupSessionsByBrowser, type BrowserTabRow } from "../store/browserTabsView";
@@ -1628,7 +1629,7 @@ function SessionBeacon({
   useWatchEffect(() => {
     const container = containerRef.current;
     const el = container && activeSessionId
-      ? container.querySelector(`[data-session-id="${activeSessionId}"]`)
+      ? container.querySelector(railRowSelector(activeSessionId))
       : null;
     if (el === observedRef.current) return;
     ioRef.current?.disconnect();
@@ -1873,7 +1874,7 @@ function SessionListPanelImpl({
   // is time-driven, not field-driven — so feed it a coarse clock to keep that
   // sweep alive without coupling it back to heartbeat churn. 15s is well under the
   // minutes-scale TTL. See useCoarseNow / store/wakeSig.ts.
-  const coarseNow = useCoarseNow(15_000);
+  const coarseNow = useCoarseNow(INBOX_CLOCK_MS);
   // THE PLACEMENT CHOKEPOINT (store placeInboxRows, sync-convergence C5):
   // scope → shared working-set selection → fold → shared per-row placement →
   // sections, in ONE call every counting surface shares. Team mode renders the
@@ -2054,9 +2055,12 @@ function SessionListPanelImpl({
   // reach the shared classifier), identically on every client and the server.
   // The header number is the chokepoint's section COUNT (flat cards plus
   // members nested under a same-bucket lead — what the tally and the CLI
-  // report) while no chip narrows the list and the nested rows are on screen;
-  // shared sectionHeaderCount, so this panel and mobile can't drift.
-  const showSubagents = resolveShowSubagents(s.clientState.ui);
+  // report) while no chip narrows the list and the nested rows are on screen
+  // (useCardSubagents countOf, over the shared sectionHeaderCount mobile reads).
+  const { mode: subagentRows, showSubagents, filter: subagentFilter, keptSubIds, rowsUnder, nestedCardsOf, cardSubagents, countOf, withoutCompactOpen } = useCardSubagents({
+    ui: s.clientState.ui, decisions: s.sessionDecisions, liveKeys: [s.pendingMessages, s.blockedReviveRequestedAt, stopsSig],
+    placed, now: coarseNow, activeSessionId, onOpen: handleSelect,
+  });
   // Modern focused folds the workers an agent spawned under its card (nestsWorkers).
   const nestWorkers = nestsWorkers(s.clientState.ui);
   const modernFocused = useIsModernFocused();
@@ -2069,8 +2073,6 @@ function SessionListPanelImpl({
     return ids;
   }, [globalSubByParent]);
   const subRowOf = (sub: InboxSession) => (isUnderRole(sub) ? "role" : isSpawnedWorker(sub) ? "worker" : undefined);
-  const countOf = (shown: InboxSession[], full: InboxSession[], n: number) =>
-    sectionHeaderCount(shown, full, n, showSubagents);
   // The Priorities view keeps the status sections and sorts each by the
   // viewer's priority a session serves, as the keyboard walk does
   // (visualOrderSessions); Pinned keeps the person's own order. Decisions
@@ -2263,29 +2265,9 @@ function SessionListPanelImpl({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [navSetsKey]);
 
-  // Stale working set: EVERY non-hidden session untouched for >30d, minus
-  // pinned (explicit keep) and the one you're viewing. Stashed sessions are an
-  // explicit keep too — the sweep must not retire what the user deliberately
-  // set aside. Computed from the full session map — NOT the active buckets —
-  // on purpose: subagents nested under a parent are held out of those buckets,
-  // but dismissing their parent promotes them to top-level, so they must be in
-  // the dismiss set too or they refill the inbox after a sweep.
-  // Sorted newest-first so the borderline ones (the sessions most worth a
-  // second look before a sweep) lead the review list.
+  // Stale working set: what the sweep would dismiss (staleInboxSessions).
   const staleCutoff = coarseNow - STALE_SESSION_MS;
-  const staleSessions = useMemo(() => {
-    return (Object.values(s.sessions) as InboxSession[])
-      .filter(
-        (sess) =>
-          !isSessionHidden(sess) &&
-          !sess.is_pinned &&
-          !sess.inbox_snoozed_until &&
-          sess._id !== activeSessionId &&
-          // An unstamped row is unknown, not ancient: never offer it for dismissal.
-          !!sess.updated_at && sess.updated_at < staleCutoff,
-      )
-      .sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
-  }, [s.sessions, activeSessionId, staleCutoff]);
+  const staleSessions = useMemo(() => staleInboxSessions(s.sessions, activeSessionId, staleCutoff, meId), [s.sessions, activeSessionId, staleCutoff, meId]);
   // The snooze is a persisted pref, not component state: a "Not now" used to
   // evaporate on every reload, so the prompt kept coming back.
   const stalePromptSnoozedAt = s.clientState.ui?.inbox_stale_prompt_snoozed_at ?? 0;
@@ -2306,23 +2288,11 @@ function SessionListPanelImpl({
   // never count — claude only, dismissed excluded), plus the same window
   // (isCurrentBlock, judged on when the block landed), so the count shown
   // always matches what a revive would act on.
-  const blockedSessions = useMemo(() => {
-    const now = Date.now();
-    // A session the user just told to continue/switch (fresh revive stamp) is
-    // out of the blocked set immediately — the pill count drops and the banner
-    // clears on the click, not on the daemon round trip. The server flag only
-    // resets once the agent resumes; if that never happens the stamp expires
-    // and the session re-enters here (coarseNow keeps the TTL live).
-    const reviving = freshReviveRequestIds(s.blockedReviveRequestedAt, now);
-    return (Object.values(s.sessions) as InboxSession[]).filter(
-      (sess) =>
-        !isSessionHidden(sess) &&
-        !reviving.has(sess._id) &&
-        isCurrentBlock(sess, now),
-    ).map(withSafetyBlock).filter(
-      (sess) => isBlockedConversation(sess.agent_type != null ? sess : { ...sess, agent_type: "claude_code" }),
-    );
-  }, [s.sessions, s.blockedReviveRequestedAt, coarseNow]);
+  // (blockedInboxSessions; coarseNow keeps a revive stamp's TTL live).
+  const blockedSessions = useMemo(
+    () => blockedInboxSessions(s.sessions as Record<string, InboxSession>, s.blockedReviveRequestedAt, Date.now(), meId),
+    [s.sessions, s.blockedReviveRequestedAt, coarseNow, meId],
+  );
   // A fleet of nothing but blocked subagent workers doesn't earn the amber
   // pill: their parents have moved on, so there's no one waiting on a revive.
   // It gets the quiet pill instead, the way back to the banner after its X.
@@ -2416,13 +2386,14 @@ function SessionListPanelImpl({
   // activity (updated_at, reshuffles as work happens), "time" by creation
   // (started_at, a stable chronology, with any manual drag pins overlaid).
   // Shared flatViewComparator so this render and the keyboard-nav order
-  // (computeVisualOrder) can't drift. It still honors the show_subagents toggle:
-  // when subagents are hidden, the same sessions the grouped view nests away
-  // (subsByParent / globalSubByParent) are excluded here — except the selected
-  // one, which always renders.
+  // (computeVisualOrder) can't drift. Unless subagents are Full rows, the rows
+  // the grouped view nests away are left out but the selected one; in Full rows
+  // the ones the filter drops (keptSubIds). Folded and Compact draw their line
+  // or rows under each card here as in the grouped view.
   // Render and keyboard-nav share the same frozen order during recent-mode j/k
   // (see recentFreezeOrder) so the list can't move out from under the cursor.
   const recentFreezeOrder = s.recentFreezeOrder;
+  const fullKeptIds = showSubagents ? keptSubIds : null;
   const flatList = useMemo(
     () =>
       flatViewSessions(sortedSessions, globalSubByParent, {
@@ -2433,11 +2404,13 @@ function SessionListPanelImpl({
         manualOrder,
         freezeOrder: viewMode === "recent" ? recentFreezeOrder : null,
         oldestFirst,
+        keepSub: fullKeptIds ? (sess) => fullKeptIds.has(sess._id) : undefined,
         chipMatches: (sess) =>
           chipMatchesSession(sess, chipFilterOpts(s, bucketByConv)),
       }),
-    [sortedSessions, showSubagents, globalSubByParent, activeSessionId, viewMode, manualOrder, recentFreezeOrder, oldestFirst, s.activeProjectFilter, s.activeBucketFilter, s.chipFilterExclude, s.extraBucketFilters, s.extraProjectFilters, bucketByConv],
+    [sortedSessions, showSubagents, globalSubByParent, activeSessionId, viewMode, manualOrder, recentFreezeOrder, oldestFirst, fullKeptIds, s.activeProjectFilter, s.activeBucketFilter, s.chipFilterExclude, s.extraBucketFilters, s.extraProjectFilters, bucketByConv],
   );
+  const flatShown = useMemo(() => withoutCompactOpen(flatList), [flatList, withoutCompactOpen]);
   const totalSubagentCount = useMemo(() => {
     let count = 0;
     for (const subs of globalSubByParent.values()) count += subs.length;
@@ -2760,7 +2733,7 @@ function SessionListPanelImpl({
     if (scrolledToRef.current === activeSessionId) return;
 
     const container = scrollContainerRef.current;
-    const el = container.querySelector(`[data-session-id="${activeSessionId}"]`);
+    const el = container.querySelector(railRowSelector(activeSessionId));
     if (el) {
       scrollRowIntoView(container, el);
       scrolledToRef.current = activeSessionId;
@@ -2771,7 +2744,7 @@ function SessionListPanelImpl({
     // subagent (or nested teammate) renders under its parent's card, so the
     // parent's membership decides which section hosts the row.
     const activeRow = s.sessions[activeSessionId];
-    const parentId = activeRow ? inboxNestParentOf(sortedSessions, nestWorkers)(activeRow) : null;
+    const parentId = activeRow ? inboxNestParentOf(sortedSessions, nestWorkers)(activeRow) ?? cardOfNested(globalSubByParent, activeSessionId) : null;
     const inList = (items: InboxSession[]) => items.some(i => i._id === activeSessionId || (!!parentId && i._id === parentId));
     const sections: [InboxSession[], string][] = flatView
       ? [[flatList, "all"]]
@@ -2825,7 +2798,7 @@ function SessionListPanelImpl({
     if (inList(filteredDismissed) && !openBuckets.dismissed) {
       setOpenBuckets((o) => ({ ...o, dismissed: true }));
     }
-  }, [activeSessionId, sortedSessions, s.collapsedSections, openBuckets, viewMode]);
+  }, [activeSessionId, sortedSessions, globalSubByParent, s.collapsedSections, openBuckets, viewMode]);
 
   // Shared renderer for the two hidden buckets at the bottom of the list —
   // Stashed (set aside, agent alive) above Killed (retired, agent torn down;
@@ -2882,14 +2855,16 @@ function SessionListPanelImpl({
           globalRenderedCards += visibleTop.length;
           return (
           <div>
-            {visibleTop.map((session) => (
+            {visibleTop.map((session) => {
+              const bucketSubs = subMap.get(session._id) ?? [];
+              const rows = rowsUnder(session, [...bucketSubs, ...(workersNeedingYouByParent.get(session._id) ?? [])]);
+              return (
               <div key={session._id} className="border-b border-sol-border/30">
                 <SessionCard
                   session={session}
                   isSelected={selectedSet.has(session._id)}
                   isActive={session._id === activeSessionId}
                   globalIndex={-1}
-                  {...foldedRunning(standingRoleIdOf(session) ? undefined : subMap.get(session._id), showSubagents, coarseNow, activeSessionId)}
                   onSelect={handleSelect}
                   onCardContextMenu={handleCardContextMenu}
                   onPickCharacter={handlePickCharacter}
@@ -2906,16 +2881,17 @@ function SessionListPanelImpl({
                     buckets carry the same bars as the live sections; without
                     them an expanded bucket hides that a card is a loop. */}
                 {/* The workers this agent spawned fold under its card (Modern
-                    focused, nestsWorkers); the line keeps them counted while folded,
-                    and names any that wait on you even when the option lists
-                    them. */}
-                {(!showSubagents || workersNeedingYouByParent.has(session._id)) && (
+                    focused, nestsWorkers). In Full rows they are cards of
+                    their own, and this line names any that wait on you;
+                    Folded and Compact draw those among the card's subagents. */}
+                {showSubagents && workersNeedingYouByParent.has(session._id) && (
                   <CardWorkersLine
                     count={workerCountByParent.get(session._id) ?? 0}
                     needsYou={workersNeedingYouByParent.get(session._id) ?? []}
                     onOpen={handleSelect}
                   />
                 )}
+                {cardSubagents(session, rows)}
                 <CardBars
                   session={session}
                   mode={cardBars}
@@ -2924,7 +2900,7 @@ function SessionListPanelImpl({
                   onOpen={handleSelect}
                   onOpenSchedule={openScheduleTarget}
                 />
-                {(subMap.get(session._id) ?? []).filter((sub) => showSubagents || sub._id === activeSessionId).map((sub) => (
+                {nestedCardsOf(session, bucketSubs, rows).map((sub) => (
                   <SessionCard
                     key={sub._id}
                     session={sub}
@@ -2939,13 +2915,15 @@ function SessionListPanelImpl({
                     onKill={onKill}
                     variant={variant}
                     subRow={subRowOf(sub)}
+                    underParent
                     sessionLabel={labelByConv[sub._id] ?? null}
                     isUnread={!!unreadByConv[sub._id]}
                     isFavorite={cardIsFavorite(sub)}
                   />
                 ))}
               </div>
-            ))}
+              );
+            })}
             {hHidden > 0 && (
               <button
                 onClick={() => setSectionLimits((prev) => ({ ...prev, [hkey]: (prev[hkey] ?? SECTION_RENDER_CAP) + SECTION_RENDER_STEP }))}
@@ -3011,6 +2989,9 @@ function SessionListPanelImpl({
     const key = opts?.key ?? label.toLowerCase().replace(/\s+/g, "_");
     const collapsed = !!s.collapsedSections[key];
     const isDragOverSection = dragOverSectionKey === key;
+    // The flat views draw a nested row under its card (underParent): it rides
+    // that card's slot, and one its session owns adds to no count.
+    const flatUnderParent = flat ? drawnUnderParentIds(items, globalSubByParent, nestWorkers) : null;
     const dropProps = isDropTarget
       ? {
           onDragOver: (e: React.DragEvent) => {
@@ -3045,7 +3026,7 @@ function SessionListPanelImpl({
       >
         <SectionHeader
           label={label}
-          count={opts?.count ?? items.length}
+          count={opts?.count ?? (flatUnderParent ? flatHeaderCount(items, flatUnderParent, meId) : items.length)}
           color={color}
           sectionKey={key}
           collapsed={collapsed}
@@ -3066,18 +3047,24 @@ function SessionListPanelImpl({
           // even when the budget is spent.
           const globalRemaining = Math.max(0, GLOBAL_CARD_BUDGET + globalCardExtra - globalRenderedCards);
           const limit = Math.max(Math.min(sectionCap, globalRemaining), opts?.floor ? Math.min(items.length, SECTION_CARD_FLOOR) : 0);
-          let visibleItems = items.length > limit ? items.slice(0, limit) : items;
+          let visibleItems = sectionWindow(items, limit, Math.max(limit, globalRemaining), flatUnderParent);
           // Never let the active row (or the parent hosting the active subagent)
           // fall past the cap — it must stay mounted for auto-scroll and so the
           // session being viewed never vanishes from the list.
+          // A flat view lists the open subagent as a row of its own right
+          // after its parent, so both are kept, in list order.
           if (visibleItems.length < items.length && activeSessionId) {
-            const needed = items.find(
-              (i) => i._id === activeSessionId
-                || (globalSubByParent.get(i._id) || []).some((sub) => sub._id === activeSessionId),
-            );
-            if (needed && !visibleItems.includes(needed)) visibleItems = [...visibleItems, needed];
+            const shown = new Set(visibleItems);
+            const needed = items.filter((i) => !shown.has(i) && (i._id === activeSessionId
+              || (globalSubByParent.get(i._id) || []).some((sub) => sub._id === activeSessionId)));
+            if (needed.length) visibleItems = [...visibleItems, ...needed];
           }
-          const hiddenCount = items.length - visibleItems.length;
+          // Hidden cards, counted the way the cap counts them (a row drawn
+          // under its card rides that card's slot); rows alone when only a
+          // card's nested rows ran past the budget, so Show more stays.
+          const kept = new Set(visibleItems);
+          const hidden = items.filter((i) => !kept.has(i));
+          const hiddenCount = hidden.filter((i) => !flatUnderParent?.has(i._id)).length || hidden.length;
           globalRenderedCards += visibleItems.length;
           // The flat views hoist a role's session under its role's card as a
           // row of its own (hoistNestedUnderParent), so it takes the small row
@@ -3089,10 +3076,12 @@ function SessionListPanelImpl({
             // rows (they're in sortedSessions), so suppress the nested rendering
             // to avoid showing them twice.
             const allSubs = flat ? [] : (globalSubByParent.get(session._id) || []);
-            // The selected subagent always renders — even when subagents are
-            // globally hidden or fall past the "+N more" cutoff. The row being
-            // viewed must never vanish from the list.
-            const subs = showSubagents ? allSubs : allSubs.filter((sub) => sub._id === activeSessionId);
+            const subRows = rowsUnder(session);
+            // The selected subagent always renders — whatever the mode and
+            // filter, and past the "+N more" cutoff — as a nested card, unless
+            // its Compact row under this card stands in, highlighted
+            // (nestedCardsOf). The row being viewed must never vanish.
+            const subs = nestedCardsOf(session, allSubs, subRows);
             const subsExpanded = !!expandedSubSessions[session._id];
             let visibleSubs = subs.length <= 2 || subsExpanded ? subs : subs.slice(0, 2);
             if (visibleSubs.length < subs.length && !visibleSubs.some((sub) => sub._id === activeSessionId)) {
@@ -3164,12 +3153,13 @@ function SessionListPanelImpl({
                   forkColorKey={forkColorKeyOf(session)}
                   roleSessions={roleSessionsByLead.get(session._id)}
                   subRow={flatNestParentOf && isUnderRole(session) && flatNestParentOf(session) ? "role" : flat && nestedWorkerIds.has(session._id) ? "worker" : undefined}
+                  underParent={!!flatUnderParent?.has(session._id)}
                   sessionLabel={labelByConv[session._id] ?? null}
                   priorityRank={priorityPlaceOf ? rankLabelOf(priorityPlaceOf(session)) : undefined}
                   isUnread={!!unreadByConv[session._id]}
                   isFavorite={cardIsFavorite(session)}
-                  {...foldedRunning(standingRoleIdOf(session) ? undefined : globalSubByParent.get(session._id), showSubagents, coarseNow, activeSessionId)}
                 />
+                {cardSubagents(session, subRows)}
                 {key === "browser" && browserTabsByConv.has(session._id) && (
                   <SessionBrowserTabs tabs={browserTabsByConv.get(session._id)!.tabs} sessionUuid={session.session_id ?? null} />
                 )}
@@ -3206,6 +3196,7 @@ function SessionListPanelImpl({
                     onClose={handleAnimatedClose}
                     variant={sectionVariant || "default"}
                     subRow={subRowOf(sub)}
+                    underParent
                     sessionLabel={labelByConv[sub._id] ?? null}
                     isUnread={!!unreadByConv[sub._id]}
                     isFavorite={cardIsFavorite(sub)}
@@ -3332,8 +3323,10 @@ function SessionListPanelImpl({
             teamScope={inboxScope === "team"}
             onTeamScope={(on) => s.updateClientUI({ inbox_scope: on ? "team" : "mine" })}
             subagentCount={!favoritesView ? totalSubagentCount : 0}
-            showSubagents={showSubagents}
-            onShowSubagents={(on) => s.updateClientUI({ show_subagents: on })}
+            subagentRows={subagentRows}
+            onSubagentRows={(value) => s.updateClientUI({ subagent_rows: value })}
+            subagentFilter={subagentFilter}
+            onSubagentFilter={(value) => s.updateClientUI({ subagent_filter: value })}
             oldCount={!favoritesView ? oldCount : 0}
             showOld={showAllSessions}
             onShowOld={(on) => s.setShowOldSessions(on)}
@@ -3351,7 +3344,7 @@ function SessionListPanelImpl({
       <div className="relative flex-1 min-h-0">
       {/* Rows keep the sticky section heading's height clear when scrolled
           to. */}
-      <div ref={scrollContainerRef} className="h-full overflow-y-auto scrollbar-auto [&_[data-session-id]]:scroll-mt-8">
+      <div ref={scrollContainerRef} className="h-full overflow-y-auto scrollbar-auto [&_[data-session-id]]:scroll-mt-8 [&_[data-sv-subagent-row]]:scroll-mt-8">
         {favoritesView ? (
           favoriteGroups && favoriteGroups.count > 0 ? (
             <>
@@ -3450,7 +3443,7 @@ function SessionListPanelImpl({
           </div>
         )}
         {flatView ? (
-          renderSection("All", flatList, "text-sol-cyan", undefined, true, { reorderable: viewMode === "time" })
+          renderSection("All", flatShown, "text-sol-cyan", undefined, true, { reorderable: viewMode === "time" })
         ) : viewMode === "bucket" && bucketView ? (
         <>
         {bucketView.labelGroups.map(({ bucket, items }) => (
@@ -3654,13 +3647,13 @@ function SessionListPanelImpl({
           matches={chipMatchesId}
           priorityPlaceOf={priorityPlaceOf ?? undefined}
         />
-        {renderSection("Pinned", statusPinned, "text-sol-magenta", undefined, undefined, { floor: true, count: countOf(statusPinned, pinned, placed.counts.pinned) })}
-        {renderSection("New", statusNew, "text-sol-blue", undefined, undefined, { key: "new", floor: true, count: countOf(statusNew, newSessions, placed.counts.newSessions) })}
+        {renderSection("Pinned", statusPinned, "text-sol-magenta", undefined, undefined, { floor: true, count: countOf(statusPinned, pinned, "pinned") })}
+        {renderSection("New", statusNew, "text-sol-blue", undefined, undefined, { key: "new", floor: true, count: countOf(statusNew, newSessions, "newSessions") })}
         {/* Needs You, Done and Dormant take a dragged card: the drop is the
             user's rest verdict (setSessionRest), the same stamp the context
             menu and the dormant chord write. Working is not a target — nobody
             can file a row as "the agent is producing". */}
-        {renderSection("Needs You", statusNeedsInput, "text-sol-yellow", undefined, undefined, { key: "needs_input", floor: true, count: countOf(statusNeedsInput, needsInput, placed.counts.needsInput), onDropSession: dropSessionOnRest.needs_input })}
+        {renderSection("Needs You", statusNeedsInput, "text-sol-yellow", undefined, undefined, { key: "needs_input", floor: true, count: countOf(statusNeedsInput, needsInput, "needsInput"), onDropSession: dropSessionOnRest.needs_input })}
         {renderSection(STOPPED_SECTION.label, statusStopped, "text-sol-red", undefined, undefined, {
           key: "hosted_stopped",
           floor: true,
@@ -3669,14 +3662,14 @@ function SessionListPanelImpl({
         {/* Sections read top-down as "who acts next": you (Questions, Needs
             Input, Done to review), the agent right now (Working), then a
             machine event (Dormant). Nothing below Dormant is anyone's move. */}
-        {renderSection("Done", statusDone, "text-sol-cyan", undefined, undefined, { floor: true, count: countOf(statusDone, done, placed.counts.done), onDropSession: dropSessionOnRest.done })}
-        {renderSection("Working", statusWorking, "text-sol-green", "working", undefined, { floor: true, count: countOf(statusWorking, working, placed.counts.working) })}
+        {renderSection("Done", statusDone, "text-sol-cyan", undefined, undefined, { floor: true, count: countOf(statusDone, done, "done"), onDropSession: dropSessionOnRest.done })}
+        {renderSection("Working", statusWorking, "text-sol-green", "working", undefined, { floor: true, count: countOf(statusWorking, working, "working") })}
         {/* Dormant is the section nobody needs to watch: one quiet line per
             session (the compact list's layout, whatever the person's own
             setting) plus the line saying what wakes it and when. */}
         <div className="inbox-compact" data-dormant-section>
           <div data-sv-rail>
-            {renderSection("Sleeping", statusDormant, "text-sol-text-dim", undefined, undefined, { key: "dormant", floor: true, count: countOf(statusDormant, dormant, placed.counts.dormant), onDropSession: dropSessionOnRest.dormant })}
+            {renderSection("Sleeping", statusDormant, "text-sol-text-dim", undefined, undefined, { key: "dormant", floor: true, count: countOf(statusDormant, dormant, "dormant"), onDropSession: dropSessionOnRest.dormant })}
           </div>
         </div>
         </>

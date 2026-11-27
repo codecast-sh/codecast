@@ -5,7 +5,6 @@ import { performUndo } from "../undoStack";
 import { ownerFactsOf, ownerIdsOf, ownersModelOnFor } from "../sessionOwnersSlice";
 import { ownersOf } from "@codecast/shared/contracts/sessionOwners";
 import { applySessionOwnersRead } from "../../hooks/useSyncSessionOwners";
-import { agentOwnersOf } from "../../lib/sessionAgents";
 import { coOwnersOf, coOwnersSig } from "../../lib/coOwners";
 import { diffOwners } from "../../lib/ownersDraft";
 
@@ -187,17 +186,17 @@ describe("applySessionOwners", () => {
     expect(sent.filter((x) => x.action === "applySessionOwners").map((x) => x.args[1])).toEqual([diff.change, diff.inverse]);
   });
 
-  test("Add me on an agent paints its owners home, and the agents band reads it there", () => {
+  test("Add me on an agent paints its owners home, and undo takes it back", () => {
     const CHILD = "c".repeat(32);
-    useInboxStore.getState().syncTable("sessionAgents", [{ _id: S, agents: [{ _id: CHILD, short_id: "c1", title: "Child", agent_status: "working", updated_at: 1, message_count: 1, owned_by_parent: true, owners: [] }] }]);
     applySessionOwnersRead(CHILD, read({ conversation_id: CHILD, people: [], parent_session: { conversation_id: S, short_id: "s1", title: "Freeze case" } }));
-    const agent = () => agentOwnersOf(useInboxStore.getState() as any, S, (useInboxStore.getState() as any).sessionAgents[S].agents[0]);
-    expect(agent()).toEqual({ ownedByParent: true, people: [] });
+    const child = () => ownerIdsOf(useInboxStore.getState() as any, CHILD);
+    expect(ownerFactsOf(useInboxStore.getState() as any, CHILD)?.parent_conversation_id).toBe(S);
+    expect(child()).toEqual([]);
     useInboxStore.getState().applySessionOwners(CHILD, { add: [ME] }, { remove: [ME] });
-    expect(agent().people.map((p) => p._id)).toEqual([ME]);
+    expect(child()).toEqual([ME]);
     expect(Object.keys(useInboxStore.getState().pending as any)).toContain(`sessionOwners:${CHILD}:people_ids`);
     expect(performUndo()).toBe(true);
-    expect(agent().people).toEqual([]);
+    expect(child()).toEqual([]);
   });
 
   test("after Take it over the card shows no role face, as the header shows none", () => {

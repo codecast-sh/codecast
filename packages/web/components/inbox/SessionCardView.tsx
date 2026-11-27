@@ -46,7 +46,6 @@ import {
   CardStartupLine,
   CardStatusSignals,
   CommentThreadsChip,
-  FoldedSubagentsMark,
   ForkCorner,
   SessionProjectChip,
   SelectTick,
@@ -81,6 +80,7 @@ export function SessionCardView({
   placedStatus,
   forkColorKey,
   subRow,
+  underParent = false,
   roleSessions = 0,
   roleAbove = null,
   now,
@@ -98,8 +98,6 @@ export function SessionCardView({
   thumbSrc,
   ship = null,
   linkedPrs = NO_PRS,
-  hiddenRunningSubagents = 0,
-  foldedSubagentId = null,
   onSelect,
   onClose,
   onDefer,
@@ -132,10 +130,11 @@ export function SessionCardView({
   // liveness suppression (a stashed agent is still running; see the idle-dot
   // gate below, which stays keyed on the real dismissed variant).
   const isDismissed = variant === "dismissed" || isStashed;
-  // Compact nested-child look: a trigger sub-row, a Task subagent, or an
-  // agent-team teammate (drawsNested). A worktree is only where the session
-  // runs — it does not make a first-class card look like a child.
-  const isSubagent = drawsNested(session, subRow);
+  // Compact nested-child look: a trigger sub-row, or a Task subagent or an
+  // agent-team teammate drawn under its parent's card (drawsNested). A
+  // worktree is only where the session runs — it does not make a first-class
+  // card look like a child.
+  const isSubagent = drawsNested(session, subRow, underParent);
   // Local-first "pending working": a message has been sent but the daemon
   // hasn't confirmed delivery yet (status not active). Clears the moment
   // status goes active or the server echoes the message.
@@ -293,7 +292,7 @@ export function SessionCardView({
                 session. The faint violet left-border alone reads as "indented"
                 only when the parent is directly above; this makes the
                 sub-of-parent relationship explicit when a nested row is
-                focused or pinned without the parent immediately above. */}
+                focused without the parent immediately above. */}
             <svg className={`w-3 h-3 flex-shrink-0 ${subRow === "trigger" ? "text-sol-amber/60" : "text-sol-violet/60"}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5} role="img" aria-label={subRow === "trigger" ? "Trigger session" : roleAbove ? `Reports to @${roleAbove.handle}` : "Subagent"}>
               <title>{subRow === "trigger" ? "Session driven by the trigger above" : roleAbove ? `Reports to @${roleAbove.handle}, which decides what reaches you` : "Subagent — child of its parent session"}</title>
               <path strokeLinecap="round" strokeLinejoin="round" d="M6 4v12h12" />
@@ -731,7 +730,6 @@ export function SessionCardView({
             {/* A running workflow renders as its own ↳ WorkflowBar under the
                 card (same family as schedule/monitor bars) — no chip here. */}
             <CommentThreadsChip session={session} viewerId={viewerId} onOpenComments={onOpenComments} />
-            <FoldedSubagentsMark count={hiddenRunningSubagents} onOpen={foldedSubagentId && onOpenParent ? () => onOpenParent(foldedSubagentId) : undefined} />
             <CardPinMark session={session} onPin={onPin} />
             <WithOwnerMark withOwner={withOwner} working={isWorking} pendingSend={isPendingSend} />
             <CardStatusSignals

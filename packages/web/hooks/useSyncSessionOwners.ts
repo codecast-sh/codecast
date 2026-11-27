@@ -1,22 +1,18 @@
 // The feeders of a session's owners under the session_owners model, mounted
 // with the conversation's header (store/sessionOwnersSlice):
 //  - the owners read (sessionOwnership.listOwners) fills `sessionOwners`,
-//    which also releases a change painted on it;
-//  - the agents read (sessionAgents.listSessionAgents) fills `sessionAgents`
-//    for the agents band, only for a session under the model.
+//    which also releases a change painted on it.
 // A read off the model (the flag off, or turned off) drops the session's
 // cached owners read, so it draws exactly what it drew before the model.
-import { useCallback, useMemo } from "react";
+import { useCallback } from "react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { HIDDEN_OVERRIDE_SETTLE_MS, useInboxStore } from "../store/inboxStore";
 import { noteEvictedRows } from "../store/idbCollectionDiff";
-import { ownersModelOnFor, type OwnerPersonInfo, type SessionOwnersRow } from "../store/sessionOwnersSlice";
+import { type OwnerPersonInfo, type SessionOwnersRow } from "../store/sessionOwnersSlice";
 import { shouldQueryOwners } from "./useOwners";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useConvexSync } from "./useConvexSync";
 import { useServerAuthSettled } from "./useServerAuthSettled";
-import { entityIdArgs, useSyncCollection } from "./useSyncCollection";
 
 /** The `sessionOwners` row an owners read means, or null off the model. */
 export function sessionOwnersRowOf(conversationId: string, read: any): SessionOwnersRow | null {
@@ -77,8 +73,4 @@ export function useSyncSessionOwners(conversationId: string): void {
     authSettled && shouldQueryOwners(conversationId, currentUser) ? { session_id: conversationId } : "skip",
   );
   useConvexSync(data, useCallback((read: any) => applySessionOwnersRead(conversationId, read), [conversationId]));
-
-  const on = useInboxStore((s) => ownersModelOnFor(s as never, conversationId));
-  const select = useMemo(() => (agents: any) => (Array.isArray(agents) ? [{ _id: conversationId, agents }] : null), [conversationId]);
-  useSyncCollection("sessionAgents", api.sessionAgents.listSessionAgents, on ? (entityIdArgs("conversation_id", conversationId) as { conversation_id: Id<"conversations"> } | "skip") : "skip", { select });
 }

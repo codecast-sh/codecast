@@ -389,16 +389,6 @@ export const CLIENT_SYNC_REGISTRY = {
     localFirst: true,
     feeds: ["sessionOwnership.listOwners", "sessionOwnership.listOwnersFor"],
   },
-  // The agents working for a session under the owners model (convex
-  // sessionAgents.listSessionAgents): one row per open conversation, the
-  // workers nested under it, each with its state and people.
-  // The agents band draws it; an agent's owners, once read, come from
-  // sessionOwners (lib/sessionAgents). Only the server writes it.
-  sessionAgents: {
-    persistence: { kind: "collection", key: "sessionAgents" },
-    sync: { isDelta: true, deepFields: ["agents"] },
-    feeds: ["sessionAgents.listSessionAgents"],
-  },
 
   // The composer's suggested reply (convex composerSuggestions.ts): one row
   // per conversation, its owner's only, fed while the conversation is open,
@@ -2438,7 +2428,6 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   decisionStacks: "shared",
   sessionGoals: "shared",
   sessionOwners: "shared",
-  sessionAgents: "shared",
   composerSuggestions: "shared",
   handledDecisions: "shared",
   decisionDetails: "shared",

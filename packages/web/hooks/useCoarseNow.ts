@@ -68,6 +68,21 @@ export function subscribeCoarseTick(intervalMs: number, listener: () => void): (
   };
 }
 
+// The clock the inbox places and draws its lists on (the rail, the phone's
+// inbox), and what the keyboard order reads through coarseNowOf, so j/k and
+// the drawn list judge a time rule (a subagent's producing grace) at one
+// instant.
+export const INBOX_CLOCK_MS = 15_000;
+
+// The value useCoarseNow(intervalMs) reads now, for code outside React that
+// must agree with a list drawn on that clock. An idle clock is brought
+// current first, as the hook does.
+export function coarseNowOf(intervalMs: number): number {
+  const c = clockFor(intervalMs);
+  if (c.timer === null) c.now = Date.now();
+  return c.now;
+}
+
 // Tick every running clock now. For a change the clocks' subscribers must
 // re-read at once rather than at the next interval (the liveness hold lifting:
 // every placement memo keys on the coarse clock).

@@ -191,6 +191,8 @@ function InboxListAt({ now }: PartProps) {
       author={null}
       viewers={[]}
       spawnedByTitle={session.is_subagent ? SESSIONS.lead.title : null}
+      // The workers' rows sit right under the lead's card.
+      underParent={!!session.is_subagent}
       anchorIdentity={null}
       isUnread={extra?.isUnread}
       runHost={extra?.runHost}

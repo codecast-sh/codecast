@@ -214,8 +214,8 @@ export function createSessionOwnersSlice(): SessionOwnersSliceActions {
       if (!actor) return;
       const facts = ownerFactsOf(this, conversationId);
       if (!facts) {
-        // Add me on a session whose read has not arrived (an agent the band
-        // lists): a new read row holding only you, which the server's read
+        // Add me on a session whose read has not arrived (an agent not yet
+        // read): a new read row holding only you, which the server's read
         // replaces when it lands.
         if (change.add?.includes(actor) && !this.sessionOwners[conversationId]) {
           this.sessionOwners[conversationId] = {
@@ -245,6 +245,18 @@ export function createSessionOwnersSlice(): SessionOwnersSliceActions {
           org_role_id: next.role,
           owner_session_id: next.parentSession,
         };
+        // An adopt nests it under the target as the server writes it
+        // (convex lib/ownersChange): the parent link, and adopted_at stamped
+        // once, and no release, so the target's card draws it on the press
+        // (ownedChildrenOf). A detach takes the link and stamp off.
+        if (change.adopt_parent && next.parentSession === change.adopt_parent) {
+          stamps.parent_conversation_id = change.adopt_parent;
+          stamps.adopted_at = row.adopted_at ?? Date.now();
+          stamps.parent_released_at = null;
+        } else if (change.detach_parent) {
+          stamps.parent_conversation_id = null;
+          stamps.adopted_at = null;
+        }
         for (const [field, value] of Object.entries(stamps)) if ((row[field] ?? null) !== (value ?? null)) row[field] = value;
       }
     }) as SessionOwnersSliceActions["applySessionOwners"],

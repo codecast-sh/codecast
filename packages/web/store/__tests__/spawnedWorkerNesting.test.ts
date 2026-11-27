@@ -4,8 +4,8 @@ import { placeSections } from "./placeTestHarness";
 
 // In Modern focused (nestsWorkers), sessions an agent spawned (`cast spawn`
 // workers, workflow subs) fold under the session that spawned them in the web
-// list, like Task subagents: hidden
-// until the Sub-agents and workers option is on. Display only: the shared
+// list, like Task subagents: drawn as the rail's "Subagents on cards" pick
+// says (resolveSubagentRows). Display only: the shared
 // nestParentIdOf (server kill cascade, org counts, revive) still treats them
 // as first-class. Nothing waiting on the person may fold away.
 

@@ -43,7 +43,6 @@ export const DATA_SCOPE = {
   sessionDecisions: "viewer",
   sessionGoals: "entity",
   sessionOwners: "entity",
-  sessionAgents: "entity",
   composerSuggestions: "entity",
   decisionStacks: "viewer",
   weeklyCards: "viewer",

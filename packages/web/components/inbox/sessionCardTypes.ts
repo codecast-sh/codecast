@@ -52,10 +52,6 @@ export type SessionCardViewProps = {
   session: InboxSession;
   /** Every pull request the session links (lib/sessionPullRequests). */
   linkedPrs?: readonly LinkedPr[];
-  /** Running Task subagents whose rows the inbox folds away (the subagent toggle is off). */
-  hiddenRunningSubagents?: number;
-  /** The newest of them, which the count opens. */
-  foldedSubagentId?: string | null;
   /** The project it works in (lib/workProjectSig). */
   workProject?: string;
   isActive: boolean;
@@ -104,6 +100,11 @@ export type SessionCardViewProps = {
   // under its spawner's card in Modern (inboxStore.nestsWorkers). On its own
   // row it stays a full card.
   subRow?: "trigger" | "role" | "worker";
+  /** Drawn under its parent's card (the panel's nested cards): a Claude Code
+   *  subagent there takes the nested look and reads Done once its turn ended.
+   *  Standing as its own card, it draws and reads its section like any
+   *  session. */
+  underParent?: boolean;
   /** On a role's own card: how many of its sessions ride it (org-staffing.md S23.3); the pill opens the role's page. */
   roleSessions?: number;
   /** On a "role" sub row: the role above it, which its arrow names. */

@@ -2,6 +2,7 @@ import type { Doc } from "./_generated/dataModel";
 // Single source of truth for the "agent is actively producing" set and the
 // stale-status trust TTL. Re-exported so existing `from "./inboxFilters"`
 // importers (incl. the tests) keep working unchanged.
+import { SUBAGENT_PRODUCING_GRACE_MS, SUBAGENT_TOOL_CALL_CAP_MS, openToolCallAt } from "@codecast/shared/contracts/subagentProducing";
 import { ACTIVE_AGENT_STATUSES, TRUST_DECAYING_STATUSES, DECLARED_VERDICT_STATUSES, STATUS_TRUST_TTL_MS, AGENT_IDLE_GRACE_MS, HEARTBEAT_ALIVE_MS, WORK_STATES, isSessionIdle, isUnservedSession, trustedAgentStatus, type WorkState } from "@codecast/shared/contracts";
 
 export { ACTIVE_AGENT_STATUSES, STATUS_TRUST_TTL_MS, AGENT_IDLE_GRACE_MS, WORK_STATES, type WorkState };
@@ -358,25 +359,7 @@ export function deriveSessionActivity(input: SessionActivityInput): SessionActiv
   return { isIdle, isUnresponsive, lastRoleIsUser, recentlyUpdated };
 }
 
-// How recently a subagent must have produced output to count as producing on
-// the strength of recent activity alone. Wider than the AGENT_IDLE_GRACE so a
-// child between short tool calls (quiet but live) doesn't drop its parent out
-// of working.
-export const SUBAGENT_PRODUCING_GRACE_MS = 5 * 60 * 1000;
-
-// How long a subagent's open tool call keeps it producing with no output. A
-// verifier inside one long test run syncs nothing for minutes (p90 10 min,
-// the Bash timeout; p99 39 min, measured over 939 subagents on 2026-11-26),
-// and without this its parent flipped to dormant mid-call. Capped because a
-// child whose process died mid-call leaves the call open forever.
-export const SUBAGENT_TOOL_CALL_CAP_MS = 20 * 60 * 1000;
-
-// When the child's newest message is a tool call still waiting on its result:
-// the activity stamp comes from that call and nothing has synced since (a
-// result or any later message moves updated_at past it). Null otherwise.
-export function openToolCallAt(c: { last_message_role?: string | null; activity?: { at: number } | null; updated_at: number }): number | null {
-  return c.last_message_role === "assistant" && c.activity && c.activity.at >= c.updated_at ? c.activity.at : null;
-}
+export { SUBAGENT_PRODUCING_GRACE_MS, SUBAGENT_TOOL_CALL_CAP_MS, openToolCallAt };
 
 // Whether a subagent child is still PRODUCING, and so files its settled parent
 // as working: a background Agent or a Workflow's agents, doing the work the

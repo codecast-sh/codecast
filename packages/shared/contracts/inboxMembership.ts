@@ -59,10 +59,9 @@ export function isAdoptedChild(conv: InboxRowIdentity): boolean {
   return !!conv.inbox_adopted_at && isNestedIdentity(conv);
 }
 
-// Under the owners model (team feature session_owners) nothing rides a parent:
-// a nested row belongs to whoever owns it, and the row is a member of exactly
-// its owners' inboxes, standing on its own facts. The server stamps
-// owners_model only on a row the model applies to: that IS the marker.
+// Under the owners model (team feature session_owners) no row's membership
+// rides a parent: a row is a member of exactly its owners' inboxes. The server
+// stamps owners_model only on a row the model applies to: that IS the marker.
 export function underOwnersModel(row: { owners_model?: boolean | null }): boolean {
   return row.owners_model === true;
 }
@@ -221,6 +220,12 @@ export function isInboxMember(row: OwnersModelRow, viewerId: string | { toString
   const me = viewerId.toString();
   return !!row.owned_by_me || String(row.implicit_owner ?? "") === me
     || (String(row.wait_up_person ?? "") === me && waitReachedPeople(row));
+}
+
+/** A child its session still owns, drawn on that session's card only: one rule
+ *  for the server's feeders and the web nest. */
+export function ridesParentCard(row: OwnersModelRow & { parent_released_at?: number | null }, viewerId: string | { toString(): string } | null | undefined): boolean {
+  return underOwnersModel(row) && !!row.owner_session_id && !row.org_role_id && !row.parent_released_at && !isInboxMember(row, viewerId);
 }
 
 export type InboxAgentOwner = { kind: "role"; id: string } | { kind: "session"; id: string };

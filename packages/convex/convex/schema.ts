@@ -1673,6 +1673,10 @@ export default defineSchema({
     .index("by_forked_from", ["forked_from"])
     .index("by_git_branch", ["git_branch"])
     .index("by_parent_conversation_id", ["parent_conversation_id"])
+    // A parent's adopted workers (adopted_at, a session a person dragged under
+    // it): the inbox read sends every one on the parent's card, past the
+    // newest-children cap. Both keys change only on an adopt or a detach.
+    .index("by_parent_adopted", ["parent_conversation_id", "adopted_at"])
     // Sparse and STATIC key (spawned_by never changes after creation, so no
     // write amplification — the cost that killed by_user_updated_at above).
     // Powers the hide cascade: killing/stashing a team lead must find its

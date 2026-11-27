@@ -41,6 +41,8 @@ export function LiftedRow({ session, now, spawnedByTitle = null }: Pick<Componen
         author={null}
         viewers={[]}
         spawnedByTitle={spawnedByTitle}
+        // A worker lands under the lead's card, so it flies as that row.
+        underParent={!!session.is_subagent}
         anchorIdentity={null}
         onSelect={noop}
       />

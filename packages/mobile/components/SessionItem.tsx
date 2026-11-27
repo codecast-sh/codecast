@@ -3,10 +3,7 @@ import { probeGesture, probeRender, PERF_PROBE } from '@/lib/perfProbe';
 import { Text as RNText } from '@/components/Themed';
 import { createContext, memo, useContext, useRef, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { cleanUserMessage } from '@codecast/web/components/sessionMessage';
-import { railRowPlacement, showsBlockedBadge, useInboxStore } from '@codecast/web/store/inboxStore';
-import { convHasPendingSend } from '@codecast/web/store/inboxOverlays';
-import { sessionStatusOf } from '@codecast/web/lib/sessionStatus';
-import { pendingDecisionConvIds } from '@codecast/web/lib/decisionQueue';
+import { showsBlockedBadge, useInboxStore } from '@codecast/web/store/inboxStore';
 import { apiErrorBadge } from '@codecast/web/lib/apiErrorBadge';
 import { resolveImageThumbs } from '@codecast/web/lib/uiPrefDefaults';
 import { useAckAssignment } from '@codecast/web/hooks/useAckAssignment';
@@ -23,13 +20,15 @@ import { ImageViewer } from '@/components/chat/ImageViewer';
 import { IdentityPrefsOverride, useIdentityPrefs } from '@codecast/web/hooks/useIdentityPrefs';
 import { MobileIdentityFace, MobileSessionIdentityLine, useSessionIdentityRow } from '@/components/identity';
 import { coOwnersOf, coOwnersSig } from '@codecast/web/lib/coOwners';
-import { ownerRoleHandleOf, ownerSessionTitleOf, withOwnerFactsOf, withOwnerLabelOf, withOwnerShown } from '@codecast/web/lib/withOwner';
+import { rowWithOwnerLabel } from '@/lib/rowWithOwner';
 import { underOwnersModel } from '@codecast/shared/contracts';
 import { holdOwnerCard } from '@codecast/web/lib/visibleOwnerCards';
 import { teamMembersOf } from '@codecast/web/lib/activeTeam';
 import { isConvexId } from '@codecast/web/lib/entityLinks';
 import { useWatchEffect } from '@codecast/web/hooks/useWatchEffect';
 import { CoOwnerFaces } from '@/components/owners/OwnerFace';
+import { SubagentLine } from '@/components/inbox/SubagentLine';
+import type { SubagentStateGroup } from '@codecast/web/lib/subagentRows';
 
 export type SessionData = {
   _id: string;
@@ -193,31 +192,21 @@ function RowCoOwners({ id }: { id: string }) {
 /** Where the list placed a row (store placedRailPlacement) and whether a send
  *  of yours waits on it locally: the facts the row's state reads, as web's
  *  card reads its section. A list that places nothing leaves them out. */
-export type RowPlacementProps = { placedBucket?: string; placedState?: string; pendingSend?: boolean };
+export type RowPlacementProps = { placedBucket?: string; placedState?: string; pendingSend?: boolean; underParent?: boolean };
 
 /** "With <owner>": who answers the row's wait, its role and owning session as
  *  the owners read says them, drawn only while the row reads working (web's
  *  sessionStatusOf and withOwnerShown). `line` draws it as the row's only
  *  detail line, with no separator after it. */
-function RowWithOwner({ session, line = false, placedBucket, placedState, pendingSend }: { session: SessionData; line?: boolean } & RowPlacementProps) {
+function RowWithOwner({ session, line = false, placedBucket, placedState, pendingSend, underParent }: { session: SessionData; line?: boolean } & RowPlacementProps) {
   const Theme = useTheme();
-  const label = useInboxStore((s) => {
-    const row = withOwnerFactsOf(s as never, session as any);
-    const now = Date.now();
-    const pending = pendingSend ?? (s.sessionsWithQueuedMessages.has(session._id) || convHasPendingSend((s.pendingMessages as any)?.[session._id], now));
-    // A list that places nothing: the row's own placement, lifted into
-    // Questions by a pending decide for you, as the inbox's placement lifts it.
-    const placement = placedBucket ? { bucket: placedBucket, state: placedState } as never : railRowPlacement(row, now);
-    const asking = !placedBucket && pendingDecisionConvIds(s.sessionDecisions as never, s.currentUser?._id ? String(s.currentUser._id) : null).has(session._id);
-    const working = sessionStatusOf({ row, section: null, placement, now, live: { pendingSend: pending, asking } }) === 'working';
-    return withOwnerShown(withOwnerLabelOf(row, ownerSessionTitleOf(s as never, row), ownerRoleHandleOf(s as never, row)), working, pending);
-  });
+  const label = useInboxStore((s) => rowWithOwnerLabel(s, session as any, { placedBucket, placedState, pendingSend, underParent }, Date.now()));
   if (!label) return null;
   const lead = <RNText style={{ color: Theme.green, fontWeight: '600' }} testID="row-with-owner">With {label}{line ? null : <RNText style={{ color: Theme.textMuted0, fontWeight: '400' }}> · </RNText>}</RNText>;
   return line ? <RNText style={styles.summaryText} numberOfLines={1}>{lead}</RNText> : lead;
 }
 
-export function SessionItem({ session, isUnread, selected, onPress, onLongPress, roleSessions, onOpenRole, reviveAt, placedBucket, placedState, pendingSend, priorityRank }: { session: SessionData; isUnread?: boolean; selected?: boolean; onPress: () => void; roleSessions?: number; onOpenRole?: () => void; onLongPress?: () => void; reviveAt?: number; priorityRank?: PriorityRankLabel } & RowPlacementProps) {
+export function SessionItem({ session, isUnread, selected, onPress, onLongPress, roleSessions, onOpenRole, reviveAt, placedBucket, placedState, pendingSend, underParent, priorityRank, subagents, onOpenSubagent }: { session: SessionData; isUnread?: boolean; selected?: boolean; onPress: () => void; roleSessions?: number; onOpenRole?: () => void; onLongPress?: () => void; reviveAt?: number; priorityRank?: PriorityRankLabel; subagents?: readonly SubagentStateGroup[]; onOpenSubagent?: (conversationId: string) => void } & RowPlacementProps) {
   if (PERF_PROBE) probeRender('SessionItem');
   const Theme = useTheme();
   const { projectFilter, showImageThumb } = useRowEnv();
@@ -260,7 +249,7 @@ export function SessionItem({ session, isUnread, selected, onPress, onLongPress,
   // answers its wait ("With <owner>"), each in a child mounted only for such a
   // row: a row off the model reads nothing of the owners.
   const ownersModel = underOwnersModel(session as any);
-  const place = { placedBucket, placedState, pendingSend };
+  const place = { placedBucket, placedState, pendingSend, underParent };
   const withLead = ownersModel ? <RowWithOwner session={session} {...place} /> : null;
 
   return (
@@ -390,6 +379,8 @@ export function SessionItem({ session, isUnread, selected, onPress, onLongPress,
         )}
       </RNView>
       ) : null}
+      {/* The card's subagents, folded to a count per state (lib/subagentLine). */}
+      {subagents && onOpenSubagent ? <SubagentLine groups={subagents} onOpen={onOpenSubagent} /> : null}
       </RNView>
       {thumbUrl && (
         <Pressable onPress={() => setThumbZoom(true)} hitSlop={6}>
@@ -405,7 +396,7 @@ export function SessionItem({ session, isUnread, selected, onPress, onLongPress,
 // only the rows whose props changed, and a heartbeat alone changes none
 // (lib/sessionRowEqual). The callbacks take the row's id (or the
 // row) so the list passes the same functions to every row.
-export const SwipeableSessionItem = memo(function SwipeableSessionItem({ session, isUnread, selected, onPress, onClose, onLongPress, roleSessions, onOpenRole, reviveAt, placedBucket, placedState, pendingSend, priorityRank }: RowPlacementProps & {
+export const SwipeableSessionItem = memo(function SwipeableSessionItem({ session, isUnread, selected, onPress, onClose, onLongPress, roleSessions, onOpenRole, reviveAt, placedBucket, placedState, pendingSend, underParent, priorityRank, subagents }: RowPlacementProps & {
   session: SessionData;
   isUnread?: boolean;
   /** The row is the conversation on screen (a conversation's inbox panel). */
@@ -424,6 +415,9 @@ export const SwipeableSessionItem = memo(function SwipeableSessionItem({ session
   reviveAt?: number;
   /** The inbox's Priorities view only (lib/inboxPriorities): the rank and its other workspace; null, no tag. */
   priorityRank?: PriorityRankLabel;
+  /** The folded subagents line (lib/subagentLine subagentLines); a count
+   *  opens its subagent through onPress. */
+  subagents?: readonly SubagentStateGroup[];
 }) {
   const Theme = useTheme();
   const translateX = useRef(new RNAnimated.Value(0)).current;
@@ -541,7 +535,7 @@ export const SwipeableSessionItem = memo(function SwipeableSessionItem({ session
       style={[styles.conversationItem, { transform: [{ translateX }] }]}
       {...(responder ? responder.panHandlers : {})}
     >
-      <SessionItem session={session} selected={selected} roleSessions={roleSessions} onOpenRole={openRole} isUnread={isUnread} onPress={press} onLongPress={longPress} reviveAt={reviveAt} placedBucket={placedBucket} placedState={placedState} pendingSend={pendingSend} priorityRank={priorityRank} />
+      <SessionItem session={session} selected={selected} roleSessions={roleSessions} onOpenRole={openRole} isUnread={isUnread} onPress={press} onLongPress={longPress} reviveAt={reviveAt} placedBucket={placedBucket} placedState={placedState} pendingSend={pendingSend} underParent={underParent} priorityRank={priorityRank} subagents={subagents} onOpenSubagent={onPress} />
       <RNView style={styles.separator} />
     </RNAnimated.View>
   );

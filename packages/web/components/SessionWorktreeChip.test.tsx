@@ -46,7 +46,7 @@ test("both compact worktree rows and full cards render the same location chip", 
   // location, not a parent: worktree_name must not appear anywhere in
   // SessionCard's branch decision (ct-49429).
   const card = source.slice(source.indexOf("export function SessionCardView"), compact);
-  expect(card).toContain("const isSubagent = drawsNested(session, subRow);");
+  expect(card).toContain("const isSubagent = drawsNested(session, subRow, underParent);");
   expect(card).not.toContain("!!session.worktree_name");
   // The one chip both shapes render.
   expect(source.slice(0, compact)).toContain('const worktreeChip = (session.worktree_name || session.cloud_placement === "pending" || session.cloud_workspace === "shared" || session.migration_batch_id)');
@@ -61,10 +61,13 @@ test("a worktree does not make a first-class session look like a nested child", 
   const start = source.indexOf("const isSubagent =");
   expect(start).toBeGreaterThan(0);
   const line = source.slice(start, source.indexOf(";", start) + 1);
-  expect(line).toBe("const isSubagent = drawsNested(session, subRow);");
+  expect(line).toBe("const isSubagent = drawsNested(session, subRow, underParent);");
   const worktree = { worktree_name: "cloud-bc9163", worktree_branch: "codecast/cloud-bc9163" } as unknown as InboxSession;
   expect(drawsNested(worktree)).toBe(false);
-  expect(drawsNested({ ...worktree, is_subagent: true } as InboxSession)).toBe(true);
+  expect(drawsNested(worktree, undefined, true)).toBe(false);
+  // A subagent draws nested only where it is drawn under its parent.
+  expect(drawsNested({ ...worktree, is_subagent: true } as InboxSession, undefined, true)).toBe(true);
+  expect(drawsNested({ ...worktree, is_subagent: true } as InboxSession)).toBe(false);
 });
 
 test("a placed cloud row says what it started from: `<name> @<base7>` and a 'Started from' title line, still no nested control (ct-49433)", () => {

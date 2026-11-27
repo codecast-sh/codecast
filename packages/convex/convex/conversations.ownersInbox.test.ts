@@ -66,11 +66,15 @@ function world(flag: boolean) {
 }
 
 const ids = (rows: any[]) => rows.filter((r) => !r.is_subagent || r.owners_model).map((r) => String(r._id).replace("conversations_", "")).sort();
+// The viewer's inbox members: a child its session owns comes with that
+// session's row for its card only (owned by nobody here), never a member.
+const members = (rows: any[]) => ids(rows.filter((r) => !(r.owner_session_id && !r.owned_by_me && !r.implicit_owner)));
 
 describe("membership: the inbox is the sessions you own", () => {
   test("flag on: own, role-owned with my row, released, added-myself and a plain spawn's peer; not role-started, parent-owned or handed", async () => {
     const { sessions } = await computeInboxSessions({ db: world(true) }, ME as any, { includeLiveness: false });
-    expect(ids(sessions)).toEqual(["added_sub", "own", "peer", "released", "role_hand"]);
+    expect(members(sessions)).toEqual(["added_sub", "own", "peer", "released", "role_hand"]);
+    expect(sessions.find((s: any) => s._id === "conversations_child")).toMatchObject({ owned_by_me: false, implicit_owner: null, owner_session_id: "conversations_own" });
     expect(sessions.find((s: any) => s._id === "conversations_peer")).toMatchObject({ implicit_owner: ME, owner_session_id: null });
     const own = sessions.find((s: any) => s._id === "conversations_own");
     // A row names no owner list: the viewer's claim, and the implicit starter.
@@ -150,6 +154,32 @@ describe("every inbox row builder under the model spells the four owner stamps",
     for (const id of ["own", "role_hand"]) await closed.patch(`conversations_${id}`, { inbox_closed_at: EPOCH - H, inbox_dismissed_at: EPOCH - H });
     const c = await handler(listClosedSessions)(auth(closed), { paginationOpts: { numItems: 50, cursor: null } });
     spelled(c.page ?? c.sessions ?? []);
+  });
+});
+
+// The client keeps one row per session, rewritten by whichever feeder pushed
+// last: a child its parent owns must come back from byIds and the crawl as the
+// inbox read sends it on the parent's card, or every catch-up rewrites it.
+describe("a parent-owned child is one row whichever feeder sends it", () => {
+  const childOf = (rows: any[]) => rows.find((r: any) => r._id === "conversations_child");
+
+  test("byIds and the crawl send the inbox read's slim child row, field for field", async () => {
+    const db = world(true);
+    const listed = childOf((await computeInboxSessions({ db }, ME as any, { includeLiveness: false })).sessions);
+    expect(listed).toMatchObject({ is_subagent: true, owner_session_id: "conversations_own" });
+    expect(childOf((await collectInboxSessionsByIds({ db }, ME as any, ["conversations_child"])).sessions)).toEqual(listed);
+    const page = await collectInboxSessionsPaginated({ db }, ME as any, { paginationOpts: { numItems: 50, cursor: null } });
+    expect(childOf(page.page)).toEqual(listed);
+  });
+
+  test("an owner seat makes it a row of the viewer's own: the full row from every feeder, never the card's", async () => {
+    const db = world(true);
+    await db.insert("session_owners", { conversation_id: "conversations_child", user_id: ME, added_by: ME, added_at: 4 });
+    const listed = childOf((await computeInboxSessions({ db }, ME as any, { includeLiveness: false })).sessions);
+    expect(listed).toMatchObject({ owned_by_me: true, is_subagent: false });
+    expect(childOf((await collectInboxSessionsByIds({ db }, ME as any, ["conversations_child"])).sessions)).toMatchObject({ owned_by_me: true, is_subagent: false });
+    const page = await collectInboxSessionsPaginated({ db }, ME as any, { paginationOpts: { numItems: 50, cursor: null } });
+    expect(childOf(page.page)).toBeUndefined();
   });
 });
 
@@ -463,8 +493,30 @@ describe("the nested window: released subagents only", () => {
     const { sessions, truncated } = await computeInboxSessions({ db }, ME as any, { includeLiveness: false });
     expect(ids(sessions)).toContain("released");
     expect(truncated).not.toContain("nested");
-    // A subagent its parent owns is never a row of mine.
-    expect(ids(sessions).filter((id) => id.startsWith("busy"))).toEqual([]);
+    // A subagent its parent owns is never mine: it rides the parent's card,
+    // stamped owned by that session, so the client files it nowhere else.
+    const busyRows = sessions.filter((s: any) => String(s._id).startsWith("conversations_busy"));
+    expect(busyRows.length).toBeGreaterThan(0);
+    for (const row of busyRows) {
+      expect(row.owned_by_me).toBe(false);
+      expect(row.owners_model).toBe(true);
+      expect(row.owner_session_id).toBe("conversations_lead");
+      expect(row.implicit_owner).toBeNull();
+    }
+  });
+
+  // Only the web's own inbox draws them on the lead's card. The CLI's list
+  // and the team board count each row as a session of its own.
+  test("cast sessions and the team board list the lead, not the subagents it owns", async () => {
+    const owned = () => nestedWorld(Array.from({ length: 3 }, (_, i) => sub(`busy${i}`, i + 1)));
+    const busyIn = (rows: any[]) => rows.filter((s: any) => String(s._id ?? s.id).startsWith("conversations_busy"));
+    expect(busyIn((await computeInboxSessions({ db: owned() }, ME as any, { includeLiveness: false })).sessions)).toHaveLength(3);
+    const { sessions } = await computeInboxSessions({ db: owned() }, ME as any, { projection: true });
+    const { rows } = tallyInboxRows(sessions, { labelByConv: new Map(), now: EPOCH });
+    expect(rows.map((r) => r.id)).toEqual(["conversations_lead"]);
+    const team = await computeInboxSessions({ db: owned() }, ME as any, { includeLiveness: false, teamScope: TEAM as any });
+    expect(team.sessions.map((s: any) => s._id)).toContain("conversations_lead");
+    expect(busyIn(team.sessions)).toEqual([]);
   });
 
   test("past its cap the window names itself and keeps the newest releases, the replica's selection", async () => {
@@ -491,5 +543,42 @@ describe("the nested window: released subagents only", () => {
     ]);
     const { sessions } = await computeInboxSessions({ db }, ME as any, { includeLiveness: false });
     expect(ids(sessions).filter((id) => id !== "lead")).toEqual(["mine"]);
+  });
+
+  // A session a person dragged under the lead (adopted_at) rides its card
+  // however many newer children the lead has, as the same slim row from every
+  // feeder: the server's adopted_at, and is_subagent false, since it runs its
+  // own process and reads its own placement.
+  test("an adopted session older than 20 newer children rides the lead's card from every feeder", async () => {
+    const busy = Array.from({ length: 25 }, (_, i) => sub(`busy${i}`, i + 1));
+    const adopted = { _id: "conversations_adopted", user_id: ME, parent_conversation_id: "conversations_lead", adopted_at: EPOCH - H,
+      updated_at: EPOCH - 300 * 60_000, started_at: EPOCH - 300 * 60_000 - H, title: "adopted", ...live };
+    const db = () => nestedWorld([adopted, ...busy]);
+    const { sessions } = await computeInboxSessions({ db: db() }, ME as any, { includeLiveness: false });
+    const listed = sessions.find((r: any) => r._id === "conversations_adopted");
+    expect(listed).toMatchObject({ owner_session_id: "conversations_lead", owned_by_me: false, adopted_at: EPOCH - H, is_subagent: false });
+    // The 20 newest plain children ride with it; the older ones do not.
+    expect(sessions.filter((r: any) => String(r._id).startsWith("conversations_busy"))).toHaveLength(20);
+    expect((await collectInboxSessionsByIds({ db: db() }, ME as any, ["conversations_adopted"])).sessions[0]).toEqual(listed);
+    const page = await collectInboxSessionsPaginated({ db: db() }, ME as any, { paginationOpts: { numItems: 50, cursor: null } });
+    expect(page.page.find((r: any) => r._id === "conversations_adopted")).toEqual(listed);
+  });
+
+  // A child a role took, or one someone released, has left its parent's card
+  // (isParentOwnedChild): neither read sends it under the lead stamped as the
+  // lead's. Neither is mine, so no seat of its own masks the check.
+  test("a role-owned or released child of a listed lead never rides the lead's card", async () => {
+    const db = () => nestedWorld([
+      sub("roled", 5, { org_role_id: "org_roles_r", role_started: true }),
+      sub("theirs", 6, { parent_released_at: EPOCH - H, owner_user_id: MATE }),
+      sub("kept", 7),
+    ]);
+    const underLead = (rows: any[]) => rows.filter((r: any) => r.owner_session_id === "conversations_lead").map((r: any) => String(r._id)).sort();
+    const { sessions } = await computeInboxSessions({ db: db() }, ME as any, { includeLiveness: false });
+    expect(ids(sessions)).toContain("lead");
+    expect(underLead(sessions)).toEqual(["conversations_kept"]);
+    const page = await collectInboxSessionsPaginated({ db: db() }, ME as any, { paginationOpts: { numItems: 50, cursor: null } });
+    expect(page.page.map((r: any) => String(r._id))).toContain("conversations_lead");
+    expect(underLead(page.page)).toEqual(["conversations_kept"]);
   });
 });

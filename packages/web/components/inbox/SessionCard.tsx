@@ -120,7 +120,7 @@ const paneDragStart = (sessionId: string) => (e: React.DragEvent, title: string)
 export type SessionCardProps = Pick<
   SessionCardViewProps,
   | "session" | "isActive" | "isParentActive" | "isSelected" | "isUnread" | "isFavorite" | "sessionLabel" | "priorityRank"
-  | "variant" | "sectionStatus" | "forkColorKey" | "subRow" | "roleSessions" | "hiddenRunningSubagents" | "foldedSubagentId"
+  | "variant" | "sectionStatus" | "forkColorKey" | "subRow" | "underParent" | "roleSessions"
   | "onSelect" | "onClose" | "onDefer" | "onRestore" | "onKill" | "onNavigateToSession" | "onCardContextMenu" | "onPickCharacter"
 > & {
   globalIndex: number;

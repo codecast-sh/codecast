@@ -2182,6 +2182,13 @@ diffs-container {
 .inbox-compact [data-sv-rail] [data-session-id] > [role="button"] {
   padding-block: 6px;
 }
+/* A card's Compact subagent rows keep their marks under the card's mark. In
+   the Sleeping section of a card list the one line card drops the card's 6px
+   margin while the bar under it keeps its footer inset, so the rows move back
+   by the 5.5px that leaves them right of the card's mark. */
+:root:not(.minimal-style) .simple-view:not(.inbox-compact) .inbox-compact [data-sv-rail] [data-sv-subagent-row] {
+  padding-left: 7.5px;
+}
 /* A one line row is a line of text, not a card. A box around every line makes
    the list read as a stack of rectangles, so the row takes the rail's own
    ground and shows no edge. A fill that runs edge to edge, like the section

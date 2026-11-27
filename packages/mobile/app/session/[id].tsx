@@ -87,7 +87,6 @@ import { readableText } from '@/lib/markdown';
 import { ComposeButton } from '@/components/session/ComposeButton';
 import { ScreenRecordingCard } from '@/components/ScreenRecordingCard';
 import { ComposerOwnerStrip } from '@/components/session/OwnerComposerLines';
-import { SessionAgentsList } from '@/components/session/SessionAgentsList';
 import { useSyncSessionOwners } from '@codecast/web/hooks/useSyncSessionOwners';
 import { MessageComposer, dispatchComposerSend, useComposerImages, IMAGE_ONLY_CONTENT, type ComposerStatus } from '@/components/session/MessageComposer';
 import { sessionLanded } from '@/lib/compose';
@@ -2813,7 +2812,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   // of this viewer's, but only while the screen is focused and the app is in
   // the foreground.
   useAckActiveSession(typeof id === "string" ? id : null);
-  // The owners read and the agents list under the owners model (session_owners).
+  // The owners read under the owners model (session_owners).
   useSyncSessionOwners(typeof id === "string" && isConvexId(id) ? id : "");
 
   const flatListRef = useRef<FlatList>(null);
@@ -4650,8 +4649,6 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
                 )}
               </ScrollView>
             </RNView>
-            {/* Under the owners model: the agents this session owns. */}
-            {!hosted && isConvexId(conversation._id) && <SessionAgentsList conversationId={String(conversation._id)} />}
             {/* A station or a run's own session: the whole flow it works in, every station one tap away. */}
             <SessionFlowContext
               conversationId={String(conversation._id)}
