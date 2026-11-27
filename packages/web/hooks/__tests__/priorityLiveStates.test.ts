@@ -343,3 +343,11 @@ test("a decision reassigned to or away from the viewer repaints the milestone at
     await page.unmount();
   }
 }, 60_000);
+
+// Last: placeInboxRows' memo can hand a later test this row's placement (a pre-existing key gap, filed separately).
+test("asleep with its own subagent running: drawn Working, as the rail's split draws it, and the milestone reads it so", () => {
+  const at = NOW - 10 * MIN;
+  const parked = { message_count: 4, status: "completed", agent_status: "dormant", updated_at: at, last_turn_at: at - MIN, user_id: VIEWER_ID, thread_state_status: "dormant", thread_state_at: at, last_heartbeat: NOW - 5_000, open_tasks_at: at };
+  put({ [ID]: { ...parked, open_tasks: [{ id: "t1", kind: "agent", description: "Round 7 verifier: UI" }] } });
+  expect(mark()).toBe("working");
+});

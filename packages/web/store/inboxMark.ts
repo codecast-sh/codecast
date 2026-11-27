@@ -9,6 +9,7 @@ import { hostedStopOf } from "../lib/hostedNotice";
 import { queuesDecision, queuesOwnAsk } from "../lib/decisionQueue";
 import { isPriorityCard } from "@codecast/shared/contracts/priorityCard";
 import { INBOX_SECTION_DECLARED_STATUS, cardSectionOf, sessionStatusOf, type SessionStatus } from "../lib/sessionStatus";
+import { dormantActivityOf } from "../lib/railActivity";
 import {
   drawnSectionOf, filterInboxScope, placeInboxRows, railRowPlacement, subagentLiveOf, subagentStatusOf,
   type InboxSectionKey, type PlaceInboxState, type PlacedInbox, type SubagentLiveState,
@@ -143,7 +144,9 @@ export function inboxMarkOf(
     return { mark: subagentStatusOf(row, now, live), asks, target: id };
   }
   const key = section === "needsInput" && stopped ? "hosted_stopped" : PANEL_KEY_OF_SECTION[section];
-  const cardSection = section === "questions" ? "questions" : cardSectionOf(section === "working" ? "working" : "default", INBOX_SECTION_DECLARED_STATUS[key]);
+  // An asleep row draws where the rail's split puts it (lib/railActivity): its own work running reads Working, its change shipping reads Shipping.
+  const split = key === "dormant" ? dormantActivityOf(state as never, row as never, "dormant", now) : null;
+  const cardSection = section === "questions" ? "questions" : split === "working" || split === "shipping" ? split : cardSectionOf(section === "working" ? "working" : "default", INBOX_SECTION_DECLARED_STATUS[key]);
   const mark = sessionStatusOf({ row, section: cardSection, placement: cardSection ? null : railRowPlacement(row, now), now, live, hosted });
   // A pinned card keeps its own verdict: it waits on the viewer when that verdict is an ask or a failure to clear.
   const asks = queued || (section === "pinned" ? mark === "needs_you" || mark === "error" : ASKING_SECTIONS.has(section) && key !== "hosted_stopped");
