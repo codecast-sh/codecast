@@ -2094,7 +2094,8 @@ function SessionListPanelImpl({
   // Links read off the live rows: the placed rows can be older copies of a session whose link just changed.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const priorityPlaceOf = useMemo(() => (priorityKey ? priorityPlaceReader(useInboxStore.getState()) : null), [priorityKey]);
-  const priorityRankOf = (session: InboxSession) => (priorityPlaceOf ? rankLabelOf(priorityPlaceOf(session)) : undefined);
+  // The label every card's priority chip shows (the filter's Top N reads priorityRankOf, a bare rank).
+  const chipRankOf = (session: InboxSession) => (priorityPlaceOf ? rankLabelOf(priorityPlaceOf(session)) : undefined);
   const sortPlaceOf = resolveInboxViewMode(s) === "priorities" ? priorityPlaceOf : null;
   const byPriority = useCallback((rows: InboxSession[]) => (sortPlaceOf ? sortByPriority(rows, sortPlaceOf) : rows), [sortPlaceOf]);
   const statusPinned = filteredPinned;
@@ -2905,7 +2906,7 @@ function SessionListPanelImpl({
                   variant={variant}
                   forkColorKey={forkColorKeyOf(session)}
                   sessionLabel={labelByConv[session._id] ?? null}
-                  priorityRank={priorityRankOf(session)}
+                  priorityRank={chipRankOf(session)}
                   isUnread={!!unreadByConv[session._id]}
                   isFavorite={cardIsFavorite(session)}
                 />
@@ -2950,7 +2951,7 @@ function SessionListPanelImpl({
                     subRow={subRowOf(sub)}
                     underParent
                     sessionLabel={labelByConv[sub._id] ?? null}
-                    priorityRank={priorityRankOf(sub)}
+                    priorityRank={chipRankOf(sub)}
                     isUnread={!!unreadByConv[sub._id]}
                     isFavorite={cardIsFavorite(sub)}
                   />
@@ -3189,7 +3190,7 @@ function SessionListPanelImpl({
                   subRow={flatNestParentOf && isUnderRole(session) && flatNestParentOf(session) ? "role" : flat && nestedWorkerIds.has(session._id) ? "worker" : undefined}
                   underParent={!!flatUnderParent?.has(session._id)}
                   sessionLabel={labelByConv[session._id] ?? null}
-                  priorityRank={priorityRankOf(session)}
+                  priorityRank={chipRankOf(session)}
                   isUnread={!!unreadByConv[session._id]}
                   isFavorite={cardIsFavorite(session)}
                 />
@@ -3232,7 +3233,7 @@ function SessionListPanelImpl({
                     subRow={subRowOf(sub)}
                     underParent
                     sessionLabel={labelByConv[sub._id] ?? null}
-                    priorityRank={priorityRankOf(sub)}
+                    priorityRank={chipRankOf(sub)}
                     isUnread={!!unreadByConv[sub._id]}
                     isFavorite={cardIsFavorite(sub)}
                   />
@@ -3639,7 +3640,7 @@ function SessionListPanelImpl({
                   onPin={s.pinSession}
                   forkColorKey={forkColorKeyOf(session)}
                   sessionLabel={labelByConv[session._id] ?? null}
-                  priorityRank={priorityRankOf(session)}
+                  priorityRank={chipRankOf(session)}
                   isUnread={!!unreadByConv[session._id]}
                   isFavorite={cardIsFavorite(session)}
                   subRow="trigger"
