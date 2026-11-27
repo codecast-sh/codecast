@@ -24,8 +24,9 @@ async function takesSessionChange(ctx: any, run: any, cache: Map<string, boolean
 
 const LIVE = ["pending", "running", "paused"] as const;
 
-/** A run a session's change feeds carry: its flow takes the change, or (a project flow that only extends the
- *  library's change flow names no branch) it is a live run of a shipping flow, which the rail splits a session by. */
+/** A run a session's change feeds carry: its flow takes the change (a variant that only extends a library flow by
+ *  name reads its takes from there, flowRunAttr), or it is a live run of a shipping flow whose base the source alone
+ *  cannot name (one extended by file path), which the rail splits a session by. */
 async function countsAsChangeRun(ctx: any, run: any, cache: Map<string, boolean>): Promise<boolean> {
   return (await takesSessionChange(ctx, run, cache)) || (LIVE_RUN_STATUSES.has(run.status) && SHIPPING_FLOWS.has(run.workflow_name ?? ""));
 }
