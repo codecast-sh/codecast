@@ -7,6 +7,7 @@
 import { isHostedAgentType, isUnderRole } from "@codecast/shared/contracts";
 import { hostedStopOf } from "../lib/hostedNotice";
 import { queuesDecision, queuesOwnAsk } from "../lib/decisionQueue";
+import { isPriorityCard } from "@codecast/shared/contracts/priorityCard";
 import { INBOX_SECTION_DECLARED_STATUS, cardSectionOf, sessionStatusOf, type SessionStatus } from "../lib/sessionStatus";
 import {
   drawnSectionOf, filterInboxScope, placeInboxRows, railRowPlacement, subagentLiveOf, subagentStatusOf,
@@ -63,7 +64,8 @@ export type DrawnMark = { mark: SessionStatus; asks: boolean; target: string };
  */
 function inDecisionQueue(state: PlaceInboxState, id: string): boolean {
   const meId = state.currentUser?._id ? String(state.currentUser._id) : undefined;
-  for (const d of Object.values(state.sessionDecisions ?? {})) if (d.conversation_id === id && queuesDecision(d, meId)) return true;
+  // A priority card sits in a session without being its question (shared isPriorityCard): it never makes the session ask.
+  for (const d of Object.values(state.sessionDecisions ?? {})) if (d.conversation_id === id && !isPriorityCard(d) && queuesDecision(d, meId)) return true;
   const row = filterInboxScope(state.sessions, "mine", meId)[id];
   return !!row && queuesOwnAsk(row, state.questionResolutions);
 }
