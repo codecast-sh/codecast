@@ -34,7 +34,10 @@ declare global {
 
 const testHost = (): DictationHost | undefined => (typeof window !== "undefined" ? window.__dictationTestHost : undefined);
 
-async function openMicrophone(convex: ConvexAction | null, events: DictationPipeEvents): Promise<DictationPipe> {
+/** What a start nobody wants any more rejects with (the controller ignores it). */
+export const DICTATION_ABANDONED = "Dictation was cancelled";
+
+async function openMicrophone(convex: ConvexAction | null, events: DictationPipeEvents, signal: { readonly aborted: boolean }): Promise<DictationPipe> {
   if (!convex) throw new Error("Dictation is not connected");
   // Loaded on the first press, not with every composer.
   const pipeModule = import("../calls/asrPipe");
@@ -55,6 +58,9 @@ async function openMicrophone(convex: ConvexAction | null, events: DictationPipe
   }
   try {
     const { openAsrPipe } = await pipeModule;
+    // Cancelled (or taken over) while the browser asked for the microphone:
+    // let it go here, before the pipe mints a key nobody will use.
+    if (signal.aborted) throw new Error(DICTATION_ABANDONED);
     const t0 = Date.now();
     const pipe = openAsrPipe({
       convex,
@@ -92,9 +98,9 @@ async function openMicrophone(convex: ConvexAction | null, events: DictationPipe
  *  at each press), else the microphone. */
 export function dictationHost(convex: () => ConvexAction | null): DictationHost {
   return {
-    open: (events) => {
+    open: (events, signal) => {
       const t = testHost();
-      return t ? t.open(events) : openMicrophone(convex(), events);
+      return t ? t.open(events, signal) : openMicrophone(convex(), events, signal);
     },
     now: () => (testHost()?.now ?? Date.now)(),
     setTimer: (fn, ms) => {

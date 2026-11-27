@@ -180,8 +180,12 @@ export type DictationPipe = {
 
 export type DictationHost = {
   /** Open the microphone and a recognizer on it. Rejects when the microphone
-   *  cannot be had; the message is what the mic shows. */
-  open(events: DictationPipeEvents): Promise<DictationPipe>;
+   *  cannot be had; the message is what the mic shows. `signal.aborted` turns
+   *  true once nothing wants this recording any more (cancelled, another box
+   *  took over, a huddle started): a host checks it after each slow step (the
+   *  permission prompt, the microphone) and stops there instead of minting a
+   *  key and opening a recognizer nobody will read. */
+  open(events: DictationPipeEvents, signal: { readonly aborted: boolean }): Promise<DictationPipe>;
   now?: () => number;
   setTimer?: (fn: () => void, ms: number) => unknown;
   clearTimer?: (handle: unknown) => void;
@@ -190,8 +194,14 @@ export type DictationHost = {
 export type Dictation = {
   readonly state: DictationState;
   start(): void;
-  /** Keep the words. Resolves once the last words are in the field. */
-  finish(): Promise<void>;
+  /** Keep the words. Resolves once the last words are in the field: true when
+   *  the recording ended by finishing, false when it was cancelled, disposed or
+   *  started over before its words came back. */
+  finish(): Promise<boolean>;
+  /** Finish, then run `then` (a send, a create) only if the words were kept.
+   *  One slot: a second press replaces the first rather than running twice,
+   *  and Cancel or unmount while finishing runs nothing. Idle runs `then` now. */
+  finishThen(then: () => void): void;
   /** Put the field back as it was before the press. */
   cancel(): void;
   /** True while a press of Enter or Esc belongs to the recording. */
@@ -200,16 +210,18 @@ export type Dictation = {
   dispose(): void;
 };
 
-/** The recording running anywhere in this app, so a second press elsewhere
- *  finishes it first. */
+/** The newest recording in this app, so a second press elsewhere finishes it
+ *  first. */
 let running: Dictation | null = null;
+/** Every recording not yet idle, finishing ones included. */
+const live = new Set<Dictation>();
 
 /** A start cancelled while the recording before it was still finishing. */
 const ABANDONED = Symbol("dictation abandoned");
 
 /** Whether a recording is running anywhere in this app. */
 export function dictationRunning(): boolean {
-  return running?.active === true;
+  return live.size > 0;
 }
 
 /** Keep the words of the recording running anywhere in this app and stop it.
@@ -217,12 +229,13 @@ export function dictationRunning(): boolean {
  *  going to the background, the screen going away) calls this first, so its
  *  audio never lands in a text box. */
 export function finishRunningDictation(): Promise<void> {
-  return running ? running.finish() : Promise.resolve();
+  return Promise.all([...live].map((d) => d.finish())).then(() => {});
 }
 
 /** For tests: forget the running recording without touching it. */
 export function _resetDictationForTests() {
   running = null;
+  live.clear();
 }
 
 export function createDictation(
@@ -245,8 +258,10 @@ export function createDictation(
   let run = 0;
   let silenceTimer: unknown = null;
   let maxTimer: unknown = null;
-  let finishing: Promise<void> | null = null;
+  let finishing: Promise<boolean> | null = null;
   let disposed = false;
+  /** finishThen's one slot, for the recording finishing now. */
+  let after: { then: () => void } | null = null;
 
   const set = (next: Partial<DictationState>) => {
     state = { ...state, ...next };
@@ -293,6 +308,7 @@ export function createDictation(
     partial = "";
     finishing = null;
     if (running === self) running = null;
+    live.delete(self);
     run++;
     set({ phase: "idle", stopped, error });
   };
@@ -310,15 +326,15 @@ export function createDictation(
   };
 
   /** Keep the words: wait for the last ones, then go idle. */
-  const stop = (why: DictationStop | null): Promise<void> => {
+  const stop = (why: DictationStop | null): Promise<boolean> => {
     if (finishing) return finishing;
-    if (state.phase === "idle") return Promise.resolve();
+    if (state.phase === "idle") return Promise.resolve(true);
     const id = run;
     const p = pipe;
     if (!p) {
       // Still opening the microphone: nothing was heard, nothing to keep.
       settle(why);
-      return Promise.resolve();
+      return Promise.resolve(true);
     }
     set({ phase: "finishing" });
     clearTimers();
@@ -326,7 +342,8 @@ export function createDictation(
       .finish()
       .catch(() => {})
       .then(() => {
-        if (id !== run) return;
+        // Cancelled, disposed or edited while the last words were on their way.
+        if (id !== run) return false;
         // A sentence the recognizer never closed is still what the person saw
         // in the box, so it stays.
         if (partial) {
@@ -336,6 +353,7 @@ export function createDictation(
         render();
         p.close();
         settle(why);
+        return true;
       });
     return finishing;
   };
@@ -354,6 +372,7 @@ export function createDictation(
       // hold the microphone (or the phone's audio session) at once.
       const prior = running && running !== self ? running.finish() : null;
       running = self;
+      live.add(self);
       const id = ++run;
       anchor = dictationAnchor(field.getValue(), field.getSelection());
       committed = [];
@@ -383,9 +402,14 @@ export function createDictation(
           if (id === run) void stop("dropped");
         },
       };
+      const signal = {
+        get aborted() {
+          return id !== run || disposed;
+        },
+      };
       const opening = prior
-        ? prior.then(() => (id === run && !disposed ? host.open(events) : Promise.reject(ABANDONED)))
-        : host.open(events);
+        ? prior.then(() => (signal.aborted ? Promise.reject(ABANDONED) : host.open(events, signal)))
+        : host.open(events, signal);
       opening.then(
         (opened) => {
           if (id !== run || disposed) {
@@ -408,7 +432,23 @@ export function createDictation(
     finish() {
       return stop(null);
     },
+    finishThen(then) {
+      if (state.phase === "idle") {
+        then();
+        return;
+      }
+      if (after) {
+        after.then = then;
+        return;
+      }
+      const mine = (after = { then });
+      void stop(null).then((kept) => {
+        if (after === mine) after = null;
+        if (kept) mine.then();
+      });
+    },
     cancel() {
+      after = null;
       if (state.phase === "idle") return;
       const a = anchor;
       pipe?.close();
@@ -420,6 +460,7 @@ export function createDictation(
       settle(null);
     },
     dispose() {
+      after = null;
       if (state.phase !== "idle") {
         pipe?.close();
         settle(null);
