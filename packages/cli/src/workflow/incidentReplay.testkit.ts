@@ -139,7 +139,7 @@ async function verdictsCommand(argv: string[], cwd: string): Promise<number> {
   const pr = readPr(dir);
   const head = pr?.branch ? originHead(cwd, pr.branch) || null : null;
   const proof = needsProof(dir) ? await post("/cli/workflow-runs/merge-proof", {}) : null;
-  console.log(JSON.stringify(changeVerdicts(dir, arg(argv, "--review"), head, proof)));
+  console.log(JSON.stringify(changeVerdicts(dir, arg(argv, "--review"), head, proof, { runId: arg(argv, "--run") ?? process.env.run_id })));
   return 0;
 }
 

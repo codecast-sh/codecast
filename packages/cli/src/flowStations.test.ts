@@ -171,7 +171,8 @@ describe("cast flow verdicts and an approved CI edit", () => {
     const head = "a".repeat(40);
     fs.writeFileSync(path.join(dir, "pr.json"), JSON.stringify({ url: "u", number: 7, head_sha: head, round: "r2" }));
     fs.writeFileSync(path.join(dir, "ci.json"), JSON.stringify({ green: true, head_sha: head, failing: [], preexisting: [], pending: [], timed_out: false, ci_changed: true, ci_edit: "e1" }));
-    fs.writeFileSync(path.join(dir, "ci-approved.json"), JSON.stringify({ ci_edit: "e1" }));
+    // The approval is this run's (--run), as Merge records it.
+    fs.writeFileSync(path.join(dir, "ci-approved.json"), JSON.stringify({ run_id: "run_3", ci_edit: "e1" }));
     const review = JSON.stringify({ round: "r2", head_sha: head, verdict: "ship", findings: [] });
     const said: string[] = [];
     const log = console.log;

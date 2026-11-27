@@ -286,30 +286,31 @@ describe("cast flow ci: splitting a red head (routing only, never green)", () =>
     expect(summary).toBe("CI red on #7: 1 failure in test-cli");
   });
 
-  test("a change to CI carries a digest of its own edit to its CI files: main's edits around it, brought in by a rebase, keep it", async () => {
-    const files = [".github/workflows/ci.yml", "src/app.ts"];
-    const pass = { polls: [{ rollup: [check("lint", "SUCCESS", 1)] }], files };
-    const ci = (patch: string | undefined, o: { status?: string; tree?: string[] } = {}) => [{ filename: ".github/workflows/ci.yml", status: o.status ?? "modified", ...(patch !== undefined ? { patch } : {}) }, { filename: "src/app.ts", status: "modified", patch: "@@ -1 +1 @@\n-a\n+b" }];
-    const tree = (mode = "100644", sha = "111") => [`${mode} ${sha} .github/workflows/ci.yml`, "100644 aaa src/app.ts"];
-    const edit = (patches: ReturnType<typeof ci>, t: string[] | "none" = tree()) => station(fakeGh({ ...pass, patches, tree: t === "none" ? undefined : t })).then((s) => s.result);
-    const a = await edit(ci("@@ -3,2 +3,2 @@ jobs:\n   lint:\n-    runs-on: x\n+    runs-on: y"));
+  test("a change to CI carries a digest of its CI files at the head: the same edit, the same digest; content, mode or removal changes it", async () => {
+    const pass = { polls: [{ rollup: [check("lint", "SUCCESS", 1)] }], files: [".github/workflows/ci.yml", "src/app.ts"] };
+    const edit = (tree: string[] | undefined) => station(fakeGh({ ...pass, tree })).then((s) => s.result);
+    const at = (mode: string, sha: string) => [`${mode} ${sha} .github/workflows/ci.yml`, "100644 aaa src/app.ts"];
+    const a = await edit(at("100644", "111"));
     expect(a).toMatchObject({ green: true, ci_changed: true });
     expect(a.ci_edit).toMatch(/^[0-9a-f]{16}$/);
+    expect((await edit(at("100644", "111"))).ci_edit).toBe(a.ci_edit);
+    // A different content, a mode-only change (same blob), and the file removed are each another edit.
+    const others = [await edit(at("100644", "222")), await edit(at("100755", "111")), await edit(["100644 aaa src/app.ts"])].map((r) => r.ci_edit);
+    expect(new Set([a.ci_edit, ...others]).size).toBe(4);
+    // Each CI path keeps its own digest, so a second card can name the file that changed.
     expect(Object.keys(a.ci_edit_files!)).toEqual([".github/workflows/ci.yml"]);
-    // The same added and removed lines after main edited the file elsewhere (another blob, other lines and context).
-    expect((await edit(ci("@@ -9,2 +12,2 @@ on:\n   test:\n-    runs-on: x\n+    runs-on: y"), tree("100644", "999"))).ci_edit).toBe(a.ci_edit);
-    // Another line edited, the file added rather than modified, a mode change, and no patch (by its blob) are each another edit.
-    const others = [
-      await edit(ci("@@ -3,2 +3,2 @@\n-    runs-on: x\n+    runs-on: z")),
-      await edit(ci("@@ -3,2 +3,2 @@\n-    runs-on: x\n+    runs-on: y", { status: "added" })),
-      await edit(ci("@@ -3,2 +3,2 @@\n-    runs-on: x\n+    runs-on: y"), tree("100755")),
-      await edit(ci(undefined)),
-    ].map((r) => r.ci_edit);
-    expect(new Set([a.ci_edit, ...others]).size).toBe(5);
-    // A tree GitHub cut short, no tree at all, or a CI path the list lacks names no edit: a person is asked.
-    expect((await edit(ci("@@ -1 +1 @@\n-x\n+y"), ["truncated", ...tree()])).ci_edit).toBeNull();
-    expect((await edit(ci("@@ -1 +1 @@\n-x\n+y"), "none")).ci_edit).toBeNull();
-    expect((await edit([{ filename: "src/app.ts", status: "modified", patch: "@@ -1 +1 @@\n-a\n+b" }])).ci_edit).toBeNull();
+    // A tree GitHub cut short, or no tree at all, names no edit: a person is asked.
+    expect((await edit(["truncated", ...at("100644", "111")])).ci_edit).toBeNull();
+    expect((await edit(undefined)).ci_edit).toBeNull();
+  });
+
+  // Polish round 3, refuted digest: hashing only the added and removed lines let a step moved from an unprivileged job
+  // into the one holding production secrets keep its approval. The person approved the edit in its context.
+  test("a CI edit whose file changed anywhere is another edit: main's edits around it, or a step moved to another job, ask again", async () => {
+    const pass = { polls: [{ rollup: [check("lint", "SUCCESS", 1)] }], files: [".github/workflows/ci.yml"] };
+    const edit = (sha: string) => station(fakeGh({ ...pass, tree: [`100644 ${sha} .github/workflows/ci.yml`] })).then((s) => s.result.ci_edit);
+    // The same step, once added to `lint` and once to `release`: the same added line, another file.
+    expect(await edit("1111111")).not.toBe(await edit("2222222"));
   });
 
   test("the real ci.yml's summary job is no failure of its own beside a matrix job's (`test-web (1/4)`, `typecheck (web)`)", async () => {

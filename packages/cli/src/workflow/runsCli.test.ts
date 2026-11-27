@@ -108,15 +108,19 @@ test("a landed run's restart is the deploy that takes it live, as the run page's
   const change = { task_short_id: "ct-9", workflow_slug: "change", takes_change: true, current_node_id: "deploy__failed" };
   const stop = await stopWords({ workflow_slug: "change", current_node_id: "deploy__failed" });
   const failed = { ...change, merge: { sha: "929c5d8d44" }, fail_reason: "Stopped: The deploy that carried 929c5d8 failed: desktop dp-3559 (Stopped at Send.)." };
-  expect(restartHint(failed, stop)).toBe("it is on main, so running it again lands nothing: the next desktop deploy takes it live (cast line deploy targets --target desktop)");
+  expect(restartHint(failed, stop)).toBe("it is on main as 929c5d8, so running it again lands nothing: the next desktop deploy takes it live (cast line deploy targets --target desktop)");
   // The stop's words say it landed even when the row carries no merge, and every failed target is named.
   const two = { ...change, fail_reason: "Stopped: The deploy that carried 929c5d8 failed: desktop dp-3559 (Stopped at Send.), web dp-12. A later deploy that takes it live ends this run at Live." };
   expect(restartHint(two, stop)).toBe("it is on main, so running it again lands nothing: the next desktop and web deploys take it live (cast line deploy targets)");
   const unsent = { ...change, merge: { sha: "929c5d8d44" }, fail_reason: "Stopped: No deploy took 929c5d8 out: cli dp-3789 stopped at Send before sending anything (gh failed). A later deploy that takes it live ends this run at Live." };
-  expect(restartHint(unsent, stop)).toBe("it is on main, so running it again lands nothing: the next cli deploy takes it live (cast line deploy targets --target cli)");
+  expect(restartHint(unsent, stop)).toBe("it is on main as 929c5d8, so running it again lands nothing: the next cli deploy takes it live (cast line deploy targets --target cli)");
   const stuck = { ...change, current_node_id: "deploy__stuck", merge: { sha: "acbd8d27a8" }, fail_reason: "Stopped: Deploy stuck: cli is not live with acbd8d2 after 60m (last: waiting on main CI at c6c7a32 (running)). Live: backend dp-3302." };
-  expect(restartHint(stuck, null)).toBe("it is on main, so running it again lands nothing: the next cli deploy takes it live (cast line deploy targets --target cli)");
-  expect(restartHint({ ...change, merge: { sha: "31ccbb83b1" }, fail_reason: "Stopped: Deploy stuck" }, stop)).toBe("it is on main, so running it again lands nothing: each target's next deploy takes it live (cast line deploy targets)");
+  expect(restartHint(stuck, null)).toBe("it is on main as acbd8d2, so running it again lands nothing: the next cli deploy takes it live (cast line deploy targets --target cli)");
+  // Every target a stuck stop names, as awaitDeploy joins them.
+  const twoStuck = { ...stuck, fail_reason: "Stopped: Deploy stuck: cli is not live with acbd8d2 after 60m (last: sending); web is not live with acbd8d2 after 60m (last: waiting). Live: backend dp-3302." };
+  expect(restartHint(twoStuck, null)).toBe("it is on main as acbd8d2, so running it again lands nothing: the next cli and web deploys take it live (cast line deploy targets)");
+  // A stop that names no target (ct-64369: cancelled while it waited; a flow may have no deploy targets) says only what is true.
+  expect(restartHint({ ...change, current_node_id: "deploy__wait", merge: { sha: "b3e94c2ccd" }, fail_reason: "Cancelled by user" }, null)).toBe("it is on main as b3e94c2, so running it again lands nothing; where it is live: cast line deploy targets");
   // Deploy found no merge: the change is not on main, and a fresh run is the way on.
   expect(restartHint({ ...change, current_node_id: "deploy__unmerged", fail_reason: "Stopped: 929c5d8 is not on main" }, null)).toBe("once the change is fixed, run it again: cast flow run change --task ct-9");
 });

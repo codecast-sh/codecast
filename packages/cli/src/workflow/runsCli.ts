@@ -10,7 +10,7 @@ import { apiPost, isOlderBackendRefusal, type PublishDeps } from "../castApi.js"
 import { c, fmt } from "../colors.js";
 import { formatAge } from "../decideCommand.js";
 import { ownRestartOf } from "@codecast/shared/contracts/runRestart";
-import { failedDeploysOf, stuckTargetOf } from "@codecast/shared/contracts/deployStop";
+import { failedDeploysOf, stuckTargetsOf } from "@codecast/shared/contracts/deployStop";
 
 export interface RunNode {
   node_id: string;
@@ -179,14 +179,18 @@ export function restartHint(run: { task_short_id?: string | null; workflow_slug?
   return `try it again from its start: cast workflow resume ${task} --at start`;
 }
 
-/** A landed change's way on: the next deploy of each target its Deploy stop names (failed, or not live), else all of them. */
+/**
+ * A landed change's way on: the next deploy of each target its Deploy stop names (failed, or not live). A stop that
+ * names none (a run cancelled while it waited, a flow with no deploy targets) says only what is true: it is on main.
+ */
 function landedHint(run: { fail_reason?: string | null; merge?: { sha?: string | null } | null }): string | null {
   const failed = failedDeploysOf(run.fail_reason);
   if (!run.merge?.sha && !failed.length) return null;
-  const targets = failed.length ? failed.map((f) => f.target) : [stuckTargetOf(run.fail_reason)].filter((t): t is string => !!t);
+  const targets = failed.length ? failed.map((f) => f.target) : stuckTargetsOf(run.fail_reason);
+  const onMain = `it is on main${run.merge?.sha ? ` as ${run.merge.sha.slice(0, 7)}` : ""}, so running it again lands nothing`;
+  if (!targets.length) return `${onMain}; where it is live: cast line deploy targets`;
   const see = targets.length === 1 ? `cast line deploy targets --target ${targets[0]}` : "cast line deploy targets";
-  const next = targets.length ? `the next ${targets.join(" and ")} deploy${targets.length > 1 ? "s take" : " takes"} it live` : "each target's next deploy takes it live";
-  return `it is on main, so running it again lands nothing: ${next} (${see})`;
+  return `${onMain}: the next ${targets.join(" and ")} deploy${targets.length > 1 ? "s take" : " takes"} it live (${see})`;
 }
 
 /**

@@ -46,11 +46,11 @@ export interface CiResult {
   /** The change edits CI (`.github/**`, a `[line] ci_paths` path, or a file list too long to rule it out): a person must Ship it. */
   ci_changed: boolean;
   /**
-   * With ci_changed, what the CI edit is: a digest of the change's own edit to each CI path the pull request touches
-   * (ci_edit_files). An approval of the edit holds while this is the same; null when it could not be read.
+   * With ci_changed, what the CI edit is: a digest of each CI path the pull request touches with its content at the
+   * head. An approval of the edit holds while this is the same; null when it could not be read.
    */
   ci_edit: string | null;
-  /** The digest of each CI path's edit, by path (a renamed file by its new path), so a re-ask can say which changed. */
+  /** Each of those CI paths' own digest, by path, so a second card can name which of them changed. */
   ci_edit_files: Record<string, string> | null;
   /** What was still running, or never started, when the deadline passed. */
   pending: string[];
@@ -581,34 +581,21 @@ class Station {
   }
 
   /**
-   * What a person approves when they let a CI edit merge: the change's own edit to each CI path the pull request
-   * touches, as GitHub's patch for the pull request has it (against where the change forked from the base, so main's
-   * own edits to the file, which a rebase brings in, never count), only its added and removed lines (a rebase moves
-   * line numbers and context), with the file's status, old path and its mode at the head. A file GitHub gives no patch
-   * for (binary, too large, a mode-only change) counts as its blob at the head. Null when the list or the head's tree
-   * could not be read whole, or a CI path is missing from it.
+   * A digest of the CI paths the pull request touches, each as the head's tree holds it (its mode and blob sha, or
+   * absent when the change removed it), or null when the tree could not be read whole: what a person approves when
+   * they let a CI edit merge. A mode-only change keeps the blob sha, so the mode counts too. Strict on purpose: the
+   * person approved the edit in its context, so any change to such a file (main's edits a rebase brings in, a step
+   * moved to another job) asks again. `files` holds each path's own digest, so a second card can name what changed.
    */
   private ciEdit(ciFiles: string[], head: string): { digest: string; files: Record<string, string> } | null {
-    const paths = [...new Set(ciFiles)];
-    const listed = this.call(["api", "--paginate", `repos/${this.repo}/pulls/${this.o.pr}/files`, "--jq", `.[] | . as $f | select(${JSON.stringify(paths)} | any(. == $f.filename or . == ($f.previous_filename // ""))) | {filename, previous_filename, status, patch} | tojson`]);
-    if (listed.code !== 0) return null;
     const r = this.call(["api", `repos/${this.repo}/git/trees/${head}?recursive=1`, "--jq", `(if .truncated then "truncated" else empty end), (.tree[] | select(.type != "tree") | "\\(.mode) \\(.sha) \\(.path)")`]);
     if (r.code !== 0) return null;
     const lines = r.out.split("\n").map((l) => l.trim()).filter(Boolean);
     if (lines.includes("truncated")) return null;
     const at = new Map(lines.map((l) => { const [mode, sha, ...p] = l.split(" "); return [p.join(" "), `${mode} ${sha}`] as const; }));
-    type Listed = { filename: string; previous_filename?: string | null; status?: string; patch?: string | null };
-    let entries: Listed[];
-    try { entries = listed.out.split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l) as Listed); } catch { return null; }
-    if (paths.some((p) => !entries.some((f) => f.filename === p || f.previous_filename === p))) return null;
     const hash = (text: string) => createHash("sha256").update(text).digest("hex").slice(0, 16);
-    const files: Record<string, string> = {};
-    for (const f of entries) {
-      const blob = at.get(f.filename) ?? "absent";
-      const edit = typeof f.patch === "string" ? f.patch.split("\n").filter((l) => /^[+-]/.test(l)).join("\n") : `blob ${blob}`;
-      files[f.filename] = hash(`${f.status ?? ""} ${f.previous_filename ?? ""} ${blob.split(" ")[0]}\n${edit}`);
-    }
-    return { digest: hash(Object.keys(files).sort().map((p) => `${files[p]} ${p}`).join("\n")), files };
+    const entries = [...new Set(ciFiles)].sort().map((f) => [f, `${at.get(f) ?? "absent"} ${f}`] as const);
+    return { digest: hash(entries.map(([, e]) => e).join("\n")), files: Object.fromEntries(entries.map(([f, e]) => [f, hash(e)])) };
   }
 
   /**

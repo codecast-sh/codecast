@@ -13,7 +13,7 @@ export function failedDeploysOf(reason: string | null | undefined): Array<{ targ
   return [...out].map(([target, f]) => ({ target, ...f }));
 }
 
-/** The target a stuck Deploy stop names as not live ("cli is not live with acbd8d2"), or null. */
-export function stuckTargetOf(reason: string | null | undefined): string | null {
-  return reason?.match(/\b([a-z][a-z0-9-]{0,31}) is not live\b/)?.[1] ?? null;
+/** The targets a stuck Deploy stop names as not live ("cli is not live with acbd8d2 …; web is not live with …"), each once. */
+export function stuckTargetsOf(reason: string | null | undefined): string[] {
+  return [...new Set([...(reason ?? "").matchAll(/\b([a-z][a-z0-9-]{0,31}) is not live\b/g)].map((m) => m[1]))];
 }

@@ -1403,12 +1403,16 @@ describe("gatePayload asker", () => {
   });
   // A card about one repository's change, asked from a session in another, never said which repository it merges into.
   test("a run that merges a change names the repository first; a question that names it, or a run with no change, stands", () => {
-    const g = parseWorkflowSource(src);
+    const merging = src.replace("digraph g { ", 'digraph g { graph [takes="task,branch"]; ');
+    const g = parseWorkflowSource(merging);
     const node = g.nodes.get("decide")!;
     expect(gatePayload(node, g, { repo_name: "acme-app", branch: "codecast/change-ct-1" }).prompt).toBe("In acme-app: Ship?");
-    const named = parseWorkflowSource(src.replace('prompt="Ship?"', 'prompt="Ship this acme-app fix?"'));
+    const named = parseWorkflowSource(merging.replace('prompt="Ship?"', 'prompt="Ship this acme-app fix?"'));
     expect(gatePayload(named.nodes.get("decide")!, named, { repo_name: "acme-app", branch: "b" }).prompt).toBe("Ship this acme-app fix?");
     expect(gatePayload(node, g, { repo_name: "acme-app" }).prompt).toBe("Ship?");
+    // A flow that takes no change merges nothing, though its run has a worktree and so a branch.
+    const plain = parseWorkflowSource(src);
+    expect(gatePayload(plain.nodes.get("decide")!, plain, { repo_name: "acme-app", branch: "codecast/line-ct-1" }).prompt).toBe("Ship?");
   });
   // Polish round 3: the change flow's CI-edit card is a segment's gate; cards from cast 1.1.316 named no repository, and
   // its reviewer's note opened with an answer ("Yes, and nothing new is in the way") to a question the card dropped.

@@ -1509,7 +1509,7 @@ export { gateDoc };
 export function gatePayload(node: WorkflowNode, graph: WorkflowGraph, context: Record<string, string>) {
   const card = node.card ? readGateCard(expandPromptVars(node.card, graph, context).trim()) : null;
   return {
-    prompt: inRepo(node.prompt ? expandPromptVars(node.prompt, graph, context) : node.label, context),
+    prompt: inRepo(node.prompt ? expandPromptVars(node.prompt, graph, context) : node.label, graph, context),
     ...(node.doc ? { doc_md: gateDoc(expandPromptVars(node.doc, graph, context)) } : {}),
     ...(node.category ? { category: node.category } : {}),
     ...(graph.stack ? { stack: expandPromptVars(graph.stack, graph, context) } : {}),
@@ -1530,9 +1530,11 @@ export function gatePayload(node: WorkflowNode, graph: WorkflowGraph, context: R
  * question that already names the repository stands. Every card the runner posts goes through here: a gate's
  * (gatePayload, so a segment's gate too, the change flow's CI-edit card among them) and a failure's (queueTaskDecision).
  */
-function inRepo(question: string, context: Record<string, string>): string {
+function inRepo(question: string, graph: Pick<WorkflowGraph, "takes">, context: Record<string, string>): string {
   const repo = context["repo_name"];
-  if (!repo || !context["branch"] || new RegExp(`(^|[^\\w-])${repo.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^\\w-]|$)`, "i").test(question.split("\n")[0])) return question;
+  // A flow that takes a change (takes="…,branch": flowPool takesSessionChange) merges one; any other run in a worktree
+  // has a branch too, and merges nothing.
+  if (!repo || !graph.takes?.includes("branch") || !context["branch"] || new RegExp(`(^|[^\\w-])${repo.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^\\w-]|$)`, "i").test(question.split("\n")[0])) return question;
   return `In ${repo}: ${question}`;
 }
 
@@ -1927,14 +1929,14 @@ function detectDefaultBranch(cwd: string): string {
 // A person decides what happens next (the-line.md L4): a review reject or
 // retries exhausted queues a blocking decision from the session that started
 // the run. Without one (a daemon run with no spawner) the comment says so.
-async function queueTaskDecision(options: RunOptions, context: Record<string, string>, question: string, note: string, nodeId: string): Promise<boolean> {
+async function queueTaskDecision(options: RunOptions, graph: WorkflowGraph, context: Record<string, string>, question: string, note: string, nodeId: string): Promise<boolean> {
   if (!options.taskId || !options.spawnerSession) return false;
   const result = await cliCall(options, "/cli/decide", {
     session_id: options.spawnerSession,
     task: options.taskId,
     // A failure gate is the run's decision too (the-line.md L4).
     ...(options.runId ? { workflow_run_id: options.runId, gate_node_id: nodeId } : {}),
-    question: inRepo(question, context),
+    question: inRepo(question, graph, context),
     options: [
       { label: "Reopen for another implement round", description: "Run the line on this task again. If the reason below is outside the change, fix that first or the run stops the same way." },
       { label: "Drop the task", description: "Close the task and land nothing." },
@@ -2011,7 +2013,7 @@ async function returnTaskOnFailure(options: RunOptions, graph: WorkflowGraph, st
       : { short_id: options.taskId, status: "open" });
   }
   if (parkedByHand || exhausted) {
-    const queued = await queueTaskDecision(options, state.context, card.question, card.body || card.summary, state.currentNodeId);
+    const queued = await queueTaskDecision(options, graph, state.context, card.question, card.body || card.summary, state.currentNodeId);
     if (!queued) text += "\n\nNo decision queued: the run has no owning session.";
   }
   await runComment(options, "blocker", text);
@@ -2508,7 +2510,7 @@ async function driveRun(
     // blocked until a person decides (the-line.md L4).
     if (options.taskId && state.context["review_verdict"] === "reject") {
       const note = state.context["review_note"] ? `Reviewer note:\n${state.context["review_note"]}` : "The reviewer rejected the branch.";
-      const queued = await queueTaskDecision(options, state.context, `${quotedTitle(state.context, options.taskId)}: review rejected. What next?`, note, current.id);
+      const queued = await queueTaskDecision(options, graph, state.context, `${quotedTitle(state.context, options.taskId)}: review rejected. What next?`, note, current.id);
       await runComment(options, "blocker", `Review rejected; task left open as blocked.${queued ? " Decision queued to the run's owner." : " No decision queued: the run has no owning session."}`);
     }
     await parker?.stop();
