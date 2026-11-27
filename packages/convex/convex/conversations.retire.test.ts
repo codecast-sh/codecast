@@ -42,6 +42,15 @@ describe("the run reads its subject even when it is killed", () => {
     expect(row.message_count).toBe(12);
     expect(typeof row.work_state).toBe("string");
   });
+
+  // The run spots a person taking its subject over by this stamp (cli workflow/subjectPark.ts).
+  test("a row named by id carries the person's newest turn; a listing that names nothing leaves it off", async () => {
+    const { t } = await setup({ last_person_turn_at: 1_234 });
+    const named = (await t.query(api.conversations.inboxForCLI, { api_token: TOKEN, session_ids: ["jx7subj"], show_all: true }) as any).sessions;
+    expect(named[0].last_person_turn_at).toBe(1_234);
+    const listed = (await t.query(api.conversations.inboxForCLI, { api_token: TOKEN, show_all: true }) as any).sessions;
+    expect(listed[0]).not.toHaveProperty("last_person_turn_at");
+  });
 });
 
 describe("cliRetireSession", () => {
