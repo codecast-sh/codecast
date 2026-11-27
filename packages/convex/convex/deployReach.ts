@@ -45,7 +45,7 @@ export async function reachOf(ctx: any, canRead: (workspace: string) => Promise<
   for (const t of rows) {
     if (someNamePaths && t.paths.length === 0) continue;
     if (!access.has(t.workspace)) access.set(t.workspace, await canRead(t.workspace));
-    if (!access.get(t.workspace) || !commitTouchesTarget(t.paths, files)) continue;
+    if (!access.get(t.workspace) || !commitTouchesTarget(t, files)) continue;
     // Reach reads back to the first live deploy that held the change; an older one only names which deploy took it out.
     const newest = await targetDeploys(ctx, t.workspace, t.name, REACH_DEPLOYS);
     const deploys = newest.filter((d) => !d.repository || d.repository === repository);

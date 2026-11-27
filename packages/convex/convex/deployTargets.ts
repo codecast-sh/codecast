@@ -62,6 +62,7 @@ const targetValidator = v.object({
   rollback: v.optional(v.string()),
   policy: v.union(v.literal("press"), v.literal("release"), v.literal("auto")),
   paths: v.array(v.string()),
+  unless: v.optional(v.array(v.string())),
   ship_stage: v.optional(v.union(v.literal("before_push"), v.literal("after_push"), v.literal("press"))),
   workflow: v.optional(v.string()),
   rollback_inputs: v.optional(v.record(v.string(), v.string())),
@@ -123,6 +124,7 @@ export const publish = mutation({
         rollback: t.rollback,
         policy: t.policy,
         paths: t.paths,
+        unless: t.unless,
         ship_stage: t.ship_stage,
         workflow: t.workflow,
         rollback_inputs: t.rollback_inputs,
@@ -242,7 +244,7 @@ export async function fillDeployRange(ctx: any, deployId: Id<"deploys">): Promis
     const range = await mainCommitsAfter(ctx, d.repository!, previous, d.sha);
     if (range.known) {
       const commits = await deployCommitsOf(ctx, range.commits
-        .filter((c) => commitTouchesTarget(t?.paths ?? [], (c.files ?? []).map((f) => f.filename)))
+        .filter((c) => commitTouchesTarget(t ?? { paths: [] }, (c.files ?? []).map((f) => f.filename)))
         .reverse()
         .slice(0, COMMITS_MAX));
       if (commits.length) patch.commits = commits;

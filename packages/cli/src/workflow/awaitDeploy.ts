@@ -12,7 +12,7 @@ import { spawn } from "../proc.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { DEPLOY_WAIT_CAP_MS, deployDeadlineMs, releaseOrder, type DeployTarget } from "@codecast/shared/contracts/deployTargets";
+import { DEPLOY_WAIT_CAP_MS, deployDeadlineMs, fileShipsTo, NOT_YOUR_MACHINE, releaseOrder, type DeployTarget, type TargetPaths } from "@codecast/shared/contracts/deployTargets";
 import { mainRedSince, type MainRedPayload } from "@codecast/shared/contracts/mainRed";
 import { git, gitTry } from "../wipSnapshot.js";
 import { landsConfig, notYetHeld, republishLanded } from "./republishLanded.js";
@@ -101,20 +101,12 @@ export async function landedCommit(cwd: string, branch: string, base: string, kn
 }
 
 /**
- * Whether a target ships any of these files: one under its path globs (every path when it names none) that its
- * `unless` globs do not exempt. A change of only tests under a target's paths sends no deploy of it.
+ * Whether a target ships any of these files: one under its paths (every path when it names none) that its `unless`
+ * does not exempt, read as the server reads it (fileShipsTo). A change of only tests under its paths sends no deploy.
  */
-export function targetTouches(t: { paths?: ReadonlyArray<string>; unless?: ReadonlyArray<string> }, files: ReadonlyArray<string>): boolean {
+export function targetTouches(t: TargetPaths, files: ReadonlyArray<string>): boolean {
   if (!t.paths?.length && !t.unless?.length) return true;
-  const under = t.paths?.length ? pathMatcher(t.paths) : () => true;
-  const exempt = t.unless?.length ? pathMatcher(t.unless) : () => false;
-  return files.some((f) => under(f) && !exempt(f));
-}
-
-/** A path as written first, then as a glob: app/task/[id].tsx read only as a glob matches nothing (ct-102468). */
-function pathMatcher(globs: ReadonlyArray<string>): (file: string) => boolean {
-  const entries = globs.map((p) => ({ p, glob: new Bun.Glob(p) }));
-  return (f) => entries.some(({ p, glob }) => p === f || glob.match(f));
+  return files.some((f) => fileShipsTo(t, f));
 }
 
 /**
@@ -234,10 +226,13 @@ function publisherWords(p: DeployTargetRow["publisher"]): string {
   return machine ? `the machine that publishes it (${machine})` : "the machine that publishes it";
 }
 
+/** A release's result line for one target (`FAIL  cli  …`), when its output holds one. */
+const resultLine = (line: string, target: string) => new RegExp(`^\\s*(FAIL|live|-)\\s+${target}\\b`).test(line);
+
 /** A release's last lines, as far as they speak of one target: the others' lines ("- mobile not named") say nothing of it. */
 function ownLines(last: string, target: string): string {
-  const own = last.split(" | ").map((l) => l.trim()).filter((l) => new RegExp(`^(FAIL|live|-)\\s+${target}\\b`).test(l));
-  return own.length ? own.map((l) => l.replace(/^FAIL\s+/, "").replace(/\s+/g, " ")).join("; ") : last;
+  const own = last.split(" | ").filter((l) => resultLine(l, target));
+  return own.length ? own.map((l) => l.trim().replace(/^FAIL\s+/, "").replace(/\s+/g, " ")).join("; ") : last;
 }
 
 /** Main CI on one commit: its state and the jobs that failed. */
@@ -382,15 +377,16 @@ export async function awaitDeploy(input: { sha: string; base: string; plan: Depl
           const newest = [...(row?.history ?? []), ...(row?.live ? [row.live] : []), ...(row?.open ? [row.open] : [])]
             .filter((x) => x.sha && (x.created_at ?? 0) >= clock.start).sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0))[0];
           if (newest) return `${d.target} ${newest.short_id} sent ${newest.sha!.slice(0, 7)}, so the checkout that publishes it may be behind origin/${input.base}`;
-          // Another machine publishes it and this one could not ask it to send (another person's machine takes only
-          // its owner's commands): which machine sends it is what a person needs, not the release's FAIL lines.
-          if (row?.device_id && io.here && row.device_id !== io.here) {
+          // The server refused to ask the machine that publishes it, another person's, to send it: which machine
+          // sends it is what a person needs, not the release's FAIL lines. Any other cause is said as it is.
+          const said = ownLines(ended.get(d.target)!.last, d.target);
+          if (said.includes(NOT_YOUR_MACHINE) && row?.device_id && io.here && row.device_id !== io.here) {
             away.push(d.target);
             return `${d.target} is sent only from ${publisherWords(row.publisher)}, not from this machine`;
           }
-          return `cast deploy sent no deploy of ${d.target} (${ownLines(ended.get(d.target)!.last, d.target)})`;
+          return `cast deploy sent no deploy of ${d.target} (${said})`;
         });
-        const next = away.length ? ` ${short} is on main: ${away.join(" and ")}'s next deploy takes it live, and ends this run at Live.` : "";
+        const next = away.length ? ` ${short} is on main and goes out with ${away.join(" and ")}'s next deploy; the run ends at Live once every target it touches carries it.` : "";
         if (away.length === why.length) return { code: 1, line: `This run could not send ${away.join(" or ")}: ${why.join("; ")}.${next}` };
         return { code: 1, line: `No deploy carries ${short}: ${why.join("; ")}.${next}` };
       }
@@ -720,6 +716,9 @@ async function sendDetached(cwd: string, targets: string[], sha: string, logDir:
   fs.closeSync(fd);
   child.unref();
   const code = await new Promise<number>((resolve) => { child.on("error", () => resolve(1)); child.on("exit", (c) => resolve(c ?? 1)); });
-  const last = fs.readFileSync(log, "utf-8").trim().split("\n").filter(Boolean).slice(-3).join(" | ");
+  // Each sent target's result line, wherever the release printed it; else the release's last lines.
+  const lines = fs.readFileSync(log, "utf-8").trim().split("\n").filter(Boolean);
+  const own = lines.filter((l) => targets.some((t) => resultLine(l, t)));
+  const last = (own.length ? own : lines.slice(-3)).map((l) => l.trim()).join(" | ");
   return { code, last: last || `exited ${code}` };
 }

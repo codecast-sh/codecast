@@ -56,9 +56,9 @@ export type DeployTarget = {
   /** Repository paths whose change this target ships; empty means every path. */
   paths: string[];
   /**
-   * Paths under `paths` that ship nothing here (tests, fixtures, test helpers): a change whose files under `paths` are
-   * all among them sends no deploy of this target. Read only by the CLI (targetTouches), so the server's queue still
-   * lists such a commit; it goes out with the target's next deploy.
+   * Paths under `paths` that ship nothing here (tests, fixtures): a change whose files under `paths` are all among them
+   * sends no deploy of this target, and goes out with its next one. The CLI's duties and the server's reach and queue
+   * read it through the one matcher, fileShipsTo.
    */
   unless?: string[];
   /**
@@ -93,11 +93,11 @@ export type DeployTarget = {
 };
 
 /** The keys a target holds that only the CLI reads: the server stores the rest. */
-export const CLI_ONLY_TARGET_KEYS = ["after", "ci", "gate", "rollout", "finish", "deadline", "unless"] as const;
+export const CLI_ONLY_TARGET_KEYS = ["after", "ci", "gate", "rollout", "finish", "deadline"] as const;
 
 /** A target as the server's publish takes it. */
 export function publishableTarget(t: DeployTarget): Omit<DeployTarget, (typeof CLI_ONLY_TARGET_KEYS)[number]> {
-  const { after: _a, ci: _c, gate: _g, rollout: _r, finish: _f, deadline: _d, unless: _u, ...rest } = t;
+  const { after: _a, ci: _c, gate: _g, rollout: _r, finish: _f, deadline: _d, ...rest } = t;
   return rest;
 }
 
@@ -125,6 +125,12 @@ export function deployDeadlineMs(t: Pick<DeployTarget, "deadline" | "policy" | "
 export const DEPLOY_TARGET_NAME_RE = /^[a-z][a-z0-9-]{0,31}$/;
 
 export class DeployTargetError extends Error {}
+
+/**
+ * What the server's refusal of a deploy request says when the machine that publishes the target is another person's
+ * (deployTargetRequest.ts): a change run elsewhere reads it to say which machine sends the target.
+ */
+export const NOT_YOUR_MACHINE = "which is not yours";
 
 /** A live reader from its config string; throws DeployTargetError on one it cannot read. */
 export function parseLiveReader(raw: string | null | undefined): DeployLiveReader {
@@ -311,16 +317,35 @@ export function canRedeploySha(t: Pick<DeployTarget, "command">): boolean {
 
 // ── paths ────────────────────────────────────────────────────────────────────
 
-/** A glob over repository paths (`packages/convex/**`, `*.md`). */
+/** A glob over repository paths (`packages/convex/**`, `*.md`, `**\/*.test.ts`): `**\/` is any directories, none included. */
 export function globMatch(pattern: string, file: string): boolean {
-  const re = new RegExp(`^${pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*\*\/?/g, "\u0000").replace(/\*/g, "[^/]*").replace(/\u0000/g, ".*").replace(/\?/g, "[^/]")}$`);
-  return re.test(file);
+  const re = pattern
+    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+    .replace(/\*\*\//g, "\u0000")
+    .replace(/\*\*/g, "\u0001")
+    .replace(/\*/g, "[^/]*")
+    .replace(/\?/g, "[^/]")
+    .replace(/\u0000/g, "(?:.*/)?")
+    .replace(/\u0001/g, ".*");
+  return new RegExp(`^${re}$`).test(file);
 }
 
-/** Whether a commit ships to a target: it touches one of the target's paths. A commit whose files are unknown counts. */
-export function commitTouchesTarget(paths: readonly string[], files: readonly string[] | null | undefined): boolean {
-  if (!paths.length || !files?.length) return true;
-  return files.some((f) => paths.some((p) => globMatch(p, f)));
+/** A target's paths, as far as which files it ships. */
+export type TargetPaths = { paths?: readonly string[]; unless?: readonly string[] };
+
+/**
+ * Whether one file ships to a target: under one of its paths (every path when it names none) and not among what its
+ * `unless` exempts. A path as written matches itself before it is read as a glob (`app/task/[id].tsx`, ct-102468).
+ */
+export function fileShipsTo(t: TargetPaths, file: string): boolean {
+  const hit = (globs: readonly string[]) => globs.some((g) => g === file || globMatch(g, file));
+  return (!t.paths?.length || hit(t.paths)) && !(t.unless?.length && hit(t.unless));
+}
+
+/** Whether a commit ships to a target: it touches a file the target ships. A commit whose files are unknown counts. */
+export function commitTouchesTarget(t: TargetPaths, files: readonly string[] | null | undefined): boolean {
+  if ((!t.paths?.length && !t.unless?.length) || !files?.length) return true;
+  return files.some((f) => fileShipsTo(t, f));
 }
 
 // ── CI per commit ────────────────────────────────────────────────────────────

@@ -153,6 +153,32 @@ describe("a commit's reach", () => {
     expect(await w.reach(`acme/app@${sha(3)}`, STRANGER)).toBeNull();
   });
 
+  // What a target exempts (its `unless`, published with it) ships nothing there: the CLI's duties and this reach agree.
+  test("a commit's files that a target exempts reach no deploy of it", async () => {
+    const w = await world();
+    await (publish as any)._handler(w.ctx, {
+      api_token: TOKEN, team_id: TEAM, repository: REPO,
+      targets: [
+        { name: "web", runs: "push", live: { kind: "marker" }, policy: "press", paths: ["web/**"], unless: ["**/*.test.tsx"] },
+        { name: "api", runs: "push", live: { kind: "marker" }, policy: "press", paths: ["api/**"] },
+      ],
+    });
+    expect(w.t.deploy_targets.find((t) => t.name === "web").unless).toEqual(["**/*.test.tsx"]);
+    w.t.commits.push({ _id: "commit_5", sha: sha(5), message: "change 5", author_name: "Ana", author_email: "a@x", timestamp: NOW, files_changed: 2, insertions: 0, deletions: 0, repository: REPO, team_id: TEAM, branch: "main", files: [file("web/e.test.tsx"), file("api/e.ts")] });
+    await stampMainOrder(w.ctx, ["commit_5" as any], NOW - 1_000);
+    expect((await w.reach(`acme/app@${sha(5)}`)).targets.map((x: any) => x.target)).toEqual(["api"]);
+    // A publish from a CLI that does not read the key clears it: the target counts its tests again.
+    await (publish as any)._handler(w.ctx, {
+      api_token: TOKEN, team_id: TEAM, repository: REPO,
+      targets: [
+        { name: "web", runs: "push", live: { kind: "marker" }, policy: "press", paths: ["web/**"] },
+        { name: "api", runs: "push", live: { kind: "marker" }, policy: "press", paths: ["api/**"] },
+      ],
+    });
+    expect(w.t.deploy_targets.find((t) => t.name === "web").unless).toBeUndefined();
+    expect((await w.reach(`acme/app@${sha(5)}`)).targets.map((x: any) => x.target).sort()).toEqual(["api", "web"]);
+  });
+
   test("a repository with no targets the viewer can read is null", async () => {
     const w = await world();
     for (const t of w.t.deploy_targets) t.workspace = `user:${STRANGER}`;

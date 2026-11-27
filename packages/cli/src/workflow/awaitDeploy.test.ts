@@ -81,9 +81,9 @@ describe("targetState", () => {
     expect(targetTouches({ paths: ["web/**"] }, ["api/a.ts"])).toBe(false);
     expect(targetTouches({ paths: ["web/**", "shared/**"] }, ["web/w.ts"])).toBe(true);
     expect(targetTouches({ paths: [] }, ["anything"])).toBe(true);
-    // ct-102468: a target naming a route file as written reaches it.
+    // ct-102468: a target naming a route file as written reaches it. Brackets are literal, as the server reads them.
     expect(targetTouches({ paths: ["packages/mobile/app/task/[id].tsx"] }, ["packages/mobile/app/task/[id].tsx"])).toBe(true);
-    expect(targetTouches({ paths: ["packages/mobile/app/task/[id].tsx"] }, ["packages/mobile/app/task/i.tsx"])).toBe(true);
+    expect(targetTouches({ paths: ["packages/mobile/app/task/[id].tsx"] }, ["packages/mobile/app/task/i.tsx"])).toBe(false);
   });
 
   // ct-102488: a one-test change under the CLI's paths cut a CLI release and force-updated every machine.
@@ -364,18 +364,25 @@ describe("awaitDeploy", () => {
     expect(f.at()).toBe(MIN);
   });
 
-  // ct-102488: a run on Ashot's machine stopped with the release's raw FAIL lines for a target only Jason's machine sends.
+  // ct-102488: a run on one person's machine stopped with the release's raw FAIL lines for a target only another's sends.
   test("a target another person's machine sends: the stop names that machine and says the change goes with its next deploy", async () => {
-    const last = "FAIL  cli  cli runs on the machine that published it, which is not yours | -     mobile  not named | -     desktop  not named";
-    const row = { name: "cli", device_id: "jason-mac", publisher: { name: "Jason", machine: "jb-m5-max" }, live: { ...dp("dp-1", "live", "old"), created_at: -5 } };
-    const f = fake(() => [row], { here: "ashot-mac", send: async () => ({ code: 1, last }) });
-    expect(await awaitDeploy({ sha: SHA, base: "main", plan: deployDuties(declared, ["cli/c.ts"]), intervalMs: MIN }, f.io)).toEqual({ code: 1, line: "This run could not send cli: cli is sent only from Jason's machine (jb-m5-max), not from this machine. 1a2b3c4 is on main: cli's next deploy takes it live, and ends this run at Live." });
+    const last = "FAIL  cli  cli runs on the machine that published it, which is not yours: ask its owner | -     mobile  not named";
+    const row = { name: "cli", device_id: "publisher-mac", publisher: { name: "Ana", machine: "ana-laptop" }, live: { ...dp("dp-1", "live", "old"), created_at: -5 } };
+    const f = fake(() => [row], { here: "runner-mac", send: async () => ({ code: 1, last }) });
+    expect(await awaitDeploy({ sha: SHA, base: "main", plan: deployDuties(declared, ["cli/c.ts"]), intervalMs: MIN }, f.io)).toEqual({ code: 1, line: "This run could not send cli: cli is sent only from Ana's machine (ana-laptop), not from this machine. 1a2b3c4 is on main and goes out with cli's next deploy; the run ends at Live once every target it touches carries it." });
     // An older server names no publisher.
-    const g = fake(() => [{ ...row, publisher: undefined }], { here: "ashot-mac", send: async () => ({ code: 1, last }) });
+    const g = fake(() => [{ ...row, publisher: undefined }], { here: "runner-mac", send: async () => ({ code: 1, last }) });
     expect((await awaitDeploy({ sha: SHA, base: "main", plan: deployDuties(declared, ["cli/c.ts"]), intervalMs: MIN }, g.io)).line).toStartWith("This run could not send cli: cli is sent only from the machine that publishes it, not from this machine.");
     // Sent from this machine and still unsent: the release's own line for that target, not the others'.
-    const h = fake(() => [{ ...row, device_id: "ashot-mac" }], { here: "ashot-mac", send: async () => ({ code: 1, last: "FAIL  cli  exited 2 | -     mobile  not named" }) });
+    const h = fake(() => [{ ...row, device_id: "runner-mac" }], { here: "runner-mac", send: async () => ({ code: 1, last: "FAIL  cli  exited 2 | -     mobile  not named" }) });
     expect((await awaitDeploy({ sha: SHA, base: "main", plan: deployDuties(declared, ["cli/c.ts"]), intervalMs: MIN }, h.io)).line).toBe("No deploy carries 1a2b3c4: cast deploy sent no deploy of cli (cli exited 2).");
+  });
+
+  test("another machine publishes it but the release failed for another reason: the stop says that reason", async () => {
+    // mobile goes after backend; backend failed, so mobile was never asked for.
+    const rows = () => [{ name: "mobile", device_id: "publisher-mac", publisher: { name: "Ana", machine: "ana-laptop" }, live: { ...dp("dp-1", "live", "old"), created_at: -5 } }];
+    const f = fake(rows, { here: "runner-mac", send: async () => ({ code: 1, last: "FAIL  mobile  not sent: backend did not go live" }) });
+    expect((await awaitDeploy({ sha: SHA, base: "main", plan: deployDuties(declared, ["app/a.tsx"]), intervalMs: MIN }, f.io)).line).toBe("No deploy carries 1a2b3c4: cast deploy sent no deploy of mobile (mobile not sent: backend did not go live).");
   });
 
   test("a deploy that went out without the commit names the sha it sent and the checkout that may be behind", async () => {

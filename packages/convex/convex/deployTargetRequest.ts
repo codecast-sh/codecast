@@ -5,7 +5,7 @@ import { workspaceGrantsAccess } from "./lib/accessKeys";
 import { nextShortId } from "./counters";
 import { enqueueConfigCommand } from "./users";
 import { DEPLOY_SHORT_ID_PREFIX, liveDeploys } from "@codecast/shared/contracts/deploys";
-import { canRedeploySha, commitTouchesTarget } from "@codecast/shared/contracts/deployTargets";
+import { canRedeploySha, commitTouchesTarget, NOT_YOUR_MACHINE } from "@codecast/shared/contracts/deployTargets";
 import { teamKey } from "./deployTargetsCi";
 import { refuseWhilePaused } from "./deployPause";
 import { kickDispatch, sendsThroughGithub } from "./deployDispatch";
@@ -86,7 +86,7 @@ export async function requestTargetDeployCore(
   if (action === "deploy") {
     const after = await mainCommitsAfter(ctx, t.repository, live?.sha ?? null, sha ?? null);
     commits = await deployCommitsOf(ctx, after.commits
-      .filter((c) => commitTouchesTarget(t.paths, (c.files ?? []).map((f) => f.filename)))
+      .filter((c) => commitTouchesTarget(t, (c.files ?? []).map((f) => f.filename)))
       .reverse()
       .slice(0, COMMITS_MAX));
   }
@@ -129,7 +129,7 @@ export async function requestTargetDeployCore(
     try {
       await enqueueConfigCommand(ctx, userId, "line_deploy", JSON.stringify({ deploy: shortId, root: t.root }), t.device_id, args.request_id);
     } catch (err) {
-      throw new Error(`${name} runs on the machine that published it, which is not yours: ask its owner, or run \`cast line deploy --target ${name} --go\` there (${err instanceof Error ? err.message : String(err)})`);
+      throw new Error(`${name} runs on the machine that published it, ${NOT_YOUR_MACHINE}: ask its owner, or run \`cast line deploy --target ${name} --go\` there (${err instanceof Error ? err.message : String(err)})`);
     }
   }
   return { _id: String(id), short_id: shortId, target: name, action, sha: sha ?? null, commits: commits.length };

@@ -21,7 +21,8 @@ copy = [
 # falls back to a bare worktree rather than blocking the session. Frozen: a
 # release bumps workspace versions bun.lock also records, and a plain install
 # rewrites the lockfile, which a change's worktree then reads as its own edit.
-install = ["bun install --frozen-lockfile"]
+# A lock that is really out of step with package.json still installs, unfrozen.
+install = ["bun install --frozen-lockfile || bun install"]
 
 # Per-worktree web dev server port. `acquire` picks the first free port at/after
 # `base` and exposes it as PORT_WEB, so parallel worktrees never collide.

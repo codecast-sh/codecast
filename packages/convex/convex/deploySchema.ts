@@ -73,6 +73,9 @@ export const deployTables = {
     rollback: v.optional(v.string()),
     policy: v.union(v.literal("press"), v.literal("release"), v.literal("auto")),
     paths: v.array(v.string()),
+    // Paths under `paths` that ship nothing here (tests): a commit of only these waits on no deploy of it (fileShipsTo).
+    // A publish from a CLI that does not read the key clears it, so the target counts every path under `paths` again.
+    unless: v.optional(v.array(v.string())),
     ship_stage: v.optional(v.union(v.literal("before_push"), v.literal("after_push"), v.literal("press"))),
     // The Actions workflow file its deploys run as (deploy.yml): each run on the default branch records a deploy.
     workflow: v.optional(v.string()),

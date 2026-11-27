@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { commitCiState, commitTouchesTarget, DeployTargetError, groupQueueBySession, parseLiveReader, readJsonLive, parseDeployTargetEntries, parseDeployTargets, publishableTarget, releaseOrder, targetFromLineDeploy, type QueueCommit } from "./deployTargets";
+import { commitCiState, commitTouchesTarget, DeployTargetError, fileShipsTo, globMatch, groupQueueBySession, parseLiveReader, readJsonLive, parseDeployTargetEntries, parseDeployTargets, publishableTarget, releaseOrder, targetFromLineDeploy, type QueueCommit } from "./deployTargets";
 
 describe("deploy targets from config (deploys.md DP10)", () => {
   const SHIP = [{ name: "convex", when: ["api/**"], run: "deploy.sh", stage: "before_push" as const }];
@@ -41,10 +41,26 @@ describe("deploy targets from config (deploys.md DP10)", () => {
 
 describe("what waits on a target (DP12)", () => {
   test("a commit ships to a target when it touches one of its paths; unknown files count", () => {
-    expect(commitTouchesTarget(["packages/convex/**"], ["packages/convex/convex/a.ts"])).toBe(true);
-    expect(commitTouchesTarget(["packages/convex/**"], ["packages/web/a.ts"])).toBe(false);
-    expect(commitTouchesTarget(["packages/convex/**"], null)).toBe(true);
-    expect(commitTouchesTarget([], ["anything"])).toBe(true);
+    expect(commitTouchesTarget({ paths: ["packages/convex/**"] }, ["packages/convex/convex/a.ts"])).toBe(true);
+    expect(commitTouchesTarget({ paths: ["packages/convex/**"] }, ["packages/web/a.ts"])).toBe(false);
+    expect(commitTouchesTarget({ paths: ["packages/convex/**"] }, null)).toBe(true);
+    expect(commitTouchesTarget({ paths: [] }, ["anything"])).toBe(true);
+    // What a target exempts ships nothing there; one shipped file among them ships it, and unknown files still count.
+    const cli = { paths: ["packages/cli/**", "packages/shared/**"], unless: ["**/*.test.ts", "**/__fixtures__/**"] };
+    expect(commitTouchesTarget(cli, ["packages/cli/src/a.test.ts", "packages/shared/contracts/__fixtures__/x.json"])).toBe(false);
+    expect(commitTouchesTarget(cli, ["packages/cli/src/a.ts", "packages/shared/contracts/b.test.ts"])).toBe(true);
+    expect(commitTouchesTarget(cli, null)).toBe(true);
+    expect(commitTouchesTarget({ unless: ["**/*.test.ts"] }, ["a.test.ts"])).toBe(false);
+  });
+
+  test("a glob: ** spans directories, none included; * stays inside one; a path as written matches itself", () => {
+    expect(globMatch("**/*.test.ts", "a.test.ts")).toBe(true);
+    expect(globMatch("**/*.test.ts", "x/y/a.test.ts")).toBe(true);
+    expect(globMatch("**/__tests__/**", "a/__tests__/b.ts")).toBe(true);
+    expect(globMatch("**/__tests__/**", "a/my__tests__/b.ts")).toBe(false);
+    expect(globMatch("*.md", "docs/a.md")).toBe(false);
+    expect(fileShipsTo({ paths: ["packages/mobile/app/task/[id].tsx"] }, "packages/mobile/app/task/[id].tsx")).toBe(true);
+    expect(fileShipsTo({ paths: ["packages/mobile/app/task/[id].tsx"] }, "packages/mobile/app/task/i.tsx")).toBe(false);
   });
 
   test("a commit's CI: red beats running beats green; a cancelled run says nothing; the newest run of a workflow speaks", () => {
@@ -94,7 +110,8 @@ describe("a release's order and steps (DP15)", () => {
     const [t] = parse([{ name: "cli", run: "x", policy: "release", after: [], ci: "c", gate: "g", rollout: "r", finish: "f", unless: "**/*.test.ts" }]);
     expect([t.ci, t.gate, t.rollout, t.finish]).toEqual(["c", "g", "r", "f"]);
     expect(t.unless).toEqual(["**/*.test.ts"]);
-    expect(Object.keys(publishableTarget(t)).sort()).toEqual(["command", "live", "name", "paths", "policy", "runs", "ship_stage"]);
+    // `unless` goes to the server: its reach and queue read what a target exempts as the CLI does.
+    expect(Object.keys(publishableTarget(t)).sort()).toEqual(["command", "live", "name", "paths", "policy", "runs", "ship_stage", "unless"]);
     expect(() => parse([{ name: "cli", run: "x", gate: 3 }])).toThrow("'gate' must be a string");
     expect(() => parse([{ name: "cli", run: "x", unless: [3] }])).toThrow("'unless' must be a string or a list of strings");
   });
