@@ -5,11 +5,12 @@
  * session that wrote it (attribute.ts, as `cast ship checkout` reads it), and
  * the sweep's state on it. Reported when that changes, never every minute.
  *
- * A level held for LEVEL_STUCK_FILE_MS asks for help, once
- * per episode per writer: each session that last wrote some of the
+ * A file a level has been held on for LEVEL_STUCK_FILE_MS asks for help,
+ * once per writer and file: each session that last wrote some of the
  * conflicting files hears about those files only, as a machine wake with the
  * brief and merge files of levelConflicts.ts, and the files no session wrote
- * go to one finding on the repository's project. The episode, who it has told
+ * go to a finding on the repository's project. Nobody is asked twice about
+ * the same file in one hold. The episode, who it has told
  * and who could never be told are kept on disk, so a daemon restart neither
  * forgets nor asks again.
  */
@@ -39,7 +40,11 @@ class DeferFiling extends Error {}
  * read as told), the writers the server will never deliver to (`unreachable`: not told, and not asked again), and how
  * many sends to each have failed in a row and when the next may go (`attempts`, by conversation; "" for the finding).
  */
-type Episode = { key: string; files: string[]; reason: string; since: number; told?: CheckoutTold[]; unreachable?: string[]; attempts?: Record<string, { n: number; next: number }>; filed?: { at: number; to: "session"; conversation_id: string } | { at: number; to: "finding" } | null };
+type Episode = { key: string; files: string[]; reason: string; since: number; told?: CheckoutTold[]; unreachable?: string[]; attempts?: Record<string, { n: number; next: number }>; filed?: { at: number; to: "session"; conversation_id: string } | { at: number; to: "finding" } | null;
+  /** When each file now held was first seen conflicting: its grace runs from then, not from the episode's start. */
+  seen?: Record<string, number>;
+  /** The files each reader has been told of (by conversation, "" for the finding): told again only about one it was not. */
+  toldFiles?: Record<string, string[]> };
 
 /** The last grouping of a root's uncommitted paths, kept while the same paths stay dirty (attribution reads every transcript). */
 type Grouped = { sig: string; at: number; uncommitted: CheckoutReport["uncommitted"] };
@@ -87,9 +92,11 @@ export function nextLevel(prev: RootState, o: LevelSweepOutcome, now: number): {
   // writer's fix drops some every few minutes, so an episode keyed by the exact set restarted its clock before
   // LEVEL_STUCK_FILE_MS and its writers were never told. Only a set sharing no file with the last starts a new one; a
   // refusal naming no file (HEAD moved under the level) leaves the episode as it was.
+  const seenAt = (f: string) => prior?.seen?.[f] ?? (prior?.files.includes(f) ? prior.since : now);
+  const seen = (held: string[]) => Object.fromEntries(held.map((f) => [f, seenAt(f)]));
   const stuck: Episode = prior && !files.length && prior.files.length ? { ...prior, reason }
-    : prior && (prior.key === key || files.some((f) => prior.files.includes(f))) ? { ...prior, key, files, reason }
-    : { key, files, reason, since: now, told: [] };
+    : prior && (prior.key === key || files.some((f) => prior.files.includes(f))) ? { ...prior, key, files, reason, seen: seen(files) }
+    : { key, files, reason, since: now, told: [], seen: Object.fromEntries(files.map((f) => [f, now])) };
   return { level: { state: "stuck", files: stuck.files, reason, since: stuck.since, told: toldOf(stuck) }, state: { ...prev, stuck } };
 }
 
@@ -222,24 +229,38 @@ export const LEVEL_SEND_BACKOFF_MAX_MS = 60 * 60_000;
 /** After the n-th failed send to one reader, the wait before the next: 1, 2, 4 ... minutes, at most LEVEL_SEND_BACKOFF_MAX_MS. */
 export const levelSendBackoffMs = (n: number) => Math.min(60_000 * 2 ** (n - 1), LEVEL_SEND_BACKOFF_MAX_MS);
 
+/** Who a told entry reached: its conversation, or "" for the finding. */
+const readerOf = (t: CheckoutTold) => (t.to === "session" ? t.conversation_id : "");
+
 /** What the checkout is held at: the level's base (HEAD) and the upstream commit it could not reach. */
 export type Held = { gitDir: string; from: string; to: string };
 
 /**
- * Ask everyone a stuck level has not asked yet this episode: each session about the conflicting files it last wrote,
- * as a machine wake, and one finding for the files no session wrote. Each ask's full list is written to a file it
- * names, and each file's three-way merge under the checkout's merge directory. Each ask carries levelAskClientId,
+ * Ask everyone a stuck level has not yet told of a file it holds now: each session about the conflicting files it last
+ * wrote (of `due`, those past their grace), as a machine wake, and one finding for the files no session wrote. A
+ * reader told of every file it holds (`toldAbout`; one in `level.told` with no list was told of all) hears nothing
+ * again. Each ask's full list is written to a file it names, and each file's three-way merge under the checkout's
+ * merge directory. Each ask carries levelAskClientId,
  * which the pipeline page's ask shares, so a writer the page told already is answered with that ask, not a second.
  * A send that failed comes back in `failed` (by conversation, "" for the finding) and is asked again on a later
  * pass with the same client id; a writer the server will never deliver to (a teammate's session) comes back in
  * `unreachable`, to be skipped for the rest of the episode. Readers in `skip` (given up, or waiting out a backoff after a
  * failed send) are not asked this pass.
  */
-export async function tellWriters(deps: { post: Post; sendBrief: SendBrief }, report: CheckoutReport, level: Extract<CheckoutLevel, { state: "stuck" }>, attribution: Pick<Attribution, "owners"> | null, held: Held, opts: { teamId?: string | null; host?: string; now?: number; dir?: string; skip?: string[] } = {}): Promise<{ told: CheckoutTold[]; unreachable: string[]; failed: Array<{ who: string; why: string }> }> {
+export async function tellWriters(deps: { post: Post; sendBrief: SendBrief }, report: CheckoutReport, level: Extract<CheckoutLevel, { state: "stuck" }>, attribution: Pick<Attribution, "owners"> | null, held: Held, opts: { teamId?: string | null; host?: string; now?: number; dir?: string; skip?: string[]; due?: string[]; toldAbout?: Record<string, string[]> } = {}): Promise<{ told: CheckoutTold[]; toldFiles: Record<string, string[]>; unreachable: string[]; failed: Array<{ who: string; why: string }> }> {
   const at = opts.now ?? Date.now();
   const host = opts.host ?? os.hostname();
-  const { writers, nobody } = conflictGroups(level.files, attribution);
-  const skip = new Set([...level.told.map((t) => (t.to === "session" ? t.conversation_id : "")), ...(opts.skip ?? [])]);
+  const due = opts.due ?? level.files;
+  const { writers, nobody } = conflictGroups(due, attribution);
+  // The brief counts the other sessions' files among those asked about, never a file still inside its grace.
+  const asked = { ...level, files: due };
+  const skip = new Set(opts.skip ?? []);
+  const toldOfAll = new Set(level.told.map(readerOf));
+  const isNews = (who: string, mine: string[]) => {
+    const known = opts.toldAbout?.[who] ?? (toldOfAll.has(who) ? mine : []);
+    return mine.some((f) => !known.includes(f));
+  };
+  const toldFiles: Record<string, string[]> = {};
   const told: CheckoutTold[] = [];
   const unreachable: string[] = [];
   const failed: Array<{ who: string; why: string }> = [];
@@ -247,19 +268,23 @@ export async function tellWriters(deps: { post: Post; sendBrief: SendBrief }, re
     const list = listFile(report, who, opts.dir);
     fs.mkdirSync(path.dirname(list), { recursive: true });
     fs.writeFileSync(list, `${mine.join("\n")}\n`);
-    return heldBrief({ root: report.path, gitDir: held.gitDir, upstream: report.upstream, behind: report.behind, level, mine, from: held.from, to: held.to, list, host, whose });
+    return heldBrief({ root: report.path, gitDir: held.gitDir, upstream: report.upstream, behind: report.behind, level: asked, mine, from: held.from, to: held.to, list, host, whose });
   };
   for (const [conversation, mine] of writers) {
-    if (skip.has(conversation)) continue;
+    if (skip.has(conversation) || !isNews(conversation, mine)) continue;
     const { title, body } = await brief(conversation, mine, "session");
     const message = formatSessionMessage("codecast", `${title}\n\n${body}`, { name: "level sweep" });
-    const clientId = levelAskClientId({ device_id: report.device_id, path: report.path, files: level.files, since: level.since, conversation });
+    // The files asked about are in the id: an ask about a file the writer was not yet told of is a new one.
+    const clientId = levelAskClientId({ device_id: report.device_id, path: report.path, files: due, since: level.since, conversation });
     const outcome = await deps.sendBrief(conversation, message, clientId).catch(() => "failed" as const);
-    if (outcome === "sent") told.push({ at, files: mine.length, to: "session", conversation_id: conversation });
+    if (outcome === "sent") {
+      told.push({ at, files: mine.length, to: "session", conversation_id: conversation });
+      toldFiles[conversation] = mine;
+    }
     else if (outcome === "unreachable") unreachable.push(conversation);
     else failed.push({ who: conversation, why: "the send failed" });
   }
-  if (nobody.length && !skip.has("")) {
+  if (nobody.length && !skip.has("") && isNews("", nobody)) {
     const { title, body } = await brief("nobody", nobody, "nobody");
     try {
       await deps.post("/cli/signal/add", {
@@ -273,11 +298,12 @@ export async function tellWriters(deps: { post: Post; sendBrief: SendBrief }, re
         ...(opts.teamId ? { team_id: opts.teamId } : {}),
       });
       told.push({ at, files: nobody.length, to: "finding" });
+      toldFiles[""] = nobody;
     } catch (e) {
       failed.push({ who: "", why: String((e as Error)?.message ?? e) });
     }
   }
-  return { told, unreachable, failed };
+  return { told, toldFiles, unreachable, failed };
 }
 
 /**
@@ -303,7 +329,10 @@ export async function reportCheckouts(outcomes: LevelSweepOutcome[], deps: { pos
     next.state.grouped = read.grouped;
     const level = report.level;
     // Held: HEAD is still where the level started. A level that raced a writer moved it, and briefed that writer itself.
-    if (level.state === "stuck" && level.files.length && now - level.since >= LEVEL_STUCK_FILE_MS && "result" in o && report.head_sha === o.result.from) {
+    // Each file's grace runs from when it was first seen conflicting, so a file that joins a long hold waits its own.
+    const seenAt = next.state.stuck?.seen ?? {};
+    const due = level.state === "stuck" ? level.files.filter((f) => now - (seenAt[f] ?? level.since) >= LEVEL_STUCK_FILE_MS) : [];
+    if (level.state === "stuck" && due.length && "result" in o && report.head_sha === o.result.from) {
       try {
         const attribution = read.attribution ?? await attributeInSlices(o.root, level.files, now, left());
         // Who to ask is each file's last writer: until every transcript is read, ask nobody (a later pass will).
@@ -312,15 +341,19 @@ export async function reportCheckouts(outcomes: LevelSweepOutcome[], deps: { pos
         // A reader whose last send failed waits out its backoff; one the server refused for good is not asked again.
         const attempts = { ...(episode.attempts ?? {}) };
         const waiting = Object.keys(attempts).filter((k) => now < (attempts[k]?.next ?? 0));
-        const { told, unreachable, failed } = await tellWriters(deps, report, level, attribution, { gitDir: o.gitDir, from: o.result.from, to: o.result.to }, { host: deps.host, now, dir: deps.askDir, skip: [...(episode.unreachable ?? []), ...waiting] });
+        const { told, toldFiles, unreachable, failed } = await tellWriters(deps, report, level, attribution, { gitDir: o.gitDir, from: o.result.from, to: o.result.to }, { host: deps.host, now, dir: deps.askDir, skip: [...(episode.unreachable ?? []), ...waiting], due, toldAbout: episode.toldFiles });
         const retries = failed.map((f) => {
           const n = (attempts[f.who]?.n ?? 0) + 1;
           const wait = levelSendBackoffMs(n);
           attempts[f.who] = { n, next: now + wait };
           return { ...f, wait };
         });
-        const all = [...level.told, ...told];
-        next.state.stuck = { ...episode, told: all, filed: undefined, attempts, unreachable: [...(episode.unreachable ?? []), ...unreachable] };
+        // A reader told again keeps one entry, its newest; what it has been told of grows.
+        const retold = new Set(told.map(readerOf));
+        const all = [...level.told.filter((t) => !retold.has(readerOf(t))), ...told];
+        const knows = { ...(episode.toldFiles ?? {}) };
+        for (const [who, files] of Object.entries(toldFiles)) knows[who] = [...new Set([...(knows[who] ?? []), ...files])];
+        next.state.stuck = { ...episode, told: all, toldFiles: knows, filed: undefined, attempts, unreachable: [...(episode.unreachable ?? []), ...unreachable] };
         report = { ...report, level: { ...level, told: all } };
         filed += told.length;
         const who = (c: string) => c || "the finding";
