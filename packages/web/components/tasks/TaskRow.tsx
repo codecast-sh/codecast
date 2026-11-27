@@ -237,13 +237,13 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
           <TaskSessionBadge task={task} />
           {task.session_count && task.session_count > 1 ? (
             <span className="text-meta text-sol-text-dim font-mono">
-              <Mark id="work.sessions"><Link2 className="w-3 h-3 inline mr-0.5" /></Mark>{task.session_count}
+              <Mark id="work.sessions" className="mr-0.5"><Link2 className="w-3 h-3" /></Mark>{task.session_count}
             </span>
           ) : null}
         </span>
       ) : task.session_count && task.session_count > 0 ? (
         <span className="text-meta text-sol-text-dim flex-shrink-0 font-mono cq-hide-compact">
-          <Mark id="work.sessions"><Link2 className="w-3 h-3 inline mr-0.5" /></Mark>{task.session_count}
+          <Mark id="work.sessions" className="mr-0.5"><Link2 className="w-3 h-3" /></Mark>{task.session_count}
         </span>
       ) : null}
       {(task as any).plan && (

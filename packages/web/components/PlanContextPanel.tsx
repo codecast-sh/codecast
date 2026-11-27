@@ -119,7 +119,7 @@ export function PlanContextPanel({ planId }: { planId: Id<"plans"> }) {
                     {task.title}
                   </span>
                   {PIcon && pColor && (
-                    <span className="ml-auto flex-shrink-0"><Mark id={`task.priority.${task.priority}`}><PIcon className={`w-3 h-3 ${pColor}`} /></Mark></span>
+                    <Mark id={`task.priority.${task.priority}`} className="ml-auto"><PIcon className={`w-3 h-3 ${pColor}`} /></Mark>
                   )}
                 </Link>
               );
