@@ -126,24 +126,6 @@ export const CHANGE_PREFIX: Record<PriorityChangeKind, string | null> = {
   drop_milestone: "Drop",
 };
 
-/** The name an icon's hover shows. */
-export const CHANGE_NAME: Record<PriorityChangeKind, string> = {
-  move: "Moved",
-  rename: "Rename",
-  new_priority: "New priority",
-  done: "Priority done",
-  reopen: "Reopened",
-  serves: "Serves another goal",
-  merge: "Merged",
-  new_milestone: "New milestone",
-  rename_milestone: "Rename",
-  milestone_done: "Milestone done",
-  milestone_reopen: "Reopened",
-  to_critical: "Moved to critical",
-  to_polish: "Moved to polish",
-  drop_milestone: "Dropped",
-};
-
 /** A row's plain text: the prefix (when its kind has one), then what changed. */
 export function changeLine(c: PriorityChange, titleOf: (priority: string) => string): string {
   const prefix = CHANGE_PREFIX[c.kind];

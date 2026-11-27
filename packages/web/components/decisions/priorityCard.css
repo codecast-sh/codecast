@@ -50,7 +50,9 @@
 .pcc-row { padding: 6px 0; border-radius: 6px; }
 .pcc-row[role="checkbox"] { cursor: pointer; }
 .pcc-row[role="checkbox"]:focus-visible { outline: 2px solid color-mix(in srgb, var(--pcc-teal) 60%, transparent); outline-offset: 2px; }
-.pcc-icon { grid-column: 2; align-self: start; display: flex; width: var(--pcc-ic); height: var(--pcc-ic); padding-top: 2px; }
+/* The icon sits inside its <Mark> box, and that box is the row's grid item. */
+.pcc-row > [data-mark] { grid-column: 2; align-self: start; }
+.pcc-icon { align-self: start; display: flex; width: var(--pcc-ic); height: var(--pcc-ic); padding-top: 2px; }
 .pcc-icon svg { width: 18px; height: 18px; }
 .pcc-text { grid-column: 3; min-width: 0; font-size: 15px; overflow-wrap: anywhere; }
 .pcc-prefix { font-weight: 600; color: var(--sol-text); }
