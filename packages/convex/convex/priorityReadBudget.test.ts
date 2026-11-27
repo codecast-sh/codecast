@@ -306,6 +306,69 @@ test("a dense Deploys board numbers each session's priority by walking its group
 });
 
 /**
+ * `mates` teammates in one team with `per` active priorities each; every
+ * priority has `own` of its owner's sessions, then `starts` newer ones other
+ * teammates started on it, which crowd the owner's out of the newest. Returns
+ * the session on each teammate's last-ranked priority.
+ */
+async function crowded(mates: number, per: number, own: number, starts: number) {
+  const t = convexTest(schema, allModules);
+  const out = await t.run(async (ctx: any) => {
+    const bea = await ctx.db.insert("users", { name: "Bea" });
+    const team = await ctx.db.insert("teams", { name: "Acme", created_at: NOW, features: { priorities: true } });
+    const users: Id<"users">[] = [];
+    for (const u of [bea]) await ctx.db.insert("team_memberships", { user_id: u, team_id: team, role: "member", joined_at: 1 });
+    for (let m = 0; m < mates; m++) {
+      const u = await ctx.db.insert("users", { name: `Mate ${m}` });
+      users.push(u);
+      await ctx.db.insert("team_memberships", { user_id: u, team_id: team, role: "member", joined_at: 1 });
+    }
+    let n = 0;
+    const conv = (u: Id<"users">, fields: Record<string, unknown>) => {
+      const sid = `jx7c${n++}`;
+      return ctx.db.insert("conversations", {
+        user_id: u, team_id: team, agent_type: "claude_code", session_id: sid, short_id: sid, title: sid,
+        started_at: NOW, updated_at: NOW, message_count: 1, is_private: false, team_visibility: "full", status: "active", ...fields,
+      });
+    };
+    const deepest: Id<"conversations">[] = [];
+    for (let m = 0; m < mates; m++) {
+      for (let rank = 1; rank <= per; rank++) {
+        const p = await ctx.db.insert("priorities", {
+          user_id: users[m], workspace: `team:${team}`, short_id: `pri-${n++}`, title: "p", summary: "", status: "active", ai_rank: rank,
+          steps: [{ key: "s1", title: "M", tier: "critical", tier_set_by: "pass", refs: [], done: false }],
+          first_seen_at: NOW, last_active_at: NOW - rank * 10 - m, pass_at: NOW, created_at: NOW, updated_at: NOW,
+        });
+        let first: Id<"conversations"> | null = null;
+        for (let s = 0; s < own; s++) {
+          const c = await conv(users[m], { priority_id: p, priority_step_key: "s1" });
+          first ??= c;
+        }
+        for (let s = 0; s < starts; s++) await conv(users[(m + 1 + (s % (mates - 1))) % mates], { priority_id: p, priority_step_key: "s1", priority_set_by: "link" });
+        if (rank === per) deepest.push(first!);
+      }
+    }
+    return { bea, team, deepest };
+  });
+  return t.run(async (ctx: any) => {
+    const counted = counting(ctx);
+    const priorityOf = await sessionPriorityReader(counted.ctx, out.bea, out.team);
+    const ranks: Array<number | null> = [];
+    for (const id of out.deepest) ranks.push((await priorityOf(await ctx.db.get(id)))?.rank ?? null);
+    return { ranks, docs: counted.docs() };
+  });
+}
+
+for (const [mates, per, own, starts] of [[8, 30, 10, 3], [6, 30, 30, 2]] as const) {
+  test(`a Deploys board over groups crowded by Starts (${mates} teammates x ${per} priorities, ${own} own sessions + ${starts} Starts each) widens a step at a time`, async () => {
+    const { ranks, docs } = await crowded(mates, per, own, starts);
+    console.log(`crowded deploys board ${mates}x${per}, ${own} own + ${starts} Starts: ${docs} documents for each teammate's #${per}`);
+    expect(ranks).toEqual(ranks.map(() => per));
+    expect(docs).toBeLessThan(DENSE_BUDGET);
+  });
+}
+
+/**
  * Bea has `own` active priorities in each of `teams` team workspaces, and
  * three teammates twenty each, all heavy (four milestones naming a task with
  * two sessions, five mapped sessions): full links read each one's tasks and

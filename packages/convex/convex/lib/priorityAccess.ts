@@ -31,7 +31,7 @@ export const TEAMMATE_SESSIONS = 4;
  * would make the links read the same sessions again.
  */
 export const ACCESS_SESSIONS_READ = 10;
-/** The wider window access reads, once, when teammates' Starts leave fewer than TEAMMATE_SESSIONS of the owner's among the newest; past it, hidden. */
+/** The widest window access reads, last, when teammates' Starts leave fewer than TEAMMATE_SESSIONS of the owner's among the newest; past it, hidden. */
 export const ACCESS_SESSIONS_WIDE = 50;
 
 type Ctx = { db: any };
@@ -60,7 +60,7 @@ export type Reader = {
   viewer: Id<"users">;
   held: Set<string>;
   vis: SessionVisibility;
-  /** The newest `n` sessions mapped to a priority (by_priority), one read per priority per call. */
+  /** The newest `n` sessions mapped to a priority (by_priority), each read once per call: a wider read goes on from the last. */
   sessionsOf: (p: Priority, n: number) => Promise<Doc<"conversations">[]>;
   /**
    * Whether a session is listed to the viewer (its title, its chip, a count):
@@ -94,7 +94,16 @@ export async function readerFor(ctx: Ctx, viewer: Id<"users">): Promise<Reader> 
     const key = String(p._id);
     const had = reads.get(key);
     if (had && had.n >= n) return (await had.rows).slice(0, n);
-    const rows: Promise<Doc<"conversations">[]> = ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", p._id)).order("desc").take(n);
+    // A wider read of a priority already read goes on from the oldest it holds, rather than reading those again.
+    const rows: Promise<Doc<"conversations">[]> = (async () => {
+      const before = had ? await had.rows : [];
+      if (had && before.length < had.n) return before;
+      const last = before.at(-1);
+      const more: Doc<"conversations">[] = await ctx.db.query("conversations")
+        .withIndex("by_priority", (q: any) => (last ? q.eq("priority_id", p._id).lt("_creationTime", last._creationTime) : q.eq("priority_id", p._id)))
+        .order("desc").take(n - before.length);
+      return [...before, ...more];
+    })();
     reads.set(key, { n, rows });
     return rows;
   };
@@ -113,12 +122,12 @@ export async function readerFor(ctx: Ctx, viewer: Id<"users">): Promise<Reader> 
     }
     const ws = parseWorkspaceKey(p.workspace);
     if (ws?.type !== "team") return false;
-    let window = await sessionsOf(p, first);
-    let owners = window.filter((c) => String(c.user_id) === String(p.user_id));
-    // Teammates' Starts crowd the newest: when they leave fewer than TEAMMATE_SESSIONS of the owner's, look further back once.
-    if (owners.length < TEAMMATE_SESSIONS && window.length === first) {
-      window = await sessionsOf(p, ACCESS_SESSIONS_WIDE);
+    // Teammates' Starts crowd the newest: while they leave fewer than TEAMMATE_SESSIONS of the owner's in a full window, look further back, a step at a time.
+    let owners: Doc<"conversations">[] = [];
+    for (const n of new Set([first, ACCESS_SESSIONS_READ, ACCESS_SESSIONS_WIDE])) {
+      const window = await sessionsOf(p, n);
       owners = window.filter((c) => String(c.user_id) === String(p.user_id));
+      if (owners.length >= TEAMMATE_SESSIONS || window.length < n) break;
     }
     for (const c of owners.slice(0, TEAMMATE_SESSIONS)) if (await vis.listedTo(c, ws.teamId)) return true;
     return false;
