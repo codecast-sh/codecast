@@ -350,6 +350,12 @@ describe("cast line deploy targets", () => {
     expect(lines[2]).toBe("  nothing waiting");
   });
 
+  test("commits on main that touch none of a target's paths are counted in agreement", () => {
+    const line = (untouched: number) => formatTargets({ targets: [{ name: "web", live, open: null, queue: { ...queue, untouched } }] }, NOW).split("\n")[1];
+    expect(line(1)).toBe("  nothing waiting (1 commit on main touches none of its paths)");
+    expect(line(3)).toBe("  nothing waiting (3 commits on main touch none of its paths)");
+  });
+
   // dp-3856 was sending the cli queue while targets listed its commits as waiting.
   test("what an open deploy is sending is going out, not waiting; only what is newer waits", () => {
     const c = (n: number, at: number) => ({ sha: `${n}`.repeat(12), subject: `change ${n}`, at, main_at: at, ci: "passed", tasks: [], session: null, conversation_id: null });

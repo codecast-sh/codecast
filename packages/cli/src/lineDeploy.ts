@@ -618,7 +618,7 @@ export function formatTargets(view: { targets: any[] }, now: number = Date.now()
     const sent = sending.length ? sending.length + older : 0;
     const waiting = q.commits - sent;
     if (!q.known) out.push(`  waiting: unknown (the live sha is not on main as codecast knows it)`);
-    else if (!q.commits) out.push(`  nothing waiting${q.untouched ? ` (${q.untouched} commit${q.untouched === 1 ? "" : "s"} on main touch none of its paths)` : ""}`);
+    else if (!q.commits) out.push(`  nothing waiting${q.untouched ? ` (${q.untouched} commit${q.untouched === 1 ? " on main touches" : "s on main touch"} none of its paths)` : ""}`);
     else {
       if (going && sent) out.push(`  ${sent} commit${sent === 1 ? "" : "s"} going out in ${going.short_id}`);
       if (!waiting) out.push(`  nothing else waiting`);
