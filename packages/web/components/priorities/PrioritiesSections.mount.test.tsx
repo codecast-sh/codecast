@@ -240,3 +240,35 @@ test("the session menu on a teammate's milestone: a session the viewer started m
     await page.unmount();
   }
 }, 60_000);
+
+test("on a phone, Group by is a 44px square in every style; the first section sits right under the toolbar", async () => {
+  const page = await mount(view({ rows: ROWS, layout: "phone" }));
+  try {
+    const picker = page.container.querySelector("[data-group-by-picker]")!;
+    expect(picker.className.split(/\s+/)).toEqual(expect.arrayContaining(["size-11", "modern:size-11"]));
+    expect(picker.className).not.toMatch(/(^|\s)modern:h-6(\s|$)/);
+    // Sections space themselves from each other, never from the toolbar before the first.
+    const first = page.container.querySelector("section[data-section]")!;
+    expect(first.className.split(/\s+/)).toEqual(expect.arrayContaining(["mt-6", "first-of-type:mt-0"]));
+    expect(first.previousElementSibling?.hasAttribute("data-priorities-toolbar")).toBe(true);
+  } finally {
+    await page.unmount();
+  }
+}, 60_000);
+
+test("the chips' edge fades follow the scroll: none while every chip fits", async () => {
+  const page = await mount(view({ rows: ROWS }));
+  try {
+    const chips = page.container.querySelector("[data-workspace-chips]") as HTMLElement;
+    // jsdom lays nothing out: the row reads as fitting, so neither edge fades.
+    expect([chips.hasAttribute("data-fade-left"), chips.hasAttribute("data-fade-right")]).toEqual([false, false]);
+    Object.defineProperties(chips, { scrollWidth: { value: 600, configurable: true }, clientWidth: { value: 300, configurable: true }, scrollLeft: { value: 120, configurable: true, writable: true } });
+    await act(async () => { chips.dispatchEvent(new window.Event("scroll", { bubbles: true })); });
+    expect([chips.hasAttribute("data-fade-left"), chips.hasAttribute("data-fade-right")]).toEqual([true, true]);
+    Object.defineProperty(chips, "scrollLeft", { value: 300, configurable: true });
+    await act(async () => { chips.dispatchEvent(new window.Event("scroll", { bubbles: true })); });
+    expect([chips.hasAttribute("data-fade-left"), chips.hasAttribute("data-fade-right")]).toEqual([true, false]);
+  } finally {
+    await page.unmount();
+  }
+}, 60_000);

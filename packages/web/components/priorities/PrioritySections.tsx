@@ -101,7 +101,8 @@ export function PrioritySections({ sections, block, layout, headings, people }: 
   /** A teammate is on the page: each person in a workspace gets their label. */
   people: boolean;
 }) {
-  const gap = "mt-6 first:mt-0";
+  // Between sections only: the toolbar is the list's first child, so the first section is the first of its type.
+  const gap = "mt-6 first-of-type:mt-0";
   if (sections.groupBy === "workspace") {
     return (
       <>

@@ -4,6 +4,7 @@
 // pageControls; the choices ride clientState.ui.priorities_view, so they
 // follow the person to every device. On a phone the chips scroll sideways
 // under an edge fade, and Group by and Compact fold to their icons.
+import { useCallback, useRef, useState } from "react";
 import { Check, ChevronDown, Layers, Rows3, User } from "lucide-react";
 import { useInboxStore } from "../../store/inboxStore";
 import { workspaceMarkOf } from "../../store/priorityOrder";
@@ -11,6 +12,7 @@ import { GROUP_BY_LABEL, type GroupBy, type PageControls } from "../../lib/prior
 import type { PrioritiesViewPrefs, usePrioritiesView } from "../../hooks/usePriorities";
 import { TOUCH_AREA, type ListLayout } from "../../lib/priorityList";
 import { cn } from "../../lib/utils";
+import { sameEdges, scrollEdges, type ScrollEdges } from "../../lib/scrollEdges";
 import { TeamIcon } from "../TeamIcon";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { modernButton } from "../ui/modernLook";
@@ -33,14 +35,36 @@ export function PrioritiesToolbar({ controls, view, groupBy, onChange, layout }:
   layout: ListLayout;
 }) {
   const phone = layout === "phone";
+  const [edges, setEdges] = useState<ScrollEdges>({ left: false, right: false });
+  const measureChips = useCallback((el: HTMLElement) => {
+    const next = scrollEdges(el.scrollLeft, el.clientWidth, el.scrollWidth);
+    setEdges((e) => (sameEdges(e, next) ? e : next));
+  }, []);
+  // Measured again whenever the row or its chips change size (a resize, a chip turned off).
+  const observer = useRef<ResizeObserver | null>(null);
+  const chipsRef = useCallback((el: HTMLDivElement | null) => {
+    observer.current?.disconnect();
+    observer.current = null;
+    if (!el) return;
+    measureChips(el);
+    if (typeof ResizeObserver === "undefined") return;
+    observer.current = new ResizeObserver(() => measureChips(el));
+    observer.current.observe(el);
+    for (const chip of el.children) observer.current.observe(chip);
+  }, [measureChips]);
   const toggle = (key: string) => onChange({ hidden: view.hidden.includes(key) ? view.hidden.filter((k) => k !== key) : [...view.hidden, key] });
   return (
     <div data-priorities-toolbar className="flex min-w-0 items-center gap-2 pb-1 pt-3">
       {controls.showChips && (
-        // The fade covers the scroller's last 24px: chips that run past it fade out, and a short row never reaches it.
+        // A 24px fade on each edge with chips past it: the right while more lie that way, the left once scrolled.
         <div
+          ref={chipsRef}
+          onScroll={(e) => measureChips(e.currentTarget)}
           data-workspace-chips
-          className="flex min-w-0 flex-1 gap-1.5 overflow-x-auto [mask-image:linear-gradient(to_right,black_calc(100%-24px),transparent)] [scrollbar-width:none] [@media(pointer:coarse)]:py-2 [&::-webkit-scrollbar]:hidden"
+          data-fade-left={edges.left || undefined}
+          data-fade-right={edges.right || undefined}
+          style={{ maskImage: fadeMask(edges), WebkitMaskImage: fadeMask(edges) }}
+          className="flex min-w-0 flex-1 gap-1.5 overflow-x-auto [scrollbar-width:none] [@media(pointer:coarse)]:py-2 [&::-webkit-scrollbar]:hidden"
         >
           {controls.workspaces.map((w) => {
             const on = !view.hidden.includes(w.key);
@@ -90,6 +114,11 @@ export function PrioritiesToolbar({ controls, view, groupBy, onChange, layout }:
   );
 }
 
+const FADE = "24px";
+/** The chips' mask: opaque but for a fade on each edge with more chips past it. */
+const fadeMask = ({ left, right }: ScrollEdges) =>
+  `linear-gradient(to right, ${left ? "transparent" : "black"}, black ${FADE}, black calc(100% - ${FADE}), ${right ? "transparent" : "black"})`;
+
 /** Group by, drawn as the inbox's group-by picker draws its field (components/InboxViewPicker). */
 function GroupByPicker({ value, options, onChange, phone }: { value: GroupBy; options: GroupBy[]; onChange: (g: GroupBy) => void; phone: boolean }) {
   return (
@@ -101,8 +130,9 @@ function GroupByPicker({ value, options, onChange, phone }: { value: GroupBy; op
           aria-label={`Grouped by ${GROUP_BY_LABEL[value].toLowerCase()}`}
           className={cn(
             "flex shrink-0 items-center gap-1 rounded-[5px] text-meta font-medium text-sol-text-secondary transition-colors hover:bg-sol-text/[0.06] hover:text-sol-text data-[state=open]:bg-sol-text/[0.06]",
-            phone ? "size-11 justify-center" : cn("h-7 px-1.5", TOUCH_AREA),
             modernButton({ variant: "ghost", size: "xs" }, "modern:text-sol-text modern:data-[state=open]:bg-sol-text/[0.06]"),
+            // After the Modern look, whose xs size would otherwise make the phone's 44px square 24px tall.
+            phone ? "size-11 justify-center modern:size-11" : cn("h-7 px-1.5", TOUCH_AREA),
           )}
         >
           <Layers className="size-3.5 shrink-0" aria-hidden />
