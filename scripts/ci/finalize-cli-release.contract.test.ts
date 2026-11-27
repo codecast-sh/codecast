@@ -254,6 +254,14 @@ describe("the build it made (ct-102056)", () => {
     expect(step("Revalidate main and atomically publish version commit and tag").run).toContain('git merge-base --is-ancestor "$SOURCE_COMMIT" HEAD');
   });
 
+  test("the tag is the build commit plus the version bump, never main's head", () => {
+    const run = step("Revalidate main and atomically publish version commit and tag").run;
+    expect(run).toContain('git commit-tree "$tree" -p "$SOURCE_COMMIT"');
+    expect(run).toContain('git tag -a "$tag" "$release_sha"');
+    expect(run).toContain('"$(git rev-parse "$release_sha^")" != "$SOURCE_COMMIT"');
+    expect(run).not.toMatch(/release_sha=\$\(git rev-parse HEAD\)/);
+  });
+
   test("a version already public from another source commit is refused", () => {
     expect(step("Validate immutable release identity and source").run).toContain('"$public_version" == "$RELEASE_VERSION" && "$public_source" != "$SOURCE_COMMIT"');
   });
