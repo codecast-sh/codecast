@@ -297,6 +297,7 @@ import { waitForHandHost } from "./handHostGrace.js";
 export { AGENT_ENV_SCRUB, AGENT_SCRUBBED_ENV_VARS } from "./agentEnv.js";
 import { getMachineKey } from "./machineKey.js";
 import { DAEMON_BUILD_ID } from "./daemonBuildId.js";
+import { harnessRefreshDue, markHarnessRefreshed } from "./harnessRefreshStamp.js";
 import { decideSourceRestart, type SourceRestartState } from "./sourceRestart.js";
 import { sweepHostDisk } from "./hostDiskSweep.js";
 import { diskFullFailReason, diskFullHold, freeDiskShare } from "./diskFull.js";
@@ -1491,6 +1492,7 @@ const VERSION_FILE = path.join(CONFIG_DIR, "daemon.version");
 // instead of "is the version string different". Missing file = a daemon from
 // before this existed, and every reader falls back to the version compare.
 const BUILD_FILE = path.join(CONFIG_DIR, "daemon.build");
+const HARNESS_REFRESH_FILE = path.join(CONFIG_DIR, "harness.version");
 // Which daemon process this is. Two daemons can briefly share a device (an
 // upgrade, a rogue self spawn); the boot id is what lets the server hand each
 // command to exactly one of them.
@@ -31681,15 +31683,10 @@ async function main(): Promise<void> {
     daemonVersion = "unknown";
   }
 
-  // A version change since the last boot means a self-update restarted us —
-  // the interactive `cast update` paths (which refresh snippets) never ran, so
-  // shell out to `snippets-refresh` to bring every enabled snippet's text to
-  // this binary's versions. Detected BEFORE the version file is overwritten.
-  let bootedNewVersion = false;
-  try {
-    const priorVersion = fs.existsSync(VERSION_FILE) ? fs.readFileSync(VERSION_FILE, "utf-8").trim() : "";
-    bootedNewVersion = !!priorVersion && priorVersion !== daemonVersion;
-  } catch {}
+  // A self update restarts us without running the interactive `cast update`
+  // refresh, so shell out to `snippets-refresh` whenever this binary has not
+  // refreshed the harness files (hooks, snippets, skills) yet.
+  const harnessRefreshNeeded = harnessRefreshDue(HARNESS_REFRESH_FILE, daemonVersion);
 
   try {
     fs.writeFileSync(VERSION_FILE, daemonVersion, { mode: 0o600 });
@@ -31705,13 +31702,16 @@ async function main(): Promise<void> {
   activeConfig = readConfig();
   loadPersistedLogQueue();
 
-  if (bootedNewVersion) {
+  if (harnessRefreshNeeded) {
     log(`[SNIPPET] version changed to v${daemonVersion} — refreshing enabled snippets`);
     runCastCommand(["snippets-refresh"], {
       timeoutMs: 60 * 1000,
       env: harnessCauseEnv(consumeUpdateRequested()
         ? { why: `update to v${daemonVersion}, requested in codecast`, automatic: false }
         : { why: `automatic update to v${daemonVersion}`, automatic: true }),
+    }).then((r) => {
+      if (r.code === 0 && daemonVersion) markHarnessRefreshed(HARNESS_REFRESH_FILE, daemonVersion);
+      else logError("snippets-refresh after update failed", new Error(`exit ${r.code}: ${r.stderr.slice(-300)}`));
     }).catch((e) =>
       logError("snippets-refresh after update failed", e instanceof Error ? e : new Error(String(e)))
     );
