@@ -127,8 +127,8 @@ export function bandOfStatus(status: SessionStatus): StatusBand | null {
 /** The row fields the mapping reads. Every inbox row carries them. */
 export type StatusRow = {
   message_count?: number | null;
-  last_message_role?: string | null;
-  activity?: { at: number } | null;
+  /** A subagent child row's open tool call (shared openToolCallAt). */
+  tool_call_open_at?: number | null;
   agent_status?: string | null;
   is_subagent?: boolean | null;
   parent_conversation_id?: string | null;
@@ -304,7 +304,7 @@ export function sessionStatusOf({ row, section, placement, now, live = {}, hoste
     && !row.inbox_killed_at && !row.inbox_dismissed_at && !row.inbox_stashed_at;
   if (inParentsTurn) {
     if (live.stopped || statusFailure(row, now, live)) return "error";
-    const finished = row.status === "completed" || !producingByOutput({ updated_at: row.updated_at ?? 0, last_message_role: row.last_message_role, activity: row.activity }, now);
+    const finished = row.status === "completed" || !producingByOutput({ updated_at: row.updated_at ?? 0, tool_call_open_at: row.tool_call_open_at }, now);
     return finished ? "done" : "working";
   }
   switch (where) {

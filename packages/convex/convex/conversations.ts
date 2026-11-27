@@ -8901,9 +8901,6 @@ async function enrichInboxSessionRow(
     // What the agent is doing now (see schema.activity); the overlay's twin of
     // this field for liveness-on clients and the CLI.
     activity: conv.activity ?? null,
-    // With activity, whether its newest message is a tool call still open
-    // (shared subagentProducing); the same raw field sync-log cargo lands.
-    last_message_role: conv.last_message_role ?? null,
     last_user_message: lastUserMessage,
     // Newest image in the conversation (see schema) — the inbox row thumbnail.
     // Presence doubles as "this session has images".
@@ -9168,9 +9165,9 @@ async function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: nu
     // child quiet past the window read stopped while is_connected said live: a
     // station hand mid tool call settled as needs_input (ct-59591).
     status: child.status ?? "active",
-    // With activity, whether its newest message is a tool call still open
-    // (shared subagentProducing): the card's state reads it.
-    last_message_role: child.last_message_role ?? null,
+    // When its open tool call started (shared subagentProducing), else null:
+    // the card's state keeps it Working through one long call.
+    tool_call_open_at: openToolCallAt(child),
     agent_status_updated_at: maps.agentStatusUpdatedAtMap.get(child._id.toString()) ?? null,
     agent_status_boundary: maps.settleFactsMap.get(child._id.toString())?.boundary === true,
     turn_completed_at: maps.settleFactsMap.get(child._id.toString())?.turnCompletedAt ?? null,

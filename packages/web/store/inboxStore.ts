@@ -813,6 +813,8 @@ export type InboxSession = {
   // subscribes to its text and stamp, never the object (each overlay push
   // hands back a new object).
   activity?: SessionActivity | null;
+  // A subagent child row's open tool call (shared openToolCallAt).
+  tool_call_open_at?: number | null;
   is_deferred?: boolean;
   // When the user deferred the row; orders deferred rows by defer time.
   inbox_deferred_at?: number | null;

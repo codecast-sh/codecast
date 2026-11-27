@@ -67,7 +67,7 @@ export const INBOX_FACT_FIELDS = [
 // rename) it is one of these, or the next list or byIds push would remove it
 // again. A convex test pins this set to what those three functions write.
 export const INBOX_ROW_FIELDS = [
-  "_id", "session_id", "user_id", "team_id", "status", "last_message_role", "is_private", "team_visibility", "team_answered_by", "team_answered_at",
+  "_id", "session_id", "user_id", "team_id", "status", "tool_call_open_at", "is_private", "team_visibility", "team_answered_by", "team_answered_at",
   "title", "subtitle", "started_at", "history_import", "agent_type", "model", "effort", "cc_account", "codex_account", "transcript_revision",
   "project_path", "git_root", "git_branch", "git_remote_url", "worktree_name", "worktree_branch",
   // A staged "Rewind to here" in the checkout (treeSnapshots.reportRewindStaged): the

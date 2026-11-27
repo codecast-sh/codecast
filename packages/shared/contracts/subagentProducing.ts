@@ -17,9 +17,10 @@ export function openToolCallAt(c: { last_message_role?: string | null; activity?
   return c.last_message_role === "assistant" && c.activity && c.activity.at >= c.updated_at ? c.activity.at : null;
 }
 
-/** Recent output, or one open tool call younger than the cap. */
-export function producingByOutput(c: { last_message_role?: string | null; activity?: { at: number } | null; updated_at: number }, now: number): boolean {
+/** Recent output, or one open tool call (openToolCallAt, as the inbox child
+ *  row carries it) younger than the cap. */
+export function producingByOutput(c: { updated_at: number; tool_call_open_at?: number | null }, now: number): boolean {
   if (now - c.updated_at < SUBAGENT_PRODUCING_GRACE_MS) return true;
-  const at = openToolCallAt(c);
+  const at = c.tool_call_open_at;
   return at != null && now - at < SUBAGENT_TOOL_CALL_CAP_MS;
 }
