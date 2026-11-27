@@ -369,6 +369,76 @@ for (const [mates, per, own, starts] of [[8, 30, 10, 3], [6, 30, 30, 2]] as cons
 }
 
 /**
+ * Two team workspaces, `mates` teammates with `per` active priorities in
+ * each, every priority with `own` of its owner's sessions; each teammate's
+ * top `hot` also carry `starts` newer sessions other teammates started on
+ * them (Starts on each other's top work), crowding the owner's out of the
+ * newest. Bea's list of every workspace, and what it read.
+ */
+async function crowdedList(mates: number, per: number, own: number, hot: number, starts: number) {
+  const t = convexTest(schema, allModules);
+  const bea = await t.run(async (ctx: any) => {
+    const bea = await ctx.db.insert("users", { name: "Bea" });
+    const users: Id<"users">[] = [];
+    for (let m = 0; m < mates; m++) users.push(await ctx.db.insert("users", { name: `Mate ${m}` }));
+    let n = 0;
+    for (const name of ["Acme", "Beta"]) {
+      const team = await ctx.db.insert("teams", { name, created_at: NOW, features: { priorities: true } });
+      for (const u of [bea, ...users]) await ctx.db.insert("team_memberships", { user_id: u, team_id: team, role: "member", joined_at: 1 });
+      const conv = (u: Id<"users">, fields: Record<string, unknown>) => {
+        const sid = `jx7c${n++}`;
+        return ctx.db.insert("conversations", {
+          user_id: u, team_id: team, agent_type: "claude_code", session_id: sid, short_id: sid, title: sid,
+          started_at: NOW, updated_at: NOW, message_count: 1, is_private: false, team_visibility: "full", status: "active", ...fields,
+        });
+      };
+      for (let m = 0; m < mates; m++) {
+        for (let rank = 1; rank <= per; rank++) {
+          const p = await ctx.db.insert("priorities", {
+            user_id: users[m], workspace: `team:${team}`, short_id: `pri-${n++}`, title: `${m}:${rank}`, summary: "", status: "active", ai_rank: rank,
+            steps: [{ key: "s1", title: "M", tier: "critical", tier_set_by: "pass", refs: [], done: false }],
+            first_seen_at: NOW, last_active_at: NOW - rank * 10 - m, pass_at: NOW, created_at: NOW, updated_at: NOW,
+          });
+          for (let s = 0; s < own; s++) await conv(users[m], { priority_id: p, priority_step_key: "s1" });
+          if (rank <= hot) for (let s = 0; s < starts; s++) await conv(users[(m + 1 + (s % (mates - 1))) % mates], { priority_id: p, priority_step_key: "s1", priority_set_by: "link" });
+        }
+      }
+    }
+    return bea;
+  });
+  return t.run(async (ctx: any) => {
+    const counted = counting(ctx);
+    const list = await listFor(counted.ctx, bea, {});
+    return { list, calls: counted.calls(), docs: counted.docs() };
+  });
+}
+
+/** Each teammate's top `hot` in both workspaces are on the list: Starts crowding them never hide them. */
+const listsTop = (list: any, mates: number, hot: number) => {
+  const titles = new Set(list.priorities.map((r: any) => `${r.workspace} ${r.title}`));
+  const workspaces = new Set(list.priorities.map((r: any) => r.workspace));
+  expect(workspaces.size).toBe(2);
+  for (const ws of workspaces) for (let m = 0; m < mates; m++) for (let rank = 1; rank <= hot; rank++) expect(titles.has(`${ws} ${m}:${rank}`)).toBe(true);
+};
+
+for (const own of [40, 50]) {
+  test(`a list where Starts crowd each teammate's top 5 (8 teammates x 30 priorities x 2 workspaces, ${own} own sessions, 7 Starts) pages its judgment in tens`, async () => {
+    const { list, calls, docs } = await crowdedList(8, 30, own, 5, 7);
+    console.log(`crowded priority list, ${own} own sessions + 7 Starts on each top 5: ${calls} db calls, ${docs} documents for ${list.priorities.length} rows`);
+    expect(docs).toBeLessThan(DENSE_BUDGET);
+    listsTop(list, 8, 5);
+  });
+}
+
+test("a priority whose owner's sessions turn up only past the newest 40 is still read: the judgment pages to its widest window", async () => {
+  // 42 Starts on each teammate's #1, then the owner's own: the 4th of them is the 46th newest.
+  const { list, calls, docs } = await crowdedList(8, 30, 10, 1, 42);
+  console.log(`crowded priority list, the owner's sessions past 40 on each #1: ${calls} db calls, ${docs} documents for ${list.priorities.length} rows`);
+  expect(docs).toBeLessThan(DENSE_BUDGET);
+  listsTop(list, 8, 1);
+});
+
+/**
  * Bea has `own` active priorities in each of `teams` team workspaces, and
  * three teammates twenty each, all heavy (four milestones naming a task with
  * two sessions, five mapped sessions): full links read each one's tasks and

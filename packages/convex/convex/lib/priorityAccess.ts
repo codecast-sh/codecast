@@ -31,8 +31,14 @@ export const TEAMMATE_SESSIONS = 4;
  * would make the links read the same sessions again.
  */
 export const ACCESS_SESSIONS_READ = 10;
-/** The widest window access reads, last, when teammates' Starts leave fewer than TEAMMATE_SESSIONS of the owner's among the newest; past it, hidden. */
+/** The widest window access reads, ACCESS_SESSIONS_READ more at a time, while teammates' Starts leave fewer than TEAMMATE_SESSIONS of the owner's among the newest; past it, hidden. */
 export const ACCESS_SESSIONS_WIDE = 50;
+/** The windows a judgment reads in turn, `first` before them (each goes on from the last: Reader.sessionsOf). */
+const accessWindows = (first: number): number[] => {
+  const out = [first];
+  for (let n = ACCESS_SESSIONS_READ; n <= ACCESS_SESSIONS_WIDE; n += ACCESS_SESSIONS_READ) if (n > first) out.push(n);
+  return out;
+};
 
 type Ctx = { db: any };
 type Priority = Doc<"priorities">;
@@ -122,9 +128,9 @@ export async function readerFor(ctx: Ctx, viewer: Id<"users">): Promise<Reader> 
     }
     const ws = parseWorkspaceKey(p.workspace);
     if (ws?.type !== "team") return false;
-    // Teammates' Starts crowd the newest: while they leave fewer than TEAMMATE_SESSIONS of the owner's in a full window, look further back, a step at a time.
+    // Teammates' Starts crowd the newest: while they leave fewer than TEAMMATE_SESSIONS of the owner's in a full window, look ten further back.
     let owners: Doc<"conversations">[] = [];
-    for (const n of new Set([first, ACCESS_SESSIONS_READ, ACCESS_SESSIONS_WIDE])) {
+    for (const n of accessWindows(first)) {
       const window = await sessionsOf(p, n);
       owners = window.filter((c) => String(c.user_id) === String(p.user_id));
       if (owners.length >= TEAMMATE_SESSIONS || window.length < n) break;
