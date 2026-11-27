@@ -51,9 +51,9 @@ import type { PriorityDetail } from "@codecast/shared/contracts/priorities";
 // sheet on a tap), and alone on a line still the pill: a transcript promotes
 // no priority to a card (messageMarkdown ASSISTANT_CARDS). The loader seeds it into
 // priorityDetails as a `show` answer lands for a priority the list does not
-// hold (lib/priorityDetail detailRowOf). Its asking session is a fixture id no
-// inbox holds, so no live state overrides it and the card shows Next with its
-// Answer.
+// hold (lib/priorityDetail detailRowOf). The pill and card draw the owner's
+// face (no picture here, so their initial) and the rank badge; the card lists
+// the two open critical milestones, each with its toggle.
 export const GALLERY_PRIORITY = { id: "gallerypriority000000001", short: "pri-90001", asking: "galleryprioritysession0000000001" } as const;
 
 function priorityRecord(now: number, viewerId: string, workspace: string) {
@@ -67,7 +67,7 @@ function priorityRecord(now: number, viewerId: string, workspace: string) {
     summary: "Priorities is live on Union; session mapping sits around 0.65, short of the 0.75 bar, and calibration waits on one answer.",
     status: "active", rank: 7, person_pos: null, ai_rank: 7, rank_source: "ai", status_set_by: "pass", serves: null,
     steps: [step("s1", "Priorities live behind a flag", "critical", true, now - 20 * hour), step("s2", "Calibrate goal finding and session mapping", "critical", false), step("s3", "Turn on for the Union team", "critical", true, now - 6 * hour), step("s4", "Session mapping reaches 0.75", "critical", false), step("s5", "Priorities page redesign", "polish", false)],
-    counts: { critical_done: 2, critical_total: 4 }, workspace, user_id: viewerId, owner: "You", mine: true,
+    counts: { critical_done: 2, critical_total: 4 }, workspace, user_id: viewerId, owner: "You", owner_image: null, mine: true,
     first_seen_at: now - 30 * hour, last_active_at: now - hour, done_at: null, session_count: 1, session_count_more: false, sessions: [], correction_pending: false,
     links: [link("s1", []), link("s2", [session]), link("s3", []), link("s4", []), link("s5", [])], plan: null,
     other_sessions: [], corrections: [],
