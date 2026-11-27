@@ -1,0 +1,3661 @@
+{
+"version": "1.1.300",
+"commands": [
+{
+"path": [
+"board"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [],
+"runsBare": false
+},
+{
+"path": [
+"board",
+"access"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [
+{
+"name": "doc",
+"required": true,
+"variadic": false,
+"description": "Id or /docs/<id> URL"
+},
+{
+"name": "who",
+"required": false,
+"variadic": true,
+"description": "team | owners [names...]; nothing prints who edits now"
+}
+],
+"runsBare": true
+},
+{
+"path": [
+"board",
+"add"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "--draft",
+"description": "Write into the draft",
+"type": "boolean",
+"long": "--draft"
+},
+{
+"flags": "--json",
+"description": "Machine-readable output",
+"type": "boolean",
+"long": "--json"
+},
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [
+{
+"name": "doc",
+"required": true,
+"variadic": false,
+"description": "Id or /docs/<id> URL"
+},
+{
+"name": "args",
+"required": false,
+"variadic": true,
+"description": "Verb arguments"
+}
+],
+"runsBare": true
+},
+{
+"path": [
+"board",
+"align"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "--draft",
+"description": "Write into the draft",
+"type": "boolean",
+"long": "--draft"
+},
+{
+"flags": "--json",
+"description": "Machine-readable output",
+"type": "boolean",
+"long": "--json"
+},
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [
+{
+"name": "doc",
+"required": true,
+"variadic": false,
+"description": "Id or /docs/<id> URL"
+},
+{
+"name": "args",
+"required": false,
+"variadic": true,
+"description": "Verb arguments"
+}
+],
+"runsBare": true
+},
+{
+"path": [
+"board",
+"apply"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "-f, --file <path>",
+"description": "Read ops from a file instead of stdin",
+"type": "value",
+"long": "--file",
+"short": "-f"
+},
+{
+"flags": "--draft",
+"description": "Write into the draft (opens one if none is open)",
+"type": "boolean",
+"long": "--draft"
+},
+{
+"flags": "--status <text>",
+"description": "What you are doing, shown on your cursor",
+"type": "value",
+"long": "--status"
+},
+{
+"flags": "--json",
+"description": "Machine-readable output",
+"type": "boolean",
+"long": "--json"
+},
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [
+{
+"name": "doc",
+"required": true,
+"variadic": false,
+"description": "Id or /docs/<id> URL"
+}
+],
+"runsBare": true
+},
+{
+"path": [
+"board",
+"archive"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [
+{
+"name": "doc",
+"required": true,
+"variadic": false,
+"description": "Id or /docs/<id> URL"
+}
+],
+"runsBare": true
+},
+{
+"path": [
+"board",
+"arrange"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "--draft",
+"description": "Write into the draft",
+"type": "boolean",
+"long": "--draft"
+},
+{
+"flags": "--json",
+"description": "Machine-readable output",
+"type": "boolean",
+"long": "--json"
+},
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [
+{
+"name": "doc",
+"required": true,
+"variadic": false,
+"description": "Id or /docs/<id> URL"
+},
+{
+"name": "args",
+"required": false,
+"variadic": true,
+"description": "Verb arguments"
+}
+],
+"runsBare": true
+},
+{
+"path": [
+"board",
+"card"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "--draft",
+"description": "Write into the draft",
+"type": "boolean",
+"long": "--draft"
+},
+{
+"flags": "--json",
+"description": "Machine-readable output",
+"type": "boolean",
+"long": "--json"
+},
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [
+{
+"name": "doc",
+"required": true,
+"variadic": false,
+"description": "Id or /docs/<id> URL"
+},
+{
+"name": "args",
+"required": false,
+"variadic": true,
+"description": "Verb arguments"
+}
+],
+"runsBare": true
+},
+{
+"path": [
+"board",
+"checkpoint"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [
+{
+"name": "doc",
+"required": true,
+"variadic": false,
+"description": "Id or /docs/<id> URL"
+},
+{
+"name": "label",
+"required": false,
+"variadic": false,
+"description": "Name"
+}
+],
+"runsBare": true
+},
+{
+"path": [
+"board",
+"clear"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "--draft",
+"description": "Write into the draft",
+"type": "boolean",
+"long": "--draft"
+},
+{
+"flags": "--json",
+"description": "Machine-readable output",
+"type": "boolean",
+"long": "--json"
+},
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [
+{
+"name": "doc",
+"required": true,
+"variadic": false,
+"description": "Id or /docs/<id> URL"
+},
+{
+"name": "args",
+"required": false,
+"variadic": true,
+"description": "Verb arguments"
+}
+],
+"runsBare": true
+},
+{
+"path": [
+"board",
+"collapse"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "--draft",
+"description": "Write into the draft",
+"type": "boolean",
+"long": "--draft"
+},
+{
+"flags": "--json",
+"description": "Machine-readable output",
+"type": "boolean",
+"long": "--json"
+},
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [
+{
+"name": "doc",
+"required": true,
+"variadic": false,
+"description": "Id or /docs/<id> URL"
+},
+{
+"name": "args",
+"required": false,
+"variadic": true,
+"description": "Verb arguments"
+}
+],
+"runsBare": true
+},
+{
+"path": [
+"board",
+"comment"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [
+{
+"name": "doc",
+"required": true,
+"variadic": false,
+"description": "Id or /docs/<id> URL"
+},
+{
+"name": "key",
+"required": true,
+"variadic": false,
+"description": "Element key to pin it to, or a comment key to reply to"
+},
+{
+"name": "text",
+"required": true,
+"variadic": true,
+"description": "Comment"
+}
+],
+"runsBare": true
+},
+{
+"path": [
+"board",
+"comments"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "--all",
+"description": "Include resolved threads",
+"type": "boolean",
+"long": "--all"
+},
+{
+"flags": "--json",
+"description": "Machine-readable output",
+"type": "boolean",
+"long": "--json"
+},
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [
+{
+"name": "doc",
+"required": true,
+"variadic": false,
+"description": "Id or /docs/<id> URL"
+}
+],
+"runsBare": true
+},
+{
+"path": [
+"board",
+"connect"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "--draft",
+"description": "Write into the draft",
+"type": "boolean",
+"long": "--draft"
+},
+{
+"flags": "--json",
+"description": "Machine-readable output",
+"type": "boolean",
+"long": "--json"
+},
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [
+{
+"name": "doc",
+"required": true,
+"variadic": false,
+"description": "Id or /docs/<id> URL"
+},
+{
+"name": "args",
+"required": false,
+"variadic": true,
+"description": "Verb arguments"
+}
+],
+"runsBare": true
+},
+{
+"path": [
+"board",
+"copy"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "--project <ref>",
+"description": "Project id, short id or title",
+"type": "value",
+"long": "--project"
+},
+{
+"flags": "--personal",
+"description": "Only you can see it",
+"type": "boolean",
+"long": "--personal"
+},
+{
+"flags": "--team <team>",
+"description": "The team that can see it (name or id)",
+"type": "value",
+"long": "--team"
+},
+{
+"flags": "--json",
+"description": "Machine-readable output",
+"type": "boolean",
+"long": "--json"
+},
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [
+{
+"name": "doc",
+"required": true,
+"variadic": false,
+"description": "Id or /docs/<id> URL"
+},
+{
+"name": "title",
+"required": false,
+"variadic": true,
+"description": "Title of the copy (default: \"<title> (copy)\")"
+}
+],
+"runsBare": true
+},
+{
+"path": [
+"board",
+"create"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "--project <ref>",
+"description": "Project id, short id or title",
+"type": "value",
+"long": "--project"
+},
+{
+"flags": "--personal",
+"description": "Only you can see it",
+"type": "boolean",
+"long": "--personal"
+},
+{
+"flags": "--team <team>",
+"description": "The team that can see it (name or id)",
+"type": "value",
+"long": "--team"
+},
+{
+"flags": "--json",
+"description": "Machine-readable output",
+"type": "boolean",
+"long": "--json"
+},
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [
+{
+"name": "title",
+"required": true,
+"variadic": false,
+"description": "Title"
+}
+],
+"runsBare": true
+},
+{
+"path": [
+"board",
+"cursor"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "--point <x,y>",
+"description": "Canvas point",
+"type": "value",
+"long": "--point"
+},
+{
+"flags": "--cell <A1>",
+"description": "Sheet cell",
+"type": "value",
+"long": "--cell"
+},
+{
+"flags": "--range <A1:B2>",
+"description": "Sheet range",
+"type": "value",
+"long": "--range"
+},
+{
+"flags": "--block <key>",
+"description": "Dashboard block",
+"type": "value",
+"long": "--block"
+},
+{
+"flags": "--key <key>",
+"description": "Any element",
+"type": "value",
+"long": "--key"
+},
+{
+"flags": "--status <text>",
+"description": "What you are doing",
+"type": "value",
+"long": "--status"
+},
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [
+{
+"name": "doc",
+"required": true,
+"variadic": false,
+"description": "Id or /docs/<id> URL"
+}
+],
+"runsBare": true
+},
+{
+"path": [
+"board",
+"distribute"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "--draft",
+"description": "Write into the draft",
+"type": "boolean",
+"long": "--draft"
+},
+{
+"flags": "--json",
+"description": "Machine-readable output",
+"type": "boolean",
+"long": "--json"
+},
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [
+{
+"name": "doc",
+"required": true,
+"variadic": false,
+"description": "Id or /docs/<id> URL"
+},
+{
+"name": "args",
+"required": false,
+"variadic": true,
+"description": "Verb arguments"
+}
+],
+"runsBare": true
+},
+{
+"path": [
+"board",
+"draft"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "--label <text>",
+"description": "What the draft is, for start",
+"type": "value",
+"long": "--label"
+},
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [
+{
+"name": "doc",
+"required": true,
+"variadic": false,
+"description": "Id or /docs/<id> URL"
+},
+{
+"name": "op",
+"required": true,
+"variadic": false,
+"description": "start | save | discard"
+}
+],
+"runsBare": true
+},
+{
+"path": [
+"board",
+"edit"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "--draft",
+"description": "Write into the draft",
+"type": "boolean",
+"long": "--draft"
+},
+{
+"flags": "--json",
+"description": "Machine-readable output",
+"type": "boolean",
+"long": "--json"
+},
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [
+{
+"name": "doc",
+"required": true,
+"variadic": false,
+"description": "Id or /docs/<id> URL"
+},
+{
+"name": "args",
+"required": false,
+"variadic": true,
+"description": "Verb arguments"
+}
+],
+"runsBare": true
+},
+{
+"path": [
+"board",
+"expand"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "--draft",
+"description": "Write into the draft",
+"type": "boolean",
+"long": "--draft"
+},
+{
+"flags": "--json",
+"description": "Machine-readable output",
+"type": "boolean",
+"long": "--json"
+},
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [
+{
+"name": "doc",
+"required": true,
+"variadic": false,
+"description": "Id or /docs/<id> URL"
+},
+{
+"name": "args",
+"required": false,
+"variadic": true,
+"description": "Verb arguments"
+}
+],
+"runsBare": true
+},
+{
+"path": [
+"board",
+"frame"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "--draft",
+"description": "Write into the draft",
+"type": "boolean",
+"long": "--draft"
+},
+{
+"flags": "--json",
+"description": "Machine-readable output",
+"type": "boolean",
+"long": "--json"
+},
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [
+{
+"name": "doc",
+"required": true,
+"variadic": false,
+"description": "Id or /docs/<id> URL"
+},
+{
+"name": "args",
+"required": false,
+"variadic": true,
+"description": "Verb arguments"
+}
+],
+"runsBare": true
+},
+{
+"path": [
+"board",
+"group"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "--draft",
+"description": "Write into the draft",
+"type": "boolean",
+"long": "--draft"
+},
+{
+"flags": "--json",
+"description": "Machine-readable output",
+"type": "boolean",
+"long": "--json"
+},
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [
+{
+"name": "doc",
+"required": true,
+"variadic": false,
+"description": "Id or /docs/<id> URL"
+},
+{
+"name": "args",
+"required": false,
+"variadic": true,
+"description": "Verb arguments"
+}
+],
+"runsBare": true
+},
+{
+"path": [
+"board",
+"history"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "--json",
+"description": "Machine-readable output",
+"type": "boolean",
+"long": "--json"
+},
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [
+{
+"name": "doc",
+"required": true,
+"variadic": false,
+"description": "Id or /docs/<id> URL"
+}
+],
+"runsBare": true
+},
+{
+"path": [
+"board",
+"ls"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "-n, --limit <n>",
+"description": "Max results",
+"type": "value",
+"long": "--limit",
+"short": "-n",
+"default": "20"
+},
+{
+"flags": "--json",
+"description": "Machine-readable output",
+"type": "boolean",
+"long": "--json"
+},
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [],
+"runsBare": true
+},
+{
+"path": [
+"board",
+"matrix"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "--draft",
+"description": "Write into the draft",
+"type": "boolean",
+"long": "--draft"
+},
+{
+"flags": "--json",
+"description": "Machine-readable output",
+"type": "boolean",
+"long": "--json"
+},
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [
+{
+"name": "doc",
+"required": true,
+"variadic": false,
+"description": "Id or /docs/<id> URL"
+},
+{
+"name": "args",
+"required": false,
+"variadic": true,
+"description": "Verb arguments"
+}
+],
+"runsBare": true
+},
+{
+"path": [
+"board",
+"move"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "--draft",
+"description": "Write into the draft",
+"type": "boolean",
+"long": "--draft"
+},
+{
+"flags": "--json",
+"description": "Machine-readable output",
+"type": "boolean",
+"long": "--json"
+},
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [
+{
+"name": "doc",
+"required": true,
+"variadic": false,
+"description": "Id or /docs/<id> URL"
+},
+{
+"name": "args",
+"required": false,
+"variadic": true,
+"description": "Verb arguments"
+}
+],
+"runsBare": true
+},
+{
+"path": [
+"board",
+"order"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "--draft",
+"description": "Write into the draft",
+"type": "boolean",
+"long": "--draft"
+},
+{
+"flags": "--json",
+"description": "Machine-readable output",
+"type": "boolean",
+"long": "--json"
+},
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [
+{
+"name": "doc",
+"required": true,
+"variadic": false,
+"description": "Id or /docs/<id> URL"
+},
+{
+"name": "args",
+"required": false,
+"variadic": true,
+"description": "Verb arguments"
+}
+],
+"runsBare": true
+},
+{
+"path": [
+"board",
+"page"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "--draft",
+"description": "Write into the draft",
+"type": "boolean",
+"long": "--draft"
+},
+{
+"flags": "--json",
+"description": "Machine-readable output",
+"type": "boolean",
+"long": "--json"
+},
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [
+{
+"name": "doc",
+"required": true,
+"variadic": false,
+"description": "Id or /docs/<id> URL"
+},
+{
+"name": "args",
+"required": false,
+"variadic": true,
+"description": "Verb arguments"
+}
+],
+"runsBare": true
+},
+{
+"path": [
+"board",
+"place"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "--draft",
+"description": "Write into the draft",
+"type": "boolean",
+"long": "--draft"
+},
+{
+"flags": "--json",
+"description": "Machine-readable output",
+"type": "boolean",
+"long": "--json"
+},
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [
+{
+"name": "doc",
+"required": true,
+"variadic": false,
+"description": "Id or /docs/<id> URL"
+},
+{
+"name": "args",
+"required": false,
+"variadic": true,
+"description": "Verb arguments"
+}
+],
+"runsBare": true
+},
+{
+"path": [
+"board",
+"project"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [
+{
+"name": "doc",
+"required": true,
+"variadic": false,
+"description": "Id or /docs/<id> URL"
+},
+{
+"name": "project",
+"required": true,
+"variadic": false,
+"description": "Project id, short id or title, or none"
+}
+],
+"runsBare": true
+},
+{
+"path": [
+"board",
+"read"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "--json",
+"description": "The elements as JSON",
+"type": "boolean",
+"long": "--json"
+},
+{
+"flags": "--draft",
+"description": "Only the draft layer",
+"type": "boolean",
+"long": "--draft"
+},
+{
+"flags": "--main",
+"description": "Only the saved layer, without the draft",
+"type": "boolean",
+"long": "--main"
+},
+{
+"flags": "--keys <keys>",
+"description": "Only these element keys (comma-separated)",
+"type": "value",
+"long": "--keys"
+},
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [
+{
+"name": "doc",
+"required": true,
+"variadic": false,
+"description": "Id or /docs/<id> URL"
+}
+],
+"runsBare": true
+},
+{
+"path": [
+"board",
+"reflow"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "--draft",
+"description": "Write into the draft",
+"type": "boolean",
+"long": "--draft"
+},
+{
+"flags": "--json",
+"description": "Machine-readable output",
+"type": "boolean",
+"long": "--json"
+},
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [
+{
+"name": "doc",
+"required": true,
+"variadic": false,
+"description": "Id or /docs/<id> URL"
+},
+{
+"name": "args",
+"required": false,
+"variadic": true,
+"description": "Verb arguments"
+}
+],
+"runsBare": true
+},
+{
+"path": [
+"board",
+"rename"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [
+{
+"name": "doc",
+"required": true,
+"variadic": false,
+"description": "Id or /docs/<id> URL"
+},
+{
+"name": "title",
+"required": true,
+"variadic": true,
+"description": "New title"
+}
+],
+"runsBare": true
+},
+{
+"path": [
+"board",
+"restore"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [
+{
+"name": "doc",
+"required": true,
+"variadic": false,
+"description": "Id or /docs/<id> URL"
+},
+{
+"name": "rev",
+"required": true,
+"variadic": false,
+"description": "Revision from `history` (r12 or 12)"
+}
+],
+"runsBare": true
+},
+{
+"path": [
+"board",
+"rm"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "--draft",
+"description": "Delete in the draft",
+"type": "boolean",
+"long": "--draft"
+},
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [
+{
+"name": "doc",
+"required": true,
+"variadic": false,
+"description": "Id or /docs/<id> URL"
+},
+{
+"name": "keys",
+"required": true,
+"variadic": true,
+"description": "Element keys"
+}
+],
+"runsBare": true
+},
+{
+"path": [
+"board",
+"share"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "--off",
+"description": "Turn the public link off (same as unshare)",
+"type": "boolean",
+"long": "--off"
+},
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [
+{
+"name": "doc",
+"required": true,
+"variadic": false,
+"description": "Id or /docs/<id> URL"
+}
+],
+"runsBare": true
+},
+{
+"path": [
+"board",
+"template"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "--draft",
+"description": "Write into the draft",
+"type": "boolean",
+"long": "--draft"
+},
+{
+"flags": "--json",
+"description": "Machine-readable output",
+"type": "boolean",
+"long": "--json"
+},
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [
+{
+"name": "doc",
+"required": true,
+"variadic": false,
+"description": "Id or /docs/<id> URL"
+},
+{
+"name": "args",
+"required": false,
+"variadic": true,
+"description": "Verb arguments"
+}
+],
+"runsBare": true
+},
+{
+"path": [
+"board",
+"themes"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "--draft",
+"description": "Write into the draft",
+"type": "boolean",
+"long": "--draft"
+},
+{
+"flags": "--json",
+"description": "Machine-readable output",
+"type": "boolean",
+"long": "--json"
+},
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [
+{
+"name": "doc",
+"required": true,
+"variadic": false,
+"description": "Id or /docs/<id> URL"
+},
+{
+"name": "args",
+"required": false,
+"variadic": true,
+"description": "Verb arguments"
+}
+],
+"runsBare": true
+},
+{
+"path": [
+"board",
+"timeline"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "--draft",
+"description": "Write into the draft",
+"type": "boolean",
+"long": "--draft"
+},
+{
+"flags": "--json",
+"description": "Machine-readable output",
+"type": "boolean",
+"long": "--json"
+},
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [
+{
+"name": "doc",
+"required": true,
+"variadic": false,
+"description": "Id or /docs/<id> URL"
+},
+{
+"name": "args",
+"required": false,
+"variadic": true,
+"description": "Verb arguments"
+}
+],
+"runsBare": true
+},
+{
+"path": [
+"board",
+"unarchive"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [
+{
+"name": "doc",
+"required": true,
+"variadic": false,
+"description": "Id or /docs/<id> URL"
+}
+],
+"runsBare": true
+},
+{
+"path": [
+"board",
+"unshare"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [
+{
+"name": "doc",
+"required": true,
+"variadic": false,
+"description": "Id or /docs/<id> URL"
+}
+],
+"runsBare": true
+},
+{
+"path": [
+"call"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "--transcript",
+"description": "Print the full attributed transcript",
+"type": "boolean",
+"long": "--transcript"
+},
+{
+"flags": "--json",
+"description": "Machine-readable output (a call always includes segments; a snap gives frames, or {error, code, try})",
+"type": "boolean",
+"long": "--json"
+},
+{
+"flags": "--for <session>",
+"description": "With `hold`, `join`, `board` or `pin`: the fed session (default: the current one)",
+"type": "value",
+"long": "--for"
+},
+{
+"flags": "--at <time>",
+"description": "With `join`: when the bot joins (15m, 2h or an ISO time; default now)",
+"type": "value",
+"long": "--at"
+},
+{
+"flags": "--no-feed",
+"description": "With `join`: do not feed the meeting's words to this session",
+"type": "boolean",
+"long": "--no-feed",
+"negated": true
+},
+{
+"flags": "--screen",
+"description": "With `snap`: only a shared screen will do; refuse (code no_screen) where none was recorded",
+"type": "boolean",
+"long": "--screen"
+},
+{
+"flags": "--composite",
+"description": "With `snap`: prefer the room view (faces and the share as everyone saw it)",
+"type": "boolean",
+"long": "--composite"
+},
+{
+"flags": "-o, --out <path>",
+"description": "With `snap`: a .png/.jpg file, or a directory (default: a private scratch directory)",
+"type": "value",
+"long": "--out",
+"short": "-o"
+},
+{
+"flags": "--max <n>",
+"description": "With `snap` on a line range: at most this many frames (default 8, up to 50)",
+"type": "value",
+"long": "--max"
+},
+{
+"flags": "--crop <region>",
+"description": "With `snap`: only part of each frame, at full resolution: top, bottom, left, right, top-left, top-right, bottom-left, bottom-right, center, or x,y,w,h in pixels or percent (its own file, named by the part, beside any whole frame)",
+"type": "value",
+"long": "--crop"
+},
+{
+"flags": "--tiles <grid>",
+"description": "With `snap`: each frame also as tiles at full resolution, columns x rows (2x2 writes _tl, _tr, _bl, _br), each reaching a little past its neighbours so a line on a seam is whole in one",
+"type": "value",
+"long": "--tiles"
+},
+{
+"flags": "--share",
+"description": "With `snap`: upload each frame as a public image anyone with its link can open; only for readers outside codecast, and only by whoever recorded the call, a team admin, or the person whose screen it shows (cite cl-42@12:34 for everyone else)",
+"type": "boolean",
+"long": "--share"
+},
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [
+{
+"name": "id",
+"required": true,
+"variadic": false,
+"description": "Call short id (cl-42), id or unique prefix from `cast calls`; or the verb `hold`, `snap`, `join`, `leave`, `board`, `pin`, `unpin` or `pins`"
+},
+{
+"name": "arg",
+"required": false,
+"variadic": false,
+"description": "Lines to print (15:25, 15-25 or 15); after `hold`: 3m, 90s, 1h or `off`; after `snap`: the moment (cl-42:15, cl-42@12:34, cl-42 15)"
+}
+],
+"runsBare": true
+},
+{
+"path": [
+"calls"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "-n, --limit <n>",
+"description": "How many calls to list",
+"type": "value",
+"long": "--limit",
+"short": "-n",
+"default": "20"
+},
+{
+"flags": "--video",
+"description": "Only calls with video (what `cast call snap` can show)",
+"type": "boolean",
+"long": "--video"
+},
+{
+"flags": "--json",
+"description": "Machine-readable output",
+"type": "boolean",
+"long": "--json"
+},
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [],
+"runsBare": true
+},
+{
+"path": [
+"chat"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [],
+"runsBare": false
+},
+{
+"path": [
+"chat",
+"send"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "--channel <ref>",
+"description": "#name, @person (comma-separate for a group), or a channel id",
+"type": "value",
+"long": "--channel",
+"required": true
+},
+{
+"flags": "--thread <root_id>",
+"description": "Reply on this thread instead of the channel",
+"type": "value",
+"long": "--thread"
+},
+{
+"flags": "--local-only",
+"description": "Keep this line out of the channel's Slack mirror",
+"type": "boolean",
+"long": "--local-only"
+},
+{
+"flags": "--team <name|id>",
+"description": "Team whose #names and people resolve (default: your active team)",
+"type": "value",
+"long": "--team"
+},
+{
+"flags": "--json",
+"description": "Machine-readable output",
+"type": "boolean",
+"long": "--json"
+},
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [
+{
+"name": "text",
+"required": true,
+"variadic": false,
+"description": "Message text; '-' reads it from stdin (heredoc-friendly)"
+}
+],
+"runsBare": true
+},
+{
+"path": [
+"goals"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "--brief",
+"description": "The compact shape a prompt reads: no descriptions",
+"type": "boolean",
+"long": "--brief"
+},
+{
+"flags": "--json",
+"description": "The raw rows and the principles text",
+"type": "boolean",
+"long": "--json"
+},
+{
+"flags": "--project <ref>",
+"description": "One project's charter and the initiatives carrying it: id, short id or title (default: the repo profile's [line] project, else the whole workspace)",
+"type": "value",
+"long": "--project"
+},
+{
+"flags": "--task <ct>",
+"description": "The brief this problem is grounded against: its own project's, else its workspace's (replaces --project and --team)",
+"type": "value",
+"long": "--task"
+},
+{
+"flags": "--team <name|id|personal>",
+"description": "Workspace to read (default: the repo profile's [line] team, else the session's team, else the directory's mapping)",
+"type": "value",
+"long": "--team"
+},
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [],
+"runsBare": true
+},
+{
+"path": [
+"plan"
+],
+"aliases": [
+"p"
+],
+"flags": [
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [],
+"runsBare": false
+},
+{
+"path": [
+"plan",
+"create"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "-g, --goal <text>",
+"description": "The plan's objective: what it sets out to do (the company's goals are cast goal records, reached through --project); '-' reads it from stdin (heredoc-friendly)",
+"type": "value",
+"long": "--goal",
+"short": "-g"
+},
+{
+"flags": "-b, --body <text>",
+"description": "Plan body; '-' reads it from stdin (heredoc-friendly)",
+"type": "value",
+"long": "--body",
+"short": "-b"
+},
+{
+"flags": "--body-file <path>",
+"description": "Plan body from file (for longer content; '-' for stdin)",
+"type": "value",
+"long": "--body-file"
+},
+{
+"flags": "-a, --acceptance <criteria>",
+"description": "Acceptance criterion (repeatable); '-' reads it from stdin (heredoc-friendly)",
+"type": "value",
+"long": "--acceptance",
+"short": "-a",
+"default": []
+},
+{
+"flags": "--from-session",
+"description": "Promote from current session",
+"type": "boolean",
+"long": "--from-session"
+},
+{
+"flags": "--project <ref>",
+"description": "The project whose goal the plan serves: ID, short ID, or title substring (without it the plan is unplaced)",
+"type": "value",
+"long": "--project"
+},
+{
+"flags": "-t, --template <name>",
+"description": "Steps from a template: plan-implement-verify, implement-review-fix, full-lifecycle, or one saved with cast plan template save",
+"type": "value",
+"long": "--template",
+"short": "-t"
+},
+{
+"flags": "--steps <lines>",
+"description": "The plan's steps, one per line (\"Title :: what done means\" adds a description); a blank line starts a wave that needs the one before (steps in a wave run in parallel); '-' reads it from stdin (heredoc-friendly)",
+"type": "value",
+"long": "--steps"
+},
+{
+"flags": "--model-stylesheet <stylesheet>",
+"description": "CSS-like model routing rules",
+"type": "value",
+"long": "--model-stylesheet"
+},
+{
+"flags": "--policy <name>",
+"description": "How the plan's agents share findings: lead (report to the lead, the default) or shared-log (post typed entries to the plan)",
+"type": "value",
+"long": "--policy"
+},
+{
+"flags": "--human",
+"description": "File it as a person's plan, on the shelf (a script a person drives; a terminal is detected on its own)",
+"type": "boolean",
+"long": "--human"
+},
+{
+"flags": "--from-call <call>",
+"description": "The call this plan was pulled from (cl-42, from `cast calls`)",
+"type": "value",
+"long": "--from-call"
+},
+{
+"flags": "--json",
+"description": "Output the created plan as JSON: { short_id, title, tasks }",
+"type": "boolean",
+"long": "--json"
+},
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [
+{
+"name": "title",
+"required": true,
+"variadic": false,
+"description": "Plan title; '-' reads it from stdin (heredoc-friendly)"
+}
+],
+"runsBare": true
+},
+{
+"path": [
+"plan",
+"ls"
+],
+"aliases": [
+"list"
+],
+"flags": [
+{
+"flags": "--team <name|id|personal>",
+"description": "Workspace to list: a team, or personal (default: the directory's mapping)",
+"type": "value",
+"long": "--team"
+},
+{
+"flags": "--active",
+"description": "Show every active plan",
+"type": "boolean",
+"long": "--active"
+},
+{
+"flags": "--draft",
+"description": "Show draft plans",
+"type": "boolean",
+"long": "--draft"
+},
+{
+"flags": "--done",
+"description": "Show done plans",
+"type": "boolean",
+"long": "--done"
+},
+{
+"flags": "--all",
+"description": "Show all statuses",
+"type": "boolean",
+"long": "--all"
+},
+{
+"flags": "-s, --status <status>",
+"description": "Show one status: draft, active, paused, done, abandoned",
+"type": "value",
+"long": "--status",
+"short": "-s"
+},
+{
+"flags": "--project <ref>",
+"description": "Filter by project ID, short ID, or title substring",
+"type": "value",
+"long": "--project"
+},
+{
+"flags": "-q, --query <text>",
+"description": "Filter by title/goal/description (case-insensitive)",
+"type": "value",
+"long": "--query",
+"short": "-q"
+},
+{
+"flags": "--json",
+"description": "Output as JSON (an array of plan rows; every field, no colours)",
+"type": "boolean",
+"long": "--json"
+},
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [],
+"runsBare": true
+},
+{
+"path": [
+"priorities"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [],
+"runsBare": true
+},
+{
+"path": [
+"priorities",
+"create"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "--summary <text>",
+"description": "What it is driving at, in a sentence",
+"type": "value",
+"long": "--summary"
+},
+{
+"flags": "--owner <@handle>",
+"description": "Whose priority it is: a member of the team (default: yours)",
+"type": "value",
+"long": "--owner"
+},
+{
+"flags": "--from-call <call>",
+"description": "The call it was pulled from (cl-42, from `cast calls`); whoever can read the call can read it",
+"type": "value",
+"long": "--from-call"
+},
+{
+"flags": "--team <name|id|personal>",
+"description": "Which workspace to file it in (default: as cast task create files: the session's team, else the directory's mapping)",
+"type": "value",
+"long": "--team"
+},
+{
+"flags": "--json",
+"description": "The new priority as JSON",
+"type": "boolean",
+"long": "--json"
+},
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [
+{
+"name": "title",
+"required": true,
+"variadic": true
+}
+],
+"runsBare": true
+},
+{
+"path": [
+"priorities",
+"ls"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "--all",
+"description": "Include done, quiet and set-aside ones",
+"type": "boolean",
+"long": "--all"
+},
+{
+"flags": "--team <name|id|personal>",
+"description": "Which workspace (default: your active team, as the app shows)",
+"type": "value",
+"long": "--team"
+},
+{
+"flags": "--json",
+"description": "As JSON",
+"type": "boolean",
+"long": "--json"
+},
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [],
+"runsBare": true
+},
+{
+"path": [
+"publish"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "--title <title>",
+"description": "Override the page title (default: <title> tag / first heading / filename); '-' reads it from stdin (heredoc-friendly)",
+"type": "value",
+"long": "--title"
+},
+{
+"flags": "--new",
+"description": "Publish under a fresh URL even if this path was published before",
+"type": "boolean",
+"long": "--new"
+},
+{
+"flags": "--json",
+"description": "Emit the raw JSON response",
+"type": "boolean",
+"long": "--json"
+},
+{
+"flags": "--url",
+"description": "Print only the page URL, one line (for scripts and $(...))",
+"type": "boolean",
+"long": "--url"
+},
+{
+"flags": "--watch",
+"description": "Keep watching the file/directory and republish on change",
+"type": "boolean",
+"long": "--watch"
+},
+{
+"flags": "--password <password>",
+"description": "Require a password to view (visible in ps; prefer --password-stdin)",
+"type": "value",
+"long": "--password"
+},
+{
+"flags": "--password-stdin",
+"description": "Read the view password from stdin (keeps it out of the process list)",
+"type": "boolean",
+"long": "--password-stdin"
+},
+{
+"flags": "--no-password",
+"description": "Clear the password gate",
+"type": "boolean",
+"long": "--no-password",
+"negated": true
+},
+{
+"flags": "--email-gate",
+"description": "Require an email address to view",
+"type": "boolean",
+"long": "--email-gate"
+},
+{
+"flags": "--no-email-gate",
+"description": "Clear the email gate",
+"type": "boolean",
+"long": "--no-email-gate",
+"negated": true
+},
+{
+"flags": "--expires <duration>",
+"description": "Expire the link after a duration (30m, 24h, 7d) or never",
+"type": "value",
+"long": "--expires"
+},
+{
+"flags": "--edit-mode <mode>",
+"description": "Who can edit in the browser: owner | link | team",
+"type": "value",
+"long": "--edit-mode"
+},
+{
+"flags": "--session",
+"description": "Show the link to the publishing session on the page (default)",
+"type": "boolean",
+"long": "--session"
+},
+{
+"flags": "--no-session",
+"description": "Hide the publishing-session link from the page",
+"type": "boolean",
+"long": "--no-session",
+"negated": true
+},
+{
+"flags": "--comments",
+"description": "Let viewers discuss the page (default)",
+"type": "boolean",
+"long": "--comments"
+},
+{
+"flags": "--no-comments",
+"description": "Turn off the viewer discussion",
+"type": "boolean",
+"long": "--no-comments",
+"negated": true
+},
+{
+"flags": "--no-thumb",
+"description": "Skip the headless-Chrome thumbnail screenshot",
+"type": "boolean",
+"long": "--no-thumb",
+"negated": true
+},
+{
+"flags": "--task <ct-N>",
+"description": "Attach the page to a task as evidence at its current station (default: the session's active task)",
+"type": "value",
+"long": "--task"
+},
+{
+"flags": "--plan <pl-N>",
+"description": "Attach the page to a plan",
+"type": "value",
+"long": "--plan"
+},
+{
+"flags": "--open",
+"description": "Open the published URL in the browser",
+"type": "boolean",
+"long": "--open"
+},
+{
+"flags": "--render",
+"description": "Render a HyperFrames composition directory to MP4 and offer it on the page (slow; only when an MP4 is wanted)",
+"type": "boolean",
+"long": "--render"
+},
+{
+"flags": "--resolve <id>",
+"description": "comments: mark one comment resolved",
+"type": "value",
+"long": "--resolve"
+},
+{
+"flags": "--resolve-all",
+"description": "comments: mark every open comment resolved",
+"type": "boolean",
+"long": "--resolve-all"
+},
+{
+"flags": "--refresh",
+"description": "data: run the page's queries now and wait for the rows",
+"type": "boolean",
+"long": "--refresh"
+},
+{
+"flags": "--set <key=json>",
+"description": "state: write one row's whole value",
+"type": "value",
+"long": "--set"
+},
+{
+"flags": "--insert <json>",
+"description": "state: add a row under a fresh key",
+"type": "value",
+"long": "--insert"
+},
+{
+"flags": "--patch <key=json>",
+"description": "state: merge an object into a row",
+"type": "value",
+"long": "--patch"
+},
+{
+"flags": "--delete <key>",
+"description": "state: delete one row",
+"type": "value",
+"long": "--delete"
+},
+{
+"flags": "--clear",
+"description": "state: delete every row of the collection",
+"type": "boolean",
+"long": "--clear"
+},
+{
+"flags": "--prompt <text>",
+"description": "watch: the brief each wake starts with (default: answer on the page); '-' reads it from stdin (heredoc-friendly)",
+"type": "value",
+"long": "--prompt"
+},
+{
+"flags": "--spawn",
+"description": "watch: run each wake in a fresh session instead of this one",
+"type": "boolean",
+"long": "--spawn"
+},
+{
+"flags": "--all",
+"description": "unwatch: stop every watch of yours on the page, not only this session's",
+"type": "boolean",
+"long": "--all"
+},
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [
+{
+"name": "target",
+"required": false,
+"variadic": false,
+"description": "file.html, file.md, or a directory; or a subcommand: ls | rm | rollback | open | versions | comments | viewers | links | set | data | state | watch | unwatch | video | install | uninstall | apps"
+},
+{
+"name": "args",
+"required": false,
+"variadic": true,
+"description": "subcommand arguments"
+}
+],
+"runsBare": true
+},
+{
+"path": [
+"send"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "--from <id>",
+"description": "Override sender session (required if current session cannot be detected)",
+"type": "value",
+"long": "--from"
+},
+{
+"flags": "--wake",
+"description": "Deliver even when the target was killed",
+"type": "boolean",
+"long": "--wake"
+},
+{
+"flags": "--done",
+"description": "Close the exchange: the recipient must not reply",
+"type": "boolean",
+"long": "--done"
+},
+{
+"flags": "--fyi",
+"description": "For information: the recipient need not reply",
+"type": "boolean",
+"long": "--fyi"
+},
+{
+"flags": "--status",
+"description": "Show your recent sends to this session: when each was typed in and delivered",
+"type": "boolean",
+"long": "--status"
+},
+{
+"flags": "--raw",
+"description": "Deliver the text exactly as typed, without the session-message wrapper, for the agent's own slash commands (/model opus, /effort high). Own sessions only.",
+"type": "boolean",
+"long": "--raw"
+},
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [
+{
+"name": "session_id",
+"required": true,
+"variadic": false,
+"description": "Target session short ID (e.g. jx7c6zk)"
+},
+{
+"name": "text",
+"required": false,
+"variadic": false,
+"description": "Message text; '-' reads it from stdin (heredoc-friendly)"
+}
+],
+"runsBare": true
+},
+{
+"path": [
+"state"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "--status <status>",
+"description": "Who acts next: working (default) | blocked | done | dormant; files the session under Needs You / Done / Sleeping when the turn ends",
+"type": "value",
+"long": "--status"
+},
+{
+"flags": "--for <session>",
+"description": "Target another session (default: the current one)",
+"type": "value",
+"long": "--for"
+},
+{
+"flags": "--serves <pri-N/sK>",
+"description": "The priority or milestone this session serves: a hint the priorities pass weighs, never a link",
+"type": "value",
+"long": "--serves"
+},
+{
+"flags": "--json",
+"description": "Machine-readable output",
+"type": "boolean",
+"long": "--json"
+},
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [
+{
+"name": "args",
+"required": false,
+"variadic": true,
+"description": "clear | show <session> | the text to pin (prose past 1200 chars is cut; a fenced json block is kept whole); '-' reads it from stdin (heredoc-friendly)"
+}
+],
+"runsBare": true
+},
+{
+"path": [
+"task"
+],
+"aliases": [
+"t"
+],
+"flags": [
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [],
+"runsBare": false
+},
+{
+"path": [
+"task",
+"comment"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "-t, --type <type>",
+"description": "Comment type: note or progress (the board's record, reaches no inbox); blocker or review (reach the people following the task)",
+"type": "value",
+"long": "--type",
+"short": "-t",
+"default": "note"
+},
+{
+"flags": "-a, --author <name>",
+"description": "Ignored: the author is the identity behind your token (a role signs as the role); kept for older scripts",
+"type": "value",
+"long": "--author",
+"short": "-a"
+},
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [
+{
+"name": "short_id",
+"required": true,
+"variadic": false,
+"description": "Task short ID"
+},
+{
+"name": "text",
+"required": true,
+"variadic": false,
+"description": "Comment text; '-' reads it from stdin (heredoc-friendly)"
+}
+],
+"runsBare": true
+},
+{
+"path": [
+"task",
+"create"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "--team <name|id|personal>",
+"description": "Workspace to file it in: a team, or personal (default: the session's team, else the directory's mapping)",
+"type": "value",
+"long": "--team"
+},
+{
+"flags": "-d, --description <text>",
+"description": "Description; '-' reads it from stdin (heredoc-friendly)",
+"type": "value",
+"long": "--description",
+"short": "-d"
+},
+{
+"flags": "-t, --type <type>",
+"description": "Type: task, feature, bug, chore",
+"type": "value",
+"long": "--type",
+"short": "-t",
+"default": "task"
+},
+{
+"flags": "-p, --priority <level>",
+"description": "Priority: urgent, high, medium, low, none (p0 to p3 map to urgent to low)",
+"type": "value",
+"long": "--priority",
+"short": "-p",
+"default": "medium"
+},
+{
+"flags": "--project <ref>",
+"description": "Project ID, short ID, or title substring",
+"type": "value",
+"long": "--project"
+},
+{
+"flags": "--blocked-by <refs>",
+"description": "Comma-separated blockers of any kind: a task (ct-12), a PR to merge (\"#42\", quoted since # starts a shell comment; owner/repo#42, a PR URL; add :checks to wait on green CI), a decision (sd-4) or a time (2h, 2026-10-14T09:00)",
+"type": "value",
+"long": "--blocked-by"
+},
+{
+"flags": "--found-during <task_id>",
+"description": "The task this was found while working on (default: the task this session is bound to); none to leave it unlinked",
+"type": "value",
+"long": "--found-during"
+},
+{
+"flags": "--labels <labels>",
+"description": "Comma-separated labels",
+"type": "value",
+"long": "--labels"
+},
+{
+"flags": "--assignee <name>",
+"description": "Assignee",
+"type": "value",
+"long": "--assignee"
+},
+{
+"flags": "--status <status>",
+"description": "Initial status: a category (backlog, open, in_progress, in_review, done, dropped) or one of your team's statuses by name, e.g. today",
+"type": "value",
+"long": "--status",
+"default": "open"
+},
+{
+"flags": "--plan <plan_id>",
+"description": "Plan short ID to associate this task with",
+"type": "value",
+"long": "--plan"
+},
+{
+"flags": "--parent <task_id>",
+"description": "Nest this task under a parent task (e.g. ct-4102)",
+"type": "value",
+"long": "--parent"
+},
+{
+"flags": "--under <id>",
+"description": "File it under a task (its subtask), a plan (one of its tasks) or a priority (a new critical milestone): ct-N, pl-N or pri-N",
+"type": "value",
+"long": "--under"
+},
+{
+"flags": "--human",
+"description": "Put the task on the human's board \u2014 for work the human must see and manage (rare)",
+"type": "boolean",
+"long": "--human"
+},
+{
+"flags": "--from-meeting",
+"description": "This task came out of a meeting with people in it, not from your own work",
+"type": "boolean",
+"long": "--from-meeting"
+},
+{
+"flags": "--from-call <call>",
+"description": "The call this task was pulled from (cl-42, from `cast calls`); implies --from-meeting, and the task shows on the call's page",
+"type": "value",
+"long": "--from-call"
+},
+{
+"flags": "--model <model>",
+"description": "Model a session spawned for this task launches with",
+"type": "value",
+"long": "--model"
+},
+{
+"flags": "--effort <level>",
+"description": "Reasoning effort a session spawned for this task launches with: low, medium, high, xhigh, max",
+"type": "value",
+"long": "--effort"
+},
+{
+"flags": "--ephemeral",
+"description": "Bookkeeping with no value once done (a checklist, a probe): kept off the board, the feed and notifications; cast task keep undoes it",
+"type": "boolean",
+"long": "--ephemeral"
+},
+{
+"flags": "--goal-ref <ref>",
+"description": "The goal it serves: a metric ref (in-N:key) or project short id from cast goals",
+"type": "value",
+"long": "--goal-ref"
+},
+{
+"flags": "--predict <line>",
+"description": "The predicted effect on a goal metric, read after ship: \"in-9:intros_a_week +5% by 2026-12-15 :: <basis>\" (or in 21d after ship)",
+"type": "value",
+"long": "--predict"
+},
+{
+"flags": "--json",
+"description": "Output the created task as JSON (one object for one title, an array for several)",
+"type": "boolean",
+"long": "--json"
+},
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [
+{
+"name": "title",
+"required": true,
+"variadic": false,
+"description": "Task title, or one title per line for a bulk decomposition; '-' reads it from stdin (heredoc-friendly)"
+}
+],
+"runsBare": true
+},
+{
+"path": [
+"task",
+"ls"
+],
+"aliases": [
+"list"
+],
+"flags": [
+{
+"flags": "--team <name|id|personal>",
+"description": "Workspace to list: a team, or personal (default: the directory's mapping, else the active team)",
+"type": "value",
+"long": "--team"
+},
+{
+"flags": "-p, --project <ref>",
+"description": "Filter by project ID, short ID, or title substring",
+"type": "value",
+"long": "--project",
+"short": "-p"
+},
+{
+"flags": "--initiative <in-N>",
+"description": "Only the tasks of the goal's projects (with -p, that project must be one of them)",
+"type": "value",
+"long": "--initiative"
+},
+{
+"flags": "-s, --status <status>",
+"description": "Filter by status: a category (backlog, open, in_progress, in_review, done, dropped) or one of your team's statuses by name, e.g. today",
+"type": "value",
+"long": "--status",
+"short": "-s"
+},
+{
+"flags": "-r, --ready",
+"description": "Show only ready items: open, out of triage, not superseded or someone else's ephemeral task, no parent being worked, and every blocker cleared (tasks done or dropped, waits met; a failed wait holds until removed)",
+"type": "boolean",
+"long": "--ready",
+"short": "-r"
+},
+{
+"flags": "-a, --all",
+"description": "Include done/dropped tasks",
+"type": "boolean",
+"long": "--all",
+"short": "-a"
+},
+{
+"flags": "-d, --derived",
+"description": "Include derived/mined tasks (hidden by default)",
+"type": "boolean",
+"long": "--derived",
+"short": "-d"
+},
+{
+"flags": "-n, --limit <n>",
+"description": "Max results",
+"type": "value",
+"long": "--limit",
+"short": "-n",
+"default": 50
+},
+{
+"flags": "-q, --query <text>",
+"description": "Filter by title/description (case-insensitive)",
+"type": "value",
+"long": "--query",
+"short": "-q"
+},
+{
+"flags": "--assignee <name>",
+"description": "Filter by assignee: a person (username, 'me', or user ID) or a role (@handle)",
+"type": "value",
+"long": "--assignee"
+},
+{
+"flags": "--chain <person>",
+"description": "Everything in a person's reporting chain: their tasks and the tasks of every role under them ('me', a name, or a handle)",
+"type": "value",
+"long": "--chain"
+},
+{
+"flags": "--label <label>",
+"description": "Filter by label (case-insensitive)",
+"type": "value",
+"long": "--label"
+},
+{
+"flags": "--plan <plan_id>",
+"description": "Filter by plan",
+"type": "value",
+"long": "--plan"
+},
+{
+"flags": "--ephemeral",
+"description": "Include ephemeral bookkeeping tasks (hidden by default)",
+"type": "boolean",
+"long": "--ephemeral"
+},
+{
+"flags": "-v, --verbose",
+"description": "Show descriptions",
+"type": "boolean",
+"long": "--verbose",
+"short": "-v"
+},
+{
+"flags": "--json",
+"description": "Output as JSON (an array of task rows; every field, no colours)",
+"type": "boolean",
+"long": "--json"
+},
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [],
+"runsBare": true
+},
+{
+"path": [
+"task",
+"update"
+],
+"aliases": [],
+"flags": [
+{
+"flags": "-s, --status <status>",
+"description": "New status: a category (backlog, open, in_progress, in_review, done, dropped) or one of your team's statuses by name, e.g. today. cancelled means dropped; what a task waits on is cast task dep",
+"type": "value",
+"long": "--status",
+"short": "-s"
+},
+{
+"flags": "-p, --priority <level>",
+"description": "New priority: urgent, high, medium, low, none (p0 to p3 map to urgent to low)",
+"type": "value",
+"long": "--priority",
+"short": "-p"
+},
+{
+"flags": "-t, --title <title>",
+"description": "New title; '-' reads it from stdin (heredoc-friendly)",
+"type": "value",
+"long": "--title",
+"short": "-t"
+},
+{
+"flags": "-d, --description <text>",
+"description": "New description; '-' reads it from stdin (heredoc-friendly)",
+"type": "value",
+"long": "--description",
+"short": "-d"
+},
+{
+"flags": "--assignee <name>",
+"description": "New assignee",
+"type": "value",
+"long": "--assignee"
+},
+{
+"flags": "--labels <labels>",
+"description": "Comma-separated labels",
+"type": "value",
+"long": "--labels"
+},
+{
+"flags": "--project <ref>",
+"description": "Project ID, short ID, or title substring",
+"type": "value",
+"long": "--project"
+},
+{
+"flags": "--project-path <path>",
+"description": "Project directory path",
+"type": "value",
+"long": "--project-path"
+},
+{
+"flags": "--plan <plan_id>",
+"description": "Plan short ID to associate this task with",
+"type": "value",
+"long": "--plan"
+},
+{
+"flags": "--from-call <call>",
+"description": "The call this task was pulled from (cl-42, from `cast calls`); pass '' to unlink",
+"type": "value",
+"long": "--from-call"
+},
+{
+"flags": "--parent <task_id>",
+"description": "Nest under a parent task; pass '' to move it back to the top level",
+"type": "value",
+"long": "--parent"
+},
+{
+"flags": "--cascade",
+"description": "When closing: also close this task's open subtasks",
+"type": "boolean",
+"long": "--cascade"
+},
+{
+"flags": "--only-parent",
+"description": "When closing: close just this task, leaving open subtasks",
+"type": "boolean",
+"long": "--only-parent"
+},
+{
+"flags": "--human",
+"description": "Put the task on the human's board (rare)",
+"type": "boolean",
+"long": "--human"
+},
+{
+"flags": "--no-human",
+"description": "Take the task off the human's board",
+"type": "boolean",
+"long": "--no-human",
+"negated": true
+},
+{
+"flags": "--steps <lines>",
+"description": "Checklist items shown on the task (not plan steps; those are cast plan steps), one per line; replaces the list; '-' reads it from stdin (heredoc-friendly)",
+"type": "value",
+"long": "--steps"
+},
+{
+"flags": "--criteria <lines>",
+"description": "Acceptance criteria, one per line (replaces the list); '-' reads it from stdin (heredoc-friendly)",
+"type": "value",
+"long": "--criteria"
+},
+{
+"flags": "--goal-ref <ref>",
+"description": "The goal the problem threatens: a metric ref (in-N:key) or project short id from cast goals, or none; '' clears",
+"type": "value",
+"long": "--goal-ref"
+},
+{
+"flags": "--category <kind>",
+"description": "What kind of change it needs: code, prompt, ux, infra, data, or line (the project's own line)",
+"type": "value",
+"long": "--category"
+},
+{
+"flags": "--risk <level>",
+"description": "How much review it needs: low, review or plan",
+"type": "value",
+"long": "--risk"
+},
+{
+"flags": "--readiness <state>",
+"description": "Whether it can be worked as it stands: ready, needs_context or not_actionable",
+"type": "value",
+"long": "--readiness"
+},
+{
+"flags": "--readiness-note <text>",
+"description": "One line on why; '-' reads it from stdin (heredoc-friendly)",
+"type": "value",
+"long": "--readiness-note"
+},
+{
+"flags": "--watch-days <n>",
+"description": "Watch the problem after ship: a new report within N days reopens it, a quiet watch closes it as resolved; 0 ends the watch",
+"type": "value",
+"long": "--watch-days"
+},
+{
+"flags": "--predict <line>",
+"description": "The predicted effect on a goal metric, read after ship: \"in-9:intros_a_week +5% by 2026-12-15 :: <basis>\" (or in 21d after ship); '' clears",
+"type": "value",
+"long": "--predict"
+},
+{
+"flags": "--model <model>",
+"description": "Model a session spawned for this task launches with; '' clears",
+"type": "value",
+"long": "--model"
+},
+{
+"flags": "--effort <level>",
+"description": "Reasoning effort a session spawned for this task launches with: low, medium, high, xhigh, max; '' clears",
+"type": "value",
+"long": "--effort"
+},
+{
+"flags": "-V, --version",
+"description": "output the version number",
+"type": "boolean",
+"long": "--version",
+"short": "-V",
+"global": true
+},
+{
+"flags": "-h, --help",
+"description": "display help for command",
+"type": "boolean",
+"long": "--help",
+"short": "-h",
+"global": true
+}
+],
+"args": [
+{
+"name": "short_id",
+"required": true,
+"variadic": false,
+"description": "Task short ID"
+}
+],
+"runsBare": true
+}
+]
+}

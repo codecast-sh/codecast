@@ -19,12 +19,45 @@ export interface FakeTask {
   plan?: string;
   project?: string;
   found_during?: string;
+  /** The call it was filed from (`--from-call`), the object it sits under (`--under`), who answers for it. */
+  from_call?: string;
+  under?: string;
+  assignee?: string;
   comments: Array<{ type: string; text: string; seq: number }>;
 }
 
 export interface Role {
   session: string;
   title: string;
+}
+
+/** One board doc, element by element, as the server stores it: each write stamps its rev and its writer (`s:<session>` or a person's `u:<id>`). */
+export interface FakeBoard {
+  doc: string;
+  title: string;
+  rev: number;
+  elements: Record<string, { kind: string; fields: Record<string, any>; deleted?: boolean; rev: number; by?: string; at?: number }>;
+  comments: Array<{ key: string; text: string; author_name: string; by?: string; anchor?: string; parent?: string; resolved?: boolean }>;
+  cursor?: { key?: string; point?: string; status?: string };
+  checkpoints: Array<{ rev: number; label: string }>;
+  /** Every write in order: which verb, at which call, the ops it made. */
+  log: Array<{ seq: number; rev: number; verb: string; ops: unknown[] }>;
+}
+
+/** The live call a replay is fed from. */
+export interface FakeCall {
+  id: string;
+  title: string;
+  started: string;
+  speakers: string[];
+}
+
+/** What the listings print before the run made anything: lines read once from a real workspace. */
+export interface FakeListings {
+  priorities?: string[];
+  goals?: string;
+  plans?: string[];
+  tasks?: string[];
 }
 
 export interface FakeWorld {
@@ -53,6 +86,11 @@ export interface FakeWorld {
   channels?: string[];
   /** Fidelity scoring's world: every well-formed id a real call named existed, so the fake takes any. */
   open?: boolean;
+  board?: FakeBoard;
+  call?: FakeCall;
+  listings?: FakeListings;
+  plans: Record<string, { id: string; title: string; goal?: string; from_call?: string }>;
+  priorities: Record<string, { id: string; title: string; owner?: string; from_call?: string }>;
 }
 
 export interface WorldSeed {
@@ -65,16 +103,23 @@ export interface WorldSeed {
   known?: string[];
   channels?: string[];
   open?: boolean;
+  board?: FakeBoard;
+  call?: FakeCall;
+  listings?: FakeListings;
 }
 
-export const DEFAULT_NEXT: Record<string, number> = { 'ct-': 96001, 'tr-': 7301, 'sd-': 3101, msg: 1 };
+export const DEFAULT_NEXT: Record<string, number> = { 'ct-': 96001, 'tr-': 7301, 'sd-': 3101, 'pl-': 1201, 'pri-': 301, msg: 1 };
 
 /** A map with no prototype: a key the agent types (`__proto__`, `constructor`) is only ever a key. */
 const bare = <T>(from: Record<string, T> | undefined): Record<string, T> => Object.assign(Object.create(null) as Record<string, T>, from ?? {});
 
 /** Every map in a world made prototype-free, as a world arrives from JSON or a seed. */
 function bareWorld(w: FakeWorld): FakeWorld {
-  return { ...w, roles: bare(w.roles), people: bare(w.people), next: bare(w.next), tasks: bare(w.tasks), triggers: bare(w.triggers), decisions: bare(w.decisions) };
+  return {
+    ...w, roles: bare(w.roles), people: bare(w.people), next: bare(w.next), tasks: bare(w.tasks), triggers: bare(w.triggers), decisions: bare(w.decisions),
+    plans: bare(w.plans), priorities: bare(w.priorities),
+    ...(w.board ? { board: { ...w.board, elements: bare(w.board.elements) } } : {}),
+  };
 }
 
 export function newWorld(seed: WorldSeed = {}): FakeWorld {
@@ -88,6 +133,11 @@ export function newWorld(seed: WorldSeed = {}): FakeWorld {
     ...(seed.known ? { known: seed.known } : {}),
     ...(seed.channels ? { channels: seed.channels } : {}),
     ...(seed.open ? { open: true } : {}),
+    ...(seed.board ? { board: structuredClone(seed.board) } : {}),
+    ...(seed.call ? { call: seed.call } : {}),
+    ...(seed.listings ? { listings: seed.listings } : {}),
+    plans: {},
+    priorities: {},
     tasks: {},
     triggers: {},
     decisions: {},
