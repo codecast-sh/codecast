@@ -127,11 +127,15 @@ describe("Workspace", () => {
     expect(ids(codecast.past)).toEqual(["me-cdone", "me-cquiet", "me-caside", "ash-cdone"]);
   });
 
-  test("the rank is the place in the owner's list, not the server's field", () => {
-    const gapped = [row({ short_id: "x1", user_id: "x", person_pos: 4, rank: 4 }), row({ short_id: "x2", user_id: "x", person_pos: 9, rank: 9 })];
-    const out = buildSections(gapped, opts({ groupBy: "workspace" }));
+  test("a row's rank is the server's number where it has one, so a lone #5 left after a cap sits with the #5s; else its place in its owner's list", () => {
+    const rows = [
+      row({ short_id: "me-1", person_pos: 1 }), row({ short_id: "me-2", person_pos: 2 }), row({ short_id: "me-3", person_pos: 3 }),
+      row({ short_id: "me-4", person_pos: 4 }), row({ short_id: "me-5", person_pos: 5 }),
+      row({ short_id: "x5", user_id: "x", rank: 5 }),
+    ];
+    const out = buildSections(rows, opts({ groupBy: "workspace" }));
     if (out.groupBy !== "workspace") throw new Error(out.groupBy);
-    expect(ranked(out.sections[0].active)).toEqual(["x1#1", "x2#2"]);
+    expect(ranked(out.sections[0].active)).toEqual(["me-1#1", "me-2#2", "me-3#3", "me-4#4", "me-5#5", "x5#5"]);
   });
 });
 

@@ -86,14 +86,16 @@ export function effectiveGroupBy(pref: unknown, shown: { workspaces: number; tea
   return groupBy === "person_workspace" && shown.workspaces < 2 ? DEFAULT_GROUP_BY : groupBy;
 }
 
-/** Every #1, then every #2, …; within a rank the order ownerGroups gives (the viewer first, then by owner name). */
+/**
+ * Every #1, then every #2, …, by each row's rank (the server's number for a
+ * teammate's, so a lone #5 left after a cap still sits with the #5s; its
+ * place in its owner's list where it has none); within a rank the order
+ * ownerGroups gives (the viewer first, then by owner name).
+ */
 function interleave(people: readonly OwnerGroup[]): RankedRow[] {
-  const out: RankedRow[] = [];
-  const depth = Math.max(0, ...people.map((p) => p.active.length));
-  for (let i = 0; i < depth; i++) {
-    for (const p of people) if (p.active[i]) out.push({ row: p.active[i], rank: i + 1 });
-  }
-  return out;
+  const ranked = people.flatMap((p, person) => p.active.map((row, i) => ({ row, rank: row.rank ?? i + 1, person })));
+  ranked.sort((a, b) => a.rank - b.rank || a.person - b.person);
+  return ranked.map(({ row, rank }) => ({ row, rank }));
 }
 
 export function buildSections(rows: readonly PriorityRow[], opts: SectionOptions & { groupBy: unknown }): Sections {
