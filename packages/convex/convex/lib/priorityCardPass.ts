@@ -48,7 +48,7 @@ export function withEvidence(changes: PriorityChange[], plan: MergePlan, input: 
     texts.flatMap((text): PriorityEvidence[] => {
       const found = findQuote(text, input.sessions, input.calls);
       if (!found) return [];
-      if (found.kind === "session") return [{ kind: "quote", text: text.replace(/\s+/g, " ").trim(), session: found.session, session_title: found.title, at: found.at }];
+      if (found.kind === "session") return [{ kind: "quote", text: found.text, session: found.session, session_title: found.title, at: found.at }];
       return [{ kind: "event", text: `Action item on “${found.title}”: ${found.action_item}`, ref: found.call, at: found.at }];
     });
   const records = (steps: PriorityStep[]): PriorityEvidence[] =>

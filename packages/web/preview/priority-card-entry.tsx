@@ -1,24 +1,27 @@
 // Preview entry: the real PriorityChangeCard over its synthetic fixture
 // (components/decisions/__fixtures__/priorityCard.fixture.ts), for eyeballing
 // and screenshotting without a backend. `?theme=light` flips the theme
-// (default dark), `?view=answered` shows the answered record, `?width=402`
+// (default dark), `?view=answered|correction|none` shows each answered record, `?width=402`
 // frames it at a phone's width.
 import "../app/globals.css";
 import React, { useState } from "react";
 import { createRoot } from "react-dom/client";
-import { PriorityChangeCard, type PriorityCardAnswer } from "../components/decisions/PriorityChangeCard";
+import { PriorityChangeCard, type PriorityCardAnswer, type PriorityCardAnswered } from "../components/decisions/PriorityChangeCard";
 import { fixtureTickedSome, priorityCardFixture as card } from "../components/decisions/__fixtures__/priorityCard.fixture";
 
 const params = new URLSearchParams(window.location.search);
 document.documentElement.classList.add(params.get("theme") === "light" ? "light" : "dark", "modern-style");
-const answeredView = params.get("view") === "answered";
+const view = params.get("view");
 const width = Number(params.get("width")) || undefined;
 
 function App() {
   const [ticked, setTicked] = useState(fixtureTickedSome);
   const [last, setLast] = useState<PriorityCardAnswer | null>(null);
-  const answered = answeredView
-    ? { ids: fixtureTickedSome.filter((id) => id !== "c9"), text: "Text sign-in is how the shop kiosk works. Keep it.", about: "c9", at: card.run.at + 61 * 60_000 }
+  const at = card.run.at + 61 * 60_000;
+  const answered: PriorityCardAnswered | null =
+    view === "answered" ? { kind: "accept", ids: fixtureTickedSome.filter((id) => id !== "c9"), text: "Text sign-in is how the shop kiosk works. Keep it.", about: "c9", at }
+    : view === "correction" ? { kind: "text", ids: [], text: "Checkout stays at #9 until the holiday freeze; the rest can wait for next week's pass.", at }
+    : view === "none" ? { kind: "none", ids: [], at }
     : null;
   return (
     <div className="min-h-screen bg-sol-bg text-sol-text" style={{ padding: width ? 0 : "28px 36px 60px" }}>

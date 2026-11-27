@@ -533,17 +533,19 @@ describe("quotes", () => {
   const sessions = [session("k3v", { title: "Retry storm", typed: [{ at: NOW - H, text: "Checkout is the thing\n  customers feel this week." }] })];
   const calls = [{ id: "cl-1", title: "Weekly", at: NOW - 2 * H, summary: "", action_items: ["Sam owns the change request flow"] }];
 
-  test("found verbatim in a typed message, whitespace aside", () => {
-    expect(findQuote("the thing customers feel", sessions, calls)).toEqual({ kind: "session", session: "k3v", title: "Retry storm", at: NOW - H });
+  test("found verbatim in a typed message, whitespace aside, in the person's own words", () => {
+    expect(findQuote("the thing customers feel", sessions, calls)).toEqual({ kind: "session", session: "k3v", title: "Retry storm", at: NOW - H, text: "the thing\n  customers feel" });
   });
 
   test("found in a call's action item", () => {
-    expect(findQuote("owns the change request flow", sessions, calls)).toEqual({ kind: "call", call: "cl-1", title: "Weekly", action_item: "Sam owns the change request flow", at: NOW - 2 * H });
+    expect(findQuote("owns the change request flow", sessions, calls)).toEqual({ kind: "call", call: "cl-1", title: "Weekly", action_item: "Sam owns the change request flow", at: NOW - 2 * H, text: "owns the change request flow" });
   });
 
-  test("case counts, and a quote nobody said is null", () => {
-    expect(findQuote("checkout is the thing", sessions, calls)).toBeNull();
-    expect(findQuote("Checkout is great", sessions, calls)).toBeNull();
+  test("case is ignored and the person's casing shown; a quote nobody said, or one too short to mean anything, is null", () => {
+    expect(findQuote("checkout is the thing", sessions, calls)).toMatchObject({ session: "k3v", text: "Checkout is the thing" });
+    expect(findQuote("Checkout is great today", sessions, calls)).toBeNull();
+    expect(findQuote("the thing", sessions, calls)).toBeNull();
+    expect(findQuote("customers feel this", sessions, calls)).toBeNull();
     expect(findQuote("   ", sessions, calls)).toBeNull();
   });
 });

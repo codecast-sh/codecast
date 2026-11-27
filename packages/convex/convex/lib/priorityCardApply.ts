@@ -13,6 +13,7 @@ import { changeLine, type PriorityCard } from "@codecast/shared/contracts/priori
 import { effectivePriorityOrder } from "@codecast/shared/contracts/priorities";
 import { planForAccepted, type CardRow, type HeldPlan } from "./priorityCard";
 import { activeGroup } from "./priorityGroup";
+import { priorityCardRefusal } from "./priorityCardAccess";
 import { writePlan } from "../priorityPassRun";
 import { doCorrect, doMove } from "../priorityWrite";
 import { OWN_SCAN_READ } from "../priorityRead";
@@ -23,7 +24,7 @@ type Ctx = { db: any; scheduler?: any };
 const CORRECTION_CHARS = 2_000;
 
 /** What answering writes from: the core's held plan, with the conversations the run read its waiting sessions as. */
-type Held = HeldPlan & { conversations?: Record<string, Id<"conversations">> };
+type Held = HeldPlan & { conversations?: Record<string, Id<"conversations">>; corrections?: Id<"priority_corrections">[] };
 
 /** The ticked option indexes of a multi answer. */
 function ticked(verdict: { answer_index?: number; answer_json?: unknown }): number[] {
@@ -62,7 +63,7 @@ export async function settlePriorityCard(
   if (!card || card.outcome || (verdict.status !== "answered" && verdict.status !== "dismissed")) return;
   // The person it asked, and only them: the priorities written are theirs.
   const person = row.user_id;
-  if (by.kind !== "user" || String(by.user_id) !== String(person) || !(row.asked_user_ids ?? [person]).some((id) => String(id) === String(person))) return;
+  if (priorityCardRefusal(row, by) || !(row.asked_user_ids ?? [person]).some((id) => String(id) === String(person))) return;
   // A dismissal is "Accept none" (a multi answer cannot be empty): nothing is written.
   const answered = verdict.status === "answered";
   const accepted = answered ? [...new Set(ticked(verdict).map((i) => card.changes[i]?.id).filter((id): id is string => !!id))] : [];
@@ -89,6 +90,13 @@ export async function settlePriorityCard(
   if (text) {
     const target = await correctionTarget(ctx, person, card);
     if (target) await doCorrect(ctx as any, person, target, correctionText(row, card, text), undefined);
+  }
+  // The corrections the run read waited on this answer: the person has decided what of them lands.
+  for (const id of (card.held as Held).corrections ?? []) {
+    const c: Doc<"priority_corrections"> | null = await ctx.db.get(id);
+    if (c?.status === "pending" && !c.deleted_at && String(c.user_id) === String(person) && c.workspace === card.workspace) {
+      await ctx.db.patch(id, { status: "applied", applied_at: now, applied_window: card.run.window });
+    }
   }
   const outcome: NonNullable<PriorityCard["outcome"]> = { accepted: accepted.filter((id) => !skipped.includes(id)), skipped, at: now, ...(text ? { text } : {}) };
   await ctx.db.patch(row._id, { priority_card: { ...card, outcome } });

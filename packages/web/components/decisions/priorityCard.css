@@ -7,6 +7,11 @@
 .pcc {
   --pcc-teal: color-mix(in oklab, var(--sol-cyan) 72%, var(--sol-text));
   --pcc-g: 40px; --pcc-ic: 20px; --pcc-gap: 12px; --pcc-cb: 22px;
+  /* Outlines that must read on the page: the empty checkbox clears 3:1 in both themes, a chip's hairline stays visible. */
+  --pcc-box-edge: var(--sol-text-muted);
+  --pcc-chip-edge: color-mix(in srgb, var(--sol-text-muted) 70%, transparent);
+  /* A struck line: a token strong enough to see through a faded row, in dark as in light. */
+  --pcc-strike: var(--sol-text-muted);
   container: pcc / inline-size;
   color: var(--sol-text);
   font-size: 14px;
@@ -44,8 +49,7 @@
 .pcc-row[role="checkbox"]:focus-visible { outline: 2px solid color-mix(in srgb, var(--pcc-teal) 60%, transparent); outline-offset: 2px; }
 .pcc-icon { grid-column: 2; align-self: start; display: flex; width: var(--pcc-ic); height: var(--pcc-ic); padding-top: 2px; }
 .pcc-icon svg { width: 18px; height: 18px; }
-.pcc-text { grid-column: 3; min-width: 0; font-size: 15px; }
-.pcc-line { overflow-wrap: anywhere; }
+.pcc-text { grid-column: 3; min-width: 0; font-size: 15px; overflow-wrap: anywhere; }
 .pcc-prefix { font-weight: 600; color: var(--sol-text); }
 
 .pcc-tone-up { color: var(--cc-green-ink); }
@@ -59,25 +63,32 @@
 /* The checkbox: a filled teal square with a check, or an empty outline. */
 .pcc-box { grid-column: 4; align-self: start; margin-top: 1px; width: 20px; height: 20px; border-radius: 5px; background: var(--pcc-teal); display: grid; place-items: center; }
 .pcc-box::after { content: ""; width: 9px; height: 5px; border: 2px solid var(--sol-bg); border-top: 0; border-right: 0; transform: rotate(-45deg) translate(1px, -1px); }
-.pcc-row.is-off .pcc-box { background: transparent; border: 1.5px solid var(--sol-border); }
+.pcc-row.is-off .pcc-box { background: transparent; border: 1.5px solid var(--pcc-box-edge); }
 .pcc-row.is-off .pcc-box::after { display: none; }
 .pcc-row[role="checkbox"]:hover .pcc-box { box-shadow: 0 0 0 3px color-mix(in srgb, var(--pcc-teal) 18%, transparent); }
 
 /* An unticked or declined row fades and its line is struck. */
 .pcc-row.is-off .pcc-icon, .pcc-row.is-off .pcc-line { opacity: 0.4; }
 .pcc-row.is-off .pcc-ev { opacity: 0.45; }
-.pcc-row.is-off .pcc-line { text-decoration: line-through; text-decoration-color: var(--sol-text-dim); }
+.pcc-row.is-off .pcc-line, .pcc-row.is-off .pcc-chip-title { text-decoration: line-through; text-decoration-color: var(--pcc-strike); text-decoration-thickness: 1.5px; }
 .is-answered .pcc-row.is-off .pcc-line { opacity: 1; color: var(--sol-text-dim); }
 .is-answered .pcc-row.is-off .pcc-line .pcc-prefix { color: var(--sol-text-dim); }
+/* A chip is its own box, so the line's strike and dim stop at its edge: it carries both itself. */
+.is-answered .pcc-row.is-off .pcc-chip { color: var(--sol-text-dim); border-color: color-mix(in srgb, var(--sol-text-muted) 30%, transparent); }
+.is-answered .pcc-row.is-off .pcc-chip [data-milestone-mark] { opacity: 0.5; }
+/* Answered in the person's own words: nothing was applied, so the rows are dimmed, not struck. */
+.is-unapplied .pcc-row .pcc-icon, .is-unapplied .pcc-row .pcc-line { opacity: 0.5; }
+.pcc-list-label { padding: 0 0 6px calc(var(--pcc-g) + var(--pcc-ic) + 2 * var(--pcc-gap)); font-size: 12px; font-weight: 500; color: var(--sol-text-dim); }
+.pcc-correction { padding-left: 12px; border-left: 2px solid color-mix(in srgb, var(--pcc-teal) 55%, transparent); font-style: italic; overflow-wrap: anywhere; }
 /* The person's own words under a change they declined read at full strength. */
 .is-answered .pcc-row.is-off .pcc-ev { opacity: 1; }
 
 /* An existing milestone, priority or goal the row names. */
-.pcc-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 0 7px 0 5px; border: 1px solid var(--sol-border); border-radius: 5px; background: var(--sol-card); font-size: 14px; line-height: 20px; vertical-align: baseline; }
+.pcc-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 0 7px 0 5px; border: 1px solid var(--pcc-chip-edge); border-radius: 5px; background: var(--sol-card); font-size: 14px; line-height: 20px; vertical-align: baseline; }
 .pcc-chip-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Evidence: a quote (italic, quoted, then who, where and when) or an event (upright), on one left bar. */
-.pcc-ev { margin-top: 4px; padding-left: 10px; border-left: 2px solid color-mix(in srgb, var(--sol-text-muted) 30%, transparent); font-size: 14px; line-height: 1.45; color: var(--sol-text-muted); }
+.pcc-ev { overflow-wrap: anywhere; margin-top: 4px; padding-left: 10px; border-left: 2px solid color-mix(in srgb, var(--sol-text-muted) 30%, transparent); font-size: 14px; line-height: 1.45; color: var(--sol-text-muted); }
 .pcc-ev em.pcc-ev-text { font-style: italic; color: var(--sol-text); }
 .pcc-ev.is-event .pcc-ev-text { color: var(--sol-text); }
 .pcc-ev-at, .pcc-ev-ref { font-family: var(--font-mono, ui-monospace), monospace; font-size: 12px; color: var(--sol-text-dim); }
@@ -123,6 +134,8 @@
   .pcc-headline { font-size: 25px; }
   .pcc-case { font-size: 14.5px; }
   .pcc-box { width: 24px; height: 24px; }
-  .pcc-row { padding: 8px 0; }
+  /* Touch targets: every row and the Quotes switch are at least 44px tall. */
+  .pcc-row { min-height: 44px; padding: 10px 0; align-content: center; }
+  .pcc-quotes { height: 44px; padding: 0 14px; }
   .pcc-answers .decision-option { min-height: 52px; align-items: center; }
 }

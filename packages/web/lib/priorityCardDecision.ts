@@ -26,10 +26,12 @@ export function priorityCardAnswered(row: Row): PriorityCardAnswered | null {
   const card = row.priority_card;
   if (!card || row.status === "pending") return null;
   const text = row.answer_text || undefined;
-  if (card.outcome) return { ids: card.outcome.accepted, text, at: card.outcome.at };
+  // Accept none is a dismissal; words with nothing accepted are a correction instead of an answer.
+  const kindOf = (ids: string[]): PriorityCardAnswered["kind"] => (row.status === "dismissed" ? "none" : text && ids.length === 0 ? "text" : "accept");
+  if (card.outcome) return { kind: kindOf(card.outcome.accepted), ids: card.outcome.accepted, text, at: card.outcome.at };
   const picked = row.status === "answered" && Array.isArray(row.answer_json) ? row.answer_json : [];
   const ids = picked.map((i: number) => card.changes[i]?.id).filter((id: string | undefined): id is string => !!id);
-  return { ids, text, at: row.resolved_at };
+  return { kind: kindOf(ids), ids, text, at: row.resolved_at };
 }
 
 /** A compact row's one-line ask: how many changes the card proposes. */
@@ -42,7 +44,8 @@ export function priorityCardAsk(card: PriorityCard): string {
 export function priorityCardAnswerWord(row: Row): string | null {
   const answered = priorityCardAnswered(row);
   if (!answered || !row.priority_card) return null;
-  return answered.text ?? `Accepted ${answered.ids.length} of ${row.priority_card.changes.length}`;
+  if (answered.text) return answered.text;
+  return answered.kind === "none" ? "Accepted none" : `Accepted ${answered.ids.length} of ${row.priority_card.changes.length}`;
 }
 
 /** The context's first line: the card's one short line of case under its headline. */

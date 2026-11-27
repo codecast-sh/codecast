@@ -31,17 +31,18 @@ const { toggleTicked } = await import("../../../lib/priorityCardTicks");
 type Answer = Parameters<React.ComponentProps<typeof PriorityChangeCard>["onAnswer"]>[0];
 afterAll(() => { closeDomWindow(dom); restoreGlobals(); });
 
-function Harness({ initial, answers, answered }: { initial: string[]; answers: Answer[]; answered?: React.ComponentProps<typeof PriorityChangeCard>["answered"] }) {
+type Answered = React.ComponentProps<typeof PriorityChangeCard>["answered"];
+function Harness({ initial, answers, answered, now }: { initial: string[]; answers: Answer[]; answered?: Answered; now?: number }) {
   const [ticked, setTicked] = useState(initial);
-  return <PriorityChangeCard card={card} ticked={ticked} onToggle={(next) => setTicked(next)} answered={answered} onAnswer={(a) => answers.push(a)} />;
+  return <PriorityChangeCard card={card} ticked={ticked} onToggle={(next) => setTicked(next)} answered={answered} onAnswer={(a) => answers.push(a)} now={now} />;
 }
 
-async function mount(initial: string[] = card.suggested, answered?: React.ComponentProps<typeof PriorityChangeCard>["answered"]) {
+async function mount(initial: string[] = card.suggested, answered?: Answered, now?: number) {
   const answers: Answer[] = [];
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
-  await act(() => root.render(<Harness initial={initial} answers={answers} answered={answered} />));
+  await act(() => root.render(<Harness initial={initial} answers={answers} answered={answered} now={now} />));
   const row = (id: string) => container.querySelector(`[data-pcc-row="${id}"]`) as HTMLElement;
   const checked = () => Array.from(container.querySelectorAll("[data-pcc-row]")).filter((r) => r.getAttribute("aria-checked") === "true").map((r) => r.getAttribute("data-pcc-row"));
   const first = () => container.querySelector('[data-option="0"]') as HTMLButtonElement;
@@ -169,10 +170,15 @@ test("the words table sorts by share, then by any header clicked", async () => {
   unmount();
 });
 
+const HOUR = 3_600_000;
+const answeredAt = card.run.at + HOUR; // 7:01 PM UTC, the run's day
+
 test("answered: the headline counts, rows lose their boxes, declined rows are struck, the correction sits under its change", async () => {
   const ids = card.changes.map((c) => c.id).filter((id) => !["c9", "c12", "c13", "c14"].includes(id));
-  const { container, row, unmount } = await mount(card.suggested, { ids, text: "Text sign-in is how the kiosk works; keep it.", about: "c9", at: card.run.at + 3_600_000 });
+  const { container, row, unmount } = await mount(card.suggested, { kind: "accept", ids, text: "Text sign-in is how the kiosk works; keep it.", about: "c9", at: answeredAt }, answeredAt + HOUR);
   expect(container.querySelector("[data-card-headline]")!.textContent).toBe(`Accepted ${ids.length} of ${card.changes.length}`);
+  // Answered today: the clock alone.
+  expect(container.querySelector("[data-pcc-when]")!.textContent).toBe("· answered 7:01 PM");
   expect(container.querySelector("[data-pcc-box]")).toBeNull();
   expect(container.querySelector("[data-option]")).toBeNull();
   expect(container.querySelector("[data-pcc-words]")).toBeNull();
@@ -181,11 +187,43 @@ test("answered: the headline counts, rows lose their boxes, declined rows are st
   expect(row("c1").className).not.toContain("is-off");
   expect(row("c9").querySelector("[data-pcc-correction]")!.textContent).toContain("Text sign-in is how the kiosk works");
   expect(container.querySelectorAll("[data-pcc-correction]").length).toBe(1);
+  expect(container.querySelector("[data-pcc-unapplied]")).toBeNull();
   unmount();
 });
 
-test("answered with words about no one change: the correction reads at the end", async () => {
-  const { container, unmount } = await mount(card.suggested, { ids: [], text: "None of this, the week was a one-off." });
-  expect(container.querySelector(".pcc-loose [data-pcc-correction]")!.textContent).toContain("the week was a one-off");
+test("an answer from another day leads with its weekday, read against now and not the run", async () => {
+  const { container, unmount } = await mount(card.suggested, { kind: "accept", ids: ["c1"], at: answeredAt }, answeredAt + 2 * 24 * HOUR);
+  expect(container.querySelector("[data-pcc-when]")!.textContent).toBe("· answered Tue 7:01 PM");
+  unmount();
+});
+
+test("words beside accepted changes about no one change read at the end", async () => {
+  const { container, unmount } = await mount(card.suggested, { kind: "accept", ids: ["c1"], text: "The rest can wait a week." });
+  expect(container.querySelector(".pcc-loose [data-pcc-correction]")!.textContent).toContain("The rest can wait a week.");
+  unmount();
+});
+
+test("a correction instead of an answer: its words lead, the rows read not applied rather than declined", async () => {
+  const { container, unmount } = await mount(card.suggested, { kind: "text", ids: [], text: "None of this, the week was a one-off.", at: answeredAt }, answeredAt);
+  expect(container.querySelector("[data-card-headline]")!.textContent).toBe("You sent a correction");
+  expect(container.querySelector("[data-card-headline] + [data-pcc-correction]")!.textContent).toBe("None of this, the week was a one-off.");
+  expect(container.querySelector("[data-pcc-unapplied]")!.textContent).toBe("Not applied");
+  expect(container.querySelectorAll("[data-pcc-row].is-off").length).toBe(0);
+  expect(container.querySelector(".pcc-loose")).toBeNull();
+  expect(container.querySelectorAll("[data-pcc-correction]").length).toBe(1);
+  unmount();
+});
+
+test("Accept none reads accepted none, with every row declined", async () => {
+  const { container, unmount } = await mount(card.suggested, { kind: "none", ids: [], at: answeredAt }, answeredAt);
+  expect(container.querySelector("[data-card-headline]")!.textContent).toBe("Accepted none");
+  expect(container.querySelector("[data-pcc-when]")!.textContent).toBe("· accepted none 7:01 PM");
+  expect(container.querySelectorAll("[data-pcc-row]:not(.is-off)").length).toBe(0);
+  unmount();
+});
+
+test("Serves names the goals by title in chips", async () => {
+  const { row, unmount } = await mount();
+  expect(Array.from(row("c4").querySelectorAll("[data-pcc-chip]")).map((c) => c.textContent)).toEqual(["The holiday rush without an outage", "Faster pages everywhere"]);
   unmount();
 });

@@ -7,8 +7,11 @@ import type { PriorityCard } from "@codecast/shared/contracts/priorityCard";
 import { effectivePriorityOrder } from "@codecast/shared/contracts/priorities";
 import type { MergePlan, PriorityPassInput } from "./lib/priorityPass";
 import { PRIORITY_PASS_SCHEMA, PRIORITY_PASS_SCHEMA_WHY, PRIORITY_PASS_SYSTEM, priorityPassRequest } from "./lib/priorityPass";
-import { finalizeAnswer, settleClientResolution } from "./sessionDecisions";
-import { isStackedAsk } from "@codecast/shared/contracts";
+import { finalizeAnswer, reroutePendingDecisionsForConversation, settleClientResolution, withdrawCore } from "./sessionDecisions";
+import { isStackedAsk, liftsAskingSession } from "@codecast/shared/contracts";
+import { PRIORITY_CARD_REFUSED } from "./lib/priorityCardAccess";
+import { hashToken } from "./apiTokens";
+import { api } from "./_generated/api";
 import { loadPendingDecisionConvIds } from "./conversations";
 import { ringsPhone } from "./lib/decisionRing";
 import { H, pass, stubModel, world } from "./priorityPassRun.testkit";
@@ -32,6 +35,8 @@ const cardsOn = (w: World) => w.t.run((ctx) => ctx.db.patch(w.ana, { experiments
 const rows = async (w: World): Promise<Doc<"priorities">[]> => (await w.priorities()).filter((p: Doc<"priorities">) => p.workspace === w.team);
 const cards = (w: World): Promise<Doc<"session_decisions">[]> => w.t.run(async (ctx) => (await ctx.db.query("session_decisions").collect()).filter((d) => d.priority_card));
 const ANA = (w: World) => ({ kind: "user" as const, id: String(w.ana), user_id: w.ana });
+const TOKEN = "cli_" + "priority_card_test";
+const tick = () => new Promise((r) => setTimeout(r, 5));
 
 /** Grader with one milestone and Ana's team session on it; she typed TYPED in it an hour ago. */
 async function graderWorld() {
@@ -44,10 +49,10 @@ async function graderWorld() {
 const graderReply = (extra: unknown[] = []) => JSON.stringify({
   priorities: [{
     short_id: "pri-1", title: "Evals people trust", summary: "Calibrating the grader", status: "active", serves: null, rank: 1,
-    why: ["calibrate the grader", "a line nobody typed"],
+    why: ["Then Calibrate the grader", "a line nobody typed", "calibrate the grader"],
     steps: [
       { key: "s1", title: "Grader faults under 5%", tier: "critical", refs: [], why: ["get grader faults under five percent"] },
-      { title: "Calibrate the grader", tier: "critical", refs: [], why: ["calibrate   the grader"] },
+      { title: "Calibrate the grader", tier: "critical", refs: [], why: ["then calibrate   the grader"] },
     ],
     sessions: [{ session: "jx7team", step: "s1" }],
   }, ...extra],
@@ -106,8 +111,9 @@ describe("a pass run", () => {
     expect(card.changes.map((c) => c.kind)).toEqual(["rename", "rename_milestone", "new_milestone"]);
     expect(card.suggested).toEqual(card.changes.map((c) => c.id));
     expect(card.groups).toEqual([{ priority: "pri-1", rank: 1, title: "Trusted evals", changes: card.changes.map((c) => c.id) }]);
-    // A verbatim excerpt is kept with its session; one nobody typed is dropped; whitespace is forgiven.
-    const quote = { kind: "quote", text: "calibrate the grader", session: "jx7team", session_title: "Session jx7team", at: w.now - H };
+    // A verbatim excerpt is kept with its session, in the person's own words (case and whitespace forgiven);
+    // one nobody typed is dropped, and so is one too short to mean anything.
+    const quote = { kind: "quote", text: "then calibrate the grader", session: "jx7team", session_title: "Session jx7team", at: w.now - H };
     expect(card.changes[0].evidence).toEqual([quote]);
     expect(card.changes[1].evidence).toEqual([{ ...quote, text: "get grader faults under five percent" }]);
     expect(card.changes[2].evidence).toEqual([quote]);
@@ -147,33 +153,153 @@ describe("a pass run", () => {
     expect(await cards(w)).toHaveLength(2);
   });
 
-  test("the card is asked from the workspace's agent's session when it has one", async () => {
+  test("it sits in the person's own most recent session in the workspace, never a teammate's, the workspace agent's included", async () => {
     const w = await graderWorld();
     await cardsOn(w);
-    await w.t.run((ctx) => ctx.db.insert("anchors", { scope_type: "team", team_id: w.acme, bot_user_id: w.ben, host_user_id: w.ben, conversation_id: w.benConv, name: "Acme agent", status: "active", created_at: 1 }));
+    await w.t.run(async (ctx) => {
+      await ctx.db.insert("anchors", { scope_type: "team", team_id: w.acme, bot_user_id: w.ben, host_user_id: w.ben, conversation_id: w.benConv, name: "Acme agent", status: "active", created_at: 1 });
+      await ctx.db.patch(w.teamConv, { updated_at: w.now });
+    });
     model.reply = () => graderReply();
     await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team });
     const [d] = await cards(w);
-    expect([d.conversation_id, d.session_title]).toEqual([w.benConv, "Session jx7ben"]);
+    expect([d.conversation_id, d.session_title]).toEqual([w.teamConv, "Session jx7team"]);
   });
 
-  test("it sits in the person's queue, and leaves the session it hangs on as it was", async () => {
+  test("it sits in the person's queue without making its session ask: no lift, no ring, and its agent neither lists nor takes it back", async () => {
     const w = await graderWorld();
     await cardsOn(w);
-    await w.t.run((ctx) => ctx.db.insert("anchors", { scope_type: "team", team_id: w.acme, bot_user_id: w.ben, host_user_id: w.ben, conversation_id: w.benConv, name: "Acme agent", status: "active", created_at: 1 }));
-    const before = await w.conversation(w.benConv);
+    await w.t.run(async (ctx) => {
+      await ctx.db.patch(w.teamConv, { updated_at: w.now });
+      await ctx.db.insert("api_tokens", { user_id: w.ana, token_hash: await hashToken(TOKEN), name: "cli", created_at: 1, last_used_at: 1 } as any);
+    });
+    const before = await w.conversation(w.teamConv);
     model.reply = () => graderReply();
     await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team });
     const [d] = await cards(w);
-    // In Ana's QUESTIONS (a stacked ask), under the session it was asked from; not in Ben's, whose session it is.
-    expect(isStackedAsk(d)).toBe(true);
+    expect(d.conversation_id).toBe(w.teamConv);
+    // In Ana's queue (a stacked ask with her inbox row), but it lifts no session as asking, hers or anyone's.
+    expect([isStackedAsk(d), liftsAskingSession(d)]).toEqual([true, false]);
     const asking = (u: Id<"users">) => w.t.run(async (ctx) => [...(await loadPendingDecisionConvIds(ctx, u))]);
-    expect(await asking(w.ana)).toEqual([String(w.benConv)]);
-    expect(await asking(w.ben)).toEqual([]);
+    expect(await asking(w.ana)).toEqual([]);
     // No phone rings, nothing is sent into the session, and its row is untouched.
     expect(ringsPhone(d)).toBe(false);
     expect(await w.t.run((ctx) => ctx.db.query("pending_messages").collect())).toEqual([]);
-    expect(await w.conversation(w.benConv)).toEqual(before);
+    expect(await w.conversation(w.teamConv)).toEqual(before);
+    // The session's agent (Ana's token): `cast decide ls` does not show it, a re-ask does not touch it, `cast decide cancel` cannot take it.
+    const listed = await w.t.mutation(api.sessionDecisions.listForSession, { api_token: TOKEN, session_id: "jx7team" });
+    expect(listed.decisions).toEqual([]);
+    expect((await w.t.mutation(api.sessionDecisions.listForSession, { api_token: TOKEN, mine: true })).decisions).toEqual([]);
+    const asked = await w.t.mutation(api.sessionDecisions.ask, { api_token: TOKEN, session_id: "jx7team", question: d.question, options: [{ label: "Yes" }, { label: "No" }] } as any);
+    expect(asked.other_open ?? []).toEqual([]);
+    expect(asked.id).not.toBe(d._id);
+    expect(await w.t.mutation(api.sessionDecisions.withdraw, { api_token: TOKEN, decision_id: d.short_id!, session_id: "jx7team" })).toEqual({ error: "Decision not found" });
+    expect((await w.t.run((ctx) => ctx.db.get(d._id)))?.status).toBe("pending");
+  });
+
+  test("a session owner change leaves the card with its person", async () => {
+    const w = await graderWorld();
+    await cardsOn(w);
+    model.reply = () => graderReply();
+    await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team });
+    const [d] = await cards(w);
+    await w.t.run(async (ctx) => {
+      await ctx.db.patch(d.conversation_id, { user_id: w.ben });
+      await reroutePendingDecisionsForConversation(ctx as any, d.conversation_id, Date.now());
+    });
+    const after = (await w.t.run((ctx) => ctx.db.get(d._id)))!;
+    expect(after.asked_user_ids).toEqual([w.ana]);
+  });
+
+  test("a run that read the priorities before a card was answered writes nothing: the answer stands, the cursor stays", async () => {
+    const w = await graderWorld();
+    await cardsOn(w);
+    model.reply = () => graderReply();
+    await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team });
+    const [d] = await cards(w);
+    const [stale] = await rows(w);
+    await tick();
+    // A run starts reading here; the card is answered while it reads.
+    const started_at = Date.now();
+    await tick();
+    await w.t.run((ctx) => finalizeAnswer(ctx as any, d, { status: "answered", answer_json: [0, 1, 2], answer_index: 0 }, ANA(w), { deliver: false }));
+    const answered = (await rows(w))[0];
+    expect(answered.steps.map((s) => s.title)).toEqual(["Grader faults under 5%", "Calibrate the grader"]);
+    // Its plan was made from the priorities as they were: their milestones as they stood then.
+    const plan = { creates: [], updates: [{ short_id: "pri-1", patch: { steps: stale.steps, summary: "stale" }, seen_steps: stale.steps.map((s) => s.key) }], merges: [], sessions: [], unmap: [], notes: [], rewritten: [] };
+    const empty = { changes: [], groups: [], held: { v: 1, order: [], creates: [], changes: [], sessions: [] }, typed: [], sessions: 0, calls: 0 };
+    const result = await w.t.mutation(pass.applyPlan, { user_id: w.ana, workspace: w.team, started_at, from_cursor: 7, cursor_at: started_at, model: "m", plan, card: empty });
+    expect(result).toBeNull();
+    const [after] = await rows(w);
+    expect([after.summary, after.steps.map((s) => s.title)]).toEqual([answered.summary, ["Grader faults under 5%", "Calibrate the grader"]]);
+    expect(await w.latestRun()).toMatchObject({ status: "skipped", error: "superseded", cursor_at: 7 });
+  });
+
+  test("corrections the run read wait on its card: applied when the person answers or dismisses it, pending while it is open or once it is withdrawn", async () => {
+    const correctionWorld = async () => {
+      const w = await graderWorld();
+      await cardsOn(w);
+      const [g] = await rows(w);
+      const id = await w.t.run((ctx) => ctx.db.insert("priority_corrections", { user_id: w.ana, workspace: w.team, priority_id: g._id, text: "Calibration is part of grading", status: "pending", created_at: w.now - 2 * H, snapshot: { short_id: g.short_id, title: g.title, summary: g.summary, status: g.status, steps: g.steps } }));
+      model.reply = () => graderReply();
+      await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team });
+      const [d] = await cards(w);
+      return { w, d, id, status: async () => (await w.t.run((ctx) => ctx.db.get(id)))!.status };
+    };
+    const open = await correctionWorld();
+    expect(await open.status()).toBe("pending");
+    expect((open.d.priority_card as any).held.corrections).toEqual([open.id]);
+    await open.w.t.run((ctx) => finalizeAnswer(ctx as any, open.d, { status: "dismissed" }, ANA(open.w), { deliver: false }));
+    expect(await open.status()).toBe("applied");
+
+    const answered = await correctionWorld();
+    await answered.w.t.run((ctx) => finalizeAnswer(ctx as any, answered.d, { status: "answered", answer_json: [2], answer_index: 2 }, ANA(answered.w), { deliver: false }));
+    expect(await answered.status()).toBe("applied");
+
+    const withdrawn = await correctionWorld();
+    await withdrawn.w.t.run((ctx) => withdrawCore(ctx as any, withdrawn.d, Date.now()));
+    expect(await withdrawn.status()).toBe("pending");
+  });
+});
+
+describe("who may answer and read the card", () => {
+  test("only its person answers or dismisses it; an agent answering for them, or a teammate, is refused", async () => {
+    const w = await graderWorld();
+    await cardsOn(w);
+    model.reply = () => graderReply();
+    await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team });
+    const [d] = await cards(w);
+    const ben = { kind: "user" as const, id: String(w.ben), user_id: w.ben };
+    for (const [verdict, by] of [[{ status: "dismissed" as const }, ben], [{ status: "answered" as const, answer_json: [0], answer_index: 0 }, ben], [{ status: "answered" as const, answer_json: [0], answer_index: 0 }, { ...ANA(w), via: w.oldConv }]] as const) {
+      await expect(w.t.run((ctx) => finalizeAnswer(ctx as any, d, verdict as any, by as any, { deliver: false }))).rejects.toThrow(PRIORITY_CARD_REFUSED);
+    }
+    expect((await w.t.run((ctx) => ctx.db.get(d._id)))?.status).toBe("pending");
+    expect((await rows(w))[0].title).toBe("Trusted evals");
+  });
+
+  test("a teammate who can read the session reads the decision without the card; its person reads it whole", async () => {
+    const w = await graderWorld();
+    await cardsOn(w);
+    await w.t.run((ctx) => ctx.db.patch(w.teamConv, { updated_at: w.now }));
+    model.reply = () => graderReply();
+    await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team });
+    const [d] = await cards(w);
+    const ana = w.t.withIdentity({ subject: w.ana });
+    const ben = w.t.withIdentity({ subject: w.ben });
+    expect((await ana.query(api.sessionDecisions.get, { decision_id: d.short_id! }))?.priority_card).toBeDefined();
+    const benGet = await ben.query(api.sessionDecisions.get, { decision_id: d.short_id! });
+    expect(benGet?._id).toBe(d._id);
+    expect(benGet?.priority_card).toBeUndefined();
+    expect((await ana.query(api.sessionDecisions.getWithDoc, { decision_id: d.short_id! }))?.decision).toHaveProperty("priority_card");
+    const benDoc = await ben.query(api.sessionDecisions.getWithDoc, { decision_id: d.short_id! });
+    expect(benDoc?.decision._id).toBe(d._id);
+    expect(benDoc?.decision).not.toHaveProperty("priority_card");
+    const benMany = await ben.query(api.sessionDecisions.getWithDocMany, { decision_ids: [String(d._id)] });
+    expect(benMany.map((x: any) => "priority_card" in x.decision)).toEqual([false]);
+    // The team's decision list, which every teammate's app syncs.
+    const team = await ben.query(api.decisionTeamList.listForTeam, { workspace: w.team });
+    expect(team.filter((x: any) => x._id === d._id).map((x: any) => "priority_card" in x)).toEqual([false]);
+    expect((await ana.query(api.sessionDecisions.listForUser, {})).find((x: any) => x._id === d._id)?.priority_card).toBeDefined();
   });
 });
 
@@ -242,13 +368,6 @@ describe("answering the card", () => {
     const { input } = await w.t.query(pass.passInputs, { user_id: w.ana, workspace: w.team });
     expect(input.corrections?.map((c: any) => c.text)).toEqual([corrections[0].text]);
     expect(await outcome(w, d._id)).toMatchObject({ accepted: [], skipped: [], text: words });
-  });
-
-  test("only the person it asked writes: a teammate's answer writes nothing", async () => {
-    const { w, d } = await posted();
-    await answer(w, d, [0, 1, 2], { kind: "user", id: String(w.ben), user_id: w.ben });
-    expect((await rows(w))[0].title).toBe("Trusted evals");
-    expect(await outcome(w, d._id)).toBeUndefined();
   });
 
   test("a change the person made since is skipped; the rest land", async () => {

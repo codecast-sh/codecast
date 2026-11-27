@@ -38,13 +38,13 @@ afterAll(() => { closeDomWindow(dom); restoreGlobals(); });
 const titleOf = (p: string) => card.groups.find((g) => g.priority === p)?.title ?? p;
 let n = 0;
 
-/** A fresh row in the store, shaped as the server posts it: a silent, non-blocking multi whose option i is change i. */
+/** A fresh row in the store, shaped as the server posts it: a silent, blocking multi whose option i is change i (it waits on the person; nothing goes ahead without them). */
 function seed(extra: Record<string, unknown> = {}) {
   const id = `d-pcc-${++n}`;
   const row: any = {
     _id: id, conversation_id: "c-pcc", session_id: "s-pcc", question: "Should your priorities follow what you worked on today?",
     context_md: "A third of what you typed went to checkout.\n\nMore below.", options: card.changes.map((c) => ({ label: changeLine(c, titleOf) })),
-    kind: "multi", silent: true, blocking: false, status: "pending", created_at: 1, priority_card: card, ...extra,
+    kind: "multi", silent: true, blocking: true, status: "pending", created_at: 1, priority_card: card, ...extra,
   };
   useInboxStore.setState((s: any) => ({ sessionDecisions: { ...s.sessionDecisions, [id]: row } }));
   return id;
@@ -104,7 +104,11 @@ test("Accept none dismisses the row, and the card records none accepted", async 
   await act(() => { (container.querySelector('[data-option="1"]') as HTMLElement).click(); });
   expect(answers).toEqual([{ dismiss: true }]);
   expect(row().status).toBe("dismissed");
-  expect(q("[data-card-headline]").textContent).toBe(`Accepted 0 of ${card.changes.length}`);
+  expect(q("[data-card-headline]").textContent).toBe("Accepted none");
+  expect(q("[data-pcc-when]").textContent).toContain("accepted none");
+  expect(q("[data-pcc-when]").textContent).not.toContain("answered");
+  // Every row reads declined.
+  expect(container.querySelectorAll("[data-pcc-row]:not(.is-off)").length).toBe(0);
 });
 
 test("Something else sends the person's words as a text answer", async () => {
@@ -116,7 +120,11 @@ test("Something else sends the person's words as a text answer", async () => {
   expect(answers).toEqual([{ text: "Keep checkout where it is." }]);
   expect(row().status).toBe("answered");
   expect(row().answer_text).toBe("Keep checkout where it is.");
-  expect(q("[data-pcc-correction]").textContent).toContain("Keep checkout where it is.");
+  // The correction leads the card in place of a count; the rows were not applied, not declined.
+  expect(q("[data-card-headline]").textContent).toBe("You sent a correction");
+  expect(q("[data-card-headline] + [data-pcc-correction]").textContent).toBe("Keep checkout where it is.");
+  expect(q("[data-pcc-unapplied]").textContent).toBe("Not applied");
+  expect(container.querySelectorAll("[data-pcc-row].is-off").length).toBe(0);
 });
 
 test("a settled row renders its record: the server's outcome wins over the picked indexes", async () => {
@@ -143,6 +151,6 @@ test("a compact row asks how many changes the card proposes, and a settled one s
   expect(priorityCardAsk(card)).toBe(`${card.changes.length} changes to your priorities`);
   expect(priorityCardAnswerWord({ status: "pending", priority_card: card })).toBeNull();
   expect(priorityCardAnswerWord({ status: "answered", answer_json: [0, 3], priority_card: card })).toBe(`Accepted 2 of ${card.changes.length}`);
-  expect(priorityCardAnswerWord({ status: "dismissed", priority_card: card })).toBe(`Accepted 0 of ${card.changes.length}`);
+  expect(priorityCardAnswerWord({ status: "dismissed", priority_card: card })).toBe("Accepted none");
   expect(priorityCardAnswerWord({ status: "answered", answer_text: "Not checkout.", priority_card: card })).toBe("Not checkout.");
 });

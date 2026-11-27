@@ -27,8 +27,8 @@ const changes: PriorityChange[] = [
     evidence: [quote("If the cart disappears when the train goes into a tunnel we lose the order. That one is not optional.", "k3v8qpa", "Retry storm on the payment step", 180)],
   },
   {
-    id: "c4", kind: "serves", priority: "pri-14", from: null, to: "in-5",
-    evidence: [quote("This is all in service of the holiday rush, really.", "m2c9xte", "Holiday traffic plan", 410)],
+    id: "c4", kind: "serves", priority: "pri-14", from: "Faster pages everywhere", to: "The holiday rush without an outage",
+    evidence: [quote("This is all in service of the holiday rush, really. The load test is at https://status.example.com/load-tests/holiday-rush-2026/checkout-under-flaky-network-conditions-run-7", "m2c9xte", "Holiday traffic plan", 410)],
   },
 
   // #4 Onboarding under a minute

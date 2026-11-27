@@ -147,22 +147,47 @@ const stepBefore = (steps: PriorityStep[], i: number): string | null => {
 
 // ---------------------------------------------------------------- evidence
 
+/** `text`: the words as the person wrote them, the slice of their message (or action item) the quote matched. */
 export type QuoteSource =
-  | { kind: "session"; session: string; title: string; at: number }
-  | { kind: "call"; call: string; title: string; action_item: string; at: number };
+  | { kind: "session"; session: string; title: string; at: number; text: string }
+  | { kind: "call"; call: string; title: string; action_item: string; at: number; text: string };
 
 const squash = (s: string) => s.replace(/\s+/g, " ").trim();
+/** A quote this short is found almost anywhere: it says nothing. */
+export const QUOTE_MIN_WORDS = 4;
+
+/** The slice of `hay` that `q` (squashed, lower case) matches, whitespace collapsed and case ignored, or null. */
+function sliceOf(hay: string, q: string): string | null {
+  let flat = "";
+  const at: number[] = []; // flat index -> hay index
+  for (let i = 0; i < hay.length; i++) {
+    if (/\s/.test(hay[i])) {
+      if (flat && !flat.endsWith(" ")) { flat += " "; at.push(i); }
+      continue;
+    }
+    for (const ch of hay[i].toLowerCase()) { flat += ch; at.push(i); }
+  }
+  const i = flat.indexOf(q);
+  return i < 0 ? null : hay.slice(at[i], at[i + q.length - 1] + 1);
+}
 
 /**
- * Where `text` was said, verbatim (whitespace collapsed, case kept): a message
- * the person typed in one of the run's sessions, or an action item of one of
- * its calls. Null when it was not, and a quote that was not said is dropped.
+ * Where `text` was said (whitespace collapsed, case ignored, at least
+ * QUOTE_MIN_WORDS words): a message the person typed in one of the run's
+ * sessions, or an action item of one of its calls, with the words as they
+ * wrote them. Null when it was not, and a quote that was not said is dropped.
  */
 export function findQuote(text: string, sessions: ReadonlyArray<Pick<PassSession, "id" | "title" | "typed">>, calls: ReadonlyArray<Pick<PassCall, "id" | "title" | "at" | "action_items">>): QuoteSource | null {
-  const q = squash(text);
-  if (!q) return null;
-  for (const s of sessions) for (const m of s.typed) if (squash(m.text).includes(q)) return { kind: "session", session: s.id, title: s.title, at: m.at };
-  for (const c of calls) for (const a of c.action_items) if (squash(a).includes(q)) return { kind: "call", call: c.id, title: c.title, action_item: a, at: c.at };
+  const q = squash(text).toLowerCase();
+  if (q.split(" ").length < QUOTE_MIN_WORDS) return null;
+  for (const s of sessions) for (const m of s.typed) {
+    const said = sliceOf(m.text, q);
+    if (said !== null) return { kind: "session", session: s.id, title: s.title, at: m.at, text: said };
+  }
+  for (const c of calls) for (const a of c.action_items) {
+    const said = sliceOf(a, q);
+    if (said !== null) return { kind: "call", call: c.id, title: c.title, action_item: a, at: c.at, text: said };
+  }
   return null;
 }
 

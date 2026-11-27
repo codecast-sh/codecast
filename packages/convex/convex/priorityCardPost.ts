@@ -34,6 +34,18 @@ export async function openCards(ctx: Ctx, userId: Id<"users">, workspace: string
   return pending.filter((d) => isCardOf(d, workspace));
 }
 
+/**
+ * Whether the person answered a priority card of this workspace at or after
+ * `since`. A pass run that started before then read the priorities as they
+ * were before the answer wrote, so its plan would undo what the person just
+ * accepted: applyPlan treats it as superseded, as it does a newer run. One
+ * index range: the person's answers since the run started.
+ */
+export async function cardAnsweredSince(ctx: Ctx, userId: Id<"users">, workspace: string, since: number): Promise<boolean> {
+  const answered: Doc<"session_decisions">[] = await ctx.db.query("session_decisions").withIndex("by_user_status_resolved", (q: any) => q.eq("user_id", userId).eq("status", "answered").gte("resolved_at", since)).collect();
+  return answered.some((d) => isCardOf(d, workspace));
+}
+
 /** The person's newest priority card in this workspace, answered or not. */
 async function lastCard(ctx: Ctx, userId: Id<"users">, workspace: string): Promise<Doc<"session_decisions"> | null> {
   let best: Doc<"session_decisions"> | null = null;
@@ -55,18 +67,21 @@ function startOfToday(now: number, timeZone: string | undefined): number {
   }
 }
 
-/** The session the card is asked from: the workspace's agent's, else the person's most recently active one in the workspace. */
-async function askingConversation(ctx: Ctx, userId: Id<"users">, workspace: string): Promise<Doc<"conversations"> | null> {
-  const ws = parseWorkspaceKey(workspace);
-  const anchors: Doc<"anchors">[] = ws?.type === "team"
-    ? await ctx.db.query("anchors").withIndex("by_team", (q: any) => q.eq("team_id", ws.teamId)).take(50)
-    : await ctx.db.query("anchors").withIndex("by_scope_user", (q: any) => q.eq("scope_user_id", userId)).take(50);
-  const anchor = anchors.find((a) => !a.org_role_id && a.status !== "decommissioned" && a.conversation_id);
-  const anchored: Doc<"conversations"> | null = anchor ? await ctx.db.get(anchor.conversation_id!) : null;
-  if (anchored) return anchored;
+/**
+ * The session the card sits in: the person's own most recently active one in
+ * the workspace, else one the run read (theirs, in the workspace, by how
+ * passInputs read them). Never another person's (a team agent's session is
+ * its teammates' to read too). The card is not that session's question: it
+ * lifts nothing and its agent neither lists nor takes it back.
+ */
+async function askingConversation(ctx: Ctx, userId: Id<"users">, workspace: string, read: Record<string, Id<"conversations">> = {}): Promise<Doc<"conversations"> | null> {
   const vis = sessionVisibility(ctx);
   const recent: Doc<"conversations">[] = await ctx.db.query("conversations").withIndex("by_user_updated", (q: any) => q.eq("user_id", userId)).order("desc").take(CONVERSATIONS_READ);
   for (const c of recent) if (await inWorkspace(vis, c, userId, workspace)) return c;
+  for (const id of Object.values(read)) {
+    const c: Doc<"conversations"> | null = await ctx.db.get(id);
+    if (c && String(c.user_id) === String(userId)) return c;
+  }
   return null;
 }
 
@@ -77,18 +92,19 @@ export type PostedCard = { posted: Id<"session_decisions"> } | { skipped: string
  * settled ok (`run_id`). Changes an open card of the person's already
  * proposes are left off; a card left with none is not posted (null). With no
  * session in the workspace to ask from, the changes stay unwritten and the
- * reason comes back for the run's record.
+ * reason comes back for the run's record. The card holds the corrections the
+ * run read (`corrections`): they stay pending until the person answers it.
  */
 export async function postPriorityCard(
   ctx: Ctx,
-  run: { user_id: Id<"users">; workspace: string; run_id: Id<"priority_pass_runs">; cost_usd?: number; from: number; to: number; conversations?: Record<string, Id<"conversations">> },
+  run: { user_id: Id<"users">; workspace: string; run_id: Id<"priority_pass_runs">; cost_usd?: number; from: number; to: number; conversations?: Record<string, Id<"conversations">>; corrections?: Id<"priority_corrections">[] },
   raw: CardDraft,
   now: number,
 ): Promise<PostedCard> {
   const open = await openCards(ctx, run.user_id, run.workspace);
   const draft = dropRepeats(raw, open.map((d) => d.priority_card as PriorityCard));
   if (!draft.changes.length) return null;
-  const asker = await askingConversation(ctx, run.user_id, run.workspace);
+  const asker = await askingConversation(ctx, run.user_id, run.workspace, run.conversations);
   if (!asker) return { skipped: `card not posted: no session in this workspace to ask from (${draft.changes.length} changes left unwritten)` };
 
   // Run facts: the runs that wrote a plan, today and since the last card's.
@@ -131,7 +147,8 @@ export async function postPriorityCard(
     changes: draft.changes,
     words,
     suggested: draft.changes.map((c) => c.id),
-    held: { ...draft.held, conversations },
+    // The corrections the run read wait with the card: answering it (or dismissing it) applies them (lib/priorityCardApply).
+    held: { ...draft.held, conversations, corrections: run.corrections ?? [] },
   };
 
   const titleOf = (priority: string) => draft.groups.find((g) => g.priority === priority)?.title ?? priority;
@@ -148,7 +165,8 @@ export async function postPriorityCard(
     category: "unknown",
     options: draft.changes.map((c) => ({ label: changeLine(c, titleOf), ...(c.kind === "new_priority" ? {} : { description: titleOf(c.priority) }) })),
     // Blocking puts it in the person's queue (isStackedAsk), where an advisory ask never shows; silent keeps it from
-    // ringing a phone (ringsPhone) or delivering anything into the session it hangs on. The approval cards do the same.
+    // ringing a phone (ringsPhone) or delivering anything into the session it hangs on, and it never lifts that
+    // session as asking (liftsAskingSession).
     blocking: true,
     silent: true,
     status: "pending",

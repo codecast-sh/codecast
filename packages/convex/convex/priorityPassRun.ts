@@ -20,7 +20,7 @@ import { PRIORITY_CARDS_EXPERIMENT } from "@codecast/shared/contracts/priorityCa
 import { hasExperiment } from "./lib/experiments";
 import { splitPlan } from "./lib/priorityCard";
 import { cardDraft, type CardDraft } from "./lib/priorityCardPass";
-import { postPriorityCard } from "./priorityCardPost";
+import { cardAnsweredSince, postPriorityCard } from "./priorityCardPost";
 import { nextShortId } from "./counters";
 import { runModelCall, type CallScope } from "./modelCalls";
 import { modelCallProblem } from "@codecast/shared/contracts/modelCall";
@@ -322,24 +322,24 @@ export const applyPlan = internalMutation({
   handler: async (ctx, args): Promise<Counts | null> => {
     const { plan, from_cursor, conversations, strays, corrections, superseded, card, ...run } = args;
     const recent = await recentRuns(ctx, args.user_id, args.workspace);
-    if (recent.some((r) => r.status === "ok" && r.finished_at > args.started_at)) {
+    // A priority card the person answered since this run started wrote rows this plan was not made from: superseded too.
+    if (recent.some((r) => r.status === "ok" && r.finished_at > args.started_at) || (card && (await cardAnsweredSince(ctx, args.user_id, args.workspace, args.started_at)))) {
       await settleRun(ctx, { ...run, cursor_at: from_cursor, status: "skipped", error: "superseded" });
       return null;
     }
     const counts = await writePlan(ctx, { user_id: args.user_id, workspace: args.workspace }, plan as MergePlan, { conversations, strays });
     const now = Date.now();
 
-    for (const id of [...(corrections ?? []), ...(superseded ?? [])]) {
+    const run_id = await settleRun(ctx, { ...run, status: "ok", counts });
+    // A card posted (or one that could not be) holds the corrections the run read: they wait on the person's answer.
+    const posted = card ? await postPriorityCard(ctx, { user_id: args.user_id, workspace: args.workspace, run_id, cost_usd: args.cost_usd, from: from_cursor, to: args.cursor_at, conversations, corrections }, card as CardDraft, now) : null;
+    if (posted && "skipped" in posted) await ctx.db.patch(run_id, { error: posted.skipped });
+
+    for (const id of [...(posted ? [] : corrections ?? []), ...(superseded ?? [])]) {
       const c: Doc<"priority_corrections"> | null = await ctx.db.get(id);
       if (c?.status === "pending" && !c.deleted_at && String(c.user_id) === String(args.user_id) && c.workspace === args.workspace) {
         await ctx.db.patch(id, { status: "applied", applied_at: now, applied_window: { from: from_cursor, to: args.cursor_at }, ...((superseded ?? []).includes(id) ? { superseded: true } : {}) });
       }
-    }
-
-    const run_id = await settleRun(ctx, { ...run, status: "ok", counts });
-    if (card) {
-      const posted = await postPriorityCard(ctx, { user_id: args.user_id, workspace: args.workspace, run_id, cost_usd: args.cost_usd, from: from_cursor, to: args.cursor_at, conversations }, card as CardDraft, now);
-      if (posted && "skipped" in posted) await ctx.db.patch(run_id, { error: posted.skipped });
     }
     return counts;
   },

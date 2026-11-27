@@ -18,6 +18,7 @@ import {
   fnv1a32,
   rollupParentIdOf,
   isStackedAsk,
+  liftsAskingSession,
   rideLeadPlacements,
   inWorkingSet,
   inboxEpoch,
@@ -822,6 +823,12 @@ describe("isStackedAsk — which pending decide lifts its session", () => {
     expect(isStackedAsk({ status: "pending", blocking: false })).toBe(false);
     expect(isStackedAsk({ status: "pending", blocking: false, stack_id: "ds1" })).toBe(true);
     expect(isStackedAsk({ status: "answered", blocking: true })).toBe(false);
+  });
+
+  test("a priority card is in its person's queue but lifts no session as asking", () => {
+    const card = { status: "pending", blocking: true, priority_card: { v: 1 } };
+    expect([isStackedAsk(card), liftsAskingSession(card)]).toEqual([true, false]);
+    expect(liftsAskingSession({ status: "pending", blocking: true })).toBe(true);
   });
 });
 

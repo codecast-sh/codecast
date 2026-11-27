@@ -121,6 +121,15 @@ export function isStackedAsk(d: StackedAskRow): boolean {
   return d.status === "pending" && (!!d.blocking || !!d.stack_id);
 }
 
+// Whether a stacked ask lifts the session it sits in as asking. A priority
+// card (contracts/priorityCard.ts) is codecast's question to a person about
+// their priorities, set down in one of their sessions: it is in their queue
+// (isStackedAsk) but is not that session's question, so it lifts nothing.
+// ONE rule for the server's pending-decide set and the replica's.
+export function liftsAskingSession(d: StackedAskRow & { priority_card?: unknown }): boolean {
+  return isStackedAsk(d) && !d.priority_card;
+}
+
 // Whether an answered ask still takes a person's answer. A person may go back
 // to a decision they or a stack policy answered and change it: the new answer
 // reaches the agent as one more message naming the answer it replaces (on an

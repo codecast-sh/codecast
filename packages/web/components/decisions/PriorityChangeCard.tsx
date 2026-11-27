@@ -26,8 +26,12 @@ import "./priorityCard.css";
 
 export type PriorityCardAnswer = { kind: "accept"; ids: string[] } | { kind: "none" } | { kind: "text"; text: string };
 
-/** How the card was answered: the changes accepted, and the person's own words (with the change they were about, when known). */
-export type PriorityCardAnswered = { ids: string[]; text?: string; about?: string; at?: number };
+/**
+ * How the card was answered: which answer (some changes accepted, none, or the
+ * person's own words instead), the changes that landed, and the person's words
+ * with the change they were about, when known.
+ */
+export type PriorityCardAnswered = { kind: "accept" | "none" | "text"; ids: string[]; text?: string; about?: string; at?: number };
 
 /** One icon per kind, toned by what it does. A move points the way it goes. */
 const ICON: Record<PriorityChangeKind, { icon: LucideIcon; tone: string }> = {
@@ -55,9 +59,11 @@ function iconOf(c: PriorityChange) {
 const timeFmt = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" });
 const dayFmt = new Intl.DateTimeFormat("en-US", { weekday: "short" });
 const sameDay = (a: number, b: number) => new Date(a).toDateString() === new Date(b).toDateString();
-/** A time on the run's day reads as the clock alone; any other day leads with its weekday. */
-function when(at: number, runAt: number) {
-  return sameDay(at, runAt) ? timeFmt.format(at) : `${dayFmt.format(at)} ${timeFmt.format(at)}`;
+const dateFmt = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" });
+/** A time on the reference day reads as the clock alone, one in the week before leads with its weekday, an older one is a date. */
+function when(at: number, ref: number) {
+  if (sameDay(at, ref)) return timeFmt.format(at);
+  return Math.abs(ref - at) < 6 * 86_400_000 ? `${dayFmt.format(at)} ${timeFmt.format(at)}` : dateFmt.format(at);
 }
 
 /** An existing thing the row names (a milestone, a priority, an initiative): an outlined chip, never plain text. */
@@ -256,16 +262,23 @@ function Answers({ total, ticked, onAnswer, keys }: { total: number; ticked: str
   );
 }
 
-function Correction({ text, at, runAt }: { text: string; at?: number; runAt: number }) {
+function Correction({ text, at, now }: { text: string; at?: number; now: number }) {
   return (
     <div className="pcc-ev" data-pcc-correction>
       <em className="pcc-ev-text">"{text}"</em>{" "}
-      <span className="pcc-ev-meta">You{at !== undefined && <> · <span className="pcc-ev-at">{when(at, runAt)}</span></>}</span>
+      <span className="pcc-ev-meta">You{at !== undefined && <> · <span className="pcc-ev-at">{when(at, now)}</span></>}</span>
     </div>
   );
 }
 
-export function PriorityChangeCard({ card, ticked, onToggle, answered, onAnswer, question, context, keys = false }: {
+/** The answered card's headline: how many landed, none, or that the person answered in their own words. */
+function answeredHeadline(a: PriorityCardAnswered, total: number) {
+  if (a.kind === "text") return "You sent a correction";
+  if (a.kind === "none") return "Accepted none";
+  return `Accepted ${a.ids.length} of ${total}`;
+}
+
+export function PriorityChangeCard({ card, ticked, onToggle, answered, onAnswer, question, context, keys = false, now = Date.now() }: {
   card: PriorityCard;
   /** The ticked change ids. */
   ticked: string[];
@@ -280,16 +293,21 @@ export function PriorityChangeCard({ card, ticked, onToggle, answered, onAnswer,
   context?: string;
   /** Whether the digit keys answer on this surface (shows them as key caps). */
   keys?: boolean;
+  /** The instant an answered card's times read against (today shows the clock alone). */
+  now?: number;
 }) {
   const [quotes, setQuotes] = useState(true);
   const byId = new Map(card.changes.map((c) => [c.id, c]));
   const total = card.changes.length;
   const accepted = new Set(answered ? answered.ids : ticked);
-  // A correction about no change in the card reads at the end of the list.
-  const loose = answered?.text && !(answered.about && byId.has(answered.about));
+  // Answered in the person's own words: nothing was applied, and their words lead the card instead of a count.
+  const corrected = answered?.kind === "text";
+  // A correction beside accepted changes sits under the change it was about, else at the end of the list.
+  const loose = !corrected && answered?.text && !(answered.about && byId.has(answered.about));
 
   const list = (
-    <div className={`pcc-list ${answered ? "is-answered" : ""}`} data-pcc-list>
+    <div className={`pcc-list ${answered ? "is-answered" : ""} ${corrected ? "is-unapplied" : ""}`} data-pcc-list>
+      {corrected && <div className="pcc-list-label" data-pcc-unapplied>Not applied</div>}
       {card.groups.map((g) => (
         <section key={g.priority} className="pcc-group">
           <GroupHead g={g} card={card} />
@@ -301,16 +319,16 @@ export function PriorityChangeCard({ card, ticked, onToggle, answered, onAnswer,
                 key={id}
                 c={c}
                 card={card}
-                on={accepted.has(id)}
+                on={corrected || accepted.has(id)}
                 quotes={!answered && quotes}
                 onToggle={answered ? undefined : () => onToggle(toggleTicked(card, ticked, id), id)}
-                after={answered?.text && answered.about === id ? <Correction text={answered.text} at={answered.at} runAt={card.run.at} /> : null}
+                after={!corrected && answered?.text && answered.about === id ? <Correction text={answered.text} at={answered.at} now={now} /> : null}
               />
             );
           })}
         </section>
       ))}
-      {loose && <div className="pcc-loose"><Correction text={answered!.text!} at={answered!.at} runAt={card.run.at} /></div>}
+      {loose && <div className="pcc-loose"><Correction text={answered!.text!} at={answered!.at} now={now} /></div>}
     </div>
   );
 
@@ -321,7 +339,9 @@ export function PriorityChangeCard({ card, ticked, onToggle, answered, onAnswer,
           <div className="pcc-main">
             <div className="pcc-topline">
               <span className="pcc-kind"><CircleDot aria-hidden />Priorities pass</span>
-              <span className="pcc-when">· {answered?.at !== undefined ? `answered ${when(answered.at, card.run.at)}` : `${dayFmt.format(card.run.at)} ${timeFmt.format(card.run.at)}`}</span>
+              <span className="pcc-when" data-pcc-when>· {answered
+                ? [answered.kind === "none" ? "accepted none" : "answered", answered.at !== undefined ? when(answered.at, now) : null].filter(Boolean).join(" ")
+                : `${dayFmt.format(card.run.at)} ${timeFmt.format(card.run.at)}`}</span>
               <span className="pcc-spacer" />
               {!answered && (
                 <button type="button" className={`pcc-quotes ${quotes ? "is-on" : ""}`} aria-pressed={quotes} onClick={() => setQuotes(!quotes)} data-pcc-quotes>
@@ -330,7 +350,10 @@ export function PriorityChangeCard({ card, ticked, onToggle, answered, onAnswer,
               )}
             </div>
             {answered ? (
-              <h1 className="pcc-headline" data-card-headline>Accepted {answered.ids.length} of {total}</h1>
+              <>
+                <h1 className="pcc-headline" data-card-headline>{answeredHeadline(answered, total)}</h1>
+                {corrected && answered.text && <p className="pcc-case pcc-correction" data-pcc-correction>{answered.text}</p>}
+              </>
             ) : (
               <>
                 <h1 className="pcc-headline" data-card-headline>{question ?? "Should your priorities follow what you worked on?"}</h1>
