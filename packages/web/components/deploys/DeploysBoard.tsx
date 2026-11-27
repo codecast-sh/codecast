@@ -231,7 +231,7 @@ export function DeploysBoard(p: DeploysBoardProps) {
 type BoardModel = {
   queue: BoardQueueCommit[];
   going: BoardDeploy | null;
-  nextCommits: ReturnType<typeof splitQueue>["next"];
+  nextCommits: BoardQueueCommit[];
   next: Carried | null;
   unlisted: number;
   cards: Card[];

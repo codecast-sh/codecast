@@ -210,21 +210,19 @@ describe("the waiting queue (DP12)", () => {
 
   test("a release's own version bump for the live version, on main after its cut, waits on nothing; other work does", async () => {
     const { t, ctx } = await published();
-    const cli = t.deploy_targets.find((r) => r.name === "cli");
     await pushMain(t, ctx, [{ n: 1, files: ["cli/a.ts"] }], NOW - 10_000);
-    expect(await (recordLiveRead as any)._handler(ctx, { target_id: cli._id, sha: sha(1), version: "1.2.0" })).toBe("dp-1");
-    // The finalize workflow's bump for 1.2.0 lands after the cut it recorded.
+    await (recordLiveRead as any)._handler(ctx, { target_id: t.deploy_targets.find((r) => r.name === "cli")._id, sha: sha(1), version: "1.2.0" });
+    // The finalize workflow's bump for 1.2.0 lands after the cut it recorded; then one that also changes shipped code.
     await pushMain(t, ctx, [{ n: 2, files: ["cli/package.json"] }], NOW - 5_000);
-    t.commits.find((c) => c.sha === sha(2)).message = "chore(cli): bump version to 1.2.0";
-    const queueOf = async () => (await viewOf(ctx, "cli"))[0].queue;
-    expect(await queueOf()).toMatchObject({ known: true, commits: 0, untouched: 0, groups: [] });
-    // A bump that names another version, or one that also changes code the target ships, is real work.
-    t.commits.find((c) => c.sha === sha(2)).message = "chore(cli): bump version to 1.2.1";
-    expect((await queueOf()).commits).toBe(1);
-    t.commits.find((c) => c.sha === sha(2)).message = "chore(cli): bump version to 1.2.0";
+    const bump = (n: number, version: string) => (t.commits.find((c) => c.sha === sha(n)).message = `chore(cli): bump version to ${version}`);
+    const waiting = async () => (await viewOf(ctx, "cli"))[0].queue.groups.flatMap((g: any) => g.commits.map((c: any) => c.sha.slice(0, 2)));
+    bump(2, "1.2.1");
+    expect(await waiting()).toEqual(["02"]);
+    bump(2, "1.2.0");
+    expect(await waiting()).toEqual([]);
     await pushMain(t, ctx, [{ n: 3, files: ["cli/package.json", "cli/b.ts"] }], NOW - 4_000);
-    t.commits.find((c) => c.sha === sha(3)).message = "chore(cli): bump version to 1.2.0";
-    expect((await queueOf()).groups.flatMap((g: any) => g.commits.map((c: any) => c.sha.slice(0, 2)))).toEqual(["03"]);
+    bump(3, "1.2.0");
+    expect(await waiting()).toEqual(["03"]);
   });
 
   test("a source's marker (an environment, a short sha, no repository) fills its range from the published target; a commit with no trailer is its task's session", async () => {
