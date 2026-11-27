@@ -86,7 +86,7 @@ test("Start's brief is editable text in the composer, and the create links the m
   container.remove();
 }, 60_000);
 
-test("Discard after a Start leaves nothing behind: no draft here or on the server, no kept session in the inbox", async () => {
+test("Discard after editing a Start leaves nothing behind: no draft here or on the server, no kept session in the inbox", async () => {
   useInboxStore.setState({ currentUser: { _id: "user_start_test", name: "Tester" } as any, drafts: {}, sessions: {}, conversations: {}, composes: [] } as any);
   const calls: Array<{ action: string; args: any[] }> = [];
   (useInboxStore.getState() as any)._setDispatch(async (action: string, args: any[]) => { calls.push({ action, args }); return undefined; });
@@ -98,6 +98,8 @@ test("Discard after a Start leaves nothing behind: no draft here or on the serve
   await act(() => { useInboxStore.getState().openCompose(BRIEF, { start: START }); });
   await flush(50);
   const stubId = (useInboxStore.getState() as any).composes[0].stubId as string;
+  await act(() => { typeInto(container.querySelector("textarea") as HTMLTextAreaElement, `${BRIEF}\nFirst the script.`); });
+  await flush(10);
   await act(() => { w.document.dispatchEvent(new w.KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
   await flush(20);
   const discard = [...container.ownerDocument.querySelectorAll("[role=alertdialog] button")].find((b) => b.textContent?.includes("Discard")) as HTMLButtonElement;

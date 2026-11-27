@@ -34,6 +34,11 @@ const draftContentFor = (id: string | null) => {
   flushDraftWrite(id);
   return composeDraftContent(useInboxStore.getState(), id);
 };
+// What the person put in: text that is still only what the composer opened with (a link's, a Start's brief) is not.
+const typedFor = (id: string | null, opened: string) => {
+  const content = draftContentFor(id);
+  return content && (content.images.length > 0 || content.text !== opened) ? content : null;
+};
 
 /**
  * The floating new-session popup, shown in the palette window when summoned by
@@ -84,26 +89,20 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
 
   // A ComposeView instance owns ONE deferred stub and ends one of three ways:
   //   • committed — the first send fires materialize() and sets sentRef.
-  //   • kept — the user chose "Keep draft" (or a dismissal we couldn't intercept
-  //     happened over typed content): the stub stays, flagged _hasDraft, and
-  //     renders as a draft new-session card in the inbox. The desktop palette
-  //     window keeps on every dismissal and reopens onto the kept draft
-  //     (findKeptComposeDraft).
-  //   • abandoned — abandonStub() prunes the un-sent, server-less stub (and plants
-  //     an IDB exclude so it can't resurrect as a ghost "New session").
+  //   • kept — "Keep draft", or a dismissal we couldn't intercept over typed content: the stub stays, flagged
+  //     _hasDraft, a draft card in the inbox (the palette window reopens onto it: findKeptComposeDraft).
+  //   • abandoned — abandonStub() prunes the un-sent stub (an IDB exclude keeps it from resurrecting as a ghost).
   // abandonStub is the SINGLE un-commit path, run from the only two moments the
-  // popup disappears: unmount, and the palette window hiding while staying
-  // mounted. Idempotent — pruneGhostSessions no-ops once the stub has been sent.
+  // popup disappears: unmount (StrictMode's dev remount too), and the palette
+  // window hiding while staying mounted. Idempotent once the stub has been sent.
+  const openedRef = useRef((initialQuery ?? "").trim());
   const abandonStub = useCallback(() => {
-    if (sentRef.current || handedOffRef.current || !stubIdRef.current) return;
-    // Typed content must survive dismissals that never passed through the
-    // confirm dialog (host unmounted us, the palette window hid on blur):
-    // auto-keep the draft instead of destroying it.
-    if (draftContentFor(stubIdRef.current)) {
-      useInboxStore.getState().setSessionHasDraft(stubIdRef.current, true);
-      return;
-    }
-    useInboxStore.getState().pruneGhostSessions([stubIdRef.current]);
+    const id = stubIdRef.current;
+    if (sentRef.current || handedOffRef.current || !id) return;
+    // What the person typed survives a dismissal that skipped the confirm; untouched opening text goes with the stub.
+    if (typedFor(id, openedRef.current)) return useInboxStore.getState().setSessionHasDraft(id, true);
+    if (draftContentFor(id)) useInboxStore.getState().clearDraftFinal(id);
+    useInboxStore.getState().pruneGhostSessions([id]);
   }, []);
 
   // The standalone desktop palette window (no onClose host). It closes
@@ -333,7 +332,7 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
   useWatchEffect(() => { if (!collapsed) refocusComposer(); }, [docked, collapsed, refocusComposer]);
 
   const requestClose = useCallback(() => {
-    if (!standalone && !sentRef.current && draftContentFor(stubIdRef.current)) {
+    if (!standalone && !sentRef.current && typedFor(stubIdRef.current, openedRef.current)) {
       // The confirm paints inside the body a collapsed dock hides.
       const inst = instanceRef.current;
       if (inst?.collapsed) useInboxStore.getState().setComposeCollapsed(inst.id, false);
