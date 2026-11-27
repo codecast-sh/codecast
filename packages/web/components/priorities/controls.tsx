@@ -47,12 +47,16 @@ function useOwnActive(row: PriorityRow): PriorityRow[] {
  * 24px, and a coarse pointer (Daylight's desktop grid) presses a 44px area
  * around it. `reveal`: on a mouse it shows while its line is hovered (the
  * class names that group); on a touch screen and while its menu is open it
- * always shows.
+ * always shows. `gutter`: the button sits in the page's right gutter, so its
+ * press area grows leftward only and never widens the page.
  */
-function menuButtonClass(touch?: boolean, reveal?: string) {
+function menuButtonClass(touch?: boolean, reveal?: string, gutter?: boolean) {
   return cn(
     "flex shrink-0 items-center justify-center rounded text-sol-text-dim hover:bg-sol-bg-highlight hover:text-sol-text focus-visible:opacity-100 data-[state=open]:opacity-100",
-    touch ? "size-11" : "relative size-6 [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:-inset-2.5 [@media(pointer:coarse)]:after:content-['']",
+    touch ? "size-11" : cn(
+      "relative size-6 [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:content-['']",
+      gutter ? "[@media(pointer:coarse)]:after:-inset-y-2.5 [@media(pointer:coarse)]:after:-left-5 [@media(pointer:coarse)]:after:right-0" : "[@media(pointer:coarse)]:after:-inset-2.5",
+    ),
     !touch && reveal && cn("opacity-0 [@media(hover:none)]:opacity-100 [@media(pointer:coarse)]:opacity-100", reveal),
   );
 }
@@ -147,7 +151,7 @@ function dropLedger(row: PriorityRow, step: Pick<PriorityStep, "key" | "title">)
 }
 
 /** The priority's ⋯: who placed it, then the owner's moves, done, set aside or restore, merge, Correct…, and Copy link for anyone. */
-export function PriorityMenu({ row, touch, label, className }: { row: PriorityRow; touch?: boolean; label?: string; className?: string }) {
+export function PriorityMenu({ row, touch, reveal, gutter, label, className }: { row: PriorityRow; touch?: boolean; reveal?: string; gutter?: boolean; label?: string; className?: string }) {
   const writes = usePriorityWrites();
   const [correcting, setCorrecting] = useState(false);
   const [merging, setMerging] = useState<PriorityRow | null>(null);
@@ -158,7 +162,7 @@ export function PriorityMenu({ row, touch, label, className }: { row: PriorityRo
         <span className="inline-flex">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <button type="button" data-priority-menu={row.short_id} aria-label={label ?? `More for ${row.title}`} onClick={stop} className={menuButtonClass(touch)}>
+              <button type="button" data-priority-menu={row.short_id} aria-label={label ?? `More for ${row.title}`} onClick={stop} className={menuButtonClass(touch, reveal, gutter)}>
                 <MoreHorizontal className="size-3.5" />
               </button>
             </DropdownMenuTrigger>
@@ -227,12 +231,13 @@ function OwnerPriorityItems({ row, onCorrect, onMerge }: { row: PriorityRow; onC
 }
 
 /** A milestone's ⋯, for the owner: Done or Undone, Rename, its tier, Drop, Correct…. */
-export function MilestoneMenu({ row, step, onRename, touch, reveal, className }: {
+export function MilestoneMenu({ row, step, onRename, touch, reveal, gutter, className }: {
   row: PriorityRow;
   step: PriorityStep;
   onRename: () => void;
   touch?: boolean;
   reveal?: string;
+  gutter?: boolean;
   className?: string;
 }) {
   const writes = usePriorityWrites();
@@ -245,7 +250,7 @@ export function MilestoneMenu({ row, step, onRename, touch, reveal, className }:
         <span className="inline-flex">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <button type="button" data-milestone-menu={step.key} aria-label={`More for ${step.title}`} onClick={stop} className={menuButtonClass(touch, reveal)}>
+              <button type="button" data-milestone-menu={step.key} aria-label={`More for ${step.title}`} onClick={stop} className={menuButtonClass(touch, reveal, gutter)}>
                 <MoreHorizontal className="size-3.5" />
               </button>
             </DropdownMenuTrigger>

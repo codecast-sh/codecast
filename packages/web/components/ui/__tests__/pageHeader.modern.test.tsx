@@ -119,10 +119,10 @@ describe("PageFrame", () => {
 });
 
 test("only the listed shell pages own their canvas in Modern, by exact path", () => {
-  for (const p of ["/notifications", "/pages", "/artifacts", "/feed", "/expectations", "/week", "/mods", "/pages?x=1"]) {
+  for (const p of ["/notifications", "/pages", "/artifacts", "/feed", "/expectations", "/week", "/mods", "/priorities", "/pages?x=1"]) {
     expect(ownsCanvasInModern(p)).toBe(true);
   }
-  for (const p of ["/team", "/pages/auth", "/feedback", "/search"]) expect(ownsCanvasInModern(p)).toBe(false);
+  for (const p of ["/team", "/pages/auth", "/feedback", "/search", "/priorities/pri-1"]) expect(ownsCanvasInModern(p)).toBe(false);
 });
 
 describe("a list page (Tasks, Docs, Decisions: GenericListView)", () => {

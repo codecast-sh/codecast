@@ -1,7 +1,8 @@
 "use client";
 // /priorities: the page checked between sessions. One line of stats (critical
 // milestones landed in ten days, where today's messages went), the filters
-// (Mine, Hide done, which links to Show; kept in the address), what waits on
+// (Mine, Hide done, which links to Show; kept in the address, and a bare
+// address opens the viewer's last ones: lib/rememberedFilters), what waits on
 // the person, then each priority with its one next action (lib/priorityList,
 // shared/contracts/priorityDerive). The rows come from the store
 // (useSyncPriorities feeds convex priorities.list, whose rows carry each
@@ -28,10 +29,11 @@ import { PageFrame, PageHeader } from "../ui/page-header";
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { behindLabel, nextPassLabel, ownerGroups, passDue, type OwnerGroup, type PriorityRow } from "../../lib/priorities";
 import {
-  COARSE_TALL, LIST_DAYS, LIST_GRID, POLISH_SLOT, SHOW_KINDS, TOUCH_AREA, buildModels, filtersHref, landedByDay, lastDays, layoutForWidth, listedRows, TABLET_QUERY, localDayKey, readFilters, todayOf, waitingOf,
+  COARSE_TALL, FILTER_PARAMS, LIST_DAYS, LIST_GRID, POLISH_SLOT, SHOW_KINDS, TOUCH_AREA, buildModels, filterParams, filtersHref, landedByDay, lastDays, layoutForWidth, listedRows, TABLET_QUERY, localDayKey, readFilters, todayOf, waitingOf,
   type ListFilters, type ListLayout, type PriorityModel, type ShowKind,
 } from "../../lib/priorityList";
 import { useInboxStore, type ClientUI } from "../../store/inboxStore";
+import { rememberFilters, useRememberedFilters } from "../../lib/rememberedFilters";
 import { cn } from "../../lib/utils";
 import { PriorityBlock, type RankDrag } from "./PriorityBlock";
 import { linkedPrRefs, linkedSessionIds, usePriorityLiveStates, usePriorityLookups } from "../../hooks/usePriorityModels";
@@ -61,8 +63,13 @@ export default function PrioritiesPage() {
 
   const router = useRouter();
   const params = useSearchParams();
-  const filters = useMemo(() => readFilters(params), [params]);
-  const setFilters = useCallback((f: ListFilters) => router.replace(filtersHref(f, params)), [router, params]);
+  // An address that names no filter opens the ones the viewer last chose here (lib/rememberedFilters).
+  const opened = useRememberedFilters("priorities", FILTER_PARAMS, params);
+  const filters = useMemo(() => readFilters(opened), [opened]);
+  const setFilters = useCallback((f: ListFilters) => {
+    rememberFilters("priorities", filterParams(f));
+    router.replace(filtersHref(f, params));
+  }, [router, params]);
   const compact = useInboxStore((s) => !!(s.clientState.ui as CompactPrefs | undefined)?.priorities_view?.compact);
   const updateClientUI = useInboxStore((s) => s.updateClientUI);
   const setCompact = useCallback((on: boolean) => updateClientUI({ priorities_view: { compact: on } } as Partial<ClientUI>), [updateClientUI]);
@@ -94,8 +101,10 @@ export default function PrioritiesPage() {
   return (
     <PageFrame
       header={<PageHeader legacy={legacy} title="Priorities" icon={Target} count={rows.length ? listed : null} status={behindChip} />}
-      legacyColumn="mx-auto w-full max-w-[1080px]"
-      column="mx-auto w-full max-w-[1080px] px-3 pb-16 pt-3 sm:px-4"
+      // The side padding is the gutter a wide list's ⋯ menus sit in (PriorityBlock C_MENU), 32px: from 544px a list can be wide (520px).
+      // Classic's shell pads 24px at sm and 32px from lg.
+      legacyColumn="mx-auto w-full max-w-[1280px] min-[544px]:px-4 min-[640px]:px-2 min-[1024px]:px-0"
+      column="mx-auto w-full max-w-[1280px] px-3 pb-16 pt-3 min-[544px]:px-10"
     >
       <div ref={measure}>{body}</div>
     </PageFrame>

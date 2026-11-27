@@ -109,7 +109,7 @@ test("an open milestone shows every kind of link whatever Show says, and its who
     expect(title().className).toContain("truncate");
     await act(async () => { (b.querySelector('[data-milestone="s1"] [role=button]') as HTMLElement).click(); });
     const detail = b.querySelector("[data-milestone-detail]")!;
-    expect([...detail.querySelectorAll("[data-type-row]")].map((r) => r.getAttribute("data-type-row"))).toEqual(["Plan", "Tasks", "PRs", "Branches", "Deploys"]);
+    expect([...detail.querySelectorAll("[data-type-row]")].map((r) => r.getAttribute("data-type-row"))).toEqual(["Sessions", "Plan", "Tasks", "PRs", "Branches", "Deploys"]);
     for (const kind of CHIP_KINDS) expect(detail.querySelector(`[data-chip="${kind}"]`)).not.toBeNull();
     // Under a coarse pointer the plan and task chips are 44px tall, and their rows' labels keep to the first line.
     for (const kind of ["plan", "task"]) {
@@ -235,14 +235,16 @@ test("a narrow window takes the desktop grid on a touch screen at least 900px wi
   }
 }, 60_000);
 
-test("a milestone line's chips use the today and momentum columns, its today count sits in the line, and the action keeps its session while the plan gives way", async () => {
+test("a milestone line's chips take the title and progress columns, its today count sits in the Today column, and the action keeps its session while the plan gives way", async () => {
   const history = { ...HISTORY, sessions: { jx7crfl: at(3) } };
   const page = await mount(view({ history }));
   try {
     const grid = block(page.container, "pri-1").querySelector('[data-milestone="s2"] [role=button] > div')!;
-    expect(grid.className).toContain("col-end-6");
-    // The line's today count is inside the line, not a column of its own.
-    expect(block(page.container, "pri-1").querySelector('[data-milestone="s2"] [data-line-today]')!.textContent).toBe("3 today");
+    expect(grid.className).toContain("col-end-4");
+    // The line's today count is a bare number in the Today column, under the priority's.
+    const today = block(page.container, "pri-1").querySelector('[data-milestone="s2"] [data-line-today]')!;
+    expect(today.textContent).toBe("3");
+    expect(today.className).toContain("col-start-4");
     // pri-3: the Open action with "in ‹session›" right after the button, ellipsizing inside the chips cell (the
     // group and the words both shrink); the plan last, the chip a narrow line clips (the open line lists it).
     const line = block(page.container, "pri-3").querySelector('[data-milestone="s1"] [data-line-chips]')!;

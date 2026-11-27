@@ -232,6 +232,7 @@ import { adjustScrollForResizeRule } from "../lib/virtualList/resizeAdjust";
 import type { MountedRows } from "../lib/virtualList/coverage";
 import { createScrollSync, type ScrollSync } from "../lib/virtualList/scrollSync";
 import { lazyNamed } from "../lib/lazyNamed";
+import { rememberReadingSpot, readingSpotForOpen } from "../lib/transcriptReadingSpot";
 
 const MOMENT_FEATURES: readonly MomentFeature[] = ["decide", "visual", "publish"];
 /** Agent states in which the session is waiting on its human, not working. */
