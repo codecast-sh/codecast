@@ -18165,11 +18165,16 @@ work
   .option("--page <slug|url>", "Attach a published page as evidence (repeatable; the-line.md L6)", (val: string, prev: string[]) => prev.concat([val]), [] as string[])
   .option("--guide <markdown>", stdinText("Change guide: a walkthrough of the change in reading order, one heading per step with its file:start-end on the heading line and the reason under it. With --evidence - too, stdin holds one section per '-' in the order the flags are written, split by a --- line"))
   .option("--guide-base <ref>", "Diff the guide's hunks against this ref (default: where HEAD branched from origin/main)")
+  .option("--label <name>", "Add a label to the task, keeping the labels it has (repeatable, or comma-separated)", (val: string, prev: string[]) => prev.concat([val]), [] as string[])
   .action(async (shortId: string, options: any) => {
-    const { buildTaskHandoffBody, handoffCommentText, parseFilesFlag, parseHandoffStatus } = await import("./taskClaim.js");
+    const { buildTaskHandoffBody, handoffCommentText, parseFilesFlag, parseHandoffStatus, parseLabelFlags } = await import("./taskClaim.js");
     const { pageSlugFromRef } = await import("./publishCommand.js");
     const { parseChangeGuide } = await import("@codecast/shared/contracts/changeGuide");
     const { guideDiffReader } = await import("./changeGuideDiff.js");
+    const labels = parseLabelFlags(options.label);
+    // The update writes a task's labels whole, so the ones it has are read before --label adds to them.
+    const task = labels ? await cliPost("/cli/work/get", { short_id: shortId }) : null;
+    if (labels && !task) exitNotFound("task", shortId, `cast task ls -q "<words from its title>"`);
     let input!: Parameters<typeof buildTaskHandoffBody>[2];
     let body!: Record<string, any>;
     try {
@@ -18196,8 +18201,8 @@ work
         const bare = guide.steps.filter((s) => !s.hunk).map((s) => s.file);
         if (bare.length) console.error(`${c.yellow}note${c.reset} no diff found for ${[...new Set(bare)].join(", ")} against ${reader!.base.slice(0, 12)} in ${reader!.root}; those steps show text only (paths are read from the repository root or this directory)`);
       }
-      input = { status: parseHandoffStatus(options.status), evidence: String(options.evidence ?? ""), files: parseFilesFlag(options.files), pr: options.pr, pages, guide };
-      body = buildTaskHandoffBody(shortId, ownSessionId(getRealCwd()), input);
+      input = { status: parseHandoffStatus(options.status), evidence: String(options.evidence ?? ""), files: parseFilesFlag(options.files), pr: options.pr, pages, guide, labels };
+      body = buildTaskHandoffBody(shortId, ownSessionId(getRealCwd()), input, task?.labels ?? []);
     } catch (err) {
       console.error(`Error: ${(err as Error).message}`);
       process.exit(1);
@@ -18220,7 +18225,7 @@ work
     const commentBody: Record<string, any> = { short_id: shortId, text: handoffCommentText(input), comment_type: "review" };
     if (body.conversation_id) commentBody.conversation_id = body.conversation_id;
     await cliPost("/cli/work/comment", commentBody);
-    const extras = `${input.pages?.length ? ` · ${input.pages.length} page${input.pages.length === 1 ? "" : "s"} attached` : ""}${input.guide ? ` · guide, ${input.guide.steps.length} step${input.guide.steps.length === 1 ? "" : "s"}` : ""}`;
+    const extras = `${input.pages?.length ? ` · ${input.pages.length} page${input.pages.length === 1 ? "" : "s"} attached` : ""}${input.guide ? ` · guide, ${input.guide.steps.length} step${input.guide.steps.length === 1 ? "" : "s"}` : ""}${input.labels ? ` · labelled ${input.labels.join(", ")}` : ""}`;
     if (held) {
       console.log(`${c.green}ok${c.reset} Evidence recorded on ${c.cyan}${shortId}${c.reset} (${input.status})${extras}; it stays at ${held.station}, held by ${c.cyan}${held.decision}${c.reset}`);
       console.log(fmt.muted(`  ${held.decision} is a person's to answer, and their answer moves the task. To park until then: cast task dep ${shortId} --blocked-by ${held.decision}`));
