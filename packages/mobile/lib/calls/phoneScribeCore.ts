@@ -100,7 +100,9 @@ export function createPhoneScribe(d: PhoneScribeDeps) {
   let op: Promise<void> | null = null;
   function run(fn: () => Promise<void>): void {
     busy = true;
-    op = fn().finally(() => {
+    // A step that throws (a native module, a mutation) is over like any other:
+    // the next reconcile decides again.
+    op = fn().catch(() => {}).finally(() => {
       busy = false;
       op = null;
       reconcile();

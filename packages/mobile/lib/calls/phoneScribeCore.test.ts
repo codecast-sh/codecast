@@ -357,4 +357,29 @@ describe("phone scribe", () => {
     await settle();
     expect(h.sessions).toHaveLength(4);
   });
+
+  test("a step that throws is contained: nothing unhandled, and the scribe keeps going", async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (e: unknown) => unhandled.push(e);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      let first = true;
+      const h = harness({
+        openTap: async () => {
+          if (first) {
+            first = false;
+            throw new Error("native module threw");
+          }
+          return { tap: h.newTap() };
+        },
+      });
+      h.scribe.reconcile();
+      h.live(null);
+      await settle();
+      expect(unhandled).toEqual([]);
+      expect(h.engine.getStatus().trackCount).toBe(1);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
 });
