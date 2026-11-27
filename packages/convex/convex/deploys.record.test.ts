@@ -191,7 +191,9 @@ describe("a deploy.sh push", () => {
 
   test("a ship pass's deploy went live when its step pushed: a dev push saved before the pass ended runs on top of it", async () => {
     const { t, ids, tokens, settle, save, view, deploys, addedBy } = await withTarget();
-    const pushed = Date.now();
+    // The step pushed 10s ago. The server dates the push as its own now minus the age sent, so live_at lands
+    // at pushed plus the mutation's latency; the 10s keeps that latency far from Ben's later save.
+    const pushed = Date.now() - 10_000;
     await pause();
     await save("ben", { sha: SHA2, dirty: 2, adds: ["fn:b:x"] });
     await pause();
@@ -202,7 +204,8 @@ describe("a deploy.sh push", () => {
     await settle();
     const [row] = await deploys();
     expect(row.short_id).toBe(pass.deploys[0].deploy);
-    expect(row.live_at).toBeLessThanOrEqual(pushed + 2);
+    expect(row.live_at).toBeGreaterThanOrEqual(pushed);
+    expect(row.live_at).toBeLessThan(pushed + 5_000);
     const shown = await view();
     expect(shown.live).toMatchObject({ short_id: row.short_id });
     expect(shown.dev_push).toMatchObject({ by: "Ben", adds_count: 1 });

@@ -59,6 +59,10 @@ class FakeTerminal {
     addon.activate?.(this);
   }
   attachCustomKeyEventHandler() {}
+  parser = { registerOscHandler: () => ({ dispose() {} }) };
+  registerLinkProvider() {
+    return { dispose() {} };
+  }
   focus() {}
   dispose() {}
 }
