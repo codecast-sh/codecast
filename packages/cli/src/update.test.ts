@@ -4,13 +4,13 @@
 // signature gate holds signed clients to signed releases. Every side effect
 // is injected; no process, network or file outside the fixture is touched.
 import { describe, expect, it } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { generateKeyPairSync } from "node:crypto";
 import { publicKeyToBase64, sha256Hex, signManifest, type UpdaterFs } from "@platform/cli-kit/update";
-import { DARWIN_SIGNING_TEAM, RELEASE_BASE_URL, RELEASE_MANIFEST_SIGNING, createCodecastUpdater, makeCurlDownload, makeDarwinSignatureCheck } from "./update";
-import { isReleaseRace, updateWithRetry } from "./updateRetry";
+import { DARWIN_SIGNING_TEAM, RELEASE_BASE_URL, RELEASE_MANIFEST_SIGNING, createCodecastUpdater, makeCurlDownload, makeDarwinSignatureCheck, UPDATE_IN_PROGRESS } from "./update";
+import { exclusiveUpdate, isReleaseRace, updateWithRetry } from "./updateRetry";
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
@@ -216,6 +216,79 @@ describe("a download that raced the manifest is tried once more", () => {
     expect(isReleaseRace("download_incomplete")).toBe(true);
     expect(isReleaseRace("download_curl_22")).toBe(false);
     expect(isReleaseRace(undefined)).toBe(false);
+  });
+});
+
+describe("two updaters on one install (ct-102415)", () => {
+  // Real files on a temp install, and a download that streams like curl -o:
+  // open (truncating) the fixed `<binary>.new`, write half, yield, write the
+  // rest. Unlocked, the second updater deletes and truncates the first's
+  // download mid-stream: one reads the other's half file (download_incomplete,
+  // or a checksum mismatch), and the retry races the same way.
+  const BIG = enc.encode("NEW CODECAST BINARY ".repeat(4096));
+  async function install(dir: string) {
+    const exe = join(dir, "codecast");
+    writeFileSync(exe, "OLD");
+    const manifest = {
+      version: "9.9.9",
+      released: "2026-09-23T00:00:00Z",
+      binaries: { "darwin-arm64": { url: `${RELEASE_BASE_URL}/cli/releases/v9.9.9/abc/codecast-darwin-arm64`, sha256: await sha256Hex(BIG), size: BIG.byteLength } },
+    };
+    const download = async (_url: string, dest: string) => {
+      const fd = openSync(dest, "w");
+      try {
+        writeSync(fd, BIG.subarray(0, BIG.byteLength / 2));
+        await new Promise((r) => setTimeout(r, 20));
+        writeSync(fd, BIG.subarray(BIG.byteLength / 2));
+      } finally {
+        closeSync(fd);
+      }
+    };
+    const updater = () =>
+      createCodecastUpdater({
+        currentVersion: "1.0.0",
+        stateDir: join(dir, "state"),
+        fetch: releaseFetch(manifest),
+        manifestSigning: TEST_SIGNING,
+        execPath: exe,
+        platform: "darwin",
+        arch: "arm64",
+        log: () => {},
+        download,
+        verifyPlatformSignature: async () => ({ ok: true }),
+      });
+    return { exe, updater };
+  }
+  const noPause = async () => {};
+
+  it("serialize: one installs, the other skips the round, and the binary is the release", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "cast-update-race-"));
+    try {
+      const { exe, updater } = await install(dir);
+      const lock = join(dir, "update.lock");
+      const run = (u: ReturnType<typeof updater>) => exclusiveUpdate(lock, () => updateWithRetry(() => u.performUpdate(), noPause));
+      const results = await Promise.all([run(updater()), run(updater())]);
+      expect(results.filter((r) => r.success)).toHaveLength(1);
+      expect(results.filter((r) => !r.success).map((r) => r.error)).toEqual([UPDATE_IN_PROGRESS]);
+      expect(readFileSync(exe)).toEqual(Buffer.from(BIG));
+      // The lock is released: the next round runs.
+      expect((await run(updater())).success).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reclaims a lock left by a dead updater", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "cast-update-race-"));
+    try {
+      const { exe, updater } = await install(dir);
+      const lock = join(dir, "update.lock");
+      writeFileSync(lock, JSON.stringify({ pid: 2 ** 22 + 17, at: Date.now(), token: "dead" }));
+      expect((await exclusiveUpdate(lock, () => updater().performUpdate())).success).toBe(true);
+      expect(readFileSync(exe)).toEqual(Buffer.from(BIG));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

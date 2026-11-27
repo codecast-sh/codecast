@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { explainUpdateError, isCurrent, notCurrent, settle, summaryLine, unsettled, verdictLine, type Verdict } from "./updateReport";
+import { explainUpdateError, isCurrent, notCurrent, settle, summaryLine, unsettled, verdictLine, versionMark, type Verdict } from "./updateReport";
 
 describe("isCurrent", () => {
   test("compares the running version to the release by number, not text", () => {
@@ -86,5 +86,25 @@ describe("reporting", () => {
     expect(verdictLine({ kind: "updated", from: "1.1.272" }, "nose  ", "1.1.273")).toBe("updated     nose  1.1.272 → 1.1.273");
     expect(verdictLine({ kind: "current" }, "nose  ", "1.1.273")).toBe("current     nose  1.1.273");
     expect(verdictLine({ kind: "behind", reason: "offline" }, "nose  ", undefined)).toBe("not updated nose  unknown  offline");
+  });
+});
+
+describe("versionMark (ct-102438)", () => {
+  test("a machine behind the manifest's release is marked, whatever its day-old cached check says", () => {
+    expect(versionMark({ cli_version: "1.1.300" }, "1.1.305")).toBe("update");
+    expect(versionMark({ cli_version: "1.1.300", update_available: "" }, "1.1.305")).toBe("update");
+  });
+
+  test("a machine on the release is not marked, even when its cache still says update", () => {
+    expect(versionMark({ cli_version: "1.1.305", update_available: "1.1.305" }, "1.1.305")).toBeNull();
+    expect(versionMark({ cli_version: "1.1.306" }, "1.1.305")).toBeNull();
+  });
+
+  test("below the floor outranks behind; no manifest falls back to the cached check", () => {
+    expect(versionMark({ cli_version: "1.1.290", update_required: true }, "1.1.305")).toBe("below floor");
+    expect(versionMark({ cli_version: "1.1.300", update_available: "1.1.305" }, null)).toBe("update");
+    expect(versionMark({ cli_version: "1.1.300" }, null)).toBeNull();
+    expect(versionMark({ cli_version: "dev" }, "1.1.305")).toBeNull();
+    expect(versionMark({}, "1.1.305")).toBeNull();
   });
 });
