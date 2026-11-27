@@ -1,11 +1,12 @@
 // Where the change a link names stands on one target of the Deploys page (ct-98574), for its focus chip: the deploy
 // that carries it; else its place among the commits waiting since the live deploy and the one thing that holds it
-// there; else, off main, where its Ship run stopped or waits. A change the page can place is never "not here" without
+// there; else, off main, where its Ship run stopped or waits, or what its open pull request waits on when no run carries
+// it. A change the page can place is never "not here" without
 // a reason. Pure: no store, no React.
 import type { ShippingRun } from "@codecast/shared/contracts/deployTargets";
 import type { ReachState } from "@codecast/shared/contracts/deployReach";
-import { STEPS, runState, stepper, type BoardQueueCommit } from "./board";
-import { commitMatches, deployMatches, runMatches, type DeployFocus } from "./focus";
+import { STEPS, prState, runState, stepper, type BoardQueueCommit, type OpenPr } from "./board";
+import { commitMatches, deployMatches, prMatches, runMatches, type DeployFocus } from "./focus";
 import { isGoing, isOpen, openOf, supersededBy, type DeployTargetRow, type TeamDeployRow } from "./targets";
 
 /** What keeps a waiting change from going out, the first that applies. */
@@ -35,6 +36,8 @@ export type Spot =
   | { kind: "waiting"; place: number | null; of: number; since: string | null; held: Held | null }
   /** Not on main: its Ship run, and the words for where that run is. */
   | { kind: "run"; run: ShippingRun; word: string; dropped: boolean }
+  /** Not on main, and no Ship run carries it: an open pull request, and what it waits on. */
+  | { kind: "pr"; pr: OpenPr; word: string }
   | { kind: "reading" }
   | { kind: "absent" };
 
@@ -54,6 +57,8 @@ export type SpotInput = {
   /** Shipping's runs on this repository; null while they are read. */
   shipping: { moving: ReadonlyArray<ShippingRun>; dropped: ReadonlyArray<ShippingRun> } | null;
   shippingError?: boolean;
+  /** The repository's open pull requests no run carries (board openPrs); null while they are read. */
+  openPrs?: ReadonlyArray<OpenPr> | null;
 };
 
 const REACH_WORD: Record<Exclude<ReachState, "waiting" | "failed">, HoldWord> = { live: "live", going_out: "going", queued: "asked", rolled_back: "rolled_back" };
@@ -88,7 +93,10 @@ export function changeSpot(i: SpotInput): Spot {
   const moving = i.shipping?.moving.find((x) => runMatches(x, f));
   const run = moving ?? i.shipping?.dropped.find((x) => runMatches(x, f));
   if (run) return { kind: "run", run, word: runWord(run), dropped: !moving };
-  return !i.shipping && !i.shippingError ? { kind: "reading" } : { kind: "absent" };
+  const pr = i.openPrs?.find((p) => prMatches(p, f));
+  if (pr) return { kind: "pr", pr, word: prState(pr).word };
+  // Still looking while the runs, or the open PRs (null, not left out), are being read.
+  return (!i.shipping && !i.shippingError) || i.openPrs === null ? { kind: "reading" } : { kind: "absent" };
 }
 
 function heldBy(i: SpotInput, open: TeamDeployRow | null): Held | null {
