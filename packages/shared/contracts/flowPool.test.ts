@@ -4,6 +4,7 @@
 import { expect, test } from "bun:test";
 import { flowBase, flowGraphAttr, flowRunAttr, flowSegmentSlugs, flowPathWords, foldFlow, publishableFlowSource, sourceTakesSessionChange, withGraphAttrs } from "./flowPool";
 import { flowEditWords, type FlowEditChange } from "./flowEdit";
+import { sourceSaysOwnResults } from "./ownResults";
 
 test("withGraphAttrs sets and drops graph attributes, quotes and the rest of the source kept", () => {
   const src = `digraph x {\n  graph [kind="line", label="A, b ] c", takes="task", draft="imported", goal="$task_title"]\n  a [label="x"]\n}\n`;
@@ -44,7 +45,8 @@ test("a variant that only extends a library flow takes what the library flow tak
   expect(sourceTakesSessionChange(variant)).toBe(true);
   expect(flowRunAttr(variant, "kind")).toBe("line");
   expect(flowRunAttr(variant, "takes")).toBe("task,branch");
-  expect(sourceTakesSessionChange(`digraph change { graph [extends="change.cast"] }`)).toBe(true);
+  // A name with `.cast` is a file beside the variant to the parser, never the library's flow.
+  expect(sourceTakesSessionChange(`digraph change { graph [extends="change.cast"] }`)).toBe(false);
   // The variant's own attribute wins; `serves` and `extends` stay the file's own.
   expect(flowRunAttr(`digraph c { graph [extends="change", takes="task"] }`, "takes")).toBe("task");
   expect(sourceTakesSessionChange(`digraph c { graph [extends="change", takes="task"] }`)).toBe(false);
@@ -53,6 +55,10 @@ test("a variant that only extends a library flow takes what the library flow tak
   expect(flowRunAttr(`digraph r { graph [extends="review"] }`, "kind")).toBe("segment");
   expect(sourceTakesSessionChange(`digraph c { graph [extends="../line/change.cast"] }`)).toBe(false);
   expect(flowRunAttr(`digraph c { graph [extends="our-base"] }`, "kind")).toBe(null);
+  // own_results reads through the same resolver: a variant of the personal Ship rounds on its own results.
+  expect(sourceSaysOwnResults(`digraph personal { graph [extends="personal"] }`)).toBe(true);
+  expect(sourceSaysOwnResults(`digraph c { graph [extends="change"] }`)).toBe(false);
+  expect(sourceSaysOwnResults(`digraph p { graph [kind="line", own_results=true] }`)).toBe(true);
 });
 
 // A station a variant placed after Check (parser.ts variantEdits) as the expanded graph holds it: Check's passing

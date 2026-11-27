@@ -92,13 +92,15 @@ export function flowGraphAttr(source: string | null | undefined, key: string): s
  * One graph attribute as the flow runs with it, for a reader holding no parser: the source's own, else, for a variant
  * that leaves it unset, the library flow its `extends` names (cli parser.ts inherit: a variant's graph attributes
  * override its base's one by one). Codecast's own Change is only `graph [extends="change"]` plus its stations, and it
- * takes a branch and is a line because the library's Change is. A base named by path, or one only the team's pool
- * holds, is not known here: the source's own attributes are all that reads. `extends` and `serves` are a file's own.
+ * takes a branch and is a line because the library's Change is. Only a bare name reads the library (the parser reads a
+ * name with `.cast` or a path as a file beside the variant), and a repository file of that name beside it, or a flow
+ * only the team's pool holds, is not known here: then the source's own attributes are all that reads. `extends` and
+ * `serves` are a file's own.
  */
 export function flowRunAttr(source: string | null | undefined, key: string): string | null {
   const own = flowGraphAttr(source, key);
   if (own !== null || key === "extends" || key === "serves") return own;
-  const base = flowGraphAttr(source, "extends")?.replace(/\.cast$/, "");
+  const base = flowGraphAttr(source, "extends");
   return base && /^[\w-]+$/.test(base) && Object.prototype.hasOwnProperty.call(LIBRARY_FLOW_GRAPHS, base) ? LIBRARY_FLOW_GRAPHS[base][key] ?? null : null;
 }
 
