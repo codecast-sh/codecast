@@ -21,6 +21,7 @@
 // audio or words go anywhere but the recognizer.
 
 import { letterScript, localTranscribeLanguages } from "./transcribeLanguage";
+import { teamVendorBlock } from "./vendorCoverage";
 
 /** A minute with no new words ends a recording (Claude Code's rule). */
 export const DICTATION_SILENCE_MS = 60_000;
@@ -60,6 +61,19 @@ export function dictationStopLine(stop: DictationStop | null): string | null {
     default:
       return null;
   }
+}
+
+/** Why this person may not dictate, as the one line the mic and Settings ›
+ *  Voice show on web and phone, or null. The server refuses the mint when ANY
+ *  team they belong to may not send speech to OpenAI (convex/dictation
+ *  authForDictation), whichever team is on screen; the first such team names
+ *  the line. A string, so a store selector over it is stable. */
+export function dictationTeamBlock(teams: readonly unknown[] | undefined): string | null {
+  for (const team of teams ?? []) {
+    const t = team as { name?: string; policy?: unknown } | null;
+    if (teamVendorBlock(t, "openai")) return `Dictation isn't available: ${t?.name || "your team"} has no BAA with OpenAI yet.`;
+  }
+  return null;
 }
 
 // ── Where the words go ────────────────────────────────────────────────────

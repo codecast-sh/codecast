@@ -14,6 +14,7 @@ import { formatRelativeTime } from '@/components/sessionFormat';
 import { View as RNView } from 'react-native';
 import { Text as RNText } from '@/components/Themed';
 import { appAlert } from '@/lib/popups';
+import { vendorBlockOf } from '@/lib/dictation';
 import { showNotice } from '@/lib/undoBar';
 import { useSettingsUser } from './SettingsPages';
 import { SettingsScroll, SettingsGroup, ToggleRow, NavRow, settingsStyles } from './SettingsUI';
@@ -33,6 +34,9 @@ export function VoicePage() {
   };
 
   const dictation = user?.dictation_enabled === true;
+  // A team that may not send speech to OpenAI strikes every mic; the switch
+  // stays the person's own, so it keeps working and the line says why.
+  const dictationBlocked = useInboxStore(vendorBlockOf);
   const setDictation = (v: boolean) => void useInboxStore.getState().setDictationEnabled(v).catch(failed);
 
   const set = (v: boolean) => void useInboxStore.getState().setVoiceIdEnabled(v).catch(failed);
@@ -64,7 +68,7 @@ export function VoicePage() {
 
   return (
     <SettingsScroll>
-      <SettingsGroup footnote="A mic in the message boxes types what you say.">
+      <SettingsGroup footnote={dictationBlocked ?? 'A mic in the message boxes types what you say.'}>
         <ToggleRow label="Dictation" value={dictation} onValueChange={setDictation} />
       </SettingsGroup>
       <SettingsGroup footnote="Stores samples of your voice. Only you see them.">

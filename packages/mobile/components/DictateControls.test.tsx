@@ -6,7 +6,7 @@
 // selection, send through dictation.send).
 import { afterEach, beforeAll, beforeEach, expect, mock, test } from 'bun:test';
 import React from 'react';
-import { teamVendorBlock } from '@codecast/shared/contracts/vendorCoverage';
+import { dictationTeamBlock } from '@codecast/shared/contracts/dictation';
 
 const host = (name: string) => name;
 // TouchableOpacity decides "disabled" as React Native 0.81 does (its
@@ -54,10 +54,10 @@ mock.module('@react-navigation/native', () => ({ NavigationContext }));
 const blurListeners = new Set<() => void>();
 const navigation = { addListener: (event: string, fn: () => void) => { if (event !== 'blur') return () => {}; blurListeners.add(fn); return () => blurListeners.delete(fn); } };
 mock.module('@expo/vector-icons/Feather', () => ({ default: host('Feather') }));
-const THEME = { text: '#111', textMuted: '#555', textMuted0: '#777', bg: '#fff', bgAlt: '#eee', borderLight: '#ddd', red: '#dc322f' };
+const THEME = { text: '#111', textMuted: '#555', textDim: '#666', textMuted0: '#777', bg: '#fff', bgAlt: '#eee', borderLight: '#ddd', red: '#dc322f' };
 mock.module('@/constants/Theme', () => ({ themedStyles: (build: (t: typeof THEME, look: string) => unknown) => build(THEME, 'classic'), useTheme: () => THEME }));
 mock.module('@/lib/solColor', () => ({ mixColor: (a: string) => a }));
-const alerts: { title: string; message?: string; buttons?: { text: string; onPress?: () => void }[] }[] = [];
+const alerts: { title: string; message?: string; buttons?: { text: string; style?: string; onPress?: () => void }[] }[] = [];
 const sheets: { title?: string; items: { label: string; selected?: boolean; onPress: () => void }[] }[] = [];
 mock.module('@/lib/popups', () => ({
   appAlert: (title: string, message?: string, buttons?: any[]) => alerts.push({ title, message, buttons }),
@@ -94,6 +94,8 @@ mock.module('@codecast/web/store/inboxStore', () => ({
 let TestRenderer: typeof import('react-test-renderer');
 let useDictation: typeof import('@/lib/dictation').useDictation;
 let DictateControls: typeof import('./DictateControls').DictateControls;
+let sendSlotIsStop: typeof import('./DictateControls').sendSlotIsStop;
+let DICTATE_SEND_SLOP: typeof import('./DictateControls').DICTATE_SEND_SLOP;
 let contracts: typeof import('@codecast/shared/contracts/dictation');
 beforeAll(async () => {
   (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
@@ -102,7 +104,7 @@ beforeAll(async () => {
   console.error = (...args: unknown[]) => { if (!String(args[0]).includes('react-test-renderer is deprecated')) error(...args); };
   TestRenderer = await import('react-test-renderer');
   ({ useDictation } = await import('@/lib/dictation'));
-  ({ DictateControls } = await import('./DictateControls'));
+  ({ DictateControls, sendSlotIsStop, DICTATE_SEND_SLOP } = await import('./DictateControls'));
   contracts = await import('@codecast/shared/contracts/dictation');
 });
 
@@ -141,21 +143,31 @@ afterEach(async () => {
 const sent: string[] = [];
 // What the native box was told to select (createNodeMock stands in for it).
 const nativeSelections: [number, number][] = [];
-function Box({ initial, look }: { initial: string; look?: 'quiet' | 'bare' }) {
+// The agent stops pressed on the session composer's Stop.
+let stops = 0;
+// With `canStop`, the send slot is the session composer's: Stop while the
+// box has nothing to send (sendSlotIsStop), on the same button and slop.
+function Box({ initial, look, canStop }: { initial: string; look?: 'quiet' | 'bare'; canStop?: boolean }) {
   const [value, setValue] = React.useState(initial);
   const inputRef = React.useRef<any>(null);
   const d = useDictation({ value, onChangeText: setValue, inputRef });
   const send = React.useRef(() => {});
   send.current = () => { if (value.trim()) sent.push(value.trim()); setValue(''); };
+  const showStop = sendSlotIsStop(!!value.trim(), !!canStop);
   return React.createElement('View', null,
     React.createElement('TextInput', { testID: 'box', ref: inputRef, value, onChangeText: setValue, onSelectionChange: d.onSelectionChange, placeholder: d.placeholder('Add a comment...') }),
     React.createElement(DictateControls, { dictation: d, look }),
-    React.createElement('TouchableOpacity', { testID: 'send', onPress: () => d.send(() => send.current()) }),
+    React.createElement('TouchableOpacity', {
+      testID: 'send',
+      hitSlop: DICTATE_SEND_SLOP,
+      accessibilityLabel: showStop ? 'Stop the agent' : 'Send',
+      onPress: showStop ? () => { stops++; } : () => d.send(() => send.current()),
+    }),
   );
 }
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
-async function mount(initial = '', look?: 'quiet' | 'bare') {
+async function mount(initial = '', look?: 'quiet' | 'bare', canStop?: boolean) {
   sent.length = 0;
   let r!: import('react-test-renderer').ReactTestRenderer;
   nativeSelections.length = 0;
@@ -164,7 +176,7 @@ async function mount(initial = '', look?: 'quiet' | 'bare') {
   await TestRenderer.act(async () => {
     r = TestRenderer.create(
       <NavigationContext.Provider value={navigation}>
-        <Box initial={initial} look={look} />
+        <Box initial={initial} look={look} canStop={canStop} />
       </NavigationContext.Provider>,
       { createNodeMock },
     );
@@ -314,8 +326,9 @@ test('a start that failed says why at once, tints the mic, and a tap says it aga
   expect(mic.findByType('Feather' as any).props.color).toBe(THEME.red);
   expect(mic.findByType('Feather' as any).props.name).toBe('mic-off');
   await m.press('Dictate');
-  expect(alerts.map((a) => [a.title, a.message, a.buttons?.map((b) => b.text)])).toEqual([
-    ["Dictation didn't start", BUSY, ['OK', 'Try again']],
+  // Beside an action the dismiss is the quiet cancel; Try again is the one filled button.
+  expect(alerts.map((a) => [a.title, a.message, a.buttons?.map((b) => [b.text, b.style ?? null])])).toEqual([
+    ["Dictation didn't start", BUSY, [['OK', 'cancel'], ['Try again', null]]],
   ]);
   installHost();
   await m.act(() => alerts[0]!.buttons![1]!.onPress!());
@@ -330,8 +343,10 @@ test('an app too old for dictation offers no Try again: only an update helps', a
   await m.press('Dictate');
   expect(notices).toEqual([NEEDS_UPDATE]);
   await m.press('Dictate');
-  expect(alerts.map((a) => [a.title, a.message, a.buttons?.map((b) => b.text)])).toEqual([
-    ["Dictation didn't start", NEEDS_UPDATE, ['OK']],
+  // Nothing to do but read it: appAlert's plain notice (its one filled OK),
+  // the same dialog "Dictation isn't available" shows, not a grey cancel.
+  expect(alerts.map((a) => [a.title, a.message, a.buttons])).toEqual([
+    ["Dictation didn't start", NEEDS_UPDATE, undefined],
   ]);
 });
 
@@ -363,7 +378,7 @@ test('the server refusing mid-start says its reason on the mic', async () => {
 test("a team without OpenAI under its BAA gets a dimmed mic that says why", async () => {
   setStore({ teams: [{ _id: 't1', name: 'Clinic', policy: { regulated_data: true } }], clientState: { ui: { active_team_id: 't1' } } });
   const m = await mount('');
-  const why = teamVendorBlock({ name: 'Clinic', policy: { regulated_data: true } }, 'openai')!;
+  const why = dictationTeamBlock([{ name: 'Clinic', policy: { regulated_data: true } }])!;
   const mic = m.byLabel('Dictate')[0]!;
   // Pressable, or the tap that says why would do nothing (RN treats
   // accessibilityState.disabled as disabled); VoiceOver reads the reason.
@@ -373,7 +388,7 @@ test("a team without OpenAI under its BAA gets a dimmed mic that says why", asyn
   expect(fake.events).toBe(null);
   // Whole, in a dialog: the sentence is longer than the one-line notice bar.
   // Not "off": the person's own switch is on; the team is what stops it.
-  expect(alerts.map((a) => [a.title, a.message])).toEqual([["Dictation isn't available", why]]);
+  expect(alerts.map((a) => [a.title, a.message, a.buttons])).toEqual([["Dictation isn't available", why, undefined]]);
   // The chevron stays, dimmed with the mic, and says the same.
   await m.press('Dictation settings');
   expect(sheets).toEqual([]);
@@ -503,6 +518,37 @@ test('every target is 44pt and none overlaps its neighbour, send included', asyn
   expect(m.byLabel('Microphone on').length).toBe(1);
 });
 
+test('while the agent works, an empty box keeps Stop through a recording; the first words make it Send', async () => {
+  stops = 0;
+  const m = await mount('', undefined, true);
+  const slot = () => m.r.root.findByProps({ testID: 'send' }).props;
+  expect(slot().accessibilityLabel).toBe('Stop the agent');
+  await m.press('Dictate');
+  // Listening into an empty box: Stop stays, live, beside ✕ and ✓.
+  expect(m.placeholder()).toBe('Listening…');
+  expect([slot().accessibilityLabel, touchableDisabled(slot())]).toEqual(['Stop the agent', false]);
+  await m.press('Stop the agent');
+  expect(stops).toBe(1);
+  // Stop is send's own button and slop: ✕ and ✓ keep their 44pt beside it.
+  expect(slot().hitSlop).toBe(DICTATE_SEND_SLOP);
+  expectClear(targets(m, ['Cancel dictation', 'Finish dictation']));
+  // The microphone is still on after the agent stopped.
+  expect(m.byLabel('Finish dictation').length).toBe(1);
+  await m.act(() => fake.events!.onPartial('and then'));
+  expect(slot().accessibilityLabel).toBe('Send');
+  // Cancel empties the box again: Stop is back.
+  await m.press('Cancel dictation');
+  expect([m.value(), slot().accessibilityLabel]).toEqual(['', 'Stop the agent']);
+});
+
+test('the session composer decides its Stop with sendSlotIsStop, recording or not', () => {
+  const { readFileSync } = require('node:fs');
+  const { join } = require('node:path');
+  const src = readFileSync(join(import.meta.dir, 'session/MessageComposer.tsx'), 'utf8') as string;
+  expect(src).toContain('const showStop = sendSlotIsStop(canSend, !!stop);');
+  expect([sendSlotIsStop(false, true), sendSlotIsStop(true, true), sendSlotIsStop(false, false)]).toEqual([true, false, false]);
+});
+
 // The layout above holds only where send sits beside the controls with no
 // slop to its left: every composer that draws them says so on its Send.
 test('every Send beside the dictation controls reaches nothing to its left while they show', () => {
@@ -611,26 +657,52 @@ test('✓ is quiet like ✕; a send waiting on the last words shows on Send, not
   expect(m.dictationOf().sendWaiting).toBe(false);
 });
 
-test('beside a bare send glyph (the task box) ✕ and ✓ are bare glyphs; beside a filled send they are quiet circles', async () => {
+test('beside a bare send glyph (the task box) ✕ and ✓ are dim bare glyphs; beside a filled send they are quiet circles', async () => {
   const flat = (st: any): any => (Array.isArray(st) ? Object.assign({}, ...st.filter(Boolean).map(flat)) : st ?? {});
   const look = async (variant?: 'quiet' | 'bare') => {
     const m = await mount('', variant);
     await m.press('Dictate');
     const out = ['Cancel dictation', 'Finish dictation'].map((label) => {
       const st = flat(m.byLabel(label)[0]!.props.style);
-      return [label, st.backgroundColor ?? null, st.borderWidth ?? 0, st.width, st.height];
+      const color = m.byLabel(label)[0]!.findByType('Feather' as any).props.color;
+      return [label, st.backgroundColor ?? null, st.borderWidth ?? 0, st.width, st.height, color];
     });
     await m.press('Cancel dictation');
     return out;
   };
+  // Bare, they would match the accent arrow's weight in textMuted: the dim
+  // token keeps them secondary.
   expect(await look('bare')).toEqual([
-    ['Cancel dictation', null, 0, 32, 32],
-    ['Finish dictation', null, 0, 32, 32],
+    ['Cancel dictation', null, 0, 32, 32, THEME.textDim],
+    ['Finish dictation', null, 0, 32, 32, THEME.textDim],
   ]);
   expect(await look()).toEqual([
-    ['Cancel dictation', THEME.bgAlt, 1, 32, 32],
-    ['Finish dictation', THEME.bgAlt, 1, 32, 32],
+    ['Cancel dictation', THEME.bgAlt, 1, 32, 32, THEME.textMuted],
+    ['Finish dictation', THEME.bgAlt, 1, 32, 32, THEME.textMuted],
   ]);
+});
+
+test('the dim bare ✕ and ✓ keep 3:1 against the page in every palette', async () => {
+  // Theme is mocked in this file: Classic's values are read from its source,
+  // Modern's from the module that derives them.
+  const { readFileSync } = require('node:fs');
+  const { join } = require('node:path');
+  const src = readFileSync(join(import.meta.dir, '..', 'constants/Theme.ts'), 'utf8') as string;
+  const pick = (block: string, key: string) => new RegExp(`${key}: '(#[0-9a-fA-F]{6})'`).exec(block)![1]!;
+  const lum = (h: string) => {
+    const c = [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255).map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+    return 0.2126 * c[0]! + 0.7152 * c[1]! + 0.0722 * c[2]!;
+  };
+  const ratio = (a: string, b: string) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return (x! + 0.05) / (y! + 0.05); };
+  for (const name of ['SolarizedLight', 'SolarizedDark']) {
+    const block = src.slice(src.indexOf(`export const ${name} = {`));
+    expect([name, ratio(pick(block, 'textDim'), pick(block, 'bg')) >= 3]).toEqual([name, true]);
+  }
+  const { ModernPalettes } = await import('@/constants/modernPalette');
+  for (const scheme of ['light', 'dark'] as const) {
+    const p = ModernPalettes[scheme];
+    expect([scheme, ratio(p.textDim, p.bg) >= 3]).toEqual([scheme, true]);
+  }
 });
 
 test('text typed before the first word is kept, and Cancel leaves it', async () => {
@@ -651,7 +723,7 @@ test('any team without OpenAI under its BAA dims the mic, whichever team is acti
   });
   const m = await mount('');
   const mic = m.byLabel('Dictate')[0]!;
-  expect(mic.props.accessibilityHint).toBe(teamVendorBlock({ name: 'Clinic', policy: { regulated_data: true } }, 'openai')!);
+  expect(mic.props.accessibilityHint).toBe(dictationTeamBlock([{ name: 'Clinic', policy: { regulated_data: true } }])!);
   await m.act(() => setStore({ teams: [{ _id: 't0', name: 'Open', policy: {} }] }));
   expect(m.byLabel('Dictate')[0]!.props.accessibilityHint).toBe(undefined);
 });

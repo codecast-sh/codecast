@@ -13,8 +13,7 @@ import { useCallback, useContext, useEffect, useRef, useState, type RefObject } 
 import { AppState, Linking, type NativeSyntheticEvent, type TextInput, type TextInputSelectionChangeEventData } from 'react-native';
 import { NavigationContext } from '@react-navigation/native';
 import { useConvex } from 'convex/react';
-import { teamVendorBlock } from '@codecast/shared/contracts';
-import { DICTATION_IDLE, createDictation, dictationLanguages, dictationStopLine, type Dictation, type DictationField, type DictationHost, type DictationState } from '@codecast/shared/contracts/dictation';
+import { DICTATION_IDLE, createDictation, dictationTeamBlock, dictationLanguages, dictationStopLine, type Dictation, type DictationField, type DictationHost, type DictationState } from '@codecast/shared/contracts/dictation';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { DICTATION_NEEDS_MIC, DICTATION_NEEDS_UPDATE, phoneDictationHost } from './dictationHost';
 import { getDictationLanguage } from './dictationLanguage';
@@ -44,27 +43,28 @@ function devHost(): DictationHost | null {
 
 /** Why dictation cannot run for this person, or null: the server refuses it
  *  when any team they belong to lacks a BAA covering OpenAI, whichever team is
- *  active (convex/dictation authForDictation), so the mic does too. The first
- *  refusal wins. A string, so the selector is stable. */
-function vendorBlockOf(s: any): string | null {
-  for (const team of s.teams || []) {
-    const block = teamVendorBlock(team, 'openai');
-    if (block) return block;
-  }
-  return null;
+ *  active (convex/dictation authForDictation), so the mic does too, and
+ *  Settings › Voice says the same line under its switch. The first refusal
+ *  wins. A string, so the selector is stable. */
+export function vendorBlockOf(s: any): string | null {
+  return dictationTeamBlock(s.teams);
 }
 
 /** Why a start failed, as a dialog: what the struck mic says when tapped
  *  (`retry` adds Try again), and what a refused microphone says at once.
  *  A refused microphone is fixed only in the phone's Settings, so it offers
  *  the way there. An app too old for dictation stays too old until it
- *  updates, so it offers no Try again. */
+ *  updates, so it offers no Try again. With nothing to do but read it, it is
+ *  appAlert's plain notice (one filled OK), as "Dictation isn't available"
+ *  is; beside an action, the dismiss is the quiet cancel and the action is
+ *  the dialog's one filled button. */
 export function explainDictationFailure(error: string, retry?: () => void) {
   if (error === DICTATION_NEEDS_UPDATE) retry = undefined;
-  const buttons: AlertButton[] = [{ text: retry || error !== DICTATION_NEEDS_MIC ? 'OK' : 'Not now', style: 'cancel' }];
-  if (retry) buttons.push({ text: 'Try again', onPress: retry });
-  if (error === DICTATION_NEEDS_MIC) buttons.push({ text: 'Open Settings', onPress: () => void Linking.openSettings() });
-  appAlert("Dictation didn't start", error, buttons);
+  const actions: AlertButton[] = [];
+  if (retry) actions.push({ text: 'Try again', onPress: retry });
+  if (error === DICTATION_NEEDS_MIC) actions.push({ text: 'Open Settings', onPress: () => void Linking.openSettings() });
+  if (!actions.length) return appAlert("Dictation didn't start", error);
+  appAlert("Dictation didn't start", error, [{ text: retry ? 'OK' : 'Not now', style: 'cancel' }, ...actions]);
 }
 
 export type PhoneDictation = {

@@ -26,7 +26,7 @@ import { formatCallTime } from '@codecast/shared/contracts';
 import type { useComposerField } from '@/lib/composerField';
 import { appAlert } from '@/lib/popups';
 import { useDictation } from '@/lib/dictation';
-import { DICTATE_SEND_SLOP, DictateControls } from '@/components/DictateControls';
+import { DICTATE_SEND_SLOP, DictateControls, sendSlotIsStop } from '@/components/DictateControls';
 
 // A send with attachments and no text carries this as its content.
 export const IMAGE_ONLY_CONTENT = '[image]';
@@ -251,7 +251,7 @@ export function MessageComposer({
   const onSendRef = useRef(onSend);
   onSendRef.current = onSend;
   const send = () => dictation.send(() => onSendRef.current());
-  const showStop = !canSend && !!stop && !dictation.active;
+  const showStop = sendSlotIsStop(canSend, !!stop);
   // The suggestion owns the empty box: its text is the placeholder, so it
   // wraps and grows the box like typed words, and typing replaces it.
   const ghost = !message && !showStop && !dictation.active ? suggestion ?? null : null;

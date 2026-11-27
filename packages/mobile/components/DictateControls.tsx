@@ -20,7 +20,8 @@
 //
 // ✕ and ✓ never outweigh send: beside a filled send (the session and chat
 // composers) they are quiet circles like attach; beside a bare send glyph
-// (the task comment box) they are bare glyphs too (`look="bare"`).
+// (the task comment box) they are bare glyphs too (`look="bare"`), drawn in
+// the dim text token so the accent arrow stays the strongest mark.
 import { useEffect, useRef } from 'react';
 import { AccessibilityInfo, Animated, StyleSheet, TouchableOpacity, View as RNView, ActivityIndicator } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
@@ -44,6 +45,15 @@ const LIVE_DOT_FLOOR = 0.45;
 /** The send button's hitSlop beside these controls: nothing to the left. */
 export const DICTATE_SEND_SLOP = { top: 12, bottom: 12, left: 0, right: 12 };
 
+/** Whether a composer's send slot holds Stop: a turn can be stopped and the
+ *  box has nothing to send. A recording into an empty box changes nothing
+ *  (Stop still stops the agent; the first words make it Send). Stop is the
+ *  same 32pt button as Send with the same slop, so ✕ and ✓ beside it keep
+ *  their targets. */
+export function sendSlotIsStop(canSend: boolean, canStop: boolean): boolean {
+  return !canSend && canStop;
+}
+
 export function DictateControls({ dictation, look = 'quiet' }: { dictation: PhoneDictation; look?: 'quiet' | 'bare' }) {
   const Theme = useTheme();
   const language = useDictationLanguage();
@@ -54,6 +64,9 @@ export function DictateControls({ dictation, look = 'quiet' }: { dictation: Phon
     // The spinner goes where the press was: on ✓ for a Finish, on Send (its
     // composer draws it) for a send waiting on the last words.
     const finishing = state.phase === 'finishing' && !dictation.sendWaiting;
+    // Bare, they sit beside a bare accent arrow: the dim text token keeps them
+    // behind it (3.4:1 or more on the page in every palette).
+    const glyph = look === 'bare' ? Theme.textDim : Theme.textMuted;
     return (
       <RNView style={[styles.row, styles.recording]}>
         <RNView style={styles.liveSlot} pointerEvents="none">
@@ -67,7 +80,7 @@ export function DictateControls({ dictation, look = 'quiet' }: { dictation: Phon
           accessibilityRole="button"
           accessibilityLabel="Cancel dictation"
         >
-          <Feather name="x" size={ICON} color={Theme.textMuted} />
+          <Feather name="x" size={ICON} color={glyph} />
         </TouchableOpacity>
         <TouchableOpacity
           style={look === 'bare' ? styles.bare : styles.quiet}
@@ -80,9 +93,9 @@ export function DictateControls({ dictation, look = 'quiet' }: { dictation: Phon
           accessibilityState={{ busy: finishing, disabled: finishing }}
         >
           {finishing ? (
-            <ActivityIndicator size="small" color={Theme.textMuted} />
+            <ActivityIndicator size="small" color={glyph} />
           ) : (
-            <Feather name="check" size={ICON} color={Theme.textMuted} />
+            <Feather name="check" size={ICON} color={glyph} />
           )}
         </TouchableOpacity>
       </RNView>
