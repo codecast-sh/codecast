@@ -51,6 +51,8 @@ export const RETRY_MS = 10_000;
 // opens again after this, doubling each time up to the cap.
 export const PIPE_RETRY_MS = 1_000;
 export const PIPE_RETRY_MAX_MS = 60_000;
+// A pipe that lived this long was working: its failure starts the wait over.
+export const PIPE_HEALTHY_MS = 60_000;
 // Silence fed after a mute so the turn being spoken closes, before the mic is
 // closed: a muted huddle opens no mic (no indicator, no frames, no billing).
 export const MUTE_TAIL_MS = 1_000;
@@ -169,6 +171,7 @@ export function createPhoneScribe(d: PhoneScribeDeps) {
     // moment ago, or the recognizer on it failed (the engine forgets a failed pipe).
     else if (status.active && status.trackCount === 0 && meId) {
       if (tap && micRetryAt <= lastAttachAt) {
+        if (d.now() - lastAttachAt >= PIPE_HEALTHY_MS) pipeFailures = 0;
         pipeFailures++;
         const wait = Math.min(PIPE_RETRY_MS * 2 ** (pipeFailures - 1), PIPE_RETRY_MAX_MS);
         micRetryAt = d.now() + wait;

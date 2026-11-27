@@ -338,4 +338,23 @@ describe("phone scribe", () => {
     await settle();
     expect(h.log).toContain("start");
   });
+
+  test("a recognizer that ran a good while starts the wait over at a second", async () => {
+    const h = await scribing();
+    h.sessions[0].events.onFailed("refused");
+    await settle();
+    h.advance(1_000);
+    await settle();
+    h.sessions[1].events.onFailed("refused");
+    await settle();
+    h.advance(2_000);
+    await settle();
+    expect(h.sessions).toHaveLength(3);
+    h.advance(61_000);
+    h.sessions[2].events.onFailed("refused");
+    await settle();
+    h.advance(1_000);
+    await settle();
+    expect(h.sessions).toHaveLength(4);
+  });
 });
