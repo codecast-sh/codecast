@@ -216,4 +216,11 @@ describe('the classifier replay', () => {
     expect(s.pass).toBe(false);
     expect(s.results.filter((r) => !r.correct).map((r) => [r.session, r.kind])).toEqual([['s2', 'placement'], ['s3', 'new']]);
   });
+
+  test('a run names a session whose short id collides by a longer prefix of its id; the golden label still finds it', () => {
+    const g: Golden = { ...golden, priorities: [golden.priorities[0]!], session_labels: { jx7137j: 'g1' }, standing_sessions: [] };
+    const placed: Produced[] = [{ key: 'acme:pri-100001', workspace: 'acme', title: '', summary: '', status: 'active', steps: [], sessions: ['jx7137jn'] }];
+    const s = scoreClassifier(g, placed, new Map([['jx7137jn', 'Ship flow unification']]), new Set());
+    expect(s.results).toMatchObject([{ session: 'jx7137j', title: 'Ship flow unification', correct: true }]);
+  });
 });

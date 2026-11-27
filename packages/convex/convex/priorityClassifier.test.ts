@@ -510,14 +510,17 @@ describe('"new" and the re-run', () => {
       return answer("new");
     };
     const r = await w.t.action(fn.priorityClassifierEval.evalClassify, { user_id: w.ana, workspace: w.team, window_start: w.now - DAY, window_end: w.now, priorities: seeded });
-    expect(r.placements.map((p: any) => [p.session, p.choice, p.asks.map((a: any) => a.trigger), p.inherited_from ?? null])).toEqual([
+    // The replay names each session by its conversation id (a short id is shared by other conversations); read back as short ids here.
+    const shortOf = new Map<string, string>(await w.t.run(async (ctx) => (await ctx.db.query("conversations").collect()).map((c: any) => [String(c._id), c.short_id] as [string, string])));
+    const short = (id: string | null) => (id ? shortOf.get(id) ?? id : null);
+    expect(r.placements.map((p: any) => [short(p.session), p.choice, p.asks.map((a: any) => a.trigger), short(p.inherited_from ?? null)])).toEqual([
       ["jx7team", { priority: "pri-1", step: "s1" }, ["title"], null],
       ["jx7work", { priority: "pri-1", step: "s1" }, [], "jx7team"],
       ["jx7old", "new", ["title", "pin"], null],
     ]);
     expect(classifierPrompts().filter((p) => p.includes("Billing export shipped"))).toHaveLength(1);
-    expect(r.sessions_read.map((s: any) => s.id).sort()).toEqual(["jx7old", "jx7role", "jx7team", "jx7work"]);
-    expect(r.priorities[0].sessions.map((s: any) => [s.id, s.step_key])).toEqual([["jx7work", "s1"], ["jx7team", "s1"]]);
+    expect(r.sessions_read.map((s: any) => short(s.id)).sort()).toEqual(["jx7old", "jx7role", "jx7team", "jx7work"]);
+    expect(r.priorities[0].sessions.map((s: any) => [short(s.id), s.step_key])).toEqual([["jx7work", "s1"], ["jx7team", "s1"]]);
     expect(r.cost_usd).toBeGreaterThan(0);
     expect((await w.conversation(w.teamConv))?.priority_id).toBeUndefined();
     expect(await classifications(w)).toHaveLength(0);

@@ -38,6 +38,7 @@ export type ClassifierEvalState = { cursor_at: number; priorities: PassPriority[
 
 /** What live would ask about one session, in order: its first title's or first pin's ask, then its first pin's after a "new". */
 export type EvalAsk = { trigger: "title" | "pin"; at: number; session: ClassifierSession };
+/** Keyed by conversation id (a short id is shared by other conversations); in production a short id is its first 7 characters, which the golden labels use. */
 export type EvalSession = { id: string; title: string; last_active: number; parent: string | null; asks: EvalAsk[] };
 
 export type ClassifierEvalResult = {
@@ -60,17 +61,17 @@ export type ClassifierEvalResult = {
  * message), else at its first activity in the window.
  */
 export const evalFacts = internalQuery({
-  args: { workspace: v.string(), sessions: v.array(v.object({ id: v.string(), first_at: v.number() })), tasks: v.array(v.string()) },
+  args: {
+    workspace: v.string(),
+    /** The conversations passInputs read (PassInputs conversations), each with its first activity in the window. */
+    sessions: v.array(v.object({ conversation_id: v.id("conversations"), first_at: v.number() })),
+    tasks: v.array(v.string()),
+  },
   handler: async (ctx, args): Promise<{ sessions: EvalSession[]; tasks: ClassifierTask[] }> => {
-    const byRef = async (ref: string): Promise<Doc<"conversations"> | null> => {
-      const id = ctx.db.normalizeId("conversations", ref);
-      return id ? await ctx.db.get(id) : await ctx.db.query("conversations").withIndex("by_short_id", (q) => q.eq("short_id", ref)).first();
-    };
     const sessions: EvalSession[] = [];
-    for (const { id, first_at } of args.sessions) {
-      const conv = await byRef(id);
+    for (const { conversation_id, first_at } of args.sessions) {
+      const conv = await ctx.db.get(conversation_id);
       if (!conv || !classifierReads(conv)) continue;
-      const parent = conv.parent_conversation_id ? await ctx.db.get(conv.parent_conversation_id) : null;
       const firstTyped = await ctx.db.query("messages").withIndex("by_conversation_nav_prompt", (q) => q.eq("conversation_id", conv._id).eq("nav_prompt", true)).first();
       const firstPin = await ctx.db.query("thread_state_events").withIndex("by_conversation_at", (q) => q.eq("conversation_id", conv._id)).first();
       const titleAt = firstTyped?.timestamp ?? first_at;
@@ -78,7 +79,7 @@ export const evalFacts = internalQuery({
       const asks = firstPin && firstPin.at <= titleAt
         ? [await ask("pin", firstPin.at)]
         : [await ask("title", titleAt), ...(firstPin ? [await ask("pin", firstPin.at)] : [])];
-      sessions.push({ id, title: conv.title ?? "", last_active: first_at, parent: parent ? (parent.short_id ?? String(parent._id)) : null, asks });
+      sessions.push({ id: String(conv._id), title: conv.title ?? "", last_active: first_at, parent: conv.parent_conversation_id ? String(conv.parent_conversation_id) : null, asks });
     }
     return { sessions, tasks: [...(await classifierTasks(ctx, args.tasks, args.workspace)).values()] };
   },
@@ -104,11 +105,11 @@ export const evalClassify = internalAction({
       const firstAt = (s: PassInputs["input"]["sessions"][number]) => Math.min(...[...s.typed, ...s.pin_events].map((r) => r.at), s.last_active);
       const facts: { sessions: EvalSession[]; tasks: ClassifierTask[] } = await ctx.runQuery(fns.priorityClassifierEval.evalFacts, {
         workspace: args.workspace,
-        sessions: read.input.sessions.filter((s) => s.kind !== "role").map((s) => ({ id: s.id, first_at: firstAt(s) })),
+        sessions: read.input.sessions.filter((s) => s.kind !== "role").map((s) => ({ conversation_id: read.conversations[s.id]!, first_at: firstAt(s) })),
         tasks: tasks ? [] : taskIds,
       });
       tasks ??= new Map(facts.tasks.map((t) => [t.short_id, t]));
-      result.sessions_read.push(...read.input.sessions.map((s) => ({ id: s.id, title: s.title })));
+      result.sessions_read.push(...read.input.sessions.map((s) => ({ id: String(read.conversations[s.id] ?? s.id), title: s.title })));
       // One at a time, as live: each session sees the ones placed before it.
       for (const s of facts.sessions) {
         const inherited = s.parent ? placementOf(s.parent) : null;

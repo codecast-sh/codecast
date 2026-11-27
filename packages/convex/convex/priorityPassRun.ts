@@ -28,7 +28,9 @@ import { PRIORITY_PASS_MODEL, mergePriorities, priorityPassRequest, type MergePl
 import { stepKeyMax, holdPersonSteps, isPersonHeld, withPersonFields } from "./lib/priorityPassSteps";
 import { SESSION_PAGE, clearDeadStepKeysNow, moveMergedSessionsNow, sessionMover } from "./priorityPassSessions";
 import { parsePriorityPassOutput } from "./lib/priorityPassParse";
-import { DAY, LATE_MARGIN_MS, MINUTE, RESERVATION_TTL_MS, cursorFor, firstAfter, inWorkspace, recentRuns, type PassInputs } from "./priorityPassInputs";
+import type { PriorityStep } from "@codecast/shared/contracts/priorities";
+import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
+import { DAY, LATE_MARGIN_MS, MINUTE, RESERVATION_TTL_MS, cursorFor, firstAfter, inWorkspace, recentRuns, storedSessionId, type PassInputs } from "./priorityPassInputs";
 
 /** Runs one pass chains for work that did not fit, the first included: the rest waits for the next pass. */
 export const MAX_CHAINED_RUNS = 6;
@@ -305,9 +307,9 @@ export const releaseStrays = internalMutation({
  * its plan was made from what that run has since changed.
  */
 export const applyPlan = internalMutation({
-  args: { ...runRowArgs, from_cursor: v.number(), plan: v.any(), strays: v.optional(v.array(v.id("conversations"))), corrections: v.optional(v.array(v.id("priority_corrections"))), superseded: v.optional(v.array(v.id("priority_corrections"))) },
+  args: { ...runRowArgs, from_cursor: v.number(), plan: v.any(), conversations: v.optional(v.record(v.string(), v.id("conversations"))), strays: v.optional(v.array(v.id("conversations"))), corrections: v.optional(v.array(v.id("priority_corrections"))), superseded: v.optional(v.array(v.id("priority_corrections"))) },
   handler: async (ctx, args): Promise<Counts | null> => {
-    const { plan: raw, from_cursor, strays, corrections, superseded, ...run } = args;
+    const { plan: raw, from_cursor, conversations, strays, corrections, superseded, ...run } = args;
     const vis = sessionVisibility(ctx);
     const recent = await recentRuns(ctx, args.user_id, args.workspace);
     if (recent.some((r) => r.status === "ok" && r.finished_at > args.started_at)) {
@@ -323,6 +325,30 @@ export const applyPlan = internalMutation({
       return row && String(row.user_id) === String(args.user_id) && row.workspace === args.workspace ? row : null;
     };
     const resolve = async (target: string): Promise<Id<"priorities"> | null> => ids.get(target) ?? (await mine(target))?._id ?? null;
+
+    // A session name the input showed resolves to the conversation it named (passInputs sessionNames). Any other ref (a
+    // stored one, or a test's) resolves as the person's own in this workspace, oldest first: a stored ref named a session
+    // no older conversation shared it with (storedSessionId), so a newer one sharing it is not the one meant.
+    const conversationOf = async (ref: string): Promise<Doc<"conversations"> | null> => {
+      const named = conversations?.[ref];
+      if (named) {
+        const conv: Doc<"conversations"> | null = await ctx.db.get(named);
+        return conv && (await inWorkspace(vis, conv, args.user_id, args.workspace)) ? conv : null;
+      }
+      return findConversationByAnyRefWhere(ctx, ref, (c) => inWorkspace(vis, c, args.user_id, args.workspace), (c) => c._creationTime);
+    };
+    // A step's new session ref is stored as storedSessionId of the conversation it names, so later reads land on it; one
+    // the row already holds stays as it is, with no read (the input showed stored refs as stored).
+    const storedRefs = new Map<string, Promise<string>>();
+    const storedRef = (ref: string) => {
+      if (!storedRefs.has(ref)) storedRefs.set(ref, conversationOf(ref).then((c) => (c ? storedSessionId(ctx, c) : ref)));
+      return storedRefs.get(ref)!;
+    };
+    const sessionRefs = (steps: PriorityStep[]) => new Set(steps.flatMap((st) => st.refs.filter((r) => r.kind === "session").map((r) => r.id)));
+    const storeRefs = (steps: PriorityStep[], held: Set<string>) =>
+      Promise.all(steps.map(async (st) => ({ ...st, refs: await Promise.all(st.refs.map(async (r) => (r.kind === "session" && !held.has(r.id) ? { ...r, id: await storedRef(r.id) } : r))) })));
+    for (const c of plan.creates) c.steps = await storeRefs(c.steps, new Set());
+    for (const u of plan.updates) if (u.patch.steps) u.patch.steps = await storeRefs(u.patch.steps, sessionRefs((await mine(u.short_id))?.steps ?? []));
 
     for (const c of plan.creates) {
       const { ref, ...w } = c;
@@ -466,13 +492,6 @@ export const applyPlan = internalMutation({
 
     const { move, recount } = sessionMover(ctx);
 
-    const conversationOf = async (ref: string): Promise<Doc<"conversations"> | null> => {
-      const id = ctx.db.normalizeId("conversations", ref);
-      const conv: Doc<"conversations"> | null = id
-        ? await ctx.db.get(id)
-        : await ctx.db.query("conversations").withIndex("by_short_id", (q: any) => q.eq("short_id", ref)).first();
-      return conv && (await inWorkspace(vis, conv, args.user_id, args.workspace)) ? conv : null;
-    };
     // The person's placement, a known link and the classifier's stand, and a priority they said a session is not part of never gets it.
     const refused = (conv: Doc<"conversations">, to?: Id<"priorities">) =>
       (!!conv.priority_set_by && conv.priority_set_by !== "pass") || (!!to && (conv.priority_not ?? []).some((id) => String(id) === String(to)));
@@ -626,7 +645,7 @@ async function pass(ctx: any, args: PassArgs): Promise<PassResult> {
   // A plan that fails to land still cost the call: record it (the day's ceiling counts it), and a repeat failure steps the cursor past after FAILURES_BEFORE_STEP.
   let counts: Counts | null;
   try {
-    counts = await ctx.runMutation(self.applyPlan, { ...base, run_id, cursor_at: readTo, from_cursor: cursor_at, cost_usd: reply.cost_usd, plan, strays: read.strays, corrections: read.corrections, superseded: read.superseded });
+    counts = await ctx.runMutation(self.applyPlan, { ...base, run_id, cursor_at: readTo, from_cursor: cursor_at, cost_usd: reply.cost_usd, plan, conversations: read.conversations, strays: read.strays, corrections: read.corrections, superseded: read.superseded });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     return fail(`applying the plan failed: ${message}`.slice(0, 500), !TRANSIENT_APPLY_ERRORS.test(message));

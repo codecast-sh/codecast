@@ -88,7 +88,8 @@ export function formatPriorityDetail(p: PriorityDetail, now = Date.now()): strin
     out.push("", heading);
     for (const s of steps) {
       const refs = [...s.refs.map((r) => r.id)];
-      for (const c of s.sessions) if (!refs.includes(c.short_id)) refs.push(c.short_id);
+      // A ref names a session whose short id is shared by a longer prefix of its id (jx7137jn): that is the same session.
+      for (const c of s.sessions) if (!refs.some((r) => r.startsWith(c.short_id))) refs.push(c.short_id);
       const yours = s.tier_set_by === "person" || s.title_set_by === "person" || s.done_set_by === "person";
       out.push(`  ${s.done ? "✓" : " "} ${s.key.padEnd(keyWidth)}  ${s.title}${yours ? "  (yours)" : ""}${refs.length ? `  ${refs.join(" · ")}` : ""}`);
     }
