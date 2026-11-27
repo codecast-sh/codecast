@@ -75,7 +75,7 @@ const ROWS = [
   { id: "docs", label: "Docs", path: "/docs", icon: "FileText", group: "work", focus: "keep", match: ["/docs", "/plans"] },
   { id: "projects", label: "Projects", path: "/projects", icon: "FolderKanban", group: "work", focus: "more", title: "Projects: the work that moves the goals" },
   { id: "goals", label: "Goals", path: "/goals", icon: "Flag", group: "work", focus: "more", title: "Goals: what the company is trying to move" },
-  { id: "priorities", label: "Priorities", path: "/priorities", icon: "Target", group: "work", feature: "priorities", focus: "more", title: "Priorities: what each person is driving at, and how far along" },
+  { id: "priorities", label: "Priorities", path: "/priorities", icon: "Target", group: "work", feature: "priorities", focus: "more", title: "Priorities: what you are driving at, and how far along" },
   { id: "org", label: "Org", path: "/org", icon: "Network", group: "work", feature: "org", focus: "more", badge: "org", title: "Org: who carries the work, people and agent roles" },
   // Automation: the standing things that set agents running.
   { id: "triggers", label: "Triggers", path: "/triggers", icon: "Zap", group: "automation", focus: "more", match: ["/triggers", "/schedules"] },

@@ -427,7 +427,7 @@ export async function listFor(ctx: Ctx, viewer: Id<"users">, args: { workspace?:
   const now = Date.now();
   for (const p of rows) {
     const steps = await r.stepsFor(p);
-    // Links only on the viewer's own active priorities: the rows a next action is drawn on.
+    // Links only on the viewer's own active priorities: the rows whose milestones show a state.
     const linked = isOwner(viewer, p) && p.status === "active" ? await linksFor(r, reads, p, steps, now) : null;
     const row = rowFor(viewer, p, ownerOf(people, p), positions.get(String(p._id)) ?? null, steps, await mappedSessions(r, p, listRead(viewer, p)), await correctionPending(ctx, viewer, p), LIST_SESSIONS);
     out.push(linked ? { ...row, ...linked } : row);

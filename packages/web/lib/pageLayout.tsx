@@ -111,7 +111,7 @@ function pageMaxWidth(pathname: string): string {
   const p = routePath(pathname);
   if (p === "/team" || p.startsWith("/team/")) return "max-w-6xl";
   if (p === "/pages" || p === "/artifacts") return "max-w-6xl"; // card grid wants the wider column
-  if (p === "/priorities") return "max-w-[1280px]"; // a table: titles, actions and momentum side by side
+  if (p === "/priorities") return "max-w-[1280px]"; // titles, state marks and the 10-day strips side by side
   return "max-w-4xl";
 }
 

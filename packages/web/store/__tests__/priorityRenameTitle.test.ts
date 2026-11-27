@@ -8,13 +8,14 @@ const ID = "p".repeat(32);
 const store = () => useInboxStore.getState() as any;
 const title = () => store().priorities[ID].title;
 
+const owner = {};
 let calls: Array<[string, unknown[]]> = [];
 beforeEach(() => {
   calls = [];
   useInboxStore.setState({ priorities: { [ID]: { _id: ID, short_id: "pri-1", title: "Trusted evals", steps: [] } } } as any);
-  store()._setDispatch(async (action: string, args: unknown[]) => { calls.push([action, args]); return null; });
+  store()._setDispatch(async (action: string, args: unknown[]) => { calls.push([action, args]); return null; }, { owner });
 });
-afterEach(() => store()._clearRuntimeBindings());
+afterEach(() => store()._clearDispatch(owner));
 
 test("renamePriority paints the title before the server answers and dispatches it (the server trims)", async () => {
   priorityWrites(() => {}).renamePriority("pri-1", "  Evals people trust ");

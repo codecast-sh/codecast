@@ -206,7 +206,7 @@ export function PrioritiesView({ rows, history, now, layout }: {
   };
   const block = (r: PriorityRow) => {
     const m: PriorityModel | undefined = byId.get(r.short_id);
-    return m && <PriorityBlock key={r.short_id} model={m} layout={layout} days={days} todayIndex={todayIndex} peak={peak} now={now} lookups={lookups} drag={dragOf(r)} />;
+    return m && <PriorityBlock key={r.short_id} model={m} layout={layout} days={days} todayIndex={todayIndex} peak={peak} typingPending={!history} now={now} lookups={lookups} drag={dragOf(r)} />;
   };
   return (
     <div data-priorities data-layout={layout} className="[container-type:inline-size]">

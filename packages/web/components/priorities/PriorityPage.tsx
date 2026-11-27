@@ -119,7 +119,7 @@ function PriorityBody({ row }: { row: PriorityView }) {
       </header>
 
       <section data-ten-days className="mt-4">
-        <DayStrip counts={model.counts} days={days} todayIndex={todayIndex} peak={Math.max(1, ...model.counts)} page />
+        <DayStrip counts={model.counts} days={days} todayIndex={todayIndex} peak={Math.max(1, ...model.counts)} pending={!history} page />
       </section>
 
       {plan && (

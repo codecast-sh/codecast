@@ -1,8 +1,8 @@
 // Where the viewer's messages went (the bottom of /priorities): each
-// workspace's typing per day (convex priorities.history) split by where its
-// priorities rank today (priorities.list). There is no rank history, so past
-// days use today's ranks.
-import type { PriorityHistory, PriorityRow } from "@codecast/shared/contracts/priorities";
+// workspace's typing per day (convex priorities.history) split by where the
+// viewer's priorities rank today (priorityRanks.mine). There is no rank
+// history, so past days use today's ranks.
+import type { PriorityHistory } from "@codecast/shared/contracts/priorities";
 
 /** Top to bottom of a day's stack: no priority, priorities 4+, priorities 1–3. */
 export const TIERS = [
@@ -14,17 +14,15 @@ export type Tier = (typeof TIERS)[number]["key"];
 export type BreakdownDay = Record<Tier, number> & { total: number };
 export type WorkspaceDays = { workspace: string; name: string; days: BreakdownDay[]; total: number };
 
-type RankedRow = Pick<PriorityRow, "short_id" | "rank" | "mine" | "status">;
-
 const empty = (): BreakdownDay => ({ top: 0, rest: 0, none: 0, total: 0 });
 
 /**
  * One workspace's `days`, each split three ways: lanes with no priority, the
- * viewer's active priorities ranked 1–3, and every other priority lane.
+ * viewer's active priorities ranked 1–3 (`rank`: by short id, the viewer's
+ * own active priorities only), and every other priority lane.
  * Teammates' lanes (any `owner`, even a blank name) are not the viewer's typing and are skipped.
  */
-export function splitDays(history: PriorityHistory | undefined, rows: readonly RankedRow[], days: readonly string[]): BreakdownDay[] {
-  const rank = new Map(rows.filter((r) => r.mine && r.status === "active").map((r) => [r.short_id, r.rank]));
+export function splitDays(history: PriorityHistory | undefined, rank: ReadonlyMap<string, number>, days: readonly string[]): BreakdownDay[] {
   return days.map((d) => {
     const out = empty();
     const at = history ? history.days.indexOf(d) : -1;

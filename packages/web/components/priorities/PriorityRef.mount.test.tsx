@@ -291,6 +291,22 @@ test("the page: title, Correct…, Share and ⋯; ten days; the plan once; miles
   }
 });
 
+test("the page's strip, with no typing yet, is its baseline: no counts, no hover cards", async () => {
+  delete answers["priorities:history"];
+  const page = await inRouter(<PriorityPage id="pri-60" />, "/priorities/pri-60");
+  try {
+    await page.waitFor(() => !!page.container.querySelector("[data-ten-days] [data-day-strip]"));
+    const strip = page.container.querySelector("[data-ten-days] [data-day-strip]")!;
+    expect(strip.hasAttribute("data-pending")).toBe(true);
+    expect(strip.querySelectorAll("[data-count]")).toHaveLength(0);
+    // The dates still sit under the columns.
+    expect(strip.textContent).toContain("Today");
+  } finally {
+    await page.unmount();
+    answers["priorities:history"] = HISTORY;
+  }
+});
+
 test("a milestone's own plan, other than the priority's, still shows under that milestone", async () => {
   const OWN = { short_id: "pl-77", title: "Session mapping scorer", done: 1, total: 3, size: 3 };
   answers["priorities:show"] = { ...DETAIL, links: DETAIL.links.map((l: any) => (l.key === "s4" ? { ...l, plan: OWN } : l.key === "s2" ? { ...l, plan: PLAN } : l)) };

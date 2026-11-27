@@ -153,8 +153,8 @@ test("under a coarse pointer every control on the list is a 44px target, at ever
   // A size of 44px or more (h-11, size-11, min-h-11) at every pointer, or one a coarse pointer gets: its own, 12px above and below a
   // 20px line, or a 44px ::after press area.
   const sized = /(?:^|\s)(?:size-11|h-11|min-h-11)(?:\s|$)|\[@media\(pointer:coarse\)\]:(?:h-11|min-h-11|size-11|py-3|after:)/;
-  // A link or button inside a 44px row takes the row's height.
-  const inTallRow = (el: Element) => !!el.parentElement?.closest("li")?.className.includes("[@media(pointer:coarse)]:min-h-11");
+  // A link or button inside a 44px row counts only when it stretches to the row's full height.
+  const inTallRow = (el: Element) => /(?:^|\s)self-stretch(?:\s|$)/.test(el.className) && !!el.parentElement?.closest("li")?.className.includes("[@media(pointer:coarse)]:min-h-11");
   for (const layout of ["wide", "phone"] as const) {
     const page = await mount(view({ rows: [...ROWS, KINDS], layout }));
     try {
@@ -168,6 +168,34 @@ test("under a coarse pointer every control on the list is a 44px target, at ever
       await page.unmount();
       useInboxStore.setState({ tasks: {} } as any);
     }
+  }
+}, 60_000);
+
+test("an open milestone's rows are whole targets: each link fills its 44px row, and its title wraps to two lines on a phone or a touch screen", async () => {
+  seedKinds();
+  const page = await mount(view({ rows: [KINDS] }));
+  try {
+    const c = await openLine(block(page.container, "pri-9"), "s1");
+    const links = [...c.querySelectorAll("li a[href]")];
+    expect(links.length).toBeGreaterThan(3);
+    for (const a of links) {
+      // The row is 44px under a coarse pointer; the link stretches across it, top to bottom and to the row's end.
+      expect(a.closest("li")!.className).toContain("[@media(pointer:coarse)]:min-h-11");
+      for (const cls of ["self-stretch", "flex-1"]) expect(a.className.split(/\s+/)).toContain(cls);
+    }
+    // A title keeps one line on a wide list under a mouse, and wraps to two on a narrow list or a touch screen.
+    const titles = [...c.querySelectorAll("[data-item-title]")];
+    expect(titles.length).toBeGreaterThan(3);
+    for (const t of titles) {
+      expect(t.className).toContain("truncate");
+      for (const cls of ["[@container(max-width:40rem)]:line-clamp-2", "[@container(max-width:40rem)]:whitespace-normal", "[@media(pointer:coarse)]:line-clamp-2", "[@media(pointer:coarse)]:whitespace-normal"]) expect(t.className).toContain(cls);
+    }
+    // The priority's own title: at least 44px under a coarse pointer, centred by its padding.
+    const title = block(page.container, "pri-9").querySelector("[data-priority-title]")!;
+    for (const cls of ["[@media(pointer:coarse)]:min-h-11", "[@media(pointer:coarse)]:py-[13px]"]) expect(title.className).toContain(cls);
+  } finally {
+    await page.unmount();
+    useInboxStore.setState({ tasks: {} } as any);
   }
 }, 60_000);
 

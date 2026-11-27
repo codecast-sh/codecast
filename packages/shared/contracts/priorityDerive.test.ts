@@ -78,10 +78,11 @@ describe("milestoneStateOf", () => {
     expect([st.kind, st.session?.id]).toEqual(["needs_you", "run"]);
   });
 
-  test("someone else's ask never needs the viewer: it reads idle", () => {
+  test("a state is the viewer's final verdict: a teammate's session that asks the viewer makes the milestone Needs you", () => {
+    // The sidebar holds it under Needs You (a cast decide addressed to the viewer), so its state arrives as needs_you.
     const theirs = { ...s("needs_you", 9, false, "theirs"), mine: false };
-    expect(milestoneStateOf(m([theirs]), OWN)).toEqual({ kind: "idle", session: theirs });
-    expect(milestoneStateOf(m([theirs, s("dormant", 1, false, "mine")]), OWN).session?.id).toBe("mine");
+    expect(milestoneStateOf(m([theirs, s("working", 1, false, "mine")]), OWN)).toEqual({ kind: "needs_you", session: theirs });
+    expect(orderByState([s("working", 20, false, "mine"), theirs]).map((x) => x.id)).toEqual(["theirs", "mine"]);
   });
 
   test("done is done, whatever still asks on it", () => {
@@ -102,6 +103,11 @@ test("orderByState: the sidebar's order, then the most recent; closed last", () 
 
 test("orderSessions: a person's session ranks above a workflow run, and a closed run last", () => {
   expect(orderSessions([s("killed", 9, true, "closed-run"), s("working", 1, true, "run"), s("idle", 1, false, "mine")]).map((x) => x.id)).toEqual(["mine", "run", "closed-run"]);
+});
+
+test("orderSessions orders the server's own states: someone else's needs_you there ranks as idle", () => {
+  const theirs = { ...s("needs_you", 9, false, "theirs"), mine: false };
+  expect(orderSessions([theirs, s("dormant", 1, false, "mine")]).map((x) => x.id)).toEqual(["mine", "theirs"]);
 });
 
 test("isWorkflowSession: a run's field, or a subagent titled as a step", () => {

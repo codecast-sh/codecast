@@ -13,22 +13,21 @@ const VIEWER = fixtureId("breakdownviewer");
 const BUSY = fixtureId("busyteam");
 const QUIET = fixtureId("quietteam");
 const SILENT = fixtureId("silentteam");
+const DARK = fixtureId("darkteam");
 const DAYS = ["2026-11-24", "2026-11-25", "2026-11-26"];
 
 const lane = (short_id: string | null, counts: number[], owner?: string): PriorityHistoryLane => ({
   key: short_id ?? "unassigned", short_id, title: short_id ?? "Unassigned", status: short_id ? "active" : null, counts, total: counts.reduce((a, b) => a + b, 0), ...(owner ? { owner } : {}),
 });
-const row = (short_id: string, rank: number) => ({ short_id, rank, mine: true, status: "active" });
 const HISTORY: Record<string, PriorityHistory> = {
   [`team:${BUSY}`]: { days: DAYS, lanes: [lane("pri-1", [2, 0, 6]), lane("pri-5", [0, 0, 2]), lane(null, [0, 0, 2]), lane("pri-9", [9, 9, 9], "Sam")] },
   [`team:${QUIET}`]: { days: DAYS, lanes: [lane(null, [1, 0, 0])] },
   [`team:${SILENT}`]: { days: DAYS, lanes: [] },
+  // Priorities off there: its typing is never read.
+  [`team:${DARK}`]: { days: DAYS, lanes: [lane(null, [50, 50, 50])] },
 };
-const LIST: Record<string, unknown> = {
-  [`team:${BUSY}`]: { priorities: [row("pri-1", 1), row("pri-5", 5)] },
-  [`team:${QUIET}`]: { priorities: [] },
-  [`team:${SILENT}`]: { priorities: [] },
-};
+/** What each render asked the server for, by function and workspace. */
+const asked: string[] = [];
 
 const { getFunctionName } = await import("convex/server");
 const convexReact = { ...(await import("convex/react")) };
@@ -38,9 +37,12 @@ mock.module("convex/react", () => ({
   useQueries: (queries: Record<string, { query: unknown; args: { workspace: string } }>) =>
     Object.fromEntries(Object.entries(queries).map(([key, q]) => {
       const name = getFunctionName(q.query as any);
+      asked.push(`${name}${q.args?.workspace ? ` ${q.args.workspace}` : ""}`);
+      // The ranks come from the store (seeded below), not this answer.
+      if (name !== "priorities:history") return [key, undefined];
       // The personal workspace's reads fail: it draws as no messages.
       if (q.args.workspace.startsWith("user:")) return [key, new Error(`Could not find public function for '${name}'`)];
-      return [key, (name === "priorities:history" ? HISTORY : LIST)[q.args.workspace]];
+      return [key, HISTORY[q.args.workspace]];
     })),
 }));
 
@@ -49,17 +51,30 @@ const { act } = React as any;
 const { useInboxStore } = await import("../../store/inboxStore");
 const { MessagesByWorkspace } = await import("./MessagesByWorkspace");
 
-function seed(teams: { _id: string; name: string }[]) {
+const ON = { priorities: true };
+/** The viewer, their teams, and their priorities' ranks in every workspace (priorityRanks.mine), none of them the active one. */
+function seed(teams: { _id: string; name: string; features?: Record<string, boolean> }[]) {
   useInboxStore.setState({ currentUser: { _id: VIEWER, name: "Dana" } } as any);
   useInboxStore.getState().syncTable("teams", teams as any);
+  useInboxStore.getState().syncTable("priorityRanks", [
+    { _id: "p1", short_id: "pri-1", workspace: `team:${BUSY}`, rank: 1 },
+    { _id: "p5", short_id: "pri-5", workspace: `team:${BUSY}`, rank: 5 },
+  ] as any);
+  asked.length = 0;
 }
 
 test("one row per workspace with messages, busiest first, each day stacked 1–3 / 4+ / none, teammates' typing left out", async () => {
-  seed([{ _id: QUIET, name: "Quiet Co" }, { _id: BUSY, name: "Busy Co" }, { _id: SILENT, name: "Silent Co" }]);
+  seed([{ _id: QUIET, name: "Quiet Co", features: ON }, { _id: BUSY, name: "Busy Co", features: ON }, { _id: SILENT, name: "Silent Co", features: ON }, { _id: DARK, name: "Dark Co" }]);
   const page = await mountSurface(<MessagesByWorkspace days={DAYS} todayIndex={2} />);
   try {
     const rows = [...page.container.querySelectorAll("[data-workspace]")];
     expect(rows.map((r) => r.getAttribute("data-workspace"))).toEqual([`team:${BUSY}`, `team:${QUIET}`]);
+    // One history read per workspace with Priorities on (the personal one borrows it from the viewer's teams, as the
+    // server does), none for Dark Co, and no list read: the ranks are the store's.
+    expect([...new Set(asked.filter((a) => a.startsWith("priorities:")))].sort()).toEqual([
+      `priorities:history team:${BUSY}`, `priorities:history team:${QUIET}`, `priorities:history team:${SILENT}`, `priorities:history user:${VIEWER}`,
+    ].sort());
+    expect(asked).toContain("priorityRanks:mine");
     expect(rows.map((r) => r.querySelector("[data-workspace-total]")!.textContent)).toEqual(["12", "1"]);
     const busyDays = [...rows[0].querySelectorAll("[data-day]")];
     expect(busyDays).toHaveLength(3);
@@ -76,7 +91,7 @@ test("one row per workspace with messages, busiest first, each day stacked 1–3
 }, 30_000);
 
 test("hovering a segment shows its tier, workspace, date and shares", async () => {
-  seed([{ _id: QUIET, name: "Quiet Co" }, { _id: BUSY, name: "Busy Co" }]);
+  seed([{ _id: QUIET, name: "Quiet Co", features: ON }, { _id: BUSY, name: "Busy Co", features: ON }]);
   const page = await mountSurface(<MessagesByWorkspace days={DAYS} todayIndex={2} />);
   try {
     const top = page.container.querySelector(`[data-workspace="team:${BUSY}"]`)!.querySelectorAll("[data-day]")[2].querySelector('[data-tier="top"]')!;
@@ -93,8 +108,8 @@ test("hovering a segment shows its tier, workspace, date and shares", async () =
   }
 }, 30_000);
 
-test("renders nothing when no workspace has messages", async () => {
-  seed([{ _id: SILENT, name: "Silent Co" }]);
+test("renders nothing when no workspace has messages, or none has Priorities on", async () => {
+  seed([{ _id: SILENT, name: "Silent Co", features: ON }, { _id: DARK, name: "Dark Co" }]);
   const page = await mountSurface(<MessagesByWorkspace days={DAYS} todayIndex={2} />);
   try {
     expect(page.container.innerHTML).toBe("");
