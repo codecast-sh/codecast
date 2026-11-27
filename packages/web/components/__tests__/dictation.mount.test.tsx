@@ -63,6 +63,7 @@ test("press the mic, words stream in at the end, Enter sends them", async () => 
   expect(c.button("Cancel dictation")).not.toBeNull();
   // ✕ is the recording's only control: Send, Enter or typing finish it.
   expect(c.button("Finish dictation")).toBeNull();
+  expect(c.container.querySelector('[aria-label="Finishing dictation"]')).toBeNull();
   expect(c.button("Dictate")).toBeNull();
 
   await say((e) => e.onPartial("auth"));
@@ -76,6 +77,9 @@ test("press the mic, words stream in at the end, Enter sends them", async () => 
   await c.key("Enter");
   // Waiting for the last words: nothing sent yet.
   expect(c.container.querySelector('[data-dictation="finishing"]')).not.toBeNull();
+  // The box is full already, so the spinner beside ✕ is what says words are still coming.
+  expect(c.container.querySelector('[aria-label="Finishing dictation"]')).not.toBeNull();
+  expect(c.container.querySelector('[data-dictate-slot]')!.parentElement!.hasAttribute("data-dictate-recording")).toBe(true);
   expect(c.sent).toEqual([]);
   await act(async () => { host.endFinish!(); });
   await flush();

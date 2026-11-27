@@ -1,7 +1,7 @@
 // The composer's mic, drawn the way Claude's composer draws it: a mic and a
 // small caret for its settings while idle; Cancel (✕) while it records (Send,
-// Enter or Create finish the words and send them), with a small dot left of ✕ fading in and out while the microphone
-// listens, so a box already full of words still says the mic is on. Shown
+// Enter or Create finish the words and send them), with a small dot left of ✕
+// fading in and out while the microphone listens, so a box already full of words still says the mic is on. Shown
 // only once the person has turned dictation on (Settings › Voice); a person in
 // any team without an OpenAI BAA sees the struck-through mic and the caret
 // dimmed, and a click on either says why (the rule the server's mint applies,
@@ -14,7 +14,7 @@
 // controls and onMenuClosed a box passes are stable, so a keystroke in the box
 // does not draw the mic again.
 import { memo, useState, type MouseEvent, type ReactElement } from "react";
-import { ChevronDown, Mic, MicOff, X } from "lucide-react";
+import { ChevronDown, Loader2, Mic, MicOff, X } from "lucide-react";
 import { toast } from "sonner";
 import { DICTATION_LANGUAGES } from "@codecast/shared/contracts/dictation";
 import { useInboxStore } from "../../store/inboxStore";
@@ -81,6 +81,12 @@ function DictateButtons({ dictation, size = "dock", onMenuClosed }: { dictation:
           </button>,
           "Cancel dictation",
         )}
+        {/* Holds the row at its idle width; after Send or Enter the box may
+            already be full, so this spinner is what says the last words are
+            still coming. */}
+        <span data-dictate-slot className={`${BASE} ${sz.button}`}>
+          {dictation.state.phase === "finishing" && <Loader2 className={`${sz.icon} animate-spin text-[var(--sol-text-dim)]`} role="img" aria-label="Finishing dictation" />}
+        </span>
       </div>
     );
   }

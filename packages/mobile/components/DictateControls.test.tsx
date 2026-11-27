@@ -478,7 +478,10 @@ function targets(m: Awaited<ReturnType<typeof mount>>, labels: string[]) {
     x += st.width + (st.marginRight ?? 0);
   }
   expect(rects.map((r) => r.label)).toEqual(labels);
-  x += flat(row!.props.style).marginRight ?? 0;
+  // A row with its own width (recording) ends there, not after its last child.
+  const rowStyle = flat(row!.props.style);
+  if (rowStyle.width != null) x = rowStyle.width;
+  x += rowStyle.marginRight ?? 0;
   const { DICTATE_SEND_SLOP: send } = require('./DictateControls');
   rects.push({ label: 'Send', left: x - send.left, right: x + 32 + send.right, height: 32 + send.top + send.bottom });
   return rects;
@@ -499,8 +502,9 @@ test('every target is 44pt and none overlaps its neighbour, send included', asyn
   await m.press('Dictate');
   const recording = targets(m, ['Cancel dictation']);
   expectClear(recording);
-  // ✕ alone, from over the dot to the gap before send: the row is 50pt.
-  expect(recording.map((r) => [r.label, r.left, r.right])).toEqual([['Cancel dictation', 2, 50], ['Send', 50, 94]]);
+  // ✕ lands where the mic was, and send does not move.
+  expect(recording.map((r) => [r.label, r.left, r.right])).toEqual([['Cancel dictation', 2, 46], ['Send', 90, 134]]);
+  expect(idle.at(-1)).toEqual(recording.at(-1));
   // The live dot shows while listening and changes nothing beside it.
   expect(m.byLabel('Microphone on').length).toBe(1);
 });

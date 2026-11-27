@@ -13,11 +13,13 @@
 // so a box already full of words still says the mic is on (still under
 // Reduce Motion; not shown while starting or finishing).
 //
-// Every target is 44pt and none overlaps another, send's included: the row
-// ends in the gap before send, whose left slop beside it is 0
-// (DICTATE_SEND_SLOP). Idle (blocked included), 90pt: mic [2,46], chevron
-// [46,90]. Recording, 50pt: the dot's slot [0,10] (no target; ✕ reaches over
-// it), ✕ [2,50]. Send's own target then starts at the row's end.
+// Every target is 44pt and none overlaps another, send's included: the row is
+// 90pt wide in every state (blocked included) and ends in the gap before
+// send, whose left slop beside it is 0 (DICTATE_SEND_SLOP). Idle: mic [2,46],
+// chevron [46,90].
+// Recording: the dot's slot [0,10] (no target; ✕ reaches over it), ✕ [2,46]
+// under the thumb that pressed the mic, then empty to 90. Send's own target
+// then starts at 90.
 //
 // ✕ never outweighs send: beside a filled send (the session and chat
 // composers) it is a quiet circle like attach; beside a bare send glyph
@@ -38,8 +40,6 @@ import { setDictationLanguage, useDictationLanguage } from '@/lib/dictationLangu
 // button sits 10pt into the row (the live dot's slot) and reaches 8pt left of
 // itself and 4pt right.
 const FIRST_SLOP = { top: 6, bottom: 6, left: 8, right: 4 };
-/** ✕ while recording, alone: from over the dot to the gap before send. */
-const CANCEL_SLOP = { top: 6, bottom: 6, left: 8, right: 8 };
 /** The glyph size of the row's other icons (attach, @, emoji). */
 const ICON = 18;
 /** The live dot's faded floor: lower and it all but vanishes on a dark ground. */
@@ -75,7 +75,7 @@ export function DictateControls({ dictation, look = 'quiet' }: { dictation: Phon
           style={look === 'bare' ? styles.bare : styles.quiet}
           onPress={dictation.cancel}
           activeOpacity={0.6}
-          hitSlop={CANCEL_SLOP}
+          hitSlop={FIRST_SLOP}
           accessibilityRole="button"
           accessibilityLabel="Cancel dictation"
         >
@@ -180,13 +180,14 @@ function LiveDot({ color }: { color: string }) {
 }
 
 const styles = themedStyles((Theme) => StyleSheet.create({
+  // The same 90pt in every state, so nothing beside it moves.
   row: {
     flexDirection: 'row',
     alignItems: 'center',
   },
-  // Recording: ✕ and the 8pt gap before send.
+  // Recording: the idle row's width, so the box and send stay put.
   recording: {
-    marginRight: 8,
+    width: 90,
   },
   mic: {
     ...S.imageButton,
