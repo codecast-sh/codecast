@@ -37,7 +37,8 @@ import { isResentCopyOfSentMessage } from '@codecast/web/lib/staleDraft';
 import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
 import { pollCardAnswers, pollClosedLabel, typedPollAnswerTexts, pollDeadline, POLL_TIMED_OUT } from '@codecast/web/lib/pollPayload';
 import { useComposerField, nativeComposerText } from '@/lib/composerField';
-import { ImageGallery } from '@/components/ImageGallery';
+import { ImageGallery, type GalleryNotes } from '@/components/ImageGallery';
+import { onImageNoteOpen, samePicture } from '@/lib/imagePins';
 import { isTrustedImageSrc } from '@/lib/convex';
 import { foldToolRuns, type ToolRun } from '@/lib/toolRuns';
 import { FreshRows } from '@/lib/freshRows';
@@ -87,6 +88,7 @@ import { readableText } from '@/lib/markdown';
 import { ComposeButton } from '@/components/session/ComposeButton';
 import { ScreenRecordingCard } from '@/components/ScreenRecordingCard';
 import { ComposerOwnerStrip } from '@/components/session/OwnerComposerLines';
+import { NotesTray } from '@/components/session/NotesTray';
 import { useSyncSessionOwners } from '@codecast/web/hooks/useSyncSessionOwners';
 import { MessageComposer, dispatchComposerSend, useComposerImages, IMAGE_ONLY_CONTENT, type ComposerStatus } from '@/components/session/MessageComposer';
 import { sessionLanded } from '@/lib/compose';
@@ -197,6 +199,9 @@ type ImageData = {
   url?: string;
   // The local file an optimistic attachment paints while it uploads.
   preview_url?: string;
+  // Where a gallery entry came from, when known: a pinned note names it.
+  message_id?: string;
+  timestamp?: number;
 };
 
 type Message = {
@@ -762,6 +767,19 @@ function useImageSrc(image: ImageData) {
       : image.data
         ? `data:${image.media_type};base64,${image.data}`
         : undefined;
+}
+
+// A transcript picture as a note pinned on it records it: the address the
+// page paints (the storage URL, which the gallery's pins are found by), its
+// stored bytes so the send can attach it, and where it came from.
+function describeSessionImage(image: ImageData, src: string) {
+  return {
+    src,
+    href: src.startsWith('data:') ? undefined : src,
+    storageId: image.storage_id,
+    messageId: image.message_id,
+    timestamp: image.timestamp,
+  };
 }
 
 // Identity of an image across the raw message shape and the gallery's scanned
@@ -2474,7 +2492,7 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
     return () => task.cancel();
   }, [autoFocus]);
   const [error, setError] = useState<string | null>(null);
-  const images = useComposerImages(setMessage, { recordingsTo: !hosted && isConvexId(String(conversationId)) ? String(conversationId) : undefined });
+  const images = useComposerImages(setMessage, { recordingsTo: !hosted && isConvexId(String(conversationId)) ? String(conversationId) : undefined, notesOn: String(conversationId) });
   const { selectedImages } = images;
   // The session row's live fields (synced with the inbox): is_connected is
   // the heartbeat verdict, agent_status what the agent is doing now.
@@ -2531,14 +2549,18 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
       inputRef.current as { _lastNativeText?: unknown } | null,
       message,
     ).trim();
-    // Answers staged on a proposal card ride this send (lib/reviewActions), as on the web.
+    // Answers staged on a proposal card, quotes and notes pinned on pictures
+    // ride this send (lib/reviewActions), as on the web.
     const staged = (useInboxStore.getState().reviewComments[conversationId] ?? []).length > 0;
     if (!trimmedMessage && !images.attached && !staged) return;
     if (allowanceOut) return;
     setError(null);
 
-    const sendImages = images.optimisticImages();
-    const content = images.withRecording(attachReviewToMessage(conversationId, trimmedMessage)) || IMAGE_ONLY_CONTENT;
+    // The pictures the notes pin go as marked copies: the composer's own in
+    // their places, then those quoted from the transcript after them.
+    const send = images.takeSend(conversationId, trimmedMessage);
+    const sendImages = send.images;
+    const content = images.withRecording(send.content) || IMAGE_ONLY_CONTENT;
 
     // The bubble lands on the next frame, in a commit of its own: written
     // inside the press, it shares the composer's commit, which Reanimated
@@ -2644,8 +2666,12 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
           },
         }}
         onFocusChange={hosted ? undefined : setComposerFocused}
+        // The owner's picked pictures take pinned notes, as the transcript's do.
+        notesTo={isOwner && !hosted && isConvexId(String(conversationId)) ? String(conversationId) : undefined}
         above={hosted ? null : (
           <>
+            {/* What rides the next send: notes pinned on pictures and quotes. */}
+            <NotesTray conversationId={String(conversationId)} />
             {isConvexId(String(conversationId)) && (
               <ComposerOwnerStrip conversationId={conversationId as string} active={composerFocused || !!message.trim()} />
             )}
@@ -3224,11 +3250,11 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
       serverSessionImages ?? [],
       extractSessionImages(allMessages, isTrustedImageSrc),
     );
-    return entries.map((e): ImageData =>
-      e.storage_id
-        ? { media_type: "image/png", storage_id: e.storage_id }
-        : { media_type: "image", url: e.src }
-    );
+    return entries.map((e): ImageData => ({
+      ...(e.storage_id ? { media_type: "image/png", storage_id: e.storage_id } : { media_type: "image", url: e.src }),
+      message_id: e.message_id,
+      timestamp: e.timestamp,
+    }));
   }, [allMessages, serverSessionImages]);
 
   // Sweep a pre-feature history into conversation_images once, so a thread whose
@@ -3264,6 +3290,33 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     setGalleryIndex(Math.max(0, idx));
     setGalleryVisible(true);
   }, []);
+
+  // The viewer can reply here, so a tap on a gallery picture pins a note
+  // into this conversation's quote batch. A hosted assistant's turns take
+  // words only, and pinned pictures ride the send as attachments.
+  const canPinNotes = isReal && !!conversation?.is_own && !hosted;
+  const galleryNotes = useMemo<GalleryNotes<ImageData> | undefined>(
+    () => (canPinNotes ? { conversationId: String(id), describe: describeSessionImage } : undefined),
+    [canPinNotes, id],
+  );
+  // Opening a transcript picture at one of its notes (lib/imagePins
+  // openImageNote, from the notes tray): the gallery at that picture, with
+  // the pin's note editor open.
+  useEffect(() => {
+    if (!canPinNotes) return;
+    const cid = String(id);
+    return onImageNoteOpen(cid, (commentId) => {
+      const image = useInboxStore.getState().reviewComments[cid]?.find((c) => c.id === commentId)?.image;
+      if (!image?.point || image.attached) return false;
+      const idx = allSessionImagesRef.current.findIndex((img) =>
+        samePicture({ src: img.url || img.preview_url || '', storageId: img.storage_id }, image));
+      if (idx < 0) return false;
+      useInboxStore.getState().setReviewEditingId(commentId);
+      setGalleryIndex(idx);
+      setGalleryVisible(true);
+      return true;
+    });
+  }, [canPinNotes, id]);
 
   // Local-first fork, the same store path as web: the stub opens already
   // holding the parent's messages up to the fork point, and the screen moves
@@ -5078,6 +5131,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
         initialIndex={galleryIndex}
         visible={galleryVisible}
         onClose={() => setGalleryVisible(false)}
+        notes={galleryNotes}
       />
     </ChangesProvider>
     </ProposalBatchContext.Provider>

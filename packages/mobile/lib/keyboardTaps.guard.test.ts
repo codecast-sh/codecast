@@ -32,6 +32,7 @@ const COMPOSER_STRIPS = [
   "components/chat/MentionStrip.tsx",
   "components/chat/ChatComposerBar.tsx", // the emoji strip
   "components/session/MessageComposer.tsx",
+  "components/session/NotesTray.tsx", // the notes over the composer
   "components/terminal/PaneTerminal.tsx", // the quick-key row sits on the keyboard
 ];
 

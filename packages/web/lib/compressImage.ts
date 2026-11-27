@@ -18,7 +18,7 @@ const COMPRESS_THRESHOLD_BYTES = 256 * 1024;
 
 // Longest-edge cap. 2560px keeps full-resolution screenshots crisp (even on a
 // retina display) while bounding the pixel count we have to encode.
-const MAX_EDGE = 2560;
+export const MAX_EDGE = 2560;
 
 // WebP keeps transparency (clipboard PNGs are often opaque, but some aren't) and
 // compresses far better than PNG/JPEG at a visually-lossless quality.

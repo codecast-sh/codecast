@@ -2,6 +2,7 @@ import '@/lib/polyfills';
 import { ComposeHost } from '@/components/session/NewSessionSheet';
 import { useShareInbox } from '@/lib/shareInbox';
 import { UndoBarHost } from '@/components/UndoBar';
+import { MarkerRenderHost } from '@/lib/markPicture';
 import { PopupHost } from '@/components/PopupHost';
 import { SelectTextHost } from '@/components/SelectTextSheet';
 import { BiometricGate } from '@/components/BiometricGate';
@@ -341,6 +342,8 @@ function RootLayoutNav() {
                   <UndoBarHost />
                   <PopupHost />
                   <SelectTextHost />
+                  {/* Draws pinned notes onto pictures a send carries (lib/markPicture). */}
+                  <MarkerRenderHost />
                   {calls ? (
                     <OverlayErrorBoundary>
                       <Suspense fallback={null}>

@@ -4,50 +4,37 @@
 // visible) and a numbered badge beside it, tied to the ring by a short stem.
 import { drawFitted, encodeCompact } from "./compressImage";
 import { uploadBlobToStorage } from "./uploadBlob";
+import { BADGE_EDGE, BADGE_TEXT, MARKER_FILL, MARKER_STROKES, markerShapes, type ImageMarker } from "./markerGeometry";
 
-export type ImageMarker = { x: number; y: number; number: number };
-
-// Solarized yellow, the gallery's pin color.
-const MARKER_FILL = "#b58900";
+export type { ImageMarker };
 
 export async function drawMarkers(picture: Blob, markers: readonly ImageMarker[]): Promise<Blob | null> {
   try {
     const drawn = await drawFitted(picture);
     if (!drawn) return null;
     const { ctx, w, h } = drawn;
-    const r = Math.max(11, Math.round(Math.min(w, h) * 0.022));
-    for (const m of markers) {
-      const px = m.x * w;
-      const py = m.y * h;
-      // The badge sits up and to the right of the point, flipped near an edge
-      // so it stays on the picture.
-      const dx = px + r * 3.2 > w ? -1 : 1;
-      const dy = py - r * 3.2 < 0 ? 1 : -1;
-      const bx = px + dx * r * 2;
-      const by = py + dy * r * 2;
+    for (const { r, ring, stem, badge, text, number } of markerShapes(markers, w, h)) {
       const ringAndStem = () => {
-        const k = r * 0.55;
         ctx.beginPath();
-        ctx.arc(px, py, k, 0, Math.PI * 2);
-        ctx.moveTo(px + dx * k * Math.SQRT1_2, py + dy * k * Math.SQRT1_2);
-        ctx.lineTo(bx, by);
+        ctx.arc(ring.x, ring.y, ring.r, 0, Math.PI * 2);
+        ctx.moveTo(stem.x1, stem.y1);
+        ctx.lineTo(stem.x2, stem.y2);
       };
       ctx.lineCap = "round";
-      // A dark under-stroke, then the yellow, so it reads on any background.
-      for (const [style, width] of [["rgba(0,0,0,0.6)", 0.5], [MARKER_FILL, 0.22]] as const) {
+      for (const [style, width] of MARKER_STROKES) {
         ringAndStem();
         ctx.strokeStyle = style;
         ctx.lineWidth = r * width;
         ctx.stroke();
       }
-      ctx.beginPath(); ctx.arc(bx, by, r, 0, Math.PI * 2);
+      ctx.beginPath(); ctx.arc(badge.x, badge.y, badge.r, 0, Math.PI * 2);
       ctx.fillStyle = MARKER_FILL; ctx.fill();
-      ctx.lineWidth = r * 0.18; ctx.strokeStyle = "rgba(0,0,0,0.7)"; ctx.stroke();
-      ctx.fillStyle = "#000";
-      ctx.font = `bold ${Math.round(r * 1.15)}px sans-serif`;
+      ctx.lineWidth = r * BADGE_EDGE.width; ctx.strokeStyle = BADGE_EDGE.color; ctx.stroke();
+      ctx.fillStyle = BADGE_TEXT;
+      ctx.font = `bold ${text.size}px sans-serif`;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillText(String(m.number), bx, by + r * 0.06);
+      ctx.fillText(String(number), text.x, text.y);
     }
     return await encodeCompact(drawn.canvas);
   } catch {
