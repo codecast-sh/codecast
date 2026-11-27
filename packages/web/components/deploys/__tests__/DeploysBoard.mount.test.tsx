@@ -200,7 +200,7 @@ test("Mine narrows both columns to the viewer's work and counts what it kept", (
 
 test("a backend without the Ship runs query says Shipping can't be read, and the deploys still list what they carried", () => {
   const { host, unmount } = mount(true);
-  expect(host.querySelector("[data-deploy-shipping]")!.textContent).toContain("What is shipping can't be read right now");
+  expect(host.querySelector("[data-deploy-shipping]")!.textContent).toContain("Ship runs can't be read right now");
   expect(host.querySelector("[data-deploy-shipping-count]")).toBeNull();
   expect(rowKeys(card(host, "dp-7"))).toEqual(["jx7mineoldaaaa", "jx7anaoldaaaaa"]);
   unmount();

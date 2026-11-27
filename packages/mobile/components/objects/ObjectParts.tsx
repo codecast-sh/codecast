@@ -72,10 +72,11 @@ export function ObjectHeader({ type, shortId, refId, link, title, menu }: {
 
 /** A fact as a chip: an icon, a word, its colour. Tappable when it opens or changes something. */
 /** `link`: the press opens another object (a right caret); otherwise a press picks a value here (a down caret). */
-export function FactChip({ icon, label, color, onPress, link, testID }: { icon?: IconName; label: string; color: string; onPress?: () => void; link?: boolean; testID?: string }) {
+/** `mark`: web's glyph for the fact (components/marks), drawn in place of `icon`. */
+export function FactChip({ icon, mark, label, color, onPress, link, testID }: { icon?: IconName; mark?: ReactNode; label: string; color: string; onPress?: () => void; link?: boolean; testID?: string }) {
   const body = (
     <>
-      {icon && <FontAwesome name={icon} size={11} color={color} />}
+      {mark ?? (icon && <FontAwesome name={icon} size={11} color={color} />)}
       <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={[chipText, { color }]} numberOfLines={1}>{label}</RNText>
       {onPress && <FontAwesome name={link ? 'angle-right' : 'angle-down'} size={11} color={color} style={{ opacity: 0.7 }} />}
     </>
@@ -174,11 +175,11 @@ export function SessionsBlock({ sessions }: { sessions: SessionData[] }) {
 
 /** A row that opens another object: a glyph, its title, and a fact on the right.
  *  Without `onPress` it has nothing to open: a plain row, no caret. */
-export function LinkRow({ icon, color, title, meta, onPress, testID }: { icon: IconName; color: string; title: string; meta?: string; onPress?: () => void; testID?: string }) {
+export function LinkRow({ icon, mark, color, title, meta, onPress, testID }: { icon?: IconName; mark?: ReactNode; color: string; title: string; meta?: string; onPress?: () => void; testID?: string }) {
   const Theme = useTheme();
   const body = (
     <>
-      <FontAwesome name={icon} size={13} color={color} style={styles.linkIcon} />
+      {mark ? <RNView style={styles.linkIcon}>{mark}</RNView> : <FontAwesome name={icon ?? 'circle-o'} size={13} color={color} style={styles.linkIcon} />}
       <RNText style={styles.linkTitle} numberOfLines={2}>{title}</RNText>
       {meta ? <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={styles.linkMeta} numberOfLines={1}>{meta}</RNText> : null}
       {onPress ? <FontAwesome name="angle-right" size={14} color={Theme.textDim} /> : null}
