@@ -53,7 +53,7 @@ const sess = (tag: string, title: string, state: string, extra: Record<string, u
 });
 const links = (key: string, sessions: unknown[], extra: Record<string, unknown> = {}) => ({ key, sessions, sessions_more: 0, plan: null, part_of: [], looks_done: false, correction_pending: false, ...extra });
 const counts = (steps: any[]) => ({ critical_done: steps.filter((s) => s.tier === "critical" && s.done).length, critical_total: steps.filter((s) => s.tier === "critical").length });
-const base = { summary: "", person_pos: null, rank_source: "ai", serves: null, workspace: `team:${TEAM_ID}`, user_id: VIEWER_ID, owner: "Dana Viewer", mine: true, first_seen_at: NOW - 3 * DAY, last_active_at: NOW, done_at: null, session_count: 1, session_count_more: false, status: "active", status_set_by: "pass", correction_pending: false, plan: null };
+const base = { summary: "", person_pos: null, rank_source: "ai", serves: null, workspace: `team:${TEAM_ID}`, user_id: VIEWER_ID, owner: "Dana Viewer", owner_image: null, mine: true, first_seen_at: NOW - 3 * DAY, last_active_at: NOW, done_at: null, session_count: 1, session_count_more: false, status: "active", status_set_by: "pass", correction_pending: false, plan: null };
 const row = (id: number, title: string, rank: number, steps: any[], extra: Record<string, unknown> = {}) => ({
   ...base, _id: fixtureId(`pri${id}`), short_id: `pri-${id}`, title, rank, ai_rank: rank, steps, counts: counts(steps), sessions: [], links: steps.map((s) => links(s.key, [])), ...extra,
 });
@@ -465,10 +465,10 @@ test("the page and the card of a teammate's priority show no write control", asy
   }
 }, 60_000);
 
-test("the card: provenance once, and its open milestones with their states", async () => {
+test("the card: the rank badge, and its open milestones with their states", async () => {
   const card = await mount(<PriorityCard row={stored("pri-1")} />);
   try {
-    expect(card.text()).toContain("#1 ranked by AI");
+    expect(card.container.querySelector("[data-rank-mark]")?.textContent).toBe("1");
     const listed = [...card.container.querySelectorAll("li[data-milestone]")].map((li) => `${li.getAttribute("data-milestone")}:${li.getAttribute("data-state")}`);
     expect(listed).toEqual(["s1:dormant", "s2:start"]);
     expect(card.container.querySelector('[data-state-action="start"]')!.getAttribute("href")).toContain("pri-1");

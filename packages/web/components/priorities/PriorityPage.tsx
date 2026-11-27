@@ -32,6 +32,7 @@ import { pastBadge, priorityHref } from "../../lib/priorities";
 import { LIST_DAYS, lastDays, localDayKey } from "../../lib/priorityList";
 import { DayStrip } from "./parts";
 import { Milestones, PriorityTitleInput } from "./PriorityBlock";
+import { OwnerFace } from "./PriorityRef";
 import { CorrectPopover, PriorityMenu } from "./controls";
 import { usePriorityWrites } from "../../hooks/usePriorities";
 
@@ -108,7 +109,7 @@ function PriorityBody({ row }: { row: PriorityView }) {
             </h1>
           )}
           {/* A teammate's priority says whose it is; the viewer's own needs no name. */}
-          {!row.mine && row.owner && <span data-priority-owner className="whitespace-nowrap text-meta text-sol-text-dim">{row.owner}</span>}
+          {!row.mine && row.owner && <span data-priority-owner className="inline-flex items-center gap-1 whitespace-nowrap text-meta text-sol-text-dim"><OwnerFace row={row} size={16} />{row.owner}</span>}
           {past && <span data-past className="whitespace-nowrap text-meta text-sol-text-dim">{pastBadge(row)}</span>}
         </div>
         <div data-priority-actions className="flex shrink-0 items-center gap-1 max-sm:order-first max-sm:self-end">
