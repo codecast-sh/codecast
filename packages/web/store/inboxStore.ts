@@ -7090,8 +7090,8 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   markServerDeleted: (convId: string) => void;
   // -- Sync-log write acks (docs/architecture/sync-log-migration.md D8) --
   stampSyncAck: (patches: any, ack: Array<{ scope_key: string; position: number }>, sentAt: number, opts?: { local?: boolean; lockIds?: ReadonlySet<string> | readonly string[] }) => void;
-  /** An owners change's dispatch was acknowledged: retire the owners locks it planted (by lock id), each row taking the newest server value its lock hid. */
-  settleOwnersAck: (lockIds: readonly string[]) => void;
+  /** An owners change's or a priority control's dispatch was acknowledged: mark the locks it planted (by lock id) acked, so the next server value for each field lands (ACK_SETTLED_LOCK_FIELDS). */
+  settleAckedLocks: (lockIds: readonly string[]) => void;
   retireAckedPending: (scopeKey: string, upTo: number, opts?: { restore?: boolean }) => void;
   /** A follower's own write echoed by the host: its locks on these cells (and on every field of these rows) forget the host rows they recorded before. */
   forgetLockSeen: (keys: string[], rowPrefixes?: string[]) => void;
@@ -10035,10 +10035,13 @@ function retireAckedLockInDraft(draft: any, key: string, restore = true): void {
   else row[field] = newest;
 }
 
-// The fields an owners change paints under a lock (sessionOwnersSlice
-// applySessionOwners): the owners read's facts and the inbox row's stamps.
-// Its acknowledgement settles them (settleOwnersAck): it marks each lock it
-// planted `acked`, and the first server value applied to that field after the
+// The locks a write's acknowledgement settles: the fields an owners change
+// paints (sessionOwnersSlice applySessionOwners: the owners read's facts and
+// the inbox row's stamps), and every field a priority control paints
+// (prioritiesSlice: a move's places on the owner's other rows, which the
+// server computes over rows this window may not hold, and done stamps on the
+// server's clock). The acknowledgement (settleAckedLocks) marks each lock the
+// write planted `acked`, and the first server value applied to that field after the
 // ack retires it (store syncProtocol), the exact echo or not: the server had
 // the change by then, so its answer is the truth (someone else's change at the
 // same moment, a follower's, a leave sent offline). A value the store saw
@@ -10046,17 +10049,19 @@ function retireAckedLockInDraft(draft: any, key: string, restore = true): void {
 // hold the newer answer. A lock that never hears its acknowledgement (a window
 // that closed) is bounded like a triage lock (HIDDEN_OVERRIDE_SETTLE_MS;
 // releaseSettledFieldLocks and the owners read's apply).
-export const OWNERS_LOCK_FIELDS: Readonly<Record<string, readonly string[]>> = {
+export const ACK_SETTLED_LOCK_FIELDS: Readonly<Record<string, readonly string[] | "every">> = {
   sessionOwners: ["people_ids", "role", "parent_session", "released_parent", "released_role"],
   // An adopt's parent link and stamp too: the server's adopted_at is its own clock.
   sessions: ["owned_by_me", "implicit_owner", "org_role_id", "owner_session_id", "parent_conversation_id", "adopted_at", "parent_released_at"],
+  priorities: "every",
 };
 
-function isOwnersLockKey(key: string): boolean {
+function isAckSettledLockKey(key: string): boolean {
   const storeAt = key.indexOf(":");
   const fieldAt = key.lastIndexOf(":");
   if (storeAt < 0 || fieldAt <= storeAt) return false;
-  return !!OWNERS_LOCK_FIELDS[key.slice(0, storeAt)]?.includes(key.slice(fieldAt + 1));
+  const fields = ACK_SETTLED_LOCK_FIELDS[key.slice(0, storeAt)];
+  return fields === "every" || !!fields?.includes(key.slice(fieldAt + 1));
 }
 
 // A sibling's settle that reached this window before the mut it settles (the
@@ -10078,13 +10083,13 @@ function takeEarlySettle(draft: any, key: string): void {
   }
 }
 
-/** Marks acked the owners locks a send planted: by lock id, or (a sibling's
+/** Marks acked the ack-settled locks a send planted: by lock id, or (a sibling's
  *  mirror, which carries none) by the sent value, no newer than the send. */
-function settleOwnersLocksInDraft(draft: any, lockIds: ReadonlySet<string>, sent?: ReadonlyArray<{ key: string; value: unknown }>, sentAt = Infinity): Array<{ key: string; value: unknown }> {
+function settleAckedLocksInDraft(draft: any, lockIds: ReadonlySet<string>, sent?: ReadonlyArray<{ key: string; value: unknown }>, sentAt = Infinity): Array<{ key: string; value: unknown }> {
   const settled: Array<{ key: string; value: unknown }> = [];
-  const keys = sent ? sent.map((s) => s.key) : Object.keys(draft.pending ?? {}).filter(isOwnersLockKey);
+  const keys = sent ? sent.map((s) => s.key) : Object.keys(draft.pending ?? {}).filter(isAckSettledLockKey);
   for (const key of keys) {
-    if (!isOwnersLockKey(key)) continue;
+    if (!isAckSettledLockKey(key)) continue;
     const entry = draft.pending[key] as any;
     if (entry?.type !== "field") {
       const value = sent?.find((s) => s.key === key)?.value;
@@ -10467,7 +10472,7 @@ function applyGestureInDraft(draft: any, msg: GestureMessage) {
   }
 
   if (msg.kind === "settle") {
-    settleOwnersLocksInDraft(draft, new Set(msg.lockIds), msg.locks, msg.sentAt);
+    settleAckedLocksInDraft(draft, new Set(msg.lockIds), msg.locks, msg.sentAt);
     return;
   }
 
@@ -12095,8 +12100,8 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // rows) and retire them at the same position — they have no dispatch of
   // their own to be acknowledged. `local` marks the bridged receipt, which
   // stamps and does not re-announce.
-  settleOwnersAck: sync(function (this: Draft, lockIds: readonly string[]) {
-    const settled = settleOwnersLocksInDraft(this, new Set(lockIds));
+  settleAckedLocks: sync(function (this: Draft, lockIds: readonly string[]) {
+    const settled = settleAckedLocksInDraft(this, new Set(lockIds));
     if (settled.length) broadcastGesture({ kind: "settle", locks: settled, lockIds: [...lockIds], sentAt: Date.now(), ts: Date.now() }, bridgeUserId(this));
   }),
 

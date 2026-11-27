@@ -3,7 +3,7 @@
 // owners read, each under the ordinary field lock, so Add me, leaving and
 // Take it over move the row in the same tick and hold through echoes that
 // arrive in any order. The change's acknowledgement settles those locks on
-// whatever the server answers since (settleOwnersAck): a concurrent change
+// whatever the server answers since (settleAckedLocks): a concurrent change
 // lands, a follower's change settles on the host, and a lock that never hears
 // its acknowledgement gives way at the triage bound.
 import { afterEach, beforeEach, expect, test } from "bun:test";
