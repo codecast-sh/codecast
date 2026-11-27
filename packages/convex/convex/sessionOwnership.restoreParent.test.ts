@@ -127,6 +127,12 @@ describe("restore_parent", () => {
     expect(conv(db).released_role_id).toBeUndefined();
   });
 
+  test("a spawner already nested under this session is named but not adoptable (a loop)", async () => {
+    const db = fixtures(true, { spawned_by_conversation_id: LEAD }, { parent_conversation_id: S });
+    const read: any = await performListOwners(ctxOf(db), ME as any, S, { origin: true });
+    expect(read.spawned_by?.adoptable).toBe(false);
+  });
+
   test("names the session that spawned a peer, adoptable by a viewer who runs it", async () => {
     const db = fixtures(true, { spawned_by_conversation_id: LEAD });
     const read: any = await performListOwners(ctxOf(db), ME as any, S, { origin: true });

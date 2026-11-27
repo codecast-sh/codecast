@@ -114,7 +114,7 @@ export function rowDropZone(y: number, top: number, height: number, opts: { reor
  * server would refuse putting it back). A role's start and its hold are not
  * put back.
  */
-export function adoptChange(facts: SessionOwnerFacts | null, read: SessionOwnersRow | null, meId: string, targetId: string, mayHandTo: (sessionId: string) => boolean): { change: SessionOwnersChange; inverse: SessionOwnersChange[] | null } {
+export function adoptChange(facts: SessionOwnerFacts | null, read: SessionOwnersRow | null, meId: string, targetId: string, mayHandTo: (sessionId: string) => boolean, releasedLink: string | null = null): { change: SessionOwnersChange; inverse: SessionOwnersChange[] | null } {
   const change: SessionOwnersChange = { adopt_parent: targetId };
   if (!facts) return { change, inverse: null };
   const was = ownersOf(facts);
@@ -123,7 +123,8 @@ export function adoptChange(facts: SessionOwnerFacts | null, read: SessionOwners
   // A parent a person released it from still links it: undo nests it back
   // there released, so a later Put back can still find it, and its role
   // returns in a step of its own (an adopt cannot carry one).
-  const released = !was.parentSession ? read?.released_parent?.conversation_id ?? null : null;
+  // The open conversation's read names it; a card's row keeps the link too.
+  const released = !was.parentSession ? read?.released_parent?.conversation_id ?? releasedLink : null;
   const reNest = !!released && mayHandTo(released);
   const back: SessionOwnersChange = was.parentSession
     ? { adopt_parent: was.parentSession }

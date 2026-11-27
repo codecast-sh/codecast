@@ -42,6 +42,8 @@ export function adoptSessionNow(draggedId: string, targetId: string): void {
   const st = useInboxStore.getState() as any;
   const meId = meOf(st);
   const mayHandTo = (id: string) => !!st.sessions?.[id] && mayEdit(st.sessions[id], ownersKnownOf(st, id), meId);
-  const { change, inverse } = adoptChange(ownerFactsOf(st, draggedId), ownersReadOf(st, draggedId), meId, targetId, mayHandTo);
+  const dragged = st.sessions?.[draggedId];
+  const releasedLink = dragged?.parent_released_at != null && dragged?.parent_conversation_id ? String(dragged.parent_conversation_id) : null;
+  const { change, inverse } = adoptChange(ownerFactsOf(st, draggedId), ownersReadOf(st, draggedId), meId, targetId, mayHandTo, releasedLink);
   applyOwnersWithToast(draggedId, change, inverse, `“${titleOf(st, draggedId)}” now works for “${titleOf(st, targetId)}”`);
 }

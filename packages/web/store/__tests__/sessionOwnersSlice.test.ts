@@ -149,6 +149,14 @@ describe("applySessionOwners", () => {
     expect(back.released_role ?? null).toBeNull();
   });
 
+  test("a take-over from a closed parent offers no Put back, as the server would refuse it", () => {
+    const P = "p".repeat(32);
+    useInboxStore.setState((st: any) => ({ sessions: { ...st.sessions, [P]: { _id: P, user_id: ME, owners_model: true, inbox_closed_at: 5, inbox_dismissed_at: 5 } } }));
+    applySessionOwnersRead(S, read({ people: [], parent_session: { conversation_id: P, short_id: "p1", title: "Parent" } }));
+    useInboxStore.getState().applySessionOwners(S, { take_over: true }, null);
+    expect((useInboxStore.getState() as any).sessionOwners[S].released_parent ?? null).toBeNull();
+  });
+
   test("put back from the read alone: the released parent owns it again and you stay", () => {
     const P = "p".repeat(32);
     applySessionOwnersRead(S, read({ released_parent: { conversation_id: P, short_id: "p1", title: "Parent" } }));

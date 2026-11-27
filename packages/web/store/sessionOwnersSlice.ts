@@ -21,7 +21,7 @@
 //
 // Spread into the store (inboxStore), so it gains these without a line of its own.
 import { windowOrgTree } from "./orgSlice";
-import { underOwnersModel, workspaceFeatureEnabled } from "@codecast/shared/contracts";
+import { isClosedSession, underOwnersModel, workspaceFeatureEnabled } from "@codecast/shared/contracts";
 import { isConvexId } from "@codecast/shared/entities";
 import { action } from "./mutativeMiddleware";
 import { mayEdit } from "../lib/adoptDrop";
@@ -202,7 +202,8 @@ function changeFactsOf(s: OwnersState, conversationId: string): SessionOwnerFact
 export function mayHandToIn(s: OwnersState & { currentUser?: any }, sessionId: string): boolean {
   const meId = String(s.currentUser?._id ?? "");
   const row = s.sessions?.[sessionId] ?? s.conversations?.[sessionId];
-  return !!meId && !!row && mayEdit(row, { facts: ownerFactsOf(s, sessionId), canEdit: !!ownersReadOf(s, sessionId)?.can_edit }, meId);
+  if (!meId || !row || row.inbox_killed_at || isClosedSession(row) || !ownersModelOnFor(s, sessionId)) return false;
+  return mayEdit(row, { facts: ownerFactsOf(s, sessionId), canEdit: !!ownersReadOf(s, sessionId)?.can_edit }, meId);
 }
 
 /** Who owns the session as the store shows it: its people, then its implicit starter. */
