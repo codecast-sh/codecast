@@ -281,6 +281,16 @@ describe("recording every way a target goes live (DP11)", () => {
     expect((await viewOf(ctx, "web"))[0].live.sha).toBe(sha(1));
   });
 
+  test("a Railway success for one commit never finishes the deploy a newer commit's pending opened", async () => {
+    const { t, ctx } = await published();
+    const payload = (state: string, n: number) => ({ sha: sha(n), context: "acme - web", state, target_url: "https://railway/x", branches: [{ name: "main" }], repository: { full_name: REPO, default_branch: "main" }, updated_at: new Date(NOW).toISOString() });
+    await recordGithubDeployStatus(ctx, statusEventOf(payload("pending", 1))!);
+    await recordGithubDeployStatus(ctx, statusEventOf(payload("pending", 2))!);
+    await recordGithubDeployStatus(ctx, statusEventOf(payload("success", 1))!);
+    expect(t.deploys.find((d: any) => d.sha === sha(2))).toMatchObject({ status: "running" });
+    expect((await viewOf(ctx, "web"))[0].live.sha).toBe(sha(1));
+  });
+
   test("a json reader records a deploy when the document names a new commit, once", async () => {
     const { t, ctx } = await published();
     const cli = t.deploy_targets.find((r) => r.name === "cli");
