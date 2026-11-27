@@ -102,6 +102,9 @@ export type DeploysBoardProps = {
 export function DeploysBoard(p: DeploysBoardProps) {
   const { target: t, production, now, focus, mine, me } = p;
   const mixed = !!p.projects;
+  // Drawn together, each card names its project, unless every target drawn is one project's.
+  const repositories = useMemo(() => [...new Set((p.projects ?? [t]).map((x) => x.repository))], [p.projects, t]);
+  const tagged = repositories.length > 1;
   const show = p.show === "priorities" && !p.priorities ? "sessions" : p.show;
   // Each target's own state; drawn together, their histories merge newest first and no one target's live leads.
   const nows = useMemo(() => (p.projects ?? [t]).map((x) => ({ t: x, n: targetNow(x, p.deploys) })), [p.projects, t, p.deploys]);
@@ -213,11 +216,11 @@ export function DeploysBoard(p: DeploysBoardProps) {
       <div className="dpp-body">
         {showShipping ? (
           <div className="dpp-col" data-deploy-col="before">
-            <ShippingColumn runs={runs} shippers={shippers ?? []} error={!!p.shippingError} prs={p.prs} prsFailed={!!p.prsFailed} checkouts={p.checkouts} repositories={mixed ? nows.map((x) => x.t.repository) : [t.repository]} tagIn={mixed ? t.workspace : null} now={now} me={me} meLogin={p.meLogin} mine={mine} focus={focus} onMain={board.onMain} landedPrs={board.landedPrs} />
+            <ShippingColumn runs={runs} shippers={shippers ?? []} error={!!p.shippingError} prs={p.prs} prsFailed={!!p.prsFailed} checkouts={p.checkouts} repositories={repositories} tagIn={tagged ? t.workspace : null} now={now} me={me} meLogin={p.meLogin} mine={mine} focus={focus} onMain={board.onMain} landedPrs={board.landedPrs} />
           </div>
         ) : null}
         <div className="dpp-col" data-deploy-col="after">
-          <DeploysColumn {...p} show={show} n={n} nowOf={nowOf} shipping={showShipping} board={board} focusDeploys={focusDeploys} />
+          <DeploysColumn {...p} show={show} n={n} nowOf={nowOf} tagged={tagged} shipping={showShipping} board={board} focusDeploys={focusDeploys} />
         </div>
       </div>
     </section>
@@ -237,7 +240,7 @@ type BoardModel = {
 
 type TargetAt = { t: DeployTargetRow; n: ReturnType<typeof targetNow> };
 
-function DeploysColumn(p: Omit<DeploysBoardProps, "shipping"> & { n: ReturnType<typeof targetNow>; nowOf: (d: TeamDeployRow) => TargetAt; shipping: boolean; board: BoardModel; focusDeploys: TeamDeployRow[] }) {
+function DeploysColumn(p: Omit<DeploysBoardProps, "shipping"> & { n: ReturnType<typeof targetNow>; nowOf: (d: TeamDeployRow) => TargetAt; tagged: boolean; shipping: boolean; board: BoardModel; focusDeploys: TeamDeployRow[] }) {
   const { target: t, production, now, focus, mine, show, n, board, focusDeploys } = p;
   const mixed = !!p.projects;
   const { going, nextCommits, next, cards, mineIds, your } = board;
@@ -290,7 +293,7 @@ function DeploysColumn(p: Omit<DeploysBoardProps, "shipping"> & { n: ReturnType<
         {shown.slice(0, limit).map((c) => {
           // Each card is its own target's: its "Live now" and its presses read that target, and drawn together it names its project.
           const at = p.nowOf(c.deploys[0]);
-          return <DeployCard key={c.deploys[0]._id} card={c} {...p} target={at.t} view={show} live={at.n.live} tag={mixed} isMine={isMine} newer={your.newer} focused={cardFocus(c)} />;
+          return <DeployCard key={c.deploys[0]._id} card={c} {...p} target={at.t} view={show} live={at.n.live} tag={p.tagged} still={mixed} isMine={isMine} newer={your.newer} focused={cardFocus(c)} />;
         })}
         {shown.length > limit ? (
           <li>
@@ -331,8 +334,8 @@ function DeployButton({ t, production, n, onPress }: { t: DeployTargetRow; produ
   );
 }
 
-function DeployCard({ card, view, mine, me, focus, now, target: t, production, deploys, live, tag, isMine, newer, focused, openDeploy, onPress, onRollback }: Omit<DeploysBoardProps, "shipping"> & {
-  card: Card; view: BoardView; live: TeamDeployRow | null; tag: boolean; isMine: (id: string) => boolean; newer: ReadonlyMap<string, CardId>; focused: boolean;
+function DeployCard({ card, view, mine, me, focus, now, target: t, production, deploys, live, tag, still, isMine, newer, focused, openDeploy, onPress, onRollback }: Omit<DeploysBoardProps, "shipping"> & {
+  card: Card; view: BoardView; live: TeamDeployRow | null; tag: boolean; still: boolean; isMine: (id: string) => boolean; newer: ReadonlyMap<string, CardId>; focused: boolean;
 }) {
   const [lead, ...earlier] = card.deploys;
   const c = card.carried;
@@ -353,8 +356,8 @@ function DeployCard({ card, view, mine, me, focus, now, target: t, production, d
   // Roll back here is offered on whichever attempt at this commit went live.
   const wentLive = card.deploys.find((d) => d.status === "live") ?? lead;
   // Drawn together, nothing presses.
-  const back = tag ? null : rollbackOffer(wentLive, t, production, deploys);
-  const here = back || tag ? null : rollBackHere(wentLive, t, deploys);
+  const back = still ? null : rollbackOffer(wentLive, t, production, deploys);
+  const here = back || still ? null : rollBackHere(wentLive, t, deploys);
   // The card itself lights up when the view draws no row holding the linked thing.
   const rowHit = rowsHold(c, view, isMine, focus);
   return (

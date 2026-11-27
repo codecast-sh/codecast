@@ -43,9 +43,9 @@ mock.module("../../../hooks/useQueryNoThrow", () => ({
     return { data: undefined };
   },
 }));
-const remembered: Array<Record<string, string | null>> = [];
+const remembered: Array<{ page: string } & Record<string, string | null>> = [];
 const realRemembered = await import("../../../lib/rememberedFilters");
-mock.module("../../../lib/rememberedFilters", () => ({ ...realRemembered, rememberFilters: (_page: string, v: Record<string, string | null>) => { remembered.push(v); } }));
+mock.module("../../../lib/rememberedFilters", () => ({ ...realRemembered, rememberFilters: (page: string, v: Record<string, string | null>) => { remembered.push({ page, ...v }); } }));
 mock.module("next/link", () => ({
   default: ({ href, children, ...props }: any) => <a href={href} {...props}>{children}</a>,
 }));
@@ -89,12 +89,12 @@ const runs = [run("r-sit", "/code/sit", NOW - 3 * H, "Tidy the timer"), run("r-t
 const checkout = (repo: string) => ({ _id: `co-${repo}`, workspace: WS, device_id: "mac", path: `/code/${repo}`, repository: `jasonbenn/${repo}`, branch: "main", upstream: "origin/main", reported_at: NOW, level: { state: "ok" } });
 const byId = (rows: Array<{ _id: string }>) => Object.fromEntries(rows.map((r) => [r._id, r]));
 
-function seed({ personal = true, rows = true }: { personal?: boolean; rows?: boolean } = {}) {
+function seed({ personal = true, rows = true, saved }: { personal?: boolean; rows?: boolean; saved?: Record<string, string> } = {}) {
   const s = useInboxStore.getState() as any;
   useInboxStore.setState({
     currentUser: { _id: ME, name: "You" },
     teams: [{ _id: TEAM, name: "Codecast" }],
-    clientState: { ...s.clientState, ui: { ...(s.clientState?.ui ?? {}), active_team_id: personal ? null : TEAM } },
+    clientState: { ...s.clientState, ui: { ...(s.clientState?.ui ?? {}), active_team_id: personal ? null : TEAM, page_filters: saved ?? {} } },
     teamDeploys: rows ? byId(personal ? deploys : deploys.map((d) => ({ ...d, workspace: `team:${TEAM}`, repository: "o/codecast", target: "web" }))) : {},
     deployTargets: {},
     deployProductions: {},
@@ -175,7 +175,7 @@ test("personal: a chip toggles, All turns every one back on, and one left draws 
   click(chip(host, "jasonbenn/sit"));
   expect(chip(host, "jasonbenn/sit").getAttribute("aria-pressed")).toBe("false");
   expect(address()).toBe("jasonbenn/wardrobe,jasonbenn/tycho,jasonbenn/dance");
-  expect(remembered.at(-1)).toEqual({ show: null, mine: null, projects: "jasonbenn/wardrobe,jasonbenn/tycho,jasonbenn/dance" });
+  expect(remembered.slice(-2)).toEqual([{ page: "deploys", show: null, mine: null }, { page: "deploys-projects", projects: "jasonbenn/wardrobe,jasonbenn/tycho,jasonbenn/dance" }]);
   expect(cardIds(host)).toEqual(["dp-13", "dp-12"]);
   expect(host.querySelector("[data-deploy-heading]")!.textContent).toBe("3 projects");
   click(host.querySelector("[data-deploy-projects-all]"));
@@ -273,4 +273,39 @@ test("a stopped run's long reason folds to three lines until Show all, and Show 
       else delete proto[k];
     }
   }
+});
+
+test("personal: the projects last turned on open a bare address; a team page never reads, remembers or writes them", () => {
+  seed({ saved: { "deploys-projects": "projects=jasonbenn%2Fdance" } });
+  const own = mount();
+  expect(chips(own.host).filter((c) => c.getAttribute("aria-pressed") === "true").map((c) => c.getAttribute("data-deploy-project-chip"))).toEqual(["jasonbenn/dance"]);
+  own.unmount();
+  seed({ personal: false, saved: { "deploys-projects": "projects=jasonbenn%2Fdance" } });
+  window.history.replaceState(null, "", "/deploys?projects=jasonbenn%2Fsit");
+  const team = mount({ initialProjects: "jasonbenn/sit" });
+  click(team.host.querySelector('[data-deploy-view="prs"]'));
+  expect(new URL(window.location.href).searchParams.get("show")).toBe("prs");
+  expect(remembered).toEqual([{ page: "deploys", show: "prs", mine: null }]);
+  expect([...team.host.querySelectorAll("[data-deploy-target]")].map((t) => t.getAttribute("data-deploy-target"))).toEqual(["web"]);
+  team.unmount();
+  window.history.replaceState(null, "", "/deploys");
+  const bare = mount();
+  click(bare.host.querySelector('[data-deploy-view="tasks"]'));
+  expect(window.location.search).toBe("?show=tasks");
+  bare.unmount();
+});
+
+test("personal: one project with two targets draws them together under its name, untagged", () => {
+  seed();
+  const s = useInboxStore.getState() as any;
+  useInboxStore.setState({ teamDeploys: { ...s.teamDeploys, "dp-14": deploy("dp-14", "jasonbenn/sit", "live", NOW - 5 * H, { target: "web" }) } } as any);
+  const { host, unmount } = mount({ initialProjects: "jasonbenn/sit" });
+  expect(host.querySelector("[data-deploy-pane]")!.getAttribute("data-deploy-pane")).toBe("projects");
+  expect(host.querySelector("[data-deploy-heading]")!.textContent).toBe("sit");
+  expect(cardIds(host)).toEqual(["dp-14", "dp-11", "dp-10"]);
+  expect(host.querySelector("[data-deploy-project]")).toBeNull();
+  expect([...host.querySelectorAll("[data-deploy-run]")].map((r) => r.getAttribute("data-deploy-run"))).toEqual(["r-sit"]);
+  // Each target's own live deploy reads Live now.
+  expect([...host.querySelectorAll('[data-deploy-state="Live now"]')].map((e) => e.closest("[data-deploy-card]")!.getAttribute("data-deploy-card"))).toEqual(["dp-14", "dp-11"]);
+  unmount();
 });

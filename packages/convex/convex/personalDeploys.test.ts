@@ -162,6 +162,31 @@ describe("the Deploys page's reads by workspace", () => {
   });
 });
 
+describe("a personal workspace's deploys on the page", () => {
+  test("every deploy of the last 30 days, and each repository's newest and newest live one whatever their age", async () => {
+    const { t, ids } = await setup();
+    const DAY = 86_400_000;
+    await t.run(async (ctx) => {
+      const deploy = (n: number, repository: string, at: number, status: "live" | "failed") => ctx.db.insert("deploys", {
+        short_id: `dp-${n}`, workspace: ids.ws, target: "production", status, trigger: "outside", source: "personal flow", event_ids: [], carries: [],
+        repository, sha: String(n).padStart(7, "0"), created_at: at, ...(status === "live" ? { live_at: at } : {}), finished_at: at, updated_at: at,
+      } as any);
+      // A busy project: 100 deploys over the last ten days.
+      for (let i = 0; i < 100; i++) await deploy(i, "pia/busy", NOW - i * 2 * 3_600_000, "live");
+      // A quiet one: it went live 60 days ago and a later attempt 45 days ago failed.
+      await deploy(1000, "pia/quiet", NOW - 60 * DAY, "live");
+      await deploy(1001, "pia/quiet", NOW - 45 * DAY, "failed");
+      // Older quiet history the page needs no more of.
+      await deploy(1002, "pia/quiet", NOW - 90 * DAY, "live");
+    });
+    const rows = await t.withIdentity({ subject: `${ids.pia}|session` }).query(api.deployRefs.recentForTeam, { workspace: ids.ws });
+    expect(rows.filter((d: any) => d.repository === "pia/busy")).toHaveLength(100);
+    expect(rows.filter((d: any) => d.repository === "pia/quiet").map((d: any) => d.short_id)).toEqual(["dp-1001", "dp-1000"]);
+    // Newest first.
+    expect(rows.map((d: any) => d.created_at)).toEqual([...rows.map((d: any) => d.created_at)].sort((a, b) => b - a));
+  });
+});
+
 describe("runDeployEnd: where a run ended says what its deploy did", () => {
   const base = { node_statuses: [], fail_reason: undefined, merge: undefined } as any;
   test("live, unverified and shipped exits are live; deploy failures fail; Landed and the rest are nothing", () => {

@@ -2136,10 +2136,16 @@ export function checkVerdictOf(run: Pick<Doc<"workflow_runs">, "node_statuses">)
 }
 
 /**
- * How a flow lands a change, from its graph alone (so a run reads it before it reaches the station): "pr" when the
- * graph has a `pr` station at any depth (`pr`, `land__pr`) or a segment that is the `land` flow (Union's), else "direct".
+ * How a run lands its change. A run in a flow's direct mode (the library change flow's ship_mode=direct: its
+ * `direct_*` stations) lands direct. Otherwise its graph decides, so a run reads it before it reaches the station:
+ * "pr" when the graph has a `pr` station at any depth (`pr`, `land__pr`) or a segment that is the `land` flow
+ * (Union's), else "direct".
  */
-export function shipTrackOf(wf: { nodes?: Array<{ id: string }>; source?: string } | null | undefined): "pr" | "direct" {
+export function shipTrackOf(
+  wf: { nodes?: Array<{ id: string }>; source?: string } | null | undefined,
+  run?: Pick<Doc<"workflow_runs">, "node_statuses">,
+): "pr" | "direct" {
+  if (run?.node_statuses.some((n) => n.node_id.startsWith("direct_"))) return "direct";
   if ((wf?.nodes ?? []).some((n) => n.id === "pr" || n.id.endsWith("__pr"))) return "pr";
   const source = wf?.source ?? "";
   return /(^|[\s;{])pr\s*\[/m.test(source) || /\bflow\s*=\s*"?land"?(?![\w-])/.test(source) ? "pr" : "direct";
@@ -2220,7 +2226,7 @@ export async function shippingRunsCore(ctx: Ctx, userId: Id<"users">, workspace:
       ci_verdict: run.ci_verdict ? { green: run.ci_verdict.green, head_sha: run.ci_verdict.head_sha, at: run.ci_verdict.at } : null,
       review_verdict: run.review_verdict ? { verdict: run.review_verdict.verdict, at: run.review_verdict.at } : null,
       check_verdict: checkVerdictOf(run),
-      track: shipTrackOf(await feedWorkflowOf(ctx, run, reads)),
+      track: shipTrackOf(await feedWorkflowOf(ctx, run, reads), run),
       merge: run.merge ? { sha: run.merge.sha, branch: run.merge.branch, into: run.merge.into, at: run.merge.at, ...(run.merge.pr_url ? { pr_url: run.merge.pr_url } : {}) } : null,
       gate_prompt: run.gate_prompt ?? null,
       gate_node_id: run.gate_node_id ?? null,

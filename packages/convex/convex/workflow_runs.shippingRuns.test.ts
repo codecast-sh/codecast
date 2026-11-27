@@ -147,9 +147,12 @@ describe("workflow_runs.shippingRuns track", () => {
     const atLand = await run({ flow: union, status: "running", extra: { current_node_id: "land", node_statuses: [{ node_id: "start", status: "completed" }, { node_id: "land", status: "running" }] } });
     const direct = await run({ flow: personal, status: "running" });
     const shipNow = await run({ flow: sitBuild, status: "running" });
+    // The library change flow run in direct mode (ship_mode=direct): its graph holds a pr station it never visits.
+    const library = await flow("change-library", 'digraph change { graph [kind="line", takes="branch"]\n  pr [label="PR"]\n  direct_check [label="Check"]\n  direct_review [label="Review"]\n}', ["pr", "review", "land", "direct_check", "direct_review", "direct_deploy"]);
+    const directMode = await run({ flow: library, status: "running", extra: { current_node_id: "direct_review", node_statuses: [{ node_id: "direct_check", status: "completed" }, { node_id: "direct_review", status: "running" }] } });
     const rows = await read(ids.ana);
     const trackOf = (id: any) => rows.find((r: any) => r._id === id).track;
-    expect([trackOf(change), trackOf(atLand), trackOf(direct), trackOf(shipNow)]).toEqual(["pr", "pr", "direct", "direct"]);
+    expect([trackOf(change), trackOf(atLand), trackOf(direct), trackOf(shipNow), trackOf(directMode)]).toEqual(["pr", "pr", "direct", "direct", "direct"]);
   });
 
   test("a nested pr station counts; a flow named like land does not", () => {

@@ -27,14 +27,43 @@ export const whereIs = query({
 });
 
 const RECENT = 80;
+/** A personal workspace's page reads every deploy this recent, up to PERSONAL_RECENT_MAX. */
+const PERSONAL_WINDOW_MS = 30 * 86_400_000;
+const PERSONAL_RECENT_MAX = 500;
+/** How far back a personal workspace is read for each repository's newest deploy and newest live one. */
+const PERSONAL_SCAN = 2000;
+
+/**
+ * The deploys a personal workspace's page reads: every one of the last 30 days (capped), and for each repository its
+ * newest deploy and newest live one whatever their age, so a busy project never pushes a quiet one off the page.
+ */
+async function personalDeploys(ctx: { db: any }, workspace: string, now: number): Promise<Doc<"deploys">[]> {
+  const since = now - PERSONAL_WINDOW_MS;
+  const out = new Map<string, Doc<"deploys">>();
+  const newest = new Set<string>();
+  const newestLive = new Set<string>();
+  let scanned = 0;
+  let recent = 0;
+  for await (const d of ctx.db.query("deploys").withIndex("by_workspace_created", (q: any) => q.eq("workspace", workspace)).order("desc")) {
+    if (++scanned > PERSONAL_SCAN) break;
+    const repo = d.repository ?? "";
+    const keep = (d.created_at >= since && recent++ < PERSONAL_RECENT_MAX)
+      || (!newest.has(repo) && newest.add(repo))
+      || (d.status === "live" && !newestLive.has(repo) && newestLive.add(repo));
+    if (d.status === "live") newestLive.add(repo);
+    newest.add(repo);
+    if (keep) out.set(String(d._id), d);
+  }
+  return [...out.values()];
+}
 /** The commits a deploy row lists by name; the rest are counted. */
 const COMMIT_ROWS = 40;
 /** The sessions a deploy row names: every one its commits carry, up to this. */
 const SESSION_ROWS = 80;
 
 /**
- * A workspace's newest deploys (a team's, or a person's own), every target, each with the sessions whose commits it
- * carried and the tasks it took out.
+ * A workspace's deploys, every target, each with the sessions whose commits it carried and the tasks it took out: a
+ * team's newest RECENT, a person's own by personalDeploys.
  */
 export const recentForTeam = query({
   args: { team_id: v.optional(v.id("teams")), workspace: v.optional(v.string()) },
@@ -44,7 +73,9 @@ export const recentForTeam = query({
     const workspace = workspaceOfArgs(args);
     if (!(await workspaceGrantsAccess(ctx, userId, workspace))) return [];
     const ws = parseWorkspaceKey(workspace);
-    const rows: Doc<"deploys">[] = await ctx.db.query("deploys").withIndex("by_workspace_created", (q) => q.eq("workspace", workspace)).order("desc").take(RECENT);
+    const rows: Doc<"deploys">[] = ws?.type === "personal"
+      ? await personalDeploys(ctx, workspace, Date.now())
+      : await ctx.db.query("deploys").withIndex("by_workspace_created", (q) => q.eq("workspace", workspace)).order("desc").take(RECENT);
     // A session the viewer may read, with its owner and the priority it serves.
     const priorityOf = await sessionPriorityReader(ctx, userId, ws?.type === "team" ? ws.teamId : null);
     const convs = new Map<string, { title: string | null; user_id: string; priority: SessionPriorityRef | null } | null>();

@@ -19,7 +19,7 @@ export default function DeploysRoute() {
     <AuthGuard>
       <DashboardLayout>
         <ErrorBoundary name="Deploys">
-          <DeploysPage key={linkKey} initialTarget={params.get("target")} initialTeam={params.get("team")} initialDeploy={params.get("deploy")} initialFocus={focus} initialShow={viewOf(opened, focus)} initialMine={mineOf(opened)} initialRepo={params.get("repo")} initialProjects={opened.get("projects")} />
+          <DeploysPage key={linkKey} initialTarget={params.get("target")} initialTeam={params.get("team")} initialDeploy={params.get("deploy")} initialFocus={focus} initialShow={viewOf(opened, focus)} initialMine={mineOf(opened)} initialRepo={params.get("repo")} initialProjects={params.get("projects")} />
         </ErrorBoundary>
       </DashboardLayout>
     </AuthGuard>

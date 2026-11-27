@@ -22,7 +22,7 @@ import type { BoardView } from "../../lib/deploys/board";
 import { useOpenPullRequests, useOpenPullRequestsIn, useSyncOpenPullRequests } from "../../hooks/useSyncTimeline";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useDeployPress } from "../../hooks/useDeployPress";
-import { FOCUS_PARAMS, focusRef, focusRepository, focusSettled, focusTarget, pickTarget, reachAnyDeploy, targetKey, type DeployFocus } from "../../lib/deploys/focus";
+import { FOCUS_PARAMS, PERSONAL_PROJECTS_FILTER, focusRef, focusRepository, focusSettled, focusTarget, pickTarget, reachAnyDeploy, targetKey, type DeployFocus } from "../../lib/deploys/focus";
 import { useDeployReach } from "../../hooks/useDeployReach";
 import { focusTargets } from "../../lib/deploys/spot";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
@@ -63,18 +63,20 @@ export function DeploysPage({ initialTarget, initialTeam, initialDeploy, initial
   const ordered = useMemo(() => orderTargets(allTargets, deploys), [allTargets, deploys]);
   // What the link pointed at stays highlighted until the viewer clears it; the switch's view and Mine ride the address.
   const [focus, setFocus] = useState<DeployFocus | null>(initialFocus ?? null);
-  // The switch's view, Mine and the projects on open as the route read them (the link's, else the viewer's last:
-  // lib/rememberedFilters). Each touch writes them to the address (defaults left out), so a copied link opens as they
-  // see it, and remembers them. Projects: null is every one on (the default), "" none, else the keys on.
+  // The switch's view and Mine open as the route read them (the link's, else the viewer's last: lib/rememberedFilters).
+  // Each touch writes both to the address (defaults left out), so a copied link opens as they see it, and remembers them.
+  // A personal page's projects ride its address and are remembered apart, so a team page never names them: null is
+  // every one on (the default), "" none, else the `owner/name` keys on.
+  const savedProjects = useInboxStore((s) => (s.clientState.ui as { page_filters?: Record<string, string> } | undefined)?.page_filters?.[PERSONAL_PROJECTS_FILTER]);
   const [picks, setPicks] = useState<{ show: BoardView; mine: boolean; projects: string | null } | null>(null);
   const show = picks?.show ?? initialShow ?? "sessions";
   const mine = picks?.mine ?? !!initialMine;
-  const projectsParam = picks ? picks.projects : initialProjects ?? null;
+  const projectsParam = picks ? picks.projects : initialProjects ?? (savedProjects === undefined ? null : new URLSearchParams(savedProjects).get("projects"));
   const pickFilters = (v: BoardView, on: boolean, projects: string | null) => {
     setPicks({ show: v, mine: on, projects });
     const set = { show: v === "sessions" ? null : v, mine: on ? "1" : null };
-    // The projects ride a personal page's address; a team page keeps the viewer's last ones remembered for it.
-    rememberFilters("deploys", { ...set, projects });
+    rememberFilters("deploys", set);
+    if (personal) rememberFilters(PERSONAL_PROJECTS_FILTER, { projects });
     rewriteAddress(personal ? { ...set, projects } : set);
   };
   const pickShow = (v: BoardView) => pickFilters(v, mine, projectsParam);
@@ -181,7 +183,7 @@ export function DeploysPage({ initialTarget, initialTeam, initialDeploy, initial
         {drawn.length === 0 ? <div className="dpp-empty" data-deploys-none-picked>No projects selected</div> : (
           <DeploysBoard
             key={drawn.length === 1 ? drawn[0]._id : "projects"} target={drawn[0]} projects={drawn.length > 1 ? drawn : undefined} personal production={undefined} deploys={deploys}
-            heading={shown.length === projects.length ? "All projects" : shown.length === 1 ? shown[0].name : `${shown.length} projects`}
+            heading={shown.length === 1 ? shown[0].name : shown.length === projects.length ? "All projects" : `${shown.length} projects`}
             shipping={shipping.shipping} shippingError={shipping.error || shipping.failed} prs={personalPrs} prsFailed={personalPrsFailed} meLogin={meLogin} linesByDeploy={linesByDeploy} onLinesWanted={setLineIds} checkouts={checkouts}
             me={me ? String(me) : null} now={now} priorities={false} focus={focus} reach={reach} openDeploy={initialDeploy ?? null}
             show={show} mine={false} onShow={pickShow} onMine={pickMine} onClearFocus={clearFocus}

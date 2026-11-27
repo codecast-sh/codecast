@@ -213,11 +213,19 @@ through `packages/convex/run.sh`.
 - A decision page: a line card answered Ship says which deploy it went out in.
 - The Changes page's live strip and the Ops timeline: a deploy opens its
   deploy object.
-- The Deploys page in a personal workspace reads the person's own workspace
+- The Deploys page in a personal workspace shows every project the person
+  ships at once: a row of project chips (multi-select, all on) filters the
+  page, each project wears its repository's face, and the columns mix the
+  chosen projects' runs and deploys. A run on its way shows the Check ·
+  Review · Land track of a flow that lands straight to main (`track:
+  "direct"`), or the pull request's steps (`track: "pr"`). It has no pause or
+  rollback controls; those are a team's. It reads the person's own workspace
   (`user:<id>`): `deployTargets.view`, `deployRefs.recentForTeam`,
   `workflow_runs.shippingRuns` and `checkouts.forTeam` each take `workspace`
-  in place of `team_id` (exactly one). A personal workspace has no pause or
-  rollback controls; those are a team's.
+  in place of `team_id` (exactly one). For a personal workspace
+  `recentForTeam` returns every deploy of the last 30 days (up to 500) and
+  each repository's newest deploy and newest live one, whatever their age,
+  so a busy project never pushes a quiet one off the page.
 
 ## DP8. A deploy's steps are stations
 
@@ -433,7 +441,10 @@ one team publishing a checkout of it), and into the caller's own workspace
   repository, a repository one of the person's teams works on (its team's own
   path records it) and a line-deploy run (DP8, already a deploy) record
   nothing. A run resumed after it ended (Deploy failed, then Live) updates its
-  deploy to what the new end says; an unchanged end changes nothing.
+  deploy to what the new end says, with one exception: a deploy that went
+  live stays live when the resumed run's redeploy fails, at its sha, with
+  "A later redeploy failed: <reason>" added to its note. An unchanged end
+  changes nothing.
 
 A deploy that goes live fills its range on main (`fillDeployRange`): its
 previous sha (the target's live deploy before it) and the commits between
