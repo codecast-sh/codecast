@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import { create } from "mutative";
 import {
   lastPlacedInbox,
   placedInboxVersion,
@@ -143,5 +144,20 @@ describe("sidebarStatusOf: the chip follows the section the sidebar drew", () =>
   it("a row the sidebar has not drawn reads its own placement", () => {
     const asker = session(ASKER, { user_id: ME, agent_status: "dormant", thread_state_status: "dormant" });
     expect(sidebarStatusOf(state({ [ASKER]: asker }, "mine"), asker, NOW)).toBe("dormant");
+  });
+});
+
+describe("a placement made inside an action outlives its draft", () => {
+  // Actions place the inbox over their draft (computeVisualOrder, to advance
+  // the selection past a removed row). The memo that placement writes is read
+  // after the action ends, when every draft proxy is revoked.
+  it("the memo holds plain rows, so sidebarStatusOf reads it after the draft is gone", () => {
+    const row = session(ASKER, { user_id: ME, agent_status: "dormant", thread_state_status: "dormant" });
+    const base = state({ [ASKER]: row }, "mine");
+    create(base, (draft) => {
+      placeInboxRows(draft as PlaceInboxState, { now: NOW });
+    });
+    expect(lastPlacedInbox(base)!.sorted[0]).toBe(row);
+    expect(sidebarStatusOf(base, row, NOW)).toBe("dormant");
   });
 });

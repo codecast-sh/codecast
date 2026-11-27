@@ -25,7 +25,6 @@ import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useSearchParams } from "next/navigation";
 import { EntityIdPill } from "../EntityIdPill";
-import { Mark } from "../Mark";
 import { ShareControl } from "../ShareControl";
 import { EmptyState } from "../ui/empty-state";
 import { SkeletonRows } from "../ui/skeleton";
@@ -96,7 +95,7 @@ function PriorityBody({ row }: { row: PriorityView }) {
     <article data-priority-page={row.short_id} className="[container-type:inline-size]">
       {/* On a phone the actions take a row of their own above the title, so the title has the whole width. */}
       <header className="flex items-start gap-3 max-sm:flex-col max-sm:gap-1">
-        <span className="mt-0.5 hidden size-8 shrink-0 items-center justify-center rounded-lg bg-sol-text/[0.06] text-sol-text-muted sm:flex"><Mark id="entity.priority" labeled><Target className="size-[18px]" aria-hidden /></Mark></span>
+        <span className="mt-0.5 hidden size-8 shrink-0 items-center justify-center rounded-lg bg-sol-text/[0.06] text-sol-text-muted sm:flex"><Target className="size-[18px]" aria-hidden /></span>
         <div className="min-w-0 flex-1 max-sm:self-stretch">
           {/* The priority's own page shows its title whole. */}
           <h1 data-priority-title className="break-words text-[22px] font-semibold leading-tight text-sol-text">{row.title}</h1>
@@ -370,10 +369,10 @@ function Linked({ model, now, lookups }: { model: PriorityModel; now: number; lo
           </div>
         </TypeRow>
       )}
-      {plans.length > 0 && <TypeRow label="Plan">{plans.map(({ plan, prefix }) => <PlanChip key={plan.short_id} plan={plan} prefix={prefix} showSize={!!prefix} labeled className="max-w-[24rem]" />)}</TypeRow>}
+      {plans.length > 0 && <TypeRow label="Plan">{plans.map(({ plan, prefix }) => <PlanChip key={plan.short_id} plan={plan} prefix={prefix} showSize={!!prefix} className="max-w-[24rem]" />)}</TypeRow>}
       {prs.length > 0 && <TypeRow label="PRs">{prs.map((p) => <PrChip key={p} pr={p} state={lookups.prState(p)} />)}</TypeRow>}
-      {branches.length > 0 && <TypeRow label="Branches">{branches.map((b) => <BranchChip key={b} name={b} labeled />)}</TypeRow>}
-      {deploys.length > 0 && <TypeRow label="Deploys">{deploys.map((d) => <DeployChip key={d.id} d={d} now={now} labeled />)}</TypeRow>}
+      {branches.length > 0 && <TypeRow label="Branches">{branches.map((b) => <BranchChip key={b} name={b} />)}</TypeRow>}
+      {deploys.length > 0 && <TypeRow label="Deploys">{deploys.map((d) => <DeployChip key={d.id} d={d} now={now} />)}</TypeRow>}
     </section>
   );
 }

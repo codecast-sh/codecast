@@ -114,8 +114,6 @@ test("the bracket rail spans the lines one session covers; the plan sits on the 
       .toEqual([["s1", "head"], ["s2", "mid"], ["s3", "mid"], ["s4", "end"]]);
     // Each segment hangs off a cell as tall as its line (so a line made taller by its title or "Looks done?" leaves no gap), never the fixed-height chips row.
     for (const r of pri2.querySelectorAll("[data-rail]")) {
-      // Each segment is the registered bracket mark, so a hover names it.
-      expect(r.querySelector("[data-mark]")!.getAttribute("data-mark")).toBe("priority.bracket");
       expect(r.closest("[data-line-chips]")).toBeNull();
       const cell = r.parentElement!;
       expect(cell.hasAttribute("data-line-chips-cell")).toBe(true);

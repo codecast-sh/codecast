@@ -12,14 +12,9 @@ export const TASK_PRIORITY: Record<TaskPriority, { icon: LucideIcon; label: stri
   none: { icon: Minus, label: "None", color: "text-sol-text-dim" },
 };
 
-/** The level a surface that always draws a priority shows: an unset or unknown value reads as `fallback`. */
-export function taskPriorityLevel(priority: string | null | undefined, fallback: TaskPriority = "medium"): TaskPriority {
-  return priority && Object.hasOwn(TASK_PRIORITY, priority) ? (priority as TaskPriority) : fallback;
-}
-
 /** For a surface that always draws a priority: an unset or unknown value reads as `fallback`. */
 export function taskPriority(priority: string | null | undefined, fallback: TaskPriority = "medium") {
-  return TASK_PRIORITY[taskPriorityLevel(priority, fallback)];
+  return TASK_PRIORITY[priority as TaskPriority] ?? TASK_PRIORITY[fallback];
 }
 
 /** For a surface that shows a priority only when one is set: undefined for unset, "none" or unknown. */

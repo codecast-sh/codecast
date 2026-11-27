@@ -9,7 +9,6 @@ import Link from "next/link";
 import { ChevronDown } from "lucide-react";
 import type { PriorityLooseSession } from "@codecast/shared/contracts/priorities";
 import { Popover, PopoverAnchor, PopoverContent } from "../ui/popover";
-import { Mark } from "../Mark";
 import { TOUCH_AREA, ago, type Landed, type ListLayout, type TodaySegment, type TodayShare } from "../../lib/priorityList";
 import { cn } from "../../lib/utils";
 
@@ -53,11 +52,9 @@ export function StatsLine({ days, landed, todayIndex, today, loose, now, layout 
         <span className="text-[17px] font-semibold tabular-nums text-sol-text">{critical}</span>
         <span className="shrink-0 text-ui text-sol-text">{wide ? "critical landed · 10d" : "landed"}</span>
         {wide && (
-          <Mark id="priority.landed" labeled>
-            <span aria-hidden className="flex h-[16px] w-[100px] shrink-0 items-end gap-[3px]">
-              {perDay.map((n, i) => <i key={days[i]} className="block flex-1 rounded-[1px] bg-sol-green" style={{ height: n ? Math.max(3, Math.round((n / peak) * 16)) : 1, opacity: n ? 1 : 0.25 }} />)}
-            </span>
-          </Mark>
+          <span aria-hidden className="flex h-[16px] w-[100px] shrink-0 items-end gap-[3px]">
+            {perDay.map((n, i) => <i key={days[i]} className="block flex-1 rounded-[1px] bg-sol-green" style={{ height: n ? Math.max(3, Math.round((n / peak) * 16)) : 1, opacity: n ? 1 : 0.25 }} />)}
+          </span>
         )}
         {today.total > 0 && (
           <>
@@ -125,31 +122,29 @@ function TodayBar({ today, loose, now, full }: { today: TodayView; loose: Priori
   const none = today.parts.find((p) => p.label === "none");
   return (
     <Popover open={noneOpen} onOpenChange={setNoneOpen}>
-      {/* Its words sit beside it on the line, and its heading over it in the band. */}
-      <Mark id="priority.today_share" labeled className={full ? "w-full" : undefined} hint={today.segments.map((s) => `${s.title} ${s.count}`).join(" · ")}>
-        <PopoverAnchor asChild>
-          <span data-today-bar className={cn("relative flex shrink-0 gap-px", full ? "h-3 w-full" : "h-[10px] w-[72px]")}>
-            {today.segments.map((s) => {
-              const style = { flexGrow: s.count, flexBasis: 0, minWidth: 4, background: FILL[s.tone] };
-              const look = "block h-full first:rounded-l-[2px] last:rounded-r-[2px]";
-              // No priority opens its sessions: a real button, so a keyboard reaches it too.
-              return s.tone === "none" ? (
-                <button
-                  key={s.key}
-                  type="button"
-                  data-today-seg="none"
-                  aria-label="Today's sessions outside every priority"
-                  onClick={() => setNoneOpen(true)}
-                  className={cn(look, "cursor-pointer border border-sol-text-dim/50 p-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sol-blue/50", TOUCH_AREA)}
-                  style={style}
-                />
-              ) : (
-                <span key={s.key} data-today-seg={s.key} className={look} style={style} />
-              );
-            })}
-          </span>
-        </PopoverAnchor>
-      </Mark>
+      <PopoverAnchor asChild>
+        <span data-today-bar className={cn("relative flex shrink-0 gap-px", full ? "h-3 w-full" : "h-[10px] w-[72px]")}>
+          {today.segments.map((s) => {
+            const style = { flexGrow: s.count, flexBasis: 0, minWidth: 4, background: FILL[s.tone] };
+            const look = "block h-full first:rounded-l-[2px] last:rounded-r-[2px]";
+            // No priority opens its sessions: a real button, so a keyboard reaches it too.
+            return s.tone === "none" ? (
+              <button
+                key={s.key}
+                type="button"
+                data-today-seg="none"
+                aria-label="Today's sessions outside every priority"
+                onClick={() => setNoneOpen(true)}
+                title={`${s.title} · ${s.count} messages`}
+                className={cn(look, "cursor-pointer border border-sol-text-dim/50 p-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sol-blue/50", TOUCH_AREA)}
+                style={style}
+              />
+            ) : (
+              <span key={s.key} data-today-seg={s.key} title={`${s.title} · ${s.count} messages`} className={look} style={style} />
+            );
+          })}
+        </span>
+      </PopoverAnchor>
       <PopoverContent align="start" className="w-[22rem] bg-sol-card p-1.5">
         <div data-no-priority className="px-1.5 pb-1 pt-0.5 text-mark font-semibold uppercase tracking-wide text-sol-text-dim">No priority · {none?.pct ?? 0}% of today</div>
         {loose.length === 0 && <div className="px-1.5 py-1 text-meta text-sol-text-dim">No sessions to list</div>}

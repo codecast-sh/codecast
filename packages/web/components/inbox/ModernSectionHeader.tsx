@@ -50,7 +50,7 @@ export function ModernSectionHeader({
   const status = SECTION_HEADER_STATUS[sectionKey];
   // A section that is not a state (a label, a project, Pinned) keeps its own
   // colour as a dot, so a label still reads as that label.
-  const lead = icon ?? (status ? <SessionStatusMark status={status} labeled /> : <span aria-hidden className={`flex ${color}`}><span className="h-1.5 w-1.5 rounded-full bg-current" /></span>);
+  const lead = icon ?? (status ? <SessionStatusMark status={status} /> : <span aria-hidden className={`flex ${color}`}><span className="h-1.5 w-1.5 rounded-full bg-current" /></span>);
   const chevron = <ChevronDown aria-hidden className={`h-3.5 w-3.5 shrink-0 text-sol-text-dim transition-transform ${collapsed ? "-rotate-90" : ""}`} />;
   const caption = (
     <>
@@ -61,7 +61,7 @@ export function ModernSectionHeader({
       {!hideCount && <span className="shrink-0 text-mark tabular-nums text-sol-text-dim">{count}</span>}
       {facts}
       {states && TALLY.map(([k, s]) => (states[k] ?? 0) > 0 && (
-        <span key={k} className="flex shrink-0 items-center gap-1 text-mark tabular-nums text-sol-text-dim">
+        <span key={k} title={`${states[k]} ${k === "needs_input" ? "need you" : "working"}`} className="flex shrink-0 items-center gap-1 text-mark tabular-nums text-sol-text-dim">
           <SessionStatusMark status={s} size={8} />
           {states[k]}
         </span>
