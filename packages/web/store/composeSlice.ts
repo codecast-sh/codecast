@@ -81,13 +81,15 @@ export function bindComposeTask(
 }
 
 /** A composer opened from a milestone's Start: the stub keeps what the create
- *  links (createSessionFromStub), so a heal that re-issues it links the same. */
+ *  links (createSessionFromStub), so a heal that re-issues it links the same,
+ *  and what the team sees when the Start preselects it (lib/priorityStartFolder). */
 export function bindComposeStart(
   store: { syncRecord: (field: string, id: string, record: any) => void },
   stubId: string,
   start: SessionStart,
+  visibility?: ComposeContext["visibility"],
 ): void {
-  store.syncRecord("sessions", stubId, { _start: start });
+  store.syncRecord("sessions", stubId, { _start: start, ...(visibility ? { _visibility: visibility } : {}) });
 }
 
 /** The draft content held for a compose stub, or null when there is none worth

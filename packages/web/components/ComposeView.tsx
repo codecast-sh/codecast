@@ -162,14 +162,9 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
       // closure's mount-time `path`/`agentType`: the user may have switched
       // either in the null-state pickers before sending, and that switch (written
       // to the stub row) must be what we create with.
-      // A hosted stub's first message rides the create (hostedFirstRef, set
-      // by the hosted gate below a tick before materialize fires).
-      // A Start's create says so when the server could not put the session on its milestone.
-      create: (stubId) => sayIfStartUnlinked(
-        store.createSessionFromStub(stubId, { agentType, projectPath: path, gitRoot: path || undefined, firstMessage: hostedFirstRef.current ?? undefined }),
-        useInboxStore.getState().sessions[stubId]?._start,
-        (message) => toast(message),
-      ),
+      // A hosted stub's first message rides the create (hostedFirstRef, set by the hosted gate below a tick before
+      // materialize fires). A Start's create says so when the server could not link it (lib/priorityStartLink).
+      create: (stubId) => sayIfStartUnlinked(store.createSessionFromStub(stubId, { agentType, projectPath: path, gitRoot: path || undefined, firstMessage: hostedFirstRef.current ?? undefined }), useInboxStore.getState().sessions[stubId]?._start, (message) => toast(message)),
     });
     materializeRef.current = materialize;
     stubIdRef.current = sid;
@@ -178,8 +173,7 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
     if (initialQuery) store.setDraft(sid, { draft_message: initialQuery });
     if (context?.deviceId && sid !== resumeStubId) store.setSessionTargetDevice(sid, context.deviceId, { picked: true });
     if (context?.linkedTask && sid !== resumeStubId) bindComposeTask(store, sid, context.linkedTask);
-    if (context?.start && sid !== resumeStubId) bindComposeStart(store, sid, context.start);
-    if (context?.visibility && sid !== resumeStubId) store.setStubVisibility(sid, context.visibility);
+    if (context?.start && sid !== resumeStubId) bindComposeStart(store, sid, context.start, context.visibility);
     setSessionId(sid);
     setRestored(sid === resumeStubId);
     setSkillCtx({ projectPath: (sid === resumeStubId ? resumed?.project_path : path) || undefined, agentType });

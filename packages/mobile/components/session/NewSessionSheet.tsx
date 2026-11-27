@@ -24,8 +24,7 @@ import { SettingsSwitch } from '@/components/settings/SettingsUI';
 import { useAgentsByUse, useDefaultAgentType, useOnlyHostedAgent, usePinnedPickerOptions } from '@codecast/web/hooks/usePinnedAgents';
 import { startHostedConversation } from '@codecast/web/lib/startHostedConversation';
 import { sayIfStartUnlinked } from '@codecast/web/lib/priorityStartLink';
-import { startFolderInStore } from '@codecast/web/lib/priorityStartFolder';
-import { useSettingsData } from '@codecast/web/hooks/useSyncSettings';
+import { useStartFolderPath } from '@/hooks/useStartFolderPath';
 import { AssistantStart } from '@/components/hosted/AssistantStart';
 import { RecentScreenshots } from '@/components/session/RecentScreenshots';
 import { checkoutMatches, displayPath, expandHome, newFolderPath } from '@/lib/folderSearch';
@@ -257,15 +256,7 @@ function NewSessionSheet({ visible, seed, sharedImages, start, task, onClose, on
   const scopedDeviceId = deviceId ?? intendedDeviceId;
   const pickedDevice = useMemo(() => (scopedDeviceId ? devices.find((d) => d.device_id === scopedDeviceId) ?? null : null), [devices, scopedDeviceId]);
   const recentProjects = useScopedRecentProjects({ scopedDeviceId, routedDevice: pickedDevice, active: visible });
-  // A Start on a team priority opens in a folder whose rule shares with that
-  // team (lib/priorityStartFolder), so its link holds. The sheet has no
-  // what-the-team-sees picker, so a folder that would need Summary picked is
-  // never chosen here: the person picks the folder, and the alert explains.
-  useSettingsData('directoryMappings');
-  const startPath = useInboxStore((s) => {
-    const folder = start?.priority ? startFolderInStore(s, start.priority) : null;
-    return folder && !folder.visibility ? folder.path : null;
-  });
+  const startPath = useStartFolderPath(start);
   const projectPath = pathPick ?? startPath ?? savedProject ?? recentProjects[0]?.path ?? "";
   const defaultDeviceId = intendedDeviceId ?? defaultMachineId(rawDevices, {
     ownerDeviceId: null,
