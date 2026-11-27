@@ -149,6 +149,17 @@ describe("applySessionOwners", () => {
     expect(back.released_role ?? null).toBeNull();
   });
 
+  test("release and Put back stamp the inbox row's release as the server will", () => {
+    const P = "p".repeat(32);
+    useInboxStore.setState((st: any) => ({ sessions: { ...st.sessions, [P]: { _id: P, user_id: ME, owners_model: true }, [S]: { ...st.sessions[S], parent_conversation_id: P } } }));
+    applySessionOwnersRead(S, read({ parent_session: { conversation_id: P, short_id: "p1", title: "Parent" } }));
+    useInboxStore.getState().applySessionOwners(S, { release_parent: true }, null);
+    expect(row().parent_released_at).toBeGreaterThan(0);
+    useInboxStore.getState().applySessionOwners(S, { restore_parent: true }, null);
+    expect(row().parent_released_at ?? null).toBeNull();
+    expect(row().owner_session_id).toBe(P);
+  });
+
   test("a take-over from a closed parent offers no Put back, as the server would refuse it", () => {
     const P = "p".repeat(32);
     useInboxStore.setState((st: any) => ({ sessions: { ...st.sessions, [P]: { _id: P, user_id: ME, owners_model: true, inbox_closed_at: 5, inbox_dismissed_at: 5 } } }));

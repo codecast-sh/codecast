@@ -276,6 +276,7 @@ export function createSessionOwnersSlice(): SessionOwnersSliceActions {
       const read = this.sessionOwners[conversationId];
       if (!sameIds(read.people_ids, next.people)) read.people_ids = next.people;
       const roleBefore = read.role ? { ...read.role } : null;
+      const parentBefore = read.parent_session?.conversation_id ?? null;
       if ((read.role?.role_id ?? null) !== next.role) read.role = next.role ? roleRefOf(this, next.role) : null;
       if (!next.parentSession && read.parent_session) {
         // Released, it is where the session came from: the menu offers it back.
@@ -320,9 +321,19 @@ export function createSessionOwnersSlice(): SessionOwnersSliceActions {
           stamps.parent_conversation_id = change.adopt_parent;
           stamps.adopted_at = row.adopted_at ?? Date.now();
           stamps.parent_released_at = null;
+        } else if (change.adopt_parent && change.release_parent) {
+          // Nested there already released (an undo putting a released link back).
+          stamps.parent_conversation_id = change.adopt_parent;
+          stamps.adopted_at = row.adopted_at ?? Date.now();
+          stamps.parent_released_at = row.parent_released_at ?? Date.now();
         } else if (change.detach_parent) {
           stamps.parent_conversation_id = null;
           stamps.adopted_at = null;
+        } else if (change.restore_parent && next.parentSession) {
+          stamps.parent_released_at = null;
+        } else if (parentBefore && !next.parentSession) {
+          // Released, or taken over: the link stays, stamped released.
+          stamps.parent_released_at = row.parent_released_at ?? Date.now();
         }
         for (const [field, value] of Object.entries(stamps)) if ((row[field] ?? null) !== (value ?? null)) row[field] = value;
       }
