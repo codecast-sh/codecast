@@ -694,7 +694,7 @@ export const removeRoute = mutation({
       !isRoomlessKey(t.room_key) &&
       (await authorizeRoom(ctx, userId, t.room_key)).ok;
     if (!isScribe && !isAdder && !inRoom) throw new Error("Not your route");
-    await dropRoute(ctx, t, args.kind, args.target);
+    await dropRoute(ctx, t, args.kind, args.target, userId);
   },
 });
 
@@ -712,16 +712,20 @@ export const removeAgentFromRoom = internalMutation({
       const conv = await findConversationByAnyRefWhere(ctx, r.target, () => true);
       if (conv && String(conv._id) === args.conversation_id) {
         await assertMayDropOwnRoute(ctx, t, args.user_id, r.kind, r.target);
-        return await dropRoute(ctx, t, r.kind, r.target);
+        return await dropRoute(ctx, t, r.kind, r.target, args.user_id);
       }
     }
   },
 });
 
-/** Take one route off a transcript and let the fed sessions follow. */
-async function dropRoute(ctx: any, t: Doc<"transcripts">, kind: string, target: string): Promise<void> {
+/** Take one route off a transcript and let the fed sessions follow. Scribe's
+ *  route going is a removal on record, as removeScribe writes it (`by`: who
+ *  showed it out, else whoever seated it), so automatic invites stay out. */
+async function dropRoute(ctx: any, t: Doc<"transcripts">, kind: string, target: string, by?: Id<"users">): Promise<void> {
+  const route = t.routes.find((r) => r.kind === kind && r.target === target);
   await ctx.db.patch(t._id, {
-    routes: t.routes.filter((r) => !(r.kind === kind && r.target === target)),
+    routes: t.routes.filter((r) => r !== route),
+    ...(route?.role === "scribe" ? { scribe_claim: { by: by ?? route.added_by ?? t.started_by, at: Date.now(), removed: true as const } } : {}),
   });
   await syncAgentFeeds(ctx, (await ctx.db.get(t._id))!);
 }
@@ -1156,6 +1160,7 @@ export async function endTranscript(
   await ctx.scheduler.runAfter(0, internal.transcripts.deliverRoutes, {
     transcript_id: t._id,
     include_after_routes: true,
+    ended: true,
   });
   await ctx.scheduler.runAfter(0, internal.transcripts.generateSummary, {
     transcript_id: t._id,
@@ -1732,6 +1737,7 @@ export const finishRecordingTranscript = internalMutation({
     await ctx.scheduler.runAfter(0, internal.transcripts.deliverRoutes, {
       transcript_id: t._id,
       include_after_routes: true,
+      ended: true,
     });
     await ctx.scheduler.runAfter(0, internal.transcripts.generateSummary, {
       transcript_id: t._id,
@@ -2749,13 +2755,23 @@ export const deliverToSession = internalMutation({
     // overlapping deliverRoutes runs, a crash before markRouteSent) is a no-op.
     client_id: v.optional(v.string()),
   },
-  handler: async (ctx, args) => {
+  // `fresh`: false when an earlier delivery already queued this client_id.
+  handler: async (ctx, args): Promise<{ fresh: boolean }> => {
+    if (args.client_id) {
+      const conv = await findConversationByAnyRefWhere(ctx, args.to, () => true);
+      const queued = conv && (await ctx.db
+        .query("pending_messages")
+        .withIndex("by_conversation_client_id", (q: any) => q.eq("conversation_id", conv._id).eq("client_id", args.client_id))
+        .first());
+      if (queued) return { fresh: false };
+    }
     await performSessionSend(ctx, args.as_user, {
       to: args.to,
       body: args.body,
       image_storage_ids: args.image_storage_ids,
       client_id: args.client_id,
     });
+    return { fresh: true };
   },
 });
 
@@ -2805,6 +2821,9 @@ export const deliverRoutes = internalAction({
   args: {
     transcript_id: v.id("transcripts"),
     include_after_routes: v.boolean(),
+    // The call has stopped (endTranscript): Scribe's last message says so. A
+    // forced flush mid-call ships the after routes too, but the call goes on.
+    ended: v.optional(v.boolean()),
     reason: v.optional(DELIVER_REASON),
     // How many times this run has already rescheduled itself (a failed final
     // delivery, a catch up that found the room talking). Bounded.
@@ -2835,7 +2854,7 @@ export const deliverRoutes = internalAction({
       const unsent = segments.filter((s: { seq: number }) => s.seq > route.sent_seq);
       // Scribe's final pass waits for word that the call is over, so the
       // stop sends it one last message even when no words are left.
-      const scribeEnd = args.include_after_routes && route.kind === "session" && route.role === "scribe";
+      const scribeEnd = args.ended === true && route.kind === "session" && route.role === "scribe";
       if (unsent.length === 0 && !scribeEnd) continue;
       const chunk = unsent.length ? formatChunk(unsent) : "";
       const maxSeq = unsent.length ? unsent[unsent.length - 1].seq : route.sent_seq;
@@ -2878,14 +2897,25 @@ export const deliverRoutes = internalAction({
           const header = route.role === "scribe"
             ? scribeChunkHeader({ ...headerOpts, ended: scribeEnd })
             : own ? ownRoomChunkHeader(headerOpts) : liveFeedChunkHeader(headerOpts);
-          await ctx.runMutation(internal.transcripts.deliverToSession, {
-            as_user: asUser,
-            to: route.target,
-            body: chunk ? `${header}\n\n${chunk}` : header,
-            // The end message has an id of its own: with no new words its
-            // seq is the last chunk's, and a retry of the stop sends it once.
-            client_id: `${deliveryClientId(transcript._id, route.target, maxSeq)}${scribeEnd ? ":end" : ""}`,
-          });
+          // Words carry their chunk's id, so a flush racing the stop with the
+          // same words dedupes against it. The end alone has an id of its own,
+          // sent once per stop, also when that racing flush won the words.
+          const sent: { fresh: boolean } = chunk
+            ? await ctx.runMutation(internal.transcripts.deliverToSession, {
+                as_user: asUser,
+                to: route.target,
+                body: `${header}\n\n${chunk}`,
+                client_id: deliveryClientId(transcript._id, route.target, maxSeq),
+              })
+            : { fresh: false };
+          if (scribeEnd && !sent.fresh) {
+            await ctx.runMutation(internal.transcripts.deliverToSession, {
+              as_user: asUser,
+              to: route.target,
+              body: scribeChunkHeader({ ...headerOpts, ended: true }),
+              client_id: `${deliveryClientId(transcript._id, route.target, maxSeq)}:end`,
+            });
+          }
         } else if (route.kind === "doc") {
           await ctx.runMutation(internal.transcripts.deliverToDoc, {
             as_user: asUser,
@@ -2950,6 +2980,7 @@ export const deliverRoutes = internalAction({
     await ctx.scheduler.runAfter(retry.delay, internal.transcripts.deliverRoutes, {
       transcript_id: args.transcript_id,
       include_after_routes: args.include_after_routes,
+      ...(args.ended ? { ended: true } : {}),
       reason: retry.reason,
       attempt: attempt + 1,
     });

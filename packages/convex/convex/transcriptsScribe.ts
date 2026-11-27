@@ -51,23 +51,31 @@ export const inviteScribe = mutation({
 
 /** Anyone in the call shows Scribe out: its route goes, and the claim
  *  records the removal, so automatic invites stay out for the rest of the
- *  call. With `claim`, the inviter is only giving back a claim whose agent
- *  failed to start, which leaves alone a Scribe somebody else has since
- *  invited. */
+ *  call. The press names the Scribe it saw, seated (`target`, its route) or
+ *  joining (`claim`, the claim's `at`), and a replay that finds it gone
+ *  leaves alone whichever Scribe was invited since. With `give_back`, the
+ *  inviter is only giving back its own claim whose agent failed to start. */
 export const removeScribe = mutation({
-  args: { room_key: v.string(), claim: v.optional(v.number()) },
+  args: { room_key: v.string(), target: v.optional(v.string()), claim: v.optional(v.number()), give_back: v.optional(v.number()) },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
     const t = await liveScribeTranscript(ctx, userId, args.room_key);
     if (!t) return;
-    if (args.claim !== undefined) {
-      if (!t.scribe_claim?.removed && t.scribe_claim?.at === args.claim && String(t.scribe_claim.by) === String(userId)) {
+    const claim = t.scribe_claim;
+    if (args.give_back !== undefined) {
+      if (!claim?.removed && claim?.at === args.give_back && String(claim.by) === String(userId)) {
         await ctx.db.patch(t._id, { scribe_claim: undefined });
       }
       return;
     }
-    await ctx.db.patch(t._id, { routes: t.routes.filter((r) => r.role !== "scribe"), scribe_claim: { by: userId, at: Date.now(), removed: true } });
+    if (args.target === undefined && args.claim === undefined) throw new Error("Say which Scribe to remove");
+    const seated = t.routes.find((r) => r.role === "scribe");
+    const named = args.target !== undefined
+      ? seated?.target === args.target
+      : !seated && !!claim && !claim.removed && claim.at === args.claim;
+    if (!named) return;
+    await ctx.db.patch(t._id, { routes: t.routes.filter((r) => r !== seated), scribe_claim: { by: userId, at: Date.now(), removed: true } });
     await syncAgentFeeds(ctx, (await ctx.db.get(t._id))!);
   },
 });

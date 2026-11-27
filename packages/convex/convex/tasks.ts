@@ -14,7 +14,7 @@ import { chainAssignees, roleAssigneeInfo, type AssigneeInfo } from "@codecast/s
 import { enqueueStartSession } from "./devices";
 import { resolveSpawnDefinition, resolveTaskSpawnDevice } from "./spawn";
 import { resolveDefinitionFor } from "./agentDefinitions";
-import { resolveFromCall } from "./callReads";
+import { fromCallWorkspace, resolveFromCall } from "./callReads";
 import { appendTaskStep, priorityForTaskStep } from "./priorityCreate";
 import { outcomeOfDeclaration, subagentEnded } from "./subagentFleet";
 import { formatTaskCommentMessage, fromConvexAgentType, inlineForeignText, toConvexAgentType } from "@codecast/shared/contracts";
@@ -1210,11 +1210,13 @@ export const create = mutation({
 
     // The session the task came from links it and, when team visible, hands
     // it its team (createWorkContext).
+    // A task pulled from one person's own huddle is theirs (fromCallWorkspace).
+    const callWorkspace = await fromCallWorkspace(ctx, auth.userId, args.from_call);
     const { db, conversation: originConv } = await createWorkContext(ctx, {
       userId: auth.userId,
       project_path: args.project_path,
-      workspace: args.workspace,
-      team_id: args.team_id,
+      workspace: callWorkspace ?? args.workspace,
+      team_id: callWorkspace ? undefined : args.team_id,
       conversation_id: args.conversation_id,
     });
     const conversation_ids: Id<"conversations">[] | undefined = originConv ? [originConv._id] : undefined;

@@ -3458,8 +3458,8 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   inviteScribe: async (ctx, _userId, [roomKey, auto]: [string, boolean?]) => {
     return await ctx.runMutation!(api.transcriptsScribe.inviteScribe, { room_key: roomKey, ...(auto ? { auto: true } : {}) });
   },
-  removeScribe: async (ctx, _userId, [roomKey, claim]: [string, number?]) => {
-    return await ctx.runMutation!(api.transcriptsScribe.removeScribe, { room_key: roomKey, ...(claim !== undefined ? { claim } : {}) });
+  removeScribe: async (ctx, _userId, [roomKey, which]: [string, { target: string } | { claim: number } | { give_back: number }]) => {
+    return await ctx.runMutation!(api.transcriptsScribe.removeScribe, { room_key: roomKey, ...which });
   },
   // Point a live call's words at a session, doc or Slack thread (web useCallFeed),
   // or seat the Scribe session a claimer spawned (lib/calls/scribeInvite).

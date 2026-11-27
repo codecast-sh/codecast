@@ -38,7 +38,7 @@ import { inlineForeignText } from "@codecast/shared/contracts";
 import { listLiveManagedSessions, liveConversationIdSet } from "./lib/liveSessions";
 import { graphOutside, sortGraphRefs, stampGraphStatus } from "./lib/taskGraph";
 import { patchDepMirror } from "./tasks";
-import { resolveFromCall } from "./callReads";
+import { fromCallWorkspace, resolveFromCall } from "./callReads";
 import { isTeamMember, teamVisibleConvTeam } from "./privacy";
 import { linkConversationToEntityBestEffort } from "./conversationLinks";
 import { cliDocWriter, docLiveState, docRevision, writeDocBody } from "./lib/docBody";
@@ -102,7 +102,11 @@ export const create = mutation({
       }
     }
 
-    const db = await createDataContext(ctx, args.workspace
+    // A plan pulled from one person's own huddle is theirs (fromCallWorkspace).
+    const callWorkspace = await fromCallWorkspace(ctx, auth.userId, args.from_call);
+    const db = await createDataContext(ctx, callWorkspace
+      ? { userId: auth.userId, workspace: callWorkspace }
+      : args.workspace
       ? { userId: auth.userId, workspace: args.workspace, team_id: args.team_id }
       : {
           userId: auth.userId,

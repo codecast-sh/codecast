@@ -31,6 +31,7 @@ import { type Priority, type Result, cliWorkspace, criticalCounts, isOwner, list
 import { historyFor } from "./priorityHistory";
 import { doCreate } from "./priorityCreate";
 import { createWorkContext } from "./data";
+import { fromCallWorkspace } from "./callReads";
 import { type MilestoneChange, doCorrect, doCorrectionDelete, doMerge, doMilestone, doMove, doPriorityDone, doSessionMove, doSessionNotThis, doSetAside, doUndoPriorityDone } from "./priorityWrite";
 
 function orThrow<T>(res: Result<T>): T {
@@ -260,7 +261,9 @@ export const cliCreate = mutation({
   handler: async (ctx, args) => {
     const viewer = await tokenUser(ctx, args.api_token);
     if (!viewer) return { error: "Unauthorized" };
-    const { db } = await createWorkContext(ctx, { userId: viewer, workspace: args.workspace, team_id: args.team_id, project_path: args.project_path, conversation_id: args.conversation_id });
+    // A priority pulled from one person's own huddle is theirs (fromCallWorkspace).
+    const callWorkspace = await fromCallWorkspace(ctx, viewer, args.from_call);
+    const { db } = await createWorkContext(ctx, { userId: viewer, workspace: callWorkspace ?? args.workspace, team_id: callWorkspace ? undefined : args.team_id, project_path: args.project_path, conversation_id: args.conversation_id });
     return doCreate(ctx, viewer, { workspace: db.workspaceKey, title: args.title, summary: args.summary, owner: args.owner, from_call: args.from_call });
   },
 });

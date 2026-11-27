@@ -15,6 +15,7 @@ import { callGuestsOnRecord } from "./lib/callGuestAdmission";
 import { speakerRoster, speakersForClient } from "./lib/callSpeakers";
 import type { Route } from "./transcripts";
 import { notFound } from "./lib/auth";
+import { isOwnerOnlyRoom } from "./callRoomOwnership";
 
 /** A route as clients read it: whose it is, and whether its agent wears a face. */
 export function routeView(t: Doc<"transcripts">, r: Route) {
@@ -404,4 +405,14 @@ export async function resolveFromCall(ctx: any, userId: Id<"users">, ref: string
   const call = await resolveCallRef(ctx, userId, ref);
   if (!call) notFound(`Call not found: ${ref}`);
   return call._id;
+}
+
+/** Where a create filed from a call lands when the call decides it: what is
+ *  pulled from one person's own huddle (isOwnerOnlyRoom, getLive's
+ *  `personal`) goes to the writer's personal workspace, whatever --team or
+ *  the session's team says. Undefined leaves the usual rule. */
+export async function fromCallWorkspace(ctx: any, userId: Id<"users">, ref: string | undefined): Promise<"personal" | undefined> {
+  if (!ref?.trim()) return undefined;
+  const call = await resolveCallRef(ctx, userId, ref);
+  return call && (await isOwnerOnlyRoom(ctx, call.room_key)) ? "personal" : undefined;
 }

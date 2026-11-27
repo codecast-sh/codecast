@@ -233,3 +233,46 @@ describe("a priority made for a teammate from a call", () => {
     expect(p.steps[0].done_at).toBeGreaterThan(0);
   });
 });
+
+describe("filed from one person's own huddle", () => {
+  /** Ben's solo huddle cl-8, which bills to team T. */
+  async function soloWorld() {
+    const w = await world();
+    await w.t.run(async (ctx: any) => {
+      await ctx.db.insert("transcripts", {
+        room_key: dmRoomKey(String(w.ben)), team_id: w.team, started_by: w.ben, status: "ended", started_at: NOW - 60_000, ended_at: NOW,
+        routes: [], last_seq: 0, short_id: "cl-8", participants: [{ id: String(w.ben), name: "Ben" }],
+      } as any);
+    });
+    return w;
+  }
+
+  test("a task, plan and priority land in the caller's personal workspace, whatever --team says", async () => {
+    const { t, ben, team, create, createTask, priority, task } = await soloWorld();
+    const personal = `user:${ben}`;
+    const made = await createTask({ title: "Sketch the flow", from_call: "cl-8", source: "meeting" });
+    expect((await task(made.short_id)).workspace).toBe(personal);
+
+    const plan = await t.mutation(api.plans.create, { api_token: TOKEN, title: "Board follow-ups", from_call: "cl-8", workspace: "team", team_id: team } as any);
+    const planRow = await t.run(async (ctx: any) => await ctx.db.query("plans").withIndex("by_short_id", (q: any) => q.eq("short_id", plan.short_id)).first());
+    expect(planRow.workspace).toBe(personal);
+
+    const pri1 = await create({ title: "Ship the sketch", from_call: "cl-8" });
+    expect((await priority(pri1.short_id)).workspace).toBe(personal);
+  });
+
+  test("the session's team does not pull it back into the team", async () => {
+    const { t, ben, team, createTask, task } = await soloWorld();
+    await t.run(async (ctx: any) =>
+      ctx.db.insert("conversations", { user_id: ben, team_id: team, is_private: false, team_visibility: "full", agent_type: "claude_code", session_id: "s-scribe", started_at: NOW, updated_at: NOW, message_count: 0, status: "active" } as any),
+    );
+    const made = await t.mutation(api.tasks.create, { api_token: TOKEN, title: "From the team session", from_call: "cl-8", conversation_id: "s-scribe" } as any);
+    expect((await task(made.short_id)).workspace).toBe(`user:${ben}`);
+  });
+
+  test("a call of two still files where --team says", async () => {
+    const { team, createTask, task } = await soloWorld();
+    const made = await createTask({ title: "Send Ana the deck", from_call: "cl-7", source: "meeting" });
+    expect((await task(made.short_id)).workspace).toBe(`team:${team}`);
+  });
+});
