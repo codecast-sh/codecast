@@ -15,6 +15,7 @@ import * as path from "node:path";
 import { DEPLOY_WAIT_CAP_MS, deployDeadlineMs, releaseOrder, type DeployTarget } from "@codecast/shared/contracts/deployTargets";
 import { mainRedSince, type MainRedPayload } from "@codecast/shared/contracts/mainRed";
 import { git, gitTry } from "../wipSnapshot.js";
+import { landsConfig, notYetHeld, republishLanded } from "./republishLanded.js";
 
 /** One deploy of a target, as the targets read lists its history. */
 export type TargetDeploy = { short_id: string; status: string; sha?: string | null; created_at?: number; live_at?: number | null; finished_at?: number | null; note?: string | null };
@@ -132,13 +133,14 @@ export type CiGate = { workflow?: string; exclude?: string[] };
 /**
  * A target the run owns: Live means every touched target carries the change. `send`: a release target that runs here,
  * which the stage sends and then waits on. `wait`: a push target (it deploys itself when main moves), an auto one (the
- * server sends it once CI on main is green), a release target in a flow that sends nothing (`send=""`), or one a person
- * or a role sends (`others`: a press target, the line profile's own), which the run only ever waits on.
+ * server sends it once CI on main is green), a release target in a flow that sends nothing (`send=""`), one a person
+ * or a role sends (`others`: a press target, the line profile's own), or one Merge sent before the merge (`merge`: a
+ * target whose `ship` step runs before_push), which the run only ever waits on.
  */
 export type Duty = {
   target: string;
   action: "send" | "wait";
-  how: "release" | "push" | "auto" | "others";
+  how: "release" | "push" | "auto" | "others" | "merge";
   /** Who sends an `others` target: "a person", or the line's role ("@release"). */
   by?: string;
   deadlineMs: number;
@@ -167,10 +169,18 @@ export function lineHeld(deploy: { command?: string | null; target?: string | nu
 }
 
 /**
+ * How long Deploy waits for a target Merge sent to show a deploy carrying the merged commit. Merge records its
+ * before-merge deploys as it lands, so a longer wait only means the send failed or was not recorded.
+ */
+export const MERGE_SENT_GRACE_MS = 10 * 60_000;
+
+/**
  * What the stage does with each target the change's files touch: sends `release` targets that run here (only waits on
- * them with `send: false`), waits on `push` and `auto` ones, and waits on, never sends, `press` targets and the line
- * profile's own target (`held`: target to who sends it). A target held back on purpose (`except`) is not waited on,
- * but still holds the targets that go after it.
+ * them with `send: false`), waits on `push` and `auto` ones, and waits on, never sends, `press` targets, the line
+ * profile's own target (`held`: target to who sends it) and a target Merge sends before the merge (its `ship` step
+ * runs before_push): sending that one from here would deploy the checkout's working tree, other sessions' edits
+ * included, rather than the merged commit. A target held back on purpose (`except`) is not waited on, but still holds
+ * the targets that go after it.
  */
 export function deployDuties(declared: DeployTarget[], files: ReadonlyArray<string>, opts: { except?: ReadonlyArray<string>; held?: Readonly<Record<string, string>>; send?: boolean } = {}): DeployDuties {
   const duties: Duty[] = [];
@@ -185,6 +195,7 @@ export function deployDuties(declared: DeployTarget[], files: ReadonlyArray<stri
     touched.add(t.name);
     const held = opts.held?.[t.name];
     if (opts.except?.includes(t.name)) left.push(`${t.name} is held back`);
+    else if (t.runs === "here" && t.ship_stage === "before_push") duties.push({ target: t.name, action: "wait", how: "merge", by: "Merge", deadlineMs: t.deadline ?? MERGE_SENT_GRACE_MS, ci: null, after: [] });
     else if (held || (t.runs === "here" && t.policy === "press")) duties.push({ target: t.name, action: "wait", how: "others", by: held ?? "a person", deadlineMs: deployDeadlineMs(t, true), ci: null, after: [] });
     else if (t.runs === "push") duties.push({ target: t.name, action: "wait", how: "push", deadlineMs: deployDeadlineMs(t), ci: null, after: [] });
     else if (t.policy === "auto") duties.push({ target: t.name, action: "wait", how: "auto", deadlineMs: deployDeadlineMs(t), ci: gate({}), after: [] });
@@ -370,6 +381,7 @@ export async function awaitDeploy(input: { sha: string; base: string; plan: Depl
         else if (s.state === "deploying") said.set(d.target, { words: `${s.deploy.short_id} sending ${short}` });
         else if (notLive.length) said.set(d.target, { words: `waiting for ${notLive.join(", ")} to go live first` });
         else if (d.how === "others") said.set(d.target, { words: `waiting for ${d.by} to send it` });
+        else if (d.how === "merge") said.set(d.target, { words: `Merge sent it before the merge, but no recorded deploy carries ${short} yet: its send failed or was not recorded (the run's merge.log says which)` });
         else if (d.how === "release") said.set(d.target, { words: d.action === "send" ? `asking for a deploy of ${short}` : `waiting for a deploy that carries ${short}` });
         else if (d.how === "push") said.set(d.target, { words: `waiting for its push deploy to carry ${short}` });
         else said.set(d.target, { words: `waiting for the server to send ${short} once main CI is green` });
@@ -391,7 +403,13 @@ export async function awaitDeploy(input: { sha: string; base: string; plan: Depl
       const stuck = `Deploy stuck: ${missed.map((d) => `${d.target} is not live with ${short} ${after(d)} (last: ${words(d.target)})`).join("; ")}.${liveNow.length ? ` Live: ${liveNow.join(", ")}.` : ""}`;
       clock.stuck = true;
       io.clock.save(clock);
-      await io.block(`${stuck} Send it again from the Deploys page or with \`cast deploy ${missed.map((d) => d.target).join(" ")}\`.`).catch(() => {});
+      const resend = missed.filter((d) => d.how !== "merge").map((d) => d.target);
+      const fromMain = missed.filter((d) => d.how === "merge").map((d) => d.target);
+      const how = [
+        ...(resend.length ? [`Send ${fromMain.length ? resend.join(", ") : resend.length > 1 ? "them" : "it"} again from the Deploys page or with \`cast deploy ${resend.join(" ")}\`.`] : []),
+        ...(fromMain.length ? [`Deploy ${fromMain.join(", ")} from a clean tree at ${short} on main, never from a checkout holding others' edits.`] : []),
+      ];
+      await io.block(`${stuck} ${how.join(" ")}`).catch(() => {});
       return { code: 5, line: stuck };
     }
     // Before a target can go out its own deadline has not started: the line says how long it has been held, and what
@@ -502,10 +520,31 @@ export async function runAwaitDeploy(opts: AwaitDeployOptions, env: AwaitDeployE
     },
     between: (wait) => cli.between({ ...wait, merged, plan } satisfies DeployPlace),
   };
+  // A change that lands the repository's line profile or deploy targets republishes them beside the wait, once this
+  // checkout holds the merged commit (republishLanded.ts): nothing else moves the server's copy.
+  const publishHere = (args: string[]) => within(castCmd.cmd, [...castCmd.prefixArgs, ...args], cwd, PUBLISH_MS, { ...process.env, CODECAST_CWD: cwd });
+  const republished = !opts.once && landsConfig(merged.files)
+    ? republishLanded(cwd, merged.sha, {
+      held: () => notYetHeld(cwd, merged.sha),
+      publish: async () => {
+        if ((await publishHere(["line", "profile", "--publish", "--json"])).code === 0) return { republished: "all" };
+        // A repository with no line profile still has its targets: publish those, and say the profile was not.
+        if ((await publishHere(["line", "deploy", "targets", "--publish", "--json"])).code === 0) return { republished: "targets", why: `cast line profile --publish failed in ${cwd}` };
+        return { republished: "none", why: `cast line profile --publish and cast line deploy targets --publish both failed in ${cwd}` };
+      },
+      sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+      now: () => Date.now(),
+    }, { intervalMs: 30_000, deadline: Date.now() + REPUBLISH_WAIT_MS })
+    : null;
   const result = await awaitDeploy({ sha: merged.sha, base: opts.base, plan, intervalMs: Math.max(5, Number(opts.interval) || 60) * 1000, once: opts.once, held: back?.held }, io);
-  console.log(result.line);
+  const note = republished ? await republished : null;
+  console.log(note ? `${result.line} ${note}` : result.line);
   return result.code;
 }
+
+/** How long one publish may take, and how long the station waits for its checkout to hold the merged commit. */
+const PUBLISH_MS = 120_000;
+const REPUBLISH_WAIT_MS = 10 * 60_000;
 
 /**
  * The run's duties for a merged commit, from the targets that commit declares: never the checkout's working tree or
@@ -546,9 +585,9 @@ function readMerge(file: string): { sha?: string; files?: string[] } | null {
 }
 
 /** A command's exit code and stdout, killed after `ms` so a hung fetch or read cannot hold the poll. */
-function within(cmd: string, args: string[], cwd: string, ms: number): Promise<{ code: number; out: string }> {
+function within(cmd: string, args: string[], cwd: string, ms: number, env?: NodeJS.ProcessEnv): Promise<{ code: number; out: string }> {
   return new Promise((resolve) => {
-    const child = spawn(cmd, args, { cwd, stdio: ["ignore", "pipe", "ignore"] });
+    const child = spawn(cmd, args, { cwd, stdio: ["ignore", "pipe", "ignore"], ...(env ? { env } : {}) });
     let out = "";
     const timer = setTimeout(() => child.kill("SIGKILL"), ms);
     child.stdout.on("data", (d) => { out += d; });

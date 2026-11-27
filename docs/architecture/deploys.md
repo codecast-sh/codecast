@@ -281,7 +281,13 @@ problem runs on the line like any other.
 Everything above is a line's deploy of fixes. A repository also has targets
 of its own, each a place its code goes live on its own clock. Codecast's are
 the backend (Convex), web (Railway), the CLI release, the mobile OTA and the
-desktop app. They are declared once, in the checkout:
+desktop app. A codecast change's Ship run sends each one its files touch
+(DP15): the backend at Merge, before the merge (its `ship` step; Deploy only
+waits for it); the CLI and
+mobile as `release` targets; web deploys itself on push. Desktop is `press`:
+its release signs with a Developer ID certificate on the machine that runs it,
+builds that checkout's working tree and pushes its own version bump, so a
+person sends it and the run waits. They are declared once, in the checkout:
 
 - A `[[target]]` table of `.codecast/deploy.toml` is one. `name` names it,
   `run` is the command that sends it (from the checkout's root; `$sha`,
@@ -317,7 +323,13 @@ like the CLI release's latest.json `sourceCommit`).
 The targets are published per repository to `deploy_targets` (workspace key
 of the repository's team) by every line profile publish and by `cast line
 deploy targets --publish`, with the machine and checkout that published
-them: where a deploy of a `here` target runs. A target the checkout stops
+them: where a deploy of a `here` target runs. A change that lands
+`.codecast/line.toml`, `deploy.toml`, `workspace.toml` or a file in the
+line's own folder is republished by its run's Deploy station (`workflow/republishLanded.ts`):
+once the run's checkout holds the merged commit with `.codecast` clean,
+within ten minutes, it runs `cast line profile --publish` there (`cast line
+deploy targets --publish` for a repository with no profile), and its last
+line says whether it did. A target the checkout stops
 declaring is retired, not deleted. Every reader (the CLI, the server, the
 Deploys page) parses through `contracts/deployTargets`.
 
@@ -550,6 +562,12 @@ still name a target the commit removed. Of the targets the change's files touch:
   on. A flow that composes the segment with `send=""` sends none of them and
   waits for a deploy someone else sends. `send` defaults to `release`, the
   library's default: a flow that composes the segment without it sends.
+- A target Merge sends (one whose `ship` step runs `before_push`), whatever
+  its policy: Merge deployed it from the change rebased onto main and recorded
+  it at the landed sha, so the stage only waits, ten minutes by default, for
+  that record. It never sends it, since a send from the checkout deploys the
+  checkout's working tree. With no deploy carrying the commit it ends stuck,
+  saying Merge's send failed or was not recorded.
 - `push` targets, whatever their policy: it waits until their own deploy
   carries the commit.
 - `auto` targets: it waits until the server sends them from green main CI (every
@@ -584,7 +602,8 @@ main's open culprit for the repository (main-red.md, `/cli/main-red/open`) that
 the commit's history holds, and, when the server names none or cannot answer,
 the oldest commit of the red run main's first-parent history ends in. Deadlines default to
 a day for a target a person or a role sends, an hour for one the stage sends and
-half an hour for one that deploys itself; `deadline` overrides each, up to a day.
+half an hour for one that deploys itself, ten minutes for one Merge sent; `deadline`
+overrides each, up to a day.
 The whole wait is capped at the longest deadline and an hour, from the station's
 first start. `$run_dir/deploy-clock.json` keeps that start for the merged commit
 across a station re-run mid-wait; it is deleted wherever merge.json is, and a

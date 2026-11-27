@@ -1,9 +1,11 @@
 # This repository's deploy targets (docs/architecture/deploys.md DP10): the places
 # its code goes live. The Deploys page shows what runs on each and the commits on
 # main waiting for it (those touching its `when` paths), and Deploy sends it from
-# this checkout.
+# this checkout. A change's Ship run sends every target its files touch, by each
+# target's policy below (DP15).
 #
-#   ship      the [[ship.deploy]] step in workspace.toml that sends it at a ship;
+#   ship      the [[ship.deploy]] step in workspace.toml that sends it with a change:
+#             a before_push step goes out at the change flow's Merge, before the merge;
 #             the target takes that step's run and when
 #   run       the command that sends it, from the checkout root ($sha, $deploy, $actor)
 #   runs      here (this checkout runs `run`, the default) or push (it deploys
@@ -22,11 +24,16 @@
 #   deadline  how long a change flow's Deploy stage waits for it to go live, from when it
 #             can first go out, before it calls the deploy stuck (30m, 1h30m; at most 24h).
 #             Default a day for a press target or the line's own, which the run only waits
-#             on, 60m for a release target it sends, 30m for a push or auto target
+#             on, 60m for a release target it sends, 30m for a push or auto target, 10m
+#             for one Merge sends (a before_push ship step), which it only waits on
 #
 # These live apart from workspace.toml because every released CLI validates that
 # file strictly and refuses keys it does not know.
 
+# Convex goes out before the merge (workspace.toml's convex step, run by Merge from the
+# change rebased onto main), because web rebuilds the moment main moves. Deploy only waits
+# for that recorded deploy and never sends it itself: a send from here would deploy this
+# checkout's working tree. With no deploy carrying the merged commit it stops stuck.
 [[target]]
 name = "backend"
 ship = "convex"
@@ -61,7 +68,11 @@ run = "packages/mobile/scripts/ota.sh $sha"
 policy = "release"
 after = ["backend"]
 
+# A person sends it, and a change's run waits for that: release.sh signs on the machine that
+# runs it, with a Developer ID certificate the publishing machine may not hold, builds that
+# checkout's working tree rather than the merged commit, and pushes its version bump to main.
 [[target]]
 name = "desktop"
 when = ["packages/electron/**"]
 run = "packages/electron/scripts/release.sh patch --no-floor"
+policy = "press"

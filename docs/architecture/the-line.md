@@ -292,7 +292,9 @@ request. A line's change merges in either of two ways: the profile sets
 `[line.merge] auto`, or the role that owns the line holds the merge grant
 described below (`line_merge` on, a live merge authority, room in its daily
 limit). Under the grant the ship session merges through `cast line merge`,
-which checks the allowance again and counts the merge. A Ship pressed on the
+which checks the allowance again and counts the merge. It runs none of the
+default branch's before-merge steps (`[[ship.deploy]] stage = "before_push"`),
+so it refuses a change one of them covers and names the change flow instead. A Ship pressed on the
 pull request's page also merges.
 
 Written 2026-10-02. A line may end in a merge to the default branch, and it

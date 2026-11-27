@@ -451,6 +451,29 @@ describe("runMergeStep", () => {
     expect(posts[1]).toMatchObject({ path: "/cli/work/comment", body: { short_id: "ct-7", comment_type: "blocker", conversation_id: "conv_run" } });
   });
 
+  // ct-98570: a line merge runs none of the default branch's before-merge steps, so it never lands a change they cover.
+  test("a change a before-merge step covers is left to the change flow, and one it does not cover merges", async () => {
+    const r = gitRepo();
+    try {
+      r.commit(".codecast/workspace.toml", '[[ship.deploy]]\nname = "convex"\nwhen = ["convex/**"]\nrun = "true"\nstage = "before_push"\n', "profile");
+      r.git(r.work, "push", "-q", "origin", "main");
+      const post = async (path: string) => (path.endsWith("/check") ? allowed : { used: 2, limit: 3 });
+      r.git(r.work, "checkout", "-q", "-b", "b");
+      r.commit("convex/fn.ts", "export {}\n", "add a function");
+      r.git(r.work, "push", "-q", "origin", "b");
+      const held = await runMergeStep({ cwd: r.work, run_id: "run_1", branch: "b", into: "main", post, exec: defaultExec });
+      expect(held.outcome).toEqual({ kind: "left", reason: "convex must run before this change lands, and a line merge runs none; ship it through the change flow (cast flow run change --branch b)" });
+      r.git(r.work, "checkout", "-q", "main");
+      r.git(r.work, "checkout", "-q", "-b", "c");
+      r.commit("web.txt", "page\n", "web only");
+      r.git(r.work, "push", "-q", "origin", "c");
+      const merged = await runMergeStep({ cwd: r.work, run_id: "run_2", branch: "c", into: "main", post, exec: defaultExec });
+      expect(merged.outcome.kind).toBe("merged");
+    } finally {
+      r.done();
+    }
+  });
+
   test("a landed merge posts no blocker", async () => {
     const posts: string[] = [];
     const { exec } = scripted({ "git rev-parse": { stdout: "abc123\n" } });

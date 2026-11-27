@@ -88,11 +88,11 @@ run = "packages/convex/deploy.sh --typecheck=disable"
 stage = "before_push"
 ```
 
-A deploy step runs in the checkout, so it deploys what the checkout holds,
-edits the pass left out included. For Convex here that is deliberate: sessions
-deploy their uncommitted backend work to test it, and deploying only the
-shipped commit would remove functions they are using. A held group that
-touches deployed paths therefore still reaches the backend.
+Without `flow`, a deploy step runs in the checkout, so it deploys what the
+checkout holds, edits the pass left out included: a held group that touches
+deployed paths still reaches the backend. With `flow`, the flow's Merge runs
+the `before_push` steps from the change rebased onto upstream, before it
+merges (flows.md FL4), and its Deploy sends the targets the change touches.
 
 ### A pass through a flow
 

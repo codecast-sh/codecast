@@ -210,6 +210,38 @@ describe("awaitDeploy", () => {
     expect(f.lines).toContain("production: waiting for a person to send it (2h of 24h)");
   });
 
+  // Merge sends a target whose ship step runs before_push from the rebased change; Deploy sending it again would
+  // deploy the checkout's working tree, other sessions' uncommitted edits included.
+  const merged = parseDeployTargets({
+    target: [
+      { name: "backend", ship: "convex", policy: "release" },
+      { name: "mobile", run: "ota.sh $sha", policy: "release", after: "backend", when: "app/**" },
+    ],
+  }, [{ name: "convex", when: ["api/**"], run: "deploy.sh", stage: "before_push" }]);
+
+  test("a target Merge sends is only waited on, and holds the targets that go after it until it is live", async () => {
+    const { duties } = deployDuties(merged, ["api/b.ts", "app/a.tsx"]);
+    expect(duties.map((d) => [d.target, d.action, d.how, d.deadlineMs / MIN, d.after])).toEqual([["backend", "wait", "merge", 10, []], ["mobile", "send", "release", 60, ["backend"]]]);
+    const f = fake((tick) => [
+      { name: "backend", history: tick >= 1 ? [dp("dp-1", "live")] : [] },
+      { name: "mobile", history: tick >= 3 ? [dp("dp-2", "live")] : [] },
+    ]);
+    const r = await awaitDeploy({ sha: SHA, base: "main", plan: { duties, left: [] }, intervalMs: MIN }, f.io);
+    expect(f.sends).toEqual([{ targets: ["mobile"], tick: 1 }]);
+    expect(r).toEqual({ code: 0, line: "Live: 1a2b3c4 on backend dp-1, mobile dp-2." });
+  });
+
+  test("a target Merge sent that no deploy carries ends stuck, saying why, and is never sent from the checkout", async () => {
+    const f = fake(() => [{ name: "backend", history: [dp("dp-0", "live", "0".repeat(20))] }]);
+    const r = await awaitDeploy({ sha: SHA, base: "main", plan: deployDuties(merged, ["api/b.ts"]), intervalMs: MIN }, f.io);
+    expect(f.sends).toEqual([]);
+    expect(r.code).toBe(5);
+    expect(r.line).toContain("backend is not live with 1a2b3c4 after 10m (last: Merge sent it before the merge, but no recorded deploy carries 1a2b3c4 yet: its send failed or was not recorded");
+    expect(f.blocks).toHaveLength(1);
+    expect(f.blocks[0]).toContain("Deploy backend from a clean tree at 1a2b3c4 on main");
+    expect(f.blocks[0]).not.toContain("cast deploy backend");
+  });
+
   test("sends only the release targets, waits until every owned target is live, and names each dp-N", async () => {
     const f = fake((tick) => [
       { name: "backend", history: tick >= 1 ? [dp("dp-1", "live")] : [] },

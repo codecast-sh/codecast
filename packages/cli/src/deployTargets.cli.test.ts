@@ -7,6 +7,8 @@ import { parseDeployTargetsText, readDeployTargets } from "./workspace/deployTar
 import { deploysFor, shipSpec } from "./land/shipCheckout.js";
 import { awaitLive, targetDeployProfile, targetsOf } from "./lineDeploy.js";
 import { shipPassBody } from "./land/shipCheckoutCli.js";
+import { loadLineProfile } from "./lineProfile.js";
+import { deployDuties, lineHeld } from "./workflow/awaitDeploy.js";
 
 // A repository's deploy targets as the CLI reads them (docs/architecture/deploys.md DP10 to DP13).
 
@@ -89,6 +91,24 @@ describe("targets in .codecast/deploy.toml", () => {
     const targets = readDeployTargets(REPO, m.ship!.deploy);
     expect(targets.map((t) => t.name)).toEqual(["backend", "web", "cli", "mobile", "desktop"]);
     expect(deploysFor(shipSpec(REPO).deploy, ["packages/cli/src/index.ts", "packages/mobile/app.tsx", "packages/convex/convex/x.ts"]).map((s) => [s.name, s.target ?? null])).toEqual([["convex", "backend"]]);
+  });
+
+  test("codecast's change runs send every target a change touches: backend at Merge (Deploy only waits on it), cli and mobile, web on push; desktop waits for a press", () => {
+    const spec = shipSpec(REPO);
+    expect(spec.flow).toBe("change");
+    const files = ["packages/convex/convex/x.ts", "packages/web/app/page.tsx", "packages/cli/src/index.ts", "packages/mobile/app.tsx", "packages/electron/main.js"];
+    // Merge runs these from the rebased change before it merges (workflow/mergeStation.ts mainSteps).
+    expect(deploysFor(spec.deploy.filter((s) => s.stage === "before_push"), files).map((s) => s.name)).toEqual(["typing-guard", "convex"]);
+    const held = lineHeld(loadLineProfile(REPO).profile.deploy);
+    expect(held).toEqual({});
+    const { duties } = deployDuties(readDeployTargets(REPO, spec.deploy), files, { held });
+    expect(duties.map((d) => [d.target, d.action, d.how])).toEqual([
+      ["backend", "wait", "merge"],
+      ["web", "wait", "push"],
+      ["cli", "send", "release"],
+      ["mobile", "send", "release"],
+      ["desktop", "wait", "others"],
+    ]);
   });
 });
 

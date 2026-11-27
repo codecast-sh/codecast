@@ -197,7 +197,7 @@
       ".claude/agents/implementer.md": "952adc7a9e5ec50d",
       ".claude/agents/reviewer.md": "ed6462a9e2f2f8d9",
       ".claude/settings.json": "d3b7568f317c3f0f",
-      ".claude/skills/codecast-orchestrate/SKILL.md": "33ac1f8703ef8d69",
+      ".claude/skills/codecast-orchestrate/SKILL.md": "3f6b8f63be04d5ce",
       ".codecast/orchestration/scripts/agent-complete.sh": "02834fb294e9cb68",
       ".codecast/orchestration/scripts/reground.sh": "0032a90b8d285b09"
     }
@@ -214,7 +214,7 @@
       ".claude/skills/cast-bakeoff/SKILL.md": "239dea95d76a77ba",
       ".claude/skills/cast-conflicts/SKILL.md": "4a63a90a825ac77c",
       ".claude/skills/cast-dashboard/SKILL.md": "d773eac32b2c7fd5",
-      ".claude/skills/cast-deploy/SKILL.md": "990d10363a58fd8a",
+      ".claude/skills/cast-deploy/SKILL.md": "2dbba1937a1d7a52",
       ".claude/skills/cast-eod/SKILL.md": "6af05f0d09b5b709",
       ".claude/skills/cast-from-call/SKILL.md": "c6a14a0dad51e599",
       ".claude/skills/cast-handoff/SKILL.md": "5a53e47b8052da05",

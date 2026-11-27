@@ -284,6 +284,11 @@ async function mergeStep(
     log(`merge left to a person: ${check.reason}`);
     return { outcome: { kind: "left", reason: check.reason ?? "not allowed" }, check, recorded: null };
   }
+  const held = await beforeMergeSteps(args.exec ?? defaultExec, args.cwd, args.branch, args.into);
+  if (held) {
+    log(`merge left to a person: ${held}`);
+    return { outcome: { kind: "left", reason: held }, check, recorded: null };
+  }
   const outcome = mergeBranch({ cwd: args.cwd, branch: args.branch, into: args.into, pr_url: check.task?.pr_url ?? null, exec: args.exec });
   if (outcome.kind === "left") {
     log(`merge left to a person: ${outcome.reason}`);
@@ -292,4 +297,34 @@ async function mergeStep(
   const recorded = await args.post("/cli/line/merge/record", { run_id: args.run_id, sha: outcome.sha, branch: args.branch, into: outcome.into, ...(check.task?.pr_url ? { pr_url: check.task.pr_url } : {}) });
   log(`merged ${args.branch} into ${outcome.into} at ${outcome.sha.slice(0, 10)} (${recorded.used} of ${recorded.limit} today)`);
   return { outcome, check, recorded };
+}
+
+/** Why the line may not merge this branch itself, or null. The default branch's own workspace.toml can name steps
+ *  that must run before a change lands (a backend deploy ahead of the web build a push starts): this merge runs
+ *  none of them, so a change those steps cover goes through the change flow's Merge, which does. Fails closed: a
+ *  profile or diff it cannot read holds the merge. */
+async function beforeMergeSteps(exec: Exec, cwd: string, branch: string, into: string): Promise<string | null> {
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const { shipSpec, deploysFor } = await import("./land/shipCheckout.js");
+  const fetch = exec("git", ["fetch", "origin", branch, into], cwd);
+  if (fetch.status !== 0) return `git fetch failed: ${firstLine(fetch)}`;
+  const toml = exec("git", ["show", `origin/${into}:.codecast/workspace.toml`], cwd);
+  if (toml.status !== 0) return null; // no workspace profile on the default branch: no before-merge steps
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "line-merge-profile-"));
+  try {
+    fs.mkdirSync(path.join(dir, ".codecast"));
+    fs.writeFileSync(path.join(dir, ".codecast", "workspace.toml"), toml.stdout);
+    let steps;
+    try { steps = shipSpec(dir).deploy.filter((s) => s.stage === "before_push"); } catch (err: any) { return `could not read the default branch's ship steps: ${err?.message ?? String(err)}`; }
+    if (!steps.length) return null;
+    const diff = exec("git", ["diff", "--name-only", `origin/${into}...origin/${branch}`], cwd);
+    if (diff.status !== 0) return `could not list the change's files: ${firstLine(diff)}`;
+    const due = deploysFor(steps, diff.stdout.split("\n").filter(Boolean));
+    if (!due.length) return null;
+    return `${due.map((s) => s.name).join(", ")} must run before this change lands, and a line merge runs none; ship it through the change flow (cast flow run change --branch ${branch})`;
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 }
