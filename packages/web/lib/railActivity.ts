@@ -211,7 +211,7 @@ export function rowsNeedingRunFeed(state: RailActivityState): string {
 let feedMemo: { sessions: unknown; runs: unknown; workspace: string | null; ids: string } | null = null;
 const fedRows = new Set<string>();
 /** A handful at most: a session parked on a run outside the team feed is rare. */
-const RUN_FEED_CAP = 12;
+export const RUN_FEED_CAP = 12;
 
 /** Everything a row's line draws from its activity, as one string: what a
  *  surface subscribes to, so it wakes when the words, stage or wake move and
