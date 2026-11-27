@@ -371,7 +371,7 @@ export function TaskCommentComposer({
           <div className="shrink-0 flex items-center gap-1">
             <DictateControls dictation={dictation} onMenuClosed={focusComment} />
             <button
-              onClick={() => (dictation.running() ? void dictation.finish().then(() => handleAddCommentRef.current()) : handleAddComment())}
+              onClick={() => (dictation.running() ? dictation.finishThen(() => handleAddCommentRef.current()) : handleAddComment())}
               disabled={!canSend}
               className={`w-7 h-7 rounded-full transition-colors flex items-center justify-center border ${!canSend ? "border-sol-border/30 text-sol-text-dim/25 cursor-not-allowed" : "border-sol-blue/50 bg-sol-blue/20 text-sol-blue hover:bg-sol-blue/30 hover:border-sol-blue"}`}
             >

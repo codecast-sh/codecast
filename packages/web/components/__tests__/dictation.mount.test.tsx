@@ -67,6 +67,8 @@ function fakeHost() {
           }),
         close: () => {
           h.closed++;
+          // As asrPipe does: closing releases a finish still waiting.
+          h.endFinish?.();
         },
       });
     },
@@ -551,4 +553,184 @@ test("a huddle, an unmute, a voice message and a room recording each finish a ru
   expect(c.textarea().value).toBe("half a thought");
   expect(c.button("Dictate")).not.toBeNull();
   await c.unmount();
+});
+
+// ── Presses made while the last words are on their way ────────────────────
+// The real pipe's finish() resolves when it closes, so a Cancel while
+// finishing releases the wait: what was pressed must then not run.
+
+test("composer: Enter then Esc while finishing sends nothing", async () => {
+  const c = await mountComposer({ initialDraft: "draft before" });
+  await act(async () => { c.textarea().focus(); });
+  await c.press("Dictate");
+  await say((e) => e.onPartial("oops wrong words"));
+  await c.key("Enter");
+  expect(host.finishing).toBe(true);
+  await c.key("Escape");
+  await flush();
+  await flush();
+  expect(c.textarea().value).toBe("draft before");
+  expect(c.sent).toEqual([]);
+  await c.unmount();
+});
+
+test("composer: Send then ✕ while finishing sends nothing; Send twice sends once", async () => {
+  const c = await mountComposer({ initialDraft: "draft" });
+  await act(async () => { c.textarea().focus(); });
+  await c.press("Dictate");
+  await say((e) => e.onPartial("wrong"));
+  const send = () => c.container.querySelector('button[aria-label="Send"]') as HTMLButtonElement;
+  await act(async () => { send().click(); });
+  await flush();
+  expect(host.finishing).toBe(true);
+  await c.press("Cancel dictation");
+  await flush();
+  await flush();
+  expect(c.textarea().value).toBe("draft");
+  expect(c.sent).toEqual([]);
+
+  host.finishing = false;
+  await c.press("Dictate");
+  await say((e) => e.onPartial("right words"));
+  await act(async () => { send().click(); });
+  await act(async () => { send().click(); });
+  await flush();
+  await act(async () => { host.endFinish!(); });
+  await flush();
+  await flush();
+  expect(c.sent).toEqual(["draft right words"]);
+  await c.unmount();
+});
+
+test("the rich-editor switch pressed while finishing waits, and a Cancel keeps the textarea", async () => {
+  const c = await mountComposer();
+  await act(async () => { c.textarea().focus(); });
+  await c.press("Dictate");
+  await say((e) => e.onPartial("ship"));
+  await c.key("e", { metaKey: true, shiftKey: true });
+  expect(host.finishing).toBe(true);
+  await c.key("Escape");
+  await flush();
+  await flush();
+  expect(c.container.querySelector("textarea")).not.toBeNull();
+  expect(c.textarea().value).toBe("");
+  await c.unmount();
+});
+
+async function mountTaskComments() {
+  const posted: string[] = [];
+  const realAdd = useInboxStore.getState().addTaskComment;
+  useInboxStore.setState({ addTaskComment: ((_id: string, text: string) => { posted.push(text); }) as any } as any);
+  const { TaskCommentComposer } = await import("../tasks/TaskCommentStream");
+  const container = w.document.createElement("div");
+  w.document.body.appendChild(container);
+  const root = createRoot(container);
+  await act(async () => {
+    root.render(
+      <ConvexProvider client={fakeConvex()}>
+        <TaskCommentComposer shortId="ct-1" autoOpen />
+      </ConvexProvider>,
+    );
+  });
+  const ta = () => container.querySelector("textarea") as HTMLTextAreaElement;
+  const btn = (l: string) => container.querySelector(`button[aria-label="${l}"]`) as HTMLButtonElement | null;
+  const key = async (k: string) => {
+    await act(async () => { ta().dispatchEvent(new w.KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true })); });
+    await flush();
+  };
+  const unmount = async () => {
+    await act(async () => { root.unmount(); });
+    container.remove();
+    useInboxStore.setState({ addTaskComment: realAdd } as any);
+  };
+  return { container, ta, btn, key, posted, unmount };
+}
+
+test("task comment: Enter twice while finishing posts once; Enter then Esc posts nothing", async () => {
+  const m = await mountTaskComments();
+  await act(async () => { m.btn("Dictate")!.click(); });
+  await flush();
+  await say((e) => e.onPartial("looks good"));
+  await m.key("Enter");
+  await m.key("Enter");
+  await act(async () => { host.endFinish!(); });
+  await flush();
+  await flush();
+  expect(m.posted).toEqual(["looks good"]);
+
+  await act(async () => { m.btn("Dictate")!.click(); });
+  await flush();
+  await say((e) => e.onPartial("never mind"));
+  await m.key("Enter");
+  await m.key("Escape");
+  await flush();
+  await flush();
+  expect(m.posted).toEqual(["looks good"]);
+  expect(m.ta().value).toBe("");
+  await m.unmount();
+});
+
+test("task comment: the post button pressed twice while finishing posts once", async () => {
+  const m = await mountTaskComments();
+  await act(async () => { m.btn("Dictate")!.click(); });
+  await flush();
+  await say((e) => e.onPartial("ship it"));
+  // The round arrow beside the mic.
+  const target = m.container.querySelector("div.shrink-0 > button:last-child") as HTMLButtonElement;
+  expect(target?.querySelector("svg")).toBeTruthy();
+  expect(target.getAttribute("aria-label")).toBeNull();
+  await act(async () => { target.click(); });
+  await act(async () => { target.click(); });
+  await flush();
+  await act(async () => { host.endFinish!(); });
+  await flush();
+  await flush();
+  expect(m.posted).toEqual(["ship it"]);
+  await m.unmount();
+});
+
+test("Esc belongs to a box still finishing after the newer recording was cancelled", async () => {
+  const { dictatingIn } = await import("../../lib/dictation/useDictation");
+  const a = await mountComposer();
+  const b = await mountComposer();
+  await act(async () => { a.textarea().focus(); });
+  await a.press("Dictate");
+  await say((e) => e.onPartial("keep me"));
+  // B's press finishes A first; cancelling B leaves A still finishing.
+  await act(async () => { b.textarea().focus(); });
+  await b.press("Dictate");
+  await b.press("Cancel dictation");
+  expect(host.finishing).toBe(true);
+  expect(a.button("Finish dictation")).not.toBeNull();
+  expect(dictatingIn(a.textarea())).toBe(true);
+  expect(dictatingIn(b.textarea())).toBe(false);
+  await act(async () => { host.endFinish!(); });
+  await flush();
+  expect(dictatingIn(a.textarea())).toBe(false);
+  expect(a.textarea().value).toBe("keep me");
+  await a.unmount();
+  await b.unmount();
+});
+
+test("the real microphone path lets go of a microphone granted after Cancel, before minting a key", async () => {
+  delete w.__dictationTestHost;
+  const { dictationHost, DICTATION_ABANDONED } = await import("../../lib/dictation/host");
+  let grant: (s: MediaStream) => void = () => {};
+  let stopped = 0;
+  const stream = { getTracks: () => [track], getAudioTracks: () => [track] } as unknown as MediaStream;
+  const track = { stop: () => { stopped++; } };
+  (w.navigator as any).mediaDevices = { getUserMedia: () => new Promise<MediaStream>((r) => { grant = r; }) };
+  const minted: unknown[] = [];
+  const signal = { aborted: false };
+  const opening = dictationHost(() => ({ action: async (...a: unknown[]) => { minted.push(a); return null; } }))
+    .open({ onPartial() {}, onUtterance() {}, onFailed() {}, onDropped() {} }, signal)
+    .catch((e: Error) => e);
+  await new Promise((r) => setTimeout(r, 0));
+  signal.aborted = true;
+  grant(stream);
+  const err = await opening;
+  expect((err as Error).message).toBe(DICTATION_ABANDONED);
+  expect(stopped).toBe(1);
+  await new Promise((r) => setTimeout(r, 20));
+  expect(minted).toEqual([]);
 });
