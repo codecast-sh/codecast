@@ -144,13 +144,18 @@ export function InboxDecisionQueue({
   const asking = extraSessions.filter((s) => !covered.has(s._id));
   const extras = sortByRank && priorityPlaceOf ? sortByPriority(asking, priorityPlaceOf) : asking;
   const rankOf = (id: string, row?: InboxSession) => (priorityPlaceOf ? rankLabelOf(placeOfConv(id, row)) : undefined);
+  // Collapsed, the section still draws the open session's card under its
+  // header (the rail's peek, GlobalSessionPanel's renderSection), and nothing else.
+  const peekGroups = collapsed ? shown.filter(isLit) : shown;
+  const peekExtras = collapsed ? extras.filter((x) => x._id === activeSessionId) : extras;
+  const peeking = collapsed && (peekGroups.length > 0 || peekExtras.length > 0);
 
   if (queue.length === 0 && extras.length === 0 && advisory === 0) return null;
   return (
     <div>
     <SectionHeader label="Decisions" count={queue.length} color="text-sol-violet" sectionKey="questions" collapsed={collapsed} onToggle={onToggle} />
-    {!collapsed && <div className="pb-2 pt-1" data-inbox-decision-queue>
-      {shown.map((g) => {
+    {(!collapsed || peeking) && <div className={peeking ? "relative inbox-peek" : "pb-2 pt-1"} data-inbox-decision-queue>
+      {peekGroups.map((g) => {
         const lit = isLit(g);
         if (g.card) {
           const { item, n } = g.asks[0];
@@ -192,7 +197,7 @@ export function InboxDecisionQueue({
           </QueueCard>
         );
       })}
-      {hidden > 0 && (
+      {hidden > 0 && !collapsed && (
         <Link
           href="/decisions?mode=step"
           data-decision-queue-more={hidden}
@@ -202,7 +207,7 @@ export function InboxDecisionQueue({
           <ChevronRight className="w-3 h-3" />
         </Link>
       )}
-      {extras.map((session) => (
+      {peekExtras.map((session) => (
         <QueueCard
           key={session._id}
           id={session._id}
@@ -216,7 +221,7 @@ export function InboxDecisionQueue({
           rank={rankOf(session._id, session)}
         />
       ))}
-      {advisory > 0 && (
+      {advisory > 0 && !collapsed && (
         <Link
           href="/decisions?tab=mine&blocking=advisory"
           data-decision-advisory={advisory}

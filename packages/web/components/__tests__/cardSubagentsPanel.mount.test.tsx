@@ -272,7 +272,7 @@ test("opening a subagent in Compact rows scrolls to its row", async () => {
   await m.unmount();
 });
 
-test("opening a subagent its session owns opens the collapsed section that holds its session's card", async () => {
+test("opening a subagent its session owns peeks its session's card out of the collapsed section", async () => {
   const OWNED = id("owned");
   seed([
     row(PARENT, { title: "Parent session", owners_model: true, agent_status: "working", is_idle: false, updated_at: NOW - 5_000 }),
@@ -280,8 +280,8 @@ test("opening a subagent its session owns opens the collapsed section that holds
   ], { subagent_rows: "folded", subagent_filter: "all" });
   useInboxStore.setState({ collapsedSections: { working: true } } as any);
   const m = await mountInbox(OWNED);
-  expect(useInboxStore.getState().collapsedSections.working).toBeFalsy();
-  expect(cardOf(m.host, PARENT)).not.toBeNull();
+  expect(useInboxStore.getState().collapsedSections.working).toBe(true);
+  expect(cardOf(m.host, PARENT)?.closest(".inbox-peek")).not.toBeNull();
   await m.unmount();
 });
 
