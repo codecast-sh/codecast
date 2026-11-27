@@ -1122,6 +1122,16 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: { isDelta: true, deepFields: ["change", "release"] },
     feeds: ["pipelines.forTeam"],
   },
+  // Each repository's drawn face in a workspace (convex/repoIcons.ts), one
+  // row per workspace and repository, its icon absent until drawn. Delta: one
+  // workspace's feed must not drop another workspace's rows.
+  repoIcons: {
+    persistence: { kind: "collection", key: "repoIcons" },
+    hydration: { phase: "deferred" },
+    indexes: "_id, workspace",
+    sync: { isDelta: true, deepFields: ["icon"] },
+    feeds: ["repoIcons.forWorkspace"],
+  },
   // Every device's checkouts of a team's repositories (ct-98780,
   // contracts/checkouts.ts): ahead/behind, uncommitted work by session, the
   // level sweep's state. One row per device and path; the feed returns a
@@ -2500,6 +2510,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   deployTargets: "shared",
   deployProductions: "shared",
   pipelines: "shared",
+  repoIcons: "shared",
   checkouts: "shared",
   teamDeploys: "shared",
   deployReach: "local",

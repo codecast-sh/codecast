@@ -10,6 +10,7 @@ import { useMemo } from 'react';
 import { ScrollView, View as RNView, StyleSheet } from 'react-native';
 import { Stack, useRouter } from 'expo-router';
 import { useDeployTargets } from '@codecast/web/hooks/useSyncDeployTargets';
+import { teamWorkspaceKey } from '@codecast/web/lib/workspaceScope';
 import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
 import { orderTargets, productionOf, targetNow, type DeployProductionRow } from '@codecast/web/lib/deploys/targets';
 import { sendLift } from '@codecast/web/lib/deploys/press';
@@ -27,7 +28,7 @@ export default function DeploysScreen() {
   const router = useRouter();
   const now = useCoarseNow(30_000);
   const teamId = useActiveTeamId() ?? null;
-  const { targets, deploys, productions, ready } = useDeployTargets(teamId);
+  const { targets, deploys, productions, ready } = useDeployTargets(teamWorkspaceKey(teamId));
   const ordered = useMemo(() => orderTargets(targets, deploys), [targets, deploys]);
   const paused = productions.filter((p) => p.pause);
   const repos = new Set(targets.map((t) => t.repository));

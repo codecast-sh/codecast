@@ -292,6 +292,7 @@ function plans() {
     byWorkspace("deploy_targets", "by_workspace_repository"),
     byWorkspace("pipelines", "by_workspace_repository"),
     byWorkspace("checkouts", "by_workspace_repository"),
+    byWorkspace("repo_icons", "by_workspace_repository"),
     byWorkspace("deploys", "by_workspace_created"),
     byWorkspace("dev_pushes", "by_workspace_target_live"),
     byWorkspace("ship_passes", "by_workspace_finished"),

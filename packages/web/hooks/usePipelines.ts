@@ -4,6 +4,7 @@
 // pipeline page draws. The page mounts this once; it holds the feeder.
 import { createElement, Fragment, useMemo, type ReactElement } from "react";
 import { useDeployTargets } from "./useSyncDeployTargets";
+import { teamWorkspaceKey } from "../lib/workspaceScope";
 import { useSyncRuns, useWorkspaceRuns } from "./useSyncRuns";
 import { usePipelines, useSyncPipelines, type PipelineRow } from "./useSyncPipelines";
 import { useWorkspacesCollection } from "./useWorkspaceCollection";
@@ -24,7 +25,7 @@ export function usePipelineModels(workspace: string | null | undefined): { model
   const pipelines = usePipelines(teamId);
   useSyncRuns({ limit: 100 }, !!teamId, workspace);
   const runs = useWorkspaceRuns(workspace) as unknown as PipelineRun[];
-  const { targets, deploys } = useDeployTargets(teamId);
+  const { targets, deploys } = useDeployTargets(teamWorkspaceKey(teamId));
   // A deploy's "stuck" reads the clock: a coarse minute is enough.
   const now = useCoarseNow(60_000);
   // Edits sessions were started to make, from their first messages (EditComposer): drawn as ghosts until live.

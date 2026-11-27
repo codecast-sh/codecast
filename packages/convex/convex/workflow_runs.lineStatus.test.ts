@@ -24,6 +24,7 @@ const modules = {
   "./notificationRouter.ts": () => import("./notificationRouter"),
   "./sessionDecisions.ts": () => import("./sessionDecisions"),
   "./issueSync.ts": () => import("./issueSync"),
+  "./runDeploys.ts": () => import("./runDeploys"),
 };
 
 const node = (node_id: string, at: number, status = "completed") => ({ node_id, status, outcome: "success", started_at: at - 1000, completed_at: at });

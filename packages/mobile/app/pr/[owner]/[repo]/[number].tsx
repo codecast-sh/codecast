@@ -28,6 +28,7 @@ import { formatRelativeTime } from '@/components/SessionItem';
 import Feather from '@expo/vector-icons/Feather';
 import { useDeployReach } from '@codecast/web/hooks/useDeployReach';
 import { useDeployTargets } from '@codecast/web/hooks/useSyncDeployTargets';
+import { teamWorkspaceKey } from '@codecast/web/lib/workspaceScope';
 import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
 import { repoObjectId } from '@codecast/web/lib/entityLinks';
 import { REACH_LOOK, deployAgo } from '@codecast/web/lib/deploys/deployPill';
@@ -43,7 +44,7 @@ const color = (accent: ExternalEventAccent | undefined, Theme: Palette) => solCo
 function useProductionRows(pr: any, repository: string) {
   const merged = pr?.state === 'merged';
   const reach = useDeployReach(merged ? repoObjectId({ type: 'pr', repository, number: pr.number }) : null);
-  const { targets, deploys } = useDeployTargets(merged ? ((pr?.team_id as string | undefined) ?? null) : null, repository);
+  const { targets, deploys } = useDeployTargets(merged ? teamWorkspaceKey(pr?.team_id as string | undefined) : null, repository);
   const now = useCoarseNow(30_000);
   const model = useMemo(() => prDeployRows(reach, targets, deploys, repository, now), [reach, targets, deploys, repository, now]);
   return { ...model, headline: prReachHeadline(reach?.state, model.rows), now, mergedAt: (pr?.merged_at as number | undefined) ?? null };

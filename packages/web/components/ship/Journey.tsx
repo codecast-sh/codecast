@@ -21,6 +21,7 @@ import { SwitchReview } from "../consequential/ConsequentialSwitch";
 import { resumeAtLedger } from "../consequential/resumeLedger";
 import { RunGate } from "../WorkflowContextPanel";
 import { useDeployTargets } from "../../hooks/useSyncDeployTargets";
+import { teamWorkspaceKey } from "../../lib/workspaceScope";
 import { sessionTargets, targetNow } from "../../lib/deploys/targets";
 import { commitMatches, deploysFocusHref, deploysHref, runFocus, type DeployFocus } from "../../lib/deploys/focus";
 import { queueCommits } from "../../lib/deploys/board";
@@ -436,7 +437,7 @@ export function JourneyView({ journey, run, now_ms, compact, actions, again, tar
  *  landed commit when the caller knows it, else the session, highlighted there), with the press that sends it where it
  *  waits on a person. */
 export function SessionTargets({ teamId, conversationId, line, known: reached, focus }: { teamId: string; conversationId: string; line?: string | null; known?: ReadonlyArray<TargetState>; focus?: DeployFocus | null }) {
-  const { targets, deploys, productions } = useDeployTargets(teamId);
+  const { targets, deploys, productions } = useDeployTargets(teamWorkspaceKey(teamId));
   // What the store knows about the session's commits, then whatever else the Deploy stage's own line names.
   const mine = useMemo(() => {
     // The landed commit's own reach is the answer: an open deploy is not proof it carries the change.

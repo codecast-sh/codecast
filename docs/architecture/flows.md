@@ -963,7 +963,9 @@ server's `git rev-parse HEAD`, the reloaded app). It pins `{outcome:
 live|unverified|skipped|failed, note, sha, seen_live, commands,
 left_for_you}`. The run ends Live only on `live` with the landed sha and what
 showed it running (`seen_live`); a deploy that ran but was not seen running
-ends Deployed, unverified; nothing documented ends Landed. A step only a
+ends Deployed, unverified; nothing documented ends Landed. The run's end
+records the deploy on the Deploys page (deploys.md DP11): Live and Deployed,
+unverified a live one, Deploy failed a failed one, Landed none. A step only a
 person's hands can do (reload an extension, press a button in an app) is done
 with `cast computer` when its grants are in place; otherwise Deploy names it in
 `left_for_you` and finishes the rest, and Left for you posts "One step left for

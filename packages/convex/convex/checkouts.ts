@@ -12,6 +12,7 @@ import { workspaceGrantsAccess } from "./lib/accessKeys";
 import { normalizeRepository } from "./lib/gitRefs";
 import { findDeployTeam } from "./changesDeploy";
 import { teamKey } from "./deployTargetsCi";
+import { workspaceOfArgs } from "./lib/workspaceArg";
 import { parseOwnerRepo } from "@codecast/shared/contracts";
 import { checkoutHash, withPageAsks, type CheckoutPageAsk, type CheckoutReport } from "@codecast/shared/contracts/checkouts";
 
@@ -70,12 +71,12 @@ export const report = mutation({
 // The page's asks this episode read as told, beside the daemon's (contracts/checkouts withPageAsks).
 const rowOut = (r: Doc<"checkouts">) => ({ ...(r.report ?? {}), ...(r.report?.level ? { level: withPageAsks(r.report.level, r.asks as CheckoutPageAsk[] | undefined) } : {}), _id: r._id, workspace: r.workspace, repository: r.repository, device_id: r.device_id, path: r.path, reported_at: r.reported_at, device_label: r.device_label ?? null });
 
-/** A team's checkouts, every device's, of one repository or all of them: contracts/checkouts CheckoutRow. */
+/** A workspace's checkouts (a team's, or a person's own), every device's, of one repository or all of them: contracts/checkouts CheckoutRow. */
 export const forTeam = query({
-  args: { api_token: v.optional(v.string()), team_id: v.id("teams"), repository: v.optional(v.string()) },
+  args: { api_token: v.optional(v.string()), team_id: v.optional(v.id("teams")), workspace: v.optional(v.string()), repository: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const userId = await requireUserOrToken(ctx, args.api_token);
-    const workspace = teamKey(args.team_id);
+    const workspace = workspaceOfArgs(args);
     if (!(await workspaceGrantsAccess(ctx, userId, workspace))) return [];
     const parsed = args.repository ? parseOwnerRepo(args.repository) : null;
     const repository = parsed ? normalizeRepository(parsed) : null;

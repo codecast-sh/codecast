@@ -217,7 +217,8 @@ export function openOf<D extends Pick<TeamDeployRow, "status" | "sha" | "created
 }
 
 /** What a target runs now, what is going out to it, and its history. */
-export function targetNow(t: Pick<DeployTargetRow, "name" | "repository">, deploys: ReadonlyArray<TeamDeployRow>) {
+export type TargetNow = { live: TeamDeployRow | null; open: TeamDeployRow | null; failed: TeamDeployRow | null; history: TeamDeployRow[] };
+export function targetNow(t: Pick<DeployTargetRow, "name" | "repository">, deploys: ReadonlyArray<TeamDeployRow>): TargetNow {
   const mine = deploysOf(t, deploys);
   const live = mine.filter((d) => d.status === "live").sort((a, b) => (b.live_at ?? b.created_at) - (a.live_at ?? a.created_at))[0] ?? null;
   const open = openOf(mine, live);
@@ -267,17 +268,30 @@ export function orderTargets(targets: ReadonlyArray<DeployTargetRow>, deploys: R
   });
 }
 
-/** The targets a team's deploy records name that no checkout declared, as targets the page can show from their records. */
+/** The targets a workspace's deploy records name that no checkout declared, as targets the page can show from their
+ *  records: one per repository and target name (every personal project's target is `production`). `teamId` is "" in a
+ *  personal workspace, where nothing presses. */
 export function recordTargets(declared: ReadonlyArray<DeployTargetRow>, deploys: ReadonlyArray<TeamDeployRow>, teamId: string): DeployTargetRow[] {
-  const known = new Set(declared.map((t) => t.name));
+  const keyOf = (repository: string | null | undefined, name: string) => `${repository || ""}#${name}`;
+  const known = new Set(declared.map((t) => keyOf(t.repository, t.name)));
+  // A record that names no repository is the declared target of its name, as deploysOf reads it.
+  const names = new Set(declared.map((t) => t.name));
   const seen = new Map<string, TeamDeployRow>();
-  for (const d of deploys) if (!known.has(d.target) && !seen.has(d.target)) seen.set(d.target, d);
-  return [...seen.values()].map((d) => ({
-    _id: `records#${d.target}`, workspace: d.workspace, team_id: teamId, name: d.target, repository: d.repository || "", runs: "push", policy: "press",
+  for (const d of deploys) {
+    const k = keyOf(d.repository, d.target);
+    if (!known.has(k) && !(!d.repository && names.has(d.target)) && !seen.has(k)) seen.set(k, d);
+  }
+  return [...seen.values()].map((d) => recordTarget(d.workspace, teamId, d.target, d.repository || ""));
+}
+
+/** A target the page knows only from its records (or, for a personal project, from its Ship runs): no queue, no press. */
+export function recordTarget(workspace: string, teamId: string, name: string, repository: string): DeployTargetRow {
+  return {
+    _id: `records#${repository}#${name}`, workspace, team_id: teamId, name, repository, runs: "push", policy: "press",
     command: null, rollback: null, paths: [], can_deploy: false, can_redeploy_sha: false, can_rollback: false, device_id: null, publisher_user_id: "",
     record_only: true,
     queue: { known: false, truncated: false, commits: 0, untouched: 0, head_sha: null, head_ci: "none", head_ci_url: null, shown: 0, groups: [] },
-  }));
+  };
 }
 
 /** A session's title as a person reads it: markup a prompt pasted into it (`<pasted_content id=…>`) left out. */

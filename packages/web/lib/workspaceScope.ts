@@ -23,6 +23,8 @@
 
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 export type WorkspaceKey = string;
+/** A workspace key spelled out, so a bare team id fails to compile where one is taken (the deploys reads). */
+export type StrictWorkspaceKey = `team:${string}` | `user:${string}`;
 
 type WorkspaceScoped = { workspace?: string | null; team_id?: string | null };
 
@@ -109,4 +111,17 @@ export function workspaceRefOf(row: WorkspaceScoped): { kind: "team" | "user"; i
 /** A workspace key as the args a scoped Convex query takes: a team's id, or personal. */
 export function scopeArgsOf(workspace: string | null | undefined): { workspace: "team"; team_id: Id<"teams"> } | { workspace: "personal" } {
   return workspace?.startsWith("team:") ? { workspace: "team", team_id: workspace.slice(5) as Id<"teams"> } : { workspace: "personal" };
+}
+
+/** The key itself when it is one spelled out (`team:` or `user:`), else null: a bare id matches nothing. */
+export const strictWorkspaceKey = (key: string | null | undefined): StrictWorkspaceKey | null =>
+  key?.startsWith("team:") || key?.startsWith("user:") ? (key as StrictWorkspaceKey) : null;
+
+/** A team's workspace key, or null without a team. */
+export const teamWorkspaceKey = (teamId: string | null | undefined): StrictWorkspaceKey | null => (teamId ? `team:${teamId}` : null);
+
+/** A workspace key as the args a deploys read takes (deployTargets.view and its siblings): a team by `team_id`, as
+ *  those reads took it before personal deploys, and a person's own by its key. */
+export function deployScopeArgs(workspace: StrictWorkspaceKey): { team_id: Id<"teams"> } | { workspace: StrictWorkspaceKey } {
+  return workspace.startsWith("team:") ? { team_id: workspace.slice(5) as Id<"teams"> } : { workspace };
 }

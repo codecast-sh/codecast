@@ -35,6 +35,17 @@
 .dpp-target[data-focus-on] { border-color: var(--sol-yellow); box-shadow: inset 0 0 0 1px var(--sol-yellow); }
 .dpp-target[data-focus-off] { opacity: 0.5; }
 @media (pointer: coarse) { .dpp-target { min-height: 44px; } }
+/* A personal workspace's projects: multi-select chips, each its face, name, state mark and deploys live in 30 days.
+   A chip turned off reads faded with a dashed edge, so on and off hold without hover or color alone. */
+.dpp-project { gap: 6px; padding-left: 6px; }
+.dpp-project[aria-pressed="true"] { background: var(--dp-card); border-color: color-mix(in srgb, var(--sol-text) 40%, transparent); }
+.dpp-project[aria-pressed="false"] { border-style: dashed; opacity: 0.55; }
+.dpp-project[aria-pressed="false"] .dpp-target-name { text-decoration: line-through; text-decoration-thickness: 1px; }
+.dpp-project .dpp-target-n { color: var(--sol-text-muted); font-weight: 500; }
+.dpp-project-all { font-weight: 600; font-size: 13px; color: var(--sol-blue); }
+/* A project named on a card drawn with others: first in its head, the same place in both columns. */
+.dpp-tag { display: inline-flex; align-items: center; gap: 5px; flex: none; font-size: var(--fs-meta); font-weight: 600; color: var(--sol-text-muted); }
+.dpp-run-top > .dpp-tag { padding-top: 1px; }
 
 /* One target */
 .dpp-main { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 18px 26px 40px; min-width: 0; }
@@ -194,6 +205,10 @@ a.dpp-run-title:hover { text-decoration: underline; }
 .dpp-run-now[data-tone="blue"] { color: var(--sol-blue); }
 .dpp-run-now[data-tone="red"] { color: var(--sol-red); }
 .dpp-run-detail { flex-basis: 100%; font-size: 12px; color: var(--sol-text-dim); overflow-wrap: anywhere; }
+.dpp-run-detail-text { display: block; }
+.dpp-run-detail-text[data-clamped] { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }
+.dpp-run-detail-more { margin: 2px 0 0; padding: 0; font: inherit; font-size: 12px; color: var(--sol-blue); background: none; border: 0; cursor: pointer; }
+@media (pointer: coarse) { .dpp-run-detail-more { min-height: 44px; } }
 .dpp-refs { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; min-width: 0; font-size: 12px; }
 .dpp-refs > * { max-width: 100%; }
 /* A branch wears a pill like the app's own: green, mono, wrapping as prose with each line's box closed. */
@@ -227,7 +242,7 @@ button.dpp-card-title:hover { text-decoration: underline; }
 .dpp-card-title:focus-visible { outline: 2px solid var(--sol-blue); outline-offset: 2px; }
 .dpp-card[data-kind="next"] .dpp-card-title { font-family: inherit; cursor: default; }
 .dpp-meta { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 9px; min-width: 0; }
-.dpp-sha { font-size: 12px; color: var(--sol-text-muted); }
+.dpp-sha { font-size: 12px; color: var(--sol-text-muted); white-space: nowrap; }
 .dpp-by { font-size: 12.5px; color: var(--sol-text-secondary); }
 .dpp-fact { font-size: 12px; color: var(--sol-text-dim); }
 .dpp-attempt { all: unset; font-family: var(--font-mono); color: var(--sol-blue); cursor: pointer; }

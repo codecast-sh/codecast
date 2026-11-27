@@ -22,6 +22,7 @@ one target. Short id `dp-N`.
 | `carries` | the fixes it carried: problem, run, the card that shipped it, the merge, and how it is known (`sent`, `same commit`, `deployed after the merge`) |
 | `event_ids` | the markers that reported it |
 | `run_id` | the line-deploy run that carries it through its steps (DP8); each step's state is that run's station, read from the run |
+| `ship_run` | the personal flow run whose end recorded it (DP11): one deploy per run |
 
 A deploy marker stays an `external_events` row of kind `deploy` (the team's
 event stream, triggers, the Changes page); its `meta.deploy` names the deploy
@@ -212,6 +213,22 @@ through `packages/convex/run.sh`.
 - A decision page: a line card answered Ship says which deploy it went out in.
 - The Changes page's live strip and the Ops timeline: a deploy opens its
   deploy object.
+- The Deploys page in a personal workspace shows every project the person
+  ships at once: a row of project chips (multi-select, all on) filters the
+  page, each project wears its repository's face (a drawing in the role icon
+  language, `repo_icons`, asked for by the first deploy `recordDeployMarker`
+  records into the workspace, whatever path reported it; until it is drawn,
+  the name's first letter in the same color), and the columns mix the
+  chosen projects' runs and deploys. A run on its way shows the Check ·
+  Review · Land track of a flow that lands straight to main (`track:
+  "direct"`), or the pull request's steps (`track: "pr"`). It has no pause or
+  rollback controls; those are a team's. It reads the person's own workspace
+  (`user:<id>`): `deployTargets.view`, `deployRefs.recentForTeam`,
+  `workflow_runs.shippingRuns` and `checkouts.forTeam` each take `workspace`
+  in place of `team_id` (exactly one). For a personal workspace
+  `recentForTeam` returns every deploy of the last 30 days (up to 500) and
+  each repository's newest deploy and newest live one, whatever their age,
+  so a busy project never pushes a quiet one off the page.
 
 ## DP8. A deploy's steps are stations
 
@@ -356,6 +373,12 @@ with the whole manifest, so a repository adds a `[ship]` key only once
 
 ## DP11. Every way a target goes live leaves a dp-N
 
+Each path records into the repository's team when one of the caller's teams
+works on it (`changesDeploy.findDeployTeam`: the GitHub App's team, else the
+one team publishing a checkout of it), and into the caller's own workspace
+(`user:<id>`) otherwise (`findDeployWorkspace`). A personal deploy has no
+`external_events` marker: there is no team event stream for it to feed.
+
 - **A ship.** `cast ship checkout` posts its pass to `ship_passes`
   (`deployTargets.recordShipPass`): the commits with the session behind each,
   the groups held back, each deploy step's result. Every step a target names
@@ -397,6 +420,34 @@ with the whole manifest, so a repository adds a `[ship]` key only once
 - **Release scripts.** scripts/deploy-all.sh marks `mobile` after `eas
   update` and `desktop` after its release; release.sh marks `desktop` itself
   when it commits the version.
+- **A personal flow run's end.** A run in a `user:` workspace that ends is
+  read for its deploy (`lib/runDeploy.ts`, scheduled by the runner's last
+  report as `runDeploys.record`; `personalDeploysBackfill:run` for runs that
+  ended before). Completed at an exit labelled Live or Shipped, it records a
+  live deploy; at Deployed, unverified, a live one noted as not seen running.
+  Ended at a station labelled Deploy failed, or whose id says the deploy
+  failed (`deploy_failed`, `deploy__failed`), it records a failed deploy only
+  when the step that ran the deploy failed (the personal flow's Deploy pinned
+  `failed`, or a `ship`/`deploy` command station failed), with that step's
+  words; when that step succeeded and only a station watching for it failed
+  after (`deploy__wait`), the deploy went out, so it is live, noted as
+  unconfirmed. Ended anywhere else (Landed: nothing documents a deploy), it
+  records nothing. The deploy goes to `production` of the GitHub repository
+  the run's sessions work in (the task's session, the run's, the one that
+  pressed Ship), at the run's merge sha, else the sha a deploy or landing
+  station pinned, else one a station's output names (`<sha> is on main`, a
+  ship step's line that starts with the sha it shipped), with source `<flow>
+  flow`. It carries the run's task and lists the landed commit under the
+  session that pressed Ship, so its card names both; with no sha, the card
+  still names the run's task and that session. Each run is a deploy of its
+  own, never merged into another of the same sha. A run with no GitHub
+  repository, a repository one of the person's teams works on (its team's own
+  path records it) and a line-deploy run (DP8, already a deploy) record
+  nothing. A run resumed after it ended (Deploy failed, then Live) updates its
+  deploy to what the new end says, with one exception: a deploy that went
+  live stays live when the resumed run's redeploy fails, at its sha, with
+  "A later redeploy failed: <reason>" added to its note. An unchanged end
+  changes nothing.
 
 A deploy that goes live fills its range on main (`fillDeployRange`): its
 previous sha (the target's live deploy before it) and the commits between
@@ -617,8 +668,8 @@ Deploy targets have no owner of their own, so the task's blocker is the one
 card.
 
 The personal flow's Deploy (flows.md FL4) is not this stage: an agent runs the
-deploy the project's docs name, reads no targets, records no deploy of its
-own, and ends Live only on seeing the landed commit run.
+deploy the project's docs name, reads no targets, and ends Live only on seeing
+the landed commit run. Its run's end records the deploy (DP11).
 
 The `cast-deploy` skill ships everything uncommitted in a shared checkout and
 ends with `cast deploy`, so what a project deploys, in what order and with what

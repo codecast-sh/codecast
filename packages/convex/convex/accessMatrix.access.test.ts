@@ -98,6 +98,8 @@ const FEED_CASES: Record<string, (ids: Ids) => Record<string, unknown>[]> = {
   "deployTargets.view": (ids) => [{ team_id: ids.T }, { team_id: ids.O }],
   // One team's pipelines (pipeline.md PL6), asked of both teams; a pipeline is always a team's.
   "pipelines.forTeam": (ids) => [{ team_id: ids.T }, { team_id: ids.O }],
+  // Repository faces (repoIcons.ts), asked of every workspace a placement names and each identity's own.
+  "repoIcons.forWorkspace": (ids) => [...new Set([`team:${ids.T}`, `team:${ids.O}`, ...WHO.map((w) => `user:${ids[w]}`)])].map((workspace) => ({ workspace })),
   // One team's checkouts, every device's (ct-98780), asked of both teams.
   "checkouts.forTeam": (ids) => [{ team_id: ids.T }, { team_id: ids.O }],
   // One team's newest deploys across its targets, asked of both teams.
@@ -189,7 +191,7 @@ async function seed(t: ReturnType<typeof convexTest>) {
     };
     let n = 0;
     const base = (place: string) => ({ title: `${place} row`, created_at: now, updated_at: now });
-    const rows: Record<string, Record<string, string>> = { tasks: {}, docs: {}, plans: {}, projects: {}, liveFlows: {}, sessionFlows: {}, flowMaps: {}, teamKitItems: {}, opsGroups: {}, opsEvents: {}, opsReplays: {}, teamDeploys: {}, pipelines: {}, checkouts: {}, messageFeed: {}, workflowRuns: {}, envStandings: {}, priorities: {}, prNumbers: {} };
+    const rows: Record<string, Record<string, string>> = { tasks: {}, docs: {}, plans: {}, projects: {}, liveFlows: {}, sessionFlows: {}, flowMaps: {}, teamKitItems: {}, opsGroups: {}, opsEvents: {}, opsReplays: {}, teamDeploys: {}, pipelines: {}, repoIcons: {}, checkouts: {}, messageFeed: {}, workflowRuns: {}, envStandings: {}, priorities: {}, prNumbers: {} };
     const groupRefs: Record<string, string> = {};
     const runSessions: Record<string, string> = {};
     for (const [place, p] of Object.entries(placements)) {
@@ -245,6 +247,8 @@ async function seed(t: ReturnType<typeof convexTest>) {
       groupRefs[place] = short_id;
       rows.opsEvents[place] = await db.insert("external_events", { ...ws, ...(p.team_id ? { team_id: p.team_id } : {}), source: "codecast", kind: "new", title: `boom ${place}`, source_id, group_id: group, dedupe_key: `ev-${place}`, created_at: now - 1_000 } as any);
       rows.opsReplays[place] = await db.insert("replays", { ...ws, source_id, short_id: `rp-${++n}`, provider: "sdk", external_id: `ext-${place}`, started_at: now - 5_000, counts: { clicks: 0, errors: 0, failed_requests: 0 }, group_ids: [], chunk_keys: [], created_at: now, updated_at: now } as any);
+      // A face carries only a workspace key, so the private placement shares the personal one's.
+      if (place !== "private") rows.repoIcons[place] = await db.insert("repo_icons", { workspace: p.workspace, repository: `acme/${place}-app` } as any);
       if (place === "team" || place === "other") {
         await db.insert("deploy_targets", { workspace: p.workspace, repository: "acme/app", name: "web", runs: "push", live: { kind: "marker" }, policy: "press", paths: [], publisher_user_id: p.user_id, published_at: now, updated_at: now } as any);
         const repository = `acme/${place}-app`;
@@ -273,6 +277,7 @@ const EXPECTED_FOR: Record<string, Record<Who, string[]>> = {
   flowMaps: { ...EXPECTED, owner: ["personal", "team"] },
   teamDeploys: { ...EXPECTED, owner: ["team"] },
   pipelines: { ...EXPECTED, owner: ["team"] },
+  repoIcons: { ...EXPECTED, owner: ["personal", "team"] },
   checkouts: { ...EXPECTED, owner: ["team"] },
 };
 

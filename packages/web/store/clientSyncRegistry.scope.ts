@@ -117,6 +117,7 @@ export const DATA_SCOPE = {
   deployTargets: "workspace",
   deployProductions: "workspace",
   pipelines: "workspace",
+  repoIcons: "workspace",
   checkouts: "workspace",
   teamDeploys: "workspace",
   deployReach: "entity",

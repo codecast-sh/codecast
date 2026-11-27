@@ -24,8 +24,12 @@ export type DeployFocus =
 export const FOCUS_PARAMS = ["deploy", "pr", "sha", "task", "session", "branch"] as const satisfies ReadonlyArray<DeployFocus["kind"]>;
 
 /** What makes an address a link that opens as it names: a thing to focus, the switch's view or Mine. An address that
- *  names none opens the view and Mine the viewer last chose (lib/rememberedFilters). */
+ *  names none opens the view and Mine the viewer last chose (lib/rememberedFilters). A personal page's projects are
+ *  remembered on their own (PERSONAL_PROJECTS_FILTER), so a team page's address never names them. */
 export const LINK_PARAMS = [...FOCUS_PARAMS, "show", "mine"] as const;
+
+/** Where the projects a viewer last turned on in their own workspace are remembered (lib/rememberedFilters' bag). */
+export const PERSONAL_PROJECTS_FILTER = "deploys-projects";
 
 type Params = { get(name: string): string | null };
 

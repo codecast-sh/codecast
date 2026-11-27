@@ -11,7 +11,7 @@ import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useSyncCollection } from "./useSyncCollection";
 import { useSyncTeamDeployRecords } from "./useSyncDeployTargets";
 import { workspaceRows } from "./useWorkspaceCollection";
-import { activeWorkspaceKeyOf } from "../lib/workspaceScope";
+import { activeWorkspaceKeyOf, teamWorkspaceKey } from "../lib/workspaceScope";
 import { landedShas, sessionShips, type SessionShip } from "../lib/ship/sessionShip";
 import type { TeamDeployRow } from "../lib/deploys/targets";
 import { cachedAt, pinDetailRows } from "../lib/detailRows";
@@ -29,7 +29,7 @@ export function useSyncTeamShipFeeds() {
     return id && isConvexId(id) ? id : null;
   });
   useSyncCollection("workflowRuns", api.sessionFlowRuns.forTeam, teamId ? { team_id: teamId } : "skip");
-  useSyncTeamDeployRecords(teamId);
+  useSyncTeamDeployRecords(teamWorkspaceKey(teamId));
 }
 
 /** The landed runs' commits, sorted and joined: the feeder's args change only when the set does. */

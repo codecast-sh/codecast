@@ -4,7 +4,9 @@
 // own clock (Convex, through packages/convex/deploy.sh) says so itself:
 // `cast ship mark --surface backend --sha <HEAD>` posts here, and the marker
 // lands as an `external_events` row of kind `deploy` for the repository's
-// team, where the team event stream and the live strip both read it.
+// team, where the team event stream and the live strip both read it. A
+// repository none of the caller's teams works on records into the caller's own
+// workspace (findDeployWorkspace): a deploy object, with no team event.
 //
 // The marker records whether or not the team has Changes turned on. It is a
 // fact about the repository, like a commit, and a deploy left unrecorded while
@@ -16,6 +18,7 @@ import { mutation, query } from "./functions";
 import { Id } from "./_generated/dataModel";
 import { requireUserOrToken } from "./lib/auth";
 import { isTeamMember, requireTeamMembership } from "./lib/access";
+import { parseWorkspaceKey } from "./lib/accessKeys";
 import { commitUrl, normalizeRepository, shortSha } from "./lib/gitRefs";
 import { recordExternalEvent } from "./externalEvents";
 import { resolveTeamForRepository } from "./githubWebhooks";
@@ -71,6 +74,31 @@ export async function findDeployTeam(
   if (teams.length === 1) return teams[0];
   if (teams.length > 1) throw new Error(`More than one of your teams works on ${repository}; pass --team <name|id>.`);
   return null;
+}
+
+/**
+ * The workspace a repository's deploy records into: its team's (findDeployTeam), else the caller's own, as a
+ * checkout's report falls back (checkouts.report).
+ */
+export async function findDeployWorkspace(ctx: { db: any }, userId: Id<"users">, repository: string): Promise<string> {
+  const team = await findDeployTeam(ctx, userId, repository);
+  return team ? `team:${team}` : `user:${userId}`;
+}
+
+/** The workspace a CLI call records into: the team it names (a member), else findDeployWorkspace. */
+export async function deployWorkspaceFor(
+  ctx: { db: any },
+  userId: Id<"users">,
+  repository: string,
+  teamId?: Id<"teams">,
+): Promise<{ workspace: string; teamId: Id<"teams"> | null }> {
+  if (teamId) {
+    await requireTeamMembership(ctx, userId, teamId);
+    return { workspace: `team:${teamId}`, teamId };
+  }
+  const workspace = await findDeployWorkspace(ctx, userId, repository);
+  const ws = parseWorkspaceKey(workspace);
+  return { workspace, teamId: ws?.type === "team" ? ws.teamId : null };
 }
 
 // How far back through a repository's events the previous marker is looked
@@ -131,8 +159,7 @@ export const markDeploy = mutation({
     if (!SHA.test(sha)) throw new Error(`"${args.sha}" is not a commit sha.`);
     const version = args.version?.trim().slice(0, 64) || undefined;
 
-    if (args.team_id) await requireTeamMembership(ctx, userId, args.team_id);
-    const teamId = args.team_id ?? (await deployTeamFor(ctx, userId, repository));
+    const { workspace, teamId } = await deployWorkspaceFor(ctx, userId, repository, args.team_id);
     const user = await ctx.db.get(userId);
     const startedBy = { kind: "person" as const, name: user?.name ?? user?.github_username ?? "someone", user_id: userId };
 
@@ -141,14 +168,14 @@ export const markDeploy = mutation({
       // The watcher pushes once as it starts: a committed tree whose diff found nothing, at the sha of the clean deploy
       // the target runs with no dev push on top, changed nothing, and is not recorded.
       if (!args.dirty && Array.isArray(args.adds) && Array.isArray(args.drops) && !args.adds.length && !args.drops.length) {
-        const live = await latestLiveDeploy(ctx, `team:${teamId}`, surface, repository);
+        const live = await latestLiveDeploy(ctx, workspace, surface, repository);
         if (live && !live.dirty && sameSha(live.sha, sha) && !(await devPushedOver(ctx, live))) {
-          return { ok: true as const, dev_push: false as const, noop: true as const, event_id: null, team_id: teamId, repository, surface, sha, version: version ?? null, deploy: null };
+          return { ok: true as const, dev_push: false as const, noop: true as const, event_id: null, team_id: teamId, workspace, repository, surface, sha, version: version ?? null, deploy: null };
         }
       }
       await recordDevPush(ctx, {
-        workspace: `team:${teamId}`,
-        team_id: teamId,
+        workspace,
+        ...(teamId ? { team_id: teamId } : {}),
         target: surface,
         repository,
         sha,
@@ -159,25 +186,26 @@ export const markDeploy = mutation({
         ...(args.drops ? { drops: args.drops } : {}),
         at: Date.now(),
       });
-      return { ok: true as const, dev_push: true as const, event_id: null, team_id: teamId, repository, surface, sha, version: version ?? null, deploy: null };
+      return { ok: true as const, dev_push: true as const, event_id: null, team_id: teamId, workspace, repository, surface, sha, version: version ?? null, deploy: null };
     }
 
     // The surface already runs this sha (a retried deploy.sh, a redeploy of
     // the same commit): one marker. A rollback to an earlier sha is a change
     // of what runs, so it gets a marker of its own.
-    const previous = await latestDeploy(ctx, teamId, repository, surface);
-    const live = await latestLiveDeploy(ctx, `team:${teamId}`, surface, repository);
+    // A personal workspace has no team event stream, so no marker: a retry lands on the same deploy (recordDeployMarker).
+    const previous = teamId ? await latestDeploy(ctx, teamId, repository, surface) : null;
+    const live = await latestLiveDeploy(ctx, workspace, surface, repository);
     // A deploy of the same commit with uncommitted files is a different deploy, and one that changed what runs is news.
     // So is a clean deploy of a sha whose live deploy went out dirty: the tree it ran was not the sha's. So is one of a
     // sha the target no longer runs (a workflow run rolled it back since this repository's last marker), and one over a
     // dev push: it put the committed tree back.
     if (previous?.sha === sha && !args.deploy && !args.dirty && !args.adds?.length && !args.drops?.length
       && (!live || (!live.dirty && sameSha(live.sha, sha) && !(await devPushedOver(ctx, live))))) {
-      return { ok: true as const, event_id: previous._id, team_id: teamId, repository, surface, sha, version: version ?? null };
+      return { ok: true as const, event_id: previous._id, team_id: teamId, workspace, repository, surface, sha, version: version ?? null };
     }
 
     const now = Date.now();
-    const eventId = await recordExternalEvent(ctx, {
+    const eventId = teamId ? await recordExternalEvent(ctx, {
       source: "codecast",
       team_id: teamId,
       repository,
@@ -189,19 +217,19 @@ export const markDeploy = mutation({
       meta: { surface, version },
       dedupe_key: `deploy:${teamId}:${repository}:${surface}:${sha}:${now}`,
       created_at: now,
-    });
+    }) : null;
     // The marker is a deploy object too (deploys.md DP1): it finishes the
     // line's deploy on this surface, or records one of its own.
     const deploy = await recordDeployMarker(ctx, {
-      workspace: `team:${teamId}`,
-      team_id: teamId,
+      workspace,
+      ...(teamId ? { team_id: teamId } : {}),
       target: surface,
       sha,
       ...(version ? { version } : {}),
       repository,
       source: "cast ship mark",
       push: true,
-      event_id: eventId,
+      ...(eventId ? { event_id: eventId } : {}),
       ...(args.dirty ? { dirty: args.dirty } : {}),
       ...(args.deploy ? { deploy: args.deploy } : {}),
       ...(args.machine?.trim() ? { machine: args.machine.trim() } : {}),
@@ -213,7 +241,7 @@ export const markDeploy = mutation({
       started_by: startedBy,
       at: now,
     });
-    return { ok: true as const, dev_push: false as const, event_id: eventId, team_id: teamId, repository, surface, sha, version: version ?? null, deploy };
+    return { ok: true as const, dev_push: false as const, event_id: eventId, team_id: teamId, workspace, repository, surface, sha, version: version ?? null, deploy };
   },
 });
 
@@ -241,9 +269,8 @@ export const addedBy = query({
     const target = normalizeDeployTarget(surface);
     if (!target) return { found: [] };
 
-    if (args.team_id) await requireTeamMembership(ctx, userId, args.team_id);
-    const teamId = args.team_id ?? (await deployTeamFor(ctx, userId, repository));
-    const pushes = await targetPushes(ctx, `team:${teamId}`, target, normalizeRepository(repository), ADDED_BY_SCAN);
+    const { workspace } = await deployWorkspaceFor(ctx, userId, repository, args.team_id);
+    const pushes = await targetPushes(ctx, workspace, target, normalizeRepository(repository), ADDED_BY_SCAN);
     const found: AddedBy[] = [];
     for (const name of new Set(args.names)) {
       const hit = adderOf(pushes, name);

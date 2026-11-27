@@ -15,6 +15,7 @@
 import { memo, useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useCheckouts, useSyncCheckouts } from "../../../hooks/useSyncCheckouts";
+import { teamWorkspaceKey } from "../../../lib/workspaceScope";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
 import { useInboxStore } from "../../../store/inboxStore";
 import { SwitchReview } from "../../consequential/ConsequentialSwitch";
@@ -46,8 +47,8 @@ const fromWords = (c: CheckoutView) =>
 const ask = (id: string, who: string) => useInboxStore.getState().askCheckout(id, who, Date.now());
 
 export const CheckoutsSection = memo(function CheckoutsSection({ pipeline, teamId }: { pipeline: Pipeline; teamId: string | null }) {
-  const { ready, error, refused } = useSyncCheckouts(teamId);
-  const rows = useCheckouts(teamId, pipeline.repository);
+  const { ready, error, refused } = useSyncCheckouts(teamWorkspaceKey(teamId));
+  const rows = useCheckouts(teamWorkspaceKey(teamId), pipeline.repository);
   const now = useCoarseNow(60_000);
   // Sessions by their titles in this viewer's store: a team row never carries a private session's title.
   const ids = useMemo(() => [...new Set(rows.flatMap((r) => [...r.uncommitted.sessions.map((s) => s.conversation_id), ...(r.level.state === "stuck" ? toldOf(r.level).map((t) => (t.to === "session" ? t.conversation_id : null)) : [])]).filter((x): x is string => !!x))].sort().join(","), [rows]);

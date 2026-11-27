@@ -113,14 +113,14 @@ describe("a deploy card's lines and a team's Ship runs live in the store", () =>
     useInboxStore.setState({ shippingRuns: {}, shippingShippers: {} } as any);
     const run = (rid: string) => ({ _id: rid, status: "running", node_statuses: [], user_id: "u", created_at: 1, updated_at: 1 });
     const shipper = (rid: string) => ({ run_id: rid, task_short_id: null, merged_sha: null, spawner_conversation_id: null, user_id: "u", stand_in: false, created_at: 1 });
-    applyShipping("t1", { runs: [run("r1"), run("r2")], shippers: [shipper("r1"), shipper("r9")] });
-    applyShipping("t2", { runs: [run("r5")], shippers: [] });
+    applyShipping("team:t1", { runs: [run("r1"), run("r2")], shippers: [shipper("r1"), shipper("r9")] });
+    applyShipping("team:t2", { runs: [run("r5")], shippers: [] });
     expect(state().shippingRuns.r1.workspace).toBe("team:t1");
     expect(state().shippingShippers.r9).toMatchObject({ _id: "r9", workspace: "team:t1" });
-    applyShipping("t1", { runs: [run("r2")], shippers: [] });
+    applyShipping("team:t1", { runs: [run("r2")], shippers: [] });
     expect(Object.keys(state().shippingRuns).sort()).toEqual(["r2", "r5"]);
     expect(state().shippingShippers).toEqual({});
-    applyShipping("t1", null);
+    applyShipping("team:t1", null);
     expect(Object.keys(state().shippingRuns).sort()).toEqual(["r2", "r5"]);
   });
 });

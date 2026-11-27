@@ -1,6 +1,7 @@
 "use client";
-// One target on the Deploys page (doc s97bnygafm0x6p6cwn1f5bn6258jyjfa): its head (what is live, Mine, Roll back,
-// Pause), the production pause, the chip a link names, and two columns. Shipping: changes sent through Ship and not on
+// One target on the Deploys page (doc s97bnygafm0x6p6cwn1f5bn6258jyjfa), or several projects' targets drawn together
+// (a personal workspace's projects): its head (what is live, Mine, Roll back, Pause), the production pause, the chip a
+// link names, and two columns. Drawn together, each card names its project and nothing presses. Shipping: changes sent through Ship and not on
 // main yet. Deploys: Next deploy and every deploy, one card kind, each listing what it carried by session, PR, SHA,
 // task, branch or priority, every commit credited to the session that pressed Ship. Drawn from props alone
 // (lib/deploys/board.ts derives everything), so a fixture renders it; only an opened deploy's detail reads the store.
@@ -26,6 +27,7 @@ import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useDeployDetail, useSyncDeployDetail } from "../../hooks/useDeployDetail";
 import { changeGroups, devPushWords, hasChangeNames, originWords, shownNames, type ChangeGroup } from "./deployRecord";
 import { ShippingColumn } from "./ShippingColumn";
+import { RepoTag } from "./RepoFace";
 import { EntityIdPill } from "../EntityIdPill";
 import { ShareControl } from "../ShareControl";
 import "./deploys.css";
@@ -48,7 +50,16 @@ const VIEW_WORDS: Record<BoardView, { word: string; rows: string }> = {
 const CARDS_SHOWN = 6;
 
 export type DeploysBoardProps = {
+  /** The target drawn; with `projects`, the first of them. */
   target: DeployTargetRow;
+  /** Several projects' targets drawn as one board: every one's deploys newest first and every one's Ship runs, each card
+   *  tagged with its project. No Next deploy, no presses, no link chip. */
+  projects?: ReadonlyArray<DeployTargetRow>;
+  /** A person's own workspace: everything is theirs (no Mine, no "Your sessions"), and Shipping shows though its
+   *  targets are known only from their records. */
+  personal?: boolean;
+  /** What the head names in place of the target: a personal page's project, or how many of its projects are on. */
+  heading?: string;
   production: DeployProductionRow | undefined;
   /** The team's deploys (the board reads this target's). */
   deploys: ReadonlyArray<TeamDeployRow>;
@@ -90,10 +101,19 @@ export type DeploysBoardProps = {
 
 export function DeploysBoard(p: DeploysBoardProps) {
   const { target: t, production, now, focus, mine, me } = p;
+  const mixed = !!p.projects;
+  // Drawn together, each card names its project, unless every target drawn is one project's.
+  const repositories = useMemo(() => [...new Set((p.projects ?? [t]).map((x) => x.repository))], [p.projects, t]);
+  const tagged = repositories.length > 1;
   const show = p.show === "priorities" && !p.priorities ? "sessions" : p.show;
-  const n = useMemo(() => targetNow(t, p.deploys), [t, p.deploys]);
+  // Each target's own state; drawn together, their histories merge newest first and no one target's live leads.
+  const nows = useMemo(() => (p.projects ?? [t]).map((x) => ({ t: x, n: targetNow(x, p.deploys) })), [p.projects, t, p.deploys]);
+  const n = useMemo(() => (mixed ? { live: null, open: null, failed: null, history: nows.flatMap((x) => x.n.history).sort((a, b) => b.created_at - a.created_at) } : nows[0].n), [mixed, nows]);
   const history = n.history as BoardDeploy[];
-  const queue = useMemo(() => queueCommits(t.queue.groups), [t.queue.groups]);
+  // A deploy's own target (its card's presses, its "Live now"), by the target and repository it names.
+  const nowOf = (d: Pick<TeamDeployRow, "target" | "repository">) => nows.find((x) => x.t.name === d.target && (!d.repository || x.t.repository === d.repository)) ?? nows[0];
+  // Projects drawn together have no queue: they are known from their records.
+  const queue = useMemo(() => (mixed ? [] : queueCommits(t.queue.groups)), [mixed, t.queue.groups]);
   const shippers = p.shipping?.shippers;
   const lines = p.linesByDeploy;
   const board = useMemo(() => {
@@ -101,18 +121,25 @@ export function DeploysBoard(p: DeploysBoardProps) {
     const { going, sending, next: nextCommits } = splitQueue(queue, history);
     // The commits the queue counted but did not list are the oldest waiting: Next deploy's while nothing is going out,
     // else the going-out deploy's (it sends everything up to its own commit).
-    const older = Math.max(0, t.queue.commits - t.queue.shown);
+    const older = mixed ? 0 : Math.max(0, t.queue.commits - t.queue.shown);
     // Only a deploy actually sending the queue takes them; a rollback or an old request at an unlisted sha does not.
     const sends = !!going && sending.length > 0;
     const unlisted = sends ? 0 : older;
     const next = nextCommits.length ? carriedOfQueue(nextCommits, credit, unlisted) : null;
     const cards: Card[] = attemptGroups(history).map((g) => ({ deploys: g, carried: carriedOfAttempts(g, queue, credit, lines, sends && g[0] === going ? older : 0) }));
     const mineIds = mineSessionIds([next, ...cards.map((c) => c.carried)], me);
-    // Every pull request whose commit is on main, waiting or deployed (from the cards' commits).
-    const landedPrs = new Set<number>([next, ...cards.map((c) => c.carried)].flatMap((c) => (c ? c.commits.flatMap((x) => (x.pr ? [x.pr] : [])) : [])));
-    for (const c of queue) if (c.pr_number) landedPrs.add(c.pr_number);
+    // Every pull request whose commit is on main, waiting or deployed (from the cards' commits), by repository.
+    const landedPrs = new Map<string, Set<number>>();
+    const land = (repository: string, pr: number | null | undefined) => {
+      if (!pr) return;
+      const key = repository.toLowerCase();
+      landedPrs.set(key, (landedPrs.get(key) ?? new Set()).add(pr));
+    };
+    for (const x of next?.commits ?? []) land(t.repository, x.pr);
+    for (const c of cards) for (const x of c.carried.commits) land(c.deploys[0].repository || t.repository, x.pr);
+    for (const c of queue) land(t.repository, c.pr_number);
     return { queue, going, nextCommits, next, unlisted, cards, mineIds, landedPrs, your: yourSessions(next, cards, mineIds), onMain: tasksOnMain(queue, history) };
-  }, [queue, history, shippers, lines, t.queue.commits, t.queue.shown, me]);
+  }, [queue, history, shippers, lines, mixed, t.repository, t.queue.commits, t.queue.shown, me]);
 
   // Where the linked thing is: waiting in the queue, or on the deploys that took it out (reach names the one that holds
   // a PR or commit; anything else is matched on what each deploy carried), or on a Ship run on its way.
@@ -120,19 +147,20 @@ export function DeploysBoard(p: DeploysBoardProps) {
   const focusDeploys = !focus ? [] : held ? history.filter((d) => d.short_id === held.short_id) : history.filter((d) => deployMatches(d, focus));
   const runs = p.shipping?.runs ?? null;
   // As the Shipping column reads them: a run whose PR is on main already is not on its way.
-  const shipping = useMemo(() => (runs ? shippingRuns(runs, { repository: t.repository, checkouts: p.checkouts, now, landedPrs: board.landedPrs }) : null), [runs, t.repository, p.checkouts, now, board.landedPrs]);
+  const landedHere = board.landedPrs.get(t.repository.toLowerCase());
+  const shipping = useMemo(() => (runs ? shippingRuns(runs, { repository: t.repository, checkouts: p.checkouts, now, landedPrs: landedHere }) : null), [runs, t.repository, p.checkouts, now, landedHere]);
   // The open pull requests no run carries, as Shipping draws them: a link to one finds its card there.
   // Null until both are read (or the runs can't be), as the column draws them: a PR a run carries is never named as
   // runless. A target drawn from deploy records alone has no Shipping column, and an unreadable list places nothing.
   const prCards = useMemo(() => {
-    if (t.record_only || p.prsFailed) return [];
+    if ((t.record_only && !p.personal) || p.prsFailed) return [];
     if (!p.prs || !(shipping || p.shippingError)) return null;
-    return openPrs(p.prs, { repository: t.repository, runs: shipping ? [...shipping.moving, ...shipping.dropped] : [], landedPrs: board.landedPrs });
-  }, [t.record_only, p.prsFailed, p.prs, t.repository, shipping, p.shippingError, board.landedPrs]);
+    return openPrs(p.prs, { repository: t.repository, runs: shipping ? [...shipping.moving, ...shipping.dropped] : [], landedPrs: landedHere });
+  }, [t.record_only, p.personal, p.prsFailed, p.prs, t.repository, shipping, p.shippingError, landedHere]);
   const pause = production?.pause ?? null;
   // Where the linked change stands here: the deploy that holds it, its place in what waits and what holds it, or its run.
   const onTarget = p.reach?.targets.find((r) => r.target === t.name);
-  const spot = focus ? changeSpot({
+  const spot = focus && !mixed ? changeSpot({
     focus, target: t, queue, history: n.history, live: n.live, focusDeploys, paused: !!pause, shipping, shippingError: p.shippingError, openPrs: prCards,
     reach: onTarget ? { short_id: onTarget.deploy?.short_id ?? "", state: onTarget.state } : null,
   }) : null;
@@ -140,26 +168,29 @@ export function DeploysBoard(p: DeploysBoardProps) {
   const focusKey = focus ? `${focus.kind}:${focusWord(focus)}` : null;
   useWatchEffect(() => (focusKey ? landFocus() : undefined), [focusKey]);
 
-  const back = rollbackTarget(n.history, n.live);
+  const back = mixed ? null : rollbackTarget(n.history, n.live);
   const backPaused = t.workflow ? rollbackOffer(back, t, production, p.deploys) : null;
   const waiting = t.queue.commits;
+  const showShipping = !t.record_only || !!p.personal;
   return (
-    <section className="dpp-main" data-deploy-pane={t.name}>
+    <section className="dpp-main" data-deploy-pane={mixed ? "projects" : t.name}>
       <header className="dpp-head">
         <div className="dpp-head-name">
-          <h2>{t.name}</h2>
-          <span className="dpp-policy" data-policy={t.policy}>{t.record_only ? "from its deploy records" : t.runs === "push" ? "on every push" : t.policy === "auto" ? "on green CI" : t.policy === "release" ? "with every release" : "on a press"}</span>
+          <h2 data-deploy-heading>{p.heading ?? t.name}</h2>
+          {mixed ? null : <span className="dpp-policy" data-policy={t.policy}>{p.personal ? "with every Ship" : t.record_only ? "from its deploy records" : t.runs === "push" ? "on every push" : t.policy === "auto" ? "on green CI" : t.policy === "release" ? "with every release" : "on a press"}</span>}
         </div>
         <div className="dpp-live">
+          {mixed ? null : <>
           <span className="dpp-head-sub">{t.repository}</span>
           <span className="dpp-k">Live</span>
           {n.live ? (
             <span className="dpp-v"><code>{short(n.live.sha)}</code>{n.live.version && !(n.live.sha ?? "").startsWith(n.live.version.slice(0, 7)) ? <span className="dpp-ver">{n.live.version}</span> : null}<span className="dpp-dp">{n.live.short_id}</span><span className="dpp-age">{ago(now, n.live.live_at ?? n.live.created_at)}</span></span>
           ) : <span className="dpp-v dpp-dim">no live version known</span>}
           {t.dev_push ? <span className="dpp-devpush" data-deploy-dev-push={t.name}>{devPushWords(t.dev_push, now)}</span> : null}
+          </>}
         </div>
         <div className="dpp-actions">
-          <button type="button" className="dpp-mine" aria-pressed={mine} onClick={() => p.onMine(!mine)} title="Only your work and your sessions, in both columns" data-deploy-mine>Mine</button>
+          {p.personal ? null : <button type="button" className="dpp-mine" aria-pressed={mine} onClick={() => p.onMine(!mine)} title="Only your work and your sessions, in both columns" data-deploy-mine>Mine</button>}
           {!t.record_only && t.runs !== "push" && waiting === 0 && !n.open && t.queue.known ? <span className="dpp-current" data-deploy-current={t.name}><Check className="w-3.5 h-3.5" strokeWidth={3} aria-hidden />Up to date</span> : null}
           {backPaused ? (
             <button type="button" className="dpp-back" aria-haspopup="dialog" onClick={() => p.onRollback(backPaused)} data-deploy-rollback={t.name}>
@@ -170,7 +201,7 @@ export function DeploysBoard(p: DeploysBoardProps) {
               <RotateCcw className="w-3 h-3" aria-hidden />Roll back to {short(back.sha)}
             </button>
           ) : null}
-          {production?.can_pause && !pause && !t.record_only ? (
+          {production?.can_pause && !pause && !t.record_only && !mixed ? (
             <button type="button" className="dpp-back" aria-haspopup="dialog" onClick={p.onPause} data-deploy-pause={t.repository}>
               <Pause className="w-3 h-3" aria-hidden />Pause
             </button>
@@ -183,13 +214,13 @@ export function DeploysBoard(p: DeploysBoardProps) {
 
       {/* Shipping on the left, Deploys on the right once the page is wide (deploys.css), each its own scroll; narrower, Deploys comes first. */}
       <div className="dpp-body">
-        {t.record_only ? null : (
+        {showShipping ? (
           <div className="dpp-col" data-deploy-col="before">
-            <ShippingColumn runs={runs} shippers={shippers ?? []} error={!!p.shippingError} prs={p.prs} prsFailed={!!p.prsFailed} checkouts={p.checkouts} repository={t.repository} now={now} me={me} meLogin={p.meLogin} mine={mine} focus={focus} onMain={board.onMain} landedPrs={board.landedPrs} />
+            <ShippingColumn runs={runs} shippers={shippers ?? []} error={!!p.shippingError} prs={p.prs} prsFailed={!!p.prsFailed} checkouts={p.checkouts} repositories={repositories} tagIn={tagged ? t.workspace : null} now={now} me={me} meLogin={p.meLogin} mine={mine} focus={focus} onMain={board.onMain} landedPrs={board.landedPrs} />
           </div>
-        )}
+        ) : null}
         <div className="dpp-col" data-deploy-col="after">
-          <DeploysColumn {...p} show={show} n={n} board={board} focusDeploys={focusDeploys} />
+          <DeploysColumn {...p} show={show} n={n} nowOf={nowOf} tagged={tagged} shipping={showShipping} board={board} focusDeploys={focusDeploys} />
         </div>
       </div>
     </section>
@@ -207,8 +238,11 @@ type BoardModel = {
   your: ReturnType<typeof yourSessions>;
 };
 
-function DeploysColumn(p: DeploysBoardProps & { n: ReturnType<typeof targetNow>; board: BoardModel; focusDeploys: TeamDeployRow[] }) {
+type TargetAt = { t: DeployTargetRow; n: ReturnType<typeof targetNow> };
+
+function DeploysColumn(p: Omit<DeploysBoardProps, "shipping"> & { n: ReturnType<typeof targetNow>; nowOf: (d: TeamDeployRow) => TargetAt; tagged: boolean; shipping: boolean; board: BoardModel; focusDeploys: TeamDeployRow[] }) {
   const { target: t, production, now, focus, mine, show, n, board, focusDeploys } = p;
+  const mixed = !!p.projects;
   const { going, nextCommits, next, cards, mineIds, your } = board;
   const isMine = (id: string) => mineIds.has(id);
   const mineCard = (c: Carried | null) => !!c?.sessions.some((s) => mineIds.has(s.id));
@@ -228,18 +262,18 @@ function DeploysColumn(p: DeploysBoardProps & { n: ReturnType<typeof targetNow>;
   const total = n.history.length;
   const count = mine ? `${shown.reduce((k, c) => k + c.deploys.length, 0)} of ${total}` : String(total);
   const nextFocus = !!focus && nextCommits.some((c) => commitMatches(c, focus));
-  const showNext = !t.record_only && (!!next || !t.queue.known);
+  const showNext = !mixed && !t.record_only && (!!next || !t.queue.known);
   const views = VIEWS.filter((v) => v !== "priorities" || p.priorities);
   return (
     <section className="dpp-sec" data-deploy-deploys>
       <h3 className="dpp-colhead">
         Deploys<span className="dpp-num" data-deploy-count>{count}</span>
-        {t.record_only ? null : <a className="dpp-jump" href="#dpp-shipping">Shipping ↓</a>}
+        {p.shipping ? <a className="dpp-jump" href="#dpp-shipping">Shipping ↓</a> : null}
         <span className="dpp-labels dpp-switch" role="group" aria-label="What each deploy lists" data-deploy-switch>
           {views.map((v) => <button key={v} type="button" aria-pressed={show === v} onClick={() => p.onShow(v)} data-deploy-view={v}>{VIEW_WORDS[v].word}</button>)}
         </span>
       </h3>
-      <YourSessions buckets={your.buckets} />
+      {p.personal ? null : <YourSessions buckets={your.buckets} />}
       <ul className="dpp-cards">
         {showNext ? (
           <li className="dpp-card" id="deploy-next" data-kind="next" data-focus={nextFocus && !(next && rowsHold(next, show, isMine, focus)) ? "" : undefined} data-deploy-card="next">
@@ -256,9 +290,11 @@ function DeploysColumn(p: DeploysBoardProps & { n: ReturnType<typeof targetNow>;
             {next ? <CarriedList carried={next} view={show} mine={mine} isMine={isMine} newer={your.newer} self="next" focus={focus} repository={t.repository} me={p.me} /> : null}
           </li>
         ) : null}
-        {shown.slice(0, limit).map((c) => (
-          <DeployCard key={c.deploys[0]._id} card={c} {...p} view={show} live={n.live} isMine={isMine} newer={your.newer} focused={cardFocus(c)} />
-        ))}
+        {shown.slice(0, limit).map((c) => {
+          // Each card is its own target's: its "Live now" and its presses read that target, and drawn together it names its project.
+          const at = p.nowOf(c.deploys[0]);
+          return <DeployCard key={c.deploys[0]._id} card={c} {...p} target={at.t} view={show} live={at.n.live} tag={p.tagged} still={mixed} isMine={isMine} newer={your.newer} focused={cardFocus(c)} />;
+        })}
         {shown.length > limit ? (
           <li>
             <button type="button" className="dpp-fold dpp-older" onClick={() => setExtra(limit - CARDS_SHOWN + 20)} data-deploy-older={shown.length - limit}>
@@ -298,8 +334,8 @@ function DeployButton({ t, production, n, onPress }: { t: DeployTargetRow; produ
   );
 }
 
-function DeployCard({ card, view, mine, me, focus, now, target: t, production, deploys, live, isMine, newer, focused, openDeploy, onPress, onRollback }: DeploysBoardProps & {
-  card: Card; view: BoardView; live: TeamDeployRow | null; isMine: (id: string) => boolean; newer: ReadonlyMap<string, CardId>; focused: boolean;
+function DeployCard({ card, view, mine, me, focus, now, target: t, production, deploys, live, tag, still, isMine, newer, focused, openDeploy, onPress, onRollback }: Omit<DeploysBoardProps, "shipping"> & {
+  card: Card; view: BoardView; live: TeamDeployRow | null; tag: boolean; still: boolean; isMine: (id: string) => boolean; newer: ReadonlyMap<string, CardId>; focused: boolean;
 }) {
   const [lead, ...earlier] = card.deploys;
   const c = card.carried;
@@ -319,8 +355,9 @@ function DeployCard({ card, view, mine, me, focus, now, target: t, production, d
   const step = going ? (lead.steps?.find((s) => s.status === "running")?.id ?? "no step reported yet") : null;
   // Roll back here is offered on whichever attempt at this commit went live.
   const wentLive = card.deploys.find((d) => d.status === "live") ?? lead;
-  const back = rollbackOffer(wentLive, t, production, deploys);
-  const here = back ? null : rollBackHere(wentLive, t, deploys);
+  // Drawn together, nothing presses.
+  const back = still ? null : rollbackOffer(wentLive, t, production, deploys);
+  const here = back || still ? null : rollBackHere(wentLive, t, deploys);
   // The card itself lights up when the view draws no row holding the linked thing.
   const rowHit = rowsHold(c, view, isMine, focus);
   return (
@@ -328,6 +365,7 @@ function DeployCard({ card, view, mine, me, focus, now, target: t, production, d
       data-focus={focused && (focus?.kind === "deploy" || !rowHit) ? "" : undefined} data-deploy-card={lead.short_id || lead._id}>
       <div className="dpp-card-head">
         <StatePill status={lead.status} live={isLive} sha={lead.sha} stale={stale} />
+        {tag ? <RepoTag workspace={t.workspace} repository={t.repository} /> : null}
         <button type="button" className="dpp-card-title" aria-expanded={opened === lead.short_id} onClick={() => toggle(lead)} data-deploy-open={lead.short_id}>{lead.short_id || "…"}</button>
         <span className="dpp-meta">
           {lead.sha ? <code className="dpp-sha">{short(lead.sha)}</code> : null}

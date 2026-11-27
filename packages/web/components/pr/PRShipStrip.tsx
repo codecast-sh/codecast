@@ -9,7 +9,8 @@ import { ArrowUpRight } from "lucide-react";
 import { normalizeRepository } from "@codecast/shared/contracts";
 import type { PrDeployModel } from "../../hooks/usePrDeploy";
 import { useShipping } from "../../hooks/useSyncShipping";
-import { isMerged, prState, prStepper, runState, stepper } from "../../lib/deploys/board";
+import { CHANGE_STEPS, isMerged, prState, prStepper, runState, stepper, stepsFor } from "../../lib/deploys/board";
+import { teamWorkspaceKey } from "../../lib/workspaceScope";
 import { deploysFocusHref } from "../../lib/deploys/focus";
 import { ShipTrack } from "../deploys/ShipTrack";
 import { DecisionWord } from "../deploys/ShippingColumn";
@@ -24,7 +25,7 @@ export function PRShipStrip({ pr, model, shepherd, authed }: {
   shepherd: ReactNode;
   authed: boolean;
 }) {
-  const { shipping, live, failed } = useShipping(model.open ? model.teamId : null);
+  const { shipping, live, failed } = useShipping(model.open ? teamWorkspaceKey(model.teamId) : null);
   const repo = normalizeRepository(model.repository);
   // The newest run carrying this pull request (the server keeps only runs still on their way to main): by its number,
   // else by a task it names when the run recorded no PR, as the Deploys page reads it (board openPrs).
@@ -44,7 +45,7 @@ export function PRShipStrip({ pr, model, shepherd, authed }: {
       <span className="pr-ship-label text-mark uppercase tracking-wider text-sol-text-dim">Shipping</span>
       <div className="pr-ship-body">
         <div className="pr-ship-line">
-          <ShipTrack steps={steps} state={state} word={decide} />
+          <ShipTrack track={run ? stepsFor(run) : CHANGE_STEPS} steps={steps} state={state} word={decide} />
           <span className="pr-ship-act">
             {/* Only once this window has read the runs itself: a press on a cached answer could start a second run. */}
             {authed && !run && (live || failed || !model.teamId) ? <ShipControl target={{ kind: "pull_request", id: String(pr._id) }} size="compact" /> : null}

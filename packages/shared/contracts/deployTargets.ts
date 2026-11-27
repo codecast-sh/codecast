@@ -407,6 +407,10 @@ export type ShippingRun = {
   /** The CI station's verdict and the reviewer's, as their stations reported them; the merge once it landed. */
   ci_verdict?: { green: boolean; head_sha: string; at: number } | null;
   review_verdict?: { verdict: string; at: number } | null;
+  /** The personal flow's Check station's verdict (its check.json): pass or skipped is green, fail is not; null before it reports. */
+  check_verdict?: { green: boolean; at: number } | null;
+  /** How the run's flow lands a change, read from its graph: through a pull request (a `pr` station, or Union's `land` segment) or straight to main. */
+  track?: "pr" | "direct";
   merge?: { sha: string; branch: string; into: string; at: number; pr_url?: string } | null;
   gate_prompt: string | null;
   /** The gate the run waits at, when it waits at one. */
