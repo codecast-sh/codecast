@@ -4,7 +4,7 @@ import { GROUP_ORDER, MARKS, MARK_BY_ID, type MarkDef } from "../marks";
 import { SESSION_STATUS, SESSION_STATUSES } from "../sessionStatus";
 import { glyphKey, legendBox, legendGroups, readMarks } from "../iconLegend";
 import { closeDomWindow } from "../../test-helpers/domGlobals";
-import { CHANGE_NAME, type PriorityChangeKind } from "@codecast/shared/contracts/priorityCard";
+import { CHANGE_PREFIX, type PriorityChangeKind } from "@codecast/shared/contracts/priorityCard";
 import { changeMarkId } from "../marks/changes";
 
 describe("mark registry", () => {
@@ -43,7 +43,7 @@ describe("mark registry", () => {
   });
 
   test("every change the priorities pass proposes draws a registered mark, both ways for a move", () => {
-    for (const kind of Object.keys(CHANGE_NAME) as PriorityChangeKind[]) {
+    for (const kind of Object.keys(CHANGE_PREFIX) as PriorityChangeKind[]) {
       for (const down of [false, true]) expect(MARK_BY_ID.get(changeMarkId(kind, down))?.group).toBe("Priorities pass");
     }
     expect(changeMarkId("move", true)).not.toBe(changeMarkId("move", false));

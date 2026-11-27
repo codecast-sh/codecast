@@ -11,7 +11,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import {
-  CHANGE_NAME, CHANGE_PREFIX,
+  CHANGE_PREFIX,
   type PriorityCard, type PriorityCardGroup, type PriorityChange, type PriorityChangeKind, type PriorityEvidence, type PriorityWordsRow,
 } from "@codecast/shared/contracts/priorityCard";
 import type { DecisionOption } from "../../store/inboxStore";
@@ -21,6 +21,7 @@ import { priorityCardHeadline } from "../../lib/priorityCardDecision";
 import { MilestoneMark } from "../priorities/parts";
 import { TooltipProvider } from "../ui/tooltip";
 import { LegendButton, Mark } from "../Mark";
+import { MARK_BY_ID } from "../../lib/marks";
 import { changeMarkId } from "../../lib/marks/changes";
 import { Button } from "../ui/button";
 import { Textarea } from "../ui/textarea";
@@ -127,6 +128,7 @@ function ChangeRow({ c, card, on, quotes, onToggle, after }: {
 }) {
   const { icon: Icon, tone } = iconOf(c);
   const prefix = CHANGE_PREFIX[c.kind];
+  const markId = changeMarkId(c.kind, movesDown(c));
   const press = (e: KeyboardEvent) => {
     if (e.key === " " || e.key === "Enter") { e.preventDefault(); onToggle?.(); }
   };
@@ -137,8 +139,8 @@ function ChangeRow({ c, card, on, quotes, onToggle, after }: {
       data-kind={c.kind}
       {...(onToggle ? { role: "checkbox", "aria-checked": on, tabIndex: 0, onClick: onToggle, onKeyDown: press } : {})}
     >
-      <Mark id={changeMarkId(c.kind, movesDown(c))} side="left">
-        <span className={`pcc-icon pcc-tone-${tone}`} aria-label={CHANGE_NAME[c.kind]} data-pcc-icon><Icon aria-hidden /></span>
+      <Mark id={markId} side="left">
+        <span className={`pcc-icon pcc-tone-${tone}`} aria-label={MARK_BY_ID.get(markId)?.name} data-pcc-icon><Icon aria-hidden /></span>
       </Mark>
       <div className="pcc-text">
         <span className="pcc-line" data-pcc-line>
