@@ -147,7 +147,7 @@ export function prShipsTo(
   const mine = targets.filter((t) => sameRepo(t.repository, repository) && !t.record_only);
   const someNamePaths = mine.some((t) => t.paths.length > 0);
   return mine
-    .filter((t) => !(someNamePaths && t.paths.length === 0) && commitTouchesTarget(t.paths, files))
+    .filter((t) => !(someNamePaths && t.paths.length === 0) && commitTouchesTarget(t, files))
     .map((target) => ({ target, idle: idleByHistory(target, deploys, now) }))
     .sort((a, b) => Number(a.idle) - Number(b.idle) || a.target.name.localeCompare(b.target.name));
 }

@@ -25,6 +25,8 @@ export type DeployTargetRow = {
   /** What that rollback adds to the workflow's inputs; without them codecast cannot send one. */
   rollback_inputs?: Record<string, string> | null;
   paths: string[];
+  /** Paths under `paths` that ship nothing there (tests): commitTouchesTarget reads past them. */
+  unless?: string[];
   can_deploy: boolean;
   can_redeploy_sha: boolean;
   can_rollback: boolean;

@@ -7,7 +7,7 @@ import { conversationFromSessionTrailer, normalizeRepository, resolveTaskLinksFr
 import { afterFor, deployStepsOf } from "./deploysView";
 import { ciOf } from "./deployTargetsCi";
 import { canRedeploySha, commitTouchesTarget, groupQueueBySession, type QueueCommit } from "@codecast/shared/contracts/deployTargets";
-import { parseOwnerRepo } from "@codecast/shared/contracts";
+import { deviceDisplayName, parseOwnerRepo } from "@codecast/shared/contracts";
 import { liveDeployOf, type DeployPushSummary } from "@codecast/shared/contracts/deploys";
 import type { TargetDevPush } from "@codecast/shared/contracts/deployTargets";
 import { parseWorkspaceKey } from "./lib/accessKeys";
@@ -312,6 +312,19 @@ export async function devPushOver(ctx: any, t: Pick<Doc<"deploy_targets">, "work
   return { sha: p.sha, machine: p.machine ?? null, by: p.started_by?.name ?? null, at: p.live_at, dirty: p.dirty, adds_count: p.adds.length, drops_count: p.drops.length };
 }
 
+/**
+ * Who publishes a target and the machine its sends run on, named: a change run on another person's machine cannot
+ * send it, and its stop says whose machine can (awaitDeploy.ts).
+ */
+export async function publisherOf(ctx: any, t: Pick<Doc<"deploy_targets">, "publisher_user_id" | "device_id">): Promise<{ name: string | null; machine: string | null }> {
+  const user = await ctx.db.get(t.publisher_user_id);
+  const device = t.device_id
+    ? await ctx.db.query("devices").withIndex("by_user_device", (q: any) => q.eq("user_id", t.publisher_user_id).eq("device_id", t.device_id)).first()
+    : null;
+  // A row with no daemon label (never beat) has no generated name; a name a person typed still counts.
+  return { name: user?.name ?? user?.github_username ?? null, machine: typeof device?.label === "string" ? deviceDisplayName(device) : (device?.display_name ?? null) };
+}
+
 /** One target's state: live, going out, recent history, and what waits on main. */
 export async function targetState(ctx: any, t: Doc<"deploy_targets">, viewer?: Id<"users">) {
   const deploys = await targetDeploys(ctx, t.workspace, t.name);
@@ -328,7 +341,7 @@ export async function targetState(ctx: any, t: Doc<"deploy_targets">, viewer?: I
     return a ? { new_errors: a.new_errors, regressions: a.regressions, reopened: a.reopened, quiet: a.quiet, open: a.open } : null;
   };
   const after = await mainCommitsAfter(ctx, t.repository, live?.sha ?? null);
-  const touching = after.commits.filter((c) => commitTouchesTarget(t.paths, (c.files ?? []).map((f) => f.filename)));
+  const touching = after.commits.filter((c) => commitTouchesTarget(t, (c.files ?? []).map((f) => f.filename)));
   const skipped = after.commits.length - touching.length;
   const head = after.commits[after.commits.length - 1] ?? null;
   const headCi = head ? await ciOf(ctx, t.workspace, t.repository, head.sha) : live?.sha ? await ciOf(ctx, t.workspace, t.repository, live.sha) : null;
@@ -350,11 +363,13 @@ export async function targetState(ctx: any, t: Doc<"deploy_targets">, viewer?: I
     workflow: t.workflow ?? null,
     rollback_inputs: t.rollback_inputs ?? null,
     paths: t.paths,
+    unless: t.unless ?? [],
     can_deploy: t.runs === "here" && !!t.command && !!t.device_id && !!t.root,
     can_redeploy_sha: t.runs === "here" && canRedeploySha(t),
     can_rollback: t.runs === "here" && !!t.rollback,
     device_id: t.device_id ?? null,
     publisher_user_id: String(t.publisher_user_id),
+    publisher: await publisherOf(ctx, t),
     live: live ? await deployLine(ctx, live, caches, countsOf(live), reader) : null,
     dev_push: await devPushOver(ctx, t, live),
     open: open ? { ...(await deployLine(ctx, open, caches, undefined, reader)), steps: open.run_id ? await deployStepsOf(ctx, open.run_id) : [] } : null,

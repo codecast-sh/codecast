@@ -56,6 +56,12 @@ export type DeployTarget = {
   /** Repository paths whose change this target ships; empty means every path. */
   paths: string[];
   /**
+   * Paths under `paths` that ship nothing here (tests, fixtures): a change whose files under `paths` are all among them
+   * sends no deploy of this target, and goes out with its next one. The CLI's duties and the server's reach and queue
+   * read it through the one matcher, fileShipsTo.
+   */
+  unless?: string[];
+  /**
    * When `cast ship checkout` runs the command itself: before or after its push (a backend the pushed client calls
    * deploys before), or `press`, never at a ship: only a deploy from codecast or a release script sends it.
    */
@@ -120,6 +126,12 @@ export const DEPLOY_TARGET_NAME_RE = /^[a-z][a-z0-9-]{0,31}$/;
 
 export class DeployTargetError extends Error {}
 
+/**
+ * What the server's refusal of a deploy request says when the machine that publishes the target is another person's
+ * (deployTargetRequest.ts): a change run elsewhere reads it to say which machine sends the target.
+ */
+export const NOT_YOUR_MACHINE = "which is not yours";
+
 /** A live reader from its config string; throws DeployTargetError on one it cannot read. */
 export function parseLiveReader(raw: string | null | undefined): DeployLiveReader {
   const s = (raw ?? "").trim();
@@ -163,7 +175,7 @@ export function readJsonLive(r: Extract<DeployLiveReader, { kind: "json" }>, doc
 /** A `[[ship.deploy]]` step of .codecast/workspace.toml, as far as a target needs it. */
 export type ShipStepRef = { name: string; when: string[]; run: string; stage: "before_push" | "after_push" };
 
-const TARGET_KEYS = ["name", "ship", "run", "when", "runs", "live", "rollback", "policy", "after", "ci", "gate", "rollout", "finish", "deadline", "workflow", "rollback_inputs", "ci_workflow"] as const;
+const TARGET_KEYS = ["name", "ship", "run", "when", "unless", "runs", "live", "rollback", "policy", "after", "ci", "gate", "rollout", "finish", "deadline", "workflow", "rollback_inputs", "ci_workflow"] as const;
 /** The step commands a target may give its deploy (DP13), each run like `run`. */
 const STEP_KEYS = ["ci", "gate", "rollout", "finish"] as const;
 
@@ -244,6 +256,14 @@ function targetFromEntry(e: unknown, ship: readonly ShipStepRef[]): DeployTarget
   const whenRaw = r["when"] ?? step?.when ?? [];
   const when = typeof whenRaw === "string" ? [whenRaw] : whenRaw;
   if (!Array.isArray(when) || when.some((w) => typeof w !== "string")) throw new DeployTargetError(`target ${name}: 'when' must be a string or a list of strings`);
+  const unlessRaw = r["unless"] ?? [];
+  const unless = typeof unlessRaw === "string" ? [unlessRaw] : unlessRaw;
+  if (!Array.isArray(unless) || unless.some((w) => typeof w !== "string")) throw new DeployTargetError(`target ${name}: 'unless' must be a string or a list of strings`);
+  // globMatch reads braces as themselves, so `packages/{web,cli}/**` would match nothing and miss every deploy.
+  for (const [key, globs] of [["when", when], ["unless", unless]] as const) {
+    const braced = (globs as string[]).find((g) => g.includes("{"));
+    if (braced) throw new DeployTargetError(`target ${name}: '${key}' glob "${braced}" uses braces, which deploy paths do not expand: list each path on its own`);
+  }
   const command = ((r["run"] as string | undefined) ?? step?.run ?? "").trim();
   const runs = (r["runs"] ?? "here") as DeployTargetRuns;
   if (!(DEPLOY_TARGET_RUNS as readonly string[]).includes(runs)) throw new DeployTargetError(`target ${name}: runs must be one of ${DEPLOY_TARGET_RUNS.join(", ")}`);
@@ -277,6 +297,7 @@ function targetFromEntry(e: unknown, ship: readonly ShipStepRef[]): DeployTarget
     ...(r["rollback"] ? { rollback: r["rollback"] as string } : {}),
     policy,
     paths: when as string[],
+    ...(unless.length ? { unless: unless as string[] } : {}),
     ship_stage: step?.stage ?? "press",
     ...(after.length ? { after: (after as string[]).map((a) => a.trim().toLowerCase()) } : {}),
     ...Object.fromEntries(steps.map((k) => [k, (r[k] as string).trim()])),
@@ -301,16 +322,35 @@ export function canRedeploySha(t: Pick<DeployTarget, "command">): boolean {
 
 // ── paths ────────────────────────────────────────────────────────────────────
 
-/** A glob over repository paths (`packages/convex/**`, `*.md`). */
+/** A glob over repository paths (`packages/convex/**`, `*.md`, `**\/*.test.ts`): `**\/` is any directories, none included. */
 export function globMatch(pattern: string, file: string): boolean {
-  const re = new RegExp(`^${pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*\*\/?/g, "\u0000").replace(/\*/g, "[^/]*").replace(/\u0000/g, ".*").replace(/\?/g, "[^/]")}$`);
-  return re.test(file);
+  const re = pattern
+    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+    .replace(/\*\*\//g, "\u0000")
+    .replace(/\*\*/g, "\u0001")
+    .replace(/\*/g, "[^/]*")
+    .replace(/\?/g, "[^/]")
+    .replace(/\u0000/g, "(?:.*/)?")
+    .replace(/\u0001/g, ".*");
+  return new RegExp(`^${re}$`).test(file);
 }
 
-/** Whether a commit ships to a target: it touches one of the target's paths. A commit whose files are unknown counts. */
-export function commitTouchesTarget(paths: readonly string[], files: readonly string[] | null | undefined): boolean {
-  if (!paths.length || !files?.length) return true;
-  return files.some((f) => paths.some((p) => globMatch(p, f)));
+/** A target's paths, as far as which files it ships. */
+export type TargetPaths = { paths?: readonly string[]; unless?: readonly string[] };
+
+/**
+ * Whether one file ships to a target: under one of its paths (every path when it names none) and not among what its
+ * `unless` exempts. A path as written matches itself before it is read as a glob (`app/task/[id].tsx`, ct-102468).
+ */
+export function fileShipsTo(t: TargetPaths, file: string): boolean {
+  const hit = (globs: readonly string[]) => globs.some((g) => g === file || globMatch(g, file));
+  return (!t.paths?.length || hit(t.paths)) && !(t.unless?.length && hit(t.unless));
+}
+
+/** Whether a commit ships to a target: it touches a file the target ships. A commit whose files are unknown counts. */
+export function commitTouchesTarget(t: TargetPaths, files: readonly string[] | null | undefined): boolean {
+  if ((!t.paths?.length && !t.unless?.length) || !files?.length) return true;
+  return files.some((f) => fileShipsTo(t, f));
 }
 
 // ── CI per commit ────────────────────────────────────────────────────────────

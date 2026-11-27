@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
   asJobLog,
   CAST_CHECK_REPLACES,
+  changedPaths,
   DEFAULT_DROPS,
   hostMismatch,
   localJobs,
@@ -370,6 +371,33 @@ describe("a runner's environment", () => {
       tmux(person, "kill-server");
       tmux(step, "kill-server");
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+// ct-102488: Local CI's install rewrote bun.lock in the run's worktree, and every job ran "unclassified: bun.lock" for a
+// one-test change. A frozen change is its commits.
+describe("the paths a change changed", () => {
+  test("with --committed, the commits since the merge base alone, never the worktree's edits or untracked files", () => {
+    const repo = mkdtempSync(join(tmpdir(), "local-changed-"));
+    const git = (...args: string[]) => Bun.spawnSync(["git", "-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd: repo }).stdout.toString().trim();
+    try {
+      git("init", "-q", "-b", "main");
+      writeFileSync(join(repo, "bun.lock"), "lock\n");
+      git("add", ".");
+      git("commit", "-qm", "base");
+      const base = git("rev-parse", "HEAD");
+      git("switch", "-qc", "change");
+      mkdirSync(join(repo, "src"));
+      writeFileSync(join(repo, "src/dev.test.ts"), "test\n");
+      git("add", ".");
+      git("commit", "-qm", "the change");
+      writeFileSync(join(repo, "bun.lock"), "rewritten by an install\n");
+      writeFileSync(join(repo, "stray.log"), "untracked\n");
+      expect(changedPaths(base, true, repo)).toEqual(["src/dev.test.ts"]);
+      expect(changedPaths(base, false, repo)).toEqual(["bun.lock", "src/dev.test.ts", "stray.log"]);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
     }
   });
 });
