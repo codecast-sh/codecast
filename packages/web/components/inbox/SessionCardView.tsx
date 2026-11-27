@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from "react";
 import { SessionWorkProject } from "../projects/SessionWorkProject";
 import { SessionTaskChip } from "../work/SessionTaskChip";
-import { Pin, Star, Clock, EyeOff, Square, Workflow, X } from "lucide-react";
+import { Pin, Star, EyeOff, Square, Workflow, X } from "lucide-react";
 import { runHref } from "../../lib/decisionLinks";
 import Link from "next/link";
 import { withSafetyBlock, isClosedSession, isClosedHidden, isStashHidden, underOwnersModel, type UserRest } from "@codecast/shared/contracts";
@@ -126,7 +126,7 @@ export function SessionCardView({
   const spawnedById = (spawnedIsHandoff || !underOwnersModel(session)) ? session.spawned_by_conversation_id || null : null; // owners model: a spawner is a peer
   const project = getProjectName(session.git_root, session.project_path);
   const isWorking = variant === "working";
-  const isStashed = variant === "stashed" || variant === "snoozed";
+  const isStashed = variant === "stashed";
   // Stashed cards share the dismissed bucket's muted look — but NOT its
   // liveness suppression (a stashed agent is still running; see the idle-dot
   // gate below, which stays keyed on the real dismissed variant).
@@ -397,8 +397,8 @@ export function SessionCardView({
             )}
             {onRestore && (
               <button
-                aria-label={variant === "snoozed" ? "Move to Needs You now" : "Restore"}
-                title={variant === "snoozed" ? "Move to Needs You now" : "Restore"}
+                aria-label="Restore"
+                title="Restore"
                 onClick={(e) => { e.stopPropagation(); onRestore(session._id); }}
                 className="p-0.5 rounded text-sol-text-dim hover:text-sol-violet transition-colors"
               >
@@ -604,12 +604,6 @@ export function SessionCardView({
             {/* The user's own verdict has no declaration or wake row of its own to
                 explain it, so the card says what will happen: the next activity —
                 any message, trigger, or turn — files the row on its own again. */}
-            {variant === "snoozed" && session.inbox_snoozed_until && (
-              <div className="flex items-center gap-1 text-meta text-sol-blue">
-                <Clock className="h-3 w-3 shrink-0" />
-                <span>Until {new Date(session.inbox_snoozed_until).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</span>
-              </div>
-            )}
             {session.user_rest && !isDismissed && (
               <div data-sv-rest className="flex items-center gap-1.5 text-meta text-sol-blue">
                 <span className="w-1.5 h-1.5 rounded-full bg-sol-blue/60" />

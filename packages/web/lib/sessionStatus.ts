@@ -216,12 +216,11 @@ export const INBOX_SECTION_DECLARED_STATUS: Record<string, ThreadStateStatus | u
 /** The section a card is drawn in, as the panel hands it over: the section's
  *  variant and the status it declares. Null: a section that says where, not
  *  what (Pinned, New, Questions, Couldn't finish), or no sections at all. */
-export function cardSectionOf(variant: "default" | "working" | "shipping" | "dismissed" | "stashed" | "snoozed" | undefined, sectionStatus: ThreadStateStatus | undefined): StatusSection | null {
+export function cardSectionOf(variant: "default" | "working" | "shipping" | "dismissed" | "stashed" | undefined, sectionStatus: ThreadStateStatus | undefined): StatusSection | null {
   if (variant === "working") return "working";
   if (variant === "shipping") return "shipping";
   if (variant === "stashed") return "stashed";
   if (variant === "dismissed") return "dismissed";
-  if (variant === "snoozed") return "snoozed";
   if (sectionStatus === "blocked") return "needs_input";
   if (sectionStatus === "done") return "done";
   if (sectionStatus === "dormant") return "dormant";

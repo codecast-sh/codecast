@@ -82,7 +82,7 @@ export type SessionCardViewProps = {
   /** The Priorities view only: the rank of the viewer's priority this session serves and its workspace when
    *  not the active one, null for none (no chip) (store/priorityOrder rankLabelOf). Absent in every other view. */
   priorityRank?: PriorityRankLabel;
-  variant?: "default" | "working" | "shipping" | "dismissed" | "stashed" | "snoozed";
+  variant?: "default" | "working" | "shipping" | "dismissed" | "stashed";
   /** The declared status the row's section header already says (Needs you
    *  under NEEDS YOU): the card leaves that chip off rather than repeat it. */
   sectionStatus?: ThreadStateStatus;
