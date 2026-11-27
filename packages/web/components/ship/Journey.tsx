@@ -10,7 +10,7 @@ import Link from "next/link";
 import { useInboxStore } from "../../store/inboxStore";
 import { roleRowsOf } from "../../lib/roleRows";
 import { ArrowRight, Check, ChevronDown, CornerDownLeft, Loader2, Minus, X } from "lucide-react";
-import { insideWords, targetsFromLine, type InsideRoute, type Journey as JourneyModel, type JourneyStage, type JourneyNow, type JourneyWait, type TargetState } from "../../lib/ship/journey";
+import { insideWords, targetsFromLine, withRunDeploys, type InsideRoute, type Journey as JourneyModel, type JourneyStage, type JourneyNow, type JourneyWait, type TargetState } from "../../lib/ship/journey";
 import { WHO_WORDS, gateWaitWords, holdWords, plainNote, sentBackWords, stopTitle, waitWords } from "../../lib/ship/journeyWords";
 import { approvalWords } from "../../lib/ship/approval";
 import { ageShort } from "../../lib/lineFlow";
@@ -439,7 +439,7 @@ export function SessionTargets({ teamId, conversationId, line, known: reached, f
   // What the store knows about the session's commits, then whatever else the Deploy stage's own line names.
   const mine = useMemo(() => {
     // The landed commit's own reach is the answer: an open deploy is not proof it carries the change.
-    if (reached) return [...reached];
+    if (reached) return withRunDeploys(reached, line);
     const known = sessionTargets(conversationId, targets, deploys);
     const all = [...known, ...targetsFromLine(line).filter((t) => !known.some((k) => k.name === t.name))];
     // A deploy going out takes the change only when it was cut at or after the change's commits: an open request with

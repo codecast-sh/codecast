@@ -26,6 +26,8 @@ export type BoardDeploy = Omit<TeamDeployRow, "commit_rows"> & { commit_rows?: B
 /* ───────────── Ship runs (workflow_runs.shippingRuns) ───────────── */
 
 export const DROPPED_AFTER_MS = 7 * 24 * 60 * 60_000;
+/** A stopped run nobody has touched for this long has ended, not paused on its way: it folds away with the dropped. */
+export const STOPPED_AFTER_MS = 60 * 60_000;
 
 /** The repository a run ships to: its PR's, else that of the checkout it runs in (the longest path holding it). */
 export function repositoryOfRun(run: Pick<ShippingRun, "pr" | "project_path">, checkouts: ReadonlyArray<Pick<CheckoutRow, "path" | "repository">>): string | null {
@@ -141,7 +143,7 @@ export function runOwner(run: Pick<ShippingRun, "_id" | "user_id" | "stand_in">,
   return shippers.find((s) => s.run_id === run._id)?.user_id ?? run.user_id;
 }
 
-/** The left column: this repository's unmerged Ship runs, moving ones and those with no movement for 7 days; `keep` narrows them (Mine). */
+/** The left column: this repository's unmerged Ship runs, moving ones and those dropped (stopped an hour ago, or no movement for 7 days); `keep` narrows them (Mine). */
 export function shippingRuns(
   runs: ReadonlyArray<ShippingRun>,
   o: { repository: string; checkouts: ReadonlyArray<Pick<CheckoutRow, "path" | "repository">>; now: number; keep?: (r: ShippingRun) => boolean; landedPrs?: ReadonlySet<number> },
@@ -150,9 +152,10 @@ export function shippingRuns(
   // A pull request merged outside the flow (by hand on GitHub) is on main already: its commit names it.
   const landed = (r: ShippingRun) => !!r.pr && r.pr.repository.toLowerCase() === repo && !!o.landedPrs?.has(r.pr.number);
   const open = runs.filter((r) => !isMerged(r) && !landed(r) && repositoryOfRun(r, o.checkouts) === repo && (!o.keep || o.keep(r)));
+  const gone = (r: ShippingRun) => o.now - r.updated_at > (r.status === "failed" ? STOPPED_AFTER_MS : DROPPED_AFTER_MS);
   return {
-    moving: open.filter((r) => o.now - r.updated_at <= DROPPED_AFTER_MS).sort(byUrgency),
-    dropped: open.filter((r) => o.now - r.updated_at > DROPPED_AFTER_MS).sort(byUrgency),
+    moving: open.filter((r) => !gone(r)).sort(byUrgency),
+    dropped: open.filter(gone).sort(byUrgency),
   };
 }
 

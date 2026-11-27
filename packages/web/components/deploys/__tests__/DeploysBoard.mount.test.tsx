@@ -87,7 +87,7 @@ const run = (id: string, extra: Record<string, unknown>) => ({
 });
 const runs = [
   run("r-stopped", {
-    status: "failed", task_short_id: "ct-50", task_title: "Fix the flaky upload", fail_reason: "Stopped: CI could not start", user_id: "user-ana",
+    status: "failed", task_short_id: "ct-50", task_title: "Fix the flaky upload", fail_reason: "Stopped: CI could not start", user_id: "user-ana", updated_at: NOW + 30 * H - H / 6, // stopped 10 minutes before the board reads it
     pr: { repository: "o/r", number: 50, first_head_sha: "x", head_sha: "x", at: 1 },
     node_statuses: [{ node_id: "pr", status: "completed" }, { node_id: "ci", status: "failed" }],
   }),

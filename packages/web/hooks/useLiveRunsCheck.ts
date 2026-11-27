@@ -26,11 +26,10 @@ type LiveAnswer = { workspaces: string[]; ids: string[]; complete: boolean };
 type RunRow = { _id: string; status?: string; workspace?: string };
 
 /** Wakes on what the walk reads, only for live rows: a run's status or workspace, never its heartbeats. */
-const liveRunsSig = makeCollectionSig((r: RunRow) => (LIVE.has(r.status ?? "") ? `${r.status}|${r.workspace ?? ""}` : null));
+export const liveRunsSig = makeCollectionSig((r: RunRow) => (LIVE.has(r.status ?? "") ? `${r.status}|${r.workspace ?? ""}` : null));
 
-/** The runs the store holds as live, in a workspace the answer covers, that the answer does not name. */
+/** The runs the store holds as live, in a workspace the answer covers (names every live run of), that the answer does not name. */
 export function staleLiveRuns(runs: Record<string, RunRow>, answer: LiveAnswer, max = ASK_MAX): string[] {
-  if (!answer.complete) return [];
   const covered = new Set(answer.workspaces);
   const live = new Set(answer.ids);
   const out: string[] = [];

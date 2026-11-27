@@ -118,6 +118,16 @@
 .shp-chip[data-tone="wait"] { --shp-c: var(--sol-yellow); }
 .shp-chip-dot { width: 6px; height: 6px; border-radius: 999px; background: var(--shp-c); flex: none; }
 .shp-chip[data-tone="working"] .shp-chip-dot, .shp-chip[data-tone="agent"] .shp-chip-dot { animation: sj-pulse 1.6s ease-in-out infinite; }
+/* Its words survive the header squeeze (the Daylight's 947px window reads "In CI and review", not a dot): level 3 sheds
+   the targets after "·", level 5 caps what is left. Only a header under 360px keeps the dot alone, named by the
+   button's aria-label, 44px wide (the header row's own height, 28px, bounds it the other way). */
+.shp-chip { flex-shrink: 0; }
+.shp-chip-words { white-space: nowrap; }
+[data-squeeze~="5"] .shp-chip-words { max-width: 7.5rem; overflow: hidden; text-overflow: ellipsis; }
+@container (max-width: 360px) {
+  .shp-chip-words { display: none; }
+  .shp-chip, .modern-style [data-sv-convhead] [data-cc-conv-actions] > .shp-chip.shp-chip { min-width: 44px; justify-content: center; }
+}
 
 /* The Ship panel. */
 .shp { display: flex; flex-direction: column; }

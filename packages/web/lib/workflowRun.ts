@@ -86,8 +86,9 @@ export function carryNodeSessions<T extends SyncedRun>(rows: T[], prev: Record<s
 const HIDDEN_TYPES = new Set(["start", "exit"]);
 
 /**
- * Graph order when the run has a stored workflow, else the order the statuses
- * were written in. A node the run is at counts as running until a status
+ * The order the run reached its nodes in, then the nodes it has not reached in
+ * graph order when the run has a stored workflow (else the order the statuses
+ * were written in). A node the run is at counts as running until a status
  * says otherwise, the way the runner reports it.
  */
 export function runNodeRows(run: any, workflow?: any | null): RunNodeRow[] {
@@ -124,7 +125,22 @@ export function runNodeRows(run: any, workflow?: any | null): RunNodeRow[] {
   // An own-results round's ends (the personal Ship's Live, Landed, Not landed) are named by their labels, never their ids.
   const endLabel = workflow && roundsOnOwnResults(workflow) ? new Map<string, string>((workflow.nodes ?? []).map((n: any) => [n.id, n.label])) : null;
   for (const ns of statuses) push(ns.node_id, ns.label ?? endLabel?.get(ns.node_id), undefined);
-  return rows;
+  return inRunOrder(rows);
+}
+
+/** A row the run reached: it has a status of its own, or the run is at it. */
+export const rowReached = (r: RunNodeRow) => r.status !== "pending" || r.current || r.started_at != null;
+
+/**
+ * The stations the run reached in the order it reached them (each one's latest start; a row with no start keeps its
+ * place after the row before it), then the ones it has not reached, in the graph's order. The graph lists side routes
+ * (a retest, a branch that moved) beside the main path, so its order interleaves stations that never ran with ones that did.
+ */
+function inRunOrder(rows: RunNodeRow[]): RunNodeRow[] {
+  let last = -Infinity;
+  const reached = rows.filter(rowReached).map((r, i) => ({ r, i, at: (last = r.started_at ?? last) }));
+  reached.sort((a, b) => a.at - b.at || a.i - b.i);
+  return [...reached.map((x) => x.r), ...rows.filter((r) => !rowReached(r))];
 }
 
 /** Rows grouped by the phases a dynamic run declares; one unnamed group otherwise. */

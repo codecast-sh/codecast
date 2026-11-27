@@ -13,9 +13,13 @@ import { commitBySha, targetDeploys } from "./deployTargetsState";
 import { accessibleCommits } from "./commits";
 import { commitTouchesTarget } from "@codecast/shared/contracts/deployTargets";
 import { liveDeployOf } from "@codecast/shared/contracts/deploys";
-import { deployReach, type DeployReach, type ReachChange, type ReachDeploy } from "@codecast/shared/contracts/deployReach";
+import { deployHolds, deployReach, type DeployReach, type ReachChange, type ReachDeploy } from "@codecast/shared/contracts/deployReach";
 
 const REACH_DEPLOYS = 20;
+/** How many deploys from a change's place on main are read when the window's are all newer than its first carrier. */
+const EARLY_DEPLOYS = 10;
+/** A deploy can be recorded a little before main's order stamps its own sha (the push and the webhook race). */
+const EARLY_SLACK_MS = 10 * 60 * 1000;
 const PR_REF = /^([^/\s#@]+\/[^/\s#@]+)#(\d+)$/;
 const COMMIT_REF = /^([^/\s#@]+\/[^/\s#@]+)@([0-9a-f]{7,40})$/i;
 /** A full sha alone: a run knows the commit it merged but not the repository's name, which the commit's own row carries. */
@@ -43,24 +47,42 @@ export async function reachOf(ctx: any, canRead: (workspace: string) => Promise<
     if (!access.has(t.workspace)) access.set(t.workspace, await canRead(t.workspace));
     if (!access.get(t.workspace) || !commitTouchesTarget(t.paths, files)) continue;
     // Reach reads back to the first live deploy that held the change; an older one only names which deploy took it out.
-    const deploys = (await targetDeploys(ctx, t.workspace, t.name, REACH_DEPLOYS)).filter((d) => !d.repository || d.repository === repository);
+    const newest = await targetDeploys(ctx, t.workspace, t.name, REACH_DEPLOYS);
+    const deploys = newest.filter((d) => !d.repository || d.repository === repository);
     const live = liveDeployOf(deploys);
     const out: ReachDeploy[] = [];
+    const shape = (d: Doc<"deploys">, cut: number | null): ReachDeploy => ({
+      short_id: d.short_id,
+      status: d.status,
+      sha: d.sha ?? null,
+      cut_at: d.cut_at ?? cut,
+      created_at: d.created_at,
+      live_at: d.live_at ?? null,
+      finished_at: d.finished_at ?? null,
+      url: d.url ?? null,
+      note: d.note ?? null,
+    });
     for (const d of deploys) {
       // A deploy is stamped with its place on main once live; the live one stamped before main ordered its sha, and
       // any newer one still going out or failed, is placed here, so a rollback is never read by time.
       const unplaced = d.cut_at == null && d.sha && (!live || d.created_at >= live.created_at) && d.status !== "cancelled";
-      out.push({
-        short_id: d.short_id,
-        status: d.status,
-        sha: d.sha ?? null,
-        cut_at: d.cut_at ?? (unplaced ? await placeOf(d.sha!) : null),
-        created_at: d.created_at,
-        live_at: d.live_at ?? null,
-        finished_at: d.finished_at ?? null,
-        url: d.url ?? null,
-        note: d.note ?? null,
-      });
+      out.push(shape(d, unplaced ? await placeOf(d.sha!) : null));
+    }
+    // A change that went out more than a window of deploys ago: every live deploy in the window holds it, so the one
+    // that first carried it is older. The deploys from the change's place on main on are read too, each placed on
+    // main, so the first live one that holds it is named rather than the window's oldest.
+    const place = change.main_at ?? change.merged_at;
+    const oldestLive = [...out].reverse().find((d) => d.status === "live");
+    if (place != null && newest.length >= REACH_DEPLOYS && oldestLive && deployHolds(oldestLive, change)) {
+      const seen = new Set(out.map((d) => d.short_id));
+      const early: Doc<"deploys">[] = await ctx.db
+        .query("deploys")
+        .withIndex("by_workspace_target_created", (q: any) => q.eq("workspace", t.workspace).eq("target", t.name).gte("created_at", place - EARLY_SLACK_MS))
+        .take(EARLY_DEPLOYS);
+      for (const d of early) {
+        if (seen.has(d.short_id) || (d.repository && d.repository !== repository)) continue;
+        out.push(shape(d, d.cut_at == null && d.sha && d.status === "live" ? await placeOf(d.sha) : null));
+      }
     }
     targets.push({ target: t.name, deploys: out });
   }

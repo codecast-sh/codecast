@@ -1058,23 +1058,32 @@ const LIVE_IDS_MAX = 2000;
 // live forever; the sync host checks each run it holds as live against this
 // answer and asks byIds for any the server no longer holds live
 // (useLiveRunsCheck), so the collection itself never shows an ended run as live.
+// Each workspace gets an even share of the cap, and `workspaces` names only the
+// ones whose live runs fit in it: a workspace holding thousands of stale live
+// runs leaves the others checked, rather than every workspace unchecked.
 export const liveIds = query({
   args: {},
   handler: async (ctx) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return { workspaces: [], ids: [], complete: true };
     const teams = await ctx.db.query("team_memberships").withIndex("by_user_team", (q: any) => q.eq("user_id", userId)).collect();
-    const workspaces = [`user:${userId}`, ...teams.map((m: any) => `team:${m.team_id}`)];
+    const all = [`user:${userId}`, ...teams.map((m: any) => `team:${m.team_id}`)];
+    const share = Math.floor(LIVE_IDS_MAX / all.length);
+    const workspaces: string[] = [];
     const ids: string[] = [];
-    for (const workspace of workspaces) {
+    for (const workspace of all) {
+      const mine: string[] = [];
       for (const status of LIVE_RUN_STATUSES) {
-        if (ids.length >= LIVE_IDS_MAX) break;
-        const rows = await ctx.db.query("workflow_runs").withIndex("by_workspace_status_updated", (q: any) => q.eq("workspace", workspace).eq("status", status)).take(LIVE_IDS_MAX - ids.length);
-        for (const r of rows) ids.push(String(r._id));
+        if (mine.length > share) break;
+        const rows = await ctx.db.query("workflow_runs").withIndex("by_workspace_status_updated", (q: any) => q.eq("workspace", workspace).eq("status", status)).take(share + 1 - mine.length);
+        for (const r of rows) mine.push(String(r._id));
       }
+      if (mine.length > share) continue;
+      workspaces.push(workspace);
+      ids.push(...mine);
     }
-    // A full answer names every live run; a capped one cannot say which held rows ended, and says so.
-    return { workspaces, ids, complete: ids.length < LIVE_IDS_MAX };
+    // `complete`: every workspace is named in full (a client from before `workspaces` named only those trusts no less).
+    return { workspaces, ids, complete: workspaces.length === all.length };
   },
 });
 

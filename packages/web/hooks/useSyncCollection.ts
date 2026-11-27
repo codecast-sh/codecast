@@ -97,6 +97,8 @@ export type SyncCollectionResult = {
   refused: boolean;
   /** Subscribe again after a terminal error (useQueryNoThrow's own retry). */
   retry: () => void;
+  /** The latest answer as the server sent it, for a feeder that checks what its window left out. Never a render source. */
+  data?: unknown;
 };
 
 /**
@@ -147,7 +149,7 @@ export function useSyncCollection<Query extends FunctionReference<"query">>(
     ),
     opts?.coalesceMs ? { coalesceMs: opts.coalesceMs } : undefined,
   );
-  return { ready: data !== undefined, error, refused: data === null, retry };
+  return { ready: data !== undefined, error, refused: data === null, retry, data };
 }
 
 /**

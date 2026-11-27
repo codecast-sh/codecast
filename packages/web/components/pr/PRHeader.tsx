@@ -24,6 +24,9 @@ import { PRLinked, PRReviewers } from "./PRLinked";
 import { PRDeployBand, PRReachChip } from "./PRDeploy";
 import { PRShipStrip } from "./PRShipStrip";
 import { usePrDeploy } from "../../hooks/usePrDeploy";
+import { usePullRequestRun } from "../../hooks/useSyncWorkflows";
+import { reviewOnHead, type ChangeLink } from "../../lib/ship/changePage";
+
 import { copyToClipboard, relTimeShort } from "../../lib/utils";
 import { withShortcut } from "../../shortcuts/registry";
 import {
@@ -41,6 +44,8 @@ import {
   type PrReviewRow,
   type PrStateKey,
 } from "../../lib/prView";
+
+const TONE_ACCENT: Record<ChangeLink["tone"], "green" | "red" | "yellow" | "muted"> = { ok: "green", bad: "red", wait: "yellow", default: "muted" };
 
 // The header band: who, what, where it is going, and whether it can land.
 // Everything here is one line of reading, the detail lives in the tabs. The
@@ -364,6 +369,8 @@ export function PRHeader({
   const editTitle = () => setEditNonce((n) => n + 1);
   const verbs = typeof actions === "function" ? actions({ editTitle }) : actions;
   const deploy = usePrDeploy(pr, repository, authed);
+  const run = usePullRequestRun(authed ? repository : null, authed ? number : null);
+  const runReview = reviewOnHead(run, pr.head_sha);
 
   return (
     <header className="pr-band border-b border-sol-border/60 px-5 pt-4 pb-3 shrink-0">
@@ -424,10 +431,12 @@ export function PRHeader({
         <Figure label="Checks" href={checksHref} title="Open the checks">
           <ChecksBar checks={pr.checks} />
         </Figure>
-        {/* GitHub's reviews; the Ship run's own review is the strip's Review step. */}
-        <Figure label="GitHub review">
+        {/* Who reviewed this head: GitHub's reviewers, and codecast's Ship run reviewer, which answers on the run. */}
+        <Figure label="Review">
           {decision && <span style={{ color: accentVar(decision.accent) }}>{decision.label}</span>}
-          {PRReviewers({ pr, reviews }) ?? (!decision && <span className="text-sol-text-dim">Nobody has reviewed yet</span>)}
+          {/* codecast's reviewer answers on the run, never on GitHub: its verdict on this head counts as a review. */}
+          {runReview && run ? <Link href={`/workflows/runs/${run._id}`} style={{ color: accentVar(TONE_ACCENT[runReview.tone]) }} data-pr-run-review>{runReview.label}</Link> : null}
+          {PRReviewers({ pr, reviews }) ?? (!decision && !runReview && <span className="text-sol-text-dim">Nobody has reviewed yet</span>)}
         </Figure>
         <Figure label="Merge">
           {merge ? (

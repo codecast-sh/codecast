@@ -9,6 +9,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { canReadRun, enrichRun, newRunReads, withAgentSessions } from "./workflow_runs";
 import { sourceTakesSessionChange } from "@codecast/shared/contracts/flowPool";
 import { workspaceGrantsAccess } from "./lib/access";
+import { normalizeRepository } from "./lib/gitRefs";
 import { runWorkflowOf } from "./lib/runGraph";
 
 /** A run of a flow a session's change goes through (its graph takes a branch: the session's edits frozen onto one), a flow the session wrote for it included, not a deploy or a line run it also started. */
@@ -45,6 +46,25 @@ export const forConversation = query({
     const reads = newRunReads();
     const out = await Promise.all(readable.map(async (r) => enrichRun(ctx, await withAgentSessions(ctx, r, budget), reads)));
     return out.sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0));
+  },
+});
+
+/**
+ * A pull request's runs, newest first: the runs whose PR station opened it. Its page reads the run's own review verdict
+ * beside GitHub's reviews, since codecast's reviewer says ship on the run and never on GitHub.
+ */
+export const forPullRequest = query({
+  args: { repository: v.string(), number: v.number() },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+    const repository = normalizeRepository(args.repository);
+    const runs = await ctx.db.query("workflow_runs").withIndex("by_pr", (q) => q.eq("pr.repository", repository).eq("pr.number", args.number)).order("desc").take(3);
+    const readable = [];
+    for (const r of runs) if (await canReadRun(ctx, userId, r)) readable.push(r);
+    const budget = { reads: 60 };
+    const reads = newRunReads();
+    return await Promise.all(readable.map(async (r) => enrichRun(ctx, await withAgentSessions(ctx, r, budget), reads)));
   },
 });
 

@@ -10,10 +10,10 @@
 // step row in the same gutter.
 
 import Link from "next/link";
-import { Bot, CheckCircle2, Circle, GitFork, Loader2, Merge, MessageSquare, Terminal, User, XCircle, Zap } from "lucide-react";
+import { Bot, CheckCircle2, ChevronRight, Circle, GitFork, Loader2, Merge, MessageSquare, Terminal, User, XCircle, Zap } from "lucide-react";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { useOpenLinkedSession } from "../hooks/useOpenLinkedSession";
-import { formatRunDuration, runNodeGroups, runNodeLine, scriptLine, wfFmtTokens, type RunNodeRow } from "../lib/workflowRun";
+import { formatRunDuration, rowReached, runNodeGroups, runNodeLine, scriptLine, wfFmtTokens, type RunNodeRow } from "../lib/workflowRun";
 import { TaskSessionRow, type TaskLinkedSession } from "./tasks/TaskSessionList";
 import { RailProgress } from "./ContextRail";
 
@@ -43,13 +43,12 @@ function stepTone(row: RunNodeRow): "failed" | "current" | undefined {
   return undefined;
 }
 
-// A verdict the status does not already say: "success" on a completed node
-// and "failure" on a failed one add nothing.
+// A failed node's reason, when it says more than "failure". A completed node's
+// outcome is the edge the run took (`success`, a gate's choice key such as `s`):
+// routing, not words; its line under the title says what it did.
 function outcomeText(row: RunNodeRow): string | null {
   const o = row.outcome?.trim();
-  if (!o) return null;
-  if (row.status === "completed" && o === "success") return null;
-  if (row.status === "failed" && o === "failure") return null;
+  if (!o || row.status !== "failed" || o === "failure" || /^[a-z_]{1,2}$/i.test(o)) return null;
   return o;
 }
 
@@ -143,12 +142,27 @@ function StepRow({ row, now }: { row: RunNodeRow; now: number }) {
   );
 }
 
+function NotRun({ rows, now }: { rows: RunNodeRow[]; now: number }) {
+  return (
+    <details className="group" data-run-not-run={rows.length}>
+      <summary className="flex min-h-[44px] cursor-pointer list-none items-center gap-2 px-2 text-meta text-sol-text-dim hover:text-sol-text-muted [&::-webkit-details-marker]:hidden">
+        <ChevronRight className="w-3.5 h-3.5 flex-shrink-0 transition-transform group-open:rotate-90" aria-hidden />
+        <span>Not run</span>
+        <span className="tabular-nums">{rows.length}</span>
+      </summary>
+      {rows.map((row) => <StepRow key={row.id} row={row} now={now} />)}
+    </details>
+  );
+}
+
 /** `page` heads each phase the way a page heads a section (its title, what
  *  it was for, and how far it got); the default is the compact panel header. */
 export function WorkflowRunNodes({ run, workflow, className, headings = "panel" }: { run: any; workflow?: any | null; className?: string; headings?: "panel" | "page" }) {
   const now = useCoarseNow(30_000);
   const openLinkedSession = useOpenLinkedSession();
   const groups = runNodeGroups(run, workflow);
+  // An ended run's stations it never reached are side routes it did not take: put away, one press from view.
+  const ended = run?.status === "completed" || run?.status === "failed";
   if (groups.every((g) => g.rows.length === 0)) {
     return <div className="px-2 py-2 text-xs text-sol-text-dim">No steps</div>;
   }
@@ -170,11 +184,12 @@ export function WorkflowRunNodes({ run, workflow, className, headings = "panel" 
               <span className="text-meta text-sol-text-dim/60 tabular-nums">{g.rows.length}</span>
             </div>
           ))}
-          {g.rows.map((row) =>
+          {(ended ? g.rows.filter(rowReached) : g.rows).map((row) =>
             row.session
               ? <SessionNodeRow key={row.id} row={row} now={now} onOpen={openLinkedSession} />
               : <StepRow key={row.id} row={row} now={now} />,
           )}
+          {ended && g.rows.some((r) => !rowReached(r)) ? <NotRun rows={g.rows.filter((r) => !rowReached(r))} now={now} /> : null}
         </section>
       ))}
     </div>

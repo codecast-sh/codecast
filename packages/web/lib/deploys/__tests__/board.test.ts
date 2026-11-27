@@ -44,7 +44,8 @@ describe("the Shipping column", () => {
     run("moving-old", { updated_at: NOW - 3 * DAY }),
     run("moving-new", { updated_at: NOW - DAY, user_id: "me" }),
     run("paused", { status: "paused", updated_at: NOW - 2 * DAY }),
-    run("stopped", { status: "failed", updated_at: NOW - 5 * DAY, user_id: "me" }),
+    run("stopped", { status: "failed", updated_at: NOW - 30 * 60_000, user_id: "me" }),
+    run("stopped-yesterday", { status: "failed", updated_at: NOW - DAY }),
     run("dropped", { updated_at: NOW - 8 * DAY }),
     run("merged", { node_statuses: [{ node_id: "land__merge", status: "completed" }] }),
     run("deploying", { current_node_id: "deploy__await" }),
@@ -52,10 +53,10 @@ describe("the Shipping column", () => {
     run("elsewhere", { pr: { repository: "o/x", number: 2 } }),
   ];
   const o = { repository: "o/r", checkouts: [], now: NOW, mine: false };
-  test("stopped, then waiting on a person, then moving, newest first; a week without movement is dropped", () => {
+  test("stopped, then waiting on a person, then moving, newest first; a week without movement, or a stop an hour old, is dropped", () => {
     const { moving, dropped } = shippingRuns(runs, o);
     expect(moving.map((r) => r._id)).toEqual(["stopped", "paused", "moving-new", "moving-old"]);
-    expect(dropped.map((r) => r._id)).toEqual(["dropped"]);
+    expect(dropped.map((r) => r._id)).toEqual(["stopped-yesterday", "dropped"]);
     // A pull request merged by hand on GitHub is on main: its run leaves Shipping.
     const handMerged = [...runs, run("hand-merged", { pr: { repository: "o/r", number: 41 } })];
     expect(shippingRuns(handMerged, o).moving.map((r) => r._id)).toContain("hand-merged");
