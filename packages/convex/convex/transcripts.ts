@@ -89,7 +89,7 @@ import { scheduleTriggerMatch } from "./lib/triggerMatch";
 import { siteUrl } from "./lib/siteUrl";
 import { slackSend } from "./lib/slackSend";
 import { CHEAP_MODEL, postMessages, replyText, type SurfaceRequest } from "./lib/anthropic";
-import { openaiFetch } from "./lib/openai";
+import { mintRealtimeSecret, type RealtimeSession } from "./lib/realtimeMint";
 import { vendorRefusalFromDb } from "./lib/vendorGuard";
 import { SEGMENT_WRITE_BATCH, parseTranscriptionSegments, transcribeAudio } from "./lib/recordingTranscription";
 export { parseTranscriptionSegments };
@@ -2568,37 +2568,9 @@ export const mintAsrToken = action({
     // gets back is fed the same way.
     const model = LIVE_TRANSCRIBE_MODEL;
     let languages = unionTranscribeLanguages(args.languages, grant.languages);
-    // GA realtime API: client secrets are minted at /v1/realtime/client_secrets
-    // with the session config nested under `session` (audio.input vocabulary).
-    const mint = async (
-      session: ReturnType<typeof asrTranscriptionSession>,
-    ): Promise<{ error: string } | { client_secret: string }> => {
-      const resp = await openaiFetch({ ctx, scope: { workspace: grant.workspace } }, "/v1/realtime/client_secrets", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ session }),
-      });
-      if (!resp) return { error: "Transcription is not configured" };
-      if (!resp.ok) {
-        const body = (await resp.text()).slice(0, 300);
-        console.error("[transcripts] mint failed", resp.status, body);
-        let hint = "";
-        try {
-          const parsed = JSON.parse(body) as { error?: { message?: string }; message?: string };
-          const msg = parsed.error?.message ?? parsed.message;
-          if (typeof msg === "string" && msg) hint = `: ${msg.slice(0, 160)}`;
-        } catch {
-          // Body was not JSON; the status is enough.
-        }
-        return { error: `ASR session mint failed (${resp.status})${hint}` };
-      }
-      const data = (await resp.json()) as { value?: string; client_secret?: { value?: string } };
-      const secret = data.value ?? data.client_secret?.value;
-      if (!secret) return { error: "ASR session mint returned no secret" };
-      return { client_secret: secret };
-    };
+    const mint = (session: RealtimeSession) => mintRealtimeSecret(ctx, grant.workspace, session);
     if (!args.client_turns) {
-      const legacy = await mint(legacyAsrTranscriptionSession() as unknown as ReturnType<typeof asrTranscriptionSession>);
+      const legacy = await mint(legacyAsrTranscriptionSession());
       if ("error" in legacy) return { error: legacy.error };
       return { client_secret: legacy.client_secret, model: LEGACY_TRANSCRIBE_MODEL, languages: [] };
     }
