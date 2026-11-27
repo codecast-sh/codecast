@@ -29,6 +29,7 @@ import {
   STATUS_ORDER,
   PRIORITY_CONFIG,
 } from "@/components/TaskItem";
+import { PriorityMark, TaskStatusMark } from "@/components/marks";
 
 type TaskStatus = keyof typeof STATUS_CONFIG;
 type TaskPriority = keyof typeof PRIORITY_CONFIG;
@@ -199,12 +200,12 @@ export default function TaskDetailScreen() {
 
         <RNView style={styles.badgeRow}>
           <TouchableOpacity style={[styles.badge, { borderColor: status.color + "40" }]} onPress={handleStatusPress}>
-            <FontAwesome name={status.icon} size={12} color={status.color} />
+            <TaskStatusMark status={task.status} size={13} />
             <RNText style={[styles.badgeText, { color: status.color }]}>{status.label}</RNText>
           </TouchableOpacity>
 
           <TouchableOpacity style={[styles.badge, { borderColor: priority.color + "40" }]} onPress={handlePriorityPress}>
-            <FontAwesome name={priority.icon} size={10} color={priority.color} />
+            <PriorityMark priority={task.priority} size={12} />
             <RNText style={[styles.badgeText, { color: priority.color }]}>{priority.label}</RNText>
           </TouchableOpacity>
 
@@ -292,7 +293,7 @@ export default function TaskDetailScreen() {
                 onPress={() => router.push(`/task/${s.short_id}` as any)}
                 activeOpacity={0.6}
               >
-                <FontAwesome name={cfg.icon} size={12} color={cfg.color} />
+                <TaskStatusMark status={s.status} size={13} />
                 <RNText style={styles.subtaskId}>{s.short_id}</RNText>
                 <RNText style={[styles.subtaskTitle, closed && styles.subtaskTitleDone]} numberOfLines={1}>{s.title}</RNText>
               </TouchableOpacity>
@@ -465,7 +466,7 @@ function BlockerRowView({ row, taskStatus }: { row: BlockerRow; taskStatus: stri
         disabled={!!row.stateLabel}
         activeOpacity={0.6}
       >
-        <FontAwesome name={cfg?.icon ?? "question-circle-o"} size={12} color={cfg?.color ?? Theme.textMuted0} />
+        {cfg ? <TaskStatusMark status={row.status} size={13} /> : <FontAwesome name="question-circle-o" size={12} color={Theme.textMuted0} />}
         <RNText style={styles.subtaskId}>{row.ref}</RNText>
         <RNText style={[styles.subtaskTitle, row.cleared && styles.subtaskTitleDone]} numberOfLines={1}>{row.title ?? ""}</RNText>
         <RNText style={[styles.blockerState, { color: cfg?.color ?? Theme.textMuted0 }]}>{state}</RNText>
