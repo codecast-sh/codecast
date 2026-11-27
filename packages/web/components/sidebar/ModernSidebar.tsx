@@ -11,7 +11,7 @@
 import { memo, Suspense, useRef, type ReactNode, type Ref } from "react";
 import { PhoneCall, Plus } from "lucide-react";
 import { useInboxStore } from "../../store/inboxStore";
-import { useCallsAvailable, useTeamFeature, useWorkspaceFeature, useWorkspaceFeatureState } from "../../lib/teamFeatures";
+import { useAnyWorkspaceFeature, useCallsAvailable, useTeamFeature, useWorkspaceFeature, useWorkspaceFeatureState } from "../../lib/teamFeatures";
 import { FOLDERS_HEADING, type NavGates } from "../../lib/navRegistry";
 import { placeSection, RAIL_MORE_EVENT } from "../../lib/navPlace";
 import { useMountEffect } from "../../hooks/useMountEffect";
@@ -170,7 +170,7 @@ export function ModernSidebar({
   const orgOffer = useWorkspaceFeatureState("org") === "offer";
   const flowsOn = useWorkspaceFeature("line");
   const flowsOffer = useWorkspaceFeatureState("line") === "offer";
-  const prioritiesOn = useWorkspaceFeature("priorities");
+  const prioritiesOn = useAnyWorkspaceFeature("priorities");
   const staff = useInboxStore((s) => (s.currentUser as { staff?: boolean } | null | undefined)?.staff === true);
   const gates: NavGates = {
     chat: chatOn, calls: callsOn, changes: changesOn, priorities: prioritiesOn, team: hasTeam, staff,
