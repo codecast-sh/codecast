@@ -3,7 +3,7 @@
 // gets past CI on its first push (ct-102059).
 //
 // The changed paths are the diff from the merge base with origin/main (or
-// --base), uncommitted and untracked files included. changed-path-scope.ts
+// --base), uncommitted and untracked files included (--committed: commits alone). changed-path-scope.ts
 // classifies them exactly as ci.yml classifies a pull request, so the same
 // jobs gate on. Each gated job runs its ci.yml steps, except:
 // - typecheck: `cast check --changed-since <base>` (by name with --full),
@@ -44,7 +44,7 @@
 // never ci.json, which is the CI station's verdict on GitHub's CI. --list
 // prints the plan.
 //
-//   bun scripts/ci/local.ts [--base <ref>] [--full] [--no-typecheck] [--budget <minutes>] [--json <path>] [--list]
+//   bun scripts/ci/local.ts [--base <ref>] [--committed] [--full] [--no-typecheck] [--budget <minutes>] [--json <path>] [--list]
 
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync, writeSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -126,15 +126,15 @@ export type Narrowed = { suite: string; selected: number; total: number };
 export type Plan = { job: string; skip?: string; steps: Step[]; files?: number; narrowed: Narrowed[]; wide: string[] };
 export type JobResult = { job: string; status: "pass" | "fail" | "no verdict" | "skipped"; seconds: number; reason?: string };
 
-function git(args: string[]): string {
-  const r = Bun.spawnSync(["git", ...args], { cwd: ROOT });
+function git(args: string[], cwd = ROOT): string {
+  const r = Bun.spawnSync(["git", ...args], { cwd });
   if (r.exitCode !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr.toString().trim()}`);
   return r.stdout.toString();
 }
 
-/** Every path changed since base: committed, staged, unstaged and untracked. */
-export function changedPaths(base: string): string[] {
-  const lines = [...git(["diff", "--name-only", "--no-renames", base]).split("\n"), ...git(["ls-files", "--others", "--exclude-standard"]).split("\n")];
+/** Every path changed since base: committed, staged, unstaged and untracked; `committed`, the commits alone (a change flow's frozen change: an install's rewrite of bun.lock is not the change's). */
+export function changedPaths(base: string, committed = false, cwd = ROOT): string[] {
+  const lines = committed ? git(["diff", "--name-only", "--no-renames", `${base}...HEAD`], cwd).split("\n") : [...git(["diff", "--name-only", "--no-renames", base], cwd).split("\n"), ...git(["ls-files", "--others", "--exclude-standard"], cwd).split("\n")];
   return [...new Set(lines.map((line) => line.trim()).filter(Boolean))].sort();
 }
 
@@ -709,7 +709,7 @@ async function main(): Promise<never> {
     const stop = () => Promise.all([...live].map((proc) => stopTree(proc.pid))).then(() => process.exit(2));
     setTimeout(() => (console.log(`no verdict: still running ${HARD_STOP_MS / 60_000} minutes past the --budget`), stop()), budget * 60_000 + HARD_STOP_MS);
   }
-  const changed = changedPaths(base);
+  const changed = changedPaths(base, args.includes("--committed"));
   const scope = classifyChangedPaths(changed);
   const logDir = list ? join(tmpdir(), "ci-local") : mkdtempSync(join(tmpdir(), "ci-local-"));
   const plans = planJobs(changed, { base, full, temp: logDir, noTypecheck });

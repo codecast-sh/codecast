@@ -18,8 +18,10 @@ copy = [
 ]
 # A fresh worktree has its own (empty) node_modules — bun doesn't share them
 # across worktrees, so install once on creation. If this fails, the daemon
-# falls back to a bare worktree rather than blocking the session.
-install = ["bun install"]
+# falls back to a bare worktree rather than blocking the session. Frozen: a
+# release bumps workspace versions bun.lock also records, and a plain install
+# rewrites the lockfile, which a change's worktree then reads as its own edit.
+install = ["bun install --frozen-lockfile"]
 
 # Per-worktree web dev server port. `acquire` picks the first free port at/after
 # `base` and exposes it as PORT_WEB, so parallel worktrees never collide.
