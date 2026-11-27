@@ -12,7 +12,7 @@ import { useDeviceSettingsPanel } from "../../../components/settings/useDeviceSe
 import { relativeSeen, type Device } from "../../../components/DeviceBadge";
 import { useDaemonHealth } from "../../../hooks/useDaemonHealth";
 import { describeDaemonHealth } from "../../../lib/daemonHealthCopy";
-import { behindRelease, useLatestCliRelease } from "../../../lib/latestCliRelease";
+import { behindRelease, newestRelease, useLatestCliRelease } from "../../../lib/latestCliRelease";
 
 /**
  * Daemon: the codecast daemon on one machine. What version it runs, whether it
@@ -92,9 +92,11 @@ function UpdatesSection({ d, panel }: { d: Device; panel: ReturnType<typeof useD
   const blocked = selfUpdateBlocked(d);
   // The release the manifest names now; the device's own update_available is a check up to a day old.
   // Update waits for the read, so a press names the release; a failed read falls back to the device's own check.
+  // Whichever of the two is newer: this window's read can be older than the device's own check.
   const latest = useLatestCliRelease();
-  const behind = behindRelease(d.cli_version, latest ?? null);
-  const target = latest ? `v${latest}` : d.update_available ? `v${d.update_available}` : "the latest release";
+  const newest = newestRelease(latest, d.update_available);
+  const behind = behindRelease(d.cli_version, newest);
+  const target = newest ? `v${newest}` : "the latest release";
   const held =
     d.update_state === "installing" ||
     (d.update_state === "requested" && Date.now() - (d.update_requested_at ?? 0) < REQUEST_HOLD_MS);
@@ -142,7 +144,7 @@ function UpdatesSection({ d, panel }: { d: Device; panel: ReturnType<typeof useD
             size="sm"
             variant="cyan"
             disabled={!!blocked || held || latest === undefined || pending.has("update")}
-            onClick={() => run("update", () => requestUpdate(d.device_id, latest ?? undefined))}
+            onClick={() => run("update", () => requestUpdate(d.device_id, latest ? (newest ?? latest) : undefined))}
           >
             {d.update_state === "failed" ? "Retry" : "Update"}
           </Button>

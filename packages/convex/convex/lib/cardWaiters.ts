@@ -1,6 +1,7 @@
 // A card other work waits on reaches a person fast (pl-1146 piece 2). What
 // waits on an open card: the open tasks blocked by its task (one level: a
-// task's direct dependents, such as the runs an incident cause stopped), and
+// task's direct dependents, such as the runs an incident cause stopped, or
+// through a fix's incident cause, the runs that cause stopped), and
 // the open tasks with a decision wait on the card itself. Once two wait, the
 // card is escalated to the people it is already asked of, with "N changes
 // wait on this" as its note, so it sorts first for them, and they get one
@@ -8,6 +9,7 @@
 // may answer never changes: an approval card is still a person's.
 import type { Doc, Id } from "../_generated/dataModel";
 import { isTerminalTaskStatus } from "@codecast/shared/tasks";
+import { holdsFlowStop } from "@codecast/shared/contracts/signalFingerprint";
 import { dependentRefs, taskByRef } from "./taskGraph";
 import { emitNotification } from "../notificationRouter";
 
@@ -18,15 +20,35 @@ type Card = Doc<"session_decisions">;
 export const WAITERS_PUSH_AT = [2, 5] as const;
 const tier = (n: number) => WAITERS_PUSH_AT.filter((t) => n >= t).length;
 
-/** How many open tasks wait on the card: on its task, or on the card itself. */
+/** The open tasks `task` blocks directly. */
+async function openDependents(ctx: Ctx, task: Doc<"tasks">): Promise<Doc<"tasks">[]> {
+  const self = new Set([task.short_id, String(task._id)]);
+  const out: Doc<"tasks">[] = [];
+  for (const ref of new Set(await dependentRefs(ctx, task))) {
+    const dep = await taskByRef(ctx, ref);
+    if (dep && !isTerminalTaskStatus(dep.status) && dep.blocked_by?.some((r) => self.has(r))) out.push(dep);
+  }
+  return out;
+}
+
+/** An open run-stop incident's cause: the changes it stops wait on it. */
+const isOpenIncident = (t: Doc<"tasks">) => !isTerminalTaskStatus(t.status) && holdsFlowStop(t.cause?.fingerprints);
+
+/**
+ * How many open tasks wait on the card: on its task, or on the card itself. When @release filed the fix as its own
+ * task that an incident's cause waits on, the changes the cause stops wait on the fix too: they are counted in the
+ * cause's place, since a cause is no change (one level, no deeper).
+ */
 export async function cardWaiters(ctx: Ctx, card: Card): Promise<number> {
   const ids = new Set<string>();
   const task: Doc<"tasks"> | null = card.task_id ? await ctx.db.get(card.task_id) : null;
   if (task) {
-    const self = new Set([task.short_id, String(task._id)]);
-    for (const ref of new Set(await dependentRefs(ctx, task))) {
-      const dep = await taskByRef(ctx, ref);
-      if (dep && !isTerminalTaskStatus(dep.status) && dep.blocked_by?.some((r) => self.has(r))) ids.add(String(dep._id));
+    for (const dep of await openDependents(ctx, task)) {
+      if (!isOpenIncident(dep)) {
+        ids.add(String(dep._id));
+        continue;
+      }
+      for (const stopped of await openDependents(ctx, dep)) ids.add(String(stopped._id));
     }
   }
   for (const id of card.waiting_task_ids ?? []) {
@@ -63,8 +85,13 @@ export async function escalateIfWaitedOn(ctx: Ctx, cardId: Id<"session_decisions
   });
 }
 
-/** A task gained a dependent: each open card on it may now have enough waiting. */
+/** A task gained a dependent: each open card on it may now have enough waiting, and when it is an open incident's cause,
+ *  each open card on a fix it waits on (cardWaiters counts the cause's dependents there). */
 export async function escalateCardsOnTask(ctx: Ctx, taskId: Id<"tasks">, now = Date.now()): Promise<void> {
-  const cards: Card[] = await ctx.db.query("session_decisions").withIndex("by_task", (q: any) => q.eq("task_id", taskId).eq("status", "pending")).collect();
-  for (const c of cards) await escalateIfWaitedOn(ctx, c._id, now);
+  const task: Doc<"tasks"> | null = await ctx.db.get(taskId);
+  const fixes = task && isOpenIncident(task) ? (await Promise.all((task.blocked_by ?? []).map((r) => taskByRef(ctx, r)))).filter((t): t is Doc<"tasks"> => !!t) : [];
+  for (const id of new Set([String(taskId), ...fixes.map((f) => String(f._id))])) {
+    const cards: Card[] = await ctx.db.query("session_decisions").withIndex("by_task", (q: any) => q.eq("task_id", id).eq("status", "pending")).collect();
+    for (const c of cards) await escalateIfWaitedOn(ctx, c._id, now);
+  }
 }
