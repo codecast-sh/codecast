@@ -40,6 +40,8 @@ const CAUSE_SIGNALS_READ = 200;
 const WORKSPACE_STOPS_READ = 500;
 /** The runs one incident marks, read at once. */
 const INCIDENT_RUNS_READ = 200;
+/** The stop text an incident's title carries; a station's whole output (main's CI log) belongs in its detail. */
+const STOP_TITLE_CHARS = 200;
 /**
  * How long a stop no incident holds yet counts toward one. A broken shared
  * pipeline stops the next changes through it within hours; a day still spans a
@@ -131,12 +133,14 @@ export async function recordRunStop(ctx: any, runId: Id<"workflow_runs">, now: n
 
   const db = await createDataContext(ctx, ws.type === "team" ? { userId: run.user_id, workspace: "team", team_id: ws.teamId } : { userId: run.user_id, workspace: "personal" });
   if (db.workspaceKey !== run.workspace) return null;
-  const stationLabel = nodes.find((n) => n.id === station)?.label ?? station;
+  // Named for where it stopped (the shared exit), not where it resumes; the full stop text stays in the detail.
+  const exitLabel = nodes.find((n) => n.id === sharedExit)?.label || sharedExit!;
+  const stopText = reason.replace(/\s+/g, " ");
   const signal = normalizeSignal({
     source: FLOW_STOP_SOURCE,
     kind: "flowstop",
     fingerprint,
-    title: `${wf?.label || flow} stopped at ${stationLabel}: ${reason}`,
+    title: stopText ? `${exitLabel}: ${stopText.length > STOP_TITLE_CHARS ? `${stopText.slice(0, STOP_TITLE_CHARS - 1)}…` : stopText}` : exitLabel,
     detail_md: reason,
     evidence_url: `${siteUrl()}${runPath(run._id)}`,
     subject: station,

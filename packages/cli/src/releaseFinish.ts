@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "./proc.js";
 import { computeDaemonBuildId } from "./daemonBuildIdCompute.js";
+import { isBelowMinimum } from "@platform/cli-kit/update";
 
 /** Every path the daemon build id reads (daemonBuildIdCompute.ts). */
 const BUILD_ID_PATHS = ["packages/cli/src", "packages/cli/package.json", "packages/shared", "platform/packages"];
@@ -95,6 +96,8 @@ export type FinishDeps = {
   fromSession?: string;
   /** Raise the global floor; false when the caller is not platform staff (only staff may force every team's machines). */
   setGlobal?: (version: string) => Promise<boolean>;
+  /** The global floor as it stands (systemConfig.getMinCliVersion without a token), read before setGlobal so a finish never lowers it. */
+  globalFloor?: () => Promise<string | null>;
   buildIdAt?: (sha: string) => string;
   log?: (line: string) => void;
   sleep?: (ms: number) => Promise<void>;
@@ -129,8 +132,22 @@ export async function finishCliRelease(deps: FinishDeps): Promise<string> {
   // run the finish; anyone else forces only the deploy's own team, and other
   // teams' Release Captains raise theirs: the server tells each one whose
   // machines run older (this caller cannot read other teams).
-  const global = decision.force && !!deps.setGlobal && (await deps.setGlobal(deps.version));
-  if (global) say(`Forced everywhere: the global floor is now ${deps.version}.`);
+  // Never lowers it: an older release's finish that lands after a newer one's keeps the newer floor.
+  const raiseGlobal = async (setGlobal: (version: string) => Promise<boolean>): Promise<boolean> => {
+    let standing: string | null = null;
+    try {
+      standing = deps.globalFloor ? await deps.globalFloor() : null;
+    } catch (err) {
+      say(`Could not read the global floor, so it is not raised: ${err instanceof Error ? err.message : String(err)}`);
+      return false;
+    }
+    // Every team is already held to at least this release: nobody else needs forcing or telling.
+    if (standing && !isBelowMinimum(standing, deps.version)) { say(`Global floor already at ${standing}.`); return true; }
+    const raised = await setGlobal(deps.version);
+    if (raised) say(`Forced everywhere: the global floor is now ${deps.version}.`);
+    return raised;
+  };
+  const global = decision.force && !!deps.setGlobal && (await raiseGlobal(deps.setGlobal));
   if (decision.force && !global) {
     try {
       const r = await deps.post("/cli/team-cli-floor/tell-other-teams", { deploy: deps.deploy, version: deps.version });

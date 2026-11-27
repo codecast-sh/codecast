@@ -779,7 +779,7 @@ Examples:
   cast guide tasks --json    Machine-readable {topic, version, build_id, body}`,
     load: () => import("./guide.js").then((m) => m.registerGuideCommand),
   },
-  { token: "release", description: "What the Release Captain must act on now: cast release sweep [--team <t>] [--json] [--quiet] lists each exception with the command that acts, and exits 0 only when one exists (a precheck)", load: () => import("./releaseSweepCommand.js").then((m) => m.registerReleaseCommand) },
+  { token: "release", description: "What the Release Captain must act on now: cast release sweep [--team <t>] [--json] [--keys] [--quiet] lists each exception with the command that acts, and exits 0 only when one exists (a precheck)", load: () => import("./releaseSweepCommand.js").then((m) => m.registerReleaseCommand) },
   { token: "repo", description: "A repository's lease across machines: cast repo lease --repo <owner/name> [--holder <text>] -- <cmd...> runs cmd in its turn behind every merge that asked first", load: () => import("./land/repoLeaseCommand.js").then((m) => m.registerRepoCommand) },
   { token: "ci", description: "Our own CI runner's verdict per commit: cast ci record --file <dir>/verdict.json | show <sha> [--json] | log <sha> <job>", load: () => import("./ciCommand.js").then((m) => m.registerCiCommand) },
   { token: "register", hasOptions: true, description: "Register this agent session for messaging only (run from a Claude Code SessionStart hook)", load: () => import("./relay/commands.js").then((m) => m.registerRegisterCommand) },

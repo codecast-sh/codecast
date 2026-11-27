@@ -18,6 +18,10 @@ import { deployByRef } from "./lib/deployRows";
 import { workspaceGrantsAccess } from "./lib/access";
 import { liveRoleByHandle } from "./lib/orgAccess";
 import { tellRole } from "./pendingMessages";
+import { isStaff } from "./lib/staff";
+import { parseWorkspaceKey } from "./lib/accessKeys";
+import { installationCoversRepo } from "./githubApp";
+import { CLI_RELEASE_REPOSITORY } from "@codecast/shared/contracts/deploys";
 
 const FLEET_WINDOW_MS = 24 * 3600_000;
 
@@ -145,36 +149,62 @@ const RELEASE_HANDLE = "release";
  * is that team's Release Captain's call, so each other team whose members'
  * machines (seen in the last day) run older, and whose floor is below the
  * release, has its @release told once per deploy with the command to do it.
- * Whoever may read the deploy may ask: they learn only how many teams were
- * told, never which or what their machines run.
+ * It writes into every other team's inbox, so only codecast's own CLI
+ * release may ask: a `cli` deploy of CLI_RELEASE_REPOSITORY in a team
+ * workspace whose team holds a GitHub App installation on that repository
+ * (an install GitHub confirmed, where a deploy target's repository is only
+ * what its publisher claimed), or any deploy when platform staff ask. The
+ * message carries only the checked version, the deploy's id and the told
+ * team's own name and numbers; the caller learns only how many were told.
  */
 export const tellOtherTeams = mutation({
   args: { api_token: v.optional(v.string()), deploy: v.string(), version: v.string() },
   handler: async (ctx, args) => {
+    if (!RELEASE_VERSION.test(args.version)) throw new Error(`${args.version} is not a release version (x.y.z)`);
     const userId = await requireUserOrToken(ctx, args.api_token);
     const d = await deployByRef(ctx, args.deploy);
     if (!d || !(await workspaceGrantsAccess(ctx, userId, d.workspace))) throw new Error(`No deploy ${args.deploy} you can read`);
     if (d.target !== "cli" || d.version !== args.version) throw new Error(`${args.deploy} is not the CLI release ${args.version}`);
+    if (!isStaff(await ctx.db.get(userId)) && !(await isCodecastCliRelease(ctx, d))) {
+      throw new Error(`${d.short_id} is not a release of codecast's CLI (${CLI_RELEASE_REPOSITORY}, from a team whose GitHub App installation covers it)`);
+    }
     const global = await getSystemConfig(ctx, "min_cli_version");
     if (global && !isBelowMinimum(global, args.version)) return { told: 0 };
     const now = Date.now();
     let told = 0;
-    for (const team of (await ctx.db.query("teams").collect()) as Doc<"teams">[]) {
-      if (d.team_id && String(team._id) === String(d.team_id)) continue;
+    // Only teams with a @release can be told: read those roles, never every team.
+    const roles: Doc<"org_roles">[] = await ctx.db.query("org_roles").withIndex("by_handle", (q: any) => q.eq("handle", RELEASE_HANDLE)).take(OTHER_TEAMS_MAX + 1);
+    if (roles.length > OTHER_TEAMS_MAX) console.warn(`[teamCliFloor.tellOtherTeams] ${d.short_id}: more than ${OTHER_TEAMS_MAX} @release roles; only the first ${OTHER_TEAMS_MAX} are read`);
+    const seen = new Set<string>();
+    for (const role of roles.slice(0, OTHER_TEAMS_MAX)) {
+      if (!role.team_id || role.status === "retired" || seen.has(String(role.team_id))) continue;
+      seen.add(String(role.team_id));
+      if (d.team_id && String(role.team_id) === String(d.team_id)) continue;
+      const team: Doc<"teams"> | null = await ctx.db.get(role.team_id);
+      if (!team) continue;
       const floor = highestFloor([global, team.min_cli_version]);
       if (floor && !isBelowMinimum(floor, args.version)) continue;
-      const role = await liveRoleByHandle(ctx, { team_id: team._id }, RELEASE_HANDLE);
-      if (!role) continue;
       const f = await teamFleet(ctx, team, args.version, now);
       const older = f.lagging.length + f.offline.length;
       if (!older) continue;
       const name = /^[\w.-]+$/.test(team.name) ? team.name : JSON.stringify(team.name);
-      const content = `CLI release ${args.version} (${args.deploy}) changes the running daemon. ${team.name}'s floor is ${floor ?? "unset"}, and ${older} of its machines seen in the last day run older. Forcing them restarts each daemon and is your call: cast force-update ${args.version} --team ${name}`;
+      const content = `CLI release ${args.version} (${d.short_id}) changes the running daemon. ${team.name}'s floor is ${floor ?? "unset"}, and ${older} of its machines seen in the last day run older. Forcing them restarts each daemon and is your call: cast force-update ${args.version} --team ${name}`;
       if (await tellRole(ctx, role._id, { content, client_id: `team-cli-floor:${d.short_id}:${team._id}` })) told++;
     }
     return { told };
   },
 });
+const RELEASE_VERSION = /^\d+\.\d+\.\d+$/;
+const OTHER_TEAMS_MAX = 200;
+
+/** A deploy of codecast's own CLI release: of CLI_RELEASE_REPOSITORY, in a team workspace whose team's GitHub App installation covers that repository. */
+async function isCodecastCliRelease(ctx: any, d: Doc<"deploys">): Promise<boolean> {
+  if (d.repository?.toLowerCase() !== CLI_RELEASE_REPOSITORY) return false;
+  const ws = parseWorkspaceKey(d.workspace);
+  if (ws?.type !== "team") return false;
+  const installs: Doc<"github_app_installations">[] = await ctx.db.query("github_app_installations").withIndex("by_team_id", (q: any) => q.eq("team_id", ws.teamId)).collect();
+  return installs.some((i) => installationCoversRepo(i, CLI_RELEASE_REPOSITORY));
+}
 
 export type FleetDevice = { device_id: string; label: string; owner: string; user_id: Id<"users">; cli_version: string | null; online: boolean; error: string | null };
 
