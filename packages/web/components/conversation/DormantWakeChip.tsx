@@ -1,14 +1,17 @@
-// The conversation header's answer to "why is this parked": for a session the
-// inbox files under Dormant, the same wake its card's child line names
-// (DormantWakeRow), beside the status pill.
+// The conversation header's answer to "what is this doing": for a session the
+// inbox files under Dormant, the same state and words its row in the rail
+// carries (components/inbox/ActivityLine), beside the status pill. Working
+// says what its own work is, Shipping where its change is, Sleeping what wakes
+// it.
 import { useTrackedStore, useInboxStore, placeInboxRows, waitsOnViewer, type InboxSession } from "../../store/inboxStore";
 import { rowSigExcluding } from "../../store/wakeSig";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useTriggers } from "../../hooks/useSyncTriggers";
+import { sessionShipMap } from "../../hooks/useSessionShipState";
 import type { TaskRow } from "../triggerTasks";
-import { SchedChildArrow } from "../TriggerRow";
-import { useDormantWake, useSessionTriggerRows } from "../../hooks/useDormantWake";
-import { WakeWhen } from "../inbox/DormantWakeRows";
+import { useSessionTriggerRows } from "../../hooks/useDormantWake";
+import { activityFactsSig, rowActivity } from "../../lib/railActivity";
+import { ActivityChip } from "../inbox/ActivityLine";
 
 const LIVENESS_FIELDS = new Set(["updated_at", "last_heartbeat", "last_metrics_at", "last_active_at", "last_message_at"]);
 
@@ -30,31 +33,19 @@ export function DormantWakeChip({ conversationId }: { conversationId: string | u
 }
 
 function DormantWakeChipBody({ session }: { session: InboxSession }) {
+  "use no memo"; // rowActivity reads the store's runs, workers and rosters through getState; compiled, the words would freeze
   const { tasks, ready } = useTriggers();
   const rows = useSessionTriggerRows(session, (ready || tasks.length > 0 ? tasks : undefined) as TaskRow[] | undefined);
-  const { wake, label: { what, when, warn } } = useDormantWake(session, rows);
-  const tone = warn ? "text-sol-yellow/90" : "text-sol-text-dim";
-  const openTrigger = wake.kind === "trigger"
-    ? () => useInboxStore.getState().setTriggerStripRequest({ convId: session._id, taskId: wake.row.task._id, expand: true, nonce: Date.now() })
-    : undefined;
-  const body = (
-    <>
-      <span className="flex items-center shrink-0 -mt-[3px]"><SchedChildArrow label="What wakes this session" className="text-sol-text-dim/70" /></span>
-      <span data-dormant-what className={`truncate min-w-0 flex-1 ${tone}`}>{what}</span>
-      <span className={`shrink-0 whitespace-nowrap tabular-nums ${tone}`}>
-        {typeof when === "string" ? <span data-dormant-sep>· </span> : null}<WakeWhen when={when} />
-      </span>
-    </>
-  );
-  const className = "flex items-center gap-1 min-w-[16rem] max-w-[28rem] shrink overflow-hidden text-meta";
-  const title = warn ?? what;
-  return openTrigger ? (
-    <button type="button" data-dormant-wake={wake.kind} onClick={openTrigger} title={title} className={`${className} rounded px-1 hover:bg-sol-blue/[0.08] transition-colors`}>
-      {body}
-    </button>
-  ) : (
-    <span data-dormant-wake={wake.kind} title={title} className={className}>
-      {body}
-    </span>
+  // Wake when the facts the split reads move: the workers' rows and the ship state.
+  useTrackedStore([(st) => activityFactsSig(st.sessions), (st) => sessionShipMap(st as never)]);
+  const now = useCoarseNow(30_000);
+  const activity = rowActivity(useInboxStore.getState() as never, session, now, rows);
+  return (
+    <ActivityChip
+      session={session}
+      activity={activity}
+      now={now}
+      onOpenTrigger={(row) => useInboxStore.getState().setTriggerStripRequest({ convId: session._id, taskId: row.task._id, expand: true, nonce: Date.now() })}
+    />
   );
 }
