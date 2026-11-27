@@ -575,6 +575,76 @@ for (const [teams, own] of [[3, 40], [2, 50]] as const) {
   });
 }
 
+/** ctx whose db tallies the queries it starts, by table. */
+function byTable(ctx: any): { ctx: any; seen: Record<string, number> } {
+  const seen: Record<string, number> = {};
+  const db = new Proxy(ctx.db, {
+    get(target, prop) {
+      const v = target[prop];
+      if (prop === "query") return (table: string, ...rest: any[]) => { seen[table] = (seen[table] ?? 0) + 1; return v.call(target, table, ...rest); };
+      return typeof v === "function" ? v.bind(target) : v;
+    },
+  });
+  return { ctx: { ...ctx, db }, seen };
+}
+
+test("whether a closed session shipped is asked only by show, one indexed read each: the viewer's heavy list of closed, landed sessions reads no commits", async () => {
+  const t = convexTest(schema, allModules);
+  const { bea, first } = await t.run(async (ctx: any) => {
+    const bea = await ctx.db.insert("users", { name: "Bea" });
+    const team = await ctx.db.insert("teams", { name: "T", created_at: NOW, features: { priorities: true } });
+    await ctx.db.insert("team_memberships", { user_id: bea, team_id: team, role: "member", joined_at: 1 });
+    const ws = `team:${team}`;
+    let n = 0;
+    // Every session closed, each with two commits on main.
+    const conv = async (fields: Record<string, unknown> = {}) => {
+      const sid = `jx7c${n++}`;
+      const c = await ctx.db.insert("conversations", {
+        user_id: bea, team_id: team, agent_type: "claude_code", session_id: sid, short_id: sid, title: sid, inbox_killed_at: NOW,
+        started_at: NOW, updated_at: NOW, message_count: 1, is_private: false, team_visibility: "full", status: "active", ...fields,
+      });
+      for (const k of [0, 1]) await ctx.db.insert("commits", { conversation_id: c, sha: `${sid}-${k}`, message: "m", author_name: "B", author_email: "b@x", timestamp: NOW, files_changed: 1, insertions: 1, deletions: 0, repository: "o/r", main_at: NOW - k });
+      return c;
+    };
+    let first = "";
+    for (let rank = 1; rank <= OWN_LINKED + 10; rank++) {
+      const steps = [];
+      for (let s = 1; s <= 4; s++) {
+        const short_id = `ct-${n++}`;
+        await ctx.db.insert("tasks", { user_id: bea, team_id: team, workspace: ws, short_id, title: short_id, status: "open", conversation_ids: [await conv(), await conv()], created_at: NOW, updated_at: NOW });
+        steps.push({ key: `s${s}`, title: `M${s}`, tier: "critical", tier_set_by: "pass", refs: [{ kind: "task", id: short_id }], done: false });
+      }
+      const short_id = `pri-${n++}`;
+      const p = await ctx.db.insert("priorities", {
+        user_id: bea, workspace: ws, short_id, title: "p", summary: "", status: "active", ai_rank: rank, steps,
+        first_seen_at: NOW, last_active_at: NOW - rank, pass_at: NOW, created_at: NOW, updated_at: NOW,
+      });
+      for (let m = 0; m < 5; m++) await conv({ priority_id: p, priority_step_key: `s${(m % 4) + 1}` });
+      if (rank === 1) first = short_id;
+    }
+    return { bea, first };
+  });
+  const listed = await t.run(async (ctx: any) => {
+    const tables = byTable(ctx);
+    const counted = counting(tables.ctx);
+    const list = await listFor(counted.ctx, bea, {});
+    return { list, calls: counted.calls(), seen: tables.seen };
+  });
+  console.log(`priority list of ${OWN_LINKED + 10} heavy priorities, every session closed and landed: ${listed.calls} db calls`);
+  expect(listed.list.priorities.filter((r: any) => r.links)).toHaveLength(OWN_LINKED);
+  expect(listed.seen.commits ?? 0).toBe(0);
+  expect(listed.calls).toBeLessThan(DOCS_CAP);
+  const shown = await t.run(async (ctx: any) => {
+    const tables = byTable(ctx);
+    const show: any = await showFor(tables.ctx, bea, first);
+    return { show, seen: tables.seen };
+  });
+  const closed = new Set(shown.show.links.flatMap((l: any) => l.sessions.map((s: any) => s.conversation_id)));
+  // One read per closed session it sends, and every one of them landed.
+  expect(shown.seen.commits).toBe(closed.size);
+  expect(new Set(shown.show.shipped_sessions)).toEqual(closed);
+});
+
 test("the viewer's own full links go round the workspaces by rank: every workspace's #1, then each #2, and so on", async () => {
   const { list } = await ownHeavy(3, 40);
   const mine = list.priorities.filter((r: any) => r.mine);

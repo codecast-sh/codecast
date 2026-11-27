@@ -233,8 +233,6 @@ type LinkReads = {
   mine: (c: Doc<"conversations">) => Promise<boolean>;
   /** The milestone keys of a priority's pending corrections ("" for one on the priority itself). */
   pending: (p: Priority) => Promise<Set<string>>;
-  /** One of the session's commits (by conversation id) reached its repository's default branch (commits.main_at, stamped by the push webhook, which links a squash merge through its Codecast-Session trailer). */
-  shipped: (conversationId: string) => Promise<boolean>;
 };
 
 /** The reads links make, each once per list call. A plan answers only when the viewer may read it. */
@@ -256,8 +254,6 @@ function linkReads(ctx: Ctx, r: Reader): LinkReads {
     };
   };
   const listed = byConv((c) => r.listed(c));
-  // One read: any of its commits with a main_at (undefined sorts below every number).
-  const shipped = memo(async (id) => !!(await ctx.db.query("commits").withIndex("by_conversation_main", (q: any) => q.eq("conversation_id", id).gt("main_at", 0)).first()));
   // The sessions the viewer co-owns, in one read when they are few, so a teammate's sessions cost no read each; past VIEWER_OWNED_READ, one read per session.
   let owned: Promise<Set<string> | null> | undefined;
   const ownedIds = () => (owned ??= ctx.db.query("session_owners").withIndex("by_user", (q: any) => q.eq("user_id", r.viewer)).take(VIEWER_OWNED_READ + 1)
@@ -290,7 +286,6 @@ function linkReads(ctx: Ctx, r: Reader): LinkReads {
     }),
     listed,
     mine,
-    shipped,
     // Corrections are their owner's alone: no one else learns one is waiting.
     pending: async (p) => {
       if (!isOwner(r.viewer, p)) return new Set();
@@ -378,11 +373,9 @@ async function linksFor(r: Reader, reads: LinkReads, p: Priority, steps: Priorit
     const live = ordered.filter((x) => !isClosedSession(x));
     const closed = ordered.filter(isClosedSession);
     const closedShown = Math.max(0, LINK_STEP_SESSIONS - live.length);
-    // Only a closed one that is sent is asked whether it shipped: a live session's state says more, and the cut stays by recency.
-    const sent = await Promise.all(closed.slice(0, closedShown).map(async (x) => ((await reads.shipped(x.conversation_id)) ? { ...x, shipped: true as const } : x)));
     links.push({
       key: s.key,
-      sessions: [...live, ...sent],
+      sessions: [...live, ...closed.slice(0, closedShown)],
       sessions_more: Math.max(0, closed.length - closedShown),
       plan: own?.plan ? planRef(own.plan) : null,
       part_of: (own?.part_of ?? []).map(planRef),
@@ -549,7 +542,20 @@ export async function showFor(ctx: Ctx, viewer: Id<"users">, shortId: string): P
     steps: steps.map((s) => ({ ...s, sessions: sessions.filter((c) => c.step_key === s.key) })),
     other_sessions: sessions.filter((c) => !steps.some((s) => s.key === c.step_key)),
     corrections: corrections.map(correctionOut),
+    shipped_sessions: await shippedOf(ctx, linked.links),
   };
+}
+
+/**
+ * The closed sessions `links` sends whose work reached main: one indexed read
+ * each (commits.by_conversation_main, main_at set; undefined sorts below every
+ * number). Only `show` asks, one priority's at most LINK_STEP_SESSIONS a
+ * milestone: the list, across every priority, never does.
+ */
+async function shippedOf(ctx: Ctx, links: readonly PriorityMilestoneLinks[]): Promise<string[]> {
+  const closed = [...new Set(links.flatMap((l) => l.sessions.filter(isClosedSession).map((s) => s.conversation_id)))];
+  const landed = await Promise.all(closed.map((id) => ctx.db.query("commits").withIndex("by_conversation_main", (q: any) => q.eq("conversation_id", id).gt("main_at", 0)).first()));
+  return closed.filter((_, i) => landed[i]);
 }
 
 

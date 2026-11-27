@@ -111,15 +111,21 @@ const lineOf = (s: PriorityLinkedSession, live: (conversationId: string) => Draw
  * mark), and the conversation it opens (`target`: its own, or the lead it
  * rides, where the answer is; `href` is web's route to it).
  */
-export type SessionLine = PriorityLinkedSession & { target: string; href: string; mark?: SessionStatus };
+export type SessionLine = PriorityLinkedSession & {
+  target: string;
+  href: string;
+  mark?: SessionStatus;
+  /** Closed, and its work reached main: the priority's own page knows it (show's shipped_sessions); the list never asks. */
+  shipped?: true;
+};
 
 /** The mark a session's row draws (both apps): its inbox's mark (Done's check, the stash tray, an error), else its own state's. */
 export const sessionRowMark = (s: Pick<SessionLine, "mark" | "state">): SessionStatus => s.mark ?? s.state;
 
 /**
  * The mark a session's row draws on a milestone: its own (sessionRowMark),
- * except that a settled one (Done or Closed) whose work reached main (the
- * server's `shipped`) draws done, so shipped work never reads as merely closed.
+ * except that a settled one (Done or Closed) whose work reached main (its
+ * `shipped`) draws done, so shipped work never reads as merely closed.
  */
 export function sessionRowStatus(s: Pick<SessionLine, "mark" | "state" | "shipped">): { mark: SessionStatus; shipped: boolean } {
   const mark = sessionRowMark(s);
@@ -193,12 +199,17 @@ export function buildModels(
   const lanes = new Map((history?.lanes ?? []).map((l) => [l.short_id ?? l.key, l]));
   return rows.map((row) => {
     const links = new Map(milestoneLinksOf(row).map((l) => [l.key, l]));
+    // A priority's own page lays show's answer on (lib/priorityDetail PriorityView); a list row has none.
+    const shipped = new Set((row as { shipped_sessions?: readonly string[] }).shipped_sessions ?? []);
     // Anyone who reads a priority still in play may start on it (the server links the session to its milestone).
     const canStart = row.status === "active";
     // Reads never return a dropped milestone; a row cached before that rule is held to it here.
     const milestones = row.steps.filter((step) => !step.dropped).map((step): MilestoneModel => {
       const l = links.get(step.key);
-      const sessions = orderSessions((l?.sessions ?? []).map((s) => lineOf(s, live)));
+      const sessions = orderSessions((l?.sessions ?? []).map((s) => {
+        const line = lineOf(s, live);
+        return shipped.has(s.conversation_id) ? { ...line, shipped: true as const } : line;
+      }));
       return {
         key: step.key,
         tier: step.tier,

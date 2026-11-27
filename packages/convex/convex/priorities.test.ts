@@ -259,9 +259,9 @@ describe("reads", () => {
     expect(states.jx7agan).toBe("idle");
   });
 
-  test("a closed session one of whose commits reached main is shipped; a closed one whose commits never did, and a live one, are not", async () => {
+  test("show names the closed sessions one of whose commits reached main; not a closed one whose commits never did, nor a live one; the list never says", async () => {
     const { t, as, ada, acme, ws, p1 } = await world();
-    await t.run(async (ctx) => {
+    const ids = await t.run(async (ctx) => {
       const conv = (short_id: string, fields: Record<string, unknown>) => ctx.db.insert("conversations", {
         user_id: ada, team_id: acme, agent_type: "claude_code", session_id: short_id, short_id, title: `Session ${short_id}`,
         started_at: NOW, updated_at: NOW, message_count: 3, is_private: false, team_visibility: "full", status: "active",
@@ -274,12 +274,18 @@ describe("reads", () => {
       const shipped = await conv("jx7ship", { inbox_killed_at: NOW });
       await commit(shipped, "aaa1", NOW - DAY);
       await commit(shipped, "aaa2");
-      await commit(await conv("jx7kept", { inbox_killed_at: NOW }), "bbb1");
-      await commit(await conv("jx7live", {}), "ccc1", NOW - DAY);
+      const kept = await conv("jx7kept", { inbox_killed_at: NOW });
+      await commit(kept, "bbb1");
+      const live = await conv("jx7live", {});
+      await commit(live, "ccc1", NOW - DAY);
+      return { shipped: String(shipped), kept: String(kept), live: String(live) };
     });
+    const shown = await as(ada).query(pri.show, { short_id: "pri-1" });
+    const sent = shown.links.find((l: any) => l.key === "s2").sessions.map((s: any) => s.conversation_id);
+    expect(sent).toEqual(expect.arrayContaining([ids.shipped, ids.kept, ids.live]));
+    expect(shown.shipped_sessions).toEqual([ids.shipped]);
     const [row] = await rowsOf(as(ada), { workspace: ws });
-    const shipped = Object.fromEntries(row.links.find((l: any) => l.key === "s2").sessions.map((s: any) => [s.short_id, s.shipped ?? false]));
-    expect(shipped).toMatchObject({ jx7ship: true, jx7kept: false, jx7live: false });
+    expect(row.shipped_sessions).toBeUndefined();
   });
 
   test("history names today's sessions no priority holds, for the No priority share", async () => {

@@ -261,10 +261,11 @@ test("the page lists a milestone's closed sessions after the live ones, never fo
   const s2 = [
     sess("build", "Priorities feature build", "needs_you", 3),
     sess("plain", "Abandoned spike", "killed", 1),
-    sess("shipped", "Visual design polish", "killed", 30, { shipped: true }),
+    sess("shipped", "Visual design polish", "killed", 30),
     sess("settled", "Mapping notes", "done", 2),
   ];
-  answers["priorities:show"] = { ...DETAIL, links: DETAIL.links.map((l: any) => (l.key === "s2" ? { ...l, sessions: s2 } : l)) };
+  // Which closed ones landed is show's alone to say.
+  answers["priorities:show"] = { ...DETAIL, links: DETAIL.links.map((l: any) => (l.key === "s2" ? { ...l, sessions: s2 } : l)), shipped_sessions: [fixtureId("shipped")] };
   const page = await inRouter(<PriorityPage id="pri-60" />, "/priorities/pri-60");
   try {
     await page.waitFor(() => !!page.container.querySelector('[data-milestone="s2"] [data-connected] [data-session-row]'));
@@ -516,7 +517,7 @@ test("the list row wins: the detail holds only what show alone returns, and the 
     expect(el.querySelector("[data-corrections]")?.textContent).toContain("Calibration scorer belongs here");
     // The detail row is not a second copy of the priority.
     const detail = (useInboxStore.getState() as any).priorityDetails[DETAIL._id];
-    expect(Object.keys(detail).sort()).toEqual(["_cachedAt", "_id", "corrections", "other_sessions", "short_id"]);
+    expect(Object.keys(detail).sort()).toEqual(["_cachedAt", "_id", "corrections", "other_sessions", "shipped_sessions", "short_id"]);
     // Pinned while the page shows it.
     expect(isDetailPinned("priorityDetails", DETAIL._id)).toBe(true);
     // A rename paints through the list row, before any server push.
