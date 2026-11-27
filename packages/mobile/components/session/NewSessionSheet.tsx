@@ -216,7 +216,7 @@ function NewSessionSheet({ visible, seed, sharedImages, start, task, onClose, on
   // The first message. The sheet remounts on every opening (ComposeHost), so
   // the seed is the box's starting text.
   const field = useComposerField(seed ?? '');
-  const images = useComposerImages(field.setValue);
+  const images = useComposerImages(field.setValue, { files: true });
   // Images the opening came with (shared to the app) start attached; the
   // sheet remounts on every opening, so this runs once for each.
   useEffect(() => { if (sharedImages.length) images.attachImages(sharedImages); }, []);
@@ -344,6 +344,7 @@ function NewSessionSheet({ visible, seed, sharedImages, start, task, onClose, on
   // (sendMessageWhenReady), as a message typed into the stub's own composer
   // would be.
   const handleSubmit = () => {
+    if (images.filesUploading) return;
     const text = nativeComposerText(field.inputRef.current as { _lastNativeText?: unknown } | null, field.value).trim();
     const firstImages = images.optimisticImages();
     setSubmitError(null);
@@ -382,8 +383,9 @@ function NewSessionSheet({ visible, seed, sharedImages, start, task, onClose, on
       setSubmitError(mobileCreateErrorMessage("session", error));
       return;
     }
-    const empty = !text && firstImages.length === 0;
-    if (!empty) dispatchComposerSend(stubId, text || IMAGE_ONLY_CONTENT, firstImages, text);
+    const content = images.withAttachments(text);
+    const empty = !content && firstImages.length === 0;
+    if (!empty) dispatchComposerSend(stubId, content || IMAGE_ONLY_CONTENT, firstImages, text);
     finishSessionCreate(stubId, empty);
   };
 
@@ -546,12 +548,13 @@ function NewSessionSheet({ visible, seed, sharedImages, start, task, onClose, on
             </RNView>
           ) : (<>
           <RNView style={modalStyles.prompt}>
-            {/* Starting an agent session needs no words, so send is always live. */}
+            {/* Starting an agent session needs no words, so send is live
+                unless a file is still uploading (its tile shows the spinner). */}
             <MessageComposer
               field={field}
               images={images}
               placeholder={`Ask ${agentOptions.find((a) => a.id === agentId)?.label ?? 'the agent'}`}
-              canSend
+              canSend={!images.filesUploading}
               onSend={handleSubmit}
               cardStyle={modalStyles.promptCard}
               inputStyle={modalStyles.promptInput}

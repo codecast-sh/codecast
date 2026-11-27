@@ -18,6 +18,7 @@ import { ingestPlanDetail } from "@codecast/web/hooks/useSyncPlans";
 import { inActiveWorkspace } from "@codecast/web/lib/workspaceScope";
 import { useFeedLoading } from "@/hooks/useSyncWorkspaceData";
 import { PLAN_STATUS_CONFIG } from "@/components/PlanItem";
+import { PlanStatusMark } from "@/components/marks";
 import { TaskItemRow, showTaskActions } from "@/components/TaskItem";
 import { MarkdownContent } from "@/components/MarkdownRenderer";
 import { CollapsibleBody } from "@/components/CollapsibleBody";
@@ -112,7 +113,7 @@ export default function PlanDetailScreen() {
 
         <RNView style={styles.badgeRow}>
           <RNView style={[styles.badge, { borderColor: status.color + "40" }]}>
-            <FontAwesome name={status.icon} size={12} color={status.color} />
+            <PlanStatusMark status={plan.status} size={13} />
             <RNText style={[styles.badgeText, { color: status.color }]}>{status.label}</RNText>
           </RNView>
 
