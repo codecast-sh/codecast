@@ -316,7 +316,7 @@ esac
 jq -r "$filter" "$FIXTURES/$f"
 `, { mode: 0o755 });
       // Three passes, no waiting between them.
-      const script = (step("Wait for CI on the source commit").run as string).replace("seq 1 160", "seq 1 3").replaceAll("sleep 15", "sleep 0");
+      const script = (step("Wait for CI on the source commit").run as string).replace("seq 1 360", "seq 1 3").replaceAll("sleep 15", "sleep 0");
       const child = Bun.spawn(["bash", "-c", script], { cwd: work, env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, FIXTURES: fixtures, SOURCE_COMMIT: S, GITHUB_REPOSITORY: "acme/app", GH_TOKEN: "x" }, stdout: "pipe", stderr: "pipe" });
       const [code, stdout] = await Promise.all([child.exited, new Response(child.stdout).text()]);
       return { code, out: stdout.replaceAll(S, "S").replaceAll(D, "D") };

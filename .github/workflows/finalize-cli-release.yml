@@ -435,7 +435,7 @@ jobs:
       # The CI gate for a release (deploy.toml's cli target leaves it here): the
       # cut builds and signs while CI runs on the same commit, and nothing is
       # published until CI's verify job is green on it. A red or missing verdict
-      # within 40 minutes fails the release before any public object is written.
+      # within 90 minutes fails the release before any public object is written.
       # Pushes to main share one CI group in which a newer push replaces a waiting
       # run (ci.yml's concurrency), so the source commit's own run can end
       # cancelled with no jobs. Then the verdict is a later main run's, on a commit
@@ -452,7 +452,7 @@ jobs:
             gh api "repos/$GITHUB_REPOSITORY/actions/runs/$1/jobs?per_page=100" \
               --jq '[.jobs[] | select(.name == "verify")][0] | if . == null then "none" else "\(.status) \(.conclusion)" end'
           }
-          for _ in $(seq 1 160); do
+          for _ in $(seq 1 360); do
             own=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$SOURCE_COMMIT&event=push&per_page=5" \
               --jq '.workflow_runs | sort_by(.created_at) | last | select(. != null) | "\(.id) \(.status) \(.conclusion)"')
             if [[ -n "$own" ]]; then
@@ -497,7 +497,7 @@ jobs:
             fi
             sleep 15
           done
-          echo "::error::CI reached no verdict on $SOURCE_COMMIT in 40 minutes"
+          echo "::error::CI reached no verdict on $SOURCE_COMMIT in 90 minutes"
           exit 1
 
       - name: Stage immutable release objects
