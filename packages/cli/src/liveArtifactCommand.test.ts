@@ -156,11 +156,10 @@ describe("cast board frame verbs (pl-1145)", () => {
   });
 
   test("courtesy: an agent's expand that would swallow a person's sticky is refused; a person's own run goes ahead", () => {
-    // A person folded the notes and the theme shrank around the pill.
+    // A person folded the notes and the theme shrank around the pill, their sticky beside it.
     const v0 = artifactView("board", "B", [frameEl("el_t", 0, 0, 1200, 900), frameEl("el_n", 40, 64, 500, 400), sticky("el_s", 80, 128), sticky("el_p", 640, 64, "u:jason")]);
     const v1 = apply(v0, verbs.collapse.run(v0, ["el_n"]).ops);
-    // The theme narrowed to the pill (it holds a folded frame now), so the sticky sits under it, where the open notes would cover it.
-    expect(v1.get("el_p")).toMatchObject({ x: 40, y: 136 });
+    expect(v1.get("el_p")).toMatchObject({ x: 324, y: 64 });
     expect(() => verbs.expand.run(v1, ["el_n"], undefined, AGENT)).toThrow("left the board as it was: this would move or enclose a person's work (el_p). A person can press Reflow or Organize on the board.");
     expect(verbs.expand.run(v1, ["el_n"]).ops.length).toBeGreaterThan(0);
     // At the top level an expand that pushes a person's sticky down is refused the same way.

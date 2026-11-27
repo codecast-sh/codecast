@@ -28,7 +28,7 @@
 //   personTouched(view, ops, exempt) the people's elements a batch moves, resizes or newly encloses (agent courtesy)
 //   agentCollapseOps(view, key)      an agent's fold: reflows upward only as far as no person's element is touched
 //   reflowFrameOps(view, key)        lay out a frame's children and size it to fit (a resolved frame, one holding a folded
-//                                    frame, narrows to its widest card or pill, its text wrapped to that), then settle its level
+//                                    frame and a card, narrows to its widest card or pill, its text wrapped to that), then settle its level
 //   organizeOps(view, opts)          the whole board: agenda frames in the top row, other frames below, loose items gridded under them
 import { foldOps, toElement, type ArtifactElement, type ArtifactOp, type ElementState, type Json } from "./core";
 import type { ArtifactView } from "./spec";
@@ -296,8 +296,8 @@ class FrameLayout {
     const texts = ordered.filter((k) => k.el.kind === "text");
     const rest = ordered.filter((k) => k.el.kind !== "text");
     const left = n.box.x + FRAME_PAD;
-    // A resolved theme (it holds a folded notes frame) is only as wide as its widest card or pill; its text wraps to that.
-    const resolved = rest.length > 0 && rest.some((k) => k.el.kind === "frame" && this.collapsedOf(k.key));
+    // A resolved theme (folded notes and a deliverable: a folded frame and a card) is only as wide as its widest card or pill; its text wraps to that.
+    const resolved = rest.some((k) => k.el.kind === "frame" && this.collapsedOf(k.key)) && rest.some((k) => k.el.kind === "card");
     const innerW = resolved ? Math.max(...rest.map((k) => k.box.w)) : Math.max(n.box.w - FRAME_PAD * 2, ...ordered.map((k) => k.box.w));
     let y = n.box.y + FRAME_PAD + FRAME_TITLE_BAND;
     for (const t of texts) {
