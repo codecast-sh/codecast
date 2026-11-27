@@ -399,6 +399,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       // A session's change is read first: a session with nothing here stops before anything is made.
       const { previewSessionChange, previewCheckoutChange, inboxRosterVia, NoCheckoutChange } = await import("./workflow/flowChange.js");
       const preview = sessionRef && !branch ? await previewSessionChange(top, sessionRef, only).catch((err) => { console.error(err.message); process.exit(1); }) : null;
+      for (const e of preview?.unmatched ?? []) console.error(`  --only ${e} names no file this session changed, so nothing of it is in the change`);
       // The checkout's change is planned first too: a checkout with nothing that can ship stops before anything is made.
       const roster = inboxRosterVia((route, body) => deps.cliPost(route, body));
       const pass = opts.checkout ? await previewCheckoutChange(top, { roster }).catch((err) => { console.error(err.message); process.exit(1); }) : null;
