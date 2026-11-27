@@ -381,8 +381,7 @@ export const applyPlan = internalMutation({
       if (!row || row.status === "merged") continue;
       const patch: Partial<PriorityWrite> = { ...u.patch };
       // A merge survivor's carried place lands only where the person has not placed it since.
-      // Never onto one the rank backfill has not reached: its old rank still decides its place.
-      if (row.person_pos != null || row.rank_set_by != null) delete patch.person_pos;
+      if (row.person_pos != null) delete patch.person_pos;
       if (row.status === "set_aside" || row.status_set_by === "person") {
         delete patch.status;
         delete patch.done_at;

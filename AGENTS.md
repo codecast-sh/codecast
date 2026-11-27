@@ -49,7 +49,7 @@ Open tabs, the phone app and older CLI binaries keep calling the old names after
 
 A backfill runs after the deploy, by hand, and passes keep running in the gap, so:
 
-- **Code reads correctly before its backfill runs.** A new field is optional, and every reader falls back to what the old rows hold (Priorities v2's rank order read the legacy `rank` until `priorityRankBackfill` ran). Then the backfill's timing is never a correctness question.
+- **Code reads correctly before its backfill runs.** A new field is optional, and every reader falls back to what the old rows hold (a list keeps ordering by the old field while the backfill has not reached a row). Then the backfill's timing is never a correctness question.
 - **A backfill is idempotent:** a second run, or a run after people have edited rows, changes nothing that is already right. It defaults to a dry run, pages through the table (`auto: true` schedules the next page), and returns counts.
 - **Run it right after `deploy.sh`** with `packages/convex/run.sh <module>:run`: the dry run first, then the real one. Confirm by reading the rows (`env -u CONVEX_DEPLOYMENT npx convex data <table>`), not the return value. Name the command in the change's handoff, and when nothing reads the old field any more, delete the backfill and the field in a follow-up.
 

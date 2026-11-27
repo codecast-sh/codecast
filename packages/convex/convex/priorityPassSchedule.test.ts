@@ -273,7 +273,7 @@ describe("each trigger asks for its owner's pass", () => {
     const w = await world();
     const t0 = Date.now();
     await w.t.run((ctx) => ctx.db.insert("priorities", {
-      user_id: w.ana, workspace: w.team, short_id: "pri-1", title: "Trusted evals", summary: "", status: "active", rank: 1, rank_set_by: "pass",
+      user_id: w.ana, workspace: w.team, short_id: "pri-1", title: "Trusted evals", summary: "", status: "active", ai_rank: 1,
       steps: [], first_seen_at: t0, last_active_at: t0, pass_at: t0, created_at: t0, updated_at: t0, session_count: 0,
     } as any));
     setSystemTime(new Date(t0));

@@ -749,7 +749,6 @@ import type * as priorityPassRun from "../priorityPassRun.js";
 import type * as priorityPassSchedule from "../priorityPassSchedule.js";
 import type * as priorityPassSessions from "../priorityPassSessions.js";
 import type * as priorityPassSweep from "../priorityPassSweep.js";
-import type * as priorityRankBackfill from "../priorityRankBackfill.js";
 import type * as priorityRead from "../priorityRead.js";
 import type * as priorityStepKeyBackfill from "../priorityStepKeyBackfill.js";
 import type * as priorityWrite from "../priorityWrite.js";
@@ -1672,7 +1671,6 @@ declare const fullApi: ApiFromModules<{
   priorityPassSchedule: typeof priorityPassSchedule;
   priorityPassSessions: typeof priorityPassSessions;
   priorityPassSweep: typeof priorityPassSweep;
-  priorityRankBackfill: typeof priorityRankBackfill;
   priorityRead: typeof priorityRead;
   priorityStepKeyBackfill: typeof priorityStepKeyBackfill;
   priorityWrite: typeof priorityWrite;
