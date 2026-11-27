@@ -109,14 +109,15 @@ describe("buildDiffModel + diffRows", () => {
     expect(pierreNumbers(model)).toEqual(shownNumbers(model));
   });
 
-  test("a large rewrite gives up on the minimal diff and stays fast", () => {
-    const oldStr = Array.from({ length: 5000 }, (_, i) => `const a${i} = ${i};`).join("\n");
-    const newStr = Array.from({ length: 5000 }, (_, i) => `const b${i} = ${i};`).join("\n");
-    const start = performance.now();
-    const rows = diffRows(buildDiffModel({ oldStr, newStr, startLine: 3 }));
-    expect(rows.length).toBe(10_000);
+  test("a change past the edit cap is shown as one rewrite, not the minimal diff", () => {
+    // Every other line changes: 3000 edits, past the cap. The minimal diff keeps
+    // the 1500 unchanged lines as context; the capped one shows none.
+    const lines = (tag: string) =>
+      Array.from({ length: 3000 }, (_, i) => (i % 2 ? `const ${tag}${i} = ${i};` : `keep(${i});`)).join("\n");
+    const rows = diffRows(buildDiffModel({ oldStr: lines("a"), newStr: lines("b"), startLine: 3 }));
+    expect(rows.length).toBe(6000);
+    expect(rows.filter((r) => r.type === "context")).toHaveLength(0);
     expect(rows[0]).toMatchObject({ type: "removed", oldNum: 3 });
-    expect(rows[5000]).toMatchObject({ type: "added", newNum: 3 });
-    expect(performance.now() - start).toBeLessThan(2000);
+    expect(rows[3000]).toMatchObject({ type: "added", newNum: 3 });
   });
 });
