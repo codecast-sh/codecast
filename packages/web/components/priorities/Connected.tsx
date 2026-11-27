@@ -11,6 +11,8 @@ import type { PriorityPlanRef } from "@codecast/shared/contracts/priorities";
 import { entityRoute } from "@codecast/shared/entities";
 import { isClosedSession, orderByState } from "@codecast/shared/contracts/priorityDerive";
 import { SessionStatusMark } from "../inbox/SessionStatusMark";
+import { Mark } from "../Mark";
+import { taskStatusMarkId } from "../../lib/marks/work";
 import { taskVisual } from "../TaskStatusBadge";
 import { useEntityResolution } from "../../lib/entityDisplay";
 import { ago, sessionRowMark, type MilestoneModel, type PriorityModel, type SessionLine } from "../../lib/priorityList";
@@ -82,16 +84,16 @@ export function Connected({ model, m, now, lookups }: {
       <Group kind="tasks" label="Tasks" n={m.tasks.length}>{m.tasks.map((t) => <TaskItem key={t} id={t} />)}</Group>
       <Group kind="prs" label="Pull requests" n={m.prs.length}>{m.prs.map((p) => <PrItem key={p} pr={p} state={lookups.prState(p)} />)}</Group>
       <Group kind="branches" label="Branches" n={branches.length}>
-        {branches.map((b) => <Item key={b} data-branch={b} icon={<GitBranch className="size-3.5 text-sol-text-dim" />} title={<span className="font-mono text-meta">{b}</span>} />)}
+        {branches.map((b) => <Item key={b} data-branch={b} icon={<Mark id="git.branch" labeled><GitBranch className="size-3.5 text-sol-text-dim" aria-hidden /></Mark>} title={<span className="font-mono text-meta">{b}</span>} />)}
       </Group>
       <Group kind="plans" label="Plans" n={plans.length}>
         {plans.map(({ plan, partOf }) => (
-          <Item key={plan.short_id} href={`/plans/${plan.short_id}`} icon={<MapIcon className="size-3.5 text-sol-text-dim" />} title={plan.title} meta={`${partOf ? "part of · " : ""}${plan.done}/${plan.total}`} />
+          <Item key={plan.short_id} href={`/plans/${plan.short_id}`} icon={<Mark id="entity.plan" labeled><MapIcon className="size-3.5 text-sol-text-dim" aria-hidden /></Mark>} title={plan.title} meta={`${partOf ? "part of · " : ""}${plan.done}/${plan.total}`} />
         ))}
       </Group>
       <Group kind="deploys" label="Deploys" n={deploys.length}>
         {deploys.map((d) => (
-          <Item key={d.id} href={(d.short_id && entityRoute("deploy", d.short_id)) || "/deploys"} icon={<DeployMark status={d.status} />} title={d.target} meta={`${d.status} · ${age(d.at, now)}`} />
+          <Item key={d.id} href={(d.short_id && entityRoute("deploy", d.short_id)) || "/deploys"} icon={<DeployMark status={d.status} labeled />} title={d.target} meta={`${d.status} · ${age(d.at, now)}`} />
         ))}
       </Group>
       {empty && <li className="py-1 text-meta text-sol-text-dim">Nothing connected yet</li>}
@@ -135,12 +137,12 @@ function SessionItem({ s, now, menu }: { s: SessionLine; now: number; menu?: Rea
     <Item
       data-session-row={s.conversation_id}
       data-state={s.state}
-      data-mark={mark}
+      data-row-mark={mark}
       href={s.href}
-      icon={<SessionStatusMark status={mark} size={12} />}
+      icon={<SessionStatusMark status={mark} size={12} labeled />}
       title={label}
       meta={<>
-        {s.workflow && <Workflow data-workflow-hint className="mr-1 inline size-3 align-[-2px] text-sol-text-dim" aria-label="Workflow run" />}
+        {s.workflow && <Mark id="inbox.flow" className="mr-1 align-[-2px]"><Workflow data-workflow-hint className="size-3 text-sol-text-dim" aria-label="Workflow run" /></Mark>}
         <span className={asks ? "font-medium text-sol-yellow" : undefined}>{SESSION_STATUS[mark].word}</span> · {age(s.last_active_at, now)}
       </>}
       menu={menu}
@@ -159,7 +161,7 @@ function TaskItem({ id }: { id: string }) {
     <Item
       href={`/tasks/${id}`}
       icon={t
-        ? <span className={v.color} data-task-status={t.status ?? "open"}><Icon className="size-3.5" /></span>
+        ? <Mark id={taskStatusMarkId(t.status)}><span className={v.color} data-task-status={t.status ?? "open"}><Icon className="size-3.5" /></span></Mark>
         : <UnknownTaskMark />}
       title={<span className={cn(closed && "text-sol-text-dim", t?.status === "dropped" && "line-through decoration-sol-text-dim/60")}>{t?.title || id}</span>}
     />
@@ -179,7 +181,7 @@ function PrItem({ pr, state }: { pr: string; state?: string }) {
   return (
     <li className={ROW}>
       <Link href={entityRoute("pr", pr) ?? `/pr/${repo}/${n}`} data-pr={pr} className={cn(ROW_LINK, "hover:underline")}>
-        <span className="flex size-4 shrink-0 items-center justify-center"><Icon className={cn("size-3.5", color)} aria-hidden /></span>
+        <span className="flex size-4 shrink-0 items-center justify-center"><Mark id={`pr.${st}`} labeled><Icon className={cn("size-3.5", color)} aria-hidden /></Mark></span>
         <span className="text-ui tabular-nums text-sol-text">#{n}</span>
         <span className="min-w-0 truncate text-meta text-sol-text-dim">{repo.split("/")[1]} · {st}</span>
       </Link>

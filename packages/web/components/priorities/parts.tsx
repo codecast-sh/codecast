@@ -10,12 +10,15 @@ import { Rocket, SquarePen } from "lucide-react";
 import type { PriorityRow } from "@codecast/shared/contracts/priorities";
 import type { MilestoneStateKind } from "@codecast/shared/contracts/priorityDerive";
 import { SessionStatusMark } from "../inbox/SessionStatusMark";
+import { Mark } from "../Mark";
 import { Button } from "../ui/button";
 import { HoverCard } from "../ui/HoverCard";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { lookup } from "../../lib/liveEntities";
 import { milestoneStartHref } from "../../lib/priorities";
 import { dayDate } from "../../lib/priorityBreakdown";
+import { deployPillState } from "../../lib/deploys/deployPill";
+import { deployMarkId } from "../../lib/marks/work";
 import { MILESTONE_STATE_WORD, TOUCH_AREA, type MilestoneModel } from "../../lib/priorityList";
 import type { SessionStatus } from "../../lib/sessionStatus";
 import { cn } from "../../lib/utils";
@@ -63,7 +66,7 @@ export function DayStrip({ counts, days, todayIndex, peak, page, pending }: { co
   const max = page ? 56 : 24;
   const top = Math.max(1, peak);
   const column = cn("flex flex-col items-center justify-end", page ? "min-w-0 flex-1" : "w-[20px] [@container(max-width:40rem)]:w-[7px]");
-  return (
+  const strip = (
     <span data-day-strip data-pending={pending || undefined} className={cn("relative flex items-end", page ? "w-full gap-1.5" : "gap-1 [@container(max-width:40rem)]:gap-[2px]")}>
       {!pending && (
         <StripTap
@@ -125,6 +128,8 @@ export function DayStrip({ counts, days, todayIndex, peak, page, pending }: { co
       })}
     </span>
   );
+  // The strip is a registered mark (quiet: each day has its own card), so the legend lists it; a pending one draws no data yet.
+  return pending ? strip : <Mark id="priority.ten_days" quiet className={page ? "w-full" : undefined}>{strip}</Mark>;
 }
 
 /** The session language's mark for each state a milestone can show without being an action. */
@@ -133,49 +138,66 @@ const QUIET_MARK: Record<"working" | "dormant" | "idle" | "done", SessionStatus>
 /** The 24px box a state mark sits in, the milestone line's first column. */
 const BOX = "flex size-6 shrink-0 items-center justify-center";
 
-/** The bordered yellow Needs you mark. `href`: the session to answer; without one it is the mark alone (the legend). */
+/**
+ * The bordered yellow Needs you mark: the same meaning as a session's Needs
+ * you (session.needs_you), drawn as the milestone's action. `href`: the
+ * session to answer; without one it is the mark alone.
+ */
 export function NeedsYouMark({ href, label }: { href?: string; label?: string }) {
-  const look = cn(BOX, "rounded-control border border-sol-yellow/70 bg-sol-yellow/15 shadow-sm");
-  if (!href) return <span className={look}><SessionStatusMark status="needs_you" size={13} /></span>;
-  return (
-    <Link href={href} onClick={stop} data-state-action="needs_you" title={label} aria-label={label} className={cn(look, TOUCH_AREA, "hover:bg-sol-yellow/25")}>
-      <SessionStatusMark status="needs_you" size={13} />
-    </Link>
+  // The mark is the box alone, never the link around it, so every milestone's is one glyph in the legend.
+  const box = (
+    <Mark id="session.needs_you">
+      <span className={cn(BOX, "rounded-control border border-sol-yellow/70 bg-sol-yellow/15 shadow-sm group-hover/needs:bg-sol-yellow/25")}>
+        {/* The glyph inside is named by the box around it. */}
+        <SessionStatusMark status="needs_you" size={13} quiet />
+      </span>
+    </Mark>
   );
+  if (!href) return box;
+  return <Link href={href} onClick={stop} data-state-action="needs_you" aria-label={label} className={cn("group/needs flex rounded-control outline-none focus-visible:ring-2 focus-visible:ring-sol-text-dim/60", TOUCH_AREA)}>{box}</Link>;
 }
 
 /**
- * A deploy in an open milestone's list (and the legend), each state its own
- * shape so a grayscale screen tells them apart: live a green rocket, failed
- * the sessions' red error mark, still on its way a dashed grey rocket.
+ * A deploy in an open milestone's list, each state its own shape so a
+ * grayscale screen tells them apart: live a green rocket, failed the
+ * sessions' red error mark, still on its way a dashed grey rocket. Named as a
+ * deploy pill names its state (deploy.*). `labeled`: its state's word sits
+ * beside it.
  */
-export function DeployMark({ status }: { status: string }) {
-  if (status === "failed") return <span data-deploy-mark="failed" className="flex"><SessionStatusMark status="error" size={13} /></span>;
-  if (status === "live") return <Rocket data-deploy-mark="live" className="size-3.5 text-sol-green" />;
-  return <Rocket data-deploy-mark="pending" strokeDasharray="3 2" className="size-3.5 text-sol-text-dim" />;
+export function DeployMark({ status, labeled }: { status: string; labeled?: boolean }) {
+  const id = deployMarkId(deployPillState({ status } as Parameters<typeof deployPillState>[0]));
+  if (status === "failed") return <span data-deploy-mark="failed" className="flex"><SessionStatusMark status="error" size={13} markId={id} labeled={labeled} /></span>;
+  return (
+    <Mark id={id} labeled={labeled}>
+      {status === "live"
+        ? <Rocket data-deploy-mark="live" className="size-3.5 text-sol-green" aria-hidden />
+        : <Rocket data-deploy-mark="pending" strokeDasharray="3 2" className="size-3.5 text-sol-text-dim" aria-hidden />}
+    </Mark>
+  );
 }
 
 /** A task whose row has not loaded has no status to draw: a neutral dot, never Open. */
 export function UnknownTaskMark() {
-  return <span data-task-status="unknown" aria-hidden className="block size-1.5 rounded-full bg-sol-text-dim/50" />;
+  return <Mark id="priority.task_loading"><span data-task-status="unknown" aria-hidden className="block size-1.5 rounded-full bg-sol-text-dim/50" /></Mark>;
 }
 
-/** The filled primary pen, the New session button's icon. `href`: the composer to open; without one it is the mark alone (the legend). */
-export function NewSessionMark({ href }: { href?: string }) {
-  if (!href) return <Button asChild variant="primary" size="icon-sm" className="pointer-events-none size-6 shrink-0"><span><SquarePen aria-hidden /></span></Button>;
+/** The filled primary pen, the New session button's icon, opening the composer at `href`. The mark is the button's face, not the link, so every milestone's is one glyph in the legend. */
+export function NewSessionMark({ href }: { href: string }) {
   return (
-    <Button asChild variant="primary" size="icon-sm" className={cn("size-6 shrink-0", TOUCH_AREA)}>
-      <Link href={href} onClick={stop} data-state-action="start" title="New session on this milestone" aria-label="New session on this milestone">
-        <SquarePen aria-hidden />
-      </Link>
-    </Button>
+    <Link href={href} onClick={stop} data-state-action="start" aria-label="New session on this milestone" className={cn("group/start flex shrink-0 rounded-control outline-none focus-visible:ring-2 focus-visible:ring-sol-text-dim/60", TOUCH_AREA)}>
+      <Mark id="priority.new_session">
+        <Button asChild variant="primary" size="icon-sm" className="size-6 shrink-0">
+          <span><SquarePen aria-hidden /></span>
+        </Button>
+      </Mark>
+    </Link>
   );
 }
 
 /** A quiet state as its mark alone: working, sleeping, idle, done. */
 function QuietMark({ kind }: { kind: keyof typeof QUIET_MARK }) {
   return (
-    <span data-state={kind} role="img" aria-label={MILESTONE_STATE_WORD[kind]} title={MILESTONE_STATE_WORD[kind]} className={BOX}>
+    <span data-state={kind} role="img" aria-label={MILESTONE_STATE_WORD[kind]} className={BOX}>
       <SessionStatusMark status={QUIET_MARK[kind]} size={13} />
     </span>
   );

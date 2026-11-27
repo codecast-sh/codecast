@@ -381,29 +381,26 @@ test("each priority's ten days are bars on one scale; a day's hover card says on
   }
 }, 60_000);
 
-test("the legend behind the ⓘ in the page header names every mark", async () => {
+test("the ? in the page header opens the shared icon legend with Priorities first", async () => {
   answers["priorities:list"] = listOf(ROWS);
   answers["priorities:history"] = HISTORY;
-  const page = await mount(<PrioritiesPage />);
+  const { useLegendState } = await import("../../lib/iconLegend");
+  let legend: { tab: string; lead?: string } = { tab: "" };
+  function Probe() { legend = useLegendState(); return null; }
+  const page = await mount(<><PrioritiesPage /><Probe /></>);
   const { act } = React as any;
   try {
     await page.waitFor(() => !!page.container.querySelector("li[data-priority]"));
     // In the header's actions, never a row of its own above the list.
-    expect(page.container.querySelector("[data-priorities] [data-legend]")).toBeNull();
-    const legend = page.container.querySelector("header [data-legend]") as HTMLElement;
-    expect(legend).not.toBeNull();
-    await act(async () => { legend.click(); });
-    const words = [...document.querySelectorAll("[data-legend-row]")].map((r) => r.getAttribute("data-legend-row"));
-    expect(words).toEqual([
-      "Needs you", "Needs you (session)", "New session", "Working", "Sleeping", "Idle", "Done", "Closed", "Starting", "Error", "Stashed", "Workflow run",
-      "Backlog", "Open", "In Progress", "In Review", "Done", "Dropped", "Not loaded yet",
-      "Pull request, open", "Pull request, merged", "Pull request, closed", "Branch", "Plan", "Deploy, live", "Deploy, failed", "Deploy, not live yet",
-    ]);
-    // Every head but the first has its gap above it; Tasks drops it only where it heads the second of two columns.
-    const heads = [...document.querySelectorAll("[data-legend-head]")].map((h) => `${h.textContent}:${h.className.split(/\s+/).filter((c) => /(^|:)mt-/.test(c)).join(" ")}`);
-    expect(heads).toEqual(["Milestones and sessions:mt-0", "Tasks:mt-4 sm:mt-0", "Other:mt-4"]);
+    expect(page.container.querySelector("[data-priorities] [data-legend-button]")).toBeNull();
+    const button = page.container.querySelector("header [data-legend-button]") as HTMLElement;
+    expect(button).not.toBeNull();
+    await act(async () => { button.click(); });
+    expect(legend).toEqual({ tab: "icons", lead: "Priorities" });
+    expect(useInboxStore.getState().shortcutsPanelOpen).toBe(true);
   } finally {
     await page.unmount();
+    if (useInboxStore.getState().shortcutsPanelOpen) useInboxStore.getState().toggleShortcutsPanel();
   }
 }, 60_000);
 

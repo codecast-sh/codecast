@@ -1,29 +1,15 @@
 import type { MarkDef } from "./types";
 
-// The priorities page: critical pips, the ten-day strip, milestones, the
-// bracket, the task and PR chips' own glyphs. Plain session states are the
-// session.* marks; a done task, PR and deploy states, the plan, branch and flow
-// run glyphs are shared (task.done, pr.*, deploy.*, entity.plan, git.branch,
-// inbox.flow, work.tasks). Marks drawn from data keep one glyph.
+// The priorities page's own glyphs (components/priorities): what a milestone's
+// box column draws beyond a session's state, the ten-day strip, and a task
+// whose row has not loaded. Shared meanings keep their shared ids: a
+// milestone's states and its bordered Needs you are session.*, a task's state
+// task.*, pull requests pr.*, deploys deploy.*, the plan entity.plan, a branch
+// git.branch, a workflow run inbox.flow, the page's own glyph entity.priority.
 const mark = (id: string, name: string, meaning: string, oneGlyph?: true): MarkDef => ({ id: `priority.${id}`, name, meaning, group: "Priorities", ...(oneGlyph && { oneGlyph }) });
 
 export const priorityMarks: MarkDef[] = [
-  mark("critical", "Critical path", "Its critical milestones; filled ones are done", true),
-  mark("ten_days", "Last 10 days", "Messages a day; outlined is today, a tick a milestone landed", true),
-  mark("landed", "Milestones landed", "Critical milestones landed each day", true),
-  mark("today_share", "Today's messages", "Split by priority; hatched is no priority", true),
-  mark("milestone_open", "Open milestone", "Not done yet"),
-  mark("milestone_done", "Done milestone", "Landed"),
-  mark("bracket", "Shared session", "One session works these milestones", true),
-  mark("stalled", "Stalled", "No critical milestone landed in days"),
-  // The bordered action marks on a milestone's line (priorities-status). Its
-  // Needs you box is session.needs_you: the same meaning, so the same id.
-  mark("new_session", "New session", "Start a session on this milestone"),
-  mark("unstaffed", "Nobody on it", "No session works this milestone"),
-  mark("task_todo", "To do", "A task not done yet"),
-  mark("pr", "Pull request", "A linked pull request, its state not known here"),
-  mark("plan_progress", "Plan progress", "How much of the plan is done", true),
-  mark("pr_count", "Pull requests", "How many PRs it links"),
-  mark("branch_count", "Branches", "How many branches it links"),
-  mark("deploy_count", "Deploys", "How many deploys it links"),
+  mark("new_session", "New session", "Nobody is on this milestone: start a session on it"),
+  mark("ten_days", "Last 10 days", "Messages typed each day; outlined is today", true),
+  mark("task_loading", "Task loading", "The task's status hasn't arrived yet"),
 ];
