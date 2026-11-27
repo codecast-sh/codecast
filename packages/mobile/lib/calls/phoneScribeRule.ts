@@ -6,7 +6,7 @@
 // between the clients; the server (transcripts.start) arbitrates every start.
 //
 // When a web or desktop seat sits down, a phone holding the run gives the seat
-// back ("release": transcripts.releaseScribe marks it open), and that seat's
+// back ("release": scribeSeat.releaseScribe marks it open), and that seat's
 // own decideAutoScribe takes it on its next look (an open seat reads as
 // startedBy null, which is "start"). The phone never asks again while such a
 // seat is there, so the run cannot bounce back. Two phones never release to

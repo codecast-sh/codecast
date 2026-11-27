@@ -22,7 +22,6 @@ import {
   authorizeRoom,
   authorizeRoomInviter,
   authorizeRoomMembership,
-  callTeamsOf,
   clearRoomState,
   expireRoomGrants,
   isSeat,
@@ -31,9 +30,9 @@ import {
   upsertRoomState,
   liveSeat,
   openRoomDoor,
-  isOwnerOnlyRoom,
   parseRoomKey,
 } from "./callRooms";
+import { callTeamsOf, isOwnerOnlyRoom } from "./callRoomOwnership";
 import { isTeamMember } from "./privacy";
 import { requireUser } from "./lib/requireUser";
 import { channelMemberIds, isRestricted } from "./chatAccess";
@@ -1228,7 +1227,7 @@ export const getLiveRooms = query({
         room_key: roomKey,
         team_id: live[0].team_id,
         locked: !!state?.locked,
-        // Only its owner may enter (callRooms.isOwnerOnlyRoom): private
+        // Only its owner may enter (callRoomOwnership.isOwnerOnlyRoom): private
         // whatever its door says, and no door opens it.
         owner_only: ownerOnly,
         // Started private, or one person's alone: listed only to the people

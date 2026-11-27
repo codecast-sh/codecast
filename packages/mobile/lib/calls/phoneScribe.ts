@@ -44,7 +44,7 @@ const scribe = createPhoneScribe({
   openTap: openMicTap,
   openSession: openAsrPcmSession,
   flush: (id) => convex.mutation(api.transcripts.flush, { transcript_id: id as Id<"transcripts"> }),
-  release: (roomKey) => convex.mutation(api.transcripts.releaseScribe, { room_key: roomKey }),
+  release: (roomKey) => convex.mutation(api.scribeSeat.releaseScribe, { room_key: roomKey }),
   pacing: (feedTargets) => storePacing(feedTargets, () => useInboxStore.getState()),
   now: Date.now,
   later: (fn, ms) => void setTimeout(fn, ms),

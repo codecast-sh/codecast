@@ -3106,8 +3106,7 @@ export const webList = query({
     team_id: v.optional(v.id("teams")),
     workspace: v.optional(v.union(v.literal("personal"), v.literal("team"), v.literal("all"))),
     project_path: v.optional(v.string()),
-    // The tasks pulled from one call (by_from_call), wherever each is filed:
-    // the call page feeds them whatever workspace is active.
+    // One call's tasks (by_from_call), wherever filed: the call page feeds them in any workspace.
     from_call: v.optional(v.string()),
     // Delta cursor: when provided, only return tasks with updated_at > since.
     // First subscription omits it (full snapshot); subsequent subscriptions
@@ -3160,9 +3159,7 @@ export const webList = query({
     let tasks: any[];
     const fromCall = args.from_call ? ctx.db.normalizeId("transcripts", args.from_call) : null;
     if (args.from_call) {
-      const rows = fromCall
-        ? await ctx.db.query("tasks").withIndex("by_from_call", (q: any) => q.eq("from_call", fromCall)).take(200)
-        : [];
+      const rows = fromCall ? await ctx.db.query("tasks").withIndex("by_from_call", (q: any) => q.eq("from_call", fromCall)).take(200) : [];
       const readable: any[] = [];
       for (const row of rows) if (await canAccessTask(ctx, userId, row)) readable.push(row);
       tasks = isDelta ? readable.filter((t: any) => t.updated_at > since!) : readable;

@@ -36,10 +36,10 @@ import {
   authorizeRoom,
   isRoomTranscribeOff,
   liveMembers,
-  isOwnerOnlyRoom,
   readRoomState,
   stampRoomWordsPublic,
 } from "./callRooms";
+import { assertMayDropOwnRoute, isOwnerOnlyRoom, ownRouteAdder } from "./callRoomOwnership";
 import { isTeamMember } from "./privacy";
 import { teamHasFeature } from "./teamFeatures";
 import { performSessionSend } from "./pendingMessages";
@@ -460,43 +460,6 @@ export const start = mutation({
   },
 });
 
-/** The scribe hands its seat back: the run stays live and the next client to
- *  ask (`start`) takes it, as after a Record press. The phone scribes only its
- *  own mic, so it releases when someone else sits down, and a web or desktop
- *  seat that hears every track picks the run up. Only the current scribe may;
- *  for anyone else it is a no-op. */
-export const releaseScribe = mutation({
-  args: { room_key: v.string() },
-  handler: async (ctx, args): Promise<{ released: boolean }> => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
-    if (isRoomlessKey(args.room_key)) return { released: false };
-    const live = (
-      await ctx.db
-        .query("transcripts")
-        .withIndex("by_room", (q) => q.eq("room_key", args.room_key))
-        .collect()
-    ).find((t) => t.status === "live");
-    // Anyone but the scribe gets the same answer as a room with no call, so
-    // a guessable key (dm:<id>) never tells a stranger a call is running.
-    if (!live || live.scribe_open || String(live.started_by) !== String(userId)) return { released: false };
-    await ctx.db.patch(live._id, { scribe_open: true });
-    return { released: true };
-  },
-});
-
-/** Who a session room's own route speaks as (deliverRoutes sends a route's
- *  words as its added_by). In a room that is the session owner's alone, the
- *  owner: a guest rung in who begins the record cannot write to the owner's
- *  private session, which would refuse every live chunk. Elsewhere, whoever
- *  turned the words on, as before. */
-async function ownRouteAdder(ctx: any, roomKey: string, fallback: Id<"users">): Promise<Id<"users">> {
-  const own = ownRoomTarget(roomKey);
-  if (!own || !(await isOwnerOnlyRoom(ctx, roomKey))) return fallback;
-  const conversation = await ctx.db.get(own as Id<"conversations">);
-  return conversation?.user_id ?? fallback;
-}
-
 /** A room's call record begins: the one insert of a live transcripts row, for
  *  the scribe's `start` and for a press of Record in a huddle that is not
  *  transcribing (callRecordings.startRecording), so a call that is only
@@ -527,10 +490,8 @@ export async function beginCallRecord(
   const startedAt = Date.now();
   // A private huddle's words stay in its record: the room's own session
   // route would post them into a conversation the team may be able to read,
-  // so its agent joins only when someone inside adds it. A room that is one
-  // person's alone (callRooms.isOwnerOnlyRoom) keeps its record private too,
-  // but an owner-only SESSION room keeps its own route: that conversation is
-  // the owner's alone, so the reason above does not reach it.
+  // so its agent joins only when someone inside adds it. An owner-only room is
+  // private too, but an owner-only SESSION room keeps its own route: it is theirs.
   const chosenPrivate = !!(await readRoomState(ctx, args.roomKey))?.private;
   const ownerOnly = await isOwnerOnlyRoom(ctx, args.roomKey);
   const isPrivate = chosenPrivate || ownerOnly;
@@ -584,10 +545,7 @@ export async function ensureOwnRoute(ctx: any, t: Doc<"transcripts">, userId: Id
   if (!t.own_route_owed || t.status !== "live") return;
   const ownAdder = await ownRouteAdder(ctx, t.room_key, userId);
   const own = ownRoomTarget(t.room_key);
-  const routes = withDefaultRoutes(t.room_key, t.routes).map((r) => ({
-    ...r,
-    added_by: r.added_by ?? (r.kind === "session" && r.target === own ? ownAdder : userId),
-  }));
+  const routes = withDefaultRoutes(t.room_key, t.routes).map((r) => ({ ...r, added_by: r.added_by ?? (r.kind === "session" && r.target === own ? ownAdder : userId) }));
   await ctx.db.patch(t._id, { routes, own_route_owed: undefined });
   await syncAgentFeeds(ctx, (await ctx.db.get(t._id))!);
 }
@@ -601,10 +559,8 @@ export const setRoutes = mutation({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
     const t = await requireOwnLiveTranscript(ctx, userId, args.transcript_id);
-    for (const prior of t.routes) {
-      if (!args.routes.some((r) => r.kind === prior.kind && r.target === prior.target)) {
-        await assertMayDropOwnRoute(ctx, t, userId, prior.kind, prior.target);
-      }
+    for (const prior of t.routes.filter((p) => !args.routes.some((r) => r.kind === p.kind && r.target === p.target))) {
+      await assertMayDropOwnRoute(ctx, t, userId, prior.kind, prior.target);
     }
     // Keep delivery watermarks (and who added what) for routes that survive
     // the edit, so changing one route never re-sends another's history.
@@ -743,17 +699,6 @@ export const removeAgentFromRoom = internalMutation({
     }
   },
 });
-
-/** In a room that is a session owner's alone, that session's own route is
- *  the owner's to take off: it is their door to the record (canReadCall), so
- *  a guest who scribes after a handover cannot shut them out of it. A dead
- *  session's route still leaves through dropDeadRoute. */
-async function assertMayDropOwnRoute(ctx: any, t: Doc<"transcripts">, userId: Id<"users">, kind: string, target: string): Promise<void> {
-  const own = ownRoomTarget(t.room_key);
-  if (kind !== "session" || target !== own || !(await isOwnerOnlyRoom(ctx, t.room_key))) return;
-  const conversation = await ctx.db.get(own as Id<"conversations">);
-  if (String(conversation?.user_id) !== String(userId)) throw new Error("Only the session's owner can take its own route off");
-}
 
 /** Take one route off a transcript and let the fed sessions follow. */
 async function dropRoute(ctx: any, t: Doc<"transcripts">, kind: string, target: string): Promise<void> {
@@ -1563,10 +1508,8 @@ export function huddleDigestTarget(
  *  stretches (and tells an agent it can snap a frame). A chat room gets a message the
  *  reader can unfold into the transcript (chat.postCallDigest); a session room
  *  gets its agent woken with the summary and the command that reads the whole
- *  transcript, never the transcript itself. Delivery acts as the scribe,
- *  except into a session whose room is its owner's alone: there it speaks as
- *  the owner, the same as the live words (ownRouteAdder), since the scribe
- *  can be someone rung in who may not write to that session. */
+ *  transcript, never the transcript itself. Delivery acts as the scribe, or
+ *  as the owner in an owner-only room, like the live words (ownRouteAdder). */
 async function scheduleHuddleDigest(
   ctx: any,
   t: Doc<"transcripts">,
@@ -2176,8 +2119,7 @@ export const backfillCallShortIds = internalMutation({
 });
 
 export const webListCalls = query({
-  // `personal`: the Personal workspace's page, walked from the viewer's own
-  // calls, answered as { calls, complete } (callReads.listPersonalCallsCore).
+  // `personal`: Personal's page as { calls, complete } (callReads.listPersonalCallsCore).
   args: { limit: v.optional(v.number()), personal: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);

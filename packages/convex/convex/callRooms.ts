@@ -75,8 +75,8 @@
 // every calls.* mutation and the token mint — the media server trusts our JWT,
 // so this module is the entire security boundary for who can listen in.
 import type { Doc, Id } from "./_generated/dataModel";
-import { getOwnerMembership, isConversationTeamVisibleSync, isTeamMember } from "./privacy";
-import { effectiveMembershipVisibility } from "./teamVisibility";
+import { isTeamMember } from "./privacy";
+import { callTeamsOf, isOwnerOnlyRoom, sessionIsOwnerOnly } from "./callRoomOwnership";
 import { canAccessChannel, isCommunity, isRestricted } from "./chatAccess";
 import { teamFeatureOffMessage, teamHasFeature } from "./teamFeatures";
 import { checkGuestRoster, endGuestAdmissions, roomHasGuestLinks } from "./lib/callGuestAdmission";
@@ -241,30 +241,6 @@ export async function canReadRoomlessCall(
   return (await isTeamMember(ctx, userId, t.team_id)) && (await teamHasFeature(ctx, t.team_id, "calls"));
 }
 
-/** The caller's teams that can hold calls (calls on, no vendor refusal), in
- *  membership order, and why the vendor guard refuses each other team that
- *  has calls on. calls.getCallConfig hands both to the client; a room that
- *  belongs to one person borrows its billing team from the first list. */
-export async function callTeamsOf(
-  ctx: any,
-  userId: Id<"users">,
-): Promise<{ teams: Id<"teams">[]; off: Record<string, string> }> {
-  const memberships = await ctx.db
-    .query("team_memberships")
-    .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
-    .collect();
-  const teams: Id<"teams">[] = [];
-  const off: Record<string, string> = {};
-  for (const m of memberships) {
-    if (!(await teamHasFeature(ctx, m.team_id, "calls"))) continue;
-    // A regulated team's calls stay off while LiveKit has no BAA.
-    const vendorOff = await featureVendorRefusal(ctx, m.team_id, "calls");
-    if (vendorOff) off[String(m.team_id)] = vendorOff;
-    else teams.push(m.team_id);
-  }
-  return { teams, off };
-}
-
 /** The team a room that is one person's alone bills to: a people room of one,
  *  or a session with no team (or a team its owner has left). One of their
  *  teams that can hold calls: the team the room's live seats already bill to,
@@ -289,31 +265,6 @@ async function borrowedCallTeam(
     if (candidate && teams.some((t) => String(t) === String(candidate))) return candidate;
   }
   return teams[0] ?? (await recRoutingTeam(ctx, userId));
-}
-
-/** Is this room one person's alone, rather than one the team may walk into?
- *  A people room of one is its person's. A session room is its owner's while
- *  the team cannot read the conversation: no team, an owner no longer on that
- *  team, or a row the team feed hides (the rule authorizeRoomMembership admits
- *  teammates by). A session room whose conversation is gone fails closed.
- *  Read wherever a private huddle's flag is read: the open door, the
- *  inviter's seat, the record's `private` stamp, the call board's workspace. */
-export async function isOwnerOnlyRoom(ctx: any, roomKey: string): Promise<boolean> {
-  const parsed = parseRoomKey(roomKey);
-  if (parsed?.kind === "dm") return parsed.users.length === 1;
-  if (parsed?.kind !== "session") return false;
-  const conversation = await ctx.db.get(parsed.conversationId as Id<"conversations">);
-  return !conversation || (await sessionIsOwnerOnly(ctx, conversation));
-}
-
-/** The team feed's visibility rule (createTeamFeedFilter.isVisible) for one
- *  conversation, from its owner's one membership row instead of the team's
- *  whole roster: this runs per room on team-wide subscriptions. */
-export async function sessionIsOwnerOnly(ctx: any, conversation: Doc<"conversations">): Promise<boolean> {
-  if (!conversation.team_id) return true;
-  const membership = await getOwnerMembership(ctx, conversation.user_id, conversation.team_id);
-  if (!membership) return true;
-  return !isConversationTeamVisibleSync(conversation, effectiveMembershipVisibility(membership, conversation.started_at));
 }
 
 // A team every one of `users` belongs to, walking the first user's

@@ -1,4 +1,4 @@
-// A huddle that is one person's alone (callRooms.isOwnerOnlyRoom): a people
+// A huddle that is one person's alone (callRoomOwnership.isOwnerOnlyRoom): a people
 // room of one (`dm:<you>`), and a session room whose conversation the team
 // cannot read. Nothing stores that it is private, so these tests drive every
 // surface a teammate could reach it through, live and after it ends, and the
@@ -9,7 +9,8 @@ import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { allModules } from "./testModules.testkit";
 import { ensureCallBoard } from "./callStage";
-import { authorizeRoom, dmRoomKey, isOwnerOnlyRoom, sessionRoomKey } from "./callRooms";
+import { authorizeRoom, dmRoomKey, sessionRoomKey } from "./callRooms";
+import { isOwnerOnlyRoom } from "./callRoomOwnership";
 import { createTeamFeedFilter } from "./privacy";
 
 setDefaultTimeout(30_000);
@@ -245,15 +246,15 @@ describe("handing the scribe seat back", () => {
     const transcriptId = await startHuddle(w, room);
     await as(ids.ben).mutation(api.calls.joinRoom, { room_key: room, deliberate: true });
 
-    expect(await as(ids.ben).mutation(api.transcripts.releaseScribe, { room_key: room })).toEqual({ released: false });
+    expect(await as(ids.ben).mutation(api.scribeSeat.releaseScribe, { room_key: room })).toEqual({ released: false });
     expect((await t.run(async (ctx) => ctx.db.get(transcriptId)))?.scribe_open).toBeUndefined();
     // While Ana scribes from her seat, Ben's start only observes.
     expect((await as(ids.ben).mutation(api.transcripts.start, { room_key: room, auto: true })).role).toBe("observer");
 
-    expect(await as(ids.ana).mutation(api.transcripts.releaseScribe, { room_key: room })).toEqual({ released: true });
+    expect(await as(ids.ana).mutation(api.scribeSeat.releaseScribe, { room_key: room })).toEqual({ released: true });
     expect((await as(ids.ana).query(api.transcripts.getLive, { room_key: room }))?.started_by).toBeNull();
     // A second release has nothing to hand back.
-    expect(await as(ids.ana).mutation(api.transcripts.releaseScribe, { room_key: room })).toEqual({ released: false });
+    expect(await as(ids.ana).mutation(api.scribeSeat.releaseScribe, { room_key: room })).toEqual({ released: false });
 
     const taken = await as(ids.ben).mutation(api.transcripts.start, { room_key: room, auto: true });
     expect(taken).toMatchObject({ transcript_id: transcriptId, existing: true, role: "scribe" });
@@ -263,7 +264,7 @@ describe("handing the scribe seat back", () => {
 
   test("a room with no live record releases nothing", async () => {
     const w = await world();
-    expect(await w.as(w.ids.ana).mutation(api.transcripts.releaseScribe, { room_key: dmRoomKey(w.ids.ana) })).toEqual({ released: false });
+    expect(await w.as(w.ids.ana).mutation(api.scribeSeat.releaseScribe, { room_key: dmRoomKey(w.ids.ana) })).toEqual({ released: false });
   });
 });
 
@@ -396,7 +397,7 @@ describe("a scribe handover in an owner-only session huddle", () => {
     const invite = await t.run(async (ctx) => (await ctx.db.query("call_invites").collect()).find((i) => String(i.to_user) === String(ids.cy)));
     await as(ids.cy).mutation(api.calls.respondInvite, { invite_id: invite!._id, accept: true });
     await as(ids.cy).mutation(api.calls.joinRoom, { room_key: room, deliberate: true });
-    expect(await as(ids.ana).mutation(api.transcripts.releaseScribe, { room_key: room })).toEqual({ released: true });
+    expect(await as(ids.ana).mutation(api.scribeSeat.releaseScribe, { room_key: room })).toEqual({ released: true });
     expect((await as(ids.cy).mutation(api.transcripts.start, { room_key: room, auto: true })).role).toBe("scribe");
     if (opts.end) await t.run(async (ctx) => ctx.db.patch(transcriptId, { status: "ended", ended_at: Date.now(), summary_status: "pending" }));
     return { room, transcriptId };
@@ -460,8 +461,8 @@ describe("a scribe handover in an owner-only session huddle", () => {
     const room = dmRoomKey(ids.ana);
     const transcriptId = await startHuddle(w, room);
     const outsider = await t.run(async (ctx) => ctx.db.insert("users", { name: "Out" } as any));
-    expect(await as(outsider).mutation(api.transcripts.releaseScribe, { room_key: room })).toEqual({ released: false });
-    expect(await as(outsider).mutation(api.transcripts.releaseScribe, { room_key: dmRoomKey(outsider) })).toEqual({ released: false });
+    expect(await as(outsider).mutation(api.scribeSeat.releaseScribe, { room_key: room })).toEqual({ released: false });
+    expect(await as(outsider).mutation(api.scribeSeat.releaseScribe, { room_key: dmRoomKey(outsider) })).toEqual({ released: false });
     expect((await t.run(async (ctx) => ctx.db.get(transcriptId)))?.scribe_open).toBeUndefined();
   });
 });
