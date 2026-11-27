@@ -134,6 +134,22 @@ for (const [kind, url] of Object.entries(LINKS)) {
     expect(leftovers()).toEqual({ drafts: [], clientDrafts: [], sessions: [] });
   }, 60_000);
 
+  test(`${kind} link: a reload over the untouched composer writes no synced draft`, async () => {
+    const textarea = await openLink(url);
+    const stubId = (useInboxStore.getState() as any).composes[0].stubId as string;
+    // The page goes away with the composer open: every pending draft write flushes (lib/pendingDraftWrites), nothing unmounts.
+    await act(() => { w.dispatchEvent(new w.Event("pagehide")); });
+    await flush(500);
+    expect(textarea.value.length).toBeGreaterThan(0);
+    expect((useInboxStore.getState() as any).clientState?.drafts?.[stubId] ?? null).toBeNull();
+    // Once the person edits, the draft is theirs and syncs.
+    await act(() => { typeInto(textarea, `${textarea.value}\nAnd the docs.`); });
+    await act(() => { w.dispatchEvent(new w.Event("pagehide")); });
+    await flush(50);
+    expect((useInboxStore.getState() as any).clientState?.drafts?.[stubId]?.draft_message).toContain("And the docs.");
+    await leave();
+  }, 60_000);
+
   test(`${kind} link: editing and then discarding leaves no draft and no stub`, async () => {
     const textarea = await openLink(url);
     await act(() => { typeInto(textarea, `${textarea.value}\nAnd the docs.`); });

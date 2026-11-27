@@ -169,7 +169,7 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
     stubIdRef.current = sid;
     if (instance) store.bindComposeStub(instance.id, sid);
 
-    if (initialQuery) store.setDraft(sid, { draft_message: initialQuery });
+    if (initialQuery) store.setDraft(sid, { draft_message: initialQuery }, { seed: true });
     if (context?.deviceId && sid !== resumeStubId) store.setSessionTargetDevice(sid, context.deviceId, { picked: true });
     if (context?.linkedTask && sid !== resumeStubId) bindComposeTask(store, sid, context.linkedTask);
     if (context?.start && sid !== resumeStubId) bindComposeStart(store, sid, context.start);
