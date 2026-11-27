@@ -5,7 +5,6 @@ import { barHeight, busiestFirst, dayAriaLabel, dayDate, dayTotals, percent, seg
 const lane = (short_id: string | null, counts: number[], extra: Partial<PriorityHistoryLane> = {}): PriorityHistoryLane => ({
   key: short_id ?? "unassigned", short_id, title: short_id ?? "Unassigned", status: short_id ? "active" : null, counts, total: counts.reduce((a, b) => a + b, 0), ...extra,
 });
-const row = (short_id: string, rank: number | null, extra: { mine?: boolean; status?: "active" | "quiet" | "done" } = {}) => ({ short_id, rank, mine: extra.mine ?? true, status: extra.status ?? "active" }) as const;
 const day = (top: number, rest: number, none: number): BreakdownDay => ({ top, rest, none, total: top + rest + none });
 
 describe("splitDays", () => {
@@ -20,25 +19,21 @@ describe("splitDays", () => {
       lane(null, [5, 5, 5], { owner: "" }),
     ],
   };
-  const rows = [row("pri-1", 3), row("pri-4", 4), row("pri-team", 1, { mine: false }), row("pri-old", 2, { status: "done" })];
+  // The viewer's own active priorities' ranks (priorityRanks.mine): "pri-old" is done and "pri-team" a teammate's, so neither is here.
+  const ranks = new Map([["pri-1", 3], ["pri-4", 4]]);
 
   test("ranks 1–3 are top, other priority lanes rest, lanes without a priority none; teammates' lanes skipped, even one with a blank name", () => {
-    expect(splitDays(history, rows, history.days)).toEqual([day(1, 10, 4), day(2, 5, 0), day(3, 1, 2)]);
+    expect(splitDays(history, ranks, history.days)).toEqual([day(1, 10, 4), day(2, 5, 0), day(3, 1, 2)]);
   });
 
   test("a day missing from history, and every day without history, is zero", () => {
-    expect(splitDays(history, rows, ["2026-11-23", "2026-11-26"])).toEqual([day(0, 0, 0), day(3, 1, 2)]);
-    expect(splitDays(undefined, rows, ["2026-11-26"])).toEqual([day(0, 0, 0)]);
+    expect(splitDays(history, ranks, ["2026-11-23", "2026-11-26"])).toEqual([day(0, 0, 0), day(3, 1, 2)]);
+    expect(splitDays(undefined, ranks, ["2026-11-26"])).toEqual([day(0, 0, 0)]);
   });
 
-  test("a lane whose priority is not in the list, or has no rank, counts as 4+", () => {
+  test("a lane whose priority has no rank of the viewer's counts as 4+", () => {
     const h: PriorityHistory = { days: ["d"], lanes: [lane("pri-x", [2]), lane("pri-n", [3])] };
-    expect(splitDays(h, [row("pri-n", null)], ["d"])).toEqual([day(0, 5, 0)]);
-  });
-
-  test("a teammate's row with a top rank does not lift the viewer's lane of the same id", () => {
-    const h: PriorityHistory = { days: ["d"], lanes: [lane("pri-1", [2])] };
-    expect(splitDays(h, [row("pri-1", 1, { mine: false })], ["d"])).toEqual([day(0, 2, 0)]);
+    expect(splitDays(h, new Map(), ["d"])).toEqual([day(0, 5, 0)]);
   });
 });
 

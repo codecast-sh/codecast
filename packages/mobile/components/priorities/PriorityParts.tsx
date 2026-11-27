@@ -14,7 +14,6 @@ import { Text as RNText } from '@/components/Themed';
 import { CHROME_FONT_CAP, themedStyles, useTheme } from '@/constants/Theme';
 import { codeFont } from '@/constants/fonts';
 import { CODECAST_BASE_URL } from '@codecast/shared/entities';
-import { asksPerson } from '@codecast/shared/contracts/priorityDerive';
 import type { PriorityPlanRef, PriorityRow, PriorityStep } from '@codecast/shared/contracts/priorities';
 import { STATE_WORD, type MilestoneModel, type PriorityModel, type SessionLine } from '@codecast/web/lib/priorityList';
 import { priorityHref } from '@codecast/web/lib/priorities';
@@ -377,7 +376,7 @@ function SessionRow({ s, now, onPress, menu }: { s: SessionLine; now: number; on
   // A workflow step's title names its task or plan by id: read the store's title for it.
   const ref = workflowRef(s.title);
   const refTitle = useInboxStore((st) => (ref ? (lookup(ref.startsWith('pl-') ? (st as any).plans : st.tasks, ref)?.title as string | undefined) ?? '' : ''));
-  const asks = asksPerson(s);
+  const asks = s.state === 'needs_you';
   const icon = s.workflow && !asks ? <Feather name={KIND_ICON.workflow} size={13} color={Theme.textDim} accessibilityLabel="Workflow run" /> : <SessionStatusMark status={s.state} size={12} />;
   return (
     <Item

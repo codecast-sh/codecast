@@ -17,12 +17,13 @@ import type { DeployInfo } from "../lib/priorityList";
 type PlaceState = Parameters<typeof placeInboxRows>[0];
 
 /**
- * Whose Needs You a session's needs you follows. "sidebar": web's, in the
- * viewer's own scope, a hosted conversation that ended on a stop filed apart
- * under "Couldn't finish" (lib/hostedNotice splitHostedStops). "phone": the
- * phone inbox's (packages/mobile hooks/useInboxPlacement), which places in
- * the viewer's chosen inbox scope, holds the focused session in place, and
- * keeps those stops under Needs You.
+ * Whose Needs You a session's needs you follows. Both place the rows as
+ * their inbox does: in the viewer's chosen inbox scope, the focused session
+ * held in place, on the wall clock (GlobalSessionPanel; packages/mobile
+ * hooks/useInboxPlacement). They differ in one rule: the "sidebar" (web's)
+ * files a hosted conversation that ended on a stop apart, under "Couldn't
+ * finish" (lib/hostedNotice splitHostedStops); the "phone" keeps it under
+ * Needs You.
  */
 export type LiveInbox = "sidebar" | "phone";
 
@@ -40,7 +41,7 @@ function inboxAsksYou(s: PlaceState & { messages?: Record<string, any[] | undefi
   let hit = asksYouByState[inbox].get(s);
   if (!hit) {
     const phone = inbox === "phone";
-    const placed = placeInboxRows(s, phone ? { focusedId: s.currentSessionId ?? null, now } : { scope: "mine", now });
+    const placed = placeInboxRows(s, { focusedId: s.currentSessionId ?? null, now: Math.max(now, Date.now()) });
     const meId = s.currentUser?._id?.toString?.() ?? null;
     const messagesOf = (id: string) => s.messages?.[id];
     const stopped = (row: InboxSession) => !phone && !!hostedStopOf(row, messagesOf(row._id));

@@ -52,8 +52,9 @@ import type { PriorityDetail } from "@codecast/shared/contracts/priorities";
 // no priority to a card (messageMarkdown ASSISTANT_CARDS). The loader seeds it into
 // priorityDetails as a `show` answer lands for a priority the list does not
 // hold (lib/priorityDetail detailRowOf). The pill and card draw the owner's
-// face (no picture here, so their initial) and the rank badge; the card lists
-// the two open critical milestones, each with its toggle.
+// face (no picture here, so their initial) and the rank badge. Its asking
+// session is a fixture id no inbox holds, so no live state overrides it and
+// the card shows that milestone's state mark.
 export const GALLERY_PRIORITY = { id: "gallerypriority000000001", short: "pri-90001", asking: "galleryprioritysession0000000001" } as const;
 
 function priorityRecord(now: number, viewerId: string, workspace: string) {

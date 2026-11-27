@@ -8,7 +8,7 @@ import { useState, type ReactNode } from "react";
 import Link from "next/link";
 import { ChevronRight, GitBranch, GitMerge, GitPullRequest, GitPullRequestClosed, Map as MapIcon, Rocket, Workflow } from "lucide-react";
 import type { PriorityPlanRef } from "@codecast/shared/contracts/priorities";
-import { asksPerson, isClosedSession, orderByState } from "@codecast/shared/contracts/priorityDerive";
+import { isClosedSession, orderByState } from "@codecast/shared/contracts/priorityDerive";
 import { SessionStatusMark } from "../inbox/SessionStatusMark";
 import { taskVisual } from "../TaskStatusBadge";
 import { useEntityResolution } from "../../lib/entityDisplay";
@@ -23,6 +23,10 @@ const age = (t: number, now: number) => { const a = ago(t, now); return a === "j
 const LABEL = "text-mark font-semibold uppercase tracking-wide text-sol-text-dim";
 /** A row: 28px, 44px under a coarse pointer. */
 const ROW = "flex min-h-7 min-w-0 items-center gap-2 [@media(pointer:coarse)]:min-h-11";
+/** A row's link fills the row, so a press anywhere on its 44px opens it. */
+const ROW_LINK = "flex min-w-0 flex-1 items-center gap-2 self-stretch";
+/** A title on one line on a mouse; on a narrow list or a touch screen it wraps onto a second, as milestone titles do. */
+const TITLE_WRAP = "[@container(max-width:40rem)]:line-clamp-2 [@container(max-width:40rem)]:whitespace-normal [@media(pointer:coarse)]:line-clamp-2 [@media(pointer:coarse)]:whitespace-normal";
 
 /** A session's state as the sidebar marks it. */
 const MARK: Record<SessionLine["state"], SessionStatus> = { needs_you: "needs_you", working: "working", dormant: "dormant", idle: "idle", done: "done", killed: "killed" };
@@ -72,7 +76,7 @@ export function Connected({ model, m, now, lookups, olderHref }: {
         {m.more > 0 && (
           <li className={ROW}>
             {olderHref
-              ? <Link href={olderHref} data-older-sessions className="text-meta text-sol-text-muted hover:text-sol-text hover:underline">+{m.more} older {m.more === 1 ? "session" : "sessions"}</Link>
+              ? <Link href={olderHref} data-older-sessions className={cn(ROW_LINK, "text-meta text-sol-text-muted hover:text-sol-text hover:underline")}>+{m.more} older {m.more === 1 ? "session" : "sessions"}</Link>
               : <span data-older-sessions className="text-meta text-sol-text-dim">+{m.more} older {m.more === 1 ? "session" : "sessions"}</span>}
           </li>
         )}
@@ -112,13 +116,13 @@ function Item({ icon, title, meta, href, menu, ...data }: { icon: ReactNode; tit
   const body = (
     <>
       <span className="flex size-4 shrink-0 items-center justify-center">{icon}</span>
-      <span className="min-w-0 truncate text-ui text-sol-text">{title}</span>
+      <span data-item-title className={cn("min-w-0 truncate text-ui text-sol-text", TITLE_WRAP)}>{title}</span>
       {meta && <span className="shrink-0 whitespace-nowrap text-meta text-sol-text-dim">{meta}</span>}
     </>
   );
   return (
     <li {...data} className={cn(ROW, "group/session")}>
-      {href ? <Link href={href} className="flex min-w-0 items-center gap-2 decoration-sol-text-dim/50 hover:underline">{body}</Link> : body}
+      {href ? <Link href={href} className={cn(ROW_LINK, "decoration-sol-text-dim/50 hover:underline")}>{body}</Link> : body}
       {menu}
     </li>
   );
@@ -126,7 +130,7 @@ function Item({ icon, title, meta, href, menu, ...data }: { icon: ReactNode; tit
 
 function SessionItem({ s, now, menu }: { s: SessionLine; now: number; menu?: ReactNode }) {
   const label = useSessionLabel(s);
-  const asks = asksPerson(s);
+  const asks = s.state === "needs_you";
   const icon = s.workflow && !asks ? <Workflow className="size-3.5 text-sol-text-dim" aria-label="Workflow run" /> : <SessionStatusMark status={MARK[s.state]} size={12} />;
   return (
     <Item
@@ -169,7 +173,7 @@ function PrItem({ pr, state }: { pr: string; state?: string }) {
   const { Icon, color } = PR[st];
   return (
     <li className={ROW}>
-      <a href={`https://github.com/${repo}/pull/${n}`} target="_blank" rel="noreferrer" data-pr={pr} className="flex min-w-0 items-center gap-2 hover:underline">
+      <a href={`https://github.com/${repo}/pull/${n}`} target="_blank" rel="noreferrer" data-pr={pr} className={cn(ROW_LINK, "hover:underline")}>
         <span className="flex size-4 shrink-0 items-center justify-center"><Icon className={cn("size-3.5", color)} aria-hidden /></span>
         <span className="text-ui tabular-nums text-sol-text">#{n}</span>
         <span className="min-w-0 truncate text-meta text-sol-text-dim">{repo.split("/")[1]} · {st}</span>

@@ -28,33 +28,25 @@ const NO_TASKS: string[] = [];
  * typed, today outlined. Hovering a day opens its card: the date and the
  * messages. A list row's bars are 20px (7px on a narrow list), the day
  * columns "Where your messages went" draws under the list; `page` spreads
- * them across the page with a date under each.
+ * them across the page with a date under each. `pending`: the typing has not
+ * arrived, so every day is its empty baseline and no day opens a card (it
+ * would say 0 messages).
  */
-export function DayStrip({ counts, days, todayIndex, peak, page }: { counts: number[]; days: readonly string[]; todayIndex: number; peak: number; page?: boolean }) {
+export function DayStrip({ counts, days, todayIndex, peak, page, pending }: { counts: number[]; days: readonly string[]; todayIndex: number; peak: number; page?: boolean; pending?: boolean }) {
   const max = page ? 56 : 24;
   const top = Math.max(1, peak);
+  const column = cn("flex flex-col items-center justify-end", page ? "min-w-0 flex-1" : "w-[20px] [@container(max-width:40rem)]:w-[7px]");
   return (
-    <span data-day-strip className={cn("flex items-end", page ? "w-full gap-1.5" : "gap-1 [@container(max-width:40rem)]:gap-[2px]")}>
-      {counts.map((c, i) => {
+    <span data-day-strip data-pending={pending || undefined} className={cn("flex items-end", page ? "w-full gap-1.5" : "gap-1 [@container(max-width:40rem)]:gap-[2px]")}>
+      {counts.map((n, i) => {
+        const c = pending ? 0 : n;
         const share = Math.sqrt(Math.min(c, top) / top);
         const h = c <= 0 ? 2 : Math.max(5, Math.round(share * max));
         const today = i === todayIndex;
         const date = dayDate(days[i]);
-        return (
-          <HoverCard
-            key={days[i]}
-            side="bottom"
-            align="center"
-            className="w-auto"
-            triggerClassName={cn("flex flex-col items-center justify-end", page ? "min-w-0 flex-1" : "w-[20px] [@container(max-width:40rem)]:w-[7px]")}
-            card={
-              <div data-day-card className="flex items-baseline gap-3 whitespace-nowrap px-2.5 py-1.5 text-ui">
-                <span className="font-semibold text-sol-text">{date}</span>
-                <span className="tabular-nums text-sol-text-muted">{c} {c === 1 ? "message" : "messages"}</span>
-              </div>
-            }
-          >
-            <span data-day={days[i]} data-count={c} className="flex w-full flex-col justify-end" style={{ height: max + 2 }}>
+        const day = (
+          <>
+            <span data-day={days[i]} data-count={pending ? undefined : c} className="flex w-full flex-col justify-end" style={{ height: max + 2 }}>
               <i
                 className={cn("block w-full rounded-[2px]", today && "border border-sol-green/80", c > 0 ? "bg-sol-green" : "bg-sol-text/10")}
                 style={{ height: h, opacity: c > 0 ? 0.45 + 0.55 * share : 1 }}
@@ -66,6 +58,24 @@ export function DayStrip({ counts, days, todayIndex, peak, page }: { counts: num
                 {today ? "Today" : <><span className="[@container(max-width:40rem)]:hidden">{date.replace(/^\w+,?\s*/, "")}</span><span className="hidden [@container(max-width:40rem)]:inline">{date.replace(/^.*\s/, "")}</span></>}
               </span>
             )}
+          </>
+        );
+        if (pending) return <span key={days[i]} className={column}>{day}</span>;
+        return (
+          <HoverCard
+            key={days[i]}
+            side="bottom"
+            align="center"
+            className="w-auto"
+            triggerClassName={column}
+            card={
+              <div data-day-card className="flex items-baseline gap-3 whitespace-nowrap px-2.5 py-1.5 text-ui">
+                <span className="font-semibold text-sol-text">{date}</span>
+                <span className="tabular-nums text-sol-text-muted">{c} {c === 1 ? "message" : "messages"}</span>
+              </div>
+            }
+          >
+            {day}
           </HoverCard>
         );
       })}

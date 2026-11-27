@@ -44,13 +44,15 @@ const C_RANK = "text-right text-ui tabular-nums text-sol-text-dim";
 const COARSE_WRAP = "[@media(pointer:coarse)]:line-clamp-2 [@media(pointer:coarse)]:whitespace-normal";
 const LABEL = "text-mark font-semibold uppercase tracking-wide tabular-nums text-sol-text-dim";
 
-export function PriorityBlock({ model, layout, days, todayIndex, peak, now, lookups, drag }: {
+export function PriorityBlock({ model, layout, days, todayIndex, peak, typingPending, now, lookups, drag }: {
   model: PriorityModel;
   layout: ListLayout;
   days: readonly string[];
   todayIndex: number;
   /** The busiest day across every row: all strips share it. */
   peak: number;
+  /** The typing per day has not arrived: the strip draws its baseline (DayStrip pending). */
+  typingPending?: boolean;
   now: number;
   lookups: LinkLookups;
   /** Set on the owner's own active rows of a desktop list. */
@@ -81,15 +83,15 @@ export function PriorityBlock({ model, layout, days, todayIndex, peak, now, look
             <PriorityTitleLink
               row={row}
               onRename={() => setRenaming(true)}
-              // Under a coarse pointer 12px above and below a 20px line make it a 44px target.
-              className={cn("min-w-0 font-semibold text-sol-text decoration-sol-text-dim/50 hover:underline [@media(pointer:coarse)]:py-3", wide ? cn("truncate text-body", COARSE_WRAP) : "line-clamp-2 text-ui", past && "text-sol-text-muted")}
+              // Under a coarse pointer 13px above and below an 18px line make it a 44px target, and never less.
+              className={cn("min-w-0 font-semibold text-sol-text decoration-sol-text-dim/50 hover:underline [@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:py-[13px]", wide ? cn("truncate text-body", COARSE_WRAP) : "line-clamp-2 text-ui", past && "text-sol-text-muted")}
             />
           )}
           {!renaming && <PriorityMenu row={row} reveal="group-hover/head:opacity-100" onRename={() => setRenaming(true)} />}
           {past && <span data-past className="shrink-0 whitespace-nowrap text-meta text-sol-text-dim">{pastBadge(row)}</span>}
           {pending && <PendingMark />}
         </span>
-        <DayStrip counts={model.counts} days={days} todayIndex={todayIndex} peak={peak} />
+        <DayStrip counts={model.counts} days={days} todayIndex={todayIndex} peak={peak} pending={typingPending} />
       </div>
       <div className={wide ? "ml-[28px] mt-1" : "ml-[24px] mt-1"}>
         <Milestones model={model} layout={layout} now={now} lookups={lookups} olderHref={(key) => milestoneHref(row.short_id, key)} />

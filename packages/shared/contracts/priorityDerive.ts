@@ -66,21 +66,24 @@ export function attributePlans(
 
 // ── Sessions and milestone states ───────────────────────────────────────
 
-/** `mine` false: someone else's session, which never asks the viewer anything. */
+/** `mine` false: someone else's session. */
 export type ActionSession = { state: PrioritySessionState; workflow: boolean; last_active_at: number; mine?: boolean };
 
 /** Finished or closed: never the session a line leads with. */
 export const isClosedSession = (s: Pick<ActionSession, "state">) => s.state === "done" || s.state === "killed";
-export const asksPerson = (s: Pick<ActionSession, "state" | "mine">) => s.state === "needs_you" && s.mine !== false;
 
 const STATE_RANK: Record<PrioritySessionState, number> = { needs_you: 0, working: 1, dormant: 2, idle: 3, done: 4, killed: 5 };
-// Someone else's ask ranks as idle: it is not the viewer's to answer.
-const stateRank = (s: ActionSession) => (s.state === "needs_you" && !asksPerson(s) ? STATE_RANK.idle : STATE_RANK[s.state]);
 
-/** Sessions a person drives before workflow runs, closed runs last; then needs you > working > dormant > idle, then the most recent. */
+/**
+ * Sessions a person drives before workflow runs, closed runs last; then needs
+ * you > working > dormant > idle, then the most recent. This orders the
+ * server's own states (convex priorityRead), where someone else's needs_you
+ * is theirs to answer, so it ranks as idle.
+ */
 export function orderSessions<S extends ActionSession>(list: readonly S[]): S[] {
   const tier = (s: S) => (s.workflow ? (isClosedSession(s) ? 2 : 1) : 0);
-  return [...list].sort((a, b) => tier(a) - tier(b) || stateRank(a) - stateRank(b) || b.last_active_at - a.last_active_at);
+  const rank = (s: S) => (s.state === "needs_you" && s.mine === false ? STATE_RANK.idle : STATE_RANK[s.state]);
+  return [...list].sort((a, b) => tier(a) - tier(b) || rank(a) - rank(b) || b.last_active_at - a.last_active_at);
 }
 
 /** What a milestone's state mark says, in the session language: done, or its live sessions' best state, or, with none live, a new session to start (the owner's own active priority) or nothing to show. */
@@ -88,23 +91,29 @@ export type MilestoneStateKind = "done" | "needs_you" | "working" | "dormant" | 
 /** `session`: the one the state is about; for needs_you, the session to answer. */
 export type MilestoneState<S extends ActionSession = ActionSession> = { kind: MilestoneStateKind; session?: S };
 
-/** Needs you (one that asks the viewer) > working > dormant > idle, closed last; then the most recent. Someone else's ask ranks as idle. */
+/**
+ * The sidebar's order: needs you > working > dormant > idle, closed last; then
+ * the most recent. Each state is the viewer's final verdict (web
+ * lib/priorityList buildModels has already decided whose ask is whose), so a
+ * needs_you here needs the viewer, whoever owns the session.
+ */
 export function orderByState<S extends ActionSession>(list: readonly S[]): S[] {
-  return [...list].sort((a, b) => stateRank(a) - stateRank(b) || b.last_active_at - a.last_active_at);
+  return [...list].sort((a, b) => STATE_RANK[a.state] - STATE_RANK[b.state] || b.last_active_at - a.last_active_at);
 }
 
 /**
  * A milestone's one state (the same function for the list, the card, the
- * page and the phone). Done is done; otherwise the best of its live sessions:
- * needs you > working > dormant > idle, the session to answer being the most
- * recent ask. With no live session, `canStart` (the owner's own active
- * priority) makes it a new session to start, else nothing.
+ * page and the phone), from its sessions' final verdicts. Done is done;
+ * otherwise the best of its live sessions: needs you > working > dormant >
+ * idle, the session to answer being the most recent ask. With no live
+ * session, `canStart` (the owner's own active priority) makes it a new
+ * session to start, else nothing.
  */
 export function milestoneStateOf<S extends ActionSession>(m: { done: boolean; sessions: readonly S[] }, { canStart }: { canStart: boolean }): MilestoneState<S> {
   if (m.done) return { kind: "done" };
   const best = orderByState(m.sessions.filter((s) => !isClosedSession(s)))[0];
   if (!best) return { kind: canStart ? "start" : "none" };
-  return { kind: best.state === "needs_you" && !asksPerson(best) ? "idle" : (best.state as MilestoneStateKind), session: best };
+  return { kind: best.state as MilestoneStateKind, session: best };
 }
 
 /** A workflow step's session title ("Review · ct-98544 …", "Ship · pl-12"). */

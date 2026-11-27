@@ -11,8 +11,8 @@
 // and desktop layouts; and the page's empty, error, behind and feature-off
 // states.
 // Run: cd packages/web && bun test --isolate components/priorities/PrioritiesPage.mount.test.tsx
-import { expect, test } from "bun:test";
-import { describeFailures, fixtureId, installDom, installMissingBackend, seedViewer } from "../../test-helpers/missingBackend";
+import { expect, jest, test } from "bun:test";
+import { describeFailures, fixtureId, installDom, installMissingBackend, seedViewer, TEAM_ID } from "../../test-helpers/missingBackend";
 
 installDom("https://app.test/priorities");
 // Radix's focus scope walks the popover with a TreeWalker.
@@ -103,6 +103,55 @@ test("Start's brief names the milestone's open tasks from the store, never a fin
   } finally {
     await page.unmount();
     useInboxStore.setState({ tasks: {} } as any);
+  }
+}, 60_000);
+
+test("the sidebar's verdict is final: a teammate's session it holds under Needs You makes the milestone Needs you, and its row agrees", async () => {
+  // A teammate's session on the viewer's milestone, asking the viewer (a decision addressed to them): the sidebar holds it.
+  const r = row(30, "Shared work", 1, [step("s1", "Pair on the grader", "critical")], { links: [links("s1", [sess("mate1", "Sam's grader session", "needs_you", 1, { mine: false }), sess("own1", "My grader work", "working", 0)])] });
+  const unseed = seedNeedsYou("mate1");
+  const { act } = React as any;
+  try {
+    const page = await mount(view({ rows: [r] }));
+    const b = block(page.container, "pri-30");
+    expect(states(b)).toEqual({ s1: "needs_you" });
+    expect(b.querySelector('[data-state-action="needs_you"]')!.getAttribute("href")).toBe(`/conversation/${fixtureId("mate1")}`);
+    await act(async () => { (b.querySelector('[data-milestone="s1"] [role=button]') as HTMLElement).click(); });
+    expect(b.querySelector(`[data-session-row="${fixtureId("mate1")}"]`)!.getAttribute("data-state")).toBe("needs_you");
+    await page.unmount();
+  } finally {
+    unseed();
+  }
+  // Not in the store: the server's needs_you alone is someone else's to answer, so the milestone reads idle and so does the row.
+  const page = await mount(view({ rows: [r] }));
+  try {
+    const b = block(page.container, "pri-30");
+    expect(states(b)).toEqual({ s1: "working" });
+    await act(async () => { (b.querySelector('[data-milestone="s1"] [role=button]') as HTMLElement).click(); });
+    expect(b.querySelector(`[data-session-row="${fixtureId("mate1")}"]`)!.getAttribute("data-state")).toBe("idle");
+  } finally {
+    await page.unmount();
+  }
+}, 60_000);
+
+test("Needs you follows the sidebar's inbox scope: under Team scope a session outside the team inbox does not need you here either", async () => {
+  const unseed = seedNeedsYou("crflow");
+  const setScope = (scope: "mine" | "team") => useInboxStore.setState((s: any) => ({ clientState: { ...s.clientState, ui: { ...s.clientState.ui, inbox_scope: scope } } }));
+  try {
+    setScope("mine");
+    let page = await mount(view());
+    expect(states(block(page.container, "pri-1")).s2).toBe("needs_you");
+    await page.unmount();
+    // Team scope, whose inbox (the server's team set) holds another session: the sidebar's Needs You lacks this one, and the milestone says so.
+    setScope("team");
+    useInboxStore.setState({ teamInboxIds: new Set([fixtureId("someoneelse")]), teamInboxIdSnapshot: { team_id: TEAM_ID } } as any);
+    page = await mount(view());
+    expect(states(block(page.container, "pri-1")).s2).toBe("dormant");
+    await page.unmount();
+  } finally {
+    setScope("mine");
+    useInboxStore.setState({ teamInboxIds: new Set(), teamInboxIdSnapshot: null } as any);
+    unseed();
   }
 }, 60_000);
 
@@ -246,6 +295,39 @@ test("only the viewer's own priorities; the past ones fold into one line at the 
   }
 }, 60_000);
 
+test("until the typing arrives, each strip is its empty baseline and no day opens a card", async () => {
+  const { act } = React as any;
+  const page = await mount(view({ history: undefined }));
+  try {
+    const strip = block(page.container, "pri-1").querySelector("[data-priority-head] [data-day-strip]")!;
+    expect(strip.hasAttribute("data-pending")).toBe(true);
+    const bars = [...strip.querySelectorAll("[data-day]")];
+    expect(bars).toHaveLength(days.length);
+    // No count is claimed, each bar is the 2px baseline, and the columns keep the strip's widths.
+    expect(bars.every((d) => !d.hasAttribute("data-count"))).toBe(true);
+    expect(bars.every((d) => (d.firstElementChild as HTMLElement).style.height === "2px")).toBe(true);
+    expect(bars[0].parentElement!.className).toContain("w-[20px]");
+    await act(async () => {
+      const trigger = bars[9].parentElement!;
+      trigger.dispatchEvent(new (window as any).MouseEvent("mouseover", { bubbles: true }));
+      trigger.dispatchEvent(new (window as any).MouseEvent("mouseenter", { bubbles: false }));
+      await new Promise((r) => setTimeout(r, 400));
+    });
+    expect(document.querySelector("[data-day-card]")).toBeNull();
+  } finally {
+    await page.unmount();
+  }
+  // Once it arrives the strip draws the counts.
+  const ready = await mount(view());
+  try {
+    const strip = block(ready.container, "pri-1").querySelector("[data-priority-head] [data-day-strip]")!;
+    expect(strip.hasAttribute("data-pending")).toBe(false);
+    expect(strip.querySelectorAll("[data-count]")).toHaveLength(days.length);
+  } finally {
+    await ready.unmount();
+  }
+}, 60_000);
+
 test("each priority's ten days are bars on one scale; a day's hover card says only its date and messages", async () => {
   const page = await mount(view());
   const { act } = React as any;
@@ -341,6 +423,26 @@ const click = (el: Element, init: Record<string, unknown> = {}) => {
   return e as MouseEvent;
 };
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/**
+ * The title's click delay on a fake clock: `run` steps with timers frozen and
+ * `advance` moves them by exactly `ms`, so no assertion hangs on how long the
+ * machine took between two clicks.
+ */
+async function onFakeClock(run: (advance: (ms: number) => Promise<void>) => Promise<void>) {
+  const { act } = React as any;
+  jest.useFakeTimers();
+  try {
+    await run((ms) => act(async () => { jest.advanceTimersByTime(ms); }));
+  } finally {
+    jest.useRealTimers();
+  }
+}
+/** A touch pointerdown: jsdom may have no PointerEvent, so a pointerdown event carrying the pointer type stands in. */
+const touchDown = () => {
+  const PE = (window as any).PointerEvent;
+  if (PE) return new PE("pointerdown", { bubbles: true, pointerType: "touch" }) as Event;
+  return Object.assign(new (window as any).MouseEvent("pointerdown", { bubbles: true }), { pointerType: "touch" }) as Event;
+};
 
 test("a double-click on the priority's title renames it in place: Enter saves through renamePriorityTitle, Escape takes it back", async () => {
   useInboxStore.getState().syncTable("priorities", ROWS as any);
@@ -355,13 +457,15 @@ test("a double-click on the priority's title renames it in place: Enter saves th
   });
   try {
     const before = titleOf(page.container, "pri-3").textContent;
-    await dbl(titleOf(page.container, "pri-3"));
+    await onFakeClock(async (advance) => {
+      await dbl(titleOf(page.container, "pri-3"));
+      // The double-click never navigated, even past the single click's wait.
+      await advance(1000);
+      expect(at).toBe("/priorities");
+    });
     const input = titleInput(page.container, "pri-3")!;
     expect(input).not.toBeNull();
     expect(input.value).toBe(before!);
-    // The double-click never navigated, even after the single click's wait.
-    await act(async () => { await wait(500); });
-    expect(at).toBe("/priorities");
     // Escape takes it back: the title as it was, nothing sent.
     await act(async () => {
       input.value = "Something else";
@@ -380,7 +484,7 @@ test("a double-click on the priority's title renames it in place: Enter saves th
     expect(titleInput(page.container, "pri-3")).toBeNull();
     const stored = (Object.values(useInboxStore.getState().priorities) as any[]).find((r) => r.short_id === "pri-3");
     expect(stored.title).toBe("Cut eval spend in half");
-    for (let i = 0; i < 20 && !sent.some(([a]) => a === "renamePriorityTitle"); i++) await act(async () => { await wait(10); });
+    for (let i = 0; i < 200 && !sent.some(([a]) => a === "renamePriorityTitle"); i++) await act(async () => { await wait(10); });
     expect(sent.filter(([a]) => a === "renamePriorityTitle").map(([, args]) => args)).toEqual([["pri-3", "Cut eval spend in half"]]);
   } finally {
     await page.unmount();
@@ -396,16 +500,17 @@ test("the priority's title stays a link: a single click opens its page after a b
     const title = titleOf(page.container, "pri-2");
     expect(title.tagName).toBe("A");
     expect(title.getAttribute("href")).toBe("/priorities/pri-2");
-    // A single click waits for a second one, then navigates.
-    let e!: MouseEvent;
-    await act(async () => { e = click(title); });
-    expect(e.defaultPrevented).toBe(true);
-    // Still waiting at 300ms, as a slow double-click's second click may yet come.
-    expect(at).toBe("/priorities");
-    await act(async () => { await wait(300); });
-    expect(at).toBe("/priorities");
-    await act(async () => { await wait(200); });
-    expect(at).toBe("/priorities/pri-2");
+    // A single click waits for a second one, then navigates: still waiting at 399ms, gone at 400ms.
+    await onFakeClock(async (advance) => {
+      let e!: MouseEvent;
+      await act(async () => { e = click(title); });
+      expect(e.defaultPrevented).toBe(true);
+      expect(at).toBe("/priorities");
+      await advance(399);
+      expect(at).toBe("/priorities");
+      await advance(1);
+      expect(at).toBe("/priorities/pri-2");
+    });
   } finally {
     await page.unmount();
   }
@@ -420,14 +525,16 @@ test("the priority's title stays a link: a single click opens its page after a b
   // A cmd/ctrl click is the browser's (a new tab): nothing here holds it back or moves this page.
   const modified = await mount(<>{view()}<Where /></>);
   try {
-    for (const mod of ["metaKey", "ctrlKey"]) {
-      let e!: MouseEvent;
-      await act(async () => { e = click(titleOf(modified.container, "pri-2"), { [mod]: true }); });
-      expect(e.defaultPrevented).toBe(false);
-      await act(async () => { await wait(300); });
-      expect(at).toBe("/priorities");
-      expect(titleInput(modified.container, "pri-2")).toBeNull();
-    }
+    await onFakeClock(async (advance) => {
+      for (const mod of ["metaKey", "ctrlKey"]) {
+        let e!: MouseEvent;
+        await act(async () => { e = click(titleOf(modified.container, "pri-2"), { [mod]: true }); });
+        expect(e.defaultPrevented).toBe(false);
+        await advance(1000);
+        expect(at).toBe("/priorities");
+        expect(titleInput(modified.container, "pri-2")).toBeNull();
+      }
+    });
   } finally {
     await modified.unmount();
   }
@@ -438,16 +545,18 @@ test("a slow double-click (clicks 320ms apart) still renames and never navigates
   const { act } = React as any;
   try {
     const title = titleOf(page.container, "pri-2");
-    await act(async () => { click(title, { detail: 1 }); });
-    await act(async () => { await wait(320); });
-    expect(at).toBe("/priorities");
-    await act(async () => {
-      click(title, { detail: 2 });
-      title.dispatchEvent(new (window as any).MouseEvent("dblclick", { bubbles: true, cancelable: true, detail: 2 }));
+    await onFakeClock(async (advance) => {
+      await act(async () => { click(title, { detail: 1 }); });
+      await advance(320);
+      expect(at).toBe("/priorities");
+      await act(async () => {
+        click(title, { detail: 2 });
+        title.dispatchEvent(new (window as any).MouseEvent("dblclick", { bubbles: true, cancelable: true, detail: 2 }));
+      });
+      expect(titleInput(page.container, "pri-2")).not.toBeNull();
+      await advance(1000);
+      expect(at).toBe("/priorities");
     });
-    expect(titleInput(page.container, "pri-2")).not.toBeNull();
-    await act(async () => { await wait(500); });
-    expect(at).toBe("/priorities");
   } finally {
     await page.unmount();
   }
@@ -456,7 +565,7 @@ test("a slow double-click (clicks 320ms apart) still renames and never navigates
   try {
     const title = titleOf(tapped.container, "pri-2");
     await act(async () => {
-      title.dispatchEvent(new (window as any).PointerEvent?.("pointerdown", { bubbles: true, pointerType: "touch" }) ?? Object.assign(new (window as any).MouseEvent("pointerdown", { bubbles: true }), { pointerType: "touch" }));
+      title.dispatchEvent(touchDown());
       click(title, { detail: 1 });
     });
     expect(at).toBe("/priorities/pri-2");
