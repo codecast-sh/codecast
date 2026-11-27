@@ -58,12 +58,14 @@ export function ToggleRow({ label, description, value, onValueChange }: {
         <RNText style={styles.label}>{label}</RNText>
         {description ? <RNText style={styles.description}>{description}</RNText> : null}
       </RNView>
-      <SettingsSwitch value={value} onValueChange={onValueChange} />
+      <SettingsSwitch value={value} onValueChange={onValueChange} accessibilityLabel={label} />
     </RNView>
   );
 }
 
-export function SettingsSwitch({ value, onValueChange }: { value: boolean; onValueChange: (v: boolean) => void }) {
+export function SettingsSwitch({ value, onValueChange, accessibilityLabel }: {
+  value: boolean; onValueChange: (v: boolean) => void; accessibilityLabel?: string;
+}) {
   const Theme = useTheme();
   const on = Theme.accent;
   return (
@@ -73,6 +75,7 @@ export function SettingsSwitch({ value, onValueChange }: { value: boolean; onVal
       trackColor={{ false: Theme.bgHighlight, true: on }}
       thumbColor="#fff"
       ios_backgroundColor={Theme.bgHighlight}
+      accessibilityLabel={accessibilityLabel}
     />
   );
 }
