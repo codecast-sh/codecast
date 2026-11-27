@@ -8,7 +8,8 @@
 // does not draw the mic again.
 import { memo, useState, type MouseEvent, type ReactElement } from "react";
 import { Check, ChevronDown, Loader2, Mic, X } from "lucide-react";
-import { DICTATION_LANGUAGES, dictationStopLine, teamVendorBlock } from "@codecast/shared/contracts";
+import { teamVendorBlock } from "@codecast/shared/contracts";
+import { DICTATION_LANGUAGES, dictationStopLine } from "@codecast/shared/contracts/dictation";
 import { useInboxStore } from "../../store/inboxStore";
 import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
 import {

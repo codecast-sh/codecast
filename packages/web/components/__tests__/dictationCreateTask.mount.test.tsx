@@ -17,7 +17,7 @@ mock.module("../../lib/taskActions", () => ({ ...realTaskActions, createTaskAndA
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { ConvexProvider } from "convex/react";
-import { _resetDictationForTests, type DictationHost, type DictationPipeEvents } from "@codecast/shared/contracts";
+import { _resetDictationForTests, type DictationHost, type DictationPipeEvents } from "@codecast/shared/contracts/dictation";
 import { useInboxStore } from "../../store/inboxStore";
 import { closeDomWindow } from "../../test-helpers/domGlobals";
 import { offlineConvexClient } from "../../test-helpers/offlineConvex";

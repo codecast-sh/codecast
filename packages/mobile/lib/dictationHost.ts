@@ -5,7 +5,7 @@
 // the one line the mic shows.
 
 import type { ConvexReactClient } from 'convex/react';
-import type { DictationHost } from '@codecast/shared/contracts';
+import type { DictationHost } from '@codecast/shared/contracts/dictation';
 import { micTapSupported, startAsrCapture } from './asrCapture';
 import { getCallSnapshot } from './calls/callManager';
 import { getRecorderSnapshot } from './recorder';

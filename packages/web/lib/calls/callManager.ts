@@ -44,7 +44,8 @@ import {
 import { syncRoomNoiseCancellation } from "./krispFilter";
 import { getRoomAudioStats, type RoomAudioDiagnostics } from "./audioDiagnostics";
 import { bindPrewarmAudio, bindPrewarmConvex, releasePrewarm, takePrewarmedRoom, warmRoomPublishesMic } from "./roomPrewarm";
-import { CALL_HEARTBEAT_MS, finishRunningDictation, humanizeConvexError, localTranscribeLanguages, seatAnswersRing } from "@codecast/shared/contracts";
+import { CALL_HEARTBEAT_MS, humanizeConvexError, localTranscribeLanguages, seatAnswersRing } from "@codecast/shared/contracts";
+import { finishRunningDictation } from "@codecast/shared/contracts/dictation";
 import {
   hasCallPanel,
   isCallPanelWindow,

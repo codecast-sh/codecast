@@ -77,8 +77,6 @@ export * from "./browserStream";
 export * from "./callRoomKeys";
 export * from "./recordingAudio";
 export * from "./transcribeLanguage";
-// Speech into a text box (the composer mic): one controller for web and phone.
-export * from "./dictation";
 export * from "./callPush";
 export * from "./transcriptChunk";
 // Who said each line of a voice note: the one resolver every surface names a

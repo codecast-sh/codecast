@@ -6,6 +6,7 @@
 // selection, send through dictation.send).
 import { afterEach, beforeAll, beforeEach, expect, mock, test } from 'bun:test';
 import React from 'react';
+import { teamVendorBlock } from '@codecast/shared/contracts/vendorCoverage';
 
 const host = (name: string) => name;
 mock.module('react-native', () => ({
@@ -56,7 +57,7 @@ mock.module('@codecast/web/store/inboxStore', () => ({
 let TestRenderer: typeof import('react-test-renderer');
 let useDictation: typeof import('@/lib/dictation').useDictation;
 let DictateControls: typeof import('./DictateControls').DictateControls;
-let contracts: typeof import('@codecast/shared/contracts');
+let contracts: typeof import('@codecast/shared/contracts/dictation');
 beforeAll(async () => {
   (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true;
   (globalThis as any).requestAnimationFrame ??= (fn: () => void) => setTimeout(fn, 0);
@@ -65,11 +66,11 @@ beforeAll(async () => {
   TestRenderer = await import('react-test-renderer');
   ({ useDictation } = await import('@/lib/dictation'));
   ({ DictateControls } = await import('./DictateControls'));
-  contracts = await import('@codecast/shared/contracts');
+  contracts = await import('@codecast/shared/contracts/dictation');
 });
 
 // A recognizer the test speaks into. `finish` waits until `finished()`.
-type Fake = { events: import('@codecast/shared/contracts').DictationPipeEvents | null; closed: number; finished: () => void; fail: (m: string) => void };
+type Fake = { events: import('@codecast/shared/contracts/dictation').DictationPipeEvents | null; closed: number; finished: () => void; fail: (m: string) => void };
 let fake: Fake;
 function installHost() {
   let release: () => void = () => {};
@@ -263,7 +264,7 @@ test("a team without OpenAI under its BAA gets a dimmed mic that says why", asyn
   await m.press('Dictate');
   expect(fake.events).toBe(null);
   expect(notices.length).toBe(1);
-  expect(notices[0]).toBe(contracts.teamVendorBlock({ name: 'Clinic', policy: { regulated_data: true } }, 'openai')!);
+  expect(notices[0]).toBe(teamVendorBlock({ name: 'Clinic', policy: { regulated_data: true } }, 'openai')!);
 });
 
 test('the chevron picks the language, kept on this device', async () => {
@@ -401,7 +402,7 @@ test('any team without OpenAI under its BAA dims the mic, whichever team is acti
   const m = await mount('');
   const mic = m.byLabel('Dictate')[0]!;
   expect(mic.props.accessibilityState).toEqual({ disabled: true });
-  expect(mic.props.accessibilityHint).toBe(contracts.teamVendorBlock({ name: 'Clinic', policy: { regulated_data: true } }, 'openai')!);
+  expect(mic.props.accessibilityHint).toBe(teamVendorBlock({ name: 'Clinic', policy: { regulated_data: true } }, 'openai')!);
   await m.act(() => setStore({ teams: [{ _id: 't0', name: 'Open', policy: {} }] }));
   expect(m.byLabel('Dictate')[0]!.props.accessibilityState).toBe(undefined);
 });
