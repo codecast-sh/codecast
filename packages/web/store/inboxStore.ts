@@ -11841,7 +11841,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     broadcastGesture({ kind: "forget", ids: [id], ts: Date.now() }, bridgeUserId(this));
   }),
 
-  // Bulk kill ("Kill all" on the Stashed bucket): one action so the patches
+  // Bulk kill ("Kill N" on a hidden bucket): one action so the patches
   // ride a single dispatch and the kill sound plays once, not N times. Scale
   // is the user-curated stash list (tens) — each row NEEDS its own server
   // patch anyway (the per-conversation hide transition is what enqueues the
@@ -11849,7 +11849,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   killSessions: action(function (this: Draft, ids: string[]) {
     if (ids.length === 0) return;
     soundKill();
-    // "Kill all" is ONE user gesture: one timestamp for every row it stamps and
+    // "Kill N" is ONE user gesture: one timestamp for every row it stamps and
     // for the single merged broadcast (the sound plays once for the same reason).
     // Per-row Date.now() drifts across a long sweep, so the message's timestamp
     // matched only the last row — every sibling lock planted for an earlier row
