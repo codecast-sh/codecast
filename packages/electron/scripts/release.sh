@@ -98,6 +98,10 @@ ARTIFACTS=(
 )
 # The feed goes last so no updater sees it before the installer it names.
 if [ "$WINDOWS" = "1" ]; then ARTIFACTS+=("dist/$WIN_INSTALLER" "dist/latest.yml"); fi
+# Last: what the desktop deploy target reads as live (.codecast/deploy.toml), naming the commit built.
+jq -c -n --arg version "$NEW_VERSION" --arg source "$(git -C "$REPO_ROOT" rev-parse HEAD)" \
+  '{version: $version, sourceCommit: $source}' > dist/release.json
+ARTIFACTS+=("dist/release.json")
 # Versioned binaries are immutable, but latest-mac.yml is polled for new releases.
 IMMUTABLE_CC="public, max-age=31536000, immutable"
 for f in "${ARTIFACTS[@]}"; do
@@ -111,6 +115,7 @@ for f in "${ARTIFACTS[@]}"; do
     *.exe) CT="application/vnd.microsoft.portable-executable"; CC="$IMMUTABLE_CC" ;;
     *.blockmap) CT="application/octet-stream"; CC="$IMMUTABLE_CC" ;;
     *.yml) CT="text/yaml"; CC="no-cache" ;;
+    *.json) CT="application/json"; CC="no-cache" ;;
     *) CT="application/octet-stream"; CC="$IMMUTABLE_CC" ;;
   esac
   echo "  $(basename $f)"

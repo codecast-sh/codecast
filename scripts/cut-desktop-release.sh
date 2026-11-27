@@ -41,6 +41,13 @@ if [[ -n "${CAST_DEPLOY_SHA:-}" ]] && ! git merge-base --is-ancestor "$CAST_DEPL
   exit 1
 fi
 echo "Cutting desktop from ${source:0:10}, main's head"
+since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 gh workflow run "$WORKFLOW" -R "$REPO" -f source_commit="$source"
-sleep "${CUT_DISPATCH_SETTLE_SECONDS:-5}"
-gh run list -R "$REPO" --workflow "$WORKFLOW" -L 1 --json url -q '.[0].url'
+# The run this dispatch made: the first dispatch created at or after it (the list is newest first).
+for _ in $(seq 1 12); do
+  url=$(gh run list -R "$REPO" --workflow "$WORKFLOW" --event workflow_dispatch -L 10 --json url,createdAt \
+    -q "[.[] | select(.createdAt >= \"$since\")] | last | .url // empty")
+  [[ -n "$url" ]] && { echo "$url"; exit 0; }
+  sleep 5
+done
+echo "Dispatched; its run did not show within a minute: gh run list -R $REPO --workflow $WORKFLOW"
