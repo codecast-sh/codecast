@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { parseDeployTargets } from "@codecast/shared/contracts/deployTargets";
-import { planRelease, runRelease, type PlanStep, type ReleaseIO, type ServerTarget } from "./deployRelease";
+import { commitsSince, planRelease, runRelease, type PlanStep, type ReleaseIO, type ServerTarget } from "./deployRelease";
 
 // A release (deploys.md DP15): which targets it sends, waits for and leaves
 // alone, and the order it sends them in. Synthetic targets and fakes only.
@@ -46,6 +50,35 @@ describe("what a release does with each target", () => {
     const p = await plan({ files: ["app/screen.tsx", "web/page.tsx"], except: ["web"] });
     expect(p.filter((s) => s.action !== "skip").map((s) => s.target)).toEqual(["mobile"]);
     expect(p.find((s) => s.target === "web")!.why).toBe("left out on purpose");
+  });
+
+  test("a change of only what a target exempts leaves it, and its exempt commits wait on nothing", async () => {
+    const exempting = parseDeployTargets({ target: [{ name: "mobile", run: "ota.sh $sha", policy: "release", when: "app/**", unless: "**/*.test.ts" }] }, []);
+    const p = await plan({ declared: exempting, files: ["app/screen.test.ts"] });
+    expect(p).toMatchObject([{ target: "mobile", action: "skip", why: "the change touches none of its paths, past what it exempts (tests)" }]);
+    const counted: string[][] = [];
+    await plan({ declared: exempting, commitsSince: async (_f, _p, unless) => (counted.push(unless), 0) });
+    expect(counted).toEqual([["**/*.test.ts"]]);
+  });
+
+  test("commits since a live deploy count only those touching a target's paths past what it exempts", async () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), "release-since-"));
+    const git = (...args: string[]) => spawnSync("git", ["-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", ...args], { encoding: "utf-8" }).stdout.trim();
+    const commit = (file: string) => { fs.mkdirSync(path.dirname(path.join(repo, file)), { recursive: true }); fs.writeFileSync(path.join(repo, file), file); git("add", "."); git("commit", "-qm", file); return git("rev-parse", "HEAD"); };
+    try {
+      git("init", "-q");
+      const from = commit("README.md");
+      commit("app/a.test.ts");
+      commit("app/lib/b.test.ts");
+      const head = commit("web/c.ts");
+      expect(await commitsSince(repo, from, head, ["app/**"], ["**/*.test.ts"])).toBe(0);
+      expect(await commitsSince(repo, from, head, ["app/**"], [])).toBe(2);
+      expect(await commitsSince(repo, from, head, [], ["**/*.test.ts"])).toBe(1);
+      const shipped = commit("app/d.ts");
+      expect(await commitsSince(repo, from, shipped, ["app/**"], ["**/*.test.ts"])).toBe(1);
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
   });
 });
 

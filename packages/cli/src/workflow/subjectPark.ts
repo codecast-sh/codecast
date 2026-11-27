@@ -132,8 +132,11 @@ export async function notLiveYet(cwd: string, landed: { sha: string; files: stri
   if (!Array.isArray(view?.targets)) return "its deploy targets cannot be read";
   const listed = view.targets as DeployTargetRow[];
   const { checkoutTargets } = await import("../lineDeploy.js");
-  const unlisted = (await checkoutTargets(cwd).catch(() => [])).filter((d) => !listed.some((t) => t.name === d.name)).map((d) => ({ name: d.name, paths: d.paths }));
-  const touched = [...listed, ...unlisted].filter((t) => targetTouches(t.paths, landed.files));
+  const declared = await checkoutTargets(cwd).catch(() => []);
+  const unlisted = declared.filter((d) => !listed.some((t) => t.name === d.name)).map((d) => ({ name: d.name, paths: d.paths }));
+  // What a target exempts (its tests) is the checkout's to say: the server's row does not hold it.
+  const unless = (name: string) => declared.find((d) => d.name === name)?.unless;
+  const touched = [...listed, ...unlisted].filter((t) => targetTouches({ paths: t.paths, unless: unless(t.name) }, landed.files));
   const states = await Promise.all(touched.map((t) => targetState(t, (sha) => holds(cwd, landed.sha, sha))));
   const waiting = states.filter((s) => s.state !== "live").map((s) => s.target);
   return waiting.length ? `its change is not live yet on ${waiting.join(", ")}` : null;

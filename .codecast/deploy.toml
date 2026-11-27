@@ -8,6 +8,9 @@
 #             a before_push step goes out at the change flow's Merge, before the merge;
 #             the target takes that step's run and when
 #   run       the command that sends it, from the checkout root ($sha, $deploy, $actor)
+#   unless    paths under its `when` that ship nothing there (tests, fixtures): a change
+#             whose files under `when` are all among them sends no deploy of it, and goes
+#             out with its next deploy
 #   runs      here (this checkout runs `run`, the default) or push (it deploys
 #             itself when main moves)
 #   live      how codecast reads what runs there: marker (the deploy path records
@@ -54,6 +57,7 @@ live = "github-status:codecast - web"
 [[target]]
 name = "cli"
 when = ["packages/cli/**", "packages/shared/**", "platform/**"]
+unless = ["**/*.test.ts", "**/*.test.tsx", "**/*.test.js", "**/*.test.cjs", "**/*.test.mjs", "**/__tests__/**", "**/__fixtures__/**", "**/fixtures/**", "**/test-helpers/**", "**/*.testkit.ts", "**/Tests/**"]
 run = "scripts/cut-cli-release.sh"
 live = "json:https://dl.codecast.sh/latest.json#sourceCommit,version"
 policy = "release"
@@ -67,6 +71,7 @@ finish = "cast force-update $version"
 [[target]]
 name = "mobile"
 when = ["packages/mobile/**", "packages/shared/**", "packages/web/**", "platform/**"]
+unless = ["**/*.test.ts", "**/*.test.tsx", "**/*.test.js", "**/*.test.cjs", "**/*.test.mjs", "**/__tests__/**", "**/__fixtures__/**", "**/fixtures/**", "**/test-helpers/**", "**/*.testkit.ts", "**/Tests/**"]
 run = "packages/mobile/scripts/ota.sh $sha"
 policy = "release"
 after = ["backend"]
@@ -76,6 +81,7 @@ after = ["backend"]
 # checkout's working tree rather than the merged commit, and pushes its version bump to main.
 [[target]]
 name = "desktop"
+unless = ["**/*.test.ts", "**/*.test.tsx", "**/*.test.js", "**/*.test.cjs", "**/*.test.mjs", "**/__tests__/**", "**/__fixtures__/**", "**/fixtures/**", "**/test-helpers/**", "**/*.testkit.ts", "**/Tests/**"]
 when = ["packages/electron/**"]
 run = "packages/electron/scripts/release.sh patch --no-floor"
 policy = "press"

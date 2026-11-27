@@ -78,12 +78,25 @@ describe("targetState", () => {
   });
 
   test("which targets a change touches", () => {
-    expect(targetTouches(["web/**"], ["api/a.ts"])).toBe(false);
-    expect(targetTouches(["web/**", "shared/**"], ["web/w.ts"])).toBe(true);
-    expect(targetTouches([], ["anything"])).toBe(true);
+    expect(targetTouches({ paths: ["web/**"] }, ["api/a.ts"])).toBe(false);
+    expect(targetTouches({ paths: ["web/**", "shared/**"] }, ["web/w.ts"])).toBe(true);
+    expect(targetTouches({ paths: [] }, ["anything"])).toBe(true);
     // ct-102468: a target naming a route file as written reaches it.
-    expect(targetTouches(["packages/mobile/app/task/[id].tsx"], ["packages/mobile/app/task/[id].tsx"])).toBe(true);
-    expect(targetTouches(["packages/mobile/app/task/[id].tsx"], ["packages/mobile/app/task/i.tsx"])).toBe(true);
+    expect(targetTouches({ paths: ["packages/mobile/app/task/[id].tsx"] }, ["packages/mobile/app/task/[id].tsx"])).toBe(true);
+    expect(targetTouches({ paths: ["packages/mobile/app/task/[id].tsx"] }, ["packages/mobile/app/task/i.tsx"])).toBe(true);
+  });
+
+  // ct-102488: a one-test change under the CLI's paths cut a CLI release and force-updated every machine.
+  test("a change of only what a target exempts touches it not", () => {
+    const cli = { paths: ["packages/cli/**", "packages/shared/**"], unless: ["**/*.test.ts", "**/__tests__/**", "**/test-helpers/**", "**/__fixtures__/**"] };
+    expect(targetTouches(cli, ["packages/cli/src/workspace/dev.test.ts"])).toBe(false);
+    expect(targetTouches(cli, ["packages/cli/src/workflow/runner.e2e.test.ts", "packages/cli/src/test-helpers/pollUntil.ts", "packages/shared/contracts/__fixtures__/a.json"])).toBe(false);
+    // One shipped file among the tests ships the target; a test outside its paths never mattered.
+    expect(targetTouches(cli, ["packages/cli/src/workspace/dev.test.ts", "packages/cli/src/workspace/dev.ts"])).toBe(true);
+    expect(targetTouches(cli, ["packages/web/x.ts", "packages/cli/src/a.test.ts"])).toBe(false);
+    // An exemption with no paths: every path but those.
+    expect(targetTouches({ unless: ["**/*.test.ts"] }, ["a/b.test.ts"])).toBe(false);
+    expect(targetTouches({ unless: ["**/*.test.ts"] }, ["a/b.ts"])).toBe(true);
   });
 });
 
@@ -137,6 +150,17 @@ describe("deployDuties", () => {
     const { duties, left } = deployDuties(declared, ["app/a.tsx", "api/b.ts"], { except: ["backend"] });
     expect(duties).toMatchObject([{ target: "mobile", action: "send", after: ["backend"] }]);
     expect(left).toEqual(["backend is held back"]);
+  });
+
+  // ct-102256: an electron test-only fix waited 5.5h at Go live for a person's desktop press.
+  test("a test-only change owes no deploy of the targets that exempt tests", () => {
+    const tests = ["**/*.test.ts", "**/*.test.js"];
+    const targets = parseDeployTargets({ target: [
+      { name: "cli", run: "cut.sh", policy: "release", when: "cli/**", unless: tests },
+      { name: "desktop", run: "release.sh", when: "electron/**", unless: tests },
+    ] }, []);
+    expect(deployDuties(targets, ["cli/a.test.ts", "electron/b.test.js"]).duties).toEqual([]);
+    expect(deployDuties(targets, ["cli/a.test.ts", "electron/b.js"]).duties).toMatchObject([{ target: "desktop", action: "wait", how: "others" }]);
   });
 
   test("a deadline over a day, or one that is no duration, refuses the file", () => {
@@ -338,6 +362,20 @@ describe("awaitDeploy", () => {
     const f = fake(() => [{ name: "backend", live: { ...dp("dp-1", "live", "old"), created_at: -5 } }], { send: async () => ({ code: 1, last: "not published: cast line deploy targets --publish" }) });
     expect(await awaitDeploy({ sha: SHA, base: "main", plan: deployDuties(declared, ["api/b.ts"]), intervalMs: MIN }, f.io)).toEqual({ code: 1, line: "No deploy carries 1a2b3c4: cast deploy sent no deploy of backend (not published: cast line deploy targets --publish)." });
     expect(f.at()).toBe(MIN);
+  });
+
+  // ct-102488: a run on Ashot's machine stopped with the release's raw FAIL lines for a target only Jason's machine sends.
+  test("a target another person's machine sends: the stop names that machine and says the change goes with its next deploy", async () => {
+    const last = "FAIL  cli  cli runs on the machine that published it, which is not yours | -     mobile  not named | -     desktop  not named";
+    const row = { name: "cli", device_id: "jason-mac", publisher: { name: "Jason", machine: "jb-m5-max" }, live: { ...dp("dp-1", "live", "old"), created_at: -5 } };
+    const f = fake(() => [row], { here: "ashot-mac", send: async () => ({ code: 1, last }) });
+    expect(await awaitDeploy({ sha: SHA, base: "main", plan: deployDuties(declared, ["cli/c.ts"]), intervalMs: MIN }, f.io)).toEqual({ code: 1, line: "This run could not send cli: cli is sent only from Jason's machine (jb-m5-max), not from this machine. 1a2b3c4 is on main: cli's next deploy takes it live, and ends this run at Live." });
+    // An older server names no publisher.
+    const g = fake(() => [{ ...row, publisher: undefined }], { here: "ashot-mac", send: async () => ({ code: 1, last }) });
+    expect((await awaitDeploy({ sha: SHA, base: "main", plan: deployDuties(declared, ["cli/c.ts"]), intervalMs: MIN }, g.io)).line).toStartWith("This run could not send cli: cli is sent only from the machine that publishes it, not from this machine.");
+    // Sent from this machine and still unsent: the release's own line for that target, not the others'.
+    const h = fake(() => [{ ...row, device_id: "ashot-mac" }], { here: "ashot-mac", send: async () => ({ code: 1, last: "FAIL  cli  exited 2 | -     mobile  not named" }) });
+    expect((await awaitDeploy({ sha: SHA, base: "main", plan: deployDuties(declared, ["cli/c.ts"]), intervalMs: MIN }, h.io)).line).toBe("No deploy carries 1a2b3c4: cast deploy sent no deploy of cli (cli exited 2).");
   });
 
   test("a deploy that went out without the commit names the sha it sent and the checkout that may be behind", async () => {

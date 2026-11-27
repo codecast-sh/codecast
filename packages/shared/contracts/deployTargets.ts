@@ -56,6 +56,12 @@ export type DeployTarget = {
   /** Repository paths whose change this target ships; empty means every path. */
   paths: string[];
   /**
+   * Paths under `paths` that ship nothing here (tests, fixtures, test helpers): a change whose files under `paths` are
+   * all among them sends no deploy of this target. Read only by the CLI (targetTouches), so the server's queue still
+   * lists such a commit; it goes out with the target's next deploy.
+   */
+  unless?: string[];
+  /**
    * When `cast ship checkout` runs the command itself: before or after its push (a backend the pushed client calls
    * deploys before), or `press`, never at a ship: only a deploy from codecast or a release script sends it.
    */
@@ -87,11 +93,11 @@ export type DeployTarget = {
 };
 
 /** The keys a target holds that only the CLI reads: the server stores the rest. */
-export const CLI_ONLY_TARGET_KEYS = ["after", "ci", "gate", "rollout", "finish", "deadline"] as const;
+export const CLI_ONLY_TARGET_KEYS = ["after", "ci", "gate", "rollout", "finish", "deadline", "unless"] as const;
 
 /** A target as the server's publish takes it. */
 export function publishableTarget(t: DeployTarget): Omit<DeployTarget, (typeof CLI_ONLY_TARGET_KEYS)[number]> {
-  const { after: _a, ci: _c, gate: _g, rollout: _r, finish: _f, deadline: _d, ...rest } = t;
+  const { after: _a, ci: _c, gate: _g, rollout: _r, finish: _f, deadline: _d, unless: _u, ...rest } = t;
   return rest;
 }
 
@@ -163,7 +169,7 @@ export function readJsonLive(r: Extract<DeployLiveReader, { kind: "json" }>, doc
 /** A `[[ship.deploy]]` step of .codecast/workspace.toml, as far as a target needs it. */
 export type ShipStepRef = { name: string; when: string[]; run: string; stage: "before_push" | "after_push" };
 
-const TARGET_KEYS = ["name", "ship", "run", "when", "runs", "live", "rollback", "policy", "after", "ci", "gate", "rollout", "finish", "deadline", "workflow", "rollback_inputs", "ci_workflow"] as const;
+const TARGET_KEYS = ["name", "ship", "run", "when", "unless", "runs", "live", "rollback", "policy", "after", "ci", "gate", "rollout", "finish", "deadline", "workflow", "rollback_inputs", "ci_workflow"] as const;
 /** The step commands a target may give its deploy (DP13), each run like `run`. */
 const STEP_KEYS = ["ci", "gate", "rollout", "finish"] as const;
 
@@ -244,6 +250,9 @@ function targetFromEntry(e: unknown, ship: readonly ShipStepRef[]): DeployTarget
   const whenRaw = r["when"] ?? step?.when ?? [];
   const when = typeof whenRaw === "string" ? [whenRaw] : whenRaw;
   if (!Array.isArray(when) || when.some((w) => typeof w !== "string")) throw new DeployTargetError(`target ${name}: 'when' must be a string or a list of strings`);
+  const unlessRaw = r["unless"] ?? [];
+  const unless = typeof unlessRaw === "string" ? [unlessRaw] : unlessRaw;
+  if (!Array.isArray(unless) || unless.some((w) => typeof w !== "string")) throw new DeployTargetError(`target ${name}: 'unless' must be a string or a list of strings`);
   const command = ((r["run"] as string | undefined) ?? step?.run ?? "").trim();
   const runs = (r["runs"] ?? "here") as DeployTargetRuns;
   if (!(DEPLOY_TARGET_RUNS as readonly string[]).includes(runs)) throw new DeployTargetError(`target ${name}: runs must be one of ${DEPLOY_TARGET_RUNS.join(", ")}`);
@@ -277,6 +286,7 @@ function targetFromEntry(e: unknown, ship: readonly ShipStepRef[]): DeployTarget
     ...(r["rollback"] ? { rollback: r["rollback"] as string } : {}),
     policy,
     paths: when as string[],
+    ...(unless.length ? { unless: unless as string[] } : {}),
     ship_stage: step?.stage ?? "press",
     ...(after.length ? { after: (after as string[]).map((a) => a.trim().toLowerCase()) } : {}),
     ...Object.fromEntries(steps.map((k) => [k, (r[k] as string).trim()])),

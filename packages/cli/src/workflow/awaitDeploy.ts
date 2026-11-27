@@ -19,7 +19,17 @@ import { landsConfig, notYetHeld, republishLanded } from "./republishLanded.js";
 
 /** One deploy of a target, as the targets read lists its history. */
 export type TargetDeploy = { short_id: string; status: string; sha?: string | null; created_at?: number; live_at?: number | null; finished_at?: number | null; note?: string | null };
-export type DeployTargetRow = { name: string; paths?: string[]; runs?: string; live?: TargetDeploy | null; open?: TargetDeploy | null; history?: TargetDeploy[] };
+export type DeployTargetRow = {
+  name: string;
+  paths?: string[];
+  runs?: string;
+  live?: TargetDeploy | null;
+  open?: TargetDeploy | null;
+  history?: TargetDeploy[];
+  /** The machine that publishes it, where its sends run, and who that is (absent from an older server). */
+  device_id?: string | null;
+  publisher?: { name: string | null; machine: string | null } | null;
+};
 
 export type TargetState =
   | { target: string; state: "live"; deploy: TargetDeploy }
@@ -90,12 +100,21 @@ export async function landedCommit(cwd: string, branch: string, base: string, kn
   return null;
 }
 
-/** Whether a target ships any of these files: its path globs, or every path when it names none. */
-export function targetTouches(paths: ReadonlyArray<string> | undefined, files: ReadonlyArray<string>): boolean {
-  if (!paths?.length) return true;
-  // A path as written first, then as a glob: app/task/[id].tsx read only as a glob matches nothing (ct-102468).
-  const entries = paths.map((p) => ({ p, glob: new Bun.Glob(p) }));
-  return files.some((f) => entries.some(({ p, glob }) => p === f || glob.match(f)));
+/**
+ * Whether a target ships any of these files: one under its path globs (every path when it names none) that its
+ * `unless` globs do not exempt. A change of only tests under a target's paths sends no deploy of it.
+ */
+export function targetTouches(t: { paths?: ReadonlyArray<string>; unless?: ReadonlyArray<string> }, files: ReadonlyArray<string>): boolean {
+  if (!t.paths?.length && !t.unless?.length) return true;
+  const under = t.paths?.length ? pathMatcher(t.paths) : () => true;
+  const exempt = t.unless?.length ? pathMatcher(t.unless) : () => false;
+  return files.some((f) => under(f) && !exempt(f));
+}
+
+/** A path as written first, then as a glob: app/task/[id].tsx read only as a glob matches nothing (ct-102468). */
+function pathMatcher(globs: ReadonlyArray<string>): (file: string) => boolean {
+  const entries = globs.map((p) => ({ p, glob: new Bun.Glob(p) }));
+  return (f) => entries.some(({ p, glob }) => p === f || glob.match(f));
 }
 
 /**
@@ -192,7 +211,7 @@ export function deployDuties(declared: DeployTarget[], files: ReadonlyArray<stri
   const gate = (g: CiGate): CiGate => (g.workflow || !exclude.length ? g : { ...g, exclude });
   const touched = new Set<string>();
   for (const t of releaseOrder(declared)) {
-    if (!targetTouches(t.paths, files)) continue;
+    if (!targetTouches(t, files)) continue;
     touched.add(t.name);
     const held = opts.held?.[t.name];
     if (opts.except?.includes(t.name)) left.push(`${t.name} is held back`);
@@ -204,6 +223,21 @@ export function deployDuties(declared: DeployTarget[], files: ReadonlyArray<stri
   }
   // An `after` the change does not touch is not waited on, as a release has it.
   return { duties: duties.map((d) => ({ ...d, after: d.after.filter((a) => touched.has(a)) })), left };
+}
+
+/** Who sends a target another machine publishes, in words: their name and machine as the server names them. */
+function publisherWords(p: DeployTargetRow["publisher"]): string {
+  const name = p?.name?.trim();
+  const machine = p?.machine?.trim();
+  if (name && machine) return `${name}'s machine (${machine})`;
+  if (name) return `${name}'s machine`;
+  return machine ? `the machine that publishes it (${machine})` : "the machine that publishes it";
+}
+
+/** A release's last lines, as far as they speak of one target: the others' lines ("- mobile not named") say nothing of it. */
+function ownLines(last: string, target: string): string {
+  const own = last.split(" | ").map((l) => l.trim()).filter((l) => new RegExp(`^(FAIL|live|-)\\s+${target}\\b`).test(l));
+  return own.length ? own.map((l) => l.replace(/^FAIL\s+/, "").replace(/\s+/g, " ")).join("; ") : last;
 }
 
 /** Main CI on one commit: its state and the jobs that failed. */
@@ -231,6 +265,8 @@ export type DeployWaitIO = {
   redSince: (sha: string, gate: CiGate) => Promise<string | null>;
   /** Send these targets (`cast deploy`); resolves when that release ends, with its exit code and last lines. */
   send: (targets: string[]) => Promise<{ code: number; last: string }>;
+  /** This machine's device id: a target another machine publishes is sent from there, never from here. */
+  here?: string;
   /** Where the change stands, each time that changes. */
   progress: (line: string) => void;
   /** One blocker on the run's task. */
@@ -340,15 +376,23 @@ export async function awaitDeploy(input: { sha: string; base: string; plan: Depl
       if (unsent.length) {
         // A deploy asked for since the wait began that went out without the commit sent the head of a checkout that
         // had not pulled it.
+        const away: string[] = [];
         const why = unsent.map((d) => {
           const row = rows.find((r) => r.name === d.target);
           const newest = [...(row?.history ?? []), ...(row?.live ? [row.live] : []), ...(row?.open ? [row.open] : [])]
             .filter((x) => x.sha && (x.created_at ?? 0) >= clock.start).sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0))[0];
-          return newest
-            ? `${d.target} ${newest.short_id} sent ${newest.sha!.slice(0, 7)}, so the checkout that publishes it may be behind origin/${input.base}`
-            : `cast deploy sent no deploy of ${d.target} (${ended.get(d.target)!.last})`;
+          if (newest) return `${d.target} ${newest.short_id} sent ${newest.sha!.slice(0, 7)}, so the checkout that publishes it may be behind origin/${input.base}`;
+          // Another machine publishes it and this one could not ask it to send (another person's machine takes only
+          // its owner's commands): which machine sends it is what a person needs, not the release's FAIL lines.
+          if (row?.device_id && io.here && row.device_id !== io.here) {
+            away.push(d.target);
+            return `${d.target} is sent only from ${publisherWords(row.publisher)}, not from this machine`;
+          }
+          return `cast deploy sent no deploy of ${d.target} (${ownLines(ended.get(d.target)!.last, d.target)})`;
         });
-        return { code: 1, line: `No deploy carries ${short}: ${why.join("; ")}.` };
+        const next = away.length ? ` ${short} is on main: ${away.join(" and ")}'s next deploy takes it live, and ends this run at Live.` : "";
+        if (away.length === why.length) return { code: 1, line: `This run could not send ${away.join(" or ")}: ${why.join("; ")}.${next}` };
+        return { code: 1, line: `No deploy carries ${short}: ${why.join("; ")}.${next}` };
       }
       for (const s of states.values()) if (s.state === "live") live.set(s.target, s.deploy.short_id);
       if (watched().every((d) => live.has(d.target))) return { code: 0, line: `Live: ${short} on ${watched().map((d) => `${d.target} ${live.get(d.target)}`).join(", ")}.${tailOf()}` };
@@ -508,6 +552,7 @@ export async function runAwaitDeploy(opts: AwaitDeployOptions, env: AwaitDeployE
       walk: () => firstRed(cwd, at, (c) => ciOf(c, gate)),
     }),
     send: (targets) => sendDetached(cwd, targets, merged.sha, opts.merge ? path.dirname(opts.merge) : os.tmpdir()),
+    here: (await import("../remote/device.js")).deviceId(),
     // Inside a run the waiting lines go to the station on the card, and only the verdict is the station's output,
     // which is what a stop and the session's end message quote. At a terminal every line prints.
     progress: (text) => {

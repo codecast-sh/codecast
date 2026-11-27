@@ -91,9 +91,11 @@ describe("a release's order and steps (DP15)", () => {
   });
 
   test("the server is sent the target without the keys only the CLI reads", () => {
-    const [t] = parse([{ name: "cli", run: "x", policy: "release", after: [], ci: "c", gate: "g", rollout: "r", finish: "f" }]);
+    const [t] = parse([{ name: "cli", run: "x", policy: "release", after: [], ci: "c", gate: "g", rollout: "r", finish: "f", unless: "**/*.test.ts" }]);
     expect([t.ci, t.gate, t.rollout, t.finish]).toEqual(["c", "g", "r", "f"]);
+    expect(t.unless).toEqual(["**/*.test.ts"]);
     expect(Object.keys(publishableTarget(t)).sort()).toEqual(["command", "live", "name", "paths", "policy", "runs", "ship_stage"]);
     expect(() => parse([{ name: "cli", run: "x", gate: 3 }])).toThrow("'gate' must be a string");
+    expect(() => parse([{ name: "cli", run: "x", unless: [3] }])).toThrow("'unless' must be a string or a list of strings");
   });
 });

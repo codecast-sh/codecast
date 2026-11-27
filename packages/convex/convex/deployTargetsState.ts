@@ -7,7 +7,7 @@ import { conversationFromSessionTrailer, normalizeRepository, resolveTaskLinksFr
 import { afterFor, deployStepsOf } from "./deploysView";
 import { ciOf } from "./deployTargetsCi";
 import { canRedeploySha, commitTouchesTarget, groupQueueBySession, type QueueCommit } from "@codecast/shared/contracts/deployTargets";
-import { parseOwnerRepo } from "@codecast/shared/contracts";
+import { deviceDisplayName, parseOwnerRepo } from "@codecast/shared/contracts";
 import { liveDeployOf, type DeployPushSummary } from "@codecast/shared/contracts/deploys";
 import type { TargetDevPush } from "@codecast/shared/contracts/deployTargets";
 import { parseWorkspaceKey } from "./lib/accessKeys";
@@ -313,6 +313,18 @@ export async function devPushOver(ctx: any, t: Pick<Doc<"deploy_targets">, "work
 }
 
 /** One target's state: live, going out, recent history, and what waits on main. */
+/**
+ * Who publishes a target and the machine its sends run on, named: a change run on another person's machine cannot
+ * send it, and its stop says whose machine can (awaitDeploy.ts).
+ */
+export async function publisherOf(ctx: any, t: Pick<Doc<"deploy_targets">, "publisher_user_id" | "device_id">): Promise<{ name: string | null; machine: string | null }> {
+  const user = await ctx.db.get(t.publisher_user_id);
+  const device = t.device_id
+    ? await ctx.db.query("devices").withIndex("by_user_device", (q: any) => q.eq("user_id", t.publisher_user_id).eq("device_id", t.device_id)).first()
+    : null;
+  return { name: user?.name ?? user?.github_username ?? null, machine: device ? deviceDisplayName(device) : null };
+}
+
 export async function targetState(ctx: any, t: Doc<"deploy_targets">, viewer?: Id<"users">) {
   const deploys = await targetDeploys(ctx, t.workspace, t.name);
   const deploysHere = deploys.filter((d) => !d.repository || d.repository === t.repository);
@@ -355,6 +367,7 @@ export async function targetState(ctx: any, t: Doc<"deploy_targets">, viewer?: I
     can_rollback: t.runs === "here" && !!t.rollback,
     device_id: t.device_id ?? null,
     publisher_user_id: String(t.publisher_user_id),
+    publisher: await publisherOf(ctx, t),
     live: live ? await deployLine(ctx, live, caches, countsOf(live), reader) : null,
     dev_push: await devPushOver(ctx, t, live),
     open: open ? { ...(await deployLine(ctx, open, caches, undefined, reader)), steps: open.run_id ? await deployStepsOf(ctx, open.run_id) : [] } : null,

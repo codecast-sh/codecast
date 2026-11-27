@@ -40,8 +40,8 @@ export type ReleaseInput = {
   except?: string[];
   /** A change's files: only targets they touch take part. */
   files?: string[];
-  /** Commits after `from` up to the release's sha touching these paths; null when `from` is not in this checkout. */
-  commitsSince: (from: string, paths: string[]) => Promise<number | null>;
+  /** Commits after `from` up to the release's sha touching these paths past `unless`; null when `from` is not in this checkout. */
+  commitsSince: (from: string, paths: string[], unless: string[]) => Promise<number | null>;
   /** Whether a deployed sha already holds the release's sha. */
   carries: (deployed: string) => Promise<boolean>;
 };
@@ -56,7 +56,7 @@ export async function planRelease(input: ReleaseInput): Promise<PlanStep[]> {
     const step = (action: PlanStep["action"], why: string, commits: number | null = null): PlanStep => ({ target: t.name, action, why, after: t.after ?? [], commits });
     if (named.size && !named.has(t.name)) { out.push(step("skip", "not named")); continue; }
     if (input.except?.includes(t.name)) { out.push(step("skip", "left out on purpose")); continue; }
-    if (input.files && !targetTouches(t.paths, input.files)) { out.push(step("skip", "the change touches none of its paths")); continue; }
+    if (input.files && !targetTouches(t, input.files)) { out.push(step("skip", t.unless?.length ? "the change touches none of its paths, past what it exempts (tests)" : "the change touches none of its paths")); continue; }
     if (!named.size && t.runs === "here" && t.policy !== "release") {
       out.push(step("skip", t.policy === "auto" ? "the server sends it when CI on main is green" : `goes out on a press: cast deploy ${t.name}`));
       continue;
@@ -65,7 +65,7 @@ export async function planRelease(input: ReleaseInput): Promise<PlanStep[]> {
     const state = await targetState(row, input.carries);
     if (state.state === "live") { out.push(step("skip", `already live (${state.deploy.short_id})`)); continue; }
     const liveSha = row.live?.sha ?? null;
-    const commits = liveSha ? await input.commitsSince(liveSha, t.paths) : null;
+    const commits = liveSha ? await input.commitsSince(liveSha, t.paths, t.unless ?? []) : null;
     if (commits === 0) { out.push(step("skip", "nothing waiting: no commit since its live deploy touches it", 0)); continue; }
     const waiting = commits === null ? (liveSha ? "its live deploy is not in this checkout's history" : "nothing recorded live") : `${commits} commit${commits === 1 ? "" : "s"} waiting`;
     if (t.runs === "push") out.push(step("wait", `deploys itself on push; ${waiting}`, commits));
@@ -190,11 +190,12 @@ export function formatResults(results: TargetResult[]): string {
   }).join("\n");
 }
 
-/** Commits after `from` up to `sha` touching any of `paths` (every path when none), read in `cwd`. */
-export async function commitsSince(cwd: string, from: string, sha: string, paths: string[]): Promise<number | null> {
+/** Commits after `from` up to `sha` touching any of `paths` (every path when none) past `unless`, read in `cwd`. */
+export async function commitsSince(cwd: string, from: string, sha: string, paths: string[], unless: string[] = []): Promise<number | null> {
   if ((await gitTry(cwd, ["cat-file", "-e", `${from}^{commit}`])) === null) return null;
   if ((await gitTry(cwd, ["merge-base", "--is-ancestor", from, sha])) === null) return null;
-  const out = await git(cwd, ["rev-list", "--count", `${from}..${sha}`, ...(paths.length ? ["--", ...paths.map((p) => `:(glob)${p}`)] : [])]);
+  const specs = [...paths.map((p) => `:(glob)${p}`), ...unless.map((p) => `:(glob,exclude)${p}`)];
+  const out = await git(cwd, ["rev-list", "--count", `${from}..${sha}`, ...(specs.length ? ["--", ...specs] : [])]);
   return Number(out.trim()) || 0;
 }
 
