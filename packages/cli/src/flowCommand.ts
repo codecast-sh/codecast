@@ -481,7 +481,8 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       // The change on its own branch and worktree, named as the run's isolated stations name theirs.
       const worktree = runSlug(graph, { task_id: task }, "run");
       const runDir = lineRunDir(top, worktree);
-      const { writeFrozenChange, branchHead, freezeSessionChange } = await import("./workflow/flowChange.js");
+      const { writeFrozenChange, freezeSessionChange } = await import("./workflow/flowChange.js");
+      const { branchHead } = await import("./workflow/originBranch.js");
       let change: import("./workflow/flowChange.js").FrozenChange | null = null;
       // A worktree an earlier run of this change made, read before its branch moves (workflow/runBranch.ts earlierRunTree).
       const { earlierRunTree } = await import("./workflow/runBranch.js");
@@ -489,7 +490,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       let earlier: string | null = null;
       try { earlier = earlierRunTree((await cast(["ws", "path", worktree], top)).out.trim(), resets); } catch (err) { console.error((err as Error).message); process.exit(1); }
       if (branch) {
-        const { head, remote_tip: remoteTip } = await branchHead(top, branch);
+        const { head, remote_tip: remoteTip } = await branchHead(top, branch, earlier);
         if (!head) { console.error(`No branch ${branch} here or on origin`); process.exit(1); }
         const { branchChangePaths } = await import("./workflow/flowChangeFile.js");
         // The files the branch changes, so a station gated on paths (when=) runs when they say it should.

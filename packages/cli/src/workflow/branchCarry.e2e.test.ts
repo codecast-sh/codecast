@@ -452,4 +452,62 @@ describe("a branch's carry", () => {
     expect(git(worktree, "rev-parse", "--abbrev-ref", "HEAD")).toBe("elsewhere");
     expect(git(here, "rev-parse", "feat")).toBe(tip);
   }, 180_000);
+
+  // ct-102179: Union's PR station moved the run's worktree onto origin's rebased copy without a freeze, then the
+  // session rebased and force-pushed again from its own checkout. The refreeze kept the worktree's stale copy, so the
+  // next PR station found origin holding commits the run never had and stopped the run.
+  test("a worktree moved onto origin's earlier tip follows origin when the session rewrites the branch again (ct-102179)", async () => {
+    const { origin, here, there, worktree, runDir } = originWorld("rewritten-twice");
+    write(worktree, "a.txt", "mine\n");
+    git(worktree, "commit", "--quiet", "-am", "the change");
+    git(worktree, "push", "--quiet", "origin", "feat");
+    const tip = git(worktree, "rev-parse", "HEAD");
+    writeFrozenChange(runDir, { source: "task", session: "jx7aaaa", base: tip, tip, remote_tip: tip, branch: "feat", worktree: "run-wt-rewritten-twice", paths: ["a.txt"], shared: [], held: [] } as any);
+    const rewrite = (msg: string) => {
+      git(there, "fetch", "--quiet", "origin");
+      git(there, "reset", "--quiet", "--hard", "origin/feat");
+      git(there, "commit", "--quiet", "--amend", "-m", msg);
+      git(there, "push", "--quiet", "--force", "origin", "feat");
+      return git(there, "rev-parse", "HEAD");
+    };
+    // The PR station's move: fetch origin's rewritten tip and stand the worktree on it; change.json still names `tip`.
+    const first = rewrite("the change, rebased");
+    gitNow(here, "fetch", "--quiet", "origin", "+refs/heads/feat:refs/remotes/origin/feat");
+    git(worktree, "reset", "--quiet", "--keep", first);
+    const second = rewrite("the change, rebased again");
+    await snapshotRunTree(worktree, runDir);
+    const { change } = await refreezeSessionChange(here, runDir, worktree);
+    expect(change.tip).toBe(second);
+    expect(git(worktree, "rev-parse", "HEAD")).toBe(second);
+    expect(git(origin, "rev-parse", "feat")).toBe(second);
+  }, 180_000);
+
+  // PR #303 review: a session that drops a commit already pushed (reset --hard HEAD~1) means it; origin's copy, which
+  // still holds the dropped commit, must not bring it back.
+  test("a worktree rewound off a commit origin holds stays rewound (ct-102179)", async () => {
+    const { origin, here, worktree, runDir } = originWorld("rewound");
+    const base = git(worktree, "rev-parse", "HEAD");
+    write(worktree, "a.txt", "dropped later\n");
+    git(worktree, "commit", "--quiet", "-am", "a commit the session drops");
+    git(worktree, "push", "--quiet", "origin", "feat");
+    const pushed = git(worktree, "rev-parse", "HEAD");
+    writeFrozenChange(runDir, { source: "task", session: "jx7aaaa", base: pushed, tip: pushed, remote_tip: pushed, branch: "feat", worktree: "run-wt-rewound", paths: ["a.txt"], shared: [], held: [] } as any);
+    git(worktree, "reset", "--quiet", "--hard", "HEAD~1");
+    await snapshotRunTree(worktree, runDir);
+    const { change } = await refreezeSessionChange(here, runDir, worktree);
+    expect(change.tip).toBe(base);
+    expect(git(worktree, "rev-parse", "HEAD")).toBe(base);
+    expect(git(origin, "rev-parse", "feat")).toBe(pushed);
+  }, 180_000);
+
+  test("a worktree rewritten here, which origin never held, stays the change though origin moved (ct-102179)", async () => {
+    const { here, worktree, runDir, start, push } = originWorld("rewritten-here");
+    start();
+    push("a.txt", "pushed there\n", "fix there");
+    write(worktree, "a.txt", "rewritten here\n");
+    git(worktree, "commit", "--quiet", "--amend", "-am", "base, rewritten here");
+    const mine = git(worktree, "rev-parse", "HEAD");
+    await snapshotRunTree(worktree, runDir);
+    expect((await refreezeSessionChange(here, runDir, worktree)).change.tip).toBe(mine);
+  }, 180_000);
 });

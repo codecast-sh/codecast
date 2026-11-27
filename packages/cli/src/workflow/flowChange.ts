@@ -32,6 +32,7 @@ import { execFileAsync } from "../proc.js";
 import { git, gitTry } from "../wipSnapshot.js";
 import { BRIEF_TREE, branchChangePaths, heldDir, type FrozenChange } from "./flowChangeFile.js";
 import { readRebaseChain } from "./rebaseRecord.js";
+import { originSupersedes, originTip } from "./originBranch.js";
 import { ownVersion, sessionTranscripts, type Writer } from "./ownLines.js";
 import type { RunHands } from "../lineTrialBranch.js";
 export { frozenChangeContext, writeFrozenChange, type FrozenChange } from "./flowChangeFile.js";
@@ -339,29 +340,6 @@ export async function putChangeInWorktree(repo: string, slug: string, earlier: s
   if (earlier && on === change.branch) await git(earlier, ["reset", "--quiet", "--hard", change.tip]);
 }
 
-/** Origin's tip of `branch`, fetched now; empty when origin has no such branch or cannot be reached. */
-export async function originTip(root: string, branch: string): Promise<string> {
-  const remoteRef = `refs/remotes/origin/${branch}`;
-  await git(root, ["fetch", "--quiet", "origin", `+${branch}:${remoteRef}`]).catch(() => "");
-  return git(root, ["rev-parse", "--verify", "--quiet", remoteRef]).catch(() => "");
-}
-
-/**
- * The commit a run of a named branch starts from, and that branch made local when it lives only on origin. A branch
- * pushed from another machine has no local ref here; without one, the worktree the run makes would create the branch
- * fresh from this checkout's HEAD, and the change would vanish (a rebase of it onto the default branch is empty, which
- * reads as "already landed"). Empty when neither this checkout nor origin has the branch.
- */
-export async function branchHead(root: string, branch: string): Promise<{ head: string; remote_tip: string }> {
-  const remote_tip = await originTip(root, branch);
-  let head = await git(root, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).catch(() => "");
-  if (!head && remote_tip) {
-    await git(root, ["branch", "--quiet", "--no-track", branch, remote_tip]);
-    head = remote_tip;
-  }
-  return { head, remote_tip };
-}
-
 /**
  * The upstream commit when it holds every one of `paths` as the checkout holds them now (a file gone from both is
  * held too), so a change with nothing left uncommitted (another pass shipped it, or the level sweep pulled it in) has
@@ -623,7 +601,13 @@ async function branchCarry(root: string, runDir: string, before: FrozenChange, h
   const remote = await originTip(root, before.branch);
   if (!remote) return { tip: top };
   const seen = { remote_tip: remote };
-  if (!(await isAncestor(root, before.tip, head))) return { tip: top, ...seen };
+  if (!(await isAncestor(root, before.tip, head))) {
+    // Rewritten off the last freeze: the worktree is the change, unless origin has superseded it since. Union's PR
+    // station moves the worktree onto origin's tip without a freeze; the session then rebases and pushes again from its
+    // own checkout, and the worktree's copy is the stale one (ct-102179).
+    if (!(await originSupersedes(root, before.branch, head, remote))) return { tip: top, ...seen };
+    return { tip: top === head ? remote : await replayCarry(root, head, top, remote, `origin's ${before.branch} at ${remote.slice(0, 10)}`), ...seen };
+  }
   const recorded = [...new Set([...(before.remote_tip ? [before.remote_tip] : []), ...pushedHeads(runDir, before.branch)])];
   // What this checkout fetched since the last freeze; with no time recorded for it, nothing counts.
   const since = before.frozen_at ? Math.floor(before.frozen_at / 1000) : Infinity;
