@@ -210,7 +210,7 @@ describe("the shipped change flow", () => {
     expect(JSON.parse(fs.readFileSync(path.join(w.runDir, "pr.json"), "utf-8")).head_sha).toMatch(/^rebased/);
   }, 120_000);
 
-  test("a merge still in line after its wait runs again in its place, with nothing else asked again; past three it stops not merged", async () => {
+  test("a merge still in line after its wait runs again in its place, with nothing else asked again; past three it stops still in line, resumable at PR", async () => {
     const w = world({ ci: [GREEN], review: [SHIP], merge: ["inline", "inline", "merged"] });
     const s = server(w);
     expect(await run(w)).toBe("completed");
@@ -220,7 +220,8 @@ describe("the shipped change flow", () => {
     const s2 = server(long);
     expect(await run(long)).toBe("failed");
     expect(count(long.calls(), "flow merge")).toBe(4);
-    expect(s2.sent().at(-1).body).toContain("stopped at Not merged");
+    expect(s2.sent().at(-1).body).toContain("stopped at Still in line");
+    expect(s2.failReason()).toContain("The change is not at fault: resume this run at PR (`cast workflow resume ct-9 --at pr`)");
     expect(s2.sent().at(-1).body).toContain("still waiting for the lease after 40m");
   }, 120_000);
 

@@ -192,6 +192,46 @@ describe("a station's machine slot", () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
+  test("a fan-out branch that waits out its place is reported failed, saying why, as the fan-in counts it", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "slot-fanout-"));
+    const reports: Array<Record<string, unknown>> = [];
+    const server = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        const body = await req.json().catch(() => ({}));
+        if (new URL(req.url).pathname === "/cli/workflow-runs/progress") reports.push(body as Record<string, unknown>);
+        return Response.json({});
+      },
+    });
+    const g = parseWorkflowSource(`digraph g {
+      start [shape=Mdiamond]
+      split [shape=component]
+      ci    [shape=parallelogram, machine_slot="local_ci", timeout=1, script="echo ran-ci"]
+      other [shape=parallelogram, script="echo other"]
+      join  [shape=tripleoctagon]
+      exit  [shape=Msquare]
+      start -> split
+      split -> ci
+      split -> other
+      ci -> join
+      other -> join
+      join -> exit
+    }`, root);
+    const release = await fillSlots();
+    try {
+      expect(await runWorkflow(g, { cwd: root, runId: "run-fan", apiToken: "tok", convexSiteUrl: `http://127.0.0.1:${server.port}` })).toBe("failed");
+    } finally {
+      release();
+      server.stop(true);
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+    const ci = reports.find((r) => r.node_id === "ci" && r.outcome === NO_SLOT);
+    expect(ci?.node_status).toBe("failed");
+    expect(String(ci?.result_preview)).toContain("ci did not run: all 2 local_ci slots on this machine stayed taken");
+    expect(String(ci?.result_preview)).toContain(`(${NO_SLOT})`);
+    expect(reports.find((r) => r.node_id === "other" && r.outcome === "success")?.node_status).toBe("completed");
+  });
+
   // A Ctrl-C at a runner holding a place: the lock's own handler re-raised the signal after removing every listener,
   // so the process died before the runner's handler recorded the run stopped, and before any exit listener ran.
   test("a Ctrl-C while a station holds its place reports the run stopped, runs the exit, and frees the place", async () => {

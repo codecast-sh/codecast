@@ -277,6 +277,19 @@ describe("a self update another process is already installing", () => {
   });
 });
 
+describe("cast restart while another process updates this install", () => {
+  // The restart action runs a real daemon, so its words are read from the source (the boot graph has no room for a
+  // helper module): the in-progress case is named before the failure line, and the restart goes on after both.
+  it("says the update is in progress, not that it failed, and restarts", () => {
+    const restart = readFileSync(join(import.meta.dir, "index.ts"), "utf-8").split('program\n  .command("restart")')[1]?.split("program\n  .command(")[0] ?? "";
+    const failedLine = restart.indexOf("Update failed");
+    expect(failedLine).toBeGreaterThan(0);
+    const branch = restart.slice(restart.lastIndexOf("} else {", failedLine), restart.indexOf("\n", failedLine));
+    expect(branch).toContain('error === UPDATE_IN_PROGRESS ? "another update of this install is in progress; restarting without updating" : `Update failed');
+    expect(restart.indexOf("startDaemon({ afterStop: true })")).toBeGreaterThan(failedLine);
+  });
+});
+
 describe("two updaters on one install (ct-102415)", () => {
   // Real files on a temp install, and a download that streams like curl -o:
   // open (truncating) the fixed `<binary>.new`, write half, yield, write the

@@ -5134,7 +5134,7 @@ program
         // auto-start) runs the old code: stop it so the new one starts.
         if (getDaemonPid()) stopDaemon();
       } else {
-        console.log(`Update failed${error ? ` (${error})` : ""}, restarting with current version`);
+        console.log(error === UPDATE_IN_PROGRESS ? "another update of this install is in progress; restarting without updating" : `Update failed${error ? ` (${error})` : ""}, restarting with current version`);
       }
     }
     startDaemon({ afterStop: true });
