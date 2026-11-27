@@ -271,12 +271,8 @@ export const PRIORITY_PASS_SCHEMA_WHY = {
   },
 } as const;
 
-/**
- * `why`: ask for the evidence a priority card shows (the experiment's prompt
- * and schema). `declinedMerges`: the merges the person declined on a card
- * (absorbed and survivor short ids), which the pass must never propose again.
- */
-export type PassPromptOpts = { why?: boolean; declinedMerges?: ReadonlyArray<{ absorbed: string; into: string }> };
+/** `why`: ask for the evidence a priority card shows (the experiment's prompt and schema). */
+export type PassPromptOpts = { why?: boolean };
 
 /** The newest messages that fit the session's budget, kept oldest first. */
 function newestWithin<T extends { text: string }>(items: T[], each: number, total: number): T[] {
@@ -371,17 +367,13 @@ export function buildPriorityPassPrompt(input: PriorityPassInput, opts: PassProm
   const calls = input.calls.slice(-PRIORITY_PASS_CAPS.calls).map(callBlock).join("\n\n");
   const corrections = (input.corrections ?? []).slice(-PRIORITY_PASS_CAPS.corrections)
     .map((c) => `- ${when(c.at)} · on ${c.priority}${c.step_key ? `/${c.step_key}` : ""}: ${clip(c.text, PRIORITY_PASS_CAPS.correction_chars)}`).join("\n");
-  const titleOf = new Map(input.priorities.map((p) => [p.short_id, p.title]));
-  const named = (id: string) => (titleOf.has(id) ? `${id} "${clip(titleOf.get(id)!, 120)}"` : id.startsWith("new:") ? `a new priority "${clip(id.slice(4), 120)}"` : id);
-  const declined = (opts.declinedMerges ?? []).map((d) => `- ${named(d.absorbed)} and ${named(d.into)}`).join("\n");
-  const budget = Math.max(PRIORITY_PASS_CAPS.prompt_chars - priorities.length - calls.length - corrections.length - declined.length, PRIORITY_PASS_CAPS.prompt_chars * PRIORITY_PASS_CAPS.session_share_floor);
+  const budget = Math.max(PRIORITY_PASS_CAPS.prompt_chars - priorities.length - calls.length - corrections.length, PRIORITY_PASS_CAPS.prompt_chars * PRIORITY_PASS_CAPS.session_share_floor);
   const { kept, omitted } = fitSessions(input.sessions, budget);
   const prompt = [
     `Person: ${input.person}. Workspace: ${input.workspace || "this workspace"}. Now: ${when(input.now)} UTC. The sessions below were active since ${when(input.window_start)} UTC.`,
     `# Company goals a priority may serve\n${goals}`,
     `# Their priorities so far\n${priorities}`,
     ...(corrections ? [`# Corrections the person wrote (follow every one)\n${corrections}`] : []),
-    ...(declined ? [`# Merges the person declined (never merge these two, either way round)\n${declined}`] : []),
     `# Sessions they worked in since the last pass\n${kept.length ? kept.map(sessionBlock).join("\n\n") : "(none)"}`,
     ...(calls ? [`# Calls they were in since the last pass\n${calls}`] : []),
   ].join("\n\n");

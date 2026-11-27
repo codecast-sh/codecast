@@ -18,7 +18,6 @@ import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 import { PRIORITY_CARDS_EXPERIMENT } from "@codecast/shared/contracts/priorityCard";
 import { hasExperiment } from "./lib/experiments";
-import { splitPlan } from "./lib/priorityCard";
 import { dropDeclined, mergeCardDraft, planWithoutMerges, type CardDraft } from "./lib/priorityCardPass";
 import { cardAnsweredSince, declinedMergesFor, openCards, postPriorityCard } from "./priorityCardPost";
 import { nextShortId } from "./counters";
@@ -336,13 +335,13 @@ export const applyPlan = internalMutation({
       await settleRun(ctx, { ...run, cursor_at: from_cursor, status: "skipped", error: "superseded" });
       return null;
     }
-    const { counts } = await writePlan(ctx, { user_id: args.user_id, workspace: args.workspace }, plan as MergePlan, { conversations, strays });
+    const { counts, created } = await writePlan(ctx, { user_id: args.user_id, workspace: args.workspace }, plan as MergePlan, { conversations, strays });
     const now = Date.now();
 
     const run_id = await settleRun(ctx, { ...run, status: "ok", counts });
     // The run's merges, on a card left without the ones an open card already holds.
     if (card) {
-      const posted = await postPriorityCard(ctx, { user_id: args.user_id, workspace: args.workspace, run_id, cost_usd: args.cost_usd, from: from_cursor, to: args.cursor_at, conversations }, card as CardDraft, now, await openCards(ctx, args.user_id, args.workspace));
+      const posted = await postPriorityCard(ctx, { user_id: args.user_id, workspace: args.workspace, run_id, cost_usd: args.cost_usd, from: from_cursor, to: args.cursor_at, conversations, created }, card as CardDraft, now, await openCards(ctx, args.user_id, args.workspace));
       if (posted && "skipped" in posted) await ctx.db.patch(run_id, { error: posted.skipped });
     }
 
@@ -665,7 +664,7 @@ async function pass(ctx: any, args: PassArgs): Promise<PassResult> {
     return { status: "skipped", reason: "nothing_new", ...(chained ? { chained } : {}) };
   }
   const { input, readTo, left } = runShare(read, read.input, fittingPrefix(read.input));
-  const { req } = priorityPassRequest(input, gate.cards ? { why: true, declinedMerges: gate.declined ?? [] } : {});
+  const { req } = priorityPassRequest(input, gate.cards ? { why: true } : {});
   const spec = { model: req.model, max_tokens: req.max_tokens, system: req.system, prompt: req.prompt, output: "json" as const, output_schema: req.output_schema };
   const reply = await runModelCall(
     ctx,
@@ -693,7 +692,7 @@ async function pass(ctx: any, args: PassArgs): Promise<PassResult> {
   const plan = mergePriorities(input, output);
   const merging = !!gate.cards && plan.merges.length > 0;
   const written = merging ? planWithoutMerges(input, output, plan) : plan;
-  const card = merging ? { card: dropDeclined(mergeCardDraft(splitPlan(plan, input, output), plan, written, input, output), gate.declined ?? []) } : {};
+  const card = merging ? { card: dropDeclined(mergeCardDraft(plan, written, input, output), gate.declined ?? []) } : {};
   // A plan that fails to land still cost the call: record it (the day's ceiling counts it), and a repeat failure steps the cursor past after FAILURES_BEFORE_STEP.
   let counts: Counts | null;
   try {

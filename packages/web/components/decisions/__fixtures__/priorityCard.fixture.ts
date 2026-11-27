@@ -123,7 +123,6 @@ export const priorityCardFixture: PriorityCard = {
     { priority: "pri-1", rank: 1, title: "Payments never double charge", share: 0 },
   ],
   suggested: changes.map((c) => c.id),
-  held: null,
 };
 
 /** The fixture's change ids minus the new priority and its milestones: the screenshots' "some unticked" state. */

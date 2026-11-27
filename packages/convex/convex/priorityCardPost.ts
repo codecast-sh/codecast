@@ -15,15 +15,15 @@ import { syncDecisionInbox } from "./lib/decisionInbox";
 import { parseWorkspaceKey } from "./lib/accessKeys";
 import { activeGroup } from "./lib/priorityGroup";
 import { sessionVisibility } from "./lib/prioritySessionVisibility";
-import { cardContext, cardQuestion, declinedMerges, dropRepeats, type CardDraft } from "./lib/priorityCardPass";
+import { cardContext, cardQuestion, declinedFromCorrections, dropRepeats, withCreatedIds, type CardDraft } from "./lib/priorityCardPass";
 import { inWorkspace } from "./priorityPassInputs";
 
 type Ctx = { db: any };
 
 /** How many of one person's open decisions are read to find their open cards. */
 const OPEN_READ = 1_000;
-/** How many of a pair's newest ok runs are read for the cards they posted, and so the merges the person declined (two small index ranges each). */
-const DECLINED_RUNS_READ = 1_000;
+/** How many of a person's newest corrections in a workspace are read for the merges they declined. */
+const CORRECTIONS_READ = 2_000;
 /** How many of a pair's ok runs are counted for a card's run facts. */
 const RUNS_READ = 1_000;
 /** How many runs back a card looks for the previous card's run (four small index ranges each); past it, it counts this many. */
@@ -40,37 +40,35 @@ export async function openCards(ctx: Ctx, userId: Id<"users">, workspace: string
 }
 
 /**
- * Whether the person answered a priority card of this workspace at or after
- * `since`. A pass run that started before then read the priorities as they
- * were before the answer wrote, so its plan would undo what the person just
- * accepted: applyPlan treats it as superseded, as it does a newer run. One
- * index range: the person's answers since the run started.
+ * Whether the person answered or dismissed a priority card of this workspace
+ * at or after `since`. A pass run that started before then read the
+ * priorities (and the merges declined) as they were before, so its plan would
+ * undo what the person just accepted, or propose again what they just
+ * declined: applyPlan treats it as superseded, as it does a newer run. One
+ * index range per status: the person's resolutions since the run started.
  */
 export async function cardAnsweredSince(ctx: Ctx, userId: Id<"users">, workspace: string, since: number): Promise<boolean> {
-  const answered: Doc<"session_decisions">[] = await ctx.db.query("session_decisions").withIndex("by_user_status_resolved", (q: any) => q.eq("user_id", userId).eq("status", "answered").gte("resolved_at", since)).collect();
-  return answered.some((d) => isCardOf(d, workspace));
+  for (const status of ["answered", "dismissed"] as const) {
+    const resolved: Doc<"session_decisions">[] = await ctx.db.query("session_decisions").withIndex("by_user_status_resolved", (q: any) => q.eq("user_id", userId).eq("status", status).gte("resolved_at", since)).collect();
+    if (resolved.some((d) => isCardOf(d, workspace))) return true;
+  }
+  return false;
 }
 
 /**
- * The merges the person declined on their priority cards in this workspace
- * (unticked on an answered card, or on a dismissed one): a run never proposes
- * one again, and its prompt says so. A card is posted in its run's own write,
- * so each is found by the run that posted it: the pair's ok runs newest first,
- * and for each, the person's answered and dismissed decisions created within
- * it (two small index ranges), however many other decisions they answered.
+ * The merges the person declined on a priority card in this workspace: each
+ * lives as their correction on the absorbed priority (declinedMergeText,
+ * written when the card is answered or dismissed), read here from their
+ * corrections in the workspace that are not deleted, newest first.
  */
 export async function declinedMergesFor(ctx: Ctx, userId: Id<"users">, workspace: string): Promise<Array<{ absorbed: string; into: string }>> {
-  const runs: Doc<"priority_pass_runs">[] = await ctx.db.query("priority_pass_runs").withIndex("by_user_workspace_status", (q: any) => q.eq("user_id", userId).eq("workspace", workspace).eq("status", "ok")).order("desc").take(DECLINED_RUNS_READ);
-  const cards: Array<{ status: string; card: PriorityCard }> = [];
-  for (const r of runs) {
-    for (const status of ["answered", "dismissed"] as const) {
-      const rows: Doc<"session_decisions">[] = await ctx.db.query("session_decisions")
-        .withIndex("by_user_status_created", (q: any) => q.eq("user_id", userId).eq("status", status).gte("created_at", r.started_at).lte("created_at", r.finished_at))
-        .collect();
-      for (const d of rows) if (isCardOf(d, workspace) && (d.priority_card as PriorityCard).run_id === String(r._id)) cards.push({ status, card: d.priority_card as PriorityCard });
-    }
-  }
-  return declinedMerges(cards);
+  const rows: Doc<"priority_corrections">[] = await ctx.db
+    .query("priority_corrections")
+    .withIndex("by_user_workspace_created", (q: any) => q.eq("user_id", userId).eq("workspace", workspace))
+    .order("desc")
+    .filter((q: any) => q.eq(q.field("deleted_at"), undefined))
+    .take(CORRECTIONS_READ);
+  return declinedFromCorrections(rows);
 }
 
 
@@ -139,26 +137,27 @@ export type PostedCard = { posted: Id<"session_decisions"> } | { skipped: string
  * session in the workspace to ask from, the changes stay unwritten and the
  * reason comes back for the run's record. `open` is the person's open cards
  * here (openCards).
- * The card holds only merges (sd-5035): the run wrote everything else. A
- * merge into a priority the run would create names it by its plan ref
- * ("new-1"), and the card holds that create until the merge is accepted.
+ * The card holds only merges (sd-5035): the run wrote everything else, the
+ * new priorities among it (`created`: plan ref -> short id, which a merge
+ * into one now names).
  */
 export async function postPriorityCard(
   ctx: Ctx,
-  run: { user_id: Id<"users">; workspace: string; run_id: Id<"priority_pass_runs">; cost_usd?: number; from: number; to: number; conversations?: Record<string, Id<"conversations">> },
+  run: { user_id: Id<"users">; workspace: string; run_id: Id<"priority_pass_runs">; cost_usd?: number; from: number; to: number; conversations?: Record<string, Id<"conversations">>; created: Record<string, string> },
   raw: CardDraft,
   now: number,
   open: ReadonlyArray<Doc<"session_decisions">>,
 ): Promise<PostedCard> {
   const order = effectivePriorityOrder(await activeGroup(ctx, run.user_id, run.workspace));
   const rankOf = new Map(order.map((p, i) => [p.short_id, i + 1]));
-  // Each survivor as it stands once the run wrote (it may have renamed or moved it); a new one, as the run would make it.
+  const named = withCreatedIds(raw, run.created);
+  // Each survivor as it stands once the run wrote (it may have renamed, moved or just created it).
   const groups = [];
-  for (const g of raw.groups) {
+  for (const g of named.groups) {
     const p: Doc<"priorities"> | null = await ctx.db.query("priorities").withIndex("by_short_id", (q: any) => q.eq("short_id", g.priority)).first();
     groups.push(p && String(p.user_id) === String(run.user_id) && p.workspace === run.workspace ? { ...g, title: p.title, rank: rankOf.get(p.short_id) ?? null } : g);
   }
-  const draft = dropRepeats({ ...raw, groups }, open.map((d) => d.priority_card as PriorityCard));
+  const draft = dropRepeats({ ...named, groups }, open.map((d) => d.priority_card as PriorityCard));
   if (!draft.changes.length) return null;
   const asker = await askingConversation(ctx, run.user_id, run.workspace, run.conversations);
   if (!asker) return { skipped: `card not posted: no session in this workspace to ask from (${draft.changes.length} changes left unwritten)` };
@@ -181,8 +180,6 @@ export async function postPriorityCard(
   }
   words.sort((a, b) => b.share - a.share);
 
-  // The sessions the card may still place, with the conversations the run read them as.
-  const conversations = Object.fromEntries(draft.held.sessions.flatMap((s) => (run.conversations?.[s.session] ? [[s.session, run.conversations[s.session]]] : [])));
   const window = { from: run.from, to: run.to };
   const card: PriorityCard = {
     v: 1,
@@ -201,7 +198,6 @@ export async function postPriorityCard(
     changes: draft.changes,
     words,
     suggested: draft.changes.map((c) => c.id),
-    held: { ...draft.held, conversations },
   };
 
   const titleOf = (priority: string) => draft.groups.find((g) => g.priority === priority)?.title ?? priority;

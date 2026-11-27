@@ -13,6 +13,7 @@ import { isStackedAsk, liftsAskingSession } from "@codecast/shared/contracts";
 import { PRIORITY_CARD_HANDOFF_REFUSED, PRIORITY_CARD_REFUSED } from "./lib/priorityCardAccess";
 import { escalateCore, passCore } from "./decisionHandoff";
 import { addToStackCore, createStackCore } from "./decisionStacks";
+import { doMerge } from "./priorityWrite";
 import { hashToken } from "./apiTokens";
 import { userMayRead } from "./lib/decisionAccess";
 import { api } from "./_generated/api";
@@ -88,21 +89,20 @@ const answer = (w: World, d: Doc<"session_decisions">, ticks: number[], by = ANA
 const outcome = async (w: World, id: Id<"session_decisions">) => ((await w.t.run((ctx) => ctx.db.get(id)))!.priority_card as PriorityCard).outcome;
 
 describe("the request", () => {
-  test("off, the system prompt and schema are today's; on, they ask for why, and name the merges the person declined", () => {
+  test("off, the system prompt and schema are today's; on, they ask for why", () => {
     const input = { person: "Ana", workspace: "Acme", now: 1, window_start: 0, priorities: [], initiatives: [], step_tasks: [], sessions: [], calls: [] } as PriorityPassInput;
     const off = priorityPassRequest(input).req;
     expect(off.system).toBe(PRIORITY_PASS_SYSTEM);
     expect(off.output_schema).toBe(PRIORITY_PASS_SCHEMA as any);
     expect(JSON.stringify(off.output_schema)).not.toContain("why");
     expect(priorityPassRequest(input, {})).toEqual(priorityPassRequest(input));
-    const on = priorityPassRequest(input, { why: true, declinedMerges: [] }).req;
+    const on = priorityPassRequest(input, { why: true }).req;
     expect(on.prompt).toBe(off.prompt);
     expect(on.system.startsWith(PRIORITY_PASS_SYSTEM)).toBe(true);
     expect(on.system).toContain("verbatim");
     expect(on.output_schema).toBe(PRIORITY_PASS_SCHEMA_WHY as any);
     expect((PRIORITY_PASS_SCHEMA_WHY.properties.priorities.items.properties as any).why).toBeDefined();
     expect((PRIORITY_PASS_SCHEMA_WHY.properties.priorities.items.properties.steps.items.properties as any).why).toBeDefined();
-    expect(priorityPassRequest(input, { why: true, declinedMerges: [{ absorbed: "pri-2", into: "pri-1" }] }).req.prompt).toContain("# Merges the person declined (never merge these two, either way round)\n- pri-2 and pri-1");
   });
 });
 
@@ -183,7 +183,8 @@ describe("a pass run", () => {
     expect(await outcome(w, d._id)).toMatchObject({ accepted: [(d.priority_card as PriorityCard).changes[0].id], skipped: [] });
   });
 
-  test("a merge declined is never proposed again, and the next prompt names it", async () => {
+  test("a merge declined becomes the person's correction on the absorbed priority: every pass reads it, and no run proposes the merge while it stands", async () => {
+    const correction = `Not part of pri-1 “Evals people trust”: you declined merging them on a priority card.`;
     for (const decline of ["dismiss", "untick"] as const) {
       const { w, d } = await posted();
       if (decline === "dismiss") await w.t.run((ctx) => finalizeAnswer(ctx as any, d, { status: "dismissed" }, ANA(w), { deliver: false }));
@@ -191,43 +192,44 @@ describe("a pass run", () => {
         await ctx.db.patch(d._id, { status: "answered", answer_text: "keep them apart" });
         await settleClientResolution(ctx as any, d, { status: "answered", answer_text: "keep them apart" }, w.ana, Date.now());
       });
-      await w.send(w.ana, w.teamConv, Date.now(), "calibrating the grader again today");
-      await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team, force: true });
+      const grader = await row(w, "pri-2");
+      const declined = (await w.t.run((ctx) => ctx.db.query("priority_corrections").collect())).filter((c) => c.text === correction);
+      expect(declined.map((c) => [c.priority_id, c.status, c.user_id])).toEqual([[grader._id, "pending", w.ana]]);
+      // Run after run proposes the same merge: no card, and the correction is in every prompt.
+      for (let i = 0; i < 3; i++) {
+        await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team, force: true });
+        expect(model.prompts.at(-1)).toContain(`on pri-2: ${correction}`);
+      }
       expect(await cards(w)).toHaveLength(1);
       expect((await row(w, "pri-2")).status).toBe("active");
-      expect(model.prompts.at(-1)).toContain(`# Merges the person declined (never merge these two, either way round)\n- pri-2 "Grader calibration" and pri-1 "Evals people trust"`);
+      if (decline === "dismiss") {
+        // The person deletes it: the merge may be proposed again.
+        await w.t.run((ctx) => ctx.db.patch(declined[0]._id, { deleted_at: Date.now() }));
+        await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team, force: true });
+        expect(await cards(w)).toHaveLength(2);
+      }
     }
   });
 
-  test("a merge into a new priority waits whole: nothing of it is written; accepting makes it and merges; declining leaves nothing", async () => {
-    const grading = () => reply({ title: "Grading", summary: "new", status: "active", serves: null, rank: 1, merges: ["pri-2"], steps: [{ key: "pri-2/s1", title: "Calibrate the grader", tier: "critical", refs: [] }, { title: "Grade essays", tier: "critical", refs: [] }], sessions: [{ session: "jx7old", step: "pri-2/s1" }, { session: "jx7team", step: "Grade essays" }] });
-    for (const answerIt of [true, false]) {
-      const w = await graderWorld();
-      await cardsOn(w);
-      model.reply = grading;
-      await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team });
-      // Nothing of it: no Grading, Grader calibration as it was, both sessions where they were.
-      expect((await rows(w)).some((p) => p.title === "Grading")).toBe(false);
-      expect((await row(w, "pri-2")).status).toBe("active");
-      expect((await w.conversation(w.teamConv))?.priority_id).toBe((await row(w, "pri-1"))._id);
-      const [d] = await cards(w);
-      expect((d.priority_card as PriorityCard).changes.map((c) => [c.kind, c.priority, c.target, c.parent])).toEqual([["merge", "new-1", "pri-2", undefined]]);
-      expect(d.question).toBe("Merge “Grader calibration” into “Grading”?");
-      if (answerIt) {
-        await answer(w, d, [0]);
-        const made = (await rows(w)).find((p) => p.title === "Grading")!;
-        expect([(await row(w, "pri-2")).status, made.steps.map((s) => s.title)]).toEqual(["merged", ["Grade essays", "Calibrate the grader"]]);
-        expect((await w.conversation(w.oldConv))?.priority_id).toBe(made._id);
-        expect((await w.conversation(w.teamConv))?.priority_id).toBe(made._id);
-      } else {
-        await w.t.run((ctx) => finalizeAnswer(ctx as any, d, { status: "dismissed" }, ANA(w), { deliver: false }));
-        expect((await rows(w)).some((p) => p.title === "Grading")).toBe(false);
-        // Declined: the same new priority absorbing it is not proposed again.
-        await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team, force: true });
-        expect(await cards(w)).toHaveLength(1);
-        expect(model.prompts.at(-1)).toContain(`- pri-2 "Grader calibration" and a new priority "grading"`);
-      }
-    }
+  test("a new priority appears at once; only its merges wait, naming it, and two into it both land", async () => {
+    const w = await graderWorld();
+    await cardsOn(w);
+    model.reply = () => reply({ title: "Grading", summary: "new", status: "active", serves: null, rank: 1, merges: ["pri-2", "pri-3"], steps: [{ key: "pri-2/s1", title: "Calibrate the grader", tier: "critical", refs: [] }, { title: "Grade essays", tier: "critical", refs: [] }], sessions: [{ session: "jx7old", step: "pri-2/s1" }, { session: "jx7team", step: "Grade essays" }] });
+    await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team });
+    // Created now, with its own milestone and the session the run put on it; nothing of either merge.
+    const grading = (await rows(w)).find((p) => p.title === "Grading")!;
+    expect(grading.steps.map((s) => s.title)).toEqual(["Grade essays"]);
+    expect((await w.conversation(w.teamConv))?.priority_id).toBe(grading._id);
+    expect([(await row(w, "pri-2")).status, (await row(w, "pri-3")).status]).toEqual(["active", "active"]);
+    expect((await w.conversation(w.oldConv))?.priority_id).toBe((await row(w, "pri-2"))._id);
+    const [d] = await cards(w);
+    expect((d.priority_card as PriorityCard).changes.map((c) => [c.kind, c.priority, c.target])).toEqual([["merge", grading.short_id, "pri-2"], ["merge", grading.short_id, "pri-3"]]);
+    expect((d.priority_card as PriorityCard).groups.map((g) => [g.priority, g.title])).toEqual([[grading.short_id, "Grading"]]);
+    await answer(w, d, [0, 1]);
+    const after = await row(w, grading.short_id);
+    expect([(await row(w, "pri-2")).status, (await row(w, "pri-3")).status, after.steps.map((s) => s.title)]).toEqual(["merged", "merged", ["Grade essays", "Calibrate the grader"]]);
+    expect((await w.conversation(w.oldConv))?.priority_id).toBe(after._id);
+    expect(await outcome(w, d._id)).toMatchObject({ skipped: [] });
   });
 
   test("a milestone the survivor would carry is held back by the same match the merge makes, by its task as much as its words", async () => {
@@ -260,33 +262,37 @@ describe("a pass run", () => {
     expect((await w.conversation(w.oldConv))?.priority_id).toBe((await row(w, "pri-2"))._id);
   });
 
-  test("accepting is the person's own merge of the absorbed priority as it stands then: a milestone it gained since comes too, none twice", async () => {
-    const { w, d } = await posted();
-    const grader = await row(w, "pri-2");
-    const evalsNow = await row(w, "pri-1");
-    await w.t.run(async (ctx) => {
-      await ctx.db.patch(grader._id, { steps: [...grader.steps, step("s2", "Grader faults under 5%"), step("s3", "Publish the rubric")], step_key_max: 3 });
+  test("accepting is exactly the person's own merge on the priorities page, of the absorbed priority as it stands then (refs and their settings kept)", async () => {
+    const changed = async (w: World) => {
+      const grader = await row(w, "pri-2");
+      await w.t.run((ctx) => ctx.db.patch(grader._id, { steps: [...grader.steps, { ...step("s2", "Publish the rubric"), refs: [{ kind: "task", id: "ct-9" }], tier: "polish", tier_set_by: "person" }], step_key_max: 2 }));
+    };
+    const card = await posted();
+    await changed(card.w);
+    await answer(card.w, card.d, [0]);
+    const page = await posted();
+    await changed(page.w);
+    await page.w.t.run((ctx) => doMerge(ctx as any, page.w.ana, "pri-2", "pri-1"));
+    const state = async (w: World) => ({
+      evals: (await row(w, "pri-1")).steps,
+      grader: ((p) => [p.status, p.status_set_by, p.merged_into === undefined])(await row(w, "pri-2")),
+      old: ((c) => [c?.priority_step_key])(await w.conversation(w.oldConv)),
     });
-    await answer(w, d, [0]);
-    const after = await row(w, "pri-1");
-    expect(after.steps.map((s) => s.title)).toEqual([...evalsNow.steps.map((s) => s.title), "Calibrate the grader", "Publish the rubric"]);
-    expect((await row(w, "pri-2")).status).toBe("merged");
+    const [viaCard, viaPage] = [await state(card.w), await state(page.w)];
+    expect(viaCard).toEqual(viaPage);
+    expect(viaCard.evals.find((s) => s.title === "Publish the rubric")).toMatchObject({ refs: [{ kind: "task", id: "ct-9" }], tier: "polish", tier_set_by: "person" });
   });
 
-  test("a decline outlives hundreds of other decisions answered since", async () => {
+  test("a card dismissed while a run reads supersedes that run: its plan proposes nothing the person just declined", async () => {
     const { w, d } = await posted();
-    await w.t.run((ctx) => finalizeAnswer(ctx as any, d, { status: "dismissed" }, ANA(w), { deliver: false }));
-    await w.t.run(async (ctx) => {
-      for (let i = 0; i < 400; i++) {
-        for (const status of ["answered", "dismissed"] as const) {
-          await ctx.db.insert("session_decisions", { conversation_id: w.oldConv, session_id: "jx7old", user_id: w.ana, question: `q${i}`, options: [{ label: "A" }], blocking: true, status, created_at: Date.now() + 1 + i, resolved_at: Date.now() + 1 + i } as any);
-        }
-      }
-    });
     await tick();
-    await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team, force: true });
-    expect(await cards(w)).toHaveLength(1);
-    expect((await row(w, "pri-2")).status).toBe("active");
+    const started_at = Date.now();
+    await tick();
+    await w.t.run((ctx) => finalizeAnswer(ctx as any, d, { status: "dismissed" }, ANA(w), { deliver: false }));
+    const plan = { creates: [], updates: [{ short_id: "pri-1", patch: { summary: "stale" }, seen_steps: [] }], merges: [], sessions: [], unmap: [], notes: [], rewritten: [] };
+    expect(await w.t.mutation(pass.applyPlan, { user_id: w.ana, workspace: w.team, started_at, from_cursor: 7, cursor_at: started_at, model: "m", plan, cards_on: true })).toBeNull();
+    expect((await row(w, "pri-1")).summary).not.toBe("stale");
+    expect(await w.latestRun()).toMatchObject({ status: "skipped", error: "superseded" });
   });
 
   test("a merge goes stale when either priority was set aside or merged by hand since: accepting it writes nothing", async () => {
@@ -551,14 +557,17 @@ describe("answering the card", () => {
     });
     expect((await row(w, "pri-2")).status).toBe("active");
     const g = await row(w, "pri-1");
-    const corrections = await w.t.run((ctx) => ctx.db.query("priority_corrections").collect());
+    // Two corrections: the merge left unticked, on Grader calibration, and the words, on the card's priority.
+    const all = await w.t.run((ctx) => ctx.db.query("priority_corrections").collect());
+    const corrections = all.filter((c) => c.priority_id === g._id);
+    expect(all.map((c) => c.text)).toContain(`Not part of pri-1 “Evals people trust”: you declined merging them on a priority card.`);
     expect(corrections).toHaveLength(1);
     expect(corrections[0]).toMatchObject({ priority_id: g._id, status: "pending", user_id: w.ana, workspace: w.team });
     expect(corrections[0].text).toContain(d.short_id!);
     expect(corrections[0].text).toContain("Merge: absorbs Grader calibration");
     expect(corrections[0].text.endsWith(words)).toBe(true);
     const { input } = await w.t.query(pass.passInputs, { user_id: w.ana, workspace: w.team });
-    expect(input.corrections?.map((c: any) => c.text)).toEqual([corrections[0].text]);
+    expect(input.corrections?.map((c: any) => c.text)).toContain(corrections[0].text);
     expect(await outcome(w, d._id)).toMatchObject({ accepted: [], skipped: [], text: words });
   });
 });

@@ -21,7 +21,7 @@ export type PriorityChangeKind =
   | "new_priority" // to: the slot it lands in
   | "done"
   | "reopen"
-  | "serves" // from/to: the goals' titles on the card (the held plan keeps their short ids); null = none
+  | "serves" // from/to: the goals' titles; null = none
   | "merge" // from: the absorbed priority's title; target: the absorbed short id
   // A milestone
   | "new_milestone" // to: its title
@@ -104,8 +104,6 @@ export type PriorityCard = {
   words: PriorityWordsRow[];
   /** Changes ticked when the card opens (all of them for now). */
   suggested: string[];
-  /** What answering writes from: the run's plan as the core split it (opaque to clients; lib/priorityCardApply reads it). */
-  held: unknown;
   /** Set once the person answered (a dismissal is "accept none"): the change ids written, those ticked that no longer applied to the priorities as they stood, and the words they wrote (saved as a correction the next pass reads). */
   outcome?: { accepted: string[]; skipped: string[]; at: number; text?: string };
 };

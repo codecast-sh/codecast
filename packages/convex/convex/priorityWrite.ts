@@ -155,12 +155,9 @@ const keyNumber = (key: string | null | undefined) => {
  * The person merges one priority into another of theirs in the same
  * workspace: its milestones (dropped ones too, so the pass still sees them)
  * join the survivor under new keys, its sessions and corrections follow with
- * their milestone, and it is marked merged by the person. `joinSameTitles`
- * (a priority card's accepted merge, lib/priorityCardApply): a live milestone
- * whose title the survivor already holds live is not carried twice; its
- * sessions and corrections go to the survivor's.
+ * their milestone, and it is marked merged by the person.
  */
-export async function doMerge(ctx: Ctx & { scheduler: any }, viewer: Id<"users">, shortId: string, intoId: string, opts: { joinSameTitles?: boolean } = {}): Promise<Result<PriorityRow>> {
+export async function doMerge(ctx: Ctx & { scheduler: any }, viewer: Id<"users">, shortId: string, intoId: string): Promise<Result<PriorityRow>> {
   const p = await owned(ctx, viewer, shortId);
   if ("error" in p) return p;
   const into = await owned(ctx, viewer, intoId);
@@ -171,16 +168,10 @@ export async function doMerge(ctx: Ctx & { scheduler: any }, viewer: Id<"users">
   // New keys after every one the survivor has spent (its mark).
   let next = Math.max(await stepKeyMark(ctx, into), ...into.steps.map((s) => keyNumber(s.key)));
   const remap = new Map<string, string>();
-  const same = (s: PriorityStep) => (opts.joinSameTitles && !s.dropped ? into.steps.find((x) => !x.dropped && x.title.trim().toLowerCase() === s.title.trim().toLowerCase()) : undefined);
-  const carried = p.steps.flatMap((s) => {
-    const held = same(s);
-    if (held) {
-      remap.set(s.key, held.key);
-      return [];
-    }
+  const carried = p.steps.map((s) => {
     const key = `s${++next}`;
     remap.set(s.key, key);
-    return [{ ...s, key }];
+    return { ...s, key };
   });
   await ctx.db.patch(into._id, { steps: [...into.steps, ...carried], step_key_max: next, updated_at: now });
   await ctx.db.patch(p._id, { status: "merged", merged_into: into._id, status_set_by: "person", ...UNRANKED, updated_at: now });
