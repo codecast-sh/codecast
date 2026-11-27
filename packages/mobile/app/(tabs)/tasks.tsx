@@ -37,6 +37,7 @@ import { sameAssigneeInfo } from "@codecast/shared/contracts/orgAssignee";
 import { TaskItemRow, STATUS_CONFIG, PRIORITY_CONFIG, PRIORITY_ORDER, showTaskActions } from "@/components/TaskItem";
 import { PlanItemRow, PLAN_STATUS_CONFIG, PLAN_STATUS_ORDER } from "@/components/PlanItem";
 import { DocItemRow } from "@/components/DocItem";
+import { PlanStatusMark, PriorityMark, ROW_MARK, TaskStatusMark } from "@/components/marks";
 import { showActionSheet } from "@/lib/popups";
 import { RoutineList } from "@/components/hosted/Routines";
 
@@ -190,7 +191,7 @@ function CreateTaskModal({
 }
 
 type TaskListItem =
-  | { kind: "header"; key: string; icon: React.ComponentProps<typeof FontAwesome>["name"]; color: string; label: string; count: number }
+  | { kind: "header"; key: string; icon: React.ComponentProps<typeof FontAwesome>["name"]; mark?: React.ReactNode; color: string; label: string; count: number }
   | { kind: "task"; key: string; task: TaskItem }
   | { kind: "doneToggle"; key: string };
 
@@ -542,12 +543,13 @@ export default function TasksScreen() {
       let icon: React.ComponentProps<typeof FontAwesome>["name"] = "circle-o";
       let color = Theme.textMuted0;
       let label = groupKey;
+      let mark: React.ReactNode = undefined;
       if (groupBy === "status") {
         const cfg = STATUS_CONFIG[groupKey as TaskStatus];
-        if (cfg) { icon = cfg.icon; color = cfg.color; label = cfg.label; }
+        if (cfg) { mark = <TaskStatusMark status={groupKey} size={ROW_MARK} />; color = cfg.color; label = cfg.label; }
       } else if (groupBy === "priority") {
         const cfg = PRIORITY_CONFIG[groupKey as keyof typeof PRIORITY_CONFIG];
-        if (cfg) { icon = cfg.icon; color = cfg.color; label = cfg.label; }
+        if (cfg) { mark = <PriorityMark priority={groupKey} size={ROW_MARK} />; color = cfg.color; label = cfg.label; }
       } else if (groupBy === "assignee") {
         icon = groupKey === "Unassigned" ? "user-o" : "user";
         color = groupKey === "Unassigned" ? Theme.textMuted0 : Theme.accent;
@@ -558,7 +560,7 @@ export default function TasksScreen() {
         label = groupKey;
       }
       return [
-        { kind: "header", key: `h:${groupKey}`, icon, color, label, count: items.length },
+        { kind: "header", key: `h:${groupKey}`, icon, mark, color, label, count: items.length },
         ...items.map((t): TaskListItem => ({ kind: "task", key: t._id, task: t })),
       ];
     },
@@ -579,7 +581,7 @@ export default function TasksScreen() {
       if (item.kind === "header") {
         return (
           <RNView style={styles.sectionHeader}>
-            <FontAwesome name={item.icon} size={11} color={item.color} />
+            {item.mark ?? <FontAwesome name={item.icon} size={11} color={item.color} />}
             <RNText style={[styles.sectionTitle, { color: item.color }]}>
               {item.label} ({item.count})
             </RNText>
@@ -636,7 +638,7 @@ export default function TasksScreen() {
       return (
         <RNView key={status}>
           <RNView style={styles.sectionHeader}>
-            <FontAwesome name={cfg.icon} size={11} color={cfg.color} />
+            <PlanStatusMark status={status} size={ROW_MARK} />
             <RNText style={[styles.sectionTitle, { color: cfg.color }]}>
               {cfg.label} ({items.length})
             </RNText>
@@ -1087,10 +1089,12 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     paddingHorizontal: Spacing.lg,
     paddingTop: Spacing.md,
   },
+  // The mark and its gap match a row's (TaskItem, PlanItem), so a heading's
+  // mark and words sit in the same columns as the rows under it.
   sectionHeader: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 6,
+    gap: 8,
     paddingHorizontal: Spacing.lg,
     paddingVertical: Spacing.sm,
     backgroundColor: Theme.bgAlt,
