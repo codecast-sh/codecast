@@ -24,7 +24,10 @@ mock.module('expo-haptics', () => ({ impactAsync: () => {}, ImpactFeedbackStyle:
 mock.module('expo-router', () => ({ router: { push: () => {} }, useFocusEffect: (fn: () => (() => void) | void) => React.useEffect(fn, [fn]) }));
 mock.module('@expo/vector-icons/FontAwesome', () => ({ default: host('FontAwesome') }));
 mock.module('@expo/vector-icons/Feather', () => ({ default: host('Feather') }));
-mock.module('react-native-svg', () => ({ SvgXml: host('SvgXml') }));
+mock.module('react-native-svg', () => ({
+  SvgXml: host('SvgXml'), default: host('Svg'), G: host('G'), Path: host('Path'), Circle: host('Circle'), Rect: host('Rect'),
+  Line: host('Line'), Polyline: host('Polyline'), Polygon: host('Polygon'), Ellipse: host('Ellipse'),
+}));
 mock.module('@/components/Themed', () => ({ Text: host('Text'), TextInput: host('TextInput') }));
 mock.module('@/components/org/RoleFace', () => ({ RoleFace: host('RoleFace') }));
 mock.module('@/components/AgentLogo', () => ({ AgentLogoSvg: host('AgentLogoSvg') }));
