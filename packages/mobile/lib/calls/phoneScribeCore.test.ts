@@ -272,4 +272,25 @@ describe("phone scribe", () => {
     h.live({ startedBy: ME, routes: [{ kind: "session", target: "c1" }, { kind: "doc", target: "d1" }] });
     expect(targets!()).toEqual(["c1"]);
   });
+
+  // A dropped socket reopens a second later; a mute in that second closes the
+  // mic. The reopen must not revive a recognizer on the closed mic, or the
+  // unmute that follows finds a pipe and never opens the mic again.
+  test("a drop, then a mute within the second: unmuting opens the mic again", async () => {
+    const h = await scribing();
+    h.sessions[0].events.onDropped();
+    h.call.muted = true;
+    h.scribe.reconcile();
+    h.advance(1_000);
+    await settle();
+    expect(h.taps[0].closed).toBe(true);
+    await new Promise((r) => setTimeout(r, 1_100));
+    h.call.muted = false;
+    h.scribe.reconcile();
+    await settle();
+    expect(h.taps).toHaveLength(2);
+    expect(h.engine.getStatus().trackCount).toBe(1);
+    h.taps[1].push();
+    expect(h.sessions.at(-1).fed.length).toBeGreaterThan(0);
+  });
 });

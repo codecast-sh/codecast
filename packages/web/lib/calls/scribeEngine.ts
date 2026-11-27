@@ -144,8 +144,9 @@ export type ScribeEngine = {
    *  restarted microphone keeps its publication and stops its old track. */
   attach(key: string, track: MediaStreamTrack, speakerId: string, speakerName: string): void;
   /** The same, for a microphone with no MediaStreamTrack to read (the phone):
-   *  `open` builds the pipe, and runs again when a dropped pipe reopens. */
-  attachPcm(key: string, open: AsrPipeOpener, speakerId: string, speakerName: string): void;
+   *  `open` builds the pipe, and runs again when a dropped pipe reopens, as
+   *  long as `alive` says the mic it reads is still open. */
+  attachPcm(key: string, open: AsrPipeOpener, speakerId: string, speakerName: string, alive?: () => boolean): void;
   detach(key: string): void;
   /** Detach after committing what the pipe heard and waiting (bounded) for
    *  its last words, which are appended as usual. */
@@ -294,7 +295,7 @@ export function createScribeEngine(): ScribeEngine {
     getStatus: () => status,
     elapsed: nowMs,
     attach,
-    attachPcm: (key, open, speakerId, speakerName) => attachSource(key, open, open, () => true, speakerId, speakerName),
+    attachPcm: (key, open, speakerId, speakerName, alive = () => true) => attachSource(key, open, open, alive, speakerId, speakerName),
     detach,
     async finishPipe(key) {
       const pipe = pipes.get(key);

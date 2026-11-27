@@ -94,4 +94,26 @@ test("finishPipe keeps a pipe's last words, then detaches it", async () => {
   await engine.stop({ keepLive: true });
 });
 
+// A dropped pipe reopens a second later, but not on a mic its caller has
+// closed in the meantime (a phone muted in that second).
+test("attachPcm's alive gates the reopen after a drop", async () => {
+  const c = { mutation: async () => ({ transcript_id: "t4", role: "scribe" }), action: async () => ({}) };
+  const engine = createScribeEngine();
+  await engine.start({ convex: c, roomKey: "dm:u1" });
+  let opens = 0;
+  let events: any = null;
+  let micOpen = true;
+  engine.attachPcm("local:mic", (o: any) => {
+    opens++;
+    events = o.events;
+    return { speaking: false, finish: async () => {}, close: () => {} };
+  }, "u1", "Cam", () => micOpen);
+  events.onDropped();
+  micOpen = false;
+  await new Promise((r) => setTimeout(r, 1_100));
+  expect(opens).toBe(1);
+  expect(engine.getStatus().trackCount).toBe(0);
+  await engine.stop({ keepLive: true });
+});
+
 afterAll(() => mock.restore());

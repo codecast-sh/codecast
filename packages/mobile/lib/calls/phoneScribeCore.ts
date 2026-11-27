@@ -225,6 +225,8 @@ export function createPhoneScribe(d: PhoneScribeDeps) {
       },
       meId,
       me?.name || "Me",
+      // A reopen after a drop only on the mic this pipe was opened on.
+      () => tap === micTap,
     );
   }
 
