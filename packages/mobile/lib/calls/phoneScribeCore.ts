@@ -40,6 +40,11 @@ export const MIC_KEY = "local:mic";
 // waits before asking again: reconcile runs on every call-snapshot change.
 export const RETRY_MS = 10_000;
 
+/** The room this phone sits in: connected, or reconnecting to the same room. */
+function seatedRoom(call: PhoneCallView): string | null {
+  return call.phase === "connected" || call.phase === "connecting" ? call.roomKey : null;
+}
+
 export function createPhoneScribe(d: PhoneScribeDeps) {
   const { engine } = d;
   let watchedRoom: string | null = null;
@@ -94,7 +99,7 @@ export function createPhoneScribe(d: PhoneScribeDeps) {
   function reconcile(): void {
     if (busy) return;
     const call = d.call();
-    const roomKey = call.phase === "connected" ? call.roomKey : null;
+    const roomKey = seatedRoom(call);
     if (roomKey !== watchedRoom) {
       tapUnavailable = false;
       retryAt = 0;
@@ -107,7 +112,9 @@ export function createPhoneScribe(d: PhoneScribeDeps) {
     const status = engine.getStatus();
     const verdict = decidePhoneScribe({
       roomKey,
-      connected: true,
+      // Reconnecting holds whatever is running (decideAutoScribe holds while
+      // not connected), so a network blip neither ends the run nor starts one.
+      connected: call.phase === "connected",
       // The phone has no walkie: every seat it holds was taken on purpose.
       deliberate: true,
       transcribeOff: !!flags?.transcribe_off,
@@ -134,7 +141,9 @@ export function createPhoneScribe(d: PhoneScribeDeps) {
       return;
     }
     const micTap = tap ?? (await d.openTap());
-    if (!micTap || watchedRoom !== roomKey) {
+    // The mic can take a while (a permission sheet, the audio session): the
+    // call may have ended or moved rooms by the time it opens.
+    if (!micTap || seatedRoom(d.call()) !== roomKey) {
       micTap?.close();
       if (!micTap) tapUnavailable = true;
       await retire({ graceful: false, keepLive: true, releaseRoom: micTap ? undefined : roomKey });

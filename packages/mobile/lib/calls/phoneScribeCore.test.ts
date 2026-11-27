@@ -140,4 +140,34 @@ describe("phone scribe", () => {
     await h.scribe.finishForLeave();
     expect(h.log).toEqual(["finish", "append last words", "flush", "tap closed"]);
   });
+
+  test("a reconnect (LiveKit connecting, same room) keeps the run and its mic", async () => {
+    const h = await scribing();
+    h.log.length = 0;
+    h.call.phase = "connecting";
+    h.scribe.reconcile();
+    await settle();
+    h.call.phase = "connected";
+    h.scribe.reconcile();
+    await settle();
+    expect(h.log).toEqual([]);
+    expect(h.engine.getStatus()).toMatchObject({ active: true, trackCount: 1 });
+  });
+
+  test("a mic that opens after the call ended is closed, never attached", async () => {
+    let resolveTap: (t: any) => void = () => {};
+    const h = harness({ openTap: () => new Promise((r) => (resolveTap = r)) });
+    h.scribe.reconcile();
+    h.live(null);
+    await settle();
+    h.call.phase = "idle";
+    h.call.roomKey = null;
+    h.scribe.reconcile();
+    const tap = h.newTap();
+    resolveTap(tap);
+    await settle();
+    expect(tap.closed).toBe(true);
+    expect(h.sessions).toHaveLength(0);
+    expect(h.engine.getStatus().active).toBe(false);
+  });
 });
