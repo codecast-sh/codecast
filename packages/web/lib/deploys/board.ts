@@ -138,17 +138,21 @@ type RunFacts = Pick<ShippingRun, "node_statuses" | "current_node_id" | "pr" | "
 /** What each step's facts say, else its stations: done, in trouble (red verdict, failed station), running, or not reached. */
 type Read = "done" | "trouble" | "active" | "idle";
 /** What each step's facts say on their own (a verdict on the PR's head, the PR, the merge), null where none speaks. */
-function stepFacts(run: RunFacts, steps: readonly Step[]): { facts: Array<Read | null>; staleReview: boolean; reviewAt: number } {
+function stepFacts(run: RunFacts, steps: readonly Step[]): { facts: Array<Read | null>; stale: boolean[] } {
   // A review binds to the head it read: once a fix round pushed another, the verdict (and the review station's earlier
   // pass) says nothing of the head the PR is on, as the PR's header says (changePage reviewOnHead).
   const v = run.review_verdict;
   const staleReview = !!(v?.head_sha && run.pr?.head_sha && !verdictOnHead(v.head_sha, run.pr.head_sha, run.station_rebases));
   const reviewAt = steps.findIndex((s) => s.word === "Review");
   const review: Read | null = v && !staleReview ? (v.verdict === "ship" ? "done" : "trouble") : null;
+  // CI binds to its head the same way, and does not hold across a rebase: it reruns there (changePage current).
+  const ci = run.ci_verdict;
+  const staleCi = !!(ci?.head_sha && run.pr?.head_sha && !verdictOnHead(ci.head_sha, run.pr.head_sha));
+  const ciAt = steps === CHANGE_STEPS ? steps.findIndex((s) => s.word === "CI") : -1;
   const facts: Array<Read | null> = steps === CHANGE_STEPS
-    ? [run.pr ? "done" : null, run.ci_verdict ? (run.ci_verdict.green ? "done" : "trouble") : null, review, run.merge ? "done" : null]
+    ? [run.pr ? "done" : null, ci && !staleCi ? (ci.green ? "done" : "trouble") : null, review, run.merge ? "done" : null]
     : [run.check_verdict ? (run.check_verdict.green ? "done" : "trouble") : null, review, isMerged(run) ? "done" : null];
-  return { facts, staleReview, reviewAt };
+  return { facts, stale: steps.map((_, i) => (i === reviewAt && staleReview) || (i === ciAt && staleCi)) };
 }
 
 function readSteps(run: RunFacts, steps: readonly Step[] = stepsFor(run)): Read[] {
@@ -163,11 +167,12 @@ function readSteps(run: RunFacts, steps: readonly Step[] = stepsFor(run)): Read[
       if (status === "completed" && s.passes?.includes(leafOf(id))) passed[j] = true;
     });
   }
-  const { facts, staleReview, reviewAt } = stepFacts(run, steps);
+  const { facts, stale } = stepFacts(run, steps);
   // A station's status says it ran, not what it found: a completed CI station without a verdict counts as done.
   return facts.map((fact, i) => {
     if (fact) return fact;
-    if (i === reviewAt && staleReview) return byStep[i].includes("running") ? "active" : "idle";
+    // A verdict on another head: the step's earlier pass says nothing of this one either.
+    if (stale[i]) return byStep[i].includes("running") ? "active" : "idle";
     const st = passed[i] ? byStep[i].filter((x) => x !== "failed") : byStep[i];
     if (st.includes("failed")) return "trouble";
     if (st.includes("running") || forked[i]) return "active";

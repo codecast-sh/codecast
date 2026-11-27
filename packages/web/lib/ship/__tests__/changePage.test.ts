@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { onPrHead } from "@codecast/shared/contracts/deployTargets";
 import { journeyOf } from "../journey";
 import { stopTitle } from "../journeyWords";
 import { changeAction, changeHeadline, changeLinks, changePr, changeStations, currentHead, deployLine, endedStages, reviewOnHead, shipsChange } from "../changePage";
@@ -246,6 +247,11 @@ describe("C: truth", () => {
     // CI green on a change that edits CI, current: shown, but not as a pass.
     const r3 = run({ pr: { number: 217, repository: "acme/app", head_sha: "bbb" }, ci_verdict: { green: true, ci_changed: true, head_sha: "bbb" }, node_statuses: ROUND });
     expect(changeLinks(r3, change).find((l) => l.kind === "ci")).toMatchObject({ label: "CI green, not counted", tone: "default" });
+    // Resolve conflict force-pushed ddd, which GitHub has and the run has not recorded: judged on the PR's real head, the
+    // run's verdicts on bbb say nothing, as the PR's header says nobody has reviewed it.
+    const r4 = run({ pr: { number: 217, repository: "acme/app", head_sha: "bbb" }, ci_verdict: { green: true, ci_changed: true, head_sha: "bbb" }, review_verdict: { verdict: "ship", head_sha: "bbb" }, node_statuses: [st("pr", "completed", 1), st("ci", "completed", 2), st("review", "completed", 2, { session: { _id: "r" } }), st("merge", "failed", 3), st("fix_conflict", "completed", 4)] });
+    expect(changeLinks(r4, change).map((l) => l.label)).toEqual(["PR #217", "CI green, not counted", "Review passed"]);
+    expect(changeLinks(onPrHead(r4, "ddd"), change).map((l) => l.label)).toEqual(["PR #217", "CI", "Review"]);
   });
 
   test("Union's runs record no verdicts: CI and Review are plain links, no state", () => {

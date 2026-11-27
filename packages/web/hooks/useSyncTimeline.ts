@@ -130,18 +130,18 @@ export function useSyncPullRequest(args: { repository: string; number: number } 
 }
 
 /** What usePullRequestMerge draws from a row: one stable function, so the reader keeps its memo across renders. */
-export const prMergeSig = (p: any) => `${p.state}|${p.merge_commit_sha ?? ""}`;
+export const prMergeSig = (p: any) => `${p.state}|${p.merge_commit_sha ?? ""}|${p.head_sha ?? ""}`;
 
-/** Whether GitHub merged one pull request, and as what commit: its list row only (fed here, never its detail), for a
- *  surface that says where a change stands (a change run's page). Undefined while the store holds no row. */
-export function usePullRequestMerge(ref: { repository: string; number: number } | null): { merged: boolean; merge_sha: string | null } | undefined {
+/** Whether GitHub merged one pull request, as what commit, and the head it is on: its list row only (fed here, never its
+ *  detail), for a surface that says where a change stands (a change run's page). Undefined while the store holds no row. */
+export function usePullRequestMerge(ref: { repository: string; number: number } | null): { merged: boolean; merge_sha: string | null; head_sha: string | null } | undefined {
   useSyncCollection("pullRequests", api.pull_requests.getPRByNumber, ref ? { repository: ref.repository, number: ref.number } : "skip", ONE_ROW);
   const repository = ref ? normalizeRepository(ref.repository) : null;
   const number = ref?.number ?? null;
   const where = useMemo(() => (p: any) => !!repository && normalizeRepository(p.repository) === repository && p.number === number, [repository, number]);
   const rows = useCollectionRows<any>("pullRequests", { where, sig: prMergeSig });
   const row = rows[0];
-  return useMemo(() => (row ? { merged: row.state === "merged", merge_sha: row.merge_commit_sha ?? null } : undefined), [row?.state, row?.merge_commit_sha]);
+  return useMemo(() => (row ? { merged: row.state === "merged", merge_sha: row.merge_commit_sha ?? null, head_sha: row.head_sha ?? null } : undefined), [row?.state, row?.merge_commit_sha, row?.head_sha]);
 }
 
 /** Feeder: one pull request's detail by id, for a surface that opens its diff

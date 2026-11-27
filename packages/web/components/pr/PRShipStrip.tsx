@@ -7,6 +7,7 @@ import type { ReactNode } from "react";
 import Link from "next/link";
 import { ArrowUpRight } from "lucide-react";
 import { normalizeRepository } from "@codecast/shared/contracts";
+import { onPrHead } from "@codecast/shared/contracts/deployTargets";
 import type { PrDeployModel } from "../../hooks/usePrDeploy";
 import { useShipping } from "../../hooks/useSyncShipping";
 import { CHANGE_STEPS, isMerged, prState, prStepper, runState, stepper, stepsFor } from "../../lib/deploys/board";
@@ -32,10 +33,13 @@ export function PRShipStrip({ pr, model, shepherd, authed, runVerdict }: {
   // The newest run carrying this pull request (the server keeps only runs still on their way to main): by its number,
   // else by a task it names when the run recorded no PR, as the Deploys page reads it (board openPrs).
   const tasks = new Set<string>((pr.task_ids ?? []).map(String));
-  const run = (shipping?.runs ?? [])
+  const carrier = (shipping?.runs ?? [])
     .filter((r) => !isMerged(r))
     .filter((r) => (r.pr ? r.pr.number === model.number && normalizeRepository(r.pr.repository || model.repository) === repo : !!r.task_id && tasks.has(String(r.task_id))))
     .sort((a, b) => b.updated_at - a.updated_at)[0] ?? null;
+  // Judged on the head GitHub has the PR on, as the header's Review figure is: a push the run has not recorded yet
+  // (Resolve conflict's force-push) leaves its verdicts on the head before.
+  const run = carrier ? onPrHead(carrier, pr.head_sha) : null;
   if (!model.open) return null;
   const state = run ? runState(run) : prState(pr, runVerdict);
   const steps = run ? stepper(run) : prStepper(pr, runVerdict);

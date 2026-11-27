@@ -540,3 +540,13 @@ export function verdictOnHead(judged: string, head: string, rebases: ReadonlyArr
   for (const r of rebases ?? []) if (r.from === at) at = r.to;
   return at === head || judged === head;
 }
+
+/**
+ * A run as judged on its pull request's real head: GitHub's (the pullRequests row) when known, which a push the run
+ * has not recorded yet (Resolve conflict's force-push) moves past the run's own `pr.head_sha`. The Shipping rail, the
+ * Deploys cards and the run page read a run through this, so each judges its verdicts on the head the PR's header does.
+ */
+export function onPrHead<R extends { pr?: { head_sha?: string | null } | null }>(run: R, head: string | null | undefined): R {
+  if (!head || !run.pr || run.pr.head_sha === head) return run;
+  return { ...run, pr: { ...run.pr, head_sha: head } };
+}

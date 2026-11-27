@@ -1,3 +1,4 @@
+import { onPrHead } from "@codecast/shared/contracts/deployTargets";
 import { describe, expect, test } from "bun:test";
 import {
   after, attemptGroups, branchHref, carriedOfAttempts, carriedOfDeploy, carriedOfQueue, fold, mineSessionIds, queueCommits, repositoryOfRun, rowsFor,
@@ -348,6 +349,27 @@ describe("a running run's track is at its station (pl-1077 polish 3)", () => {
     expect(stepper({ ...r, review_verdict: { verdict: "changes", at: 1, head_sha: "aaa" } })).toEqual(["done", "active", "active", "idle"]);
     // A verdict on an older head speaks for nothing on this one.
     expect(stepper({ ...r, review_verdict: { verdict: "changes", at: 1, head_sha: "old" } })).toEqual(["done", "active", "idle", "idle"]);
+  });
+});
+
+describe("a run is judged on the PR's real head (pl-1077 polish 4)", () => {
+  test("Resolve conflict force-pushed a head the run has not recorded: its review and CI on the old head say nothing", () => {
+    // PR #318: the run's pr.head_sha, review and CI stayed on 396830f while GitHub's head moved to 2424e6c.
+    const r = run("rc", {
+      status: "running", current_node_id: "local_ci", current_node_label: "Local CI",
+      ci_verdict: { green: true, ci_changed: true, head_sha: "396830f", at: 1 }, review_verdict: { verdict: "ship", at: 1, head_sha: "396830f" },
+      pr: { repository: "o/r", number: 318, head_sha: "396830f", first_head_sha: "a00cbbe", at: 1 },
+      node_statuses: [["pr", "completed"], ["checks", "completed"], ["ci", "completed"], ["review", "completed"], ["merge", "failed"], ["fix_conflict", "completed"], ["local_ci", "running"]].map(([node_id, status]) => ({ node_id, status })),
+    });
+    // On the run's own record the rail claims Review passed.
+    expect(stepper(r)).toEqual(["done", "active", "done", "idle"]);
+    const seen = onPrHead(r, "2424e6c");
+    expect(seen.pr?.head_sha).toBe("2424e6c");
+    expect(stepper(seen)).toEqual(["done", "active", "idle", "idle"]);
+    // Once the run reads the new head, its verdicts there count again.
+    expect(stepper(onPrHead({ ...r, review_verdict: { verdict: "ship", at: 2, head_sha: "2424e6c" }, ci_verdict: { green: true, head_sha: "2424e6c", at: 2 } }, "2424e6c"))).toEqual(["done", "active", "done", "idle"]);
+    // No PR row read yet: the run's own head stands.
+    expect(onPrHead(r, null)).toBe(r);
   });
 });
 

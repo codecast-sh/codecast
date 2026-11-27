@@ -10,7 +10,8 @@
 import { useState } from "react";
 import Link from "next/link";
 import { ChevronRight } from "lucide-react";
-import type { ShippingRun, ShippingShipper } from "@codecast/shared/contracts/deployTargets";
+import { onPrHead, type ShippingRun, type ShippingShipper } from "@codecast/shared/contracts/deployTargets";
+import { normalizeRepository } from "@codecast/shared/contracts";
 import type { CheckoutRow } from "@codecast/shared/contracts/checkouts";
 import { CHANGE_STEPS, ago, byUrgency, openPrs, prState, prStepper, repositoryOfRun, runOwner, runState, shippingRuns, stepper, stepsFor, type CardId, type OpenPr } from "../../lib/deploys/board";
 import { prMatches, runMatches, type DeployFocus } from "../../lib/deploys/focus";
@@ -70,6 +71,12 @@ export function ShippingColumn({ runs, shippers, error, prs, prsFailed = false, 
   const { moving, dropped } = mine ? runsOf(repositories, { checkouts, now, landedPrs, keep: (r) => (!!me && runOwner(r, shippers) === me) || runMatches(r, focus) }, runs ?? []) : all;
   // Each card's own repository: its pull request's, and drawn together, the project it is tagged with.
   const repoOf = (r: ShippingRun) => (repositories.length === 1 ? repositories[0] : repositoryOfRun(r, checkouts) ?? repositories[0]);
+  // The head GitHub has the run's pull request on, which a push the run has not recorded yet moves past its own.
+  const prHeadOf = (r: ShippingRun) => {
+    if (!r.pr) return null;
+    const repo = normalizeRepository(r.pr.repository || repoOf(r));
+    return prs?.find((p) => p.number === r.pr!.number && normalizeRepository(p.repository) === repo)?.head_sha ?? null;
+  };
   // A PR a run carries is that run's card, merged or not: only the runs judged above (every run of these repositories) stand for their PRs.
   const carriers = [...all.moving, ...all.dropped];
   // PR cards wait for the runs: until they are read, every PR a run carries would draw as its own card, then move.
@@ -92,7 +99,7 @@ export function ShippingColumn({ runs, shippers, error, prs, prsFailed = false, 
       <h3 className="dpp-colhead">Shipping{read && !error && !prsFailed ? <span className="dpp-num" data-deploy-shipping-count>{mine ? `${count} of ${total}` : plural(count, "change")}</span> : null}</h3>
       <p className="dpp-sub">Ship runs and open pull requests, not on main yet</p>
       <ul className="dpp-ship">
-        {moving.map((r) => <RunCard key={r._id} r={r} repository={repoOf(r)} tagIn={tagIn} now={now} focus={focus} earlier={r.task_short_id ? onMain.get(r.task_short_id) ?? null : null} />)}
+        {moving.map((r) => <RunCard key={r._id} r={onPrHead(r, prHeadOf(r))} repository={repoOf(r)} tagIn={tagIn} now={now} focus={focus} earlier={r.task_short_id ? onMain.get(r.task_short_id) ?? null : null} />)}
         {error ? <li className="dpp-run dpp-run--none" data-deploy-shipping-error>Ship runs can't be read right now</li> : null}
         {prsFailed ? <li className="dpp-run dpp-run--none" data-deploy-prs-error>Open pull requests can't be read right now</li> : null}
         {!read ? <li className="dpp-run dpp-run--none">Reading what is shipping…</li> : null}
@@ -104,7 +111,7 @@ export function ShippingColumn({ runs, shippers, error, prs, prsFailed = false, 
             </button>
           </li>
         ) : null}
-        {showQuiet ? dropped.map((r) => <RunCard key={r._id} r={r} repository={repoOf(r)} tagIn={tagIn} now={now} focus={focus} earlier={null} dropped />) : null}
+        {showQuiet ? dropped.map((r) => <RunCard key={r._id} r={onPrHead(r, prHeadOf(r))} repository={repoOf(r)} tagIn={tagIn} now={now} focus={focus} earlier={null} dropped />) : null}
         {shownPrs.length ? (
           <li className="dpp-group" data-deploy-open-prs={shownPrs.length}>
             Open pull requests<span className="dpp-pick-n">{shownPrs.length}</span><span className="dpp-fold-sub">no Ship run</span>
