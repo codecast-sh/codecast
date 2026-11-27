@@ -23,9 +23,10 @@ export type RetireOnLiveArgs = {
   commits: Array<{ sha: string }>;
 };
 
-/** The daemon's view of the session's terminal: the pane the kill would take, and the hibernation pass's attached-client reading. */
+/** The daemon's view of the session's terminal: the tmux pane the kill would take, whether its agent process is
+ *  running (null when this machine cannot tell), and the hibernation pass's attached-client reading. */
 export type RetireTerminal = {
-  paneFor: (conversationId: string) => Promise<string | null>;
+  terminalOf: (conversationId: string) => Promise<{ pane: string | null; running: boolean | null }>;
   tmuxSessions: () => Promise<Map<string, number>>;
 };
 
@@ -71,11 +72,15 @@ export async function runRetireOnLiveCommand(siteUrl: string, apiToken: string, 
   return retireOnLive(call, commandArgs ? JSON.parse(commandArgs) : {}, terminal);
 }
 
-/** A tmux client attached to its pane's session, as a reason to keep; no pane on this machine is nobody watching. */
+/** Why its terminal may be in use, or null when nobody can be: a tmux pane on this machine with no client attached,
+ *  or no agent process running at all. A live process outside any pane (a plain terminal window) may be watched. */
 async function watchedTerminal(terminal: RetireTerminal, conversationId: string): Promise<string | null> {
   try {
-    const pane = await terminal.paneFor(conversationId);
-    if (!pane) return null;
+    const { pane, running } = await terminal.terminalOf(conversationId);
+    if (!pane) {
+      if (running === false) return null;
+      return running ? "it runs outside a pane this machine can watch" : "its agent process could not be looked up";
+    }
     const clients = (await terminal.tmuxSessions()).get(pane.split(":")[0]);
     if (clients === 0) return null;
     return clients !== undefined && clients > 0 ? "a person has its terminal open" : "its terminal could not be read";

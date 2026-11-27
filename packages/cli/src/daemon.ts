@@ -8480,8 +8480,8 @@ async function executeRemoteCommand(
       // A deploy took the session's own commits live (convex retireOnLive.ts): this machine reads its checkout and its pane's attached clients (the hibernation pass's reading), then retires it or keeps it and says why.
       case "retire_on_live": {
         const { runRetireOnLiveCommand } = await import("./workflow/retireOnLive.js");
-        const paneFor = async (id: string) => { const s = buildReverseConversationCache(readConversationCache())[id]; return s ? (await resolveSessionCommandPane(id, s, detectSessionAgentType(s))).tmuxTarget : null; };
-        result = JSON.stringify(await runRetireOnLiveCommand(siteUrl, config.auth_token, commandArgs, { paneFor, tmuxSessions: productionHibernationIo.tmuxSessions }));
+        const terminalOf = async (id: string) => { const s = buildReverseConversationCache(readConversationCache())[id]; const r = s ? await resolveSessionCommandPane(id, s, detectSessionAgentType(s)) : null; return { pane: r?.tmuxTarget ?? null, running: r ? !!r.proc : null }; };
+        result = JSON.stringify(await runRetireOnLiveCommand(siteUrl, config.auth_token, commandArgs, { terminalOf, tmuxSessions: productionHibernationIo.tmuxSessions }));
         break;
       }
       // `cast hibernate <session>`: park the pane now. Being asked by a person

@@ -20,7 +20,9 @@
 // of its own is still waiting on a target would hide the session that answers
 // for that commit. What it wrote (file_changes, the tool edits the client's
 // attribution counts) must each be in a commit of its own on main made after
-// its last edit there.
+// its last edit there, and a commit of its own on no main (an open pull
+// request, a pushed branch) keeps it unless a later one of its own on main
+// holds its files (a squash, a rebase).
 
 import { v } from "convex/values";
 import { internalMutation } from "./functions";
@@ -97,6 +99,9 @@ async function judge(ctx: any, conv: Doc<"conversations">, now: number, opts: { 
   if ((conv.last_person_turn_at ?? 0) > work.lastAt) return "a person wrote to it after its own work";
   const uncommitted = uncommittedEdits(conv, work.lastEdit, landed);
   if (uncommitted) return uncommitted;
+  // Its edits are not all it made: a commit by a shell or another tool (an open pull request, a pushed branch) is work
+  // the edits never saw.
+  if (own.some((c) => c.main_at == null && made(c) && !heldOnMain(c, landed))) return "it has commits not on main";
   const notLive = await notLiveOn(ctx, conv, landed);
   if (notLive) return notLive;
   const refused = await retireRefusal(ctx, conv, conv.message_count ?? 0, now);
@@ -189,6 +194,16 @@ function uncommittedEdits(conv: Doc<"conversations">, lastEdit: Map<string, numb
   if (outside.length) return `it wrote outside its checkout: ${outside.slice(0, 3).join(", ")}${outside.length > 3 ? ` and ${outside.length - 3} more` : ""}`;
   if (inWorktree.length) return `it edited in a worktree: ${inWorktree.slice(0, 3).join(", ")}${inWorktree.length > 3 ? ` and ${inWorktree.length - 3} more` : ""}`;
   return left.length ? `it has changes not on main: ${left.slice(0, 5).join(", ")}${left.length > 5 ? ` and ${left.length - 5} more` : ""}` : null;
+}
+
+/**
+ * Whether a commit of its own that is not on main landed another way: a squash or a rebase carries the same work to
+ * main under another sha, made after it, so each file it names is in a commit of its own on main from then on. A commit
+ * whose files are unknown proves nothing.
+ */
+function heldOnMain(c: Doc<"commits">, landed: Doc<"commits">[]): boolean {
+  const files = c.files ?? [];
+  return files.length > 0 && files.every((f) => landed.some((l) => (!c.repository || l.repository === c.repository) && l.timestamp + COMMIT_CLOCK_SLACK_MS >= c.timestamp && (l.files ?? []).some((g) => g.filename === f.filename)));
 }
 
 /**

@@ -71,7 +71,7 @@ export function decideForce(sha: string, forced: { sha: string | null; floor: st
     : { force: true, reason: `daemon changed since ${since} (build ${before} -> ${now})` };
 }
 
-export type FleetDevice = { device_id: string; label: string; owner: string; cli_version: string | null; online: boolean; error: string | null };
+export type FleetDevice = { id?: string; device_id: string; label: string; owner: string; cli_version: string | null; online: boolean; error: string | null };
 /** teamCliFloor.fleet's answer: which of the team's machines run `version`. */
 export type Fleet = { team: string; version: string; floor: string | null; took: FleetDevice[]; lagging: FleetDevice[]; offline: FleetDevice[]; cannot_update: FleetDevice[] };
 
@@ -87,11 +87,18 @@ export async function waitForFleet(read: () => Promise<Fleet>, opts: { waitMs: n
   }
 }
 
-const named = (ds: FleetDevice[]) => ds.map((d) => `${d.label} (${d.owner}, ${d.cli_version ?? "?"}${d.error ? `: ${d.error}` : ""})`).join(", ");
+// The note is what @release reads (tellRelease points it there), so a machine is named only by what the server made
+// or checked: its device_id when it passes the server's safeName (convex releaseSweep.ts), else its row id, and an
+// x.y.z version. Labels, owners' names and emails, and update errors are written by members and never go in.
+const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$/;
+const ROW_ID = /^[a-z0-9]{1,64}$/;
+const version = (v: string | null | undefined) => (v && /^\d+\.\d+\.\d+$/.test(v) ? v : "?");
+const deviceRef = (d: FleetDevice) => (SAFE_NAME.test(d.device_id ?? "") ? d.device_id : d.id && ROW_ID.test(d.id) ? d.id : "a machine");
+const named = (ds: FleetDevice[]) => ds.map((d) => `${deviceRef(d)} (${version(d.cli_version)}${d.error ? ", its update failed" : ""})`).join(", ");
 
-/** The fleet as one note: who took it, and by name who lags, is offline or cannot update itself. */
+/** The fleet as one note: who took it, and by id who lags, is offline or cannot update itself. */
 export function fleetNote(f: Fleet): string {
-  const lines = [`Fleet on ${f.version} (${f.team}): ${f.took.length} took it, ${f.lagging.length} lagging, ${f.offline.length} offline, ${f.cannot_update.length} cannot update themselves.`];
+  const lines = [`Fleet on ${version(f.version)} (${f.team}): ${f.took.length} took it, ${f.lagging.length} lagging, ${f.offline.length} offline, ${f.cannot_update.length} cannot update themselves.`];
   if (f.lagging.length) lines.push(`Lagging: ${named(f.lagging)}`);
   if (f.offline.length) lines.push(`Offline: ${named(f.offline)}`);
   if (f.cannot_update.length) lines.push(`Cannot update: ${named(f.cannot_update)}`);

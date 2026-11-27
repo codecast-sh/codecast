@@ -180,6 +180,14 @@
       "stop": "Main keeps moving under this change: CI ran again 3 times and main moved again each time. When main is quieter, resume this run at PR (`cast workflow resume $task_id --at pr`) to run CI and a fresh review on the same change. Merge said: $merge.output"
     },
     {
+      "id": "in_line",
+      "label": "Still in line",
+      "shape": "Msquare",
+      "type": "exit",
+      "stop": "The merge waited its turns in line for the repository's lease, and the line is still long. The change is not at fault: resume this run at PR (`cast workflow resume $task_id --at pr`) to run CI and a fresh review on the same change once the line is shorter. Merge said: $merge.output",
+      "machine": true
+    },
+    {
       "id": "lost",
       "label": "Pull request lost",
       "shape": "Msquare",
@@ -752,6 +760,12 @@
       "to": "merge",
       "label": "still in line",
       "condition": "outcome = failure and merge.exit_code = 4 and merge.free.visits < 3"
+    },
+    {
+      "from": "merge",
+      "to": "in_line",
+      "label": "line still long",
+      "condition": "outcome = failure and merge.exit_code = 4"
     },
     {
       "from": "merge",

@@ -99,7 +99,7 @@ digraph change {
 
   // An exit marked shared="<breakage>" is a stop of the pipeline every change goes through, not of this change: the
   // same breakage on two changes is one incident for @release (convex flowStops.ts), whichever exit said it. Main
-  // moving is congestion, not breakage: unmarked, it is each change's own to resume.
+  // moving and a long line for the lease are congestion, not breakage: unmarked, each is the change's own to resume.
   nopr      [shape=Msquare, label="No pull request", stop="$pr.output"]
   rejected  [shape=Msquare, label="Rejected", stop="The reviewer rejected the change: $verdicts.json.why"]
   found     [shape=Msquare, label="Found work", stop="CI or the reviewer found work, and no session made this change to fix it: $verdicts.json.why"]
@@ -113,6 +113,7 @@ digraph change {
   unreviewed [shape=Msquare, label="Review never finished", machine=true, whole_stop=true, resume="pr", stop="The review never finished, also when asked again. The change is not at fault: resume this run at PR (`cast workflow resume $task_id --at pr`) to run CI and a fresh review on the same change. What stopped it: $last_error"]
   noci      [shape=Msquare, label="CI never reported", machine=true, whole_stop=true, resume="pr", shared="no_ci", stop="CI never reported on the pushed head, also after running it again. The change is not at fault: resume this run at PR (`cast workflow resume $task_id --at pr`) to run CI and a fresh review on the same change once GitHub runs CI on pull requests again. What CI said: $verdicts.json.why"]
   moving    [shape=Msquare, label="Main keeps moving", whole_stop=true, resume="pr", stop="Main keeps moving under this change: CI ran again 3 times and main moved again each time. When main is quieter, resume this run at PR (`cast workflow resume $task_id --at pr`) to run CI and a fresh review on the same change. Merge said: $merge.output"]
+  in_line   [shape=Msquare, label="Still in line", machine=true, whole_stop=true, resume="pr", stop="The merge waited its turns in line for the repository's lease, and the line is still long. The change is not at fault: resume this run at PR (`cast workflow resume $task_id --at pr`) to run CI and a fresh review on the same change once the line is shorter. Merge said: $merge.output"]
   lost      [shape=Msquare, label="Pull request lost", stop="$retest.output"]
   moving_branch [shape=Msquare, label="Branch keeps moving", stop="The branch keeps moving: 3 pushes during review or CI, and a 4th: $verdicts.json.why"]
   mainred   [shape=Msquare, label="Main stayed red", whole_stop=true, resume="pr", shared="main_red", stop="Main's CI did not go green while this change waited for it, so the change's failures could not be told from main's. Once main is green, resume this run at PR (`cast workflow resume $task_id --at pr`) to run CI and a fresh review on the same change. $wait_main.output"]
@@ -175,6 +176,7 @@ digraph change {
   merge -> retest       [condition="outcome = failure and merge.exit_code = 3 and retest.visits < 3", label="retest"]
   merge -> moving       [condition="outcome = failure and merge.exit_code = 3", label="main keeps moving"]
   merge -> merge        [condition="outcome = failure and merge.exit_code = 4 and merge.free.visits < 3", label="still in line", free_visit="merge"]
+  merge -> in_line      [condition="outcome = failure and merge.exit_code = 4", label="line still long"]
   merge -> unshipped    [label="not merged"]
   retest -> ci   [condition="outcome = success"]
   retest -> pr   [condition="outcome = failure and retest.exit_code = 4", label="pushed after review"]
