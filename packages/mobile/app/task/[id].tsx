@@ -4,7 +4,7 @@ import {
   useMemo,
   useRef,
   useEffect } from "react";
-import { StyleSheet, ScrollView, TouchableOpacity, View as RNView, type TextInput as RNTextInput } from 'react-native';
+import { StyleSheet, ScrollView, TouchableOpacity, View as RNView, ActivityIndicator, type TextInput as RNTextInput } from 'react-native';
 import { Text as RNText, TextInput } from '@/components/Themed';
 import { useLocalSearchParams, useRouter } from "expo-router";
 import FontAwesome from "@expo/vector-icons/FontAwesome";
@@ -424,8 +424,14 @@ export default function TaskDetailScreen() {
               style={[styles.commentSend, !commentText.trim() && { opacity: 0.3 }]}
               onPress={() => dictation.send(() => addCommentRef.current())}
               disabled={!commentText.trim()}
+              accessibilityRole="button"
+              accessibilityLabel="Send"
+              accessibilityState={dictation.sendWaiting ? { busy: true } : undefined}
             >
-              <FontAwesome name="arrow-up" size={14} color={Theme.accent} />
+              {/* A send pressed mid-dictation waits here for the last words. */}
+              {dictation.sendWaiting
+                ? <ActivityIndicator size="small" color={Theme.accent} />
+                : <FontAwesome name="arrow-up" size={14} color={Theme.accent} />}
             </TouchableOpacity>
           </RNView>
         </RNView>
@@ -771,9 +777,13 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     minHeight: 40,
     maxHeight: 100,
   },
+  // As tall as the box's last line, so the arrow sits level with the mic; as
+  // wide as a spinner, so a waiting send does not shift the row.
   commentSend: {
-    paddingHorizontal: 10,
-    paddingVertical: 10,
+    width: 36,
+    height: 40,
+    justifyContent: "center",
+    alignItems: "center",
   },
   // Beside the box's last line, like send.
   commentDictate: {
