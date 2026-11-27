@@ -43,8 +43,12 @@ const HARNESS = join(REPO, 'packages/cli/scripts/prompt-dry-run.ts');
 /** What the room calls Scribe: its character name and its brand (agentSpokenNames for a Claude session). */
 const NAMES = ['Scribe', 'Claude'];
 const BOARD_DOC = 's97fakeboardscribeeval0000000001';
-/** What Scribe hears when the call stops (the ended header convex sends then; ct-102408 follow-up). */
-export const CALL_ENDED = 'The call has ended: do your final pass now (see Pace), then end with [pass].';
+/** What Scribe hears when the call stops with nothing left unsent: the header
+ *  alone, ended, as convex deliverRoutes builds it then (`briefed`: the
+ *  route's briefed chunks so far, which decide whether it carries the brief). */
+export function endMessage(briefed: number | undefined, callId: string): string {
+  return scribeChunkHeader({ name: NAMES[0]!, lane: 'context', held: false, full: needsFullBrief(briefed), call: callId, board: BOARD_DOC, ended: true });
+}
 /** The one element a person wrote before Scribe joined: placed where the second theme frame of a 3-across grid would land. */
 export const PERSON_KEY = 'el_person_note';
 const PERSON_BY = 'u:person_seed';
@@ -114,8 +118,8 @@ function prepare() {
   });
   // The call's end: one last message, as convex sends Scribe when the call stops.
   const endFile = `chunk${String(chunks.length + 1).padStart(2, '0')}.md`;
-  writeFileSync(join(out, endFile), CALL_ENDED);
-  meta.push({ file: endFile, lines: 'end', lane: 'context', full: false });
+  writeFileSync(join(out, endFile), endMessage(briefed, callId));
+  meta.push({ file: endFile, lines: 'end', lane: 'context', full: needsFullBrief(briefed) });
   const lines = (f: string) => readFileSync(join(listings, f), 'utf8').split('\n').filter((l) => /\b(pri|pl|ct)-\d+/.test(l));
   const seed: WorldSeed = {
     self: 'jx7scrb',
