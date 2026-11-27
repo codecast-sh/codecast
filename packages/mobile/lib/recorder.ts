@@ -21,6 +21,7 @@ import type { Id } from '@codecast/convex/convex/_generated/dataModel';
 import type { ConvexReactClient } from 'convex/react';
 import {
   CALL_HEARTBEAT_MS,
+  finishRunningDictation,
   MAX_RECORDING_MS,
   meterLevelFromDb,
   RECORDING_BIT_RATE,
@@ -213,6 +214,9 @@ export async function startRecording(convex: ConvexReactClient): Promise<void> {
     return;
   }
   set({ ...IDLE, phase: 'starting' });
+  // A dictation still recording keeps its words and lets go of the microphone
+  // first, so the room's audio never lands in a text box.
+  await finishRunningDictation();
   const a = getAudio();
   if (!a) {
     set({
