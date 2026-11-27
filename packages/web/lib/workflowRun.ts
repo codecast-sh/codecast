@@ -136,7 +136,7 @@ export function runNodeRows(run: any, workflow?: any | null): RunNodeRow[] {
 }
 
 /** A node id as words, for a status no graph names: `deploy__failed` reads "Deploy failed". Never shown as the id. */
-const nodeWords = (id: string) => { const w = id.replace(/_+/g, " ").trim(); return w ? `${w[0].toUpperCase()}${w.slice(1)}` : id; };
+export const nodeWords = (id: string) => { const w = id.replace(/_+/g, " ").trim(); return w ? `${w[0].toUpperCase()}${w.slice(1)}` : id; };
 
 /** A row the run reached: it has a status of its own, or the run is at it. */
 export const rowReached = (r: RunNodeRow) => r.status !== "pending" || r.current || r.started_at != null;

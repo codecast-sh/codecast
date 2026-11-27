@@ -4,7 +4,7 @@
 // stands, where they are, and can step to any station in one click. Pure, so
 // web and phone order, name and link the stations the same way.
 
-import { runNodeRows, type RunNodeRow } from "./workflowRun";
+import { nodeWords, runNodeRows, type RunNodeRow } from "./workflowRun";
 
 export type StationState = "done" | "failed" | "live" | "waiting" | "next";
 
@@ -125,7 +125,8 @@ export function flowContext(
     const decision = isHuman && r.id === run.gate_node_id ? (run.gate_decision_short_id ?? run.gate_decision_id) : undefined;
     stations.push({
       id: r.id,
-      label: stationName(r.id, labels.get(r.id) ?? (r.label !== r.id ? r.label : undefined)),
+      // A row no graph names carries its id as words (nodeWords); here it reads by its station, past the segment prefix.
+      label: stationName(r.id, labels.get(r.id) ?? (r.label !== r.id && r.label !== nodeWords(r.id) ? r.label : undefined)),
       segment: segmentOf(r.id),
       state,
       current,
