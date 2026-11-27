@@ -105,6 +105,9 @@ export function CreateDialog({
           trapFocus(e);
         } else if (e.key === "Escape") {
           e.stopPropagation();
+          // A menu open inside the dialog (Radix, portalled out of it) closes
+          // on this Esc and marks it handled; the dialog stays.
+          if (e.defaultPrevented) return;
           onClose();
         } else if (e.key === "Enter" && !e.shiftKey && (e.metaKey || e.ctrlKey || submitOnEnter)) {
           // A plain Enter an inner control already took (a picker choosing a
