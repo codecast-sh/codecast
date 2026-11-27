@@ -44,7 +44,7 @@ import {
 import { syncRoomNoiseCancellation } from "./krispFilter";
 import { getRoomAudioStats, type RoomAudioDiagnostics } from "./audioDiagnostics";
 import { bindPrewarmAudio, bindPrewarmConvex, releasePrewarm, takePrewarmedRoom, warmRoomPublishesMic } from "./roomPrewarm";
-import { CALL_HEARTBEAT_MS, humanizeConvexError, localTranscribeLanguages, seatAnswersRing } from "@codecast/shared/contracts";
+import { CALL_HEARTBEAT_MS, finishRunningDictation, humanizeConvexError, localTranscribeLanguages, seatAnswersRing } from "@codecast/shared/contracts";
 import {
   hasCallPanel,
   isCallPanelWindow,
@@ -429,6 +429,9 @@ async function applyDeliberateJoin(roomKey: string, opts: JoinOpts): Promise<voi
   }
 }
 export async function joinCall(roomKey: string, opts?: JoinOpts): Promise<void> {
+  // The call takes the microphone: a recording in a text box keeps its words
+  // and stops listening now (its track stops at once; the words land later).
+  void finishRunningDictation();
   // ONE MICROPHONE. On a desktop with a voice host, no other window ever
   // joins a room: the join is sent there, where the walkie's ear already sits
   // and where the call will live whatever shape it takes. That is what makes
@@ -990,6 +993,7 @@ export async function takeOverCall(opts: {
  * exactly as `setCamera` does for the camera.
  */
 export async function setMuted(muted: boolean, opts?: { remember?: boolean }): Promise<void> {
+  if (!muted) void finishRunningDictation();
   if (voiceHostElsewhere() && !room && (await sendVoiceCommand("setMuted", [muted, opts ?? {}]))) return;
   return setMutedHere(muted, opts);
 }
