@@ -84,12 +84,12 @@ describe("deployRefs.recentForTeam", () => {
     expect(own.sessions.map((s: any) => s.user_id)).toEqual([BEN, BEN]);
   });
 
-  test("a session's priority shows only while the team has priorities on, to a viewer who may read it", async () => {
+  test("a session's priority shows only while the team has priorities on, to a viewer who may read it, with its owner and rank", async () => {
     const [off] = await run(BEN);
     // Said as null, never left out: the web store merges rows, and a missing key would keep a removed priority.
     expect(off.sessions.find((s: any) => s.conversation_id === "conv_private").priority).toBeNull();
     const [on] = await run(BEN, { priorities: true });
-    expect(on.sessions.find((s: any) => s.conversation_id === "conv_private").priority).toEqual({ id: "pri-4", title: "Ship the board" });
+    expect(on.sessions.find((s: any) => s.conversation_id === "conv_private").priority).toEqual({ id: "pri-4", title: "Ship the board", rank: 1, user_id: BEN });
     expect(on.sessions.find((s: any) => s.conversation_id === "conv_open").priority).toBeNull();
   });
 
