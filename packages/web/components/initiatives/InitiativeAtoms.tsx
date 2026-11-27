@@ -6,7 +6,7 @@
 // and no chip that is not health ever wears a health colour.
 import { useCallback } from "react";
 import Link from "next/link";
-import { ArrowDownRight, ArrowUpRight, CheckCircle2, Circle, CircleDashed, CircleDot, Flag, Minus, XCircle, type LucideIcon } from "lucide-react";
+import { ArrowDownRight, ArrowUpRight, Flag, Minus } from "lucide-react";
 import { mdeWords, periodsWords, pointDay, STANDING_WORD, standingWord, type WindowRead } from "@codecast/shared/contracts/metricStanding";
 import { INITIATIVE_HEALTH_LABEL, INITIATIVE_STATUS_LABEL, formatMetricNumber, formatSeriesValue, intentSourceLabel, metricAgainst, metricLine, metricNumber, metricReaches, trendWords, type InitiativeHealth, type InitiativeMilestone, type InitiativeOwner, type InitiativeStatus, type InitiativeUpdateHealth, type IntentSource, type MetricReading, type MetricStanding, type MetricTrend } from "@codecast/shared/contracts/initiative";
 import { memberHandle } from "@codecast/shared/chat";
@@ -22,18 +22,10 @@ import { ownerId, progressPercent, type Progress } from "../../lib/initiatives";
 import { compactAge } from "../../lib/threadState";
 import { cn } from "../../lib/utils";
 import { AssigneeFace } from "../identity/AssigneeFace";
-import { INITIATIVE_ACCENT, HEALTH_COLOR } from "../../lib/initiativeColors";
-
-const STATUS_VISUAL: Record<InitiativeStatus, { icon: LucideIcon; color: string }> = {
-  proposed: { icon: CircleDashed, color: "var(--sol-text-dim)" },
-  planned: { icon: Circle, color: "var(--sol-text-muted)" },
-  active: { icon: CircleDot, color: INITIATIVE_ACCENT },
-  completed: { icon: CheckCircle2, color: "var(--sol-text-muted)" },
-  cancelled: { icon: XCircle, color: "var(--sol-text-dim)" },
-};
+import { INITIATIVE_ACCENT, HEALTH_COLOR, INITIATIVE_STATUS_VISUAL } from "../../lib/initiativeColors";
 
 export function StatusGlyph({ status, className }: { status: InitiativeStatus; className?: string }) {
-  const v = STATUS_VISUAL[status];
+  const v = INITIATIVE_STATUS_VISUAL[status];
   const Icon = v.icon;
   return <Icon className={cn("w-3.5 h-3.5 shrink-0", className)} style={{ color: v.color }} aria-label={INITIATIVE_STATUS_LABEL[status]} />;
 }
