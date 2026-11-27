@@ -414,7 +414,9 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit, onO
         accessibilityRole="header"
         accessibilityState={{ expanded: !collapsed }}
       >
-        {color ? <RNView style={[styles.sectionDot, { backgroundColor: color }]} /> : null}
+        {SECTION_HEADER_STATUS[WEB_SECTION[section] ?? ''] ? (
+          <RNView style={styles.sectionMark}><SessionStatusMark status={SECTION_HEADER_STATUS[WEB_SECTION[section]]!} /></RNView>
+        ) : color ? <RNView style={[styles.sectionDot, { backgroundColor: color }]} /> : null}
         <RNText style={styles.sectionTitle}>{label}</RNText>
         <RNText style={styles.sectionCount}>{count}</RNText>
         <Feather name={collapsed ? "chevron-right" : "chevron-down"} size={15} color={Theme.textMuted0} style={{ marginLeft: 'auto' }} />
