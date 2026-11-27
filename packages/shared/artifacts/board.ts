@@ -8,7 +8,7 @@ import { boardArtFor } from "./boardArt";
 import { BOARD_VERBS } from "./boardVerbs";
 import { BOARD_ART } from "./boardArt";
 import { pageShareUrl } from "../entities";
-import { foldedCount, frameCollapsed, frameRef, frameStatus, hiddenKeys } from "./boardFrames";
+import { foldedCount, frameCollapsed, frameRef, hiddenKeys } from "./boardFrames";
 
 export * from "./boardGeometry";
 export * from "./boardLayout";
@@ -64,9 +64,8 @@ export function describeElement(el: ArtifactElement, view: Pick<ArtifactView, "g
       break;
     case "frame": {
       parts.push(quote(el.title), fmtBox(b));
-      const ref = frameRef(el), status = frameStatus(el), folded = frameCollapsed(el);
+      const ref = frameRef(el), folded = frameCollapsed(el);
       if (ref) parts.push(`ref ${ref}`);
-      if (status) parts.push(`status ${status}`);
       if (folded) {
         parts.push(`collapsed (${foldedCount(el, (k) => view.get(k))})`);
         break;
@@ -197,12 +196,12 @@ export const boardSpec: ArtifactSpec = {
     "Starting a retro, kanban, roadmap, timeline or brainstorm: `cast board template <doc> <name>`, then fill its stickies by key.",
     "Diagrams (architecture, flows): shapes in a grid with `place --cols`, then `connect --elbow` so arrows run at right angles around boxes; label an arrow with --label. Elbow arrows land where they line up with the other end, so several arrows into a wide box stay apart; pin an end with --from-at/--to-at fx,fy (0.25,1 = a quarter along the bottom). Arrows can attach to frames.",
     "Themes: `Theme name: el_a el_b el_c` per line regroups existing stickies into titled frames.",
-    "Frames about a codecast object: `place <doc> grid --frame-ref ct-12` or `frame <doc> <keys...> --ref pri-3 [--status open] [--collapse]` set the frame's `ref` (pri-N, in-N, pl-N or ct-N): its chip is the title each viewer sees, and the written title is your words or the bare id. `edit <doc> <frame> --status open|leaning|decided|parked|none` tags the discussion; `--ref <id>|none` changes its object and keeps the title.",
+    "Frames about a codecast object: `place <doc> grid --frame-ref ct-12` or `frame <doc> <keys...> --ref pri-3 [--collapse]` set the frame's `ref` (pri-N, in-N, pl-N or ct-N): its chip is the title each viewer sees, and the written title is your words or the bare id. `edit <doc> <frame> --ref <id>|none` changes its object and keeps the title.",
     "Folding: `collapse <doc> <frame>` shrinks a frame to a title pill that hides and carries what it holds; `expand <doc> <frame>` opens it in place. `reflow <doc> <frame>` lays a frame's contents out and sizes it to fit; `reflow <doc>` organizes the whole board. `move` on a frame carries everything in it.",
     "Courtesy: an agent's layout never moves, resizes or swallows a person's element. A collapse reflows the frames around it only up to the one holding a person's work; expand, reflow and move refuse and write nothing when they would touch one (a person can press Reflow or Organize).",
     "Colors: yellow orange red pink violet blue cyan green gray. Shapes: rect ellipse diamond pill triangle hexagon cylinder (a database) star.",
     "Stickers: `stamp 🎉` is a small emoji reaction; `stamp rocket` (any illustration name) places the painted illustration as a 120px sticker.",
-    "Fields for `apply`: every element x y w h z rot group; sticky text color icon; text text size weight(bold) color align(left|center|right); shape shape text color solid icon; frame title color ref (a codecast id; its chip is the title) status(open|leaning|decided|parked); connector from to (keys) or x1 y1 x2 y2, curve(curved|elbow) arrow(end|both|none) label label_at(0..1) color dash width; pen points [x,y,...] color width opacity; stamp emoji size; card ref; page slug caption; image src alt. Text takes **bold**, *italic*, - lists and links.",
+    "Fields for `apply`: every element x y w h z rot group; sticky text color icon; text text size weight(bold) color align(left|center|right); shape shape text color solid icon; frame title color ref (a codecast id; its chip is the title); connector from to (keys) or x1 y1 x2 y2, curve(curved|elbow) arrow(end|both|none) label label_at(0..1) color dash width; pen points [x,y,...] color width opacity; stamp emoji size; card ref; page slug caption; image src alt. Text takes **bold**, *italic*, - lists and links.",
     "Live codecast objects go on as cards: `cast board card <doc> ct-123`. Stickies into tasks: `cast task create` each, then `cast board card <doc> <ct-id> --replace <sticky key>` (same key, arrows stay attached).",
     "A page you published (`cast publish`) goes on live with `cast board page <doc> <url> --near <key>`: put it beside the stickies or frame it supports, so the room sees it next to the idea. Republishing the same file updates it in place.",
     "Anything else: `cast board apply <doc>` with raw ops; give each put a z (`read` shows the top), or it lands behind what is there.",

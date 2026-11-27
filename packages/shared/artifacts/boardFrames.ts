@@ -3,7 +3,6 @@
 //
 // Frame fields (board elements are free-form JSON, so no schema change):
 //   ref?: string        a codecast short id (pri-N, in-N, pl-N, ct-N); the title renders as its chip, `title` is the fallback
-//   status?: FrameStatus   the discussion tag: open | leaning | decided | parked
 //   collapsed?: { w, h, holds }   present while folded: the expanded size and the keys the pill hides
 //
 // Containment stays geometric: an element belongs to the smallest visible,
@@ -28,15 +27,14 @@
 //   enclosingFrameKeys(view, key)    the open frames around a visible element, innermost first
 //   personTouched(view, ops, exempt) the people's elements a batch moves, resizes or newly encloses (agent courtesy)
 //   agentCollapseOps(view, key)      an agent's fold: reflows upward only as far as no person's element is touched
-//   reflowFrameOps(view, key)        lay out a frame's children and size it to fit, then settle its level the same way
+//   reflowFrameOps(view, key)        lay out a frame's children and size it to fit (a resolved frame, one holding a folded
+//                                    frame, narrows to its widest card or pill, its text wrapped to that), then settle its level
 //   organizeOps(view, opts)          the whole board: agenda frames in the top row, other frames below, loose items gridded under them
 import { foldOps, toElement, type ArtifactElement, type ArtifactOp, type ElementState, type Json } from "./core";
 import type { ArtifactView } from "./spec";
-import { contains, elementBounds, textWidth, type Box, type Pt } from "./boardGeometry";
+import { contains, elementBounds, textHeight, textWidth, type Box, type Pt } from "./boardGeometry";
 import { squareCols, tidyBoxes } from "./boardLayout";
 
-export const FRAME_STATUSES = ["open", "leaning", "decided", "parked"] as const;
-export type FrameStatus = (typeof FRAME_STATUSES)[number];
 export type FrameCollapsed = { w: number; h: number; holds: string[] };
 
 /** Inside a frame: padding to its edge, the gap between children, and the extra room over the first row for the title. */
@@ -63,10 +61,6 @@ export function foldedCount(el: ArtifactElement, get: (key: string) => ArtifactE
     const kind = get(k)?.kind;
     return !!kind && kind !== "connector";
   }).length;
-}
-
-export function frameStatus(el: ArtifactElement): FrameStatus | null {
-  return (FRAME_STATUSES as readonly unknown[]).includes(el.status) ? (el.status as FrameStatus) : null;
 }
 
 export function frameRef(el: ArtifactElement): string | null {
@@ -163,7 +157,7 @@ function num(v: unknown): number {
   return typeof v === "number" && Number.isFinite(v) ? v : 0;
 }
 
-/** How wide a folded frame's pill is: room for its title (or ref chip) and status tag. */
+/** How wide a folded frame's pill is: room for its title (or ref chip). */
 export function pillWidth(el: ArtifactElement): number {
   const label = (typeof el.title === "string" && el.title) || frameRef(el) || "Frame";
   return Math.max(FRAME_PILL_MIN_W, Math.round(textWidth(label, 15) + 120));
@@ -302,9 +296,16 @@ class FrameLayout {
     const texts = ordered.filter((k) => k.el.kind === "text");
     const rest = ordered.filter((k) => k.el.kind !== "text");
     const left = n.box.x + FRAME_PAD;
-    const innerW = Math.max(n.box.w - FRAME_PAD * 2, ...ordered.map((k) => k.box.w));
+    // A resolved theme (it holds a folded notes frame) is only as wide as its widest card or pill; its text wraps to that.
+    const resolved = rest.length > 0 && rest.some((k) => k.el.kind === "frame" && this.collapsedOf(k.key));
+    const innerW = resolved ? Math.max(...rest.map((k) => k.box.w)) : Math.max(n.box.w - FRAME_PAD * 2, ...ordered.map((k) => k.box.w));
     let y = n.box.y + FRAME_PAD + FRAME_TITLE_BAND;
     for (const t of texts) {
+      if (resolved) {
+        // A width and no stored height: the words re-wrap and every renderer measures the height from the width.
+        t.box = { ...t.box, w: innerW, h: textHeight(typeof t.el.text === "string" ? t.el.text : "", num(t.el.size) || 20, innerW) };
+        this.setFields(t.key, { w: innerW, h: null });
+      }
       this.translate(t, left - t.box.x, y - t.box.y);
       y += t.box.h + FRAME_GAP;
     }
