@@ -1,11 +1,12 @@
-// The inbox's Priorities view on the phone, in web's order and words (web
-// store/priorityOrder, a leaf the shared inbox store already brings into the
-// bundle): each status section sorted by the viewer's priority a session
-// serves, the active workspace's first (its rank then its milestone), then
-// other workspaces' by rank, every other session after in the order it had;
-// a ranked row carries its rank, and its workspace's mark when that is not the
-// active one. Pinned keeps the person's order, so the inbox does not pass it
-// through `sort`.
+// The inbox's priority tags and Priorities view on the phone, in web's order
+// and words (web store/priorityOrder, a leaf the shared inbox store already
+// brings into the bundle). In every view a row filed under one of the
+// viewer's priorities carries its rank and title, and its workspace's mark
+// when that is not the active one. The Priorities view also sorts each status
+// section by that priority, the active workspace's first (its rank then its
+// milestone), then other workspaces' by rank, every other session after in
+// the order it had. Pinned keeps the person's order, so the inbox does not
+// pass it through `sort`.
 import { priorityOrderSig, priorityPlaceReader, rankLabelOf, sortByPriority, type PriorityOrderState, type PriorityRankLabel } from '@codecast/web/store/priorityOrder';
 
 type Linked = { priority_id?: string | null; priority_step_key?: string | null };
@@ -22,11 +23,12 @@ export type PriorityInboxView = {
  */
 export const priorityInboxSig = priorityOrderSig;
 
-/** Over the store's state: its current session rows are where a session's link is read (a placed row can be an older copy). */
-export function priorityInboxView(state: PriorityOrderState): PriorityInboxView {
-  const placeOf = priorityPlaceReader(state);
+/** Over the store's state: its current session rows are where a session's link is read (a placed row can be an older copy). `sorts`: the Priorities view, else rows keep their order. */
+export function priorityInboxView(state: PriorityOrderState, sorts = true): PriorityInboxView {
+  // The phone feeds the active workspace's `priorities` only while the Priorities view (`sorts`) is up: elsewhere its cached rows may be stale.
+  const placeOf = priorityPlaceReader(state, { activeRowsLive: sorts });
   return {
-    sort: (rows) => sortByPriority(rows, placeOf),
+    sort: (rows) => (sorts ? sortByPriority(rows, placeOf) : rows),
     rankOf: (s) => rankLabelOf(placeOf(s)),
   };
 }

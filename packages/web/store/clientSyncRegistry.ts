@@ -438,10 +438,10 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: { deepFields: ["steps", "counts", "sessions", "links", "plan"] },
     feeds: ["priorities.list"],
   },
-  // The rank of each of the viewer's active priorities in every workspace
-  // they hold (convex priorityRanks.mine): what the inbox's Priorities view
-  // labels a session by when the priority it serves is in another workspace
-  // than the active one, whose ranks it reads off `priorities` (store/priorityOrder).
+  // The rank, id and title of each of the viewer's active priorities in
+  // every workspace they hold (convex priorityRanks.mine): what every inbox
+  // card's priority chip names, in any view (store/priorityOrder); while the
+  // Priorities view is up the active workspace's ranks read off `priorities`.
   // A snapshot: mine returns the complete set.
   priorityRanks: {
     persistence: { kind: "collection", key: "priorityRanks" },

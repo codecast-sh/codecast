@@ -42,9 +42,9 @@ test("ranks the viewer's active priorities in each held workspace with the featu
 
   const ranks = await t.withIdentity({ subject: `${ids.ada}|session` }).query((api as any).priorityRanks.mine, {});
   const byId = Object.fromEntries(ranks.map((r: any) => [r._id, r]));
-  expect(byId[String(ids.acme1)]).toEqual({ _id: String(ids.acme1), workspace: ids.acme, rank: 1 });
+  expect(byId[String(ids.acme1)]).toEqual({ _id: String(ids.acme1), workspace: ids.acme, rank: 1, short_id: "a1", title: "a1" });
   expect(byId[String(ids.acme2)]?.rank).toBe(2);
-  expect(byId[String(ids.personal2)]).toEqual({ _id: String(ids.personal2), workspace: ids.personal, rank: 1 });
+  expect(byId[String(ids.personal2)]).toEqual({ _id: String(ids.personal2), workspace: ids.personal, rank: 1, short_id: "p2", title: "p2" });
   expect(byId[String(ids.personal1)]?.rank).toBe(2);
   // Not active, not the viewer's, the feature off, a workspace not held.
   for (const id of [ids.acmeDone, ids.beas, ids.dark, ids.notHeld]) expect(byId[String(id)]).toBeUndefined();

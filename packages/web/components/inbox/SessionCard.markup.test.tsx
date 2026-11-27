@@ -212,9 +212,9 @@ describe("the live card's toolbar", () => {
   });
 });
 
-describe("the Priorities view's rank on a classic card", () => {
+describe("the priority chip on a classic card", () => {
   test("a compact card keeps the rank chip: it sits in the meta row, which the compact rule exempts it from hiding", async () => {
-    const html = render({ _id: "c-ranked" }, { priorityRank: { rank: 3, workspace: null } });
+    const html = render({ _id: "c-ranked" }, { priorityRank: { rank: 3, workspace: null, shortId: "pri-3", title: "Trusted evals" } });
     const meta = html.slice(html.indexOf("data-sv-meta"));
     // A direct child of the meta row, its first.
     expect(meta).toMatch(/^data-sv-meta[^>]*><span data-priority-rank="3"/);

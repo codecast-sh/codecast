@@ -27,9 +27,9 @@ import { useCoarseNow } from "../../hooks/useCoarseNow";
 // them, grouped under the session that asked. Its count, the sidebar's and
 // the stepper's "2 of 32" are the same number (useDecisionQueue().length),
 // and the row the stepper is on is lit. Advisory asks (the agent already
-// went ahead on a default) are not in the queue; they fold into one row. In
-// the inbox's Priorities view each asking session leads with the rank of the
-// viewer's priority it serves, and the queue itself is in rank order
+// went ahead on a default) are not in the queue; they fold into one row. Each
+// asking session leads with the rank and title of the viewer's priority it
+// serves; in the inbox's Priorities view the queue itself is in rank order
 // (useDecisionQueue, store/priorityOrder sortQueueByPriority), so the rows'
 // numbers, the order they show and the stepper's walk agree.
 
@@ -68,6 +68,7 @@ export function InboxDecisionQueue({
   onSelectSession,
   matches,
   priorityPlaceOf,
+  sortByRank,
 }: {
   collapsed: boolean;
   onToggle: () => void;
@@ -79,8 +80,10 @@ export function InboxDecisionQueue({
    *  lists only the decisions of sessions that pass it. Each keeps its place
    *  number in the whole queue, the one the stepper walks. */
   matches?: (conversationId: string) => boolean;
-  /** The Priorities view: where a session stands in the viewer's priority order. */
+  /** Where a session stands in the viewer's priority order: its chip. */
   priorityPlaceOf?: (s: InboxSession) => PriorityStanding;
+  /** The Priorities view: the asking sessions outside the queue also sort by that order. */
+  sortByRank?: boolean;
 }) {
   const fullQueue = useDecisionQueue();
   // A queue item carries the session row it was built from; a priority link
@@ -128,7 +131,7 @@ export function InboxDecisionQueue({
   const hidden = queue.length - shown.reduce((n, g) => n + g.asks.length, 0);
   const covered = useMemo(() => new Set(queue.map((i) => i.conversationId)), [queue]);
   const asking = extraSessions.filter((s) => !covered.has(s._id));
-  const extras = priorityPlaceOf ? sortByPriority(asking, priorityPlaceOf) : asking;
+  const extras = sortByRank && priorityPlaceOf ? sortByPriority(asking, priorityPlaceOf) : asking;
   const rankOf = (id: string, row?: InboxSession) => (priorityPlaceOf ? rankLabelOf(placeOfConv(id, row)) : undefined);
 
   if (queue.length === 0 && extras.length === 0 && advisory === 0) return null;
@@ -213,7 +216,7 @@ function QueueCard({ id, lit, row, title, where, flow, href, onSelect, showAgent
   href?: string;
   onSelect?: (e: React.MouseEvent) => void;
   showAgent: boolean;
-  /** The Priorities view only: the card's rank label (PriorityRankChip). */
+  /** The card's priority label (PriorityRankChip). */
   rank?: PriorityRankLabel;
   children?: React.ReactNode;
 }) {
@@ -224,7 +227,6 @@ function QueueCard({ id, lit, row, title, where, flow, href, onSelect, showAgent
     <>
       <span className="flex h-5 w-5 shrink-0 items-center justify-center"><WorkspaceTile row={row ?? {}} size={20} showAgent={showAgent} /></span>
       <span className="min-w-0 flex-1 truncate text-body font-medium text-sol-text">{title}</span>
-      {rank && <PriorityRankChip rank={rank} />}
     </>
   );
   const chips = (where || workProject || flow) && (
@@ -245,6 +247,8 @@ function QueueCard({ id, lit, row, title, where, flow, href, onSelect, showAgent
         {href
           ? <Link href={href} className={headClass}>{head}</Link>
           : <button type="button" onClick={onSelect} className={headClass}>{head}</button>}
+        {/* Beside the head, not in it: the chip is a link of its own. */}
+        {rank && <PriorityRankChip rank={rank} />}
         {chips}
       </div>
       {children && <div className="mt-1">{children}</div>}
