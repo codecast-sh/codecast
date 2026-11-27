@@ -241,3 +241,77 @@ describe("telling the team's Release Captain what a finish left undone", () => {
     void out;
   });
 });
+
+describe("telling other teams' Release Captains about a daemon change", () => {
+  /** A third team, Union, whose @release has a reachable standing session; its member Uma. */
+  async function union(t: any) {
+    const ids = await t.run(async (ctx: any) => {
+      const uma = await ctx.db.insert("users", { name: "Uma" });
+      const team = await ctx.db.insert("teams", { name: "Union", invite_code: "UNIO1234", created_at: 1 });
+      await ctx.db.insert("team_memberships", { user_id: uma, team_id: team, role: "admin", joined_at: 1 });
+      return { uma, team };
+    });
+    return { ...ids, seat: await seat(t, ids.uma, ids.team) };
+  }
+  /** @release of `team` with a reachable standing session, as in the block above. */
+  async function seat(t: any, host: Id<"users">, team: Id<"teams">) {
+    const session_id = await roleSession(t, host, team);
+    return await t.run(async (ctx: any) => {
+      await ctx.db.patch(team, { features: { org: true } } as any);
+      const conv = await ctx.db.query("conversations").withIndex("by_session_id", (q: any) => q.eq("session_id", session_id)).first();
+      const bot = await ctx.db.insert("users", { name: "Release bot", is_bot: true } as any);
+      const anchor = await ctx.db.insert("anchors", { scope_type: "team", team_id: team, host_user_id: host, bot_user_id: bot, status: "active", org_role_id: conv.standing_role_id, conversation_id: conv._id, created_at: 1 } as any);
+      await ctx.db.patch(conv.standing_role_id, { anchor_id: anchor } as any);
+      return conv._id as Id<"conversations">;
+    });
+  }
+  const told = (t: any) => t.run(async (ctx: any) => (await ctx.db.query("pending_messages").collect()).map((m: any) => ({ conv: m.conversation_id, content: m.content as string })));
+  const device = (t: any, user: Id<"users">, device_id: string, cli_version: string, last_seen = Date.now()) =>
+    t.run(async (ctx: any) => ctx.db.insert("devices", { user_id: user, device_id, label: device_id, platform: "darwin", last_seen, cli_version }));
+
+  test("a team whose machines run older is told once, with its floor, its count and the command; the caller learns only the count", async () => {
+    const { t, team, tokens } = await setup();
+    const u = await union(t);
+    await t.run(async (ctx: any) => ctx.db.patch(u.team, { min_cli_version: "1.1.300" }));
+    await device(t, u.uma, "uma-mac", "1.1.301");
+    await device(t, u.uma, "uma-laptop", "1.1.290", Date.now() - 3 * 3600_000);
+    await device(t, u.uma, "uma-new", "1.1.306");
+    const dp = await cliDeploy(t, team, 9, "1.1.306", "b".repeat(40));
+    const args = { api_token: tokens.bo, deploy: dp, version: "1.1.306" };
+    expect(await t.mutation(api.teamCliFloor.tellOtherTeams, args)).toEqual({ told: 1 });
+    await t.mutation(api.teamCliFloor.tellOtherTeams, args);
+    const sent = await told(t);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.conv).toBe(u.seat);
+    expect(sent[0]!.content).toContain("CLI release 1.1.306 (dp-9) changes the running daemon. Union's floor is 1.1.300, and 2 of its machines seen in the last day run older.");
+    expect(sent[0]!.content).toContain("cast force-update 1.1.306 --team Union");
+  });
+
+  test("a team with no machine below the release, one already held to it, and the deploy's own team are not told", async () => {
+    const { t, team, ana, bo, tokens } = await setup();
+    const u = await union(t);
+    await seat(t, ana, team);
+    await device(t, u.uma, "uma-new", "1.1.306");
+    await device(t, u.uma, "uma-stale", "1.1.200", Date.now() - 3 * DAY);
+    // The deploy's own team has a reachable @release and a laggard: its finish forces it, so this never tells it.
+    await device(t, bo, "bo-mac", "1.1.301");
+    const dp = await cliDeploy(t, team, 9, "1.1.306", "b".repeat(40));
+    expect(await t.mutation(api.teamCliFloor.tellOtherTeams, { api_token: tokens.bo, deploy: dp, version: "1.1.306" })).toEqual({ told: 0 });
+    await device(t, u.uma, "uma-mac", "1.1.301");
+    await t.run(async (ctx: any) => ctx.db.patch(u.team, { min_cli_version: "1.1.306" }));
+    expect(await t.mutation(api.teamCliFloor.tellOtherTeams, { api_token: tokens.bo, deploy: dp, version: "1.1.306" })).toEqual({ told: 0 });
+    // Staff raised the global floor: every team is held to it, nobody is told.
+    await t.run(async (ctx: any) => ctx.db.patch(u.team, { min_cli_version: undefined }));
+    await setGlobal(t, "1.1.306");
+    expect(await t.mutation(api.teamCliFloor.tellOtherTeams, { api_token: tokens.bo, deploy: dp, version: "1.1.306" })).toEqual({ told: 0 });
+    expect(await told(t)).toEqual([]);
+  });
+
+  test("only a reader of the deploy may ask, and only for the release it is", async () => {
+    const { t, team, tokens } = await setup();
+    await union(t);
+    const dp = await cliDeploy(t, team, 9, "1.1.306", "b".repeat(40));
+    await expect(t.mutation(api.teamCliFloor.tellOtherTeams, { api_token: tokens.out, deploy: dp, version: "1.1.306" })).rejects.toThrow(/No deploy/);
+    await expect(t.mutation(api.teamCliFloor.tellOtherTeams, { api_token: tokens.bo, deploy: dp, version: "1.1.399" })).rejects.toThrow(/not the CLI release/);
+  });
+});

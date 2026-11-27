@@ -3484,6 +3484,7 @@ cliRoute("/cli/team-cli-floor/fleet", async (ctx, body) => ctx.runQuery(api.team
 cliRoute("/cli/team-cli-floor/lower", async (ctx, body) => ctx.runMutation(api.teamCliFloor.lower, body));
 cliRoute("/cli/team-cli-floor/forced", async (ctx, body) => ctx.runQuery(api.teamCliFloor.forcedRelease, body));
 cliRoute("/cli/team-cli-floor/tell-release", async (ctx, body) => ctx.runMutation(api.teamCliFloor.tellRelease, body));
+cliRoute("/cli/team-cli-floor/tell-other-teams", async (ctx, body) => ctx.runMutation(api.teamCliFloor.tellOtherTeams, body));
 // Our own CI runner's verdict per commit (ciVerdicts.ts): logs upload through /cli/images/upload-url first.
 cliRoute("/cli/ci/record", async (ctx, body) => ctx.runMutation(api.ciVerdicts.record, body));
 for (const r of ["show", "log"] as const) cliRoute(`/cli/ci/${r}`, async (ctx, body) => ctx.runQuery(api.ciVerdicts[r], body));

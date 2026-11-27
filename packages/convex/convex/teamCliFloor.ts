@@ -139,6 +139,43 @@ export const tellRelease = mutation({
 });
 const RELEASE_HANDLE = "release";
 
+/**
+ * A release that changes the daemon, finished without raising the global
+ * floor, forces only the deploy's own team. Forcing another team's machines
+ * is that team's Release Captain's call, so each other team whose members'
+ * machines (seen in the last day) run older, and whose floor is below the
+ * release, has its @release told once per deploy with the command to do it.
+ * Whoever may read the deploy may ask: they learn only how many teams were
+ * told, never which or what their machines run.
+ */
+export const tellOtherTeams = mutation({
+  args: { api_token: v.optional(v.string()), deploy: v.string(), version: v.string() },
+  handler: async (ctx, args) => {
+    const userId = await requireUserOrToken(ctx, args.api_token);
+    const d = await deployByRef(ctx, args.deploy);
+    if (!d || !(await workspaceGrantsAccess(ctx, userId, d.workspace))) throw new Error(`No deploy ${args.deploy} you can read`);
+    if (d.target !== "cli" || d.version !== args.version) throw new Error(`${args.deploy} is not the CLI release ${args.version}`);
+    const global = await getSystemConfig(ctx, "min_cli_version");
+    if (global && !isBelowMinimum(global, args.version)) return { told: 0 };
+    const now = Date.now();
+    let told = 0;
+    for (const team of (await ctx.db.query("teams").collect()) as Doc<"teams">[]) {
+      if (d.team_id && String(team._id) === String(d.team_id)) continue;
+      const floor = highestFloor([global, team.min_cli_version]);
+      if (floor && !isBelowMinimum(floor, args.version)) continue;
+      const role = await liveRoleByHandle(ctx, { team_id: team._id }, RELEASE_HANDLE);
+      if (!role) continue;
+      const f = await teamFleet(ctx, team, args.version, now);
+      const older = f.lagging.length + f.offline.length;
+      if (!older) continue;
+      const name = /^[\w.-]+$/.test(team.name) ? team.name : JSON.stringify(team.name);
+      const content = `CLI release ${args.version} (${args.deploy}) changes the running daemon. ${team.name}'s floor is ${floor ?? "unset"}, and ${older} of its machines seen in the last day run older. Forcing them restarts each daemon and is your call: cast force-update ${args.version} --team ${name}`;
+      if (await tellRole(ctx, role._id, { content, client_id: `team-cli-floor:${d.short_id}:${team._id}` })) told++;
+    }
+    return { told };
+  },
+});
+
 export type FleetDevice = { device_id: string; label: string; owner: string; user_id: Id<"users">; cli_version: string | null; online: boolean; error: string | null };
 
 /**

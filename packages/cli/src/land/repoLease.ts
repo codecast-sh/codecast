@@ -32,6 +32,10 @@ const STALE_MS = 5 * 60_000;
 /** A server older than the lease has no route for it (castApi missingRouteError): the one failure a holder goes on without. */
 export const leaseRouteMissing = (err: unknown) => /has no \/cli\/repo-lease route/.test(errorText(err));
 
+/** The server's refusal of `repository`'s lease to a run or team that does not work on it (convex repoLeases.ts
+ *  leaseWorkspace, "<who> cannot lease <repository>: ..."): no one this caller could wait behind holds it for them. */
+export const leaseAccessRefused = (err: unknown, repository: string) => errorText(err).includes(` cannot lease ${repository}: `);
+
 /** A failure worth asking again: the network or the server's gateway, never an answer the server gave. */
 const transient = (err: unknown) => /ECONN|ETIMEDOUT|EPIPE|ENETUNREACH|EHOSTUNREACH|ENOTFOUND|EAI_AGAIN|fetch failed|socket|network|timed? ?out|took too long|not answering|HTTP 5\d\d|API error \(5\d\d\)/i.test(errorText(err));
 const errorText = (err: unknown) => { const e = err as { message?: string; code?: string; cause?: { code?: string } } | null; return [e?.message ?? String(err), e?.code, e?.cause?.code].filter(Boolean).join(" "); };
