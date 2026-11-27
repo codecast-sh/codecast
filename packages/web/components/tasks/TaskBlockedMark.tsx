@@ -2,7 +2,6 @@ import { useMemo } from "react";
 import { Ban, Check, Hourglass, type LucideIcon } from "lucide-react";
 import { isTerminalTaskStatus, waitTone, type WaitState } from "@codecast/shared/tasks";
 import { useInboxStore } from "../../store/inboxStore";
-import { Mark } from "../Mark";
 import { blockerStatusSig, storeBlockedMark, WAIT_TONE_STYLE, type BoardTask } from "../../lib/taskBlockers";
 
 /** A wait that can no longer clear, wherever one is drawn: a "no entry" sign,
@@ -50,9 +49,10 @@ export function TaskBlockedMark({ task, small = false, className = "" }: { task:
     <span
       role="img"
       aria-label={mark.tip}
+      title={mark.tip}
       className={`flex items-center gap-0.5 flex-shrink-0 text-meta font-mono ${style.text} ${className}`}
     >
-      <Mark id={mark.failed ? "task.wait_failed" : "task.waiting"} hint={mark.tip}><style.icon className={small ? "w-3 h-3" : "w-3.5 h-3.5"} /></Mark>
+      <style.icon className={small ? "w-3 h-3" : "w-3.5 h-3.5"} />
       {mark.count > 1 && mark.count}
     </span>
   );

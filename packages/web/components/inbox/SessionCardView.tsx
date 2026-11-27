@@ -21,8 +21,7 @@ import { DeviceIcon, deviceDisplayName } from "../DeviceBadge";
 import { SessionWorktreeChip } from "../SessionWorktreeChip";
 import { SubagentFleetChip } from "../SubagentFleetChip";
 import { cleanUserMessage } from "../sessionMessage";
-import { AgentTypeIcon } from "../AgentTypeIcon";
-import { Mark } from "../Mark";
+import { AgentTypeIcon, formatAgentType } from "../AgentTypeIcon";
 import { AnchorScopePill, HeadOfPeopleFace } from "../anchor/AnchorIdentity";
 import { IdentityFace, SessionIdentityLine } from "../identity";
 import { sessionIdentity } from "../../lib/sessionIdentity";
@@ -294,14 +293,13 @@ export function SessionCardView({
                 only when the parent is directly above; this makes the
                 sub-of-parent relationship explicit when a nested row is
                 focused without the parent immediately above. */}
-            <Mark id={subRow === "trigger" ? "inbox.trigger_run" : roleAbove ? "inbox.reports_to" : "inbox.spawned"} hint={roleAbove ? `@${roleAbove.handle}` : undefined}>
-              <svg className={`w-3 h-3 flex-shrink-0 ${subRow === "trigger" ? "text-sol-amber/60" : "text-sol-violet/60"}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5} role="img" aria-label={subRow === "trigger" ? "Trigger session" : roleAbove ? `Reports to @${roleAbove.handle}` : "Subagent"}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M6 4v12h12" />
-                <path strokeLinecap="round" strokeLinejoin="round" d="M14 12l4 4-4 4" />
-              </svg>
-            </Mark>
+            <svg className={`w-3 h-3 flex-shrink-0 ${subRow === "trigger" ? "text-sol-amber/60" : "text-sol-violet/60"}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5} role="img" aria-label={subRow === "trigger" ? "Trigger session" : roleAbove ? `Reports to @${roleAbove.handle}` : "Subagent"}>
+              <title>{subRow === "trigger" ? "Session driven by the trigger above" : roleAbove ? `Reports to @${roleAbove.handle}, which decides what reaches you` : "Subagent — child of its parent session"}</title>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 4v12h12" />
+              <path strokeLinecap="round" strokeLinejoin="round" d="M14 12l4 4-4 4" />
+            </svg>
             {showAgentIcon && (
-              <span className="flex-shrink-0 flex items-center opacity-70">
+              <span className="flex-shrink-0 flex items-center opacity-70" title={formatAgentType(session.agent_type || "claude_code")}>
                 <AgentTypeIcon agentType={session.agent_type || "claude_code"} className="w-3 h-3" />
               </span>
             )}
@@ -500,7 +498,7 @@ export function SessionCardView({
                 <HeadOfPeopleFace size={14} />
               </span>
             ) : showAgentIcon ? (
-              <span className="flex-shrink-0 flex items-center">
+              <span className="flex-shrink-0 flex items-center" title={formatAgentType(session.agent_type || "claude_code")}>
                 <AgentTypeIcon agentType={session.agent_type || "claude_code"} className="w-3.5 h-3.5" />
               </span>
             ) : null}
