@@ -35,7 +35,7 @@ import { RUN_CONVERSATION_ENV } from "../sessionIdentity.js";
 import { behindWords, frozenChangeContext, heldWords } from "./flowChangeFile.js";
 import { webBaseUrl } from "../config/readLocalConfig.js";
 import { checkoutChangeOf, failureExcerpt, findingRoots, gateAnswerMessage, runEndMessage, runWorktreePath, sentBackWords, subjectOf, writerBrief, writersNamed, type Subject, type Writer } from "./subjectStation.js";
-import { notLiveYet, startSubjectParker, subjectOtherWork, subjectRow, subjectSettled, type SubjectParker } from "./subjectPark.js";
+import { notLiveYet, startSubjectParker, subjectOtherWork, subjectRow, subjectSettled, subjectTakenOver, type SubjectParker } from "./subjectPark.js";
 import { lineRunsRoot } from "./runDirs.js";
 import { releaseEndedRunTree, restoreRunTree, stopRunBrowser, usesRunTree } from "./runWorktree.js";
 
@@ -457,7 +457,7 @@ async function executeSubjectNode(node: WorkflowNode, graph: WorkflowGraph, cont
   // A subject someone stopped (or the run retired after an earlier land) still holds the change: the brief restarts it.
   if (row.is_killed) console.log(`  ${c.yellow}${subject.shortId} was stopped; the brief restarts it to work on this${c.reset}`);
   const brief = withHeld(expandAgentPrompt(node.prompt ?? "", graph, context).trim(), context);
-  // Quiet: a subject stashed out of sight while the run went on stays there; it surfaces itself if it pins blocked.
+  // Quiet: a subject a person put out of sight stays there; it surfaces itself if it pins blocked.
   if (!options.runSession) console.log(`${c.dim}  this run has no session of its own, so the brief to ${subject.shortId} cannot go quietly: it brings it back to the inbox${c.reset}`);
   await recordBriefTree(cwd, context);
   // Taken before the send: only a pin the session sets after this can be its answer (waitOnStation).
@@ -636,7 +636,7 @@ function subjectSendKey(options: RunOptions, context: Record<string, string>, wh
 }
 
 /**
- * Send to the run's subject. Quiet (sendSessionMessage `quiet`): a subject stashed out of sight stays there. A
+ * Send to the run's subject. Quiet (sendSessionMessage `quiet`): a subject a person put out of sight stays there. A
  * backend older than this CLI refuses the arg it does not know, so a refused send goes again plain. Each send gets a
  * client_id of its own (the key and a nonce), shared only by that plain retry: if the first did land (the answer was
  * lost, not the send) the server keeps that one. Nothing a run can count names a send once: visits restart after a
@@ -677,8 +677,8 @@ async function retireSubject(options: RunOptions, context: Record<string, string
   // A checkout's subject is the session that ran it, whose own work is no part of the change: it stays.
   if (checkoutChangeOf(context["run_dir"])) return null;
   const keep = (why: string) => { console.log(`${c.dim}  ${subject.shortId} stays: ${why}${c.reset}`); return null; };
-  // A person who brought it back from the run's stash took it over (subjectPark.ts): it is theirs to end.
-  if (context["subject_kept"] === "1") return keep("a person brought it back to the inbox");
+  // A person who wrote to it while the run went on took it over (subjectPark.ts): it is theirs to end.
+  if (context["subject_kept"] === "1") return keep("a person wrote to it while the run went on");
   const { landedCommit } = await import("./awaitDeploy.js");
   const landed = await landedCommit(cwd, branch, base, (context["change_files"] || "").split(" ").filter(Boolean)).catch(() => null);
   if (!landed) return keep(`its change is not on ${base}`);
@@ -687,6 +687,7 @@ async function retireSubject(options: RunOptions, context: Record<string, string
   const notLive = await notLiveYet(cwd, landed, (route, body) => cliCall(options, route, body));
   if (notLive) return keep(notLive);
   const row = await subjectRow((route, body) => cliCall(options, route, body), subject);
+  if (subjectTakenOver(row, context)) return keep("a person wrote to it while the run went on");
   if (!subjectSettled(row)) return keep(row ? "it has not settled" : "it cannot be read");
   const other = await subjectOtherWork(cwd, subject, landed.sha, `origin/${base}`);
   if (other) return keep(other);

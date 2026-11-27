@@ -30,7 +30,7 @@ import { computeWorkspaceKey } from "./lib/access";
 import { redactSecrets } from "./redact";
 import { storeHostedReplay } from "./hostedReplay";
 import { canSendProductMessage, markPendingDelivered } from "./pendingMessages";
-import { personTurnAnswersPinPatch, pinTurnKind, queuedBy, scheduleUserSend, turnOpener, turnOpenerPatch, type TurnOpener } from "./lib/userSend";
+import { personTurnAnswersPinPatch, personTurnStampPatch, pinTurnKind, queuedBy, scheduleUserSend, turnOpener, turnOpenerPatch, type TurnOpener } from "./lib/userSend";
 import { recordUsageDays, type UsageTurn } from "./lib/usageDaily";
 import { validateCommandId } from "./localFirstCommands";
 import {
@@ -1297,6 +1297,7 @@ export const addMessage = mutation({
     const turnKind = pinTurnKind(sendMsg);
     Object.assign(convPatch, turnOpenerPatch(conversation, opener, turnKind ? msgTimestamp : null));
     Object.assign(convPatch, personTurnAnswersPinPatch(conversation, turnKind === "person" ? msgTimestamp : null));
+    Object.assign(convPatch, personTurnStampPatch(conversation, turnKind === "person" ? msgTimestamp : null));
     if (args.role === "user" && contentToStore?.trim()) {
       convPatch.last_message_preview = redactSecrets(contentToStore).replace(/\u001b\[\d+m/g, "").replace(/\[Image[:\s][^\]]*\]/gi, "").trim().slice(0, 200);
       convPatch.last_user_message_at = msgTimestamp;
@@ -2031,6 +2032,7 @@ export async function writeMessageBatch(ctx: MutationCtx, conversation: Doc<"con
     if (safetyPatch) Object.assign(convPatch, safetyPatch);
     Object.assign(convPatch, turnOpenerPatch(conversation, lastTurnOpener, lastTurnAt));
     Object.assign(convPatch, personTurnAnswersPinPatch(conversation, lastPersonTurnAt));
+    Object.assign(convPatch, personTurnStampPatch(conversation, lastPersonTurnAt));
     const userMsgs = args.messages.filter((m) => m.role === "user");
     if (userMsgs.length > 0) {
       const lastUserMsg = userMsgs[userMsgs.length - 1];
