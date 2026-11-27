@@ -3,24 +3,29 @@
 // priorities, read the way the Priorities view reads it (store/priorityOrder).
 // A leaf beside inboxStore: types only from there, so no import cycle.
 import type { InboxSession, ProjectFilterTerm } from "./inboxStore";
-import { priorityPlaceReader, sessionPriorityOf, type PriorityOrderState } from "./priorityOrder";
+import { priorityRanks, sessionPriorityOf, type PriorityOrderState } from "./priorityOrder";
 import { PRIORITY_TOP_NS, priorityChipKey, priorityChipKeysOf, priorityTopNOfChipKey, projectAxisNoun } from "./workProjects";
 
-/** A session's rank among the viewer's priorities in the active workspace, or null. */
+/** A session's rank among the viewer's own priorities in that priority's workspace, or null. */
 export type PriorityRankOf = (s: { _id: string }) => number | null;
 
-/** The rank resolver off a store snapshot: the Priorities view's own reader
- *  (store/priorityOrder), kept to the active workspace's live priority rows,
- *  so "Top 3" is the three priorities that view puts first. The reader's
- *  fallback to `priorityRanks` is left out: those ranks are fed only while
- *  the view is up, so outside it they can name a priority that has left. */
+/** The rank resolver off a store snapshot. A session ranks when it is linked
+ *  to one of the viewer's own active priorities, in any workspace, at that
+ *  priority's place among the viewer's priorities in its workspace
+ *  (store/priorityOrder priorityRanks): ranks mean something only within one
+ *  workspace, so Top 3 is the top three of each. A teammate's priority (a
+ *  session started on one) never counts. Ranks come from the live
+ *  `priorities` rows, which hold every workspace; `priorityRanks` is left
+ *  out: those ranks are fed only while the Priorities view is up, so outside
+ *  it they can name a priority that has left. */
 export function priorityRankOfFromState(state: PriorityOrderState): PriorityRankOf {
-  const placeOf = priorityPlaceReader(state);
+  const viewer = state.currentUser?._id ? String(state.currentUser._id) : null;
+  const ranks = priorityRanks(state.priorities);
   return (s) => {
-    const place = placeOf(s);
-    if (!place || place.workspace) return null;
     const link = sessionPriorityOf(state.sessions?.[s._id] ?? (s as Parameters<typeof sessionPriorityOf>[0]));
-    return link && state.priorities?.[link.priorityId] ? place.rank : null;
+    const row = link ? state.priorities?.[link.priorityId] : undefined;
+    if (!row || !viewer || String(row.user_id) !== viewer || row.status !== "active") return null;
+    return ranks.get(String(row._id)) ?? null;
   };
 }
 

@@ -30,7 +30,8 @@ export function machineIdOfChipKey(key: string | null | undefined): string | nul
 }
 
 // And the viewer's priorities (`pr:<n>`): a session answers to `pr:3` when it
-// serves one of their three highest-ranked priorities in the active workspace.
+// serves one of their own three highest-ranked priorities in that priority's
+// workspace, whichever workspace is active (store/priorityChips).
 export const PRIORITY_CHIP_PREFIX = "pr:";
 export const PRIORITY_TOP_NS = [3, 5, 10] as const;
 export const priorityChipKey = (topN: number): string => `${PRIORITY_CHIP_PREFIX}${topN}`;

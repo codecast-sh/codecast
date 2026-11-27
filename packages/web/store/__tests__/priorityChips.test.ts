@@ -3,8 +3,9 @@ import { cardPriorityRankOf, chipFilterOpts, chipFilterSection, chipMatchesSessi
 import { priorityChipKey, priorityChipKeysOf, priorityTopNOfChipKey, projectAxisLabel, projectAxisNoun } from "../workProjects";
 
 // The filter's Top 3 / 5 / 10: a session answers to `pr:<n>` on the folder
-// chip axis when it serves one of the viewer's n highest-ranked priorities in
-// the active workspace, so include, hide and ⇧-add work as they do for folders.
+// chip axis when it serves one of the viewer's own n highest-ranked priorities
+// in that priority's workspace, whichever workspace is active, so include,
+// hide and ⇧-add work as they do for folders.
 
 const ME = "user_me";
 const row = (id: string, priority_id?: string, extra: Partial<InboxSession> = {}): InboxSession =>
@@ -12,7 +13,7 @@ const row = (id: string, priority_id?: string, extra: Partial<InboxSession> = {}
 const priority = (id: string, rank: number, workspace = "team:t1", user_id = ME) =>
   ({ _id: id, status: "active", ai_rank: rank, person_pos: null, workspace, last_active_at: 0, user_id, steps: [] });
 
-// Ranks 1..12 in the active workspace, one in another workspace, one a teammate's.
+// Ranks 1..12 in the active workspace, the viewer's #1 in another workspace, one a teammate's.
 const priorities: Record<string, ReturnType<typeof priority>> = {};
 for (let r = 1; r <= 12; r++) priorities[`p${r}`] = priority(`p${r}`, r);
 priorities.pElsewhere = priority("pElsewhere", 1, "team:t2");
@@ -54,25 +55,37 @@ describe("Top N keys", () => {
 });
 
 describe("Top N filter", () => {
-  it("includes only sessions serving the viewer's top N in the active workspace", () => {
-    expect(visible("pr:3")).toEqual(["s1", "s3"]);
-    expect(visible("pr:5")).toEqual(["s1", "s3", "s4"]);
-    expect(visible("pr:10")).toEqual(["s1", "s3", "s4", "s7"]);
+  it("includes only sessions serving the viewer's own top N, in each workspace; a teammate's priority never counts", () => {
+    expect(visible("pr:3")).toEqual(["s1", "s3", "elsewhere"]);
+    expect(visible("pr:5")).toEqual(["s1", "s3", "s4", "elsewhere"]);
+    expect(visible("pr:10")).toEqual(["s1", "s3", "s4", "s7", "elsewhere"]);
+  });
+
+  it("with another workspace active, a session on the viewer's #2 there still counts under Top 3", () => {
+    const codecast = { pC1: priority("pC1", 1, "team:codecast"), pC2: priority("pC2", 2, "team:codecast"), pC3: priority("pC3", 3, "team:codecast"), pC4: priority("pC4", 4, "team:codecast"), pMate: priority("pMate", 1, "team:codecast", "user_them") };
+    const rows = [row("onC2", "pC2"), row("onC4", "pC4"), row("onMate", "pMate")];
+    const opts = chipFilterOpts(state({
+      activeProjectFilter: "pr:3",
+      priorities: { ...priorities, ...codecast },
+      sessions: Object.fromEntries(rows.map((x) => [x._id, x])),
+      clientState: { ui: { active_team_id: "union" } },
+    }) as any, {});
+    expect(rows.filter((x) => chipMatchesSession(x, opts)).map((x) => x.session_id)).toEqual(["onC2"]);
   });
 
   it("hiding Top 3 keeps everything else, unranked sessions included", () => {
-    expect(visible("pr:3", true)).toEqual(["s4", "s7", "s12", "elsewhere", "theirs", "none"]);
+    expect(visible("pr:3", true)).toEqual(["s4", "s7", "s12", "theirs", "none"]);
   });
 
   it("⇧-adds alongside a folder like any other key", () => {
     const other = row("other", undefined, { project_path: "/Users/me/src/other", git_root: "/Users/me/src/other" });
     const opts = chipFilterOpts(state({ activeProjectFilter: "pr:3", extraProjectFilters: [{ id: "other", path: null, exclude: false }] }) as any, {});
-    expect([...sessions, other].filter((s) => chipMatchesSession(s, opts)).map((s) => s.session_id)).toEqual(["s1", "s3", "other"]);
+    expect([...sessions, other].filter((s) => chipMatchesSession(s, opts)).map((s) => s.session_id)).toEqual(["s1", "s3", "elsewhere", "other"]);
   });
 
   it("follows a re-rank: the reader is built from the state it is given", () => {
     const moved = { ...priorities, p7: priority("p7", 2), p3: priority("p3", 7) };
-    expect(visible("pr:3", false, { priorities: moved })).toEqual(["s1", "s7"]);
+    expect(visible("pr:3", false, { priorities: moved })).toEqual(["s1", "s7", "elsewhere"]);
   });
 
   it("a cached rank for a priority no longer in the live rows never counts", () => {
@@ -82,7 +95,7 @@ describe("Top N filter", () => {
     const withS2 = [...sessions, row("s2", "p2")];
     const opts = chipFilterOpts(state({ activeProjectFilter: "pr:3", ...extra, sessions: Object.fromEntries(withS2.map((x) => [x._id, x])) }) as any, {});
     // p2 left, so p3 and p4 move up to ranks 2 and 3; s2's cached rank 2 is not read.
-    expect(withS2.filter((x) => chipMatchesSession(x, opts)).map((x) => x.session_id)).toEqual(["s1", "s3", "s4"]);
+    expect(withS2.filter((x) => chipMatchesSession(x, opts)).map((x) => x.session_id)).toEqual(["s1", "s3", "s4", "elsewhere"]);
   });
 
   it("a filter with no Top N term never builds the rank reader", () => {
@@ -93,7 +106,7 @@ describe("Top N filter", () => {
 describe("Top N counts", () => {
   it("counts each Top N, smallest first, and nothing without a rank reader", () => {
     const rankOf = priorityRankOfFromState(state() as any);
-    expect(priorityChipRows(sessions, rankOf)).toEqual([["pr:3", 2], ["pr:5", 3], ["pr:10", 4]]);
+    expect(priorityChipRows(sessions, rankOf)).toEqual([["pr:3", 3], ["pr:5", 4], ["pr:10", 5]]);
     expect(priorityChipRows(sessions, undefined)).toEqual([]);
   });
 
