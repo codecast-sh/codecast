@@ -56,7 +56,7 @@ const draftContentFor = (id: string | null) => {
  * non-modal, one of several along the bottom edge, collapsible to its title
  * bar. A docked composer owns the keyboard only while focus is inside it.
  */
-export function ComposeView({ initialQuery, context, onClose, closeGuardRef, instance }: { initialQuery?: string; context?: ComposeContext; onClose?: () => void; closeGuardRef?: React.MutableRefObject<(() => void) | null>; instance?: ComposeInstance }) {
+export function ComposeView({ initialQuery, context, onClose, closeGuardRef, instance, onPictureOpen }: { initialQuery?: string; context?: ComposeContext; onClose?: () => void; closeGuardRef?: React.MutableRefObject<(() => void) | null>; instance?: ComposeInstance; /** The modal opened or closed a picture full size: its host moves it to the bottom of the screen meanwhile. */ onPictureOpen?: (open: boolean) => void }) {
   const router = useRouter();
   const docked = instance?.mode === "dock";
   const collapsed = docked && !!instance?.collapsed;
@@ -599,6 +599,12 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
   const pageLayout = !docked && !hosted && !recipient;
   const [footSlot, setFootSlot] = useState<HTMLElement | null>(null);
   const [belowSlot, setBelowSlot] = useState<HTMLElement | null>(null);
+  // A picture opened full size from the composer: the modal keeps only the
+  // composer and the strip under it (machine, context), its host drops it to
+  // the bottom of the screen, and the picture takes the room above.
+  const [lightboxOpen, setLightboxOpen] = useState(false);
+  const pictureUp = lightboxOpen && pageLayout && instance?.mode === "modal";
+  useWatchEffect(() => { onPictureOpen?.(pictureUp); }, [pictureUp, onPictureOpen]);
   // Open as the page: the same blank (and its draft) moves to the main view,
   // so closing the popup must not abandon it.
   const handedOffRef = useRef(false);
@@ -661,7 +667,7 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
       {/* Collapsed keeps everything mounted (draft, pickers, uploads) and only
           stops painting it. */}
       <div className={collapsed ? "hidden" : "contents"}>
-      <div className={`flex flex-col px-4 ${docked ? "shrink-0 pt-3" : hosted ? "min-h-0 pt-7" : pageLayout ? "min-h-0 justify-end pt-12 pb-5" : "flex-1 min-h-0 pt-6"}`}>
+      <div className={`flex flex-col px-4 ${pictureUp ? "hidden " : ""}${docked ? "shrink-0 pt-3" : hosted ? "min-h-0 pt-7" : pageLayout ? "min-h-0 justify-end pt-12 pb-5" : "flex-1 min-h-0 pt-6"}`}>
         {conversation && !onlyHosted && (
           <ComposeRolePicker picked={recipient} onPick={setRecipient} onDone={refocusComposer} className={`shrink-0 ${docked ? "mb-2" : "mb-3 pr-16"}`} />
         )}
@@ -690,6 +696,7 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
           agentType={recipient ? undefined : liveAgentType}
           onDropFiles={dropFilesRef}
           acceptFiles
+          onLightboxChange={setLightboxOpen}
           onPopulateInput={populateInputRef}
           onGateSend={recipient ? async (text, images) => { await wakeRole(text, images); } : hosted ? startHosted : undefined}
           composerPlaceholder={recipient ? `Ask ${recipient.name} for anything…` : hosted ? "Ask anything, or hand me a chore" : startsProject ? "What is the project for? Its first line names it" : undefined}
@@ -700,7 +707,8 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
           escapeCloses
         />
       )}
-      {conversation && pageLayout && <div ref={setBelowSlot} className="shrink-0 pb-6" />}
+      {/* Above the picture's backdrop while one is open, so the machine stays pickable. */}
+      {conversation && pageLayout && <div ref={setBelowSlot} className={`shrink-0 pb-6 ${lightboxOpen ? "relative z-[10002]" : ""}`} />}
       {confirmClose && (
         <DiscardDraftConfirm
           stubId={stubIdRef.current}
