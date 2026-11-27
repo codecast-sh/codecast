@@ -220,6 +220,29 @@ describe("a teammate's reads", () => {
     expect((await rowsOf(as(cy), { workspace: ws })).map((r: any) => r.short_id)).toContain("pri-1");
   });
 
+  test("past the newest 50 sessions the owner's own no longer open the priority: 51 Starts on top of them hide it, failing closed", async () => {
+    const { t, as, bea, cy, acme, ws, p1 } = await world();
+    const crowd = (from: number, to: number) => t.run(async (ctx) => {
+      for (let i = from; i < to; i++) {
+        await ctx.db.insert("conversations", {
+          user_id: bea, team_id: acme, agent_type: "claude_code", session_id: `edge-${i}`, short_id: `jx7ed${String(i).padStart(2, "0")}`, title: `edge ${i}`,
+          started_at: NOW, updated_at: NOW + 1, message_count: 1, is_private: false, team_visibility: "full", status: "active", priority_id: p1, priority_set_by: "link",
+        } as any);
+      }
+    });
+    await t.run(async (ctx) => ctx.db.insert("team_memberships", { user_id: cy, team_id: acme, role: "member", joined_at: 1 } as any));
+    const reads = async () => ({
+      canRead: await t.run(async (ctx) => (await readerFor(ctx, cy)).canRead((await ctx.db.get(p1))!)),
+      listed: (await rowsOf(as(cy), { workspace: ws })).some((r: any) => r.short_id === "pri-1"),
+    });
+    // 47 Starts: the owner's newest still sits inside the newest 50.
+    await crowd(0, 47);
+    expect(await reads()).toEqual({ canRead: true, listed: true });
+    // 51: every one of the newest 50 is a Start.
+    await crowd(47, 51);
+    expect(await reads()).toEqual({ canRead: false, listed: false });
+  });
+
   test("a starter takes their own session off a priority they can no longer read, and learns nothing of it but its id", async () => {
     const { t, as, ada, bea, acme, p1 } = await world();
     const started = await t.run(async (ctx) => {
