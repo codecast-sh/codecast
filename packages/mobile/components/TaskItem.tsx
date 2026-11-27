@@ -7,28 +7,13 @@ import { codeFont } from "@/constants/fonts";
 import type { TaskItem as TaskItemType } from "@codecast/web/store/inboxStore";
 import { formatRelativeTime } from "./SessionItem";
 import { showActionSheet } from "@/lib/popups";
+import { PriorityMark, TaskStatusMark, webLook } from "@/components/marks";
+import { TASK_STATUS, type TaskStatus } from "@codecast/web/components/TaskStatusBadge";
+import { TASK_PRIORITY, type TaskPriority } from "@codecast/web/lib/taskPriority";
 
-type TaskStatus = "backlog" | "open" | "in_progress" | "in_review" | "done" | "dropped";
-type TaskPriority = "urgent" | "high" | "medium" | "low" | "none";
-
-type IconName = React.ComponentProps<typeof FontAwesome>["name"];
-
-export const STATUS_CONFIG: Record<TaskStatus, { icon: IconName; label: string; color: string }> = {
-  backlog: { icon: "circle-thin", label: "Backlog", color: Theme.textMuted0 },
-  open: { icon: "circle-o", label: "Open", color: Theme.blue },
-  in_progress: { icon: "dot-circle-o", label: "In Progress", color: Theme.accent },
-  in_review: { icon: "dot-circle-o", label: "In Review", color: Theme.violet },
-  done: { icon: "check-circle", label: "Done", color: Theme.green },
-  dropped: { icon: "times-circle", label: "Dropped", color: Theme.textMuted0 },
-};
-
-export const PRIORITY_CONFIG: Record<TaskPriority, { icon: IconName; label: string; color: string }> = {
-  urgent: { icon: "exclamation-triangle", label: "Urgent", color: Theme.red },
-  high: { icon: "arrow-up", label: "High", color: Theme.orange },
-  medium: { icon: "minus", label: "Medium", color: Theme.textMuted },
-  low: { icon: "arrow-down", label: "Low", color: Theme.textDim },
-  none: { icon: "minus", label: "None", color: Theme.textMuted0 },
-};
+/** Web's TASK_STATUS (drawn by TaskStatusMark) and TASK_PRIORITY (PriorityMark). */
+export const STATUS_CONFIG = webLook(TASK_STATUS);
+export const PRIORITY_CONFIG = webLook(TASK_PRIORITY);
 
 export const STATUS_ORDER: TaskStatus[] = ["backlog", "open", "in_progress", "in_review", "done", "dropped"];
 export const PRIORITY_ORDER: Record<string, number> = { urgent: 0, high: 1, medium: 2, low: 3, none: 4 };
@@ -69,8 +54,6 @@ export function TaskItemRow({
 }) {
   if (PERF_PROBE) probeRender('TaskItemRow');
   const Theme = useTheme();
-  const status = STATUS_CONFIG[task.status as TaskStatus] ?? STATUS_CONFIG.open;
-  const priority = PRIORITY_CONFIG[task.priority as TaskPriority] ?? PRIORITY_CONFIG.medium;
   const labels = task.labels?.slice(0, 2) ?? [];
   const extraLabels = (task.labels?.length ?? 0) - 2;
 
@@ -93,7 +76,7 @@ export function TaskItemRow({
     >
       <RNView style={styles.topLine}>
         <RNView style={styles.leftGroup}>
-          <FontAwesome name={status.icon} size={14} color={status.color} style={styles.statusIcon} />
+          <RNView style={styles.statusIcon}><TaskStatusMark status={task.status} size={16} /></RNView>
           <RNText style={styles.title} numberOfLines={1}>
             {task.title}
           </RNText>
@@ -116,7 +99,7 @@ export function TaskItemRow({
               <RNText style={styles.subtaskCount}>{progress.done}/{progress.total}</RNText>
             </RNView>
           )}
-          <FontAwesome name={priority.icon} size={10} color={priority.color} />
+          <PriorityMark priority={task.priority} size={12} />
           <RNText style={styles.age}>{formatRelativeTime(task.updated_at)}</RNText>
         </RNView>
       </RNView>
