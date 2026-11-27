@@ -97,6 +97,8 @@ export async function leaseCore(
  * who may wait for it. The lease itself is keyed on the repository alone.
  */
 async function leaseWorkspace(ctx: any, userId: Id<"users">, repository: string, args: { team_id?: Id<"teams">; run_id?: string }): Promise<{ workspace: string; teamId?: Id<"teams"> }> {
+  // The CLI's leaseAccessRefused reads the "<who> cannot lease <repository>: " of both refusals below: a Merge station
+  // with no before-merge step merges without the lease on it.
   if (args.run_id) {
     const id = ctx.db.normalizeId("workflow_runs", args.run_id);
     const run = id ? await ctx.db.get(id) : null;

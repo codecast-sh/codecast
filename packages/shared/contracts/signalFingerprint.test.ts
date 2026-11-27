@@ -15,43 +15,18 @@ import {
   jobFingerprint,
   metricFingerprint,
   normalizeErrorMessage,
-  normalizeStopText,
   parseStackFrame,
   sdkErrorFingerprint,
   sentryIssueFingerprint,
   topInAppFrame,
 } from "./signalFingerprint";
 
-describe("normalizeStopText", () => {
-  const same = (a: string, b: string) => expect(normalizeStopText(a)).toBe(normalizeStopText(b));
-
-  test("counts, shas, ids, paths and durations differ per run and are taken out", () => {
-    same("Stopped: Land sent the change back 3 times and it still does not pass.", "Stopped: Land sent the change back 5 times and it still does not pass.");
-    same("CI failed on 4f2a9c1 for ct-1201 (#302)", "CI failed on 9b0e7d3aa41c for ct-88 (#5116)");
-    same("The deploy that carried a failed: cli dp-3424 (Stopped at Send.).", "The deploy that carried a failed: cli dp-3456 (Stopped at Send.).");
-    same("Deploy stuck: web is not live after 60m.", "Deploy stuck: web is not live after 2h.");
-    same("eval failed in /Users/a/code/x/.codecast/worktrees/s1/evals/run.ts", "eval failed in /Users/b/src/x/evals/run.ts");
-    same("session jx7c6zk did not settle in 30 s", "session jx74fyf did not settle in 45 s");
-    same("see https://github.com/acme/app/actions/runs/123", "see https://github.com/acme/app/actions/runs/456");
-  });
-
-  test("different stops stay different", () => {
-    expect(normalizeStopText("Land sent the change back 3 times")).not.toBe(normalizeStopText("Review rejected the change"));
-    expect(normalizeStopText("Stopped: merge is off for this flow")).toBe("merge is off for this flow");
-  });
-
-  test("words made of hex letters are not shas", () => {
-    expect(normalizeStopText("defaced decade")).toBe("defaced decade");
-  });
-});
-
 describe("flowStopFingerprint", () => {
-  test("one key per repository, flow, station and stop words", () => {
-    const a = flowStopFingerprint("Acme/App", "change", "land__ci", "Stopped: CI red on 4f2a9c1 3 times");
-    expect(a).toMatch(/^flowstop:acme\/app:change:land__ci:[0-9a-f]{8}$/);
-    expect(flowStopFingerprint("acme/app", "change", "land__ci", "Stopped: CI red on 77aa001 5 times")).toBe(a);
-    expect(flowStopFingerprint("acme/app", "change", "land__review", "Stopped: CI red on 4f2a9c1 3 times")).not.toBe(a);
-    expect(flowStopFingerprint("acme/other", "change", "land__ci", "Stopped: CI red on 4f2a9c1 3 times")).not.toBe(a);
+  test("one key per repository, flow and shared exit, with no stop words in it", () => {
+    const a = flowStopFingerprint("Acme/App", "change", "land__red_main");
+    expect(a).toBe("flowstop:acme/app:change:land__red_main");
+    expect(flowStopFingerprint("acme/app", "change", "land__unread")).not.toBe(a);
+    expect(flowStopFingerprint("acme/other", "change", "land__red_main")).not.toBe(a);
   });
 });
 

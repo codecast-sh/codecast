@@ -77,13 +77,16 @@ async function world(o: { release?: boolean; lines?: boolean } = {}) {
     const task = (short_id: string) => ctx.db.insert("tasks", {
       user_id: me, team_id: team, workspace: ws, short_id, title: short_id, status: "in_progress", task_type: "task", priority: "medium", source: "human", created_at: T0, updated_at: T0,
     });
-    const run = (taskId: any, extra: Record<string, unknown> = {}) => ctx.db.insert("workflow_runs", {
-      user_id: me, workflow_id: wf, task_id: taskId, workspace: ws, team_id: team, status: "running", current_node_id: "land__pr",
-      node_statuses: [], spawner_conversation_id: conv, runner_device: "laptop", created_at: T0, updated_at: T0, ...extra,
-    });
     const tasks = [await task("ct-901"), await task("ct-902"), await task("ct-903")];
-    return { me, team, ws, release, tasks, runs: [await run(tasks[0]), await run(tasks[1]), await run(tasks[0]), await run(tasks[2], release ? { org_role_id: release } : {})] };
+    return { me, team, ws, wf, conv, release, tasks };
   });
+  /** A new run of a task, the newest of its runs. */
+  const newRun = (taskId: any, extra: Record<string, unknown> = {}) => t.run((ctx: any) => ctx.db.insert("workflow_runs", {
+    user_id: ids.me, workflow_id: ids.wf, task_id: taskId, workspace: ids.ws, team_id: ids.team, status: "running", current_node_id: "land__pr",
+    node_statuses: [], spawner_conversation_id: ids.conv, runner_device: "laptop", created_at: T0, updated_at: T0, ...extra,
+  }));
+  // One run per task; the third is @release's own line run.
+  const runs = [await newRun(ids.tasks[0]), await newRun(ids.tasks[1]), await newRun(ids.tasks[2], ids.release ? { org_role_id: ids.release } : {})];
 
   const report = (runId: any, body: Record<string, unknown>) => t.mutation(api.workflow_runs.updateProgress, { api_token: TOKEN, run_id: runId, ...body });
   const drain = async () => {
@@ -113,8 +116,12 @@ async function world(o: { release?: boolean; lines?: boolean } = {}) {
     const rows: any[] = await signals(run.stop_fingerprint);
     return rows[0]?.task_id ? ((await get(rows[0].task_id)) as any) : null;
   };
-  const close = (taskId: any, status: "done" | "dropped" = "done") => t.run(async (ctx: any) => moveTaskStatus(ctx, await ctx.db.get(taskId), status, { actorUserId: ids.me }));
-  return { t, ids, report, stopAt, redMain, resume, get, signals, cause, close };
+  /** Closes a task, then runs the resumes its close scheduled. */
+  const close = async (taskId: any, status: "done" | "dropped" = "done") => {
+    await t.run(async (ctx: any) => moveTaskStatus(ctx, await ctx.db.get(taskId), status, { actorUserId: ids.me }));
+    await drain();
+  };
+  return { t, ids: { ...ids, runs }, newRun, report, stopAt, redMain, resume, get, signals, cause, close };
 }
 
 describe("a pipeline stop shared by two changes is one incident", () => {
@@ -124,13 +131,15 @@ describe("a pipeline stop shared by two changes is one incident", () => {
     const first: any = await get(ids.runs[0]);
     // Not the segment's exit step (land__red_main), which only echoes the exit and fails again.
     expect(first.stop_station).toBe("land__wait_main");
-    expect(first.stop_fingerprint).toMatch(/^flowstop:acme\/app:change:land__wait_main:[0-9a-f]{8}$/);
+    // Keyed by the shared exit it left by, never by its words.
+    expect(first.stop_fingerprint).toBe("flowstop:acme/app:change:land__red_main");
     // One stopped change is a held signal: no cause for Ground or a line to pick up.
     const held: any[] = await signals(first.stop_fingerprint);
     expect(held.map((r) => [r.attach, r.task_id])).toEqual([["held", undefined]]);
     expect(first.incident_task_id).toBeUndefined();
 
-    await redMain(ids.runs[1], "main CI stayed red on 9b0e7d3 for 4h");
+    // Words that share nothing with the first stop's: the files and prose of another change.
+    await redMain(ids.runs[1], "wait_main gave up: web/inbox.tsx and cli/src/daemon.ts fail on main; the agent thinks a flaky e2e");
     const second: any = await get(ids.runs[1]);
     expect(second.stop_fingerprint).toBe(first.stop_fingerprint);
     const incident = await cause(ids.runs[1]);
@@ -173,17 +182,32 @@ describe("a pipeline stop shared by two changes is one incident", () => {
   });
 
   test("one run stopping twice, or a second run of the same task, is not an incident", async () => {
-    const { ids, redMain, resume, get, signals } = await world();
+    const { ids, newRun, redMain, resume, get, signals } = await world();
     await redMain(ids.runs[0]);
     await resume(ids.runs[0]);
     await redMain(ids.runs[0]);
     // Another run of ct-901 stopping the same way.
-    await redMain(ids.runs[2]);
+    await redMain(await newRun(ids.tasks[0]));
     const rows: any[] = await signals(((await get(ids.runs[0])) as any).stop_fingerprint);
     expect(rows.length).toBe(3);
     expect(rows.every((r) => !r.task_id)).toBe(true);
     expect(((await get(ids.runs[0])) as any).incident_task_id).toBeUndefined();
     expect(((await get(ids.tasks[0])) as any).blocked_by ?? []).toEqual([]);
+  });
+
+  test("a stop that no longer stands for its change is not the second one: its task closed, a newer run replaced it, or it is over a day old", async () => {
+    for (const gone of ["closed", "superseded", "stale"] as const) {
+      const { t, ids, newRun, redMain, get, signals, close } = await world();
+      await redMain(ids.runs[0]);
+      if (gone === "closed") await close(ids.tasks[0]);
+      if (gone === "superseded") await newRun(ids.tasks[0]);
+      if (gone === "stale") await t.run((ctx: any) => ctx.db.patch(ids.runs[0], { updated_at: Date.now() - 25 * 60 * 60_000 }));
+      await redMain(ids.runs[1]);
+      const rows: any[] = await signals(((await get(ids.runs[1])) as any).stop_fingerprint);
+      expect([gone, rows.length, rows.every((r) => !r.task_id)]).toEqual([gone, 2, true]);
+      expect([gone, ((await get(ids.runs[1])) as any).incident_task_id]).toEqual([gone, undefined]);
+      expect([gone, ((await get(ids.tasks[1])) as any).blocked_by ?? []]).toEqual([gone, []]);
+    }
   });
 
   test("a repeat stop changes nothing more, and with no @release the incident still blocks", async () => {
@@ -203,9 +227,9 @@ describe("closing an incident", () => {
     const { t, ids, redMain, resume, get, cause, close } = await world();
     await redMain(ids.runs[0]);
     await redMain(ids.runs[1]);
-    await redMain(ids.runs[3]);
+    await redMain(ids.runs[2]);
     const incident = await cause(ids.runs[0]);
-    expect(String(((await get(ids.runs[3])) as any).incident_task_id)).toBe(String(incident._id));
+    expect(String(((await get(ids.runs[2])) as any).incident_task_id)).toBe(String(incident._id));
     // ct-902's run was resumed by hand before the incident closed.
     await resume(ids.runs[1]);
     await close(incident._id);
@@ -213,7 +237,7 @@ describe("closing an incident", () => {
     expect(await get(ids.runs[0])).toMatchObject({ status: "running", current_node_id: "land__wait_main" });
     expect(((await get(ids.runs[0])) as any).resume_queued).toBeUndefined();
     // @release's own line run, in a workspace where lines run: queued for the line's sweep.
-    expect(((await get(ids.runs[3])) as any).resume_queued).toMatchObject({ at: "land__wait_main", by: ids.me });
+    expect(((await get(ids.runs[2])) as any).resume_queued).toMatchObject({ at: "land__wait_main", by: ids.me });
     expect(((await get(ids.runs[1])) as any).resume_queued).toBeUndefined();
     expect(await t.run((ctx: any) => openFlowStopIncidents(ctx, ids.ws))).toEqual([]);
   });
@@ -221,9 +245,9 @@ describe("closing an incident", () => {
   test("where no line runs, even a line's run resumes at once", async () => {
     const { ids, redMain, get, cause, close } = await world({ lines: false });
     await redMain(ids.runs[0]);
-    await redMain(ids.runs[3]);
+    await redMain(ids.runs[2]);
     await close((await cause(ids.runs[0]))._id);
-    for (const r of [ids.runs[0], ids.runs[3]]) {
+    for (const r of [ids.runs[0], ids.runs[2]]) {
       expect(await get(r)).toMatchObject({ status: "running", current_node_id: "land__wait_main" });
       expect(((await get(r)) as any).resume_queued).toBeUndefined();
     }
@@ -243,6 +267,21 @@ describe("closing an incident", () => {
     expect(((await get(ids.runs[1])) as any).status).toBe("failed");
     expect(((await get(ids.runs[1])) as any).resume_queued).toBeUndefined();
     expect(((await get(ids.runs[0])) as any).status).toBe("running");
+  });
+
+  test("a run a newer run of its task replaced is neither listed nor resumed", async () => {
+    const { t, ids, newRun, redMain, get, cause, close } = await world();
+    await redMain(ids.runs[0]);
+    await redMain(ids.runs[1]);
+    const incident = await cause(ids.runs[0]);
+    // ct-902 started again from the top while the incident was open.
+    const fresh = await newRun(ids.tasks[1]);
+    expect((await t.run((ctx: any) => openFlowStopIncidents(ctx, ids.ws)))[0].runs.map((r) => r.task_short_id)).toEqual(["ct-901"]);
+    await close(incident._id);
+    expect(await get(ids.runs[0])).toMatchObject({ status: "running", current_node_id: "land__wait_main" });
+    expect(await get(ids.runs[1])).toMatchObject({ status: "failed" });
+    expect(((await get(ids.runs[1])) as any).resume_queued).toBeUndefined();
+    expect(((await get(fresh)) as any).status).toBe("running");
   });
 
   test("merged into another problem as its duplicate, its runs wait on that one and resume only when it closes", async () => {
@@ -276,7 +315,7 @@ describe("stopOf", () => {
       { node_id: "land__red_main", status: "failed", completed_at: 7 },
       { node_id: "stopped", status: "failed", completed_at: 8 },
     ];
-    expect(stopOf(rows, "stopped", nodes)).toEqual({ station: "land__wait_main", shared: true });
+    expect(stopOf(rows, "stopped", nodes)).toEqual({ station: "land__wait_main", sharedExit: "land__red_main" });
   });
   test("a stop with no station failed resumes its segment from the entry", () => {
     const rows = [
@@ -284,10 +323,10 @@ describe("stopOf", () => {
       { node_id: "land__unread", status: "failed", completed_at: 3 },
       { node_id: "stopped", status: "failed", completed_at: 4 },
     ];
-    expect(stopOf(rows, "stopped", nodes)).toEqual({ station: "land", shared: true });
+    expect(stopOf(rows, "stopped", nodes)).toEqual({ station: "land", sharedExit: "land__unread" });
   });
   test("a rejection is not shared; with no graph, the station that failed last", () => {
-    expect(stopOf([{ node_id: "land__review", status: "failed", completed_at: 1 }, { node_id: "land__rejected", status: "failed", completed_at: 2 }], "stopped", nodes)).toEqual({ station: "land__review", shared: false });
+    expect(stopOf([{ node_id: "land__review", status: "failed", completed_at: 1 }, { node_id: "land__rejected", status: "failed", completed_at: 2 }], "stopped", nodes)).toEqual({ station: "land__review", sharedExit: null });
     expect(stopStationOf([{ node_id: "deploy__failed", status: "failed" }], "deploy__failed")).toBe("deploy__failed");
   });
   test("an exit that names resume= resumes there: the change flow's main-red stop at PR, not at Wait for green main", () => {
@@ -297,8 +336,8 @@ describe("stopOf", () => {
       { node_id: "wait_main", status: "failed", completed_at: 2 },
       { node_id: "mainred", status: "failed", completed_at: 3 },
     ];
-    expect(stopOf(rows, "mainred", change)).toEqual({ station: "pr", shared: true });
+    expect(stopOf(rows, "mainred", change)).toEqual({ station: "pr", sharedExit: "mainred" });
     // Without it, the station that failed.
-    expect(stopOf(rows, "mainred", change.map(({ resume: _r, ...n }) => n))).toEqual({ station: "wait_main", shared: true });
+    expect(stopOf(rows, "mainred", change.map(({ resume: _r, ...n }) => n))).toEqual({ station: "wait_main", sharedExit: "mainred" });
   });
 });

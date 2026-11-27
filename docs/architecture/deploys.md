@@ -843,3 +843,14 @@ meanwhile is kept. A finish whose runner may not raise the team's floor
 records "Not forced" with the refusal, and the team's @release hears it
 with the version (`teamCliFloor.tellRelease`); machines still lagging after
 the wait reach @release by name and version, once.
+
+Platform staff running the finish also raise the global floor, which
+forces every team. Anyone else forces only the deploy's team: forcing
+another team's machines is that team's Release Captain's call. So the
+server (`teamCliFloor.tellOtherTeams`; the caller cannot read other teams)
+tells each other team's @release, once per deploy, when its members'
+machines seen in the last day run older and its floor is below the
+release: the version, that it changes the daemon, the team's floor, how
+many machines run older, and `cast force-update <version> --team <team>`.
+The caller learns only how many teams were told, which the deploy's note
+records.

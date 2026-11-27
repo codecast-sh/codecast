@@ -22,9 +22,9 @@ function fetchLatest(): Promise<string | null> {
   return read;
 }
 
-/** The latest CLI release, or null until (or unless) it is read. */
-export function useLatestCliRelease(): string | null {
-  const [latest, setLatest] = useState<string | null>(null);
+/** The latest CLI release: undefined while it is read, null when the read failed. */
+export function useLatestCliRelease(): string | null | undefined {
+  const [latest, setLatest] = useState<string | null | undefined>(undefined);
   useEffect(() => {
     let live = true;
     void fetchLatest().then((v) => { if (live) setLatest(v); });
