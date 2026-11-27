@@ -19,7 +19,7 @@
 #   the tree's alone (and a CI runner cannot run it).
 
 [[generated]]
-paths = ["packages/web/lib/line/shippedFlows.generated.ts", "packages/web/lib/line/shippedFlowStations.generated.ts"]
+paths = ["packages/web/lib/line/shippedFlows.generated.ts", "packages/web/lib/line/shippedFlowStations.generated.ts", "packages/shared/contracts/libraryFlowGraphs.generated.ts"]
 run = "bun packages/cli/scripts/gen-shipped-flows.ts"
 
 [[generated]]

@@ -4,7 +4,7 @@
 // teammates published to the workspace's pool, workflows.webPool). Each reads through the one fold
 // (shared/contracts/flowPool.ts) the CLI's `cast flow ls` uses, so both say
 // the same stations in the same order. Pure: no store, no React.
-import { defaultFlowOf, flowBase, flowFills, flowGraphAttr as graphAttr, flowNodeAttrOf, flowPathWords, flowSlotsOf, foldFlow, publishableFlowSource, retiredFlowLine, segmentTopOf, takesSessionChange, workspacePool, type FlowEdgeIn, type FlowNodeIn, type PoolFlowSummary } from "@codecast/shared/contracts/flowPool";
+import { defaultFlowOf, flowBase, flowFills, flowNodeAttrOf, flowRunAttr, flowPathWords, flowSlotsOf, foldFlow, publishableFlowSource, retiredFlowLine, segmentTopOf, takesSessionChange, workspacePool, type FlowEdgeIn, type FlowNodeIn, type PoolFlowSummary } from "@codecast/shared/contracts/flowPool";
 import type { RepoFlow } from "@codecast/shared/contracts/repoFlows";
 import { SHIPPED_FLOWS } from "./shippedFlows.generated";
 import { sourceSaysOwnResults } from "@codecast/shared/contracts/ownResults";
@@ -80,13 +80,14 @@ export function pushedFlow(row: PushedFlowRow): AppFlow {
     };
   });
   const edges = row.edges.map((e) => ({ ...e }));
-  const takes = graphAttr(row.source, "takes");
+  // A variant's graph attributes are its base's where it sets none (Codecast's Change only extends the library's).
+  const takes = flowRunAttr(row.source, "takes");
   return {
     slug: row.slug,
     name: row.name,
-    kind: (row.kind ?? graphAttr(row.source, "kind")) === "segment" ? "segment" : "line",
-    label: row.label ?? graphAttr(row.source, "label") ?? titleOf(row.name),
-    description: graphAttr(row.source, "description"),
+    kind: (row.kind ?? flowRunAttr(row.source, "kind")) === "segment" ? "segment" : "line",
+    label: row.label ?? flowRunAttr(row.source, "label") ?? titleOf(row.name),
+    description: flowRunAttr(row.source, "description"),
     takes: takes ? takes.split(/[\s,]+/).filter(Boolean) : ["task"],
     ...foldFlow(nodes, edges),
     nodes,
@@ -134,9 +135,10 @@ function buildPool(pushed: ReadonlyArray<PushedFlowRow>, repo: ReadonlyArray<Rep
   // A pushed graph joins the pool only when it says what kind of flow it is and is no session's draft, never a probe or a trial's copy,
   // and never under a name the library retired: a run of it left a row behind, which nothing shadows any more.
   const joins = pushed.filter((r) => !names.has(r.slug) && !retiredFlowLine(r.slug) && r.nodes.length && publishableFlowSource(r.source));
-  const pushedFlows = joins.filter((r, i) => joins.findIndex((x) => x.slug === r.slug) === i).map((r) => ({ flow: pushedFlow(r), saysTakes: !!graphAttr(r.source, "takes") }));
+  const pushedFlows = joins.filter((r, i) => joins.findIndex((x) => x.slug === r.slug) === i).map((r) => ({ flow: pushedFlow(r), saysTakes: !!flowRunAttr(r.source, "takes") }));
   const all: AppFlow[] = [...local, ...pushedFlows.map((p) => p.flow)];
-  // A flow that extends another and says nothing of what it takes takes what its base takes (a team's variant of Change takes a session's change).
+  // A flow that extends one only the pool holds (a team's own flow) and says nothing of what it takes takes what that
+  // base takes; a library base already gave it its takes (flowRunAttr).
   for (const p of pushedFlows) {
     const base = !p.saysTakes && p.flow.base ? all.find((f) => f.slug === p.flow.base) : null;
     if (base) p.flow.takes = base.takes;

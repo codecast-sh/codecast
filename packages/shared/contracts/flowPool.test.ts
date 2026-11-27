@@ -2,7 +2,7 @@
 // attributes rewritten with every other byte kept, and a flow's base read the
 // same way whether a save named it or the graph extends a file.
 import { expect, test } from "bun:test";
-import { flowBase, flowGraphAttr, flowSegmentSlugs, flowPathWords, foldFlow, publishableFlowSource, sourceTakesSessionChange, withGraphAttrs } from "./flowPool";
+import { flowBase, flowGraphAttr, flowRunAttr, flowSegmentSlugs, flowPathWords, foldFlow, publishableFlowSource, sourceTakesSessionChange, withGraphAttrs } from "./flowPool";
 import { flowEditWords, type FlowEditChange } from "./flowEdit";
 
 test("withGraphAttrs sets and drops graph attributes, quotes and the rest of the source kept", () => {
@@ -36,6 +36,23 @@ test("a flow takes a session's change when it takes a branch and is a whole flow
   expect(sourceTakesSessionChange(`digraph check {\n  graph [kind="segment", takes="branch"]\n  verify [flow="checker"]\n}`)).toBe(false);
   expect(sourceTakesSessionChange(`digraph line {\n  graph [kind="line", takes="task"]\n  ship [flow="ship"]\n}`)).toBe(false);
   expect(sourceTakesSessionChange(null)).toBe(false);
+});
+
+// Codecast's own Change is only `graph [extends="change"]` and a station: it runs as the library's Change does.
+test("a variant that only extends a library flow takes what the library flow takes", () => {
+  const variant = `digraph change {\n  graph [extends="change"]\n  local_ci [before="pr", label="Local CI", shape=parallelogram, script="bun run ci"]\n}`;
+  expect(sourceTakesSessionChange(variant)).toBe(true);
+  expect(flowRunAttr(variant, "kind")).toBe("line");
+  expect(flowRunAttr(variant, "takes")).toBe("task,branch");
+  expect(sourceTakesSessionChange(`digraph change { graph [extends="change.cast"] }`)).toBe(true);
+  // The variant's own attribute wins; `serves` and `extends` stay the file's own.
+  expect(flowRunAttr(`digraph c { graph [extends="change", takes="task"] }`, "takes")).toBe("task");
+  expect(sourceTakesSessionChange(`digraph c { graph [extends="change", takes="task"] }`)).toBe(false);
+  expect(flowRunAttr(`digraph c { graph [extends="change"] }`, "serves")).toBe(null);
+  // A segment's variant stays a segment; a base named by path or unknown to the library reads nothing it does not say.
+  expect(flowRunAttr(`digraph r { graph [extends="review"] }`, "kind")).toBe("segment");
+  expect(sourceTakesSessionChange(`digraph c { graph [extends="../line/change.cast"] }`)).toBe(false);
+  expect(flowRunAttr(`digraph c { graph [extends="our-base"] }`, "kind")).toBe(null);
 });
 
 // A station a variant placed after Check (parser.ts variantEdits) as the expanded graph holds it: Check's passing

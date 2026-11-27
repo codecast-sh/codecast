@@ -13,12 +13,14 @@ const CONV = "conv_1";
 
 const own = `digraph land_built_change {\n  graph [label="Built change", takes="task,branch", draft="jx7dhj9"]\n  check [flow="check"]\n  land [label="Land", flow="ship"]\n  start -> check -> land -> exit\n}`;
 const pool = `digraph change {\n  graph [kind="line", takes="task,branch"]\n}`;
+// A repository's own Change that only extends the library's (codecast's .codecast/flows/change.cast): its takes and kind are the library's.
+const variant = `digraph change {\n  graph [extends="change"]\n  local_ci [before="pr", label="Local CI", shape=parallelogram, script="bun run ci"]\n}`;
 const segment = `digraph check {\n  graph [kind="segment", takes="branch"]\n  verify [flow="checker"]\n}`;
 
 function world() {
-  const run = (id: string, workflow: string, created: number) => ({
+  const run = (id: string, workflow: string, created: number, status = "completed") => ({
     _id: id, workflow_id: workflow, user_id: ME, workspace: WS, team_id: TEAM, spawner_conversation_id: CONV,
-    status: "completed", created_at: created, updated_at: created, node_statuses: [], merge: { sha: "a".repeat(40), at: created },
+    status, created_at: created, updated_at: created, node_statuses: [], merge: { sha: "a".repeat(40), at: created },
   });
   const t: Record<string, any[]> = {
     users: [{ _id: ME, name: "Ana" }],
@@ -26,8 +28,8 @@ function world() {
     teams: [{ _id: TEAM, name: "Acme" }],
     conversations: [{ _id: CONV, user_id: ME, team_id: TEAM, title: "s" }],
     tasks: [],
-    workflows: [{ _id: "wf_own", source: own, slug: "land-built-change" }, { _id: "wf_pool", source: pool, slug: "change" }, { _id: "wf_seg", source: segment, slug: "check" }],
-    workflow_runs: [run("run_own", "wf_own", 3), run("run_pool", "wf_pool", 2), run("run_seg", "wf_seg", 1)],
+    workflows: [{ _id: "wf_own", source: own, slug: "land-built-change" }, { _id: "wf_pool", source: pool, slug: "change" }, { _id: "wf_seg", source: segment, slug: "check" }, { _id: "wf_variant", source: variant, slug: "change" }],
+    workflow_runs: [run("run_own", "wf_own", 3), run("run_pool", "wf_pool", 2), run("run_seg", "wf_seg", 1), run("run_variant", "wf_variant", 0, "running")],
   };
   const ctx = { db: makeFakeDb(t), auth: { getUserIdentity: async () => ({ subject: `${ME}|sess` }) } } as any;
   return ctx;
@@ -36,7 +38,7 @@ function world() {
 test("a session's own landing flow counts as its change run beside the pool's; a segment run alone does not", async () => {
   const ctx = world();
   const runs = await (forConversation as any)._handler(ctx, { conversation_id: CONV });
-  expect(runs.map((r: any) => [r._id, r.takes_change])).toEqual([["run_own", true], ["run_pool", true]]);
+  expect(runs.map((r: any) => [r._id, r.takes_change])).toEqual([["run_own", true], ["run_pool", true], ["run_variant", true]]);
   // The inbox card reads each session's newest change run: the one its own flow made.
   const team = await (forTeam as any)._handler(ctx, { team_id: TEAM });
   expect(team.map((r: any) => r._id)).toEqual(["run_own"]);
@@ -62,4 +64,5 @@ test("every run row says whether it carries a change, whichever feed brought it"
   // The team's run lists feed the same collection as the session's: a segment run there reads as no change.
   expect((await enrichRun(ctx, await ctx.db.get("run_seg"))).takes_change).toBe(false);
   expect((await enrichRun(ctx, await ctx.db.get("run_own"))).takes_change).toBe(true);
+  expect((await enrichRun(ctx, await ctx.db.get("run_variant"))).takes_change).toBe(true);
 });

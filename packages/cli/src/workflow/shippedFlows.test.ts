@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import * as fs from "fs";
 import * as path from "path";
-import { SHIPPED_FLOWS_SNAPSHOT_PATH, SHIPPED_FLOW_STATIONS_SNAPSHOT_PATH, renderShippedFlowsModule, renderShippedFlowStationsModule, shippedFlowStationsSnapshot, shippedFlowsSnapshot } from "./shippedFlows";
+import { LIBRARY_FLOW_GRAPHS_SNAPSHOT_PATH, SHIPPED_FLOWS_SNAPSHOT_PATH, SHIPPED_FLOW_STATIONS_SNAPSHOT_PATH, renderLibraryFlowGraphsModule, renderShippedFlowsModule, renderShippedFlowStationsModule, shippedFlowStationsSnapshot, shippedFlowsSnapshot } from "./shippedFlows";
 
 describe("the web's snapshot of the shipped pool", () => {
   test("matches the templates (regenerate: bun packages/cli/scripts/gen-shipped-flows.ts)", () => {
@@ -12,6 +12,11 @@ describe("the web's snapshot of the shipped pool", () => {
   test("the stations snapshot matches the templates (same regenerate)", () => {
     const file = path.resolve(import.meta.dir, "../../../..", SHIPPED_FLOW_STATIONS_SNAPSHOT_PATH);
     expect(fs.readFileSync(file, "utf-8")).toBe(renderShippedFlowStationsModule());
+  });
+
+  test("the library's graph attributes match the templates (same regenerate)", () => {
+    const file = path.resolve(import.meta.dir, "../../../..", LIBRARY_FLOW_GRAPHS_SNAPSHOT_PATH);
+    expect(fs.readFileSync(file, "utf-8")).toBe(renderLibraryFlowGraphsModule());
   });
 
   test("carries each station's words once, by the expanded node id the graph draws", () => {
