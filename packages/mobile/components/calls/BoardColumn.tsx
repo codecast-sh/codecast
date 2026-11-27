@@ -3,7 +3,8 @@
 // its notes and filed cards below, folded notes opening on tap. Opening a
 // fold is this reader's view only: nothing is written to the board.
 import { useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, View as RNView } from 'react-native';
+import { Image, Pressable, ScrollView, StyleSheet, View as RNView } from 'react-native';
+import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import type { ArtifactElement } from '@codecast/shared/artifacts';
 import { api } from '@codecast/convex/convex/_generated/api';
@@ -14,7 +15,7 @@ import { Text } from '@/components/Themed';
 import { EntityPill } from '@/components/EntityPill';
 import { Spacing, themedStyles, useActiveScheme, useTheme } from '@/constants/Theme';
 import { plainMarks, stickyPaper, BOARD_INK } from '@/components/artifacts/artifactColors';
-import { buildBoardColumn, foldLabel, type ColumnGroup, type ColumnItem } from '@/lib/calls/boardColumn';
+import { buildBoardColumn, foldLabel, imageThumb, pageRow, type ColumnGroup, type ColumnItem } from '@/lib/calls/boardColumn';
 
 export function BoardColumn({ docId, header }: { docId: string; header?: React.ReactNode }) {
   const elements = useLiveElements(docId) as ArtifactElement[];
@@ -115,6 +116,26 @@ function RefTitle({ refId, title, docId }: { refId: string; title: string; docId
 function Note({ el }: { el: ArtifactElement }) {
   const Theme = useTheme();
   const dark = useActiveScheme() === 'dark';
+  const router = useRouter();
+  if (el.kind === 'page') {
+    const { title, route } = pageRow(el);
+    return (
+      <Pressable
+        onPress={route ? () => router.push(route as any) : undefined}
+        disabled={!route}
+        style={({ pressed }) => [styles.pageRow, pressed && styles.pressed]}
+        accessibilityRole={route ? 'button' : undefined}
+        accessibilityLabel={title}
+      >
+        <Ionicons name="document-text-outline" size={16} color={Theme.textMuted} />
+        <Text style={styles.plain} numberOfLines={2}>{title}</Text>
+      </Pressable>
+    );
+  }
+  if (el.kind === 'image') {
+    const thumb = imageThumb(el);
+    return thumb ? <Image source={{ uri: thumb.uri }} style={styles.thumb} resizeMode="cover" accessibilityLabel={thumb.alt || 'Image'} /> : null;
+  }
   if (el.kind === 'card') {
     const ref = typeof el.ref === 'string' ? el.ref : '';
     // A filed card is only as wide as what it says.
@@ -180,6 +201,18 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   sticky: { padding: 10, borderRadius: 6 },
   noteText: { fontSize: 14, lineHeight: 20 },
   plain: { fontSize: 14, lineHeight: 20, color: Theme.text },
+  pageRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    minHeight: 44,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.borderLight,
+    backgroundColor: Theme.bg,
+  },
+  thumb: { width: 160, height: 110, borderRadius: 8, backgroundColor: Theme.bg },
   filed: {
     alignSelf: 'flex-start',
     paddingHorizontal: 10,

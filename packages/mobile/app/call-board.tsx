@@ -13,7 +13,8 @@ import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { useQueryNoThrow } from '@codecast/web/hooks/useQueryNoThrow';
 import { useMountEffect } from '@codecast/web/hooks/useMountEffect';
 import { useLiveArtifact } from '@codecast/web/components/live/useLiveArtifact';
-import { huddleWorkspaceKey, setHuddleSettings, useHuddleSetting } from '@codecast/web/lib/calls/huddleSettings';
+import { boardBannerState, huddleWorkspaceKey, markNextTimeSeen, SCRIBE_INVITE_WORDS, setHuddleSettings, useHuddleSetting, useNextTimeSeen, type BannerMemo } from '@codecast/web/lib/calls/huddleSettings';
+import { useScribe, type ScribeLive } from '@codecast/web/components/calls/useScribe';
 import { autoScribeLedger } from '@codecast/web/components/consequential/ledgers';
 import { ledgerLines } from '@codecast/web/components/consequential/roleOnline';
 import { Text } from '@/components/Themed';
@@ -21,8 +22,6 @@ import { Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { ArtifactView } from '@/components/artifacts/ArtifactView';
 import { BoardColumn } from '@/components/calls/BoardColumn';
 import { appAlert } from '@/lib/popups';
-import { usePhoneScribe, type PhoneScribeLive } from '@/lib/calls/usePhoneScribe';
-import { INVITE_WORDS, nextTimeSeenPatch, phoneBannerState, readNextTimeSeen, type PhoneBannerMemo } from '@/lib/calls/huddleBanner';
 
 export default function CallBoardScreen() {
   const Theme = useTheme();
@@ -30,12 +29,12 @@ export default function CallBoardScreen() {
   const insets = useSafeAreaInsets();
   const { room } = useLocalSearchParams<{ room: string }>();
   const roomKey = room ?? null;
-  const live = useQueryNoThrow(api.transcripts.getLive, roomKey ? { room_key: roomKey, tail: 1 } : 'skip').data as PhoneScribeLive;
+  const live = useQueryNoThrow(api.transcripts.getLive, roomKey ? { room_key: roomKey, tail: 1 } : 'skip').data as ScribeLive;
   const key = `${roomKey}|${live?.transcript_id ?? ''}`;
   const [docId, setDocId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [canvas, setCanvas] = useState(false);
-  const scribe = usePhoneScribe(roomKey, live);
+  const scribe = useScribe(roomKey, live, appAlert);
 
   useMountEffect(() => {
     if (!roomKey) return;
@@ -103,7 +102,7 @@ function ColumnBody({ docId, banner, bottom }: { docId: string; banner: React.Re
   );
 }
 
-type Scribe = ReturnType<typeof usePhoneScribe>;
+type Scribe = ReturnType<typeof useScribe>;
 
 /** Scribe while it is in the call; a tap offers Remove. */
 function ScribeChip({ scribe }: { scribe: Scribe }) {
@@ -129,10 +128,10 @@ function ScribeChip({ scribe }: { scribe: Scribe }) {
 
 // ── The banners ───────────────────────────────────────────────────────────
 
-const memos = new Map<string, PhoneBannerMemo>();
+const memos = new Map<string, BannerMemo>();
 const memoListeners = new Set<() => void>();
-const EMPTY: PhoneBannerMemo = {};
-function noteBanner(callKey: string, patch: PhoneBannerMemo) {
+const EMPTY: BannerMemo = {};
+function noteBanner(callKey: string, patch: BannerMemo) {
   memos.set(callKey, { ...memos.get(callKey), ...patch });
   memoListeners.forEach((fn) => fn());
 }
@@ -144,18 +143,18 @@ const subscribeMemos = (fn: () => void) => {
 function BoardBanner({ callKey, workspace, workspaceName, scribe }: { callKey: string; workspace: string | null; workspaceName: string; scribe: Scribe }) {
   const Theme = useTheme();
   const memo = useSyncExternalStore(subscribeMemos, () => memos.get(callKey) ?? EMPTY, () => EMPTY);
-  const nextSeen = useInboxStore((s: any) => readNextTimeSeen(s.clientState?.ui, workspace));
-  const state = phoneBannerState({ present: scribe.present, memo, nextSeen });
+  const nextSeen = useNextTimeSeen(workspace);
+  const boardViewOn = useHuddleSetting('huddleBoardView', workspace);
+  const autoScribeOn = useHuddleSetting('huddleAutoScribe', workspace);
+  const state = boardBannerState({ present: scribe.present, memo, boardViewOn, autoScribeOn, nextSeen });
   if (state === 'invite') {
     return (
       <RNView style={styles.banner} accessibilityRole="summary">
-        <Text style={styles.bannerText}>{INVITE_WORDS}</Text>
+        <Text style={styles.bannerText}>{SCRIBE_INVITE_WORDS}</Text>
         <RNView style={styles.bannerActions}>
           <Pressable
-            onPress={() => {
-              noteBanner(callKey, { invited: true });
-              scribe.invite();
-            }}
+            // "Next time" follows only an invite that seated Scribe.
+            onPress={() => void scribe.invite().then((ok) => ok && noteBanner(callKey, { invited: true }))}
             style={({ pressed }) => [styles.primary, pressed && styles.pressed]}
             accessibilityRole="button"
           >
@@ -184,8 +183,7 @@ function NextTimeBanner({ callKey, workspace, workspaceName, onClose }: { callKe
   useMountEffect(() => {
     if (memos.get(callKey)?.nextShown) return;
     noteBanner(callKey, { nextShown: true });
-    const s = useInboxStore.getState();
-    s.updateClientUI(nextTimeSeenPatch(s.clientState?.ui, workspace) as any);
+    markNextTimeSeen(workspace);
   });
   const save = () => {
     setHuddleSettings(workspace, { huddleBoardView: boardView, huddleAutoScribe: autoScribe });

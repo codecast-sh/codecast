@@ -6,7 +6,7 @@ import { useState, useSyncExternalStore } from "react";
 import { ChevronDown, PenLine, SquareKanban, SquareArrowOutUpRight, X } from "lucide-react";
 import { useInboxStore } from "../../store/inboxStore";
 import { useMountEffect } from "../../hooks/useMountEffect";
-import { boardBannerState, markNextTimeSeen, setHuddleSettings, useHuddleSetting, useNextTimeSeen, type BannerMemo } from "../../lib/calls/huddleSettings";
+import { boardBannerState, markNextTimeSeen, SCRIBE_INVITE_WORDS, setHuddleSettings, useHuddleSetting, useNextTimeSeen, type BannerMemo } from "../../lib/calls/huddleSettings";
 import type { ParticipantTile } from "../../lib/calls/callMedia";
 import { pinShare } from "../../lib/calls/stagePins";
 import type { StagePinRow } from "../../hooks/useStagePins";
@@ -145,7 +145,7 @@ export function BoardBanner({
     return (
       <div className={BANNER} role="status" data-banner="invite">
         <PenLine className="h-3.5 w-3.5 shrink-0 text-sol-violet" />
-        <span className="min-w-0 truncate">Scribe can diagram your huddles as you talk</span>
+        <span className="min-w-0 truncate">{SCRIBE_INVITE_WORDS}</span>
         <button
           type="button"
           onClick={() => {

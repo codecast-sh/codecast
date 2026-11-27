@@ -1,6 +1,10 @@
 // A session spawned for a call (a huddle feed, Scribe), shared by web and the
 // phone: neither the media room nor any web-only module is reached from here.
+import { AVATAR_KEYS } from "@codecast/shared/contracts/orgAvatars";
+import { characterNameFor, defaultCharacterFor, type Character } from "@codecast/shared/contracts/sessionCharacter";
 import { SessionCreatePendingError, defaultNewSessionPath, useInboxStore } from "../../store/inboxStore";
+import { findSessionRow } from "./findSessionRow";
+import { characterFor } from "../sessionIdentity";
 
 // Local-first "new session seeded with a message": stub + optimistic bubble +
 // side panel now, durable create + send resolve behind it. Same lifecycle as
@@ -61,4 +65,35 @@ export function spawnSessionWithMessage(
     store.sendMessage(convexId, text, undefined, clientId);
     return convexId;
   });
+}
+
+/** The character a session spawned FOR a huddle wears (session-characters.md
+ *  S1): the hash default for `seed`, unless an agent already in the room
+ *  wears that face or that name, in which case the next free face and its
+ *  name. Two agents called Ember in one room would answer each other's asks.
+ *  Written as a CHOSEN character (the seed is the stub, not the row's final
+ *  id), so the room's name for it holds on every surface. */
+export function characterForRoom(seed: string, taken: Character[]): Character {
+  const clash = (c: { avatar: string; name: string }) =>
+    taken.some((t) => t.avatar === c.avatar || t.name.toLowerCase() === c.name.toLowerCase());
+  const own = defaultCharacterFor(seed);
+  if (!clash(own)) return { ...own, chosen: true };
+  const start = AVATAR_KEYS.indexOf(own.avatar);
+  for (let i = 1; i < AVATAR_KEYS.length; i++) {
+    const avatar = AVATAR_KEYS[(start + i) % AVATAR_KEYS.length];
+    const c = { avatar, name: characterNameFor(seed, avatar) };
+    if (!clash(c)) return { ...c, chosen: true };
+  }
+  return { ...own, chosen: true };
+}
+
+/** The characters of the agents a live transcript already feeds, read from
+ *  the store, so a newcomer can avoid their faces and names. */
+export function charactersInRoom(routes: Array<{ kind: string; target: string }>): Character[] {
+  const st = useInboxStore.getState() as any;
+  return routes
+    .filter((r) => r.kind === "session")
+    .map((r) => findSessionRow(st, r.target))
+    .filter(Boolean)
+    .map((row) => characterFor(row));
 }

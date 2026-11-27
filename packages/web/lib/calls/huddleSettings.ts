@@ -4,6 +4,9 @@
 // huddle always belongs to a team). Absent means off.
 import { useInboxStore } from "../../store/inboxStore";
 
+/** The invite banner's words, on web and the phone. */
+export const SCRIBE_INVITE_WORDS = "Scribe can diagram your huddles as you talk";
+
 export type HuddleSettingKey = "huddleBoardView" | "huddleAutoScribe";
 
 /** A huddle's workspace key, from its team. */

@@ -7949,6 +7949,11 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   ) => Promise<{ claimed: true; claim_id: number; transcript_id: string } | { claimed: false; existing: "joining" | "listening" | "removed" } | undefined>;
   /** Show the call's Scribe out (transcripts.removeScribe); with `claim`, only give back this client's failed claim. */
   removeScribe: (roomKey: string, claim?: number) => Promise<unknown>;
+  /** Point a live call's words at a feed (transcripts.addRoute): a session, doc or Slack thread, or the Scribe seated in its claim. */
+  addLiveRoute: (
+    transcriptId: string,
+    route: { kind: "session" | "doc" | "slack"; target: string; mode: "live" | "after"; face?: boolean; role?: "scribe"; claim?: number },
+  ) => Promise<unknown>;
   setTeamFeature: (teamId: string, feature: string, enabled: boolean) => void;
   setTeamBudget: (teamId: string, capUsd: number) => void;
   setTeamPolicy: (teamId: string, policy: Record<string, unknown>) => void;
@@ -16817,6 +16822,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
   }),
   removeScribe: asyncAction(function (this: Draft, roomKey: string, claim?: number) {
     return { roomKey, claim };
+  }),
+  addLiveRoute: asyncAction(function (this: Draft, transcriptId: string, route: { kind: string; target: string }) {
+    return { transcriptId, route };
   }),
   setRoomTranscribeOff: asyncAction(function (this: Draft, roomKey: string, off: boolean) {
     const row = (this.callRooms[roomKey] ??= { _id: roomKey, locked: false, transcribe_off: false, transcribe_off_at: null });

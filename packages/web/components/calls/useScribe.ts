@@ -1,10 +1,11 @@
 import { useCallback, useSyncExternalStore } from "react";
 import { toast } from "sonner";
-import { humanizeConvexError, SCRIBE_CLAIM_TTL_MS, scribeInstructions, scribeStatus, type ScribeStatus } from "@codecast/shared/contracts";
+import { humanizeConvexError, SCRIBE_CLAIM_TTL_MS, scribeStatus, type ScribeStatus } from "@codecast/shared/contracts";
 import { SessionCreatePendingError, useInboxStore } from "../../store/inboxStore";
-import { getRoom } from "../../lib/calls/callManager";
+import { withoutUndo } from "../../store/undoStack";
 import { useNowWhen } from "../../hooks/useCoarseNow";
-import { useAddLiveFeed } from "./useCallFeed";
+import { inviteScribeFlow, type ScribeInviteDeps } from "../../lib/calls/scribeInvite";
+import { characterForRoom, charactersInRoom, spawnSessionWithMessage } from "../../lib/calls/spawnFeedSession";
 
 // The call's Scribe: the silent agent that keeps the board (convex
 // transcripts.inviteScribe). One per call, held by the server: an invite
@@ -49,7 +50,28 @@ export function scribeShownStatus(server: ScribeStatus, press: Press | null): Sc
   return server;
 }
 
-export function useScribe(roomKey: string | null, live: ScribeLive) {
+/** The flow's dependencies, bound to this app's store and Convex client. */
+function scribeDeps(): ScribeInviteDeps {
+  const st = () => useInboxStore.getState() as any;
+  return {
+    invite: (roomKey, auto) => (auto ? st().inviteScribe(roomKey, true) : st().inviteScribe(roomKey)),
+    giveBack: (roomKey, claim) => st().removeScribe(roomKey, claim),
+    spawn: spawnSessionWithMessage,
+    seat: ({ transcript_id, ...route }) => st().addLiveRoute(transcript_id, route),
+    character: (seed, routes) => characterForRoom(seed, charactersInRoom(routes)),
+    // The feed names its own session; that is not the user's change.
+    setCharacter: (id, c) => withoutUndo(() => st().setSessionCharacter(id, c)),
+    landed: (stub) => st().getConvexId(stub),
+    send: (id, text) => st().sendMessage(id, text),
+    context: (roomKey, teamId) => ({
+      occupants: (st().callOccupancy?.[roomKey] ?? []).length,
+      workspaceName: (st().teams ?? []).find((t: any) => String(t?._id) === teamId)?.name,
+    }),
+  };
+}
+
+/** `onError` says a failed press the surface's own way (web: a toast; the phone: an alert). */
+export function useScribe(roomKey: string | null, live: ScribeLive, onError: (title: string, message: string) => void = (_t, m) => toast.error(m)) {
   // A claim whose agent never landed stops holding the slot by the clock
   // alone: the one moment worth a re-render is that claim's expiry.
   const expiresAt = live?.scribe_claim ? live.scribe_claim.at + SCRIBE_CLAIM_TTL_MS : null;
@@ -60,52 +82,29 @@ export function useScribe(roomKey: string | null, live: ScribeLive) {
     () => null,
   );
   const status = scribeShownStatus(scribeStatus(live, now), press);
-  const addFeed = useAddLiveFeed({
-    roomKey,
-    liveTranscriptId: live?.transcript_id ?? null,
-    routes: live?.routes,
-    teamId: live?.team_id,
-    getRoom,
-  });
 
   // `auto`: the person's "Invite Scribe to every huddle", not a press: the
   // server refuses it once somebody removed Scribe from this call.
-  const invite = useCallback((opts?: { auto?: boolean }) => {
-    if (!roomKey || status !== "absent") return;
+  // Resolves whether this press seated Scribe.
+  const invite = useCallback((opts?: { auto?: boolean }): Promise<boolean> => {
+    if (!roomKey || !live || status !== "absent") return Promise.resolve(false);
     notePress(roomKey, "invite");
-    void (async () => {
-      let claim: number | null = null;
-      try {
-        const store = useInboxStore.getState();
-        const answer = opts?.auto ? await store.inviteScribe(roomKey, true) : await store.inviteScribe(roomKey);
-        // Somebody else's Scribe is joining or in (the transcript shows it),
-        // or an automatic invite met a removal.
-        if (!answer?.claimed) return;
-        claim = answer.claim_id;
-        const st = useInboxStore.getState() as any;
-        const team = (st.teams ?? []).find((t: any) => String(t?._id) === live?.team_id);
-        const instructions = scribeInstructions({
-          solo: (st.callOccupancy?.[roomKey] ?? []).length <= 1,
-          callShortId: live?.short_id ?? undefined,
-          workspaceName: team?.name,
-        });
-        notePress(roomKey, null);
-        await addFeed({ kind: "new-session" }, { face: false, scribe: { claim: answer.claim_id, instructions } });
-      } catch (err) {
-        // Give the slot back at once rather than hold it until the claim
-        // expires; a Scribe somebody else has invited since stays.
-        if (claim !== null) void useInboxStore.getState().removeScribe(roomKey, claim).catch(() => {});
-        toast.error(
+    return inviteScribeFlow(roomKey, live, scribeDeps(), { auto: opts?.auto, onClaimed: () => notePress(roomKey, null) })
+      .then((r) => r === "claimed")
+      .catch((err) => {
+        onError(
+          "Couldn't invite Scribe",
           err instanceof SessionCreatePendingError
-            // addFeed waited the spawn out and told the session to stand down.
+            // The spawn waited the create out and told the session to stand down.
             ? "Scribe's session did not start in time, so Scribe did not join. Invite it again."
             : humanizeConvexError(err, "Could not invite Scribe"),
         );
-      } finally {
+        return false;
+      })
+      .finally(() => {
         if (presses.get(roomKey) === "invite") notePress(roomKey, null);
-      }
-    })();
-  }, [roomKey, status, live?.team_id, live?.short_id, addFeed]);
+      });
+  }, [roomKey, live, status, onError]);
 
   const remove = useCallback(() => {
     if (!roomKey || status === "absent") return;
@@ -113,11 +112,11 @@ export function useScribe(roomKey: string | null, live: ScribeLive) {
     void useInboxStore
       .getState()
       .removeScribe(roomKey)
-      .catch((err) => toast.error(humanizeConvexError(err, "Could not remove Scribe")))
+      .catch((err) => onError("Couldn't remove Scribe", humanizeConvexError(err, "Could not remove Scribe")))
       .finally(() => {
         if (presses.get(roomKey) === "remove") notePress(roomKey, null);
       });
-  }, [roomKey, status]);
+  }, [roomKey, status, onError]);
 
   return { present: status !== "absent", status, invite, remove };
 }
