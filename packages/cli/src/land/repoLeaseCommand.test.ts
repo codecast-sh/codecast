@@ -149,7 +149,10 @@ describe("cast repo lease", () => {
     signals.emit("SIGINT");
     expect(await own).toBe(0);
     rmSync(started);
-    const passed = runUnderLease({ post: server().post, repository: "o/r", holder: "x", log: () => {}, signals, forwardInt: true, cmd: ["sh", "-c", `touch ${started}; exec sleep 30`] });
+    // A shell started with SIGINT ignored (a test runner's children can be) can neither die of it nor trap it, so the
+    // command is a bun script that installs its own handler before it says it started.
+    const onInt = `process.on("SIGINT", () => process.exit(130)); require("fs").writeFileSync(${JSON.stringify(started)}, ""); setTimeout(() => {}, 30000);`;
+    const passed = runUnderLease({ post: server().post, repository: "o/r", holder: "x", log: () => {}, signals, forwardInt: true, cmd: [process.execPath, "-e", onInt] });
     await pollUntil(() => { try { readFileSync(started); return true; } catch { return false; } }, "the command started");
     signals.emit("SIGINT");
     expect(await passed).toBe(130);
