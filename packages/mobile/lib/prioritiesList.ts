@@ -61,17 +61,19 @@ export type SectionKind = 'done' | 'polish';
 export type MilestoneSection = { kind: SectionKind; label: string; count: string; rows: MilestoneModel[] };
 
 /**
- * A priority's milestones: its open critical ones, then DONE n and POLISH x/y, Done first, each only when it holds any.
- * Needs you outranks done: a done milestone that asks sits with the open ones until it is answered.
+ * A priority's milestones: its open critical ones and any that need you, then DONE n and POLISH x/y, Done first, each
+ * only when its fold holds any. A milestone that reads Needs you, whatever its tier and whether done, sits with the open
+ * ones, never folded. DONE n counts its fold; POLISH x/y counts every polish milestone (x the done ones), asking or not.
  */
 export function milestoneSections(model: Pick<PriorityModel, 'milestones'>): { open: MilestoneModel[]; sections: MilestoneSection[] } {
-  const critical = model.milestones.filter((m) => m.tier === 'critical');
+  const unfolded = (m: MilestoneModel) => m.state.kind === 'needs_you' || (m.tier === 'critical' && !m.done);
   const polish = model.milestones.filter((m) => m.tier === 'polish');
-  const done = critical.filter((m) => m.state.kind === 'done');
+  const done = model.milestones.filter((m) => m.tier === 'critical' && !unfolded(m));
+  const polishFolded = polish.filter((m) => !unfolded(m));
   const sections: MilestoneSection[] = [];
   if (done.length) sections.push({ kind: 'done', label: 'Done', count: `${done.length}`, rows: done });
-  if (polish.length) sections.push({ kind: 'polish', label: 'Polish', count: `${polish.filter((m) => m.done).length}/${polish.length}`, rows: polish });
-  return { open: critical.filter((m) => m.state.kind !== 'done'), sections };
+  if (polishFolded.length) sections.push({ kind: 'polish', label: 'Polish', count: `${polish.filter((m) => m.done).length}/${polish.length}`, rows: polishFolded });
+  return { open: model.milestones.filter(unfolded), sections };
 }
 
 /** Sections in order: closed ones side by side share a line; an open one is its head over its milestones. */

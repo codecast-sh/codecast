@@ -21,8 +21,7 @@ import { priorityWrites } from '@codecast/web/lib/priorityWrites';
 import { branchesOf, type LinkLookups } from '@codecast/web/hooks/usePriorityModels';
 import { lookup } from '@codecast/web/lib/liveEntities';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
-import { SessionStatusMark } from '@/components/SessionStatusMark';
-import { TaskStatusMark } from '@/components/marks';
+import { SessionStatusMark, TaskStatusMark } from '@/components/marks';
 import { MilestoneMark, usePriorityActs } from '@/components/priorities/MilestoneMark';
 import { mobileEntityRoute } from '@/lib/linkRoutes';
 import { appAlert, appPrompt, showActionSheet } from '@/lib/popups';
@@ -430,14 +429,24 @@ function PrRow({ pr, state }: { pr: string; state?: string }) {
   );
 }
 
+/**
+ * A deploy's state, each its own shape so a grayscale screen tells them apart
+ * (web's parts DeployMark): live the green deploy cloud, failed the sessions'
+ * red error mark, still on its way a grey spinner.
+ */
+export function DeployMark({ status }: { status: string }) {
+  const Theme = useTheme();
+  if (status === 'failed') return <SessionStatusMark status="error" size={13} />;
+  if (status === 'live') return <Feather name={KIND_ICON.deploy} size={13} color={Theme.green} />;
+  return <Feather name="loader" size={13} color={Theme.textDim} />;
+}
+
 /** A deploy that shipped the milestone's work; it opens the phone's deploy screen. */
 function DeployRow({ d, now }: { d: ReturnType<LinkLookups['deploysOf']>[number]; now: number }) {
-  const Theme = useTheme();
   const router = useRouter();
-  const color = d.status === 'live' ? Theme.green : d.status === 'failed' ? Theme.red : Theme.textDim;
   return (
     <Item
-      icon={<Feather name={KIND_ICON.deploy} size={13} color={color} />}
+      icon={<DeployMark status={d.status} />}
       title={d.target}
       meta={`${d.status} · ${age(d.at, now)}`}
       onPress={() => router.push(`/deploy/${d.short_id}` as never)}

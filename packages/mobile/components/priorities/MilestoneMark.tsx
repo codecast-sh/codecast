@@ -17,7 +17,7 @@ import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { mobileEntityRoute } from '@/lib/linkRoutes';
 import { openCompose } from '@/lib/compose';
 import { milestoneMark, startCompose } from '@/lib/prioritiesList';
-import { SessionStatusMark } from '@/components/SessionStatusMark';
+import { SessionStatusMark } from '@/components/marks';
 
 /** Opening a linked session (its native screen), and New session on a milestone. */
 export function usePriorityActs() {

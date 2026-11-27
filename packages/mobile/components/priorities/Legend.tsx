@@ -11,10 +11,9 @@ import { MILESTONE_STATE_WORD } from '@codecast/web/lib/priorityList';
 import { SESSION_STATUS } from '@codecast/web/lib/sessionStatus';
 import { BottomSheet } from '@/components/BottomSheet';
 import { STATUS_CONFIG } from '@/components/TaskItem';
-import { SessionStatusMark } from '@/components/SessionStatusMark';
-import { TaskStatusMark } from '@/components/marks';
+import { SessionStatusMark, TaskStatusMark } from '@/components/marks';
 import { NeedsYouBox, NewSessionBox } from '@/components/priorities/MilestoneMark';
-import { KIND_ICON, PR_LOOK } from '@/components/priorities/PriorityParts';
+import { DeployMark, KIND_ICON, PR_LOOK } from '@/components/priorities/PriorityParts';
 
 const TASK_STATES = ['backlog', 'open', 'in_progress', 'in_review', 'done', 'dropped'] as const;
 
@@ -75,7 +74,9 @@ export function Legend() {
             <RNView style={styles.column}>
               <Row icon={icon(KIND_ICON.branch, Theme.textDim)} word="Branch" />
               <Row icon={icon(KIND_ICON.plan, Theme.textDim)} word="Plan" />
-              <Row icon={icon(KIND_ICON.deploy, Theme.green)} word="Deploy" />
+              <Row icon={<DeployMark status="live" />} word="Deploy, live" />
+              <Row icon={<DeployMark status="failed" />} word="Deploy, failed" />
+              <Row icon={<DeployMark status="running" />} word="Deploy, not live yet" />
             </RNView>
           </RNView>
         </ScrollView>

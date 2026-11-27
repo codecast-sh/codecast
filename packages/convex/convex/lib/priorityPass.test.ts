@@ -583,6 +583,14 @@ describe("rewriting a priority whose sessions left view", () => {
     const fresh = mergePriorities(input({ priorities: [secret] }), out([proposal({ short_id: "pri-1", title: "Partnerships", summary: "two calls this week" })]));
     expect(fresh.rewritten).toEqual(["pri-1"]);
   });
+  test("a title the person set is kept, so any reply on it clears the flag, even with the same summary", () => {
+    const named = { ...secret, title_set_by: "person" as const };
+    const plan = mergePriorities(input({ priorities: [named] }), out([proposal({ short_id: "pri-1", title: "Something else", summary: "talks with Acme" })]));
+    expect(plan.rewritten).toEqual(["pri-1"]);
+    expect(plan.updates.find((u) => u.short_id === "pri-1")?.patch.title).toBeUndefined();
+    // No reply on it: the flag stays.
+    expect(mergePriorities(input({ priorities: [named] }), out([])).rewritten).toEqual([]);
+  });
   test("a merge carries an absorbed priority's tombstones whatever its needs_rewrite says, but none of its withheld live steps", () => {
     const survivor = priority("pri-2", { title: "Partnerships", steps: [step("s1", { title: "Call list" })] });
     const absorbed = { ...secret, steps: [step("s1", { title: "Draft Acme term sheet", tier_set_by: "person" }), step("s2", { title: "Old outreach plan", dropped: true })] };

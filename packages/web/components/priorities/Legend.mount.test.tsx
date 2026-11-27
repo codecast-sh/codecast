@@ -24,9 +24,15 @@ const row = (word: string) => document.querySelector(`[data-legend-row="${word}"
 test("the legend shows every deploy state and a task not loaded yet, drawn as an open milestone draws them", async () => {
   const page = await open();
   try {
-    expect(row("Deploy, live").querySelector("svg")!.getAttribute("class")).toContain("text-sol-green");
-    expect(row("Deploy, failed").querySelector("svg")!.getAttribute("class")).toContain("text-sol-red");
-    expect(row("Deploy, not live yet").querySelector("svg")!.getAttribute("class")).toContain("text-sol-text-dim");
+    // Each state its own shape, so grayscale tells them apart: a plain rocket, the sessions' error mark, a dashed rocket.
+    const live = row("Deploy, live").querySelector('[data-deploy-mark="live"]')!;
+    expect(live.tagName.toLowerCase()).toBe("svg");
+    expect(live.getAttribute("stroke-dasharray")).toBeNull();
+    expect(live.getAttribute("class")).toContain("text-sol-green");
+    expect(row("Deploy, failed").querySelector('[data-deploy-mark="failed"] [data-status-mark="error"]')).not.toBeNull();
+    const pending = row("Deploy, not live yet").querySelector('[data-deploy-mark="pending"]')!;
+    expect(pending.getAttribute("stroke-dasharray")).toBe("3 2");
+    expect(pending.getAttribute("class")).toContain("text-sol-text-dim");
     const dot = row("Not loaded yet").querySelector('[data-task-status="unknown"]')!;
     expect(dot.className).toContain("rounded-full");
   } finally {

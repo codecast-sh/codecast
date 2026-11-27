@@ -100,6 +100,15 @@ describe('DONE and POLISH', () => {
     expect(answered.sections[0]).toMatchObject({ kind: 'done', count: '1', rows: [expect.objectContaining({ key: 's1' })] });
   });
 
+  it('a polish milestone that needs you sits with the open ones, never folded, and still counts in Polish x/y', () => {
+    const asking = row({ links: [link('s1'), link('s2'), link('s3'), link('s4'), link('p1', [session('pq', 'working')]), link('p2')] });
+    const { open, sections } = milestoneSections(model(asking, ['conv-pq']));
+    expect(open.map((m) => m.key)).toEqual(['s2', 's3', 's4', 'p1']);
+    expect(sections.map((s) => [s.kind, s.count, s.rows.map((m) => m.key)])).toEqual([['done', '1', ['s1']], ['polish', '1/2', ['p2']]]);
+    // Answered: it folds back.
+    expect(milestoneSections(model(asking)).sections[1].rows.map((m) => m.key)).toEqual(['p1', 'p2']);
+  });
+
   it('a priority with nothing done and no polish has no sections', () => {
     expect(milestoneSections(model(row({ steps: [step('s2', 'Calibrate goal finding')] }))).sections).toEqual([]);
   });

@@ -95,10 +95,10 @@ const ASKING_SECTIONS: ReadonlySet<InboxSectionKey> = new Set(["questions", "nee
  * conversation is where to answer, unless the session has an ask of its own
  * in the Decisions queue: then it asks, answered in itself. A row the inbox
  * lifts into Questions is drawn there even while a hidden bucket also holds
- * it. On the sidebar a session with an ask in
- * its Decisions section (the viewer's queue) asks wherever it sits, and one
- * the inbox does not otherwise draw is drawn there as an ask; the phone's
- * Decisions are its placed Questions. On the sidebar a hosted conversation that
+ * it. A session with an ask in the viewer's Decisions queue (the sidebar's
+ * Decisions section; the phone's Decisions badge, menu and screen) asks
+ * wherever it sits, and one the inbox does not otherwise draw is drawn there
+ * as an ask. On the sidebar a hosted conversation that
  * ended on a stop is drawn under "Couldn't finish" and asks nothing; the
  * phone keeps it under Needs You as an ask.
  *
@@ -114,9 +114,9 @@ export function inboxMarkOf(
   { inbox, now, focusedId }: { inbox: MarkInbox; now: number; focusedId: string | null },
 ): DrawnMark | null {
   const row = state.sessions[id];
-  // The sidebar's Decisions section lists every ask queued for the viewer wherever its session sits (stashed,
-  // snoozed, dismissed, not even in the store): such a session needs the viewer, drawn there as an ask.
-  const queued = inbox === "sidebar" && inDecisionQueue(state, id);
+  // Decisions (the sidebar's section, the phone's badge and screen) lists every ask queued for the viewer wherever
+  // its session sits (stashed, snoozed, dismissed, not even in the store): such a session needs the viewer, drawn there as an ask.
+  const queued = inDecisionQueue(state, id);
   const asked: DrawnMark = { mark: "needs_you", asks: true, target: id };
   if (!row) return queued ? asked : null;
   const placed = placeInboxRows(state, { focusedId, now });

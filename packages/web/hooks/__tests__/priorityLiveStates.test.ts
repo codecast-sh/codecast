@@ -165,7 +165,7 @@ test("stashed: its row draws the stash tray, and the milestone has nobody on it 
   expect(m.sessions[0].mark).toBe("stashed");
 });
 
-test("an ask queued for the viewer in the sidebar's Decisions needs you wherever its session sits: stashed, snoozed, dismissed, or not in the store", () => {
+test("an ask queued for the viewer in Decisions needs you wherever its session sits: stashed, snoozed, dismissed, or not in the store, on both inboxes", () => {
   const decide = (conversation_id: string) => useInboxStore.setState({ sessionDecisions: { dq: { _id: "dq", conversation_id, status: "pending", blocking: true, in_queue: true, created_at: NOW - MIN, updated_at: NOW - MIN, question: "Which one?", options: [] } } } as any);
   const quiet = { ...asking(), thread_state_status: "dormant" };
   for (const [name, row] of [["stashed", { ...quiet, inbox_stashed_at: NOW - MIN }], ["snoozed", { ...quiet, inbox_snoozed_until: NOW + 60 * MIN }], ["dismissed", { ...quiet, inbox_dismissed_at: NOW - MIN }]] as const) {
@@ -180,10 +180,11 @@ test("an ask queued for the viewer in the sidebar's Decisions needs you wherever
   }
   const absent = fixtureId("dqabsent");
   decide(absent);
-  expect(drawn(absent)).toEqual({ mark: "needs_you", asks: true, target: absent });
-  expect(milestone(absent, { server: "idle" })).toBe("needs_you");
-  // The phone's Decisions are its placed Questions: an absent session draws nothing there.
-  expect(drawn(absent, "phone")).toBeNull();
+  // The phone's Decisions badge and screen read the same queue.
+  for (const inbox of ["sidebar", "phone"] as const) {
+    expect([inbox, drawn(absent, inbox)]).toEqual([inbox, { mark: "needs_you", asks: true, target: absent }]);
+    expect([inbox, milestone(absent, { inbox, server: "idle" })]).toEqual([inbox, "needs_you"]);
+  }
 });
 
 test("a stashed session the inbox lifts into Decisions (its own question, or a decide) asks on the phone too, never New session", () => {
@@ -200,7 +201,7 @@ test("a stashed session the inbox lifts into Decisions (its own question, or a d
   }
 });
 
-test("a role's session with an ask of its own in the sidebar's Decisions asks there, answered in itself; the phone, whose Decisions do not list it, shows its lead", () => {
+test("a role's session with an ask of its own in Decisions asks, answered in itself, on both inboxes", () => {
   const lead = fixtureId("rqlead");
   const ridden = fixtureId("rqsess");
   const base = { message_count: 4, status: "completed", updated_at: NOW - 10 * MIN, last_turn_at: NOW - 11 * MIN, user_id: VIEWER_ID, thread_state_at: NOW - 10 * MIN };
@@ -209,12 +210,16 @@ test("a role's session with an ask of its own in the sidebar's Decisions asks th
   for (const own of [{}, { awaiting_input: true }]) {
     put({ [lead]: { ...base, standing_role_id: "rq", ...working }, [ridden]: { ...base, org_role_id: "rq", thread_state_status: "dormant", ...own } });
     useInboxStore.setState({ sessionDecisions: "awaiting_input" in own ? {} : { dq: { _id: "dq", conversation_id: ridden, status: "pending", blocking: true, in_queue: true, created_at: NOW - MIN, updated_at: NOW - MIN, question: "Ship it?", options: [] } } } as any);
-    expect(drawn(ridden)).toEqual({ mark: "needs_you", asks: true, target: ridden });
-    const m = model(ridden, { server: "idle" });
-    expect([m.state.kind, m.sessions[0].target]).toEqual(["needs_you", ridden]);
-    expect(drawn(ridden, "phone")).toEqual({ mark: "working", asks: false, target: lead });
-    expect(milestone(ridden, { inbox: "phone", server: "idle" })).toBe("working");
+    for (const inbox of ["sidebar", "phone"] as const) {
+      expect([inbox, drawn(ridden, inbox)]).toEqual([inbox, { mark: "needs_you", asks: true, target: ridden }]);
+      const m = model(ridden, { inbox, server: "idle" });
+      expect([inbox, m.state.kind, m.sessions[0].target]).toEqual([inbox, "needs_you", ridden]);
+    }
   }
+  // Without an ask of its own, it shows its lead on both.
+  put({ [lead]: { ...base, standing_role_id: "rq", ...working }, [ridden]: { ...base, org_role_id: "rq", thread_state_status: "dormant" } });
+  useInboxStore.setState({ sessionDecisions: {} } as any);
+  for (const inbox of ["sidebar", "phone"] as const) expect([inbox, drawn(ridden, inbox)]).toEqual([inbox, { mark: "working", asks: false, target: lead }]);
 });
 
 test("not in the store: no mark; the server's needs_you reads idle, never sleeping, whoever owns it", () => {
