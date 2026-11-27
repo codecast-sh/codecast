@@ -125,7 +125,7 @@ describe("step order", () => {
   test("latest.json is written by one step, after the version commit and the tag", () => {
     const writers = runs.filter(({ run }) => run.includes('"s3://$R2_BUCKET/latest.json"'));
     expect(writers.map(({ name }) => name)).toEqual([LATEST_JSON]);
-    expect(at("Revalidate main and atomically publish version commit and tag")).toBeLessThan(
+    expect(at("Tag the source commit and move main's version")).toBeLessThan(
       at(LATEST_JSON),
     );
   });

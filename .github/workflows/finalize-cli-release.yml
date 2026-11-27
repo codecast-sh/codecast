@@ -171,16 +171,12 @@ jobs:
             exit 1
           fi
 
-          git show "$SOURCE_COMMIT:packages/cli/package.json" |
-            jq -S 'del(.version)' > /tmp/source-cli-package.json
-          jq -S 'del(.version)' packages/cli/package.json > /tmp/head-cli-package.json
-          diff -u /tmp/source-cli-package.json /tmp/head-cli-package.json
-          source_changes=$(git diff --name-only "$SOURCE_COMMIT"..HEAD -- \
-            packages/cli packages/shared bun.lock package.json |
-            grep -v '^packages/cli/package.json$' || true)
-          if [[ -n "$source_changes" ]]; then
-            echo "::error::CLI/shared build inputs changed after the binary build commit"
-            printf '%s\n' "$source_changes"
+          # Main may have moved past the source commit, CLI code included: the
+          # release is the source commit's tree, tagged on its own commit (the
+          # publish step), so later work on main never holds it back.
+          source_version=$(git show "$SOURCE_COMMIT:packages/cli/package.json" | jq -r '.version')
+          if [[ "$source_version" != "$PREVIOUS_VERSION" ]]; then
+            echo "::error::the source commit's package version is $source_version, not the predecessor $PREVIOUS_VERSION"
             exit 1
           fi
 
@@ -597,84 +593,68 @@ jobs:
           for pid in "${pids[@]}"; do wait "$pid" || failed=1; done
           exit "$failed"
 
-      - name: Revalidate main and atomically publish version commit and tag
+      - name: Tag the source commit and move main's version
         id: version_commit
         shell: bash
         run: |
           set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git fetch origin main --tags
-          git checkout main
-          git pull --ff-only origin main
-          git merge-base --is-ancestor "$SOURCE_COMMIT" HEAD
+          git merge-base --is-ancestor "$SOURCE_COMMIT" origin/main
+          tag="v$RELEASE_VERSION"
 
-          git show "$SOURCE_COMMIT:packages/cli/package.json" |
-            jq -S 'del(.version)' > /tmp/source-cli-package.json
-          jq -S 'del(.version)' packages/cli/package.json > /tmp/head-cli-package.json
-          diff -u /tmp/source-cli-package.json /tmp/head-cli-package.json
-          source_changes=$(git diff --name-only "$SOURCE_COMMIT"..HEAD -- \
-            packages/cli packages/shared bun.lock package.json |
-            grep -v '^packages/cli/package.json$' || true)
-          if [[ -n "$source_changes" ]]; then
-            echo "::error::CLI/shared build inputs changed while the release was staging"
-            printf '%s\n' "$source_changes"
-            exit 1
-          fi
-
-          current=$(jq -r '.version' packages/cli/package.json)
-          created_commit=false
-          if [[ "$current" == "$PREVIOUS_VERSION" ]]; then
+          # The release commit is the source commit plus its version bump: the
+          # tree the binaries were built from, whatever main has gained since.
+          # A rerun finds the tag it made and checks it is that commit.
+          if git rev-parse -q --verify "refs/tags/$tag^{commit}" >/dev/null; then
+            release_sha=$(git rev-parse "$tag^{commit}")
+            if [[ "$(git show "$release_sha:packages/cli/package.json" | jq -r '.version')" != "$RELEASE_VERSION" ]]; then
+              echo "::error::$tag does not carry version $RELEASE_VERSION"
+              exit 1
+            fi
+            if [[ -n "$(git diff --name-only "$SOURCE_COMMIT" "$release_sha" -- . ':!packages/cli/package.json')" ]]; then
+              echo "::error::$tag is not the source commit plus its version bump"
+              exit 1
+            fi
+          else
+            git checkout -q --detach "$SOURCE_COMMIT"
             jq --arg version "$RELEASE_VERSION" '.version = $version' \
               packages/cli/package.json > /tmp/cli-package.json
             mv /tmp/cli-package.json packages/cli/package.json
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git add packages/cli/package.json
-            git commit -m "chore(cli): bump version to $RELEASE_VERSION"
+            git commit -q -m "chore(cli): release $RELEASE_VERSION"
             release_sha=$(git rev-parse HEAD)
-            created_commit=true
-          elif [[ "$current" == "$RELEASE_VERSION" ]]; then
-            release_sha=""
-            while read -r candidate; do
-              candidate_version=$(git show "$candidate:packages/cli/package.json" | jq -r '.version')
-              parent_version=$(git show "$candidate^:packages/cli/package.json" 2>/dev/null |
-                jq -r '.version' 2>/dev/null || true)
-              if [[ "$candidate_version" == "$RELEASE_VERSION" &&
-                "$parent_version" != "$RELEASE_VERSION" ]]; then
-                release_sha="$candidate"
-                break
-              fi
-            done < <(git rev-list --reverse "$SOURCE_COMMIT"..HEAD -- packages/cli/package.json)
-            if [[ -z "$release_sha" ]]; then
-              echo "::error::could not identify the existing version bump commit"
-              exit 1
-            fi
-          else
-            echo "::error::main package version changed to unexpected $current"
-            exit 1
-          fi
-
-          tag="v$RELEASE_VERSION"
-          if git rev-parse "$tag^{commit}" >/dev/null 2>&1; then
-            tag_sha=$(git rev-parse "$tag^{commit}")
-            if [[ "$tag_sha" != "$release_sha" ]]; then
-              echo "::error::$tag points to $tag_sha instead of $release_sha"
-              exit 1
-            fi
-            if [[ "$created_commit" == true ]]; then
-              echo "::error::tag already existed before the new version commit"
-              exit 1
-            fi
-          else
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git tag -a "$tag" "$release_sha" -m "Codecast CLI $RELEASE_VERSION"
           fi
 
-          if [[ "$created_commit" == true ]]; then
-            git push --atomic origin HEAD:main "refs/tags/$tag"
-          elif ! git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
-            git push origin "refs/tags/$tag"
-          fi
+          # Main's version moves to the release, so the next cut numbers after
+          # it; pushed with the tag in one atomic push. Main moves often, so a
+          # rejected push fetches and bumps the new tip again.
+          for attempt in 1 2 3 4 5 6; do
+            git fetch -q origin main
+            git checkout -q --detach origin/main
+            current=$(jq -r '.version' packages/cli/package.json)
+            if [[ "$current" == "$RELEASE_VERSION" ]]; then
+              git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1 || git push origin "refs/tags/$tag"
+              break
+            fi
+            if [[ "$current" != "$PREVIOUS_VERSION" ]]; then
+              echo "::error::main package version changed to unexpected $current"
+              exit 1
+            fi
+            jq --arg version "$RELEASE_VERSION" '.version = $version' \
+              packages/cli/package.json > /tmp/cli-package.json
+            mv /tmp/cli-package.json packages/cli/package.json
+            git add packages/cli/package.json
+            git commit -q -m "chore(cli): bump version to $RELEASE_VERSION"
+            if git push --atomic origin HEAD:main "refs/tags/$tag"; then break; fi
+            if [[ "$attempt" == 6 ]]; then
+              echo "::error::main moved under six pushes of the version bump"
+              exit 1
+            fi
+            sleep $((attempt * 5))
+          done
           echo "release_sha=$release_sha" >> "$GITHUB_OUTPUT"
           echo "Release commit: \`$release_sha\`" >> "$GITHUB_STEP_SUMMARY"
 
