@@ -1,13 +1,16 @@
 // Priorities (convex priorities.ts): the feeder and reader of the `priorities`
 // collection, and the person's controls with their put-back on a refusal.
-// Fed by /priorities and, wherever the workspace has Priorities on, by the
-// sync host's feeders (useSyncInboxPriorities).
+// One subscription feeds it: priorities.list over every workspace the viewer
+// holds, with the active workspace's pass timing riding the same answer.
+// /priorities mounts it, and so do the sync host's feeders wherever the
+// active workspace has Priorities on (useSyncInboxPriorities).
 import { useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { serverErrorText } from "../lib/errorCause";
 import { listMeta, listRows, prioritySig, withLiveRanks, type PriorityListMeta, type PriorityRow, type PriorityWrites } from "../lib/priorities";
 import { priorityWrites } from "../lib/priorityWrites";
+import { DEFAULT_GROUP_BY, type GroupBy } from "../lib/prioritySections";
 import { useInboxStore } from "../store/inboxStore";
 import { useWorkspaceFeature } from "../lib/teamFeatures";
 import { isRefusedDispatchError } from "../store/mutativeMiddleware";
@@ -17,15 +20,21 @@ import { useSyncCollection } from "./useSyncCollection";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useServerAuthSettled } from "./useServerAuthSettled";
 import { useCoarseNow } from "./useCoarseNow";
-import { useActiveWorkspaceKey, useWorkspaceCollection } from "./useWorkspaceCollection";
+import { useActiveWorkspaceKey, useWorkspacesCollection } from "./useWorkspaceCollection";
 import type { PriorityList } from "@codecast/shared/contracts/priorities";
 
 const api = _api as any;
 
-/** Feeder: the active workspace's priorities, a snapshot of what the viewer can read there. */
-export function useSyncPriorities(on = true) {
+/** The list's args: every workspace, the active one's pass timing. Every reader passes these, so they share one subscription. */
+function useListArgs(): { timing_for: string } | null {
   const workspace = useActiveWorkspaceKey();
-  return useSyncCollection("priorities", api.priorities.list, on && workspace ? { workspace } : "skip", { select: listRows });
+  return useMemo(() => (workspace ? { timing_for: workspace } : null), [workspace]);
+}
+
+/** Feeder: the priorities the viewer can read in every workspace they hold, a snapshot of all of them. */
+export function useSyncPriorities(on = true) {
+  const args = useListArgs();
+  return useSyncCollection("priorities", api.priorities.list, on && args ? args : "skip", { select: listRows });
 }
 
 /**
@@ -34,24 +43,50 @@ export function useSyncPriorities(on = true) {
  * offered in every view, so the ranks it reads stay live in every view.
  * Mounted in the sync host's feeders (DashboardLayout HostFeeders), so the
  * host feeds them whether or not its own window draws the inbox panel;
- * followers read the replicated rows.
+ * followers read the replicated rows. The same call as /priorities, so
+ * neither one's snapshot drops the other's rows.
  */
 export function useSyncInboxPriorities() {
   useSyncPriorities(useWorkspaceFeature("priorities"));
 }
 
-/** When the pass runs, read off the same list answer the feeder takes (one subscription: same query, same args). */
+/** When the active workspace's pass runs, read off the same list answer the feeder takes (one subscription: same query, same args). */
 export function usePriorityListMeta(): PriorityListMeta {
-  const workspace = useActiveWorkspaceKey();
+  const args = useListArgs();
   const settled = useServerAuthSettled();
-  const { data } = useQueryNoThrow(api.priorities.list, settled && workspace ? { workspace } : "skip", { remember: true });
+  const { data } = useQueryNoThrow(api.priorities.list, settled && args ? args : "skip", { remember: true });
   return listMeta(data as PriorityList | null | undefined);
 }
 
-/** Reader: the active workspace's priorities, waking on what a row paints, each rank read live from its place. */
+/** Every workspace the viewer holds: each of their teams, and their own. */
+export function useHeldWorkspaceKeys(): string[] {
+  const teams = useInboxStore((s) => (s.teams ?? []).map((t: any) => `team:${t._id}`).join("\n"));
+  const personal = useInboxStore((s) => (s.currentUser?._id ? `user:${s.currentUser._id}` : ""));
+  return useMemo(() => [...(teams ? teams.split("\n") : []), ...(personal ? [personal] : [])], [teams, personal]);
+}
+
+/** Reader: the priorities in every workspace the viewer holds, waking on what a row paints, the viewer's ranks read live from their places. */
 export function usePriorities(): PriorityRow[] {
-  const rows = useWorkspaceCollection<PriorityRow>("priorities", prioritySig);
+  const rows = useWorkspacesCollection<PriorityRow>("priorities", prioritySig, useHeldWorkspaceKeys());
   return useMemo(() => withLiveRanks(rows), [rows]);
+}
+
+/** The viewer's view of /priorities (components/priorities/PrioritiesToolbar): workspaces turned off, the grouping as stored, Compact. */
+export type PrioritiesViewPrefs = { hidden: string[]; groupBy: unknown; compact: boolean };
+type PrioritiesViewPatch = Partial<{ hidden: string[]; group_by: GroupBy; compact: boolean }>;
+
+const NO_HIDDEN: string[] = [];
+
+/** The viewer's view of /priorities and its setter, from the ui prefs bag (one stamped key, written whole). */
+export function usePrioritiesView(): [PrioritiesViewPrefs, (patch: PrioritiesViewPatch) => void] {
+  const stored = useInboxStore((s) => s.clientState.ui?.priorities_view);
+  const updateClientUI = useInboxStore((s) => s.updateClientUI);
+  const view = useMemo(() => ({ hidden: stored?.hidden ?? NO_HIDDEN, groupBy: stored?.group_by ?? DEFAULT_GROUP_BY, compact: !!stored?.compact }), [stored]);
+  const set = useCallback((patch: PrioritiesViewPatch) => {
+    const current = useInboxStore.getState().clientState.ui?.priorities_view;
+    updateClientUI({ priorities_view: { ...current, ...patch } });
+  }, [updateClientUI]);
+  return [view, set];
 }
 
 const WRITES = priorityWrites((message) => toast.error(message));

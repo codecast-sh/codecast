@@ -68,14 +68,14 @@ describe("a milestone's mark", () => {
     expect(milestoneMark(ms(row(), 's1'))).toEqual({ kind: 'quiet', status: 'done', label: 'Done' });
   });
 
-  it('an open milestone nobody is on is New session for the owner, nothing for a teammate', () => {
+  it('an open milestone nobody is on is New session, on a teammate\'s active priority as on the owner\'s', () => {
     expect(milestoneMark(ms(row(), 's4')).kind).toBe('start');
-    expect(milestoneMark(ms(row({ mine: false, rank: null }), 's4'))).toEqual({ kind: 'none' });
+    expect(milestoneMark(ms(row({ mine: false, rank: 1 }), 's4')).kind).toBe('start');
   });
 
-  it("someone else's ask never asks the viewer: it reads idle", () => {
+  it("someone else's ask reads Needs you, as the viewer's own would", () => {
     const theirs = row({ links: [link('s1'), link('s2', [session('a', 'needs_you', { mine: false })]), link('s3'), link('s4'), link('p1'), link('p2')] });
-    expect(milestoneMark(ms(theirs, 's2'))).toEqual({ kind: 'quiet', status: 'idle', label: 'Idle' });
+    expect(milestoneMark(ms(theirs, 's2')).kind).toBe('needs_you');
   });
 });
 

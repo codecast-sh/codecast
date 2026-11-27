@@ -7,6 +7,12 @@ import { ownerGroups, type OwnerGroup, type PriorityRow } from "./priorities";
 export type GroupBy = "workspace_person" | "person_workspace" | "workspace";
 
 export const DEFAULT_GROUP_BY: GroupBy = "workspace_person";
+
+export const GROUP_BY_LABEL: Record<GroupBy, string> = {
+  workspace_person: "Workspace, then person",
+  person_workspace: "Person, then workspace",
+  workspace: "Workspace",
+};
 const GROUP_BYS: readonly GroupBy[] = ["workspace_person", "person_workspace", "workspace"];
 
 export type SectionOptions = {

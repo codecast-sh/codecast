@@ -30,14 +30,14 @@ describe("buildModels: each milestone's state", () => {
     expect(model({}, [sess("dormant")], () => ({ mark: "done", asks: false, target: "c-dormant" })).kind).toBe("idle");
     // A stashed session is nobody on it: the owner's milestone offers a New session. A done one's results wait to be read: idle.
     expect(model({}, [sess("dormant")], () => ({ mark: "stashed", asks: false, target: "c-dormant" })).kind).toBe("start");
-    expect(model({ mine: false }, [sess("dormant")], () => ({ mark: "stashed", asks: false, target: "c-dormant" })).kind).toBe("none");
+    expect(model({ mine: false }, [sess("dormant")], () => ({ mark: "stashed", asks: false, target: "c-dormant" })).kind).toBe("start");
     expect(model({}, []).kind).toBe("start");
   });
-  test("a teammate's or a past priority offers nothing to start, and a teammate's ask never needs the viewer", () => {
-    expect(model({ mine: false }).kind).toBe("none");
+  test("a teammate's active priority offers Start as the viewer's own does; a past one nothing; a teammate's ask reads needs you", () => {
+    expect(model({ mine: false }).kind).toBe("start");
     expect(model({ status: "set_aside" }).kind).toBe("none");
-    expect(model({}, [sess("needs_you", false)]).kind).toBe("idle");
-    // Not drawn by the inbox, its own needs_you reads idle whoever owns it, never asleep.
+    expect(model({}, [sess("needs_you", false)]).kind).toBe("needs_you");
+    // Not drawn by the inbox, the viewer's own needs_you reads idle, never asleep.
     expect(model({}, [sess("needs_you")]).kind).toBe("idle");
   });
 });
@@ -141,11 +141,10 @@ describe("the store actions' paints", () => {
     ]);
   });
 
-  test("a teammate's priorities keep the server's rank (it counts the owner's whole group), and their order among themselves", () => {
-    // Ash's pri-7 is active but not among the viewer's rows: the server's ranks count it, so pri-5 is 2, not 1.
-    const rows = [row("pri-1", { ai_rank: 1 }), row("pri-6", { ai_rank: 3, rank: 3, user_id: "ash" as any, mine: false }), row("pri-5", { ai_rank: 2, rank: 2, user_id: "ash" as any, mine: false })];
+  test("a teammate's priorities keep the server's rank (1..n over what the viewer reads), and are ordered by it", () => {
+    const rows = [row("pri-1", { ai_rank: 1 }), row("pri-6", { rank: 2, user_id: "ash" as any, mine: false }), row("pri-5", { rank: 1, user_id: "ash" as any, mine: false })];
     const live = withLiveRanks(rows);
-    expect(live.map((r) => [r.short_id, r.rank])).toEqual([["pri-1", 1], ["pri-6", 3], ["pri-5", 2]]);
+    expect(live.map((r) => [r.short_id, r.rank])).toEqual([["pri-1", 1], ["pri-6", 2], ["pri-5", 1]]);
     expect(ids(ownerGroups(live)[1].active)).toEqual(["pri-5", "pri-6"]);
   });
 

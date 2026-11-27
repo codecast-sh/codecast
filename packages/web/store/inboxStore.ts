@@ -2159,6 +2159,10 @@ export type ClientUI = HuddleClientUI & {
   // including off — so sticky can't decay into stuck. The legacy key still
   // lingers in server docs; nothing may ever read it (resolveShowOld).
   inbox_show_old?: boolean;
+  // /priorities' view (components/priorities/PrioritiesToolbar): the
+  // workspaces turned off (a list, so a workspace joined later starts on),
+  // the grouping and Compact. Stamped: follows the person to every device.
+  priorities_view?: { hidden?: string[]; group_by?: string; compact?: boolean };
   // When the user last said "Not now" to the "clear out your working set"
   // prompt. Stamped LWW: a snooze on one device silences the prompt on every
   // device for its window (STALE_PROMPT_SNOOZE_MS in GlobalSessionPanel).

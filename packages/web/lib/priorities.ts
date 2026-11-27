@@ -70,16 +70,17 @@ const sameOwner = (a: PriorityRow, b: PriorityRow) => String(a.user_id) === Stri
 // (store/prioritiesSlice), in place. The server's push settles each one.
 
 /**
- * The rows with `rank` and `rank_source` read live from their places
+ * The viewer's rows with `rank` and `rank_source` read live from their places
  * (shared/contracts/priorities priorityPositions), not the server's
- * snapshot, so a move paints at once. A teammate's rank is the server's: it
- * counts the owner's whole active group, which the viewer's rows cannot.
- * A row whose rank holds is the same row.
+ * snapshot, so a move paints at once. A teammate's row keeps the server's
+ * rank: their order over the priorities the viewer can read (1..n, no gaps),
+ * which the viewer never moves. A row whose rank holds is the same row.
  */
 export function withLiveRanks(rows: readonly PriorityRow[]): PriorityRow[] {
-  const positions = priorityPositions(rows, (r) => String(r._id));
+  const positions = priorityPositions(rows.filter((r) => r.mine), (r) => String(r._id));
   return rows.map((r) => {
-    const rank = r.mine ? positions.get(String(r._id)) ?? null : r.rank;
+    if (!r.mine) return r;
+    const rank = positions.get(String(r._id)) ?? null;
     const rank_source = rankSourceOf(r);
     return rank === r.rank && rank_source === r.rank_source ? r : { ...r, rank, rank_source };
   });
@@ -320,6 +321,9 @@ export type OwnerGroup = { user_id: string; owner: string; mine: boolean; active
 
 const PAST_ORDER: Partial<Record<PriorityStatus, number>> = { done: 0, quiet: 1, set_aside: 2 };
 
+/** A teammate's active priorities in the order the server numbered them (their rows carry no place on the scale). */
+const byServerRank = (rows: PriorityRow[]) => rows.filter((r) => r.status === "active").sort((a, b) => (a.rank ?? Infinity) - (b.rank ?? Infinity) || b.last_active_at - a.last_active_at);
+
 /** One group per owner, the viewer's first, then by name: active in rank order, then done, quiet and set aside. */
 export function ownerGroups(rows: readonly PriorityRow[]): OwnerGroup[] {
   const groups: OwnerGroup[] = [];
@@ -331,7 +335,7 @@ export function ownerGroups(rows: readonly PriorityRow[]): OwnerGroup[] {
   }
   groups.sort((a, b) => Number(b.mine) - Number(a.mine) || a.owner.localeCompare(b.owner) || a.user_id.localeCompare(b.user_id));
   for (const g of groups) {
-    g.active = effectivePriorityOrder(g.active);
+    g.active = g.mine ? effectivePriorityOrder(g.active) : byServerRank(g.active);
     g.past.sort((a, b) => (PAST_ORDER[a.status] ?? 9) - (PAST_ORDER[b.status] ?? 9) || (b.done_at ?? b.last_active_at) - (a.done_at ?? a.last_active_at));
   }
   return groups;
@@ -393,17 +397,22 @@ export function pastBadge(row: Pick<PriorityRow, "status" | "done_at" | "last_ac
   return "Set aside";
 }
 
+/** Its milestones' links as a list row carries them: full `links`, else a teammate's `mapped_links`. */
+export function milestoneLinksOf(row: Pick<PriorityRow, "links" | "mapped_links">): PriorityMilestoneLinks[] {
+  return row.links ?? row.mapped_links ?? [];
+}
+
 /** What a priority row paints, for the store reader's wake signature. */
 export function prioritySig(r: PriorityRow): string {
   const steps = r.steps.map((s) => `${s.key}:${s.tier}:${s.done ? 1 : 0}:${s.refs.length}:${s.title}`).join(",");
   const sessions = r.sessions.map((s) => `${s.short_id}:${s.step_key ?? ""}:${s.title}`).join(",");
   const planSig = (p: PriorityPlanRef | null | undefined) => (p ? `${p.short_id}.${p.title}.${p.done}/${p.total}/${p.size}` : "");
-  const links = (r.links ?? []).map((l) => [
+  const links = milestoneLinksOf(r).map((l) => [
     l.key, l.correction_pending ? 1 : 0, l.looks_done ? 1 : 0, l.sessions_more, planSig(l.plan), l.part_of.map(planSig).join("+"),
     l.sessions.map((x) => `${x.conversation_id}.${x.short_id}.${x.state}.${x.mine ? 1 : 0}.${x.workflow ? 1 : 0}.${x.title}.${x.last_active_at}`).join(";"),
   ].join(":")).join(",");
   const plan = planSig(r.plan);
-  return [r.rank, r.person_pos, r.ai_rank, r.status, r.title, r.summary, r.serves, r.done_at, r.last_active_at, r.owner, r.correction_pending, steps, sessions, links, plan].join("|");
+  return [r.rank, r.person_pos, r.ai_rank, r.status, r.title, r.summary, r.serves, r.done_at, r.last_active_at, r.owner, r.owner_image, r.correction_pending, steps, sessions, r.links ? "full" : "mapped", links, plan].join("|");
 }
 
 /** The person's controls, as the page hands them to its rows. */

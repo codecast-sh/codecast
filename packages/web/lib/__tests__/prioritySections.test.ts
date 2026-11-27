@@ -51,7 +51,8 @@ const opts = (over: { activeWorkspace?: string | null; hidden?: string[]; groupB
 const ids = (rows: readonly PriorityRow[]) => rows.map((r) => r.short_id);
 const ranked = (rows: readonly RankedRow[]) => rows.map((r) => `${r.row.short_id}#${r.rank}`);
 
-// Jason in three workspaces plus Personal; Ashot and Zoe in Codecast, Ashot in Union.
+// Jason in three workspaces plus Personal; Ashot and Zoe in Codecast, Ashot in Union. A teammate's row
+// carries the server's rank (their order over what the viewer reads), never their scale.
 const ROWS: PriorityRow[] = [
   row({ short_id: "me-c1", person_pos: 1 }),
   row({ short_id: "me-c2", person_pos: 2 }),
@@ -60,12 +61,12 @@ const ROWS: PriorityRow[] = [
   row({ short_id: "me-cquiet", status: "quiet", last_active_at: 40 }),
   row({ short_id: "me-caside", status: "set_aside" }),
   row({ short_id: "me-cmerged", status: "merged" }),
-  row({ short_id: "zoe-c1", user_id: "Zoe", person_pos: 1 }),
-  row({ short_id: "ash-c2", user_id: "ashot", person_pos: 2 }),
-  row({ short_id: "ash-c1", user_id: "ashot", person_pos: 1 }),
+  row({ short_id: "zoe-c1", user_id: "Zoe", rank: 1 }),
+  row({ short_id: "ash-c2", user_id: "ashot", rank: 2 }),
+  row({ short_id: "ash-c1", user_id: "ashot", rank: 1 }),
   row({ short_id: "ash-cdone", user_id: "ashot", status: "done", done_at: 10 }),
   row({ short_id: "me-u1", workspace: "team:union", person_pos: 1 }),
-  row({ short_id: "ash-u1", user_id: "ashot", workspace: "team:union", person_pos: 1 }),
+  row({ short_id: "ash-u1", user_id: "ashot", workspace: "team:union", rank: 1 }),
   row({ short_id: "me-a1", workspace: "team:alpha", person_pos: 1 }),
   row({ short_id: "me-p1", workspace: `user:${ME}`, person_pos: 1 }),
 ];
