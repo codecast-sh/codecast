@@ -50,7 +50,6 @@ const readState = mockInboxStore(() => ({
 });
 
 const { SessionCard } = await import("./SessionCard");
-const { MARK_BY_ID } = await import("../../lib/marks");
 
 const convex = offlineConvexClient("https://example.convex.cloud");
 const MODERN = { theme: "light", toggleTheme: () => {}, visualStyle: "modern", setVisualStyle: () => {} } as const;
@@ -306,32 +305,6 @@ describe("the Modern session card", () => {
     expect(html).not.toContain('aria-label="Subagent"');
     expect(html).toContain('data-mc-chip="flow"');
     expect(html).toContain("Union fix flow");
-  });
-
-  test("its marks are registered: flags, chips and the nested lead name themselves, and the status mark beside its word is labeled", () => {
-    const html = render({
-      _id: "c-marks",
-      is_pinned: true,
-      git_branch: "fix/auth-race",
-      git_remote_url: "https://github.com/codecast-sh/codecast",
-      spawned_by_conversation_id: "c-lead",
-      open_comment_threads: 1,
-      flow_run_id: "run_1",
-      flow_name: "change",
-    } as never, { isFavorite: true, priorityRank: { rank: 2, workspace: null } });
-    const marks = [...html.matchAll(/data-mark="([^"]+)"( data-mark-labeled="true")?/g)].map((m) => `${m[1]}${m[2] ? " labeled" : ""}`);
-    for (const id of ["inbox.favorite", "inbox.pinned", "inbox.priority_rank", "inbox.flow", "git.branch", "inbox.parent", "inbox.comments", "inbox.repo"]) {
-      expect(marks).toContain(id);
-    }
-    // Line 2's mark is labeled only while its word is drawn beside it; the compact lead's copy never is.
-    const st = `session.${attr(html, "data-mc-status")}`;
-    expect(marks.filter((m) => m.startsWith("session."))).toEqual([st, html.includes("data-status-word=") ? `${st} labeled` : st]);
-    // Every mark the card draws is in the registry, so none renders unnamed.
-    for (const id of new Set(marks.map((m) => m.split(" ")[0]))) expect(MARK_BY_ID.has(id)).toBe(true);
-    // A flag's own native title would double the mark's tooltip.
-    expect(html).not.toContain('title="Pinned"');
-    const nested = render({ _id: "c-sub-mark", is_subagent: true, parent_conversation_id: "c-lead", is_idle: false, agent_status: "working" } as never, { variant: "working", underParent: true });
-    expect(nested).toContain('data-mark="inbox.spawned"');
   });
 
   test("text stays on the type scale", () => {

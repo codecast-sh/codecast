@@ -4503,6 +4503,11 @@ export function placeInboxRows(
   state: PlaceInboxState,
   opts: { focusedId?: string | null; scope?: "mine" | "team"; now?: number; nowMono?: number } = {},
 ): PlacedInbox {
+  // An action places over its draft (computeVisualOrder advancing the
+  // selection), and the memo below outlives it: a row kept from the draft is a
+  // proxy revoked when the action ends, and the next reader throws. current()
+  // shares every untouched subtree, so the rows stay the store's own.
+  if (isDraft(state)) state = current(state);
   // While the liveness facts are held (livenessHeldAt), every time-driven term
   // is read at the moment they were last known current, never past it.
   const now = Math.min(opts.now ?? Date.now(), state.livenessHeldAt ?? Infinity);
