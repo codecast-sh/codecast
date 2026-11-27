@@ -95,11 +95,11 @@ export function settleFailedAppends<S>(
  *  caption strip or a recording pill, never the transcript itself. */
 const TAIL = 6;
 
-/** Where a run's words go from its first line. `face: false` seats a fed
- *  agent without its video avatar (convex/callFace.ts). */
 /** Opens one recognizer for one microphone, with the engine's clock and events. */
 export type AsrPipeOpener = (o: { convex: ConvexHandle; roomKey: string; clock: () => number; events: AsrPipeEvents }) => AsrPipe;
 
+/** Where a run's words go from its first line. `face: false` seats a fed
+ *  agent without its video avatar (convex/callFace.ts). */
 export type ScribeRoute = { kind: "session" | "doc" | "slack"; target: string; mode: "live" | "after"; face?: boolean };
 
 export type ScribeStatus = {
