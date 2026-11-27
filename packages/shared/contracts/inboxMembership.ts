@@ -2,6 +2,8 @@
 // roll up to a parent, and which pending asks lift a session. Split out of
 // inboxProjection.ts, which re-exports it.
 
+import { isPriorityCard } from "./priorityCard";
+
 // Lifted from convex/inboxFilters.ts so the server scan and every replica run
 // ONE implementation (design C4); convex re-exports these back.
 export const NOISE_TITLE_PREFIXES = ["[Using:", "[Request", "[SUGGESTION MODE:"] as const;
@@ -122,12 +124,12 @@ export function isStackedAsk(d: StackedAskRow): boolean {
 }
 
 // Whether a stacked ask lifts the session it sits in as asking. A priority
-// card (contracts/priorityCard.ts) is codecast's question to a person about
-// their priorities, set down in one of their sessions: it is in their queue
-// (isStackedAsk) but is not that session's question, so it lifts nothing.
-// ONE rule for the server's pending-decide set and the replica's.
+// card is in its person's queue (isStackedAsk) but is not the question of the
+// session it sits in, so it lifts nothing (THE RULE on isPriorityCard,
+// contracts/priorityCard.ts). ONE rule for the server's pending-decide set and
+// the replica's.
 export function liftsAskingSession(d: StackedAskRow & { priority_card?: unknown }): boolean {
-  return isStackedAsk(d) && !d.priority_card;
+  return isStackedAsk(d) && !isPriorityCard(d);
 }
 
 // Whether an answered ask still takes a person's answer. A person may go back

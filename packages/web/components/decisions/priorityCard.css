@@ -31,6 +31,8 @@
 .pcc-quotes.is-on { color: var(--pcc-teal); background: color-mix(in srgb, var(--pcc-teal) 12%, var(--sol-card)); border-color: color-mix(in srgb, var(--pcc-teal) 45%, transparent); }
 .pcc-quotes svg { width: 14px; height: 14px; }
 
+/* Words that can hold a long unbroken token (a URL, a path) wrap rather than widen the page. */
+.pcc-headline, .pcc-case, .pcc-title, .pcc-topline { min-width: 0; overflow-wrap: anywhere; }
 .pcc-headline { margin: 0 0 6px; font-family: var(--font-serif); font-size: 32px; line-height: 1.18; font-weight: 600; letter-spacing: -0.01em; color: var(--sol-text); text-wrap: balance; }
 .pcc-case { margin: 0 0 20px; font-size: 15px; line-height: 1.6; color: var(--sol-text); max-width: 62ch; }
 .is-answered { margin-top: 12px; }

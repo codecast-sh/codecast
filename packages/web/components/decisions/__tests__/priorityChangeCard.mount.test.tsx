@@ -132,7 +132,10 @@ test("the answers say accept, none, or the person's words", async () => {
 test("nothing ticked holds the first answer", async () => {
   const { first, unmount } = await mount([]);
   expect(first().disabled).toBe(true);
-  expect(first().textContent).toContain(`Accept 0 of ${card.changes.length} changes`);
+  // Held, with the reason only: no count, no suggestion.
+  expect(first().textContent).toContain("Nothing ticked");
+  expect(first().textContent).not.toContain("0 of");
+  expect(first().textContent).not.toContain("Suggested");
   unmount();
 });
 

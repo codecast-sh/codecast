@@ -144,6 +144,12 @@ test("the decision page draws the card in place of its question, options and ans
   expect(doc).toContain("<PriorityCardDecision decision={decision} card={priorityCard} onAnswer={onAnswer} />");
   expect(doc).toContain("!verdictBar && !outcome && !priorityCard && <section");
   expect(doc).toContain("a.answerSection && !priorityCard && <section");
+  // The card is its person's alone, acted on only through the card: no way into its session or a team thread.
+  expect(doc).toContain("{!priorityCard && <div className=\"mt-4 flex items-center gap-2.5 flex-wrap\" data-decision-discuss>");
+  expect(doc).toContain("{!priorityCard && (discussOpen || discussion.rows.length > 0) && (");
+  expect(doc).toContain("openSession={priorityCard ? undefined : jumpToAsk}");
+  const compact = readFileSync(join(import.meta.dir, "..", "DecisionCompactCard.tsx"), "utf8");
+  expect(compact).toContain("{!folded && !decision.priority_card && (");
 });
 
 test("a compact row asks how many changes the card proposes, and a settled one says how many were taken", async () => {

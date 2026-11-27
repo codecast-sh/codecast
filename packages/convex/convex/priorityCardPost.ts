@@ -9,6 +9,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { changeLine, type PriorityCard, type PriorityWordsRow } from "@codecast/shared/contracts/priorityCard";
 import { effectivePriorityOrder } from "@codecast/shared/contracts/priorities";
 import { wallClock, wallTimeIn } from "@codecast/shared/time";
+import { isClosedSession, isHostedAgentType, isRunLog } from "@codecast/shared/contracts";
 import { nextShortId } from "./counters";
 import { syncDecisionInbox } from "./lib/decisionInbox";
 import { parseWorkspaceKey } from "./lib/accessKeys";
@@ -19,10 +20,12 @@ import { inWorkspace } from "./priorityPassInputs";
 
 type Ctx = { db: any };
 
-/** How many of one person's decisions per status are read to find their cards, newest first. */
-const CARD_SCAN = 200;
+/** How many of one person's open decisions are read to find their open cards. */
+const OPEN_READ = 1_000;
 /** How many of a pair's ok runs are counted for a card's run facts. */
 const RUNS_READ = 1_000;
+/** How many runs back a card looks for the previous card's run (four small index ranges each); past it, it counts this many. */
+const RUNS_SINCE_CARD_READ = 200;
 /** How many of the person's newest conversations are read for one in the workspace to ask from. */
 const CONVERSATIONS_READ = 100;
 
@@ -30,7 +33,7 @@ const isCardOf = (d: Doc<"session_decisions">, workspace: string) => (d.priority
 
 /** The person's priority cards in this workspace still waiting on an answer. */
 export async function openCards(ctx: Ctx, userId: Id<"users">, workspace: string): Promise<Doc<"session_decisions">[]> {
-  const pending: Doc<"session_decisions">[] = await ctx.db.query("session_decisions").withIndex("by_user_status", (q: any) => q.eq("user_id", userId).eq("status", "pending")).take(CARD_SCAN * 5);
+  const pending: Doc<"session_decisions">[] = await ctx.db.query("session_decisions").withIndex("by_user_status", (q: any) => q.eq("user_id", userId).eq("status", "pending")).take(OPEN_READ);
   return pending.filter((d) => isCardOf(d, workspace));
 }
 
@@ -46,15 +49,32 @@ export async function cardAnsweredSince(ctx: Ctx, userId: Id<"users">, workspace
   return answered.some((d) => isCardOf(d, workspace));
 }
 
-/** The person's newest priority card in this workspace, answered or not. */
-async function lastCard(ctx: Ctx, userId: Id<"users">, workspace: string): Promise<Doc<"session_decisions"> | null> {
-  let best: Doc<"session_decisions"> | null = null;
-  for (const status of ["pending", "answered", "dismissed", "withdrawn"]) {
-    const rows: Doc<"session_decisions">[] = await ctx.db.query("session_decisions").withIndex("by_user_status_created", (q: any) => q.eq("user_id", userId).eq("status", status)).order("desc").take(CARD_SCAN);
-    const hit = rows.find((d) => isCardOf(d, workspace));
-    if (hit && (!best || hit.created_at > best.created_at)) best = hit;
+/** The corrections the person's open cards in this workspace hold: each waits on its card's answer, whatever later runs read. */
+export async function correctionsOnOpenCards(ctx: Ctx, userId: Id<"users">, workspace: string): Promise<Set<string>> {
+  const held = new Set<string>();
+  for (const d of await openCards(ctx, userId, workspace)) for (const id of ((d.priority_card as PriorityCard).held as { corrections?: string[] }).corrections ?? []) held.add(String(id));
+  return held;
+}
+
+/**
+ * How many of `runs` (the pair's ok runs, newest first, this one first) came
+ * after the previous card's run, this one included. A card is posted in its
+ * run's own write, so its created_at lies within that run's started_at and
+ * finished_at: each earlier run is checked by one small index range per
+ * status, newest first, however many other decisions the person answered
+ * between cards. No card among them: every run counts.
+ */
+async function runsSinceLastCard(ctx: Ctx, userId: Id<"users">, workspace: string, runs: Doc<"priority_pass_runs">[]): Promise<number> {
+  for (let i = 1; i < Math.min(runs.length, RUNS_SINCE_CARD_READ); i++) {
+    const r = runs[i];
+    for (const status of ["pending", "answered", "dismissed", "withdrawn"]) {
+      const posted: Doc<"session_decisions">[] = await ctx.db.query("session_decisions")
+        .withIndex("by_user_status_created", (q: any) => q.eq("user_id", userId).eq("status", status).gte("created_at", r.started_at).lte("created_at", r.finished_at))
+        .collect();
+      if (posted.some((d) => isCardOf(d, workspace) && (d.priority_card as PriorityCard).run_id === String(r._id))) return i;
+    }
   }
-  return best;
+  return Math.min(runs.length, RUNS_SINCE_CARD_READ);
 }
 
 /** Midnight today on the person's clock (users.timezone), else UTC's. */
@@ -71,16 +91,21 @@ function startOfToday(now: number, timeZone: string | undefined): number {
  * The session the card sits in: the person's own most recently active one in
  * the workspace, else one the run read (theirs, in the workspace, by how
  * passInputs read them). Never another person's (a team agent's session is
- * its teammates' to read too). The card is not that session's question: it
+ * its teammates' to read too), and never one whose decisions draw as
+ * something else or reach nobody: a hosted assistant's (its asks are
+ * approvals, and a dismissal wakes it), a run's own (its log or a station),
+ * or a killed or closed one. The card is not that session's question: it
  * lifts nothing and its agent neither lists nor takes it back.
  */
 async function askingConversation(ctx: Ctx, userId: Id<"users">, workspace: string, read: Record<string, Id<"conversations">> = {}): Promise<Doc<"conversations"> | null> {
   const vis = sessionVisibility(ctx);
+  const fits = async (c: Doc<"conversations"> | null): Promise<boolean> =>
+    !!c && !isHostedAgentType(c.agent_type) && !isRunLog(c) && !c.workflow_run_id && !c.inbox_killed_at && !isClosedSession(c) && (await inWorkspace(vis, c, userId, workspace));
   const recent: Doc<"conversations">[] = await ctx.db.query("conversations").withIndex("by_user_updated", (q: any) => q.eq("user_id", userId)).order("desc").take(CONVERSATIONS_READ);
-  for (const c of recent) if (await inWorkspace(vis, c, userId, workspace)) return c;
+  for (const c of recent) if (await fits(c)) return c;
   for (const id of Object.values(read)) {
     const c: Doc<"conversations"> | null = await ctx.db.get(id);
-    if (c && String(c.user_id) === String(userId)) return c;
+    if (await fits(c)) return c;
   }
   return null;
 }
@@ -111,9 +136,9 @@ export async function postPriorityCard(
   const person: Doc<"users"> | null = await ctx.db.get(run.user_id);
   const okRuns: Doc<"priority_pass_runs">[] = await ctx.db.query("priority_pass_runs").withIndex("by_user_workspace_status", (q: any) => q.eq("user_id", run.user_id).eq("workspace", run.workspace).eq("status", "ok")).order("desc").take(RUNS_READ);
   const today = startOfToday(now, person?.timezone);
-  const previous = await lastCard(ctx, run.user_id, run.workspace);
-  const previousRun: Doc<"priority_pass_runs"> | null = previous ? await ctx.db.get((previous.priority_card as PriorityCard).run_id as Id<"priority_pass_runs">) : null;
-  const since = previousRun?.started_at ?? -Infinity;
+  const thisRun = okRuns.find((r) => String(r._id) === String(run.run_id));
+  const runsNewestFirst = [...(thisRun ? [thisRun] : []), ...okRuns.filter((r) => r !== thisRun).sort((a, b) => b.started_at - a.started_at)];
+  const sinceLastCard = await runsSinceLastCard(ctx, run.user_id, run.workspace, runsNewestFirst);
 
   // Where the person's words went: by the priority each session sits on now, ranked as the priorities stand now.
   const order = effectivePriorityOrder(await activeGroup(ctx, run.user_id, run.workspace));
@@ -140,7 +165,7 @@ export async function postPriorityCard(
       sessions: draft.sessions,
       calls: draft.calls,
       cost_usd: run.cost_usd ?? 0,
-      runs_since_last_card: okRuns.filter((r) => r.started_at > since).length,
+      runs_since_last_card: sinceLastCard,
       runs_today: okRuns.filter((r) => r.started_at >= today).length,
     },
     groups: draft.groups,

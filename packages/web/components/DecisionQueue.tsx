@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useMemo, useState } from "react";
+import type { DecisionAnswerInput, SessionDecisionItem } from "../store/inboxStore";
+import { PriorityCardDecision } from "./decisions/PriorityCardDecision";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { DecisionDocument } from "./decisions/DecisionDocument";
 import { hasOpenModal } from "../shortcuts";
@@ -86,6 +88,13 @@ export function DecisionQueue({ onExit, initialConversationId, initialKey }: { o
     item: current,
   } : null, [current, position, queue.length, advance, onSkip, onPrev, canBack, onExit]);
 
+  // A priority card belongs to its person, not to the session it sits in
+  // (isPriorityCard): the stepper draws the card itself, never that session.
+  const cardRow = useInboxStore((s) => {
+    const d = current?.decisionId ? (s.sessionDecisions as Record<string, SessionDecisionItem | undefined>)[current.decisionId] : undefined;
+    return d?.priority_card ? d : null;
+  });
+
   // Keep the rail's highlight on the question you are reading. Off the inbox
   // the rail highlights sidePanelSessionId (sessionFocusKind → "panel"), and
   // that pointer opens nothing on its own — it is purely the highlight — so
@@ -94,7 +103,7 @@ export function DecisionQueue({ onExit, initialConversationId, initialKey }: { o
   // touching the URL, and the highlight has to follow the advance. The layout's
   // leave-the-inbox carry-over stands down for this page (pageOwnsRailHighlight)
   // so its default cannot land on top of this write in the same commit.
-  const currentId = current?.conversationId;
+  const currentId = cardRow ? undefined : current?.conversationId;
   // The inbox panel lights the row this pager names.
   const currentKey = current?.key ?? null;
   useWatchEffect(() => {
@@ -115,6 +124,8 @@ export function DecisionQueue({ onExit, initialConversationId, initialKey }: { o
   if (!current || !stepper) return <QueueEmpty resolved={answered.length} onBack={answered.length ? () => setBack(answered.length - 1) : undefined} onExit={onExit} />;
   // The decision answering or skipping lands on: its page loads ahead, so it shows at once.
   const next = queue.length > 1 ? queue[(position + 1) % queue.length] : null;
+
+  if (cardRow) return <PriorityCardStep key={cardRow._id} decision={cardRow} stepper={stepper} />;
 
   return (
     <DecisionStepperContext.Provider value={stepper}>
@@ -164,6 +175,48 @@ function AnsweredDecision({ id, at, count, onStep, onExit }: { id: string; at: n
     </div>
   );
   return <div className="h-full bg-sol-bg"><DecisionDocument key={id} id={id} pager={false} nav={nav} /></div>;
+}
+
+// A priority card in the stepper: the card on its own page, with the
+// stepper's way back, on and out. Answering advances first, as the session
+// card does, so the next decision shows the moment this one leaves the queue.
+function PriorityCardStep({ decision, stepper }: { decision: SessionDecisionItem; stepper: DecisionStepper }) {
+  const adoptDecision = useInboxStore((s) => s.adoptDecision);
+  const answerDecision = useInboxStore((s) => s.answerDecision);
+  const { onDone, onSkip, onPrev, onExit, position, total } = stepper;
+  const onAnswer = useCallback((input: DecisionAnswerInput) => {
+    onDone();
+    adoptDecision(decision._id);
+    answerDecision(decision._id, input);
+  }, [onDone, adoptDecision, answerDecision, decision._id]);
+  useWatchEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey || e.defaultPrevented || hasOpenModal() || keyBelongsElsewhere(e.target)) return;
+      if (e.key === "ArrowLeft" && onPrev) { e.preventDefault(); onPrev(); }
+      else if (e.key === "ArrowRight") { e.preventDefault(); onSkip(); }
+      else if (e.key === "Escape" && onExit) { e.preventDefault(); onExit(); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onPrev, onSkip, onExit]);
+  const btn = "inline-flex items-center gap-1.5 rounded px-1.5 py-0.5 text-sol-text-dim hover:text-sol-text hover:bg-sol-card disabled:opacity-30 disabled:hover:bg-transparent";
+  return (
+    <div className="h-full overflow-y-auto bg-sol-bg" data-decision-queue-card={decision.short_id ?? decision._id}>
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 pb-16">
+        <div className="flex items-center gap-2 text-meta" data-decision-queue-step={`${position}/${total}`}>
+          <button type="button" className={btn} disabled={!onPrev} onClick={onPrev} aria-label="Previous decision">
+            <ChevronLeft className="w-3.5 h-3.5" /><KeyCap size="xs">←</KeyCap>
+          </button>
+          <span className="tabular-nums text-sol-text-dim">{position} of {total}</span>
+          <button type="button" className={btn} onClick={onSkip} aria-label="Skip to the next decision" data-decision-queue-skip>
+            <KeyCap size="xs">→</KeyCap><ChevronRight className="w-3.5 h-3.5" />
+          </button>
+          {onExit && <button type="button" className={`${btn} ml-auto`} onClick={onExit}><KeyCap size="xs">esc</KeyCap><span>Leave</span></button>}
+        </div>
+        <div className="mt-5"><PriorityCardDecision decision={decision} card={decision.priority_card!} onAnswer={onAnswer} /></div>
+      </div>
+    </div>
+  );
 }
 
 function QueueEmpty({ resolved, onBack, onExit }: { resolved: number; onBack?: () => void; onExit?: () => void }) {

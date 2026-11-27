@@ -17,6 +17,7 @@ export { escalateWait } from "./inboxOwners";
 import { isSpawnedWorker } from "./workerSettleTrigger";
 import { roleMachineAway } from "./orgRoutine";
 import { runnerDeviceOf } from "./runnerDevice";
+import { notPriorityCard } from "./priorityCardAccess";
 
 export type AgentOwnerRoute = "told" | "already" | "nobody" | "unreachable";
 
@@ -64,6 +65,8 @@ export async function routeWaitToAgentOwner(
   const openDecision = await ctx.db
     .query("session_decisions")
     .withIndex("by_conversation_status", (q: any) => q.eq("conversation_id", conv._id).eq("status", "pending"))
+    // A priority card sitting in the session is not its question (lib/priorityCardAccess).
+    .filter(notPriorityCard)
     .first();
   if (openDecision) return "already";
   const parent = await reachableParent(ctx, agent.id);

@@ -9,7 +9,9 @@ import type { MergePlan, PriorityPassInput } from "./lib/priorityPass";
 import { PRIORITY_PASS_SCHEMA, PRIORITY_PASS_SCHEMA_WHY, PRIORITY_PASS_SYSTEM, priorityPassRequest } from "./lib/priorityPass";
 import { finalizeAnswer, reroutePendingDecisionsForConversation, settleClientResolution, withdrawCore } from "./sessionDecisions";
 import { isStackedAsk, liftsAskingSession } from "@codecast/shared/contracts";
-import { PRIORITY_CARD_REFUSED } from "./lib/priorityCardAccess";
+import { PRIORITY_CARD_HANDOFF_REFUSED, PRIORITY_CARD_REFUSED } from "./lib/priorityCardAccess";
+import { escalateCore, passCore } from "./decisionHandoff";
+import { addToStackCore, createStackCore } from "./decisionStacks";
 import { hashToken } from "./apiTokens";
 import { api } from "./_generated/api";
 import { loadPendingDecisionConvIds } from "./conversations";
@@ -259,6 +261,83 @@ describe("a pass run", () => {
     const withdrawn = await correctionWorld();
     await withdrawn.w.t.run((ctx) => withdrawCore(ctx as any, withdrawn.d, Date.now()));
     expect(await withdrawn.status()).toBe("pending");
+  });
+});
+
+describe("the card stays the person's (the rule on isPriorityCard)", () => {
+  async function posted() {
+    const w = await graderWorld();
+    await cardsOn(w);
+    await w.t.run((ctx) => ctx.db.patch(w.teamConv, { updated_at: w.now }));
+    model.reply = () => graderReply();
+    await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team });
+    const [d] = await cards(w);
+    return { w, d };
+  }
+
+  test("nobody passes, escalates or stacks it, the person included; the person's answer still writes", async () => {
+    const { w, d } = await posted();
+    for (const by of [w.ana, w.ben]) {
+      expect(await w.t.run((ctx) => passCore(ctx as any, by, d.short_id!, { kind: "user", id: String(w.ben) }, "yours"))).toEqual({ error: PRIORITY_CARD_HANDOFF_REFUSED });
+      expect(await w.t.run((ctx) => escalateCore(ctx as any, by, d.short_id!, "up it goes"))).toEqual({ error: PRIORITY_CARD_HANDOFF_REFUSED });
+    }
+    const stack = await w.t.run((ctx) => createStackCore(ctx as any, w.ana, { title: "Morning" }));
+    expect(await w.t.run((ctx) => addToStackCore(ctx as any, w.ana, (stack as any).short_id ?? String((stack as any).id ?? (stack as any)._id), d.short_id!))).toEqual({ error: PRIORITY_CARD_HANDOFF_REFUSED });
+    const after = (await w.t.run((ctx) => ctx.db.get(d._id)))!;
+    expect([after.asked_user_ids, after.passed_to, after.escalated, after.stack_id]).toEqual([[w.ana], undefined, undefined, undefined]);
+    await w.t.run((ctx) => finalizeAnswer(ctx as any, after, { status: "answered", answer_json: [0], answer_index: 0 }, ANA(w), { deliver: false }));
+    expect((await rows(w))[0].title).toBe("Evals people trust");
+  });
+
+  test("a run that repeats an open card's changes leaves the corrections that card holds pending", async () => {
+    const w = await graderWorld();
+    await cardsOn(w);
+    const [g] = await rows(w);
+    const id = await w.t.run((ctx) => ctx.db.insert("priority_corrections", { user_id: w.ana, workspace: w.team, priority_id: g._id, text: "Calibration is part of grading", status: "pending", created_at: w.now - 2 * H, snapshot: { short_id: g.short_id, title: g.title, summary: g.summary, status: g.status, steps: g.steps } }));
+    model.reply = () => graderReply();
+    await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team });
+    // The same changes again: no new card; the correction it read is the open card's, still pending.
+    await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team, force: true });
+    expect(await cards(w)).toHaveLength(1);
+    expect((await w.t.run((ctx) => ctx.db.get(id)))!.status).toBe("pending");
+  });
+
+  test("it never sits in a hosted assistant's session, a run's, or a killed or closed one", async () => {
+    const w = await graderWorld();
+    await cardsOn(w);
+    await w.t.run(async (ctx) => {
+      const run = await ctx.db.insert("conversations", { user_id: w.ana, agent_type: "claude_code", session_id: "jx7runl", short_id: "jx7runl", title: "Run log", team_id: w.acme, is_private: false, team_visibility: "full", started_at: w.now, updated_at: w.now + 4, message_count: 1, status: "active", is_workflow_primary: true, workflow_run_id: "run-1" } as any);
+      void run;
+      await ctx.db.insert("conversations", { user_id: w.ana, agent_type: "codecast", session_id: "jx7host", short_id: "jx7host", title: "Assistant", team_id: w.acme, is_private: false, team_visibility: "full", started_at: w.now, updated_at: w.now + 3, message_count: 1, status: "active" } as any);
+      await ctx.db.patch(w.teamConv, { updated_at: w.now + 2, inbox_killed_at: w.now });
+      await ctx.db.patch(w.oldConv, { updated_at: w.now + 1, inbox_closed_at: w.now, inbox_dismissed_at: w.now });
+      // Ben's session is newer still, and the team's: never his.
+      await ctx.db.patch(w.benConv, { updated_at: w.now + 5 });
+      await ctx.db.insert("conversations", { user_id: w.ana, agent_type: "claude_code", session_id: "jx7open", short_id: "jx7open", title: "Session jx7open", team_id: w.acme, is_private: false, team_visibility: "full", started_at: w.now, updated_at: w.now, message_count: 1, status: "active" } as any);
+    });
+    model.reply = () => graderReply();
+    await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team });
+    const [d] = await cards(w);
+    expect(d.session_title).toBe("Session jx7open");
+  });
+
+  test("the next card counts the runs since the last one, however many other decisions the person answered between", async () => {
+    const w = await graderWorld();
+    await cardsOn(w);
+    model.reply = () => graderReply();
+    await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team });
+    const [first] = await cards(w);
+    await w.t.run((ctx) => finalizeAnswer(ctx as any, first, { status: "dismissed" }, ANA(w), { deliver: false }));
+    await w.t.run(async (ctx) => {
+      for (let i = 0; i < 250; i++) {
+        await ctx.db.insert("session_decisions", { conversation_id: w.oldConv, session_id: "jx7old", user_id: w.ana, question: `q${i}`, options: [{ label: "A" }], blocking: true, status: "dismissed", created_at: Date.now() + 1 + i, resolved_at: Date.now() + 1 + i } as any);
+      }
+    });
+    await tick();
+    model.reply = () => graderReply([{ title: "Recipes", summary: "new", status: "active", serves: null, rank: 2, steps: [], sessions: [] }]);
+    await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team, force: true });
+    const second = (await cards(w)).find((d) => d._id !== first._id)!;
+    expect((second.priority_card as PriorityCard).run.runs_since_last_card).toBe(1);
   });
 });
 

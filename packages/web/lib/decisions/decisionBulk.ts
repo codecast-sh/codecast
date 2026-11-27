@@ -5,16 +5,19 @@
 // and rides the same dispatch a single row's press does.
 
 import { approvesPersonsAct } from "@codecast/shared/contracts/commandRun";
+import { isPriorityCard } from "@codecast/shared/contracts/priorityCard";
 import { useInboxStore, type SessionDecisionItem } from "../../store/inboxStore";
 import { isOpen, type DecisionOwner } from "./decisionRows";
 
 type Rows = ReadonlyArray<SessionDecisionItem>;
 
 const open = (rows: Rows) => rows.filter(isOpen);
+/** Open ones that may be handed on: a priority card stays with its person (THE RULE on isPriorityCard). */
+const handable = (rows: Rows) => open(rows).filter((d) => !isPriorityCard(d));
 
 export function assignDecisions(rows: Rows, to: DecisionOwner): number {
   const { passDecision } = useInboxStore.getState();
-  const targets = open(rows);
+  const targets = handable(rows);
   for (const d of targets) passDecision(d._id, to);
   return targets.length;
 }
@@ -61,7 +64,7 @@ export function dismissDecisions(rows: Rows): number {
 /** Pass with a note: each moves to the new owner's queue, the note with it. */
 export function passDecisions(rows: Rows, to: DecisionOwner, note: string): number {
   const { passDecision } = useInboxStore.getState();
-  const targets = open(rows);
+  const targets = handable(rows);
   for (const d of targets) passDecision(d._id, to, note);
   return targets.length;
 }
@@ -69,7 +72,7 @@ export function passDecisions(rows: Rows, to: DecisionOwner, note: string): numb
 /** Escalate with a note: each goes up to its owner's manager, else the workspace's admins (store escalateDecision). */
 export function escalateDecisions(rows: Rows, note: string): number {
   const { escalateDecision } = useInboxStore.getState();
-  const targets = open(rows);
+  const targets = handable(rows);
   for (const d of targets) escalateDecision(d._id, note);
   return targets.length;
 }

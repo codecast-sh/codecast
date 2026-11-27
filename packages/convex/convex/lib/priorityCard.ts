@@ -152,21 +152,34 @@ export type QuoteSource =
   | { kind: "session"; session: string; title: string; at: number; text: string }
   | { kind: "call"; call: string; title: string; action_item: string; at: number; text: string };
 
-const squash = (s: string) => s.replace(/\s+/g, " ").trim();
 /** A quote this short is found almost anywhere: it says nothing. */
 export const QUOTE_MIN_WORDS = 4;
 
-/** The slice of `hay` that `q` (squashed, lower case) matches, whitespace collapsed and case ignored, or null. */
-function sliceOf(hay: string, q: string): string | null {
+/**
+ * `s` folded for comparing: whitespace runs as one space (none leading or
+ * trailing), each character lower-cased on its own, never the string at once,
+ * so a quote and the message it came from fold alike whatever their context
+ * (a whole-string lower-case writes a Greek final sigma only at a word's end;
+ * a final sigma folds to the plain one, as an upper-case sigma does).
+ * `at[i]` is the index in `s` of folded character i.
+ */
+function fold(s: string): { flat: string; at: number[] } {
   let flat = "";
-  const at: number[] = []; // flat index -> hay index
-  for (let i = 0; i < hay.length; i++) {
-    if (/\s/.test(hay[i])) {
+  const at: number[] = [];
+  for (let i = 0; i < s.length; i++) {
+    if (/\s/.test(s[i])) {
       if (flat && !flat.endsWith(" ")) { flat += " "; at.push(i); }
       continue;
     }
-    for (const ch of hay[i].toLowerCase()) { flat += ch; at.push(i); }
+    for (const ch of s[i].toLowerCase()) { flat += ch === "ς" ? "σ" : ch; at.push(i); }
   }
+  if (flat.endsWith(" ")) { flat = flat.slice(0, -1); at.pop(); }
+  return { flat, at };
+}
+
+/** The slice of `hay` that the folded quote `q` matches, or null. */
+function sliceOf(hay: string, q: string): string | null {
+  const { flat, at } = fold(hay);
   const i = flat.indexOf(q);
   return i < 0 ? null : hay.slice(at[i], at[i + q.length - 1] + 1);
 }
@@ -178,8 +191,8 @@ function sliceOf(hay: string, q: string): string | null {
  * wrote them. Null when it was not, and a quote that was not said is dropped.
  */
 export function findQuote(text: string, sessions: ReadonlyArray<Pick<PassSession, "id" | "title" | "typed">>, calls: ReadonlyArray<Pick<PassCall, "id" | "title" | "at" | "action_items">>): QuoteSource | null {
-  const q = squash(text).toLowerCase();
-  if (q.split(" ").length < QUOTE_MIN_WORDS) return null;
+  const q = fold(text).flat;
+  if (!q || q.split(" ").length < QUOTE_MIN_WORDS) return null;
   for (const s of sessions) for (const m of s.typed) {
     const said = sliceOf(m.text, q);
     if (said !== null) return { kind: "session", session: s.id, title: s.title, at: m.at, text: said };

@@ -5,6 +5,7 @@
 // note"), else by verdict; one that names no edge carries no key, and its
 // label routes as text.
 import { verdictOfOption } from "@codecast/shared/contracts/changeCard";
+import { isPriorityCard } from "./priorityCardAccess";
 
 export type GateChoice = { key: string; label: string; description?: string; target: string };
 
@@ -59,7 +60,8 @@ export async function standingCard(
   const presentedAt = run.node_statuses?.find((n) => !!askerRef && n.session_id === askerRef)?.started_at ?? Infinity;
   const ofStation = (status: string) => ctx.db.query("session_decisions").withIndex("by_conversation_status", (q: any) => q.eq("conversation_id", stationId).eq("status", status)).collect();
   const [pending, answered] = await Promise.all([ofStation("pending"), ofStation("answered")]);
-  const forThisGate = (d: any) => !d.workflow_run_id || (String(d.workflow_run_id) === String(run._id) && d.gate_node_id === nodeId);
+  // A priority card sitting in the station's session is no card of its gate (lib/priorityCardAccess).
+  const forThisGate = (d: any) => !isPriorityCard(d) && (!d.workflow_run_id || (String(d.workflow_run_id) === String(run._id) && d.gate_node_id === nodeId));
   const stands = (d: any) => d.status === "pending" || ((d.resolved_at ?? 0) >= presentedAt && (d.answer_index !== undefined || !!d.answer_text?.trim()));
   return [...pending, ...answered].filter((d: any) => forThisGate(d) && stands(d)).sort((a: any, b: any) => b.created_at - a.created_at)[0] ?? null;
 }

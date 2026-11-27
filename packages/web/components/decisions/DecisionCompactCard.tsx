@@ -358,8 +358,9 @@ export function DecisionCompactCardView({
         </div>
       )}
       {pending && <RunFallbackLine run={decision.run} className={embedded ? "pb-3" : "px-4 pb-3"} />}
-      {/* The team thread, with the session that owns it, without leaving the queue (ct-74449). */}
-      {!folded && (
+      {/* The team thread, with the session that owns it, without leaving the queue (ct-74449). A
+          priority card is its person's alone, acted on only through the card: it has no thread. */}
+      {!folded && !decision.priority_card && (
         <div className={embedded ? "pb-3" : "px-4 pb-3"}><DecisionDiscussion decisionId={decision._id} compact /></div>
       )}
     </div>

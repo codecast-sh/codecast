@@ -101,9 +101,10 @@ function FeedEntry({ d, now, answerer }: { d: SessionDecisionItem; now: number; 
         <span className="w-5 h-5 shrink-0 flex items-center justify-center">{answerer?.face}</span>
         <span className="text-sol-text font-medium truncate">{who}</span>
         <span className="shrink-0">answered {formatTimeAgo(answeredAt(d), now)}</span>
-        <button type="button" onClick={() => void jump()} className="min-w-0 inline-flex items-center gap-1 truncate hover:text-sol-text transition-colors" title="Open the session that asked" data-answered-feed-session>
+        {/* A priority card is its person's, not its session's question: no way into that session. */}
+        {!d.priority_card && <button type="button" onClick={() => void jump()} className="min-w-0 inline-flex items-center gap-1 truncate hover:text-sol-text transition-colors" title="Open the session that asked" data-answered-feed-session>
           <MessagesSquare className="w-3 h-3 shrink-0" /><span className="truncate">{d.session_title || "the session"}</span>
-        </button>
+        </button>}
         <Link href={href} className="ml-auto shrink-0 font-mono opacity-70 hover:opacity-100 no-underline text-sol-text-dim">{d.short_id ?? "open"}</Link>
       </header>
 

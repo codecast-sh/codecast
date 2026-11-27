@@ -4,6 +4,7 @@
 // every read still answers to userMayRead. A decision about a problem goes to
 // the problem's team, else to the asking conversation's; unset is personal.
 import type { Doc, Id } from "../_generated/dataModel";
+import { isPriorityCard } from "./priorityCardAccess";
 
 type Ctx = { db: any };
 
@@ -27,6 +28,8 @@ export async function restampDecisionTeams(ctx: Ctx, conversationId: Id<"convers
   const rows: Doc<"session_decisions">[] = await ctx.db.query("session_decisions").withIndex("by_conversation_status", (q: any) => q.eq("conversation_id", conversationId)).take(500);
   let moved = 0;
   for (const r of rows) {
+    // A priority card is routed by its workspace, not by the session it sits in (lib/priorityCardAccess).
+    if (isPriorityCard(r)) continue;
     const team = await decisionTeamFor(ctx, r);
     if (String(team ?? "") === String(r.team_id ?? "")) continue;
     await ctx.db.patch(r._id, { team_id: team });

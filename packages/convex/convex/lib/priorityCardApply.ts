@@ -54,16 +54,16 @@ async function correctionTarget(ctx: Ctx, userId: Id<"users">, card: PriorityCar
 
 export async function settlePriorityCard(
   ctx: Ctx,
-  row: Pick<Doc<"session_decisions">, "_id" | "short_id" | "user_id" | "asked_user_ids" | "priority_card">,
+  row: Pick<Doc<"session_decisions">, "_id" | "short_id" | "user_id" | "priority_card">,
   verdict: { status: string; answer_index?: number; answer_text?: string; answer_json?: unknown },
-  by: { kind: string; user_id?: Id<"users"> },
+  by: { kind: string; user_id?: Id<"users">; via?: unknown },
   now: number,
 ): Promise<void> {
   const card = row.priority_card as PriorityCard | undefined;
   if (!card || card.outcome || (verdict.status !== "answered" && verdict.status !== "dismissed")) return;
-  // The person it asked, and only them: the priorities written are theirs.
+  // Its person, and only them (the rule, lib/priorityCardAccess): nobody can hand it to anyone else, so this is the whole check.
   const person = row.user_id;
-  if (priorityCardRefusal(row, by) || !(row.asked_user_ids ?? [person]).some((id) => String(id) === String(person))) return;
+  if (priorityCardRefusal(row, by)) return;
   // A dismissal is "Accept none" (a multi answer cannot be empty): nothing is written.
   const answered = verdict.status === "answered";
   const accepted = answered ? [...new Set(ticked(verdict).map((i) => card.changes[i]?.id).filter((id): id is string => !!id))] : [];

@@ -6,6 +6,7 @@
 // Revise on a card undoes an earlier "ship it" and a later "ship it" outranks it.
 import type { Id } from "../_generated/dataModel";
 import { optionIsShip } from "@codecast/shared/contracts/shipAnswer";
+import { isPriorityCard } from "./priorityCardAccess";
 
 // "Approve merge" is the approval card's button and means what "Ship" did (shared/contracts/shipAnswer).
 export { optionIsShip };
@@ -62,7 +63,8 @@ export async function personAnswersIn(ctx: any, conversationId: Id<"conversation
     .withIndex("by_conversation_status", (q: any) => q.eq("conversation_id", conversationId).eq("status", "answered"))
     .order("desc")
     .take(CARDS_PER_SESSION);
-  return rows.filter((d: any) => d.answered_by?.kind === "user").map((d: any) => ({
+  // A priority card answered in the session is not the session's verdict on its work (lib/priorityCardAccess).
+  return rows.filter((d: any) => d.answered_by?.kind === "user" && !isPriorityCard(d)).map((d: any) => ({
     ref: cardRef(d),
     at: verdictAt(d),
     ship: isShipAnswer(d),

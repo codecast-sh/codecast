@@ -38,6 +38,7 @@ import { reroutePendingDecisionsForConversation } from "./sessionDecisions";
 import { movedFields } from "@codecast/shared/contracts/orgChange";
 import { findOwnableConversation, personName, roleMayHoldSession, tellSession } from "./lib/sessionTell";
 import { reportsToKey, reportsToLine, reportsToOf, type ReportsTo } from "./lib/reportsTo";
+import { notPriorityCard } from "./lib/priorityCardAccess";
 export { reportsToLine, type ReportsTo };
 export { personName, roleMayHoldSession };
 import { labelsOf, noteOrgChange, rememberOrgRecord, roleSubject, sessionParent, sessionSubject, whereOfRole, whereOfSession, withOrgChange } from "./lib/orgChangeLog";
@@ -583,6 +584,8 @@ async function rehomeSessions(
     const openAsk = await ctx.db
       .query("session_decisions")
       .withIndex("by_conversation_status", (q: any) => q.eq("conversation_id", c._id).eq("status", "pending"))
+      // A priority card sitting in the session is not its question (lib/priorityCardAccess).
+      .filter(notPriorityCard)
       .first();
     result.sessions.push(shortId);
     if (openAsk) result.kept_in_front.push(shortId);

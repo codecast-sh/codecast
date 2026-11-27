@@ -228,7 +228,10 @@ function Answers({ total, ticked, onAnswer, keys }: { total: number; ticked: str
   // Uncontrolled: a keystroke here re-renders nothing.
   const box = useRef<HTMLTextAreaElement>(null);
   const options: DecisionOption[] = [
-    { label: `${acceptLabel(ticked.length, total)} (Suggested)`, description: "They show on your priorities page now. Undo from there." },
+    // Nothing ticked: the first answer is held and says why, with no count and no suggestion.
+    ticked.length === 0
+      ? { label: "Accept" }
+      : { label: `${acceptLabel(ticked.length, total)} (Suggested)`, description: "They show on your priorities page now. Undo from there." },
     { label: "Accept none", description: "Your priorities stay as they are." },
     { label: "Something else…", description: "Say what the pass got wrong." },
   ];

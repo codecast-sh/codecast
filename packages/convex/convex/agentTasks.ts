@@ -47,6 +47,7 @@ import { workspaceHasFeature } from "./lib/teamFeatureGuard";
 import { HOSTED_TITLE_MAX_CHARS } from "@codecast/shared/contracts/assistant";
 import { isSpawnedWorker } from "./lib/workerSettleTrigger";
 import { roleCharterOf } from "./lib/roleCharter";
+import { notPriorityCard } from "./lib/priorityCardAccess";
 import { type TaskCtx, rewriterOf, roleTriggerRunnerOf, handRoleTriggersToRunner, projectQuiet, refreshArmedTriggerKind, patchTask, nextRecurringRun, applyReactivate, stampRunConversation, cancelTasksBoundToConversation, tasksOriginatedBy, cancelTasksOriginatingFrom, reactivateTasksCanceledOnKill, projectRunsInline, scheduleProjectFire } from "./lib/agentTaskRows";
 export { refreshArmedTriggerKind, patchTask, applyReactivate, stampRunConversation, cancelTasksBoundToConversation, cancelTasksOriginatingFrom, reactivateTasksCanceledOnKill };
 
@@ -1145,6 +1146,8 @@ export async function routeUpWaitingSession(
     const openDecision = await ctx.db
       .query("session_decisions")
       .withIndex("by_conversation_status", (q: any) => q.eq("conversation_id", conv._id).eq("status", "pending"))
+      // A priority card sitting in the session is not its question (lib/priorityCardAccess).
+      .filter(notPriorityCard)
       .first();
     if (openDecision) return "already";
   }

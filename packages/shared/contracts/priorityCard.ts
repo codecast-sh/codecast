@@ -164,3 +164,21 @@ export function changeLine(c: PriorityChange, titleOf: (priority: string) => str
 
 /** The experiment that turns the card on for one person (users.experiments). */
 export const PRIORITY_CARDS_EXPERIMENT = "priority_cards";
+
+/**
+ * Whether a decision row is a priority card.
+ *
+ * THE RULE: a priority card belongs to its person alone and is acted on only
+ * through the card. Only its person (the row's user_id, in their own name)
+ * answers or dismisses it; nobody passes, escalates, stacks, shares out or
+ * reroutes it; no agent lists, reuses or cancels it; and no session-scoped
+ * decision surface (the pending lift, a session's docked asks, other_open,
+ * `cast decide ls`, the session's own decision list, its wait routing, a
+ * run's gate or station reads, an approval rendering) treats it as the
+ * question of the session it happens to sit in: it sits there only because a
+ * decision row needs one. Every such surface, server, web and phone, tests
+ * this predicate (convex lib/priorityCardAccess.ts holds the server's
+ * refusals and read stripping; priorityCards.guard.test.ts lists every
+ * server function that reads decisions by session or hands one off).
+ */
+export const isPriorityCard = (row: { priority_card?: unknown } | null | undefined): boolean => !!row?.priority_card;

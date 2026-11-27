@@ -548,6 +548,12 @@ describe("quotes", () => {
     expect(findQuote("customers feel this", sessions, calls)).toBeNull();
     expect(findQuote("   ", sessions, calls)).toBeNull();
   });
+
+  test("a quote and its message fold alike: a Greek word-final sigma matches in either case", () => {
+    const greek = [session("g1", { title: "Δρόμος", typed: [{ at: NOW, text: "ΤΟ ΣΧΕΔΙΟ ΤΗΣ ΟΔΟΣ ΜΕΝΕΙ ΙΔΙΟ" }] })];
+    expect(findQuote("ΣΧΕΔΙΟ ΤΗΣ ΟΔΟΣ ΜΕΝΕΙ", greek, [])).toMatchObject({ session: "g1", text: "ΣΧΕΔΙΟ ΤΗΣ ΟΔΟΣ ΜΕΝΕΙ" });
+    expect(findQuote("σχεδιο της οδος μενει", greek, [])).toMatchObject({ session: "g1", text: "ΣΧΕΔΙΟ ΤΗΣ ΟΔΟΣ ΜΕΝΕΙ" });
+  });
 });
 
 /** The active order once an answer is written: its plan's statuses, places and new priorities, then its moves as the person's own (placePriority, as doMove). */

@@ -20,7 +20,7 @@ import { PRIORITY_CARDS_EXPERIMENT } from "@codecast/shared/contracts/priorityCa
 import { hasExperiment } from "./lib/experiments";
 import { splitPlan } from "./lib/priorityCard";
 import { cardDraft, type CardDraft } from "./lib/priorityCardPass";
-import { cardAnsweredSince, postPriorityCard } from "./priorityCardPost";
+import { cardAnsweredSince, correctionsOnOpenCards, postPriorityCard } from "./priorityCardPost";
 import { nextShortId } from "./counters";
 import { runModelCall, type CallScope } from "./modelCalls";
 import { modelCallProblem } from "@codecast/shared/contracts/modelCall";
@@ -334,8 +334,10 @@ export const applyPlan = internalMutation({
     // A card posted (or one that could not be) holds the corrections the run read: they wait on the person's answer.
     const posted = card ? await postPriorityCard(ctx, { user_id: args.user_id, workspace: args.workspace, run_id, cost_usd: args.cost_usd, from: from_cursor, to: args.cursor_at, conversations, corrections }, card as CardDraft, now) : null;
     if (posted && "skipped" in posted) await ctx.db.patch(run_id, { error: posted.skipped });
+    // Nor does a run apply a correction an open card holds, though it proposed nothing new: that card's answer does.
+    const onCards = card && !posted ? await correctionsOnOpenCards(ctx, args.user_id, args.workspace) : new Set<string>();
 
-    for (const id of [...(posted ? [] : corrections ?? []), ...(superseded ?? [])]) {
+    for (const id of [...(posted ? [] : (corrections ?? []).filter((c) => !onCards.has(String(c)))), ...(superseded ?? [])]) {
       const c: Doc<"priority_corrections"> | null = await ctx.db.get(id);
       if (c?.status === "pending" && !c.deleted_at && String(c.user_id) === String(args.user_id) && c.workspace === args.workspace) {
         await ctx.db.patch(id, { status: "applied", applied_at: now, applied_window: { from: from_cursor, to: args.cursor_at }, ...((superseded ?? []).includes(id) ? { superseded: true } : {}) });

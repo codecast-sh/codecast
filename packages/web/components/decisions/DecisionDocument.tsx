@@ -111,13 +111,14 @@ function DocumentBody({ decision, detail, answerable, pager, nav }: { decision: 
             {/* The wait leads, as its consequence for the reader; a settled
                 card says its verdict once, as the card's last line with who
                 and when, so the header keeps only the age. */}
-            {!outcome && !banner && (
+            {/* A settled priority card says its own answer ("Accepted none"), so the header names no status word. */}
+            {!outcome && !banner && !(priorityCard && !pending) && (
               // Words in the wait's tone, not a box: the headline under it is the thing to read.
               <span className={pending && waitsOnViewer(decision, meId) ? (decision.blocking ? "text-sol-yellow" : "text-sol-blue") : "text-sol-text-dim"}>
                 {decisionWaitLabel(decision, meId)}
               </span>
             )}
-            <span>{!outcome && !banner && "· "}asked {formatTimeAgo(decision.created_at, now)}</span>
+            <span>{!outcome && !banner && !(priorityCard && !pending) && "· "}asked {formatTimeAgo(decision.created_at, now)}</span>
             {decision.resolved_at && !outcome && !banner && <span>· resolved {formatTimeAgo(decision.resolved_at, now)}</span>}
             {/* A line card answered Ship: the deploy that put its fix live (deploys.md). */}
             {decision.workflow_run_id && decision.status === "answered" && <DeployedIn taskId={decision.task_id} />}
@@ -146,8 +147,9 @@ function DocumentBody({ decision, detail, answerable, pager, nav }: { decision: 
 
         {/* Two ways to discuss, each saying where the words go: into the
             session that asked (its transcript, where a message brings it to
-            the inbox), or onto the decision for the team. */}
-        <div className="mt-4 flex items-center gap-2.5 flex-wrap" data-decision-discuss>
+            the inbox), or onto the decision for the team. A priority card is
+            its person's alone and is acted on only through the card, so it has neither. */}
+        {!priorityCard && <div className="mt-4 flex items-center gap-2.5 flex-wrap" data-decision-discuss>
           <Button type="button" variant="blue" size="sm" onClick={() => void jumpToAsk()} data-decision-open-thread>
             <MessagesSquare />Talk to the session
           </Button>
@@ -160,12 +162,12 @@ function DocumentBody({ decision, detail, answerable, pager, nav }: { decision: 
           >
             <MessageSquare />Comment for the team{discussion.rows.length > 0 && <span className="text-sol-text-dim">{discussion.rows.length}</span>}
           </Button>
-        </div>
+        </div>}
 
         {/* ── The team thread (ct-74449): people and the session that owns the
             decision. It sits under the question and the button that opens
             it, above the evidence, so what the team said reads first. ── */}
-        {(discussOpen || discussion.rows.length > 0) && (
+        {!priorityCard && (discussOpen || discussion.rows.length > 0) && (
           <section className="mt-5" id="discuss" data-decision-discuss-section>
             <h2 className="decision-kicker mb-3">Comments</h2>
             <DecisionDiscussion decisionId={decision._id} open={discussOpen} onOpenChange={setDiscussOpen} bare noAsk />
@@ -265,13 +267,13 @@ function DocumentBody({ decision, detail, answerable, pager, nav }: { decision: 
         </section>}
 
         {/* Settled: where to go from here, the thread that asked or the next decision waiting. */}
-        {!pending && !nav && <DecisionNext decisionId={decision._id} step={step} openSession={jumpToAsk} />}
+        {!pending && !nav && <DecisionNext decisionId={decision._id} step={step} openSession={priorityCard ? undefined : jumpToAsk} />}
       </div>
     </div>
   );
 }
 
-function DecisionNext({ decisionId, step, openSession }: { decisionId: string; step: DecisionStep; openSession: () => Promise<boolean> }) {
+function DecisionNext({ decisionId, step, openSession }: { decisionId: string; step: DecisionStep; openSession?: () => Promise<boolean> }) {
   // The list's next, else the first decision still waiting in the queue.
   const queue = useDecisionQueue();
   const queued = queue.find((q) => q.decisionId && q.decisionId !== decisionId);
@@ -279,9 +281,9 @@ function DecisionNext({ decisionId, step, openSession }: { decisionId: string; s
   return (
     // Pinned to the bottom of the page's scroll, so the next step shows where the answer was given.
     <div className="decision-next-bar mt-4 flex items-center gap-2.5 flex-wrap" data-decision-next>
-      <Button type="button" variant="outline" size="sm" onClick={() => void openSession()} data-decision-next-session>
+      {openSession && <Button type="button" variant="outline" size="sm" onClick={() => void openSession()} data-decision-next-session>
         <MessagesSquare />Open the session
-      </Button>
+      </Button>}
       <Button type="button" variant="blue" size="sm" className="ml-auto" disabled={!next} onClick={() => step.go(next)} data-decision-next-decision>
         {next ? <>Next decision<ArrowRight /></> : "No decisions waiting"}
       </Button>

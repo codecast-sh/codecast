@@ -51,7 +51,7 @@ import { settleCardWaiting } from "./lineNotices";
 import { gateTrialPages, runOfStation, settleTrialCard, trialDeciderOf, trialProjectOf, trialStackOf, trialStationOf } from "./lib/trialDecision";
 import { linkProposalDecision, proposalToAsk, settleExpectationCard } from "./lib/expectationsApply";
 import { settlePriorityCard } from "./lib/priorityCardApply";
-import { priorityCardForViewer, priorityCardRefusal } from "./lib/priorityCardAccess";
+import { isPriorityCard, priorityCardForViewer, priorityCardRefusal } from "./lib/priorityCardAccess";
 import { pendingApproval, secretApprovalRefusal, settleSecretApproval } from "./lib/secretApprovals";
 import { applyCommandRunReport, commandRunRefusal, settleCommandRun } from "./lib/commandRuns";
 import { RUN_OPTION, RUN_OPTIONS, parseRunCommand, type CommandRun } from "@codecast/shared/contracts/commandRun";
@@ -398,8 +398,8 @@ export async function reroutePendingDecisionsForConversation(
 /** One open decision routed again from its asking session: its people, inbox rows, ladder and holder. */
 export async function rerouteRow(ctx: Ctx, conversation: any, row: DecisionRow, now: number): Promise<void> {
   // An approval card is its people's (changeApprovalCards), never its session's: moving it would ask people whose
-  // answer cannot count. A priority card is its person's alone (lib/priorityCardApply): it sits in whichever of their sessions was handy.
-  if ((row as any).approval_card || row.priority_card) return;
+  // answer cannot count. A priority card is its person's alone (lib/priorityCardAccess): it sits in whichever of their sessions was handy.
+  if ((row as any).approval_card || isPriorityCard(row)) return;
   const task = row.task_id ? await ctx.db.get(row.task_id) : null;
   // A proposal's decision asked by another session keeps routing as the station that proposed it.
   const proposal = await ctx.db.query("expectation_proposals").withIndex("by_decision", (q: any) => q.eq("decision_id", row._id)).first();
@@ -1223,7 +1223,7 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
   const openRows: DecisionRow[] = (await ctx.db
     .query("session_decisions")
     .withIndex("by_conversation_status", (q: any) => q.eq("conversation_id", conversation._id).eq("status", "pending"))
-    .collect()).filter((r: DecisionRow) => !r.priority_card);
+    .collect()).filter((r: DecisionRow) => !isPriorityCard(r));
   // Earlier asks still open in this session: the poster is the one party who
   // can withdraw the ones the work has moved past, so the response names them.
   const staleOpen = (excludeId?: string) =>
@@ -1452,7 +1452,7 @@ async function ownedDecision(
   if (row.user_id.toString() !== auth.userId.toString()) return { error: "Unauthorized: not your decision" };
   if (sessionId && row.session_id !== sessionId) return { error: "Decision belongs to another session" };
   // A priority card is posted by codecast for its person to answer; no session's agent edits or takes it back.
-  if (row.priority_card) return { error: "Decision not found" };
+  if (isPriorityCard(row)) return { error: "Decision not found" };
   return { row };
 }
 
@@ -1750,7 +1750,7 @@ export async function listForSessionCore(
     const ended = new Map<string, Promise<boolean>>();
     rows = [];
     // A priority card is codecast's to its person, answered in the app; no agent lists it (its token is the person's).
-    for (const r of await listForUserCore(ctx, auth.userId, Date.now())) if (r.status === "pending" && !r.priority_card && !(await askerEnded(ctx, auth.userId, r, ended))) rows.push(r);
+    for (const r of await listForUserCore(ctx, auth.userId, Date.now())) if (r.status === "pending" && !isPriorityCard(r) && !(await askerEnded(ctx, auth.userId, r, ended))) rows.push(r);
     rows.sort((a, b) => a.created_at - b.created_at);
     return { decisions: rows.map((r) => cliRowShape(r, own(r))) };
   }
@@ -1785,7 +1785,7 @@ export async function listForSessionCore(
   }
   rows.sort((a, b) => b.created_at - a.created_at);
   // A priority card only sits in the session: it is not the session's question.
-  return { decisions: rows.filter((r) => !r.priority_card).map((r) => cliRowShape(r, own(r))) };
+  return { decisions: rows.filter((r) => !isPriorityCard(r)).map((r) => cliRowShape(r, own(r))) };
 }
 
 /** Rows one `cast decide ls --answered-since` page aims for; it reads through a tie at its last millisecond. */
