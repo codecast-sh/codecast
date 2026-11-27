@@ -5,6 +5,7 @@
 // task, branch or priority, every commit credited to the session that pressed Ship. Drawn from props alone
 // (lib/deploys/board.ts derives everything), so a fixture renders it; only an opened deploy's detail reads the store.
 import { useMemo, useState } from "react";
+import Link from "next/link";
 import { Check, ChevronRight, GitBranch, Loader2, Pause, RotateCcw, X } from "lucide-react";
 import type { CommitCiState, ShippingRun, ShippingShipper } from "@codecast/shared/contracts/deployTargets";
 import type { CheckoutRow } from "@codecast/shared/contracts/checkouts";
@@ -12,7 +13,7 @@ import type { DeployReach } from "@codecast/shared/contracts/deployReach";
 import type { DeployPauseView } from "@codecast/shared/contracts/deployPause";
 import { entityRoute } from "@codecast/shared/entities";
 import {
-  VIEWS, ago, attemptGroups, carriedOfAttempts, carriedOfQueue, fold, mineSessionIds, queueCommits, recordedOf, rowsFor, shipperOf, shippingRuns, splitQueue, tasksOnMain, yourSessions,
+  VIEWS, ago, attemptGroups, branchHref, carriedOfAttempts, carriedOfQueue, fold, mineSessionIds, queueCommits, recordedOf, rowsFor, shipperOf, shippingRuns, splitQueue, tasksOnMain, yourSessions,
   type BoardDeploy, type BoardQueueCommit, type BoardRow, type BoardView, type Bucket, type CardId, type Carried, type DeployCard as Card, type DeployLine,
 } from "../../lib/deploys/board";
 import { carriedMatches, commitMatches, deployMatches, focusWord, reachDeployOn, rowMatches, type DeployFocus } from "../../lib/deploys/focus";
@@ -237,7 +238,7 @@ function DeploysColumn(p: DeploysBoardProps & { n: ReturnType<typeof targetNow>;
               </span>
               <span className="dpp-card-end"><DeployButton t={t} production={production} n={n} onPress={p.onPress} /></span>
             </div>
-            {next ? <CarriedList carried={next} view={show} mine={mine} isMine={isMine} newer={your.newer} self="next" focus={focus} repository={t.repository} /> : null}
+            {next ? <CarriedList carried={next} view={show} mine={mine} isMine={isMine} newer={your.newer} self="next" focus={focus} repository={t.repository} me={p.me} /> : null}
           </li>
         ) : null}
         {shown.slice(0, limit).map((c) => (
@@ -282,7 +283,7 @@ function DeployButton({ t, production, n, onPress }: { t: DeployTargetRow; produ
   );
 }
 
-function DeployCard({ card, view, mine, focus, now, target: t, production, deploys, live, isMine, newer, focused, openDeploy, onPress, onRollback }: DeploysBoardProps & {
+function DeployCard({ card, view, mine, me, focus, now, target: t, production, deploys, live, isMine, newer, focused, openDeploy, onPress, onRollback }: DeploysBoardProps & {
   card: Card; view: BoardView; live: TeamDeployRow | null; isMine: (id: string) => boolean; newer: ReadonlyMap<string, CardId>; focused: boolean;
 }) {
   const [lead, ...earlier] = card.deploys;
@@ -337,7 +338,7 @@ function DeployCard({ card, view, mine, focus, now, target: t, production, deplo
       {openOne ? <DeployDetail d={openOne} now={now} /> : null}
       {quiet ? null
         : empty ? <p className="dpp-none">{lead.status === "live" ? (rebuiltOnly(lead) ? "Rebuilt, nothing new" : "Nothing recorded") : "Nothing recorded yet"}</p>
-        : <CarriedList carried={c} view={view} mine={mine} isMine={isMine} newer={newer} self={lead.short_id} focus={focus} repository={t.repository} />}
+        : <CarriedList carried={c} view={view} mine={mine} isMine={isMine} newer={newer} self={lead.short_id} focus={focus} repository={t.repository} me={me} />}
     </li>
   );
 }
@@ -349,10 +350,10 @@ function rowsHold(c: Carried, view: BoardView, isMine: (id: string) => boolean, 
 }
 
 /** What a card carried, as the switch lists it: own rows first with a blue dot, + and − in their own columns. */
-function CarriedList({ carried: c, view, mine, isMine, newer, self, focus, repository }: {
-  carried: Carried; view: BoardView; mine: boolean; isMine: (id: string) => boolean; newer: ReadonlyMap<string, CardId>; self: CardId; focus: DeployFocus | null; repository: string;
+function CarriedList({ carried: c, view, mine, isMine, newer, self, focus, repository, me }: {
+  carried: Carried; view: BoardView; mine: boolean; isMine: (id: string) => boolean; newer: ReadonlyMap<string, CardId>; self: CardId; focus: DeployFocus | null; repository: string; me: string | null;
 }) {
-  const all = rowsFor(c, view, isMine);
+  const all = rowsFor(c, view, isMine, me);
   const hit = (r: BoardRow) => rowMatches(r, c, focus);
   // Next deploy's row holding the linked change is what the focus chip's place (N of M) links to.
   const placeRow = self === "next" ? all.find(hit)?.key ?? null : null;
@@ -365,12 +366,11 @@ function CarriedList({ carried: c, view, mine, isMine, newer, self, focus, repos
   if (view === "branches" && !c.branchesKnown) return <p className="dpp-none">Branches aren't recorded on this deploy</p>;
   if (!rows.length) return <p className="dpp-none" data-deploy-none-mine={mine ? "" : undefined}>{mine ? "None of yours" : "Nothing recorded"}</p>;
   const counted = view !== "tasks";
-  const idColumn = view === "prs" || view === "shas";
   return (
     <>
       <ul className="dpp-list" data-view={view}>
         {(open ? rows : rows.slice(0, shown)).map((r) => (
-          <li key={r.key} className="dpp-row" data-id-col={idColumn ? "" : undefined} data-counted={counted ? "" : undefined} data-mine={r.mine ? "" : undefined} id={r.key === placeRow ? NEXT_FOCUS_ROW : undefined} data-focus={hit(r) ? "" : undefined} data-deploy-row={r.key}>
+          <li key={r.key} className="dpp-row" data-counted={counted ? "" : undefined} data-mine={r.mine ? "" : undefined} id={r.key === placeRow ? NEXT_FOCUS_ROW : undefined} data-focus={hit(r) ? "" : undefined} data-deploy-row={r.key}>
             <span className="dpp-gutter">{r.mine && !mine ? <i className="dpp-you" title="Yours" aria-label="yours" /> : null}</span>
             <RowItem r={r} c={c} view={view} newer={newer} self={self} repository={repository} />
             {counted ? <Lines add={r.insertions} del={r.deletions} /> : null}
@@ -383,7 +383,7 @@ function CarriedList({ carried: c, view, mine, isMine, newer, self, focus, repos
   );
 }
 
-/** One row's item: the app's own pill for a session or task (whole title, wrapping as prose), an id column and subject for a PR or SHA. */
+/** One row's item: the app's own pill for the session, task, priority, PR or commit (whole title, wrapping as prose), or a branch's. */
 function RowItem({ r, c, view, newer, self, repository }: { r: BoardRow; c: Carried; view: BoardView; newer: ReadonlyMap<string, CardId>; self: CardId; repository: string }) {
   if (view === "sessions") {
     if (!r.session) return <span className="dpp-row-main dpp-dim">{plural(r.commits ?? 0, "commit")} not from a session</span>;
@@ -398,13 +398,22 @@ function RowItem({ r, c, view, newer, self, repository }: { r: BoardRow; c: Carr
     );
   }
   if (view === "tasks") return <span className="dpp-row-main"><EntityIdPill type="task" id={r.task!} label={r.label ?? undefined} wide /></span>;
-  if (view === "branches") return <span className="dpp-row-main">{r.branch ? <span className="dpp-branch"><GitBranch aria-hidden />{r.branch}</span> : <span className="dpp-dim">Branch not recorded</span>}</span>;
-  if (view === "priorities") return <span className="dpp-row-main">{r.label ?? <span className="dpp-dim">No priority</span>} <span className="dpp-dim">· {plural(r.sessions?.length ?? 0, "session")}</span></span>;
-  const id = view === "prs" && r.pr
-    ? <EntityIdPill type="pr" id={`${repository}#${r.pr}`} idLabel={`#${r.pr}`} certain compact bare />
-    : view === "prs" ? <span className="dpp-dim">no PR</span>
-    : <EntityIdPill type="commit" id={`${repository}@${r.sha!.slice(0, 10)}`} idLabel={short(r.sha)} certain compact bare />;
-  return <><span className="dpp-row-id" data-deploy-pr={view === "prs" && r.pr ? r.pr : undefined}>{id}</span><span className="dpp-row-main">{r.label}</span></>;
+  if (view === "branches") return <span className="dpp-row-main">{r.branch ? <BranchPill branch={r.branch} pr={r.pr ?? null} repository={repository} /> : <span className="dpp-dim">Branch not recorded</span>}</span>;
+  if (view === "priorities") return <span className="dpp-row-main">{r.priority ? <EntityIdPill type="priority" id={r.priority.id} label={r.label ?? undefined} wide /> : <span className="dpp-dim">No priority</span>} <span className="dpp-dim">· {plural(r.sessions?.length ?? 0, "session")}</span></span>;
+  // Every PR a deploy carried is merged: the board shows it at full colour, not a settled reference's dim.
+  if (view === "prs" && r.pr) return <span className="dpp-row-main" data-deploy-pr={r.pr}><EntityIdPill type="pr" id={`${repository}#${r.pr}`} label={`#${r.pr} ${r.label}`} certain wide bare undimmed /></span>;
+  if (view === "prs") return <span className="dpp-row-main"><span className="dpp-dim">No PR ·</span> {r.label}</span>;
+  return <span className="dpp-row-main"><EntityIdPill type="commit" id={`${repository}@${r.sha!.slice(0, 10)}`} label={`${short(r.sha)} ${r.label}`} certain wide bare /></span>;
+}
+
+/** A branch as an object: green like a pull request, wrapping as prose, opening where branchHref says. */
+function BranchPill({ branch, pr, repository }: { branch: string; pr: number | null; repository: string }) {
+  const away = !pr;
+  return (
+    <Link href={branchHref(repository, branch, pr)} target={away ? "_blank" : undefined} rel={away ? "noreferrer" : undefined} className="dpp-branch-pill" data-deploy-branch={branch} title={pr ? `${branch} · #${pr}` : `${branch} on GitHub`}>
+      <GitBranch aria-hidden />{branch}
+    </Link>
+  );
 }
 
 /** Lines added and removed, the way GitHub prints them; "—" when nothing recorded them. */
