@@ -142,8 +142,7 @@ const INBOX_GROUPS: [string, string, string][] = [
   ["Couldn't finish", SOL.red, "Stopped before the work was done"],
   ["Done", SOL.cyan, "Finished, ready for you to read"],
   ["Working", SOL.green, "Running right now"],
-  ["Sleeping", SOL.base01, "Asleep until something wakes it"],
-  ["Snoozed", SOL.base01, "Hidden until a time you picked"],
+  ["Sleeping", SOL.base01, "Asleep until something wakes it, or a time you picked"],
   ["Stashed", SOL.base01, "Put away; the agent keeps running"],
 ];
 
