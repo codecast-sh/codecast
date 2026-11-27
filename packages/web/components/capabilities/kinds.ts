@@ -133,8 +133,7 @@ export function kindMeta(kind: string): KindMeta | undefined {
  * contract's alone.
  *
  * `confidenceFromSurfaces` derives it from real findings; `confidenceFromKind`
- * is the floor used when nothing has looked. Nothing else may produce one, and
- * `entryConfidence` is the one place that chooses between them.
+ * is the floor used when nothing has looked. Nothing else may produce one.
  */
 export type ExecutionConfidence = "prose" | "code" | "unknown";
 
