@@ -209,7 +209,7 @@ export function DeploysPage({ initialTarget, initialTeam, initialDeploy, initial
           {ordered.map((t) => {
             const n = targetNow(t, deploys);
             const tone = targetTone(t, n);
-            const waiting = t.queue.known ? t.queue.commits : 0;
+            const waiting = t.queue.known && !t.queue.reading ? t.queue.commits : 0;
             const pause = productionOf(productions, t)?.pause;
             return (
               <li key={t._id}>

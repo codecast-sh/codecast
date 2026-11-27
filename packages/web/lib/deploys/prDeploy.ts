@@ -61,6 +61,8 @@ function pressOf(t: DeployTargetRow | undefined, deploys: ReadonlyArray<TeamDepl
   if (open) return { press: null, pressWords: null, blocked: openWords(open) };
   if (!t.can_deploy) return { press: null, pressWords: null, blocked: "No machine publishes it" };
   const n = t.queue.commits;
+  // What waits is being read again (readQueue): the press waits for the count it would send.
+  if (t.queue.reading) return { press: null, pressWords: null, blocked: "Reading what waits on main" };
   if (t.queue.known && n === 0) return { press: null, pressWords: null, blocked: "Nothing waiting" };
   return { press: t, pressWords: !t.queue.known ? "Deploy main" : `Deploy ${n}${t.queue.truncated ? "+" : ""} ${n === 1 ? "commit" : "commits"}`, blocked: null };
 }
@@ -85,7 +87,7 @@ export function prDeployRows(
     if (isDormant(t, row, deploys, now)) { dormant.push({ target: t.target, at: (t.deploy ?? t.now)?.at ?? null }); continue; }
     const waiting = t.state === "waiting" || t.state === "failed";
     let queue: PrDeployRow["queue"] = null;
-    if (row && waiting && row.queue.known) {
+    if (row && waiting && row.queue.known && !row.queue.reading) {
       const q = row.queue;
       const listed = q.groups.some((g) => g.commits.some((c) => sameSha(c.sha, reach.sha)));
       // The queue lists its newest commits only: one past that list may still wait, with a count nobody can give. One

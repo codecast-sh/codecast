@@ -49,6 +49,9 @@ export type RunNodeRow = {
   phase?: string;
   /** How many times the run entered the station; its times are the last visit's. */
   visits?: number;
+  /** A segment's way out the run took and went on from (a card answered Revise): the route, not a failure. Its
+   *  status reads completed; the runner writes such an exit failed so the composing flow can route on it. */
+  route?: true;
 };
 
 export type RunNodeGroup = { title?: string; detail?: string; rows: RunNodeRow[] };
@@ -132,7 +135,37 @@ export function runNodeRows(run: any, workflow?: any | null): RunNodeRow[] {
     const n = known.get(ns.node_id);
     if (n?.type !== "start" && !(n?.type === "exit" && ns.node_id === "exit")) push(ns.node_id, ns.label ?? n?.label ?? nodeWords(ns.node_id), n?.type);
   }
-  return inRunOrder(rows, statuses);
+  return inRunOrder(asRoutes(oneSegmentRow(rows), statuses, known), statuses);
+}
+
+/** A step whose only output names the segment exit it took (`{"exit": "revise"}`). */
+const ROUTE_ONLY = /^\s*\{\s*"exit"\s*:/;
+
+/**
+ * A segment's stop exit the run went on from is the way it went (a card answered Revise sends the change back to its
+ * session), never a failure: the runner writes it failed only so the flow that composes the segment routes on it
+ * (cli workflow/parser.ts, `segment_exit: "stop"`). Read as one when the graph marks it or its only output names the
+ * exit, and only when a step other than an end started after it, so a stop the run ended on (alone, or through the
+ * exit it routes to) stays red.
+ */
+function asRoutes(rows: RunNodeRow[], statuses: ReadonlyArray<{ node_id: string; started_at?: number }>, graph: ReadonlyMap<string, any>): RunNodeRow[] {
+  return rows.map((r) => {
+    if (r.status !== "failed") return r;
+    const n = graph.get(r.id);
+    const exit = n?.segment_exit === "stop" || (r.id.includes("__") && ROUTE_ONLY.test(r.result_preview ?? ""));
+    const since = r.completed_at ?? r.started_at;
+    // The end it routed to is not going on: Union's land__rejected leads straight to its `stopped` exit.
+    const ending = (id: string) => (graph.get(id)?.type ?? (id === "exit" ? "exit" : null)) === "exit";
+    const wentOn = since != null && statuses.some((x) => x.node_id !== r.id && !ending(x.node_id) && (x.started_at ?? 0) >= since);
+    return exit && wentOn ? { ...r, status: "completed" as const, route: true as const } : r;
+  });
+}
+
+/** A segment's own row (`decide`) beside an inner step of the same name (`decide__decide`) says one thing twice: the
+ *  inner step, which holds the time and the answer, stands for both. */
+function oneSegmentRow(rows: RunNodeRow[]): RunNodeRow[] {
+  const twice = new Set(rows.filter((r) => rows.some((x) => x.id.startsWith(`${r.id}__`) && x.label === r.label && rowReached(x) === rowReached(r))).map((r) => r.id));
+  return twice.size ? rows.filter((r) => !twice.has(r.id)) : rows;
 }
 
 /** A node id as words, for a status no graph names: `deploy__failed` reads "Deploy failed". Never shown as the id. */

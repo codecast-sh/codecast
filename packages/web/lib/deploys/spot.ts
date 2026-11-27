@@ -32,8 +32,9 @@ export type HoldWord = "live" | "went_out" | "going" | "asked" | "failed" | "can
 export type Spot =
   /** A deploy holds it (or, for a deploy link, is it). */
   | { kind: "deploy"; deploy: string; word: HoldWord }
-  /** On main, not out yet: `place` counts it among the `of` commits waiting since `since` (oldest first), null when the queue does not list it. */
-  | { kind: "waiting"; place: number | null; of: number; since: string | null; held: Held | null }
+  /** On main, not out yet: `place` counts it among the `of` commits waiting since `since` (oldest first), null when the
+   *  queue does not list it; `of` is null while what waits is being read again (readQueue). */
+  | { kind: "waiting"; place: number | null; of: number | null; since: string | null; held: Held | null }
   /** Not on main: its Ship run, and the words for where that run is. */
   | { kind: "run"; run: ShippingRun; word: string; dropped: boolean }
   /** Not on main, and no Ship run carries it: an open pull request, and what it waits on. */
@@ -87,7 +88,7 @@ export function changeSpot(i: SpotInput): Spot {
   if (mine.length || r) {
     const unlisted = Math.max(0, t.queue.commits - t.queue.shown);
     const place = mine.length ? unlisted + queue.length - queue.indexOf(mine[0]) : null;
-    return { kind: "waiting", place, of: t.queue.commits, since: i.live?.short_id ?? null, held: heldBy(i, open) };
+    return { kind: "waiting", place, of: t.queue.reading ? null : t.queue.commits, since: i.live?.short_id ?? null, held: heldBy(i, open) };
   }
   if (first) return { kind: "deploy", deploy: first.short_id, word: holdWord(first, i.live) };
   const moving = i.shipping?.moving.find((x) => runMatches(x, f));

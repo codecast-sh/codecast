@@ -67,6 +67,74 @@ describe("runNodeRows", () => {
   });
 });
 
+describe("a decision card's answer is the way the run went (pl-1077 polish 3)", () => {
+  // ct-102479's run: answered Revise, the session fixed it, a second card answered Approve, and it went Live.
+  const graph = {
+    nodes: [
+      { id: "start", label: "start", type: "start" },
+      { id: "ci_card", label: "Why a person", type: "command" },
+      { id: "decide", label: "Decide", type: "conditional", segment: "decide", segment_entry: true },
+      { id: "decide__decide", label: "Decide", type: "human", segment: "decide" },
+      { id: "decide__ship", label: "Approved", type: "command", segment: "decide", segment_exit: "done" },
+      { id: "decide__revise", label: "Revise", type: "command", segment: "decide", segment_exit: "stop" },
+      { id: "brief", label: "Fix findings", type: "agent" },
+      { id: "merge", label: "Merge", type: "command" },
+      { id: "exit", label: "Live", type: "exit" },
+    ],
+  };
+  const statuses = [
+    { node_id: "ci_card", status: "completed", started_at: 1, completed_at: 2 },
+    { node_id: "decide", status: "completed", started_at: 20, completed_at: 20 },
+    { node_id: "decide__decide", status: "completed", started_at: 21, completed_at: 25, outcome: "s" },
+    { node_id: "decide__revise", status: "failed", started_at: 5, completed_at: 5, outcome: "failure", result_preview: '{"exit": "revise"}' },
+    { node_id: "brief", status: "completed", started_at: 6, completed_at: 10 },
+    { node_id: "decide__ship", status: "completed", started_at: 26, completed_at: 26, result_preview: '{"exit": "ship"}' },
+    { node_id: "merge", status: "completed", started_at: 27, completed_at: 30 },
+    { node_id: "exit", status: "completed", started_at: 31, completed_at: 31 },
+  ];
+  const run = { status: "completed", current_node_id: "exit", node_statuses: statuses };
+
+  test("Revise reads as the route taken, never a failed step; the segment's own Decide is not listed twice", () => {
+    const rows = runNodeRows(run, graph);
+    const revise = rows.find((r) => r.id === "decide__revise")!;
+    expect(revise).toMatchObject({ status: "completed", route: true });
+    expect(rows.filter((r) => r.label === "Decide").map((r) => r.id)).toEqual(["decide__decide"]);
+    expect(runNodeCounts(rows).failed).toBe(0);
+    // Without a stored graph, its output naming the exit says the same.
+    expect(runNodeRows(run).find((r) => r.id === "decide__revise")).toMatchObject({ status: "completed", route: true });
+    // The phone's path reads it as noted, in words.
+    const step = runPath(run as any, graph as any)[0].steps.find((x) => x.id === "decide__revise");
+    expect(step).toMatchObject({ state: "noted", result: "Route taken" });
+  });
+
+  test("a stop the run ended on stays a failure", () => {
+    const ended = { status: "failed", current_node_id: "decide__revise", node_statuses: statuses.filter((n) => ["ci_card", "decide", "decide__decide", "decide__revise"].includes(n.node_id)).map((n) => (n.node_id === "decide__revise" ? { ...n, started_at: 30, completed_at: 30 } : n)) };
+    expect(runNodeRows(ended, graph).find((r) => r.id === "decide__revise")).toMatchObject({ status: "failed" });
+    expect(runNodeRows(ended, graph).find((r) => r.id === "decide__revise")?.route).toBeUndefined();
+  });
+
+  test("a stop that routes straight to the run's end is where it stopped, still a failure (Union's Land rejected)", () => {
+    // ct-102575: land__rejected leads to the `stopped` exit, whose status is written after it.
+    const land = {
+      nodes: [
+        { id: "start", label: "start", type: "start" },
+        { id: "land", label: "Land", type: "conditional", segment: "land", segment_entry: true },
+        { id: "land__review", label: "Review", type: "agent", segment: "land" },
+        { id: "land__rejected", label: "Rejected", type: "command", segment: "land", segment_exit: "stop" },
+        { id: "stopped", label: "Not merged", type: "exit" },
+      ],
+    };
+    const r = { status: "failed", current_node_id: "stopped", fail_reason: "Stopped: The reviewer rejected the change", node_statuses: [
+      { node_id: "land", status: "completed", started_at: 1, completed_at: 1 },
+      { node_id: "land__review", status: "completed", started_at: 2, completed_at: 5 },
+      { node_id: "land__rejected", status: "failed", started_at: 6, completed_at: 6, result_preview: '{"exit": "rejected"}' },
+      { node_id: "stopped", status: "failed", started_at: 7, completed_at: 7 },
+    ] };
+    expect(runNodeRows(r, land).find((x) => x.id === "land__rejected")).toMatchObject({ status: "failed" });
+    expect(runNodeRows(r, land).find((x) => x.id === "land__rejected")?.route).toBeUndefined();
+  });
+});
+
 describe("runNodeGroups", () => {
   test("declared phases group in declared order; agents outside them trail", () => {
     const run = {

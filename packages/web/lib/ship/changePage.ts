@@ -217,7 +217,8 @@ export function changeHeadline(j: Journey, run: ChangeRun, graph: ChangeGraph, c
       // A station the session itself works (its fix) is the session's fix, whatever the track calls the stage.
       const at = graph.nodes.find((x) => x.id === run.current_node_id);
       if (at?.backend === "subject") return head(foundWords(run, graph) ?? at.label, fixing(null, null), "session");
-      return head(journeyWords(j).words);
+      // Back at a stage after a later one: why it runs again.
+      return head(journeyWords(j).words, n.again ?? null);
     }
     case "session": {
       if (n.blocked) return head(n.ask?.mine ? "Waiting on your answer" : sentBackWords(n));

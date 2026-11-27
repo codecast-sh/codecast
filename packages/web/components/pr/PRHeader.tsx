@@ -211,7 +211,10 @@ function Figure({ label, children, href, onClick, title }: {
 }
 
 /** The checks bar: one segment per outcome, widths animated in on load. */
-function ChecksBar({ checks }: { checks: any[] | undefined }) {
+function ChecksBar({ checks, read }: { checks: any[] | undefined; read: boolean }) {
+  // Checks live on the pull request's detail, read after its row: until that read answers they are unknown, never
+  // "No checks". Once it has, a pull request with nothing to detail (no checks, files or commits) has no checks.
+  if (checks === undefined && !read) return <span className="pr-seg-track w-24 opacity-60" role="img" aria-label="Reading checks" data-pr-checks-reading />;
   const fold = foldChecks(checks);
   if (fold.total === 0) return <span className="text-sol-text-dim">No checks</span>;
   const pct = (n: number) => `${(n / fold.total) * 100}%`;
@@ -340,7 +343,10 @@ export function PRHeader({
   filesHref,
   onOpenComments,
   authed = false,
+  checksRead = true,
 }: {
+  /** The page's read of the pull request has answered: a missing `checks` then means none. */
+  checksRead?: boolean;
   /** Signed in: the team's deploy targets (each one's queue and press) are read. */
   authed?: boolean;
   /** Where the figures lead: the checks view, the diff, the first open thread. */
@@ -429,7 +435,7 @@ export function PRHeader({
         style={{ ["--d" as string]: "180ms" }}
       >
         <Figure label="Checks" href={checksHref} title="Open the checks">
-          <ChecksBar checks={pr.checks} />
+          <ChecksBar checks={pr.checks} read={checksRead} />
         </Figure>
         {/* Who reviewed this head: GitHub's reviewers, and codecast's Ship run reviewer, which answers on the run. */}
         <Figure label="Review">

@@ -10,7 +10,7 @@
 // step row in the same gutter.
 
 import Link from "next/link";
-import { Bot, CheckCircle2, ChevronRight, Circle, Flag, GitFork, Loader2, Merge, MessageSquare, Terminal, User, XCircle, Zap } from "lucide-react";
+import { Bot, CheckCircle2, ChevronRight, Circle, CornerDownRight, Flag, GitFork, Loader2, Merge, MessageSquare, Terminal, User, XCircle, Zap } from "lucide-react";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { useOpenLinkedSession } from "../hooks/useOpenLinkedSession";
 import { formatRunDuration, rowReached, runNodeGroups, runNodeLine, scriptLine, wfFmtTokens, type RunNodeRow } from "../lib/workflowRun";
@@ -33,6 +33,8 @@ const TYPE_ICONS: Record<string, React.ComponentType<{ className?: string }>> = 
 
 function StepMark({ row }: { row: RunNodeRow }) {
   const cls = "w-3.5 h-3.5 flex-shrink-0";
+  // The way out a segment took (a card answered Revise): where the run went, neither a pass nor a failure.
+  if (row.route) return <CornerDownRight className={`${cls} text-sol-text-dim`} aria-label="route taken" />;
   if (row.status === "completed") return <CheckCircle2 className={`${cls} text-sol-green`} aria-label="completed" />;
   if (row.status === "failed") return <XCircle className={`${cls} text-sol-red`} aria-label="failed" />;
   if (row.status === "running" || row.current) return <Loader2 className={`${cls} text-sol-cyan animate-spin`} aria-label="running" />;
@@ -113,7 +115,7 @@ function StepRow({ row, now }: { row: RunNodeRow; now: number }) {
   const href = row.session_id ? `/conversation/${row.session_id}` : null;
   const body = (
     <>
-      <span className="mt-0.5 flex-shrink-0" data-step-status={row.status}><StepMark row={row} /></span>
+      <span className="mt-0.5 flex-shrink-0" data-step-status={row.route ? "route" : row.status}><StepMark row={row} /></span>
       <TypeIcon className="w-3.5 h-3.5 mt-0.5 flex-shrink-0 text-sol-text-dim/70" />
       <div className="min-w-0 flex-1">
         <div className={`truncate text-xs leading-tight ${

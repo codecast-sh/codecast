@@ -344,7 +344,7 @@ export function JourneyNowBar({ now, run, now_ms, children, again, personal = fa
           <b>{stopTitle(now)}</b>
           {resume ? <ResumeAtPress runId={String(run._id)} resume={resume} /> : null}
           {/* The action that can work for this stop leads: re-running a refusal, or a session out of rounds, repeats it. */}
-          {now.fix === "deploy" ? <Link className="sj-act" data-primary href={deploysHref(run, now.why)} data-journey-deploys>Open {now.why?.match(/\b([a-z][a-z0-9-]{0,31}) dp-\d+/)?.[1] ?? "Deploys"}</Link>
+          {now.fix === "deploy" ? <Link className="sj-act" data-primary href={deploysHref(run, now.why)} data-journey-deploys>Open Deploys</Link>
             : now.fix === "session" && !inSession && now.session ? <Link className="sj-act" data-primary href={`/conversation/${now.session}`} data-journey-open-session>Open session</Link>
             : now.fix === "session" && briefId ? <button type="button" className="sj-act" data-primary onClick={() => useInboxStore.getState().requestNavigate(here!, { scrollToMessageId: briefId })} data-journey-open-brief>Open the brief</button>
             : now.fix === "run" ? <>{openRun}{now.session && now.session !== here && !now.landed ? <Link className="sj-act" href={`/conversation/${now.session}`} data-journey-open-session>Open session</Link> : null}</>
@@ -462,7 +462,7 @@ export function SessionTargets({ teamId, conversationId, line, known: reached, f
       {mine.map((t) => {
         const row = targets.find((x) => x.name === t.name);
         // Red CI on what a deploy would send is never offered as the press here; the target's link opens the Deploys page.
-        const canPress = t.state === "waiting" && !!row && row.runs === "here" && row.can_deploy && row.queue.head_ci !== "failed" && !targetNow(row, deploys).open;
+        const canPress = t.state === "waiting" && !!row && row.runs === "here" && row.can_deploy && row.queue.head_ci !== "failed" && !row.queue.reading && !targetNow(row, deploys).open;
         return (
           <li key={t.name} className="sj-target-item">
             <Link className="sj-target" data-state={t.state} href={deploysFocusHref({ team: teamId, target: t.name, focus: focus ?? { kind: "session", id: conversationId }, open: t.deploy })} data-session-target={t.name}>

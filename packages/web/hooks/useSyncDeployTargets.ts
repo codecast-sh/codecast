@@ -12,7 +12,7 @@ import { useConvexSync } from "./useConvexSync";
 import { useInboxStore } from "../store/inboxStore";
 import { useWorkspaceCollection } from "./useWorkspaceCollection";
 import { deployScopeArgs, type StrictWorkspaceKey } from "../lib/workspaceScope";
-import { mergeDeployRow, type DeployProductionRow, type DeployTargetRow, type TeamDeployRow } from "../lib/deploys/targets";
+import { mergeDeployRow, readQueue, type DeployProductionRow, type DeployTargetRow, type TeamDeployRow } from "../lib/deploys/targets";
 
 const api = _api as any;
 
@@ -69,14 +69,16 @@ function withRecorded<R extends TeamDeployRow[] | null | undefined>(rows: R): R 
 const devPushSig = (p: DeployTargetRow["dev_push"]) => (p ? `${p.sha}:${p.machine}:${p.by ?? ""}:${p.at}:${p.dirty}:${p.adds_count}:${p.drops_count}` : "");
 const pauseSig = (p: DeployProductionRow["pause"]) => (p ? `${p.by}:${p.at}:${p.reason}:${p.lifts}:${p.rollback ?? ""}:${p.until ? `${p.until.task ?? ""}:${p.until.kind}:${p.until.migrations.join(",")}:${p.until.commits}` : ""}` : "");
 const productionSig = (p: DeployProductionRow) => `${p.repository}|${p.can_pause ? 1 : 0}${p.can_lift ? 1 : 0}|${pauseSig(p.pause)}`;
-const targetSig = (t: DeployTargetRow) => `${t.name}|${t.policy}|${t.can_deploy ? 1 : 0}|${t.workflow ?? ""}:${t.rollback_inputs ? 1 : 0}|${devPushSig(t.dev_push)}|${t.queue?.head_sha ?? ""}|${t.queue?.commits ?? 0}|${t.queue?.head_ci ?? ""}|${t.queue?.groups?.length ?? 0}|${t.queue?.groups?.map((g) => `${g.key}:${g.commits.length}:${g.ci}`).join(",") ?? ""}`;
+const targetSig = (t: DeployTargetRow) => `${t.name}|${t.policy}|${t.can_deploy ? 1 : 0}|${t.workflow ?? ""}:${t.rollback_inputs ? 1 : 0}|${devPushSig(t.dev_push)}|${t.queue?.head_sha ?? ""}|${t.queue?.after_sha ?? ""}|${t.queue?.commits ?? 0}|${t.queue?.head_ci ?? ""}|${t.queue?.groups?.length ?? 0}|${t.queue?.groups?.map((g) => `${g.key}:${g.commits.length}:${g.ci}`).join(",") ?? ""}`;
 const deploySig = (d: TeamDeployRow) => `${d.status}|${d.sha ?? ""}|${d.live_at ?? 0}|${d.finished_at ?? 0}|${d.steps?.map((s) => `${s.id}:${s.status}`).join(",") ?? ""}|${d.note ?? ""}|${d.short_id}|${d.sessions?.map((x) => `${x.conversation_id}:${x.user_id ?? ""}:${x.task_short_ids?.length ?? ""}`).join(",") ?? ""}|${d.tasks?.length ?? 0}|${d.commit_rows?.map((c) => c.sha).join(",") ?? ""}|${d.pushed_via ?? ""}|${d.machine ?? ""}|${d.dirty ?? 0}|${d.adds_count ?? 0}|${d.drops_count ?? 0}`;
 
-/** Reader: a workspace's targets, deploys and productions from the store. With a repository, only that one's are fed. */
+/** Reader: a workspace's targets, deploys and productions from the store. With a repository, only that one's are fed.
+ *  Each target's queue reads as of the live deploy the store holds (readQueue): the two arrive by different feeds. */
 export function useDeployTargets(workspace: StrictWorkspaceKey | null | undefined, repository?: string | null): { targets: DeployTargetRow[]; deploys: TeamDeployRow[]; productions: DeployProductionRow[]; ready: boolean } {
   const { ready } = useSyncDeployTargets(workspace, repository);
-  const targets = useWorkspaceCollection<DeployTargetRow>("deployTargets", targetSig, workspace ?? null);
+  const stored = useWorkspaceCollection<DeployTargetRow>("deployTargets", targetSig, workspace ?? null);
   const deploys = useWorkspaceCollection<TeamDeployRow>("teamDeploys", deploySig, workspace ?? null);
   const productions = useWorkspaceCollection<DeployProductionRow>("deployProductions", productionSig, workspace ?? null);
+  const targets = useMemo(() => stored.map((t) => readQueue(t, deploys)), [stored, deploys]);
   return useMemo(() => ({ targets, deploys, productions, ready }), [targets, deploys, productions, ready]);
 }

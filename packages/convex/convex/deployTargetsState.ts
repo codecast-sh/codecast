@@ -378,6 +378,8 @@ export async function targetState(ctx: any, t: Doc<"deploy_targets">, viewer?: I
     queue: {
       // False when the live sha is not on main as codecast knows it (no deploy yet, or main's order not backfilled).
       known: after.known,
+      // The live commit it counts after: a reader holding a newer live deploy knows this queue is behind it.
+      after_sha: live?.sha ?? null,
       truncated: after.truncated,
       commits: touching.length,
       // Commits on main after the live sha that touch none of this target's paths: they ship nothing here.

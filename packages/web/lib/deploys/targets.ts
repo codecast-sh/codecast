@@ -48,6 +48,11 @@ export type DeployTargetRow = {
     head_ci_url: string | null;
     shown: number;
     groups: QueueGroup[];
+    /** The live sha the server counted the queue after (absent from an older server or cache). */
+    after_sha?: string | null;
+    /** Read time only (readQueue): the queue was counted after an older live deploy than the store's, so what waits
+     *  is unknown until the target's next answer. Never stored. */
+    reading?: true;
   };
 };
 
@@ -233,13 +238,47 @@ export function rollbackTarget(history: ReadonlyArray<TeamDeployRow>, live: Team
   return history.find((d) => d.status === "live" && d._id !== live?._id && !!d.sha && d.sha !== live?.sha) ?? null;
 }
 
+const sameSha = (a: string | null | undefined, b: string | null | undefined) => !!a && !!b && a.length >= 7 && b.length >= 7 && (a.toLowerCase().startsWith(b.toLowerCase()) || b.toLowerCase().startsWith(a.toLowerCase()));
+
+/**
+ * A target's queue as of the live deploy the store holds, at read time. A target row and its deploys reach the store
+ * by different feeds (a cached row from an earlier visit, the team's deploy records kept current elsewhere), so the
+ * queue can be counted after an older live deploy than the one the page shows. Commits the live deploy carries never
+ * read as waiting: when the queue lists the live commit, it and everything older go; when it was counted after an
+ * earlier live deploy the store knows, what waits is unknown (`reading`) until the target's own answer arrives.
+ * Returns the same row when nothing changes.
+ */
+export function readQueue(t: DeployTargetRow, deploys: ReadonlyArray<TeamDeployRow>): DeployTargetRow {
+  if (t.record_only || !t.queue.known) return t;
+  const live = targetNow(t, deploys).live;
+  if (!live?.sha) return t;
+  const shown = t.queue.groups.flatMap((g) => g.commits);
+  const at = shown.find((c) => sameSha(c.sha, live.sha));
+  if (at) {
+    // main's order (main_at): the live commit and everything before it went out with it.
+    const keep = (c: { main_at?: number; at: number }) => (c.main_at ?? c.at) > (at.main_at ?? at.at);
+    const groups = t.queue.groups.map((g) => ({ ...g, commits: g.commits.filter(keep) })).filter((g) => g.commits.length);
+    const left = groups.reduce((n, g) => n + g.commits.length, 0);
+    // Every commit left is listed (the cut, and anything the read did not reach, was older), and the commits that
+    // touch nothing here were counted from the older base, so neither count survives.
+    return { ...t, queue: { ...t.queue, groups, commits: left, shown: left, truncated: false, untouched: 0, after_sha: live.sha } };
+  }
+  const base = t.queue.after_sha;
+  if (base === undefined || sameSha(base, live.sha)) return t;
+  // The deploy the queue was counted after: stale only when the store knows it went live before the live one.
+  const counted = base ? deploysOf(t, deploys).find((d) => d.status === "live" && sameSha(d.sha, base)) : null;
+  const liveAt = live.live_at ?? live.created_at;
+  if (base && (!counted || (counted.live_at ?? counted.created_at) >= liveAt)) return t;
+  return { ...t, queue: { ...t.queue, groups: [], commits: 0, shown: 0, untouched: 0, reading: true } };
+}
+
 /** The target's state in a glance: going out, failed, waiting with N commits, or up to date. */
 export type TargetTone = "going" | "failed" | "waiting" | "current" | "unknown";
 export function targetTone(t: DeployTargetRow, now: ReturnType<typeof targetNow>): TargetTone {
   if (now.open) return "going";
   if (now.failed) return "failed";
   // A target known only from its records has no queue: nobody knows whether it is up to date.
-  if (t.record_only || !t.queue.known) return "unknown";
+  if (t.record_only || !t.queue.known || t.queue.reading) return "unknown";
   return t.queue.commits > 0 ? "waiting" : "current";
 }
 

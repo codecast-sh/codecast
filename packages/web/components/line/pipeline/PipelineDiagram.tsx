@@ -89,7 +89,7 @@ export const PipelineDiagram = memo(function PipelineDiagram({ model, pipeline, 
       <section className="pv-lane pv-main" aria-label="main">
         <div className="pv-gutter">
           <div className="pv-gutter-title pv-mono">main</div>
-          <div className="pv-gutter-does">{model.main.waiting ? `${model.main.waiting} waiting` : "nothing waiting"}</div>
+          <div className="pv-gutter-does">{model.main.waiting ? `${model.main.waiting} waiting` : model.main.reading ? "reading what waits" : "nothing waiting"}</div>
         </div>
         <div className="pv-targets">
           {model.main.targets.map((t) => {

@@ -472,3 +472,39 @@ test("a review the run gave on a head Merge only rebased still reads on the reba
   expect(review(r)).not.toBe("Review");
   expect(review({ ...r, station_rebases: [] })).toBe("Review");
 });
+
+describe("pl-1077 polish 3: a run back at an earlier stage says why; a stage it went past unentered is skipped", () => {
+  // Codecast's Change: Local CI before PR, and the session's conflict fix sends the change back through it.
+  const withLocal = {
+    ...change,
+    nodes: [...change.nodes, { id: "local_ci", label: "Local CI", type: "command", shape: "parallelogram" }],
+    edges: [...change.edges.filter((e: any) => !(e.from === "start" && e.to === "pr") && !(e.from === "fix_conflict" && e.to === "pr")), { from: "start", to: "local_ci" }, { from: "local_ci", to: "pr" }, { from: "fix_conflict", to: "local_ci" }],
+  };
+  const conflicted = [st("start", "completed", 0), st("local_ci", "running", 20), ...ROUND, verdicts("merge", "green", "ship"), st("merge", "failed", 14, { result_preview: "conflicts with main in a.ts" }), st("fix_conflict", "completed", 15)];
+
+  test("Local CI again after Merge's conflict was fixed: the headline names the fix that sent it back", () => {
+    const r = run({ current_node_id: "local_ci", node_statuses: conflicted });
+    const h = head(r, null, withLocal);
+    expect(h.words).toBe("Local CI");
+    expect(h.waits).toBe("Checking again after the session's fix (Resolve conflict)");
+  });
+
+  test("PR again after the session fixed what the review found", () => {
+    const r = run({ current_node_id: "pr", node_statuses: [st("start", "completed", 0), st("pr", "running", 20), ...ROUND.slice(1), verdicts("brief", "green", "changes"), st("brief", "completed", 15)] });
+    expect(head(r).waits).toBe("Checking again after the session's fix (Fix findings)");
+  });
+
+  test("a first pass says nothing more than where it is", () => {
+    expect(head(run({ current_node_id: "local_ci", node_statuses: [st("start", "completed", 0), st("local_ci", "running", 1)] }), null, withLocal).waits).toBeNull();
+    expect(head(run({ current_node_id: "merge", node_statuses: [...ROUND, verdicts("merge", "green", "ship"), st("merge", "running", 14)] })).waits).toBeNull();
+  });
+
+  test("a run that started past Local CI (it predates the station) reads it skipped, never ahead", () => {
+    const r = run({ status: "failed", current_node_id: "deploy__failed", fail_reason: "Stopped: The deploy that carried 31ccbb8 failed: cli dp-9 (Stopped at Send.).", node_statuses: [st("start", "completed", 0), ...MERGED, st("deploy__wait", "failed", 16), st("deploy__failed", "failed", 17)] });
+    const stages = journeyOf(withLocal as any, r).stages;
+    expect(stages.find((s) => s.id === "local_ci")?.state).toBe("skipped");
+    expect(stages.find((s) => s.id === "pr")?.state).toBe("done");
+    // One that has not reached it yet still reads it ahead.
+    expect(journeyOf(withLocal as any, run({ current_node_id: "local_ci", node_statuses: [st("start", "completed", 0), st("local_ci", "running", 1)] })).stages.find((s) => s.id === "pr")?.state).toBe("idle");
+  });
+});

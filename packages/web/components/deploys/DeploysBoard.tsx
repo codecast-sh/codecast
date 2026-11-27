@@ -119,7 +119,7 @@ export function DeploysBoard(p: DeploysBoardProps) {
   const lines = p.linesByDeploy;
   const board = useMemo(() => {
     const credit = shipperOf(shippers ?? []);
-    const { going, sending, next: nextCommits } = splitQueue(queue, history);
+    const { going, sending, next: nextCommits } = splitQueue(queue, history, mixed ? null : t.queue.head_sha);
     // The commits the queue counted but did not list are the oldest waiting: Next deploy's while nothing is going out,
     // else the going-out deploy's (it sends everything up to its own commit).
     const older = mixed ? 0 : Math.max(0, t.queue.commits - t.queue.shown);
@@ -139,8 +139,8 @@ export function DeploysBoard(p: DeploysBoardProps) {
     for (const x of next?.commits ?? []) land(t.repository, x.pr);
     for (const c of cards) for (const x of c.carried.commits) land(c.deploys[0].repository || t.repository, x.pr);
     for (const c of queue) land(t.repository, c.pr_number);
-    return { queue, going, nextCommits, next, unlisted, cards, mineIds, landedPrs, your: yourSessions(next, cards, mineIds), onMain: tasksOnMain(queue, history) };
-  }, [queue, history, shippers, lines, mixed, t.repository, t.queue.commits, t.queue.shown, me]);
+    return { queue, going, nextCommits, next, unlisted, cards, mineIds, landedPrs, your: yourSessions(next, cards, mineIds), onMain: tasksOnMain(queue, history, mixed ? null : t.queue.head_sha) };
+  }, [queue, history, shippers, lines, mixed, t.repository, t.queue.commits, t.queue.shown, t.queue.head_sha, me]);
 
   // Where the linked thing is: waiting in the queue, or on the deploys that took it out (reach names the one that holds
   // a PR or commit; anything else is matched on what each deploy carried), or on a Ship run on its way.
@@ -192,7 +192,7 @@ export function DeploysBoard(p: DeploysBoardProps) {
         </div>
         <div className="dpp-actions">
           {p.personal ? null : <button type="button" className="dpp-mine" aria-pressed={mine} onClick={() => p.onMine(!mine)} title="Only your work and your sessions, in both columns" data-deploy-mine>Mine</button>}
-          {!t.record_only && t.runs !== "push" && waiting === 0 && !n.open && t.queue.known ? <span className="dpp-current" data-deploy-current={t.name}><Check className="w-3.5 h-3.5" strokeWidth={3} aria-hidden />Up to date</span> : null}
+          {!t.record_only && t.runs !== "push" && waiting === 0 && !n.open && t.queue.known && !t.queue.reading ? <span className="dpp-current" data-deploy-current={t.name}><Check className="w-3.5 h-3.5" strokeWidth={3} aria-hidden />Up to date</span> : null}
           {backPaused ? (
             <button type="button" className="dpp-back" aria-haspopup="dialog" onClick={() => p.onRollback(backPaused)} data-deploy-rollback={t.name}>
               <RotateCcw className="w-3 h-3" aria-hidden />Roll back to {short(backPaused.of.sha)}
@@ -263,7 +263,7 @@ function DeploysColumn(p: Omit<DeploysBoardProps, "shipping"> & { n: ReturnType<
   const total = n.history.length;
   const count = mine ? `${shown.reduce((k, c) => k + c.deploys.length, 0)} of ${total}` : String(total);
   const nextFocus = !!focus && nextCommits.some((c) => commitMatches(c, focus));
-  const showNext = !mixed && !t.record_only && (!!next || !t.queue.known);
+  const showNext = !mixed && !t.record_only && (!!next || !t.queue.known || !!t.queue.reading);
   const views = VIEWS.filter((v) => v !== "priorities" || p.priorities);
   return (
     <section className="dpp-sec" data-deploy-deploys>
@@ -281,7 +281,9 @@ function DeploysColumn(p: Omit<DeploysBoardProps, "shipping"> & { n: ReturnType<
             <div className="dpp-card-head">
               <b className="dpp-card-title">Next deploy</b>
               <span className="dpp-meta">
-                {t.queue.known
+                {t.queue.reading
+                  ? <span className="dpp-fact" data-deploy-queue-reading>Reading what waits on main since {n.live?.short_id ?? "the live deploy"}…</span>
+                  : t.queue.known
                   ? <span className="dpp-fact">{plural(nextCommits.length + board.unlisted, "commit")} on main{going ? ` after ${going.short_id}` : n.live ? ` after ${n.live.short_id}` : ""}</span>
                   : <span className="dpp-fact" data-deploy-queue-unknown>Live <code>{short(n.live?.sha)}</code> is not on main, so what waits here can't be counted</span>}
                 {nextCommits.length ? <HeadCi ci={t.queue.head_ci} url={t.queue.head_ci_url} /> : null}
@@ -325,7 +327,7 @@ function YourSessions({ buckets }: { buckets: Record<Bucket, { count: number; ca
 function DeployButton({ t, production, n, onPress }: { t: DeployTargetRow; production: DeployProductionRow | undefined; n: ReturnType<typeof targetNow>; onPress: (p: Press) => void }) {
   if (t.runs === "push") return <span className="dpp-auto">goes out when main moves</span>;
   const pause = production?.pause ?? null;
-  const blocked = pause ? "Production is paused" : n.open ? openWords(n.open) : !t.can_deploy ? "No machine publishes it" : t.queue.known && t.queue.commits === 0 ? "Nothing waiting" : null;
+  const blocked = pause ? "Production is paused" : n.open ? openWords(n.open) : !t.can_deploy ? "No machine publishes it" : t.queue.reading ? "Reading what waits on main" : t.queue.known && t.queue.commits === 0 ? "Nothing waiting" : null;
   // Red CI on what it would send is never the primary press: it stays a plain button, and the confirm says CI failed.
   const red = t.queue.head_ci === "failed";
   return (
@@ -599,7 +601,7 @@ function SpotWords({ spot: s, own }: { spot: Spot; own: boolean }) {
     case "waiting": return (
       <span className="dpp-focus-where">
         <span>waiting</span>
-        {s.place ? <a href={`#${NEXT_FOCUS_ROW}`} data-spot-place>{s.place} of {s.of}{s.since ? ` since ${s.since}` : ""}</a> : s.since ? <span>{plural(s.of, "commit")} since {s.since}</span> : null}
+        {s.place ? <a href={`#${NEXT_FOCUS_ROW}`} data-spot-place>{s.place} of {s.of}{s.since ? ` since ${s.since}` : ""}</a> : s.since && s.of != null ? <span>{plural(s.of, "commit")} since {s.since}</span> : s.since ? <span>since {s.since}</span> : null}
         {s.held ? <HeldBy held={s.held} /> : null}
       </span>
     );

@@ -303,6 +303,52 @@ describe("the queue in main's order", () => {
     expect(splitQueue(q, [going])).toMatchObject({ going: { short_id: "dp-3" }, sending: [] });
     expect(splitQueue(q, [deploy("dp-4", 4, { status: "running", sha: "c2aaaaaa" })]).next.map((c) => c.sha)).toEqual(["c4aaaaaa", "c3aaaaaa"]);
   });
+  test("a deploy at a commit the queue does not list (it touched no path here) sends what its records name, and older", () => {
+    // dp-3802 went out at b819337, a commit that touched nothing of cli's: its records name the cli commits it carries.
+    const going = deploy("dp-5", 5, { status: "running", sha: "b8193370", commit_rows: [{ sha: "c4aaaaaa", subject: "x" }, { sha: "c3aaaaaa", subject: "y" }] });
+    expect(splitQueue(q, [going])).toMatchObject({ going: { short_id: "dp-5" }, next: [] });
+    expect(splitQueue(q, [going]).sending.map((c) => c.sha)).toEqual(["c4aaaaaa", "c3aaaaaa", "c2aaaaaa", "c1aaaaaa"]);
+    const partly = deploy("dp-6", 6, { status: "running", sha: "b8193370", commit_rows: [{ sha: "c2aaaaaa", subject: "x" }] });
+    expect(splitQueue(q, [partly]).next.map((c) => c.sha)).toEqual(["c4aaaaaa", "c3aaaaaa"]);
+  });
+  test("a deploy at main's head with no records of its own (a push target's build, a bare marker) sends the whole queue", () => {
+    const bare = deploy("dp-7", 7, { status: "running", sha: "beadbeef", commit_rows: [] });
+    expect(splitQueue(q, [bare], "beadbeef0000")).toMatchObject({ next: [] });
+    expect(splitQueue(q, [bare], "beadbeef0000").sending).toHaveLength(4);
+    // Without main's head the commit cannot be placed, and nothing is claimed.
+    expect(splitQueue(q, [bare]).next).toHaveLength(4);
+    expect(splitQueue(q, [bare], "0123abcd").next).toHaveLength(4);
+  });
+});
+
+describe("a running run's track is at its station (pl-1077 polish 3)", () => {
+  test("Local CI again after Merge's conflict was fixed: CI is current, Merge's failure is an earlier round's", () => {
+    // ct-102487: approved, Merge conflicted, the session fixed it, and the change went back through Local CI.
+    const r = run("lc", {
+      current_node_id: "local_ci", current_node_label: "Local CI",
+      ci_verdict: { green: true, head_sha: "aaa", at: 1 }, review_verdict: { verdict: "ship", at: 1, head_sha: "aaa" }, pr: { repository: "o/r", number: 318, head_sha: "bbb", first_head_sha: "aaa", at: 1 },
+      node_statuses: [["pr", "completed"], ["checks", "completed"], ["ci", "completed"], ["review", "completed"], ["merge", "failed"], ["fix_conflict", "completed"], ["local_ci", "running"]].map(([node_id, status]) => ({ node_id, status })),
+    });
+    expect(stepsFor(r).map((s) => s.word)).toEqual(["PR", "CI", "Review", "Merge"]);
+    expect(stepper(r)).toEqual(["done", "active", "idle", "idle"]);
+    expect(runState(r).word).toBe("Local CI");
+    // The session's conflict fix lands nothing: the run is still on its way to main.
+    expect(isMerged(r)).toBe(false);
+  });
+
+  test("CI still running while Review already answered on this head: Review stays done", () => {
+    // CI and review run side by side; the run's station is CI while the reviewer's ship on the PR's head stands.
+    const r = run("cr", {
+      current_node_id: "ci", current_node_label: "CI and review",
+      review_verdict: { verdict: "ship", at: 1, head_sha: "aaa" }, pr: { repository: "o/r", number: 319, head_sha: "aaa", first_head_sha: "aaa", at: 1 },
+      node_statuses: [["pr", "completed"], ["checks", "running"], ["ci", "running"], ["review", "completed"]].map(([node_id, status]) => ({ node_id, status })),
+    });
+    expect(stepper(r)).toEqual(["done", "active", "done", "idle"]);
+    // A reviewer who asked for changes on this head is still the run's to fix while CI runs.
+    expect(stepper({ ...r, review_verdict: { verdict: "changes", at: 1, head_sha: "aaa" } })).toEqual(["done", "active", "active", "idle"]);
+    // A verdict on an older head speaks for nothing on this one.
+    expect(stepper({ ...r, review_verdict: { verdict: "changes", at: 1, head_sha: "old" } })).toEqual(["done", "active", "idle", "idle"]);
+  });
 });
 
 describe("what a card carried", () => {
