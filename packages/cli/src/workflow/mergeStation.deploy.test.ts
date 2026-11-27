@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
-import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { EventEmitter } from "node:events";
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { BRANCH, PR_URL, T, setup } from "./mergeStation.testkit";
 
@@ -152,6 +153,68 @@ describe("cast flow merge: before-merge steps", () => {
       expect(s.logged).toContain("waiting for the lease on o/r: 2nd in line behind the merge of PR #9 (run r9) on host-2 (0m)");
       // Waited in line before the worktree the rebase runs in, held to the merge, released after it was recorded.
       expect(order).toEqual(["lease take", "lease take", "scratch tree", "lease renew", "merge recorded", "lease release"]);
+    } finally { s.done(); }
+  }, T);
+
+  test("a wait in line past its budget exits 4 having done nothing, keeping its place: the next visit asks with the same token", async () => {
+    const s = setup();
+    try {
+      s.profile("deploy");
+      const head = s.branch("api/route.ts", "export {}\n");
+      s.ci(head);
+      let free = false;
+      s.answers["/cli/repo-lease"] = (body) => body.op === "release" ? { released: true }
+        : free ? { held: true, expires_at: Date.now() + 600_000 } : { held: false, holder: "the merge of PR #9 on host-2", since: Date.now(), expires_at: Date.now() + 600_000, position: 3 };
+      const steps: string[] = [];
+      const runStep = async () => { steps.push("step"); return { code: 0, output: "" }; };
+      const waited = await s.run({ leaseLineMs: 0, runStep });
+      expect(waited).toEqual({ code: 4, line: "still waiting for the lease after 0m: 3rd in line behind the merge of PR #9 on host-2; nothing was done, and the run asks again in the same place" });
+      const first = s.posts.filter((p) => p.path === "/cli/repo-lease");
+      // Never released: the server keeps the place for its token.
+      expect(first.map((p) => p.body.op)).toEqual(["take"]);
+      expect(readFileSync(join(s.runDir, "merge-lease-token"), "utf-8")).toBe(first[0].body.token);
+      expect(steps).toEqual([]);
+      expect(s.merged()).toBe(false);
+      free = true;
+      const r = await s.run({ runStep });
+      expect(r.code).toBe(0);
+      const leases = s.posts.filter((p) => p.path === "/cli/repo-lease");
+      expect(new Set(leases.map((p) => p.body.token))).toEqual(new Set([first[0].body.token]));
+      expect(existsSync(join(s.runDir, "merge-lease-token"))).toBe(false);
+    } finally { s.done(); }
+  }, T);
+
+  test("a SIGTERM (the runner ending the station) releases the lease before the station exits 143, waiting in line or holding it", async () => {
+    const s = setup();
+    try {
+      s.profile("deploy");
+      const head = s.branch("api/route.ts", "export {}\n");
+      s.ci(head);
+      const signals = new EventEmitter();
+      const order: string[] = [];
+      const exit = (code: number) => { order.push(`exit ${code}`); };
+      s.answers["/cli/repo-lease"] = (body) => { order.push(`lease ${body.op}`); return body.op === "release" ? { released: true } : { held: true, expires_at: Date.now() + 600_000 }; };
+      // Holding it: the signal comes while a before-merge step runs.
+      await s.run({ signals, exit, runStep: async () => { signals.emit("SIGTERM"); await new Promise((r) => setTimeout(r, 50)); return { code: 0, output: "" }; } });
+      expect(order.slice(0, order.indexOf("exit 143") + 1).filter((o) => o !== "lease renew")).toEqual(["lease take", "lease release", "exit 143"]);
+      // One release, however many ask for it, and no listener left behind.
+      expect(order.filter((o) => o === "lease release")).toHaveLength(1);
+      expect(signals.listenerCount("SIGTERM")).toBe(0);
+
+      // Waiting in line: it leaves the line at once rather than after another poll.
+      order.length = 0;
+      s.answers["/cli/repo-lease"] = (body) => {
+        order.push(`lease ${body.op}`);
+        if (body.op === "take") setTimeout(() => signals.emit("SIGTERM"), 10);
+        return body.op === "release" ? { released: false } : { held: false, holder: "merge A", since: Date.now(), expires_at: Date.now() + 600_000, position: 2 };
+      };
+      const started = Date.now();
+      const r = await s.run({ signals, exit });
+      expect(Date.now() - started).toBeLessThan(4000);
+      expect(r.code).toBe(2);
+      await new Promise((res) => setTimeout(res, 20));
+      expect(order).toEqual(["lease take", "lease release", "exit 143"]);
+      expect(signals.listenerCount("SIGTERM")).toBe(0);
     } finally { s.done(); }
   }, T);
 

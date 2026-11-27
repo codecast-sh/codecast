@@ -52,7 +52,7 @@
       "label": "Merge",
       "shape": "parallelogram",
       "type": "command",
-      "timeout": 3600
+      "timeout": 6000
     },
     {
       "id": "moved",
@@ -746,6 +746,12 @@
       "to": "moving",
       "label": "main keeps moving",
       "condition": "outcome = failure and merge.exit_code = 3"
+    },
+    {
+      "from": "merge",
+      "to": "merge",
+      "label": "still in line",
+      "condition": "outcome = failure and merge.exit_code = 4 and merge.free.visits < 3"
     },
     {
       "from": "merge",

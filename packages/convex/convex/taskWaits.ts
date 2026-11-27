@@ -38,6 +38,7 @@ import { dependentRefs, taskByRef, taskLookups } from "./lib/taskGraph";
 import { prByNumber } from "./lib/gitRefs";
 import { waitTargetValidator } from "./lib/taskWaitValidator";
 import { decisionByShortId, linkTask, STORED, taskRepositories, writeWaits } from "./lib/waitWrite";
+import { escalateIfWaitedOn } from "./lib/cardWaiters";
 import {
   heldWaitsAnswer,
   ownerOf,
@@ -56,7 +57,7 @@ import {
 import { emitNotification } from "./notificationRouter";
 import { tellTaskWaiters } from "./lib/waitingOn";
 import { insertTaskComment } from "./tasks";
-import { resumeIncidentRuns } from "./flowStops";
+import { settleIncidentRuns } from "./flowStops";
 import { answerLabel, userMayRead, verdictOfRow, type Verdict } from "./sessionDecisions";
 import {
   isTerminalTaskStatus,
@@ -311,6 +312,11 @@ export async function addWaitCore(
   }
   if (wait.kind === "time" && !check.met) {
     await ctx.scheduler.runAt(wait.at, internal.taskWaits.settleTimeWait, { task_id: task._id, wait_id: wait.id, at: wait.at });
+  }
+  // One more task waits on this card: it may now hold up enough to escalate.
+  if (wait.kind === "decision" && !check.met) {
+    const card = await decisionByShortId(ctx, wait.decision);
+    if (card) await escalateIfWaitedOn(ctx, card._id, now);
   }
   const answer = mine && !check.met ? await parkOn(ctx, setter!, task) : await heldWaitsAnswer(ctx, by, task, check.met);
   return { wait, met: check.met, ...answer };
@@ -733,8 +739,8 @@ export async function releaseDependents(
   { closingLater: later, closing, ...by }: Omit<UnblockBy, "key"> & { closingLater?: Task; closing?: ReadonlySet<string> } = {},
 ): Promise<void> {
   if (!next || !isTerminalTaskStatus(next) || isTerminalTaskStatus(task.status)) return;
-  // An incident closing: the runs it stopped resume where they stopped.
-  await resumeIncidentRuns(ctx, task);
+  // An incident closing: the runs it stopped resume where they stopped, or wait on the cause it duplicates.
+  await settleIncidentRuns(ctx, task);
   await tellSettersClosed(ctx, task, next, by.conversationId);
   await tellTaskWaiters(ctx, task, next);
   const self = new Set([task.short_id, String(task._id)]);

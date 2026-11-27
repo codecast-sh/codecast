@@ -14,6 +14,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import {
   createUpdater,
+  isBelowMinimum,
   type DownloadOptions,
   type Updater,
   type UpdaterConfig,
@@ -165,6 +166,26 @@ export const MANAGED_UPDATE_NOTE = `cast was installed by your organization (${p
 /** performUpdate's error when it skipped the round because another process
  *  is updating this install (updateRetry.ts exclusiveUpdate). */
 export const UPDATE_IN_PROGRESS = "update_in_progress";
+
+/**
+ * Whether a machine below its floor waits instead of installing: it already
+ * runs the release latest.json names (or a newer one). An install would put
+ * the same binary back and restart the daemon, which finds itself still below
+ * the floor and does it again on every check (a floor set above every
+ * published release, ct-102483). It waits until latest.json moves. `latest`
+ * null (unread): install, and the install says why it failed.
+ */
+export function forcedUpdateWaits(current: string, latest: string | null): boolean {
+  return latest !== null && !isBelowMinimum(current, latest);
+}
+
+/** What a self update that did not install leaves on the device row: nothing
+ *  when another process is installing this install (the request stays open,
+ *  and the next beat asks again), else a failure with its reason. */
+export function updateRunAfter(error: string | undefined, at?: number): { state: "failed"; error: string; at?: number } | null {
+  if (error === UPDATE_IN_PROGRESS) return null;
+  return { state: "failed", error: String(error ?? "unknown error").slice(-500), at };
+}
 
 export async function performUpdate(): Promise<{ success: boolean; error?: string }> {
   // A root-owned binary (Codecast.pkg from an MDM) is not this user's to

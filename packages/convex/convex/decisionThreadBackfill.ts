@@ -48,7 +48,8 @@ export async function backfillRowsFor(ctx: { db: any }, row: DecisionRow): Promi
       out.push({ ...base, content: t.reply.text, client_id: replyId, author_kind: "agent", agent_status: "done", decision_session_id: t.conversation_id, created_at: t.reply.at, reply_to: askId });
     }
   }
-  if (row.escalated) {
+  // Only a person's escalation is a thread entry; codecast's (lib/cardWaiters.ts) has no author.
+  if (row.escalated?.by) {
     const id = `decision-escalated:${row._id}:${row.escalated.at}`;
     if (!existing.has(id)) {
       out.push({ ...base, content: row.escalated.note ?? "", client_id: id, author_kind: "user", author_user_id: row.escalated.by, decision_event: "escalated", decision_event_to: { kind: "user", ids: row.escalated.to.map(String) }, created_at: row.escalated.at });

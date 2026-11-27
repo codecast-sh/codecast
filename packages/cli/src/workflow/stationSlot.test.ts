@@ -98,12 +98,39 @@ describe("a station's machine slot", () => {
     expect(logs.join("\n")).toContain("waiting to run Local CI: all 2 local_ci slots on this machine are taken");
   });
 
-  test("a machine short of memory admits nothing, even with every place free", async () => {
+  test("a machine short of memory admits one holder, never none", async () => {
     machineMemoryProbe.read = () => ({ availableBytes: 0, swapUsedBytes: 0, swapTotalBytes: 0, pressureLevel: 4 });
+    // Nobody holds a place: pressure that outlasted every holder would otherwise starve them all.
+    let ran = false;
+    expect(await withStationSlot(node({ timeout: 1 }), {}, async () => { ran = true; return "success"; })).toBe("success");
+    expect(ran).toBe(true);
+    // One holder already: the second waits out its timeout, though the cap has a place left.
+    const one = await acquireFileSlot(machineSlotDir("local_ci"), 2);
+    try {
+      const context: Record<string, string> = {};
+      expect(await withStationSlot(node({ timeout: 1 }), context, async () => "success")).toBe(NO_SLOT);
+      expect(context["local_ci.output"]).toContain("the machine stayed short of memory");
+    } finally {
+      one();
+    }
+  });
+
+  test("a run cancelled while the station waits for a place never starts it", async () => {
+    const release = await fillSlots();
     const context: Record<string, string> = {};
-    const outcome = await withStationSlot(node({ timeout: 1 }), context, async () => "success");
-    expect(outcome).toBe(NO_SLOT);
-    expect(context["local_ci.output"]).toContain("the machine stayed short of memory");
+    let ran = false;
+    let asked = 0;
+    const started = Date.now();
+    try {
+      const outcome = await withStationSlot(node({ timeout: 30 }), context, async () => { ran = true; return "success"; }, { watch: { ended: async () => ++asked >= 2, everyMs: 100 } });
+      expect(outcome).toBe("failure");
+    } finally {
+      release();
+    }
+    expect(ran).toBe(false);
+    // Given up on the cancel, not on its 30s timeout.
+    expect(Date.now() - started).toBeLessThan(10_000);
+    expect(context["local_ci.output"]).toBe("Local CI did not run: the run ended while it waited for a local_ci place.");
   });
 
   test("the wait spends none of the station's timeout: its clock starts when it holds a place", async () => {
@@ -123,16 +150,15 @@ describe("a station's machine slot", () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
-  test("the flow routes no_slot like any outcome", async () => {
+  test("no_slot goes where the station's no_slot= says, never down its edges", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "slot-route-"));
     const g = parseWorkflowSource(`digraph g {
       start [shape=Mdiamond]
-      ci [shape=parallelogram, machine_slot="local_ci", timeout=1, script="echo ran-ci"]
+      ci [shape=parallelogram, machine_slot="local_ci", no_slot="left", timeout=1, script="echo ran-ci"]
       left [shape=parallelogram, script="echo left-to-ci"]
       exit [shape=Msquare]
       start -> ci
-      ci -> exit [condition="outcome = success"]
-      ci -> left [condition="outcome = no_slot"]
+      ci -> exit
       left -> exit
     }`, root);
     const release = await fillSlots();
@@ -146,6 +172,76 @@ describe("a station's machine slot", () => {
     expect(said).not.toContain("ran-ci");
     fs.rmSync(root, { recursive: true, force: true });
   });
+
+  test("without no_slot= a wait that runs out stops the run there, even with a plain edge on", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "slot-stop-"));
+    const g = parseWorkflowSource(`digraph g {
+      start [shape=Mdiamond]
+      ci [shape=parallelogram, machine_slot="local_ci", timeout=1, script="echo ran-ci"]
+      after [shape=parallelogram, script="echo went-on"]
+      exit [shape=Msquare]
+      start -> ci -> after -> exit
+    }`, root);
+    const release = await fillSlots();
+    try {
+      expect(await runWorkflow(g, { cwd: root })).toBe("failed");
+    } finally {
+      release();
+    }
+    expect(logs.join("\n")).not.toContain("went-on");
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  // A Ctrl-C at a runner holding a place: the lock's own handler re-raised the signal after removing every listener,
+  // so the process died before the runner's handler recorded the run stopped, and before any exit listener ran.
+  test("a Ctrl-C while a station holds its place reports the run stopped, runs the exit, and frees the place", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "slot-sigint-"));
+    const holding = path.join(dir, "holding");
+    const exited = path.join(dir, "exited");
+    const reports: Array<Record<string, unknown>> = [];
+    const server = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        const body = await req.json().catch(() => ({}));
+        if (new URL(req.url).pathname === "/cli/workflow-runs/progress") reports.push(body as Record<string, unknown>);
+        return Response.json({});
+      },
+    });
+    const script = path.join(dir, "runner.ts");
+    fs.writeFileSync(script, `
+      import * as fs from "node:fs";
+      import { machineMemoryProbe } from ${JSON.stringify(path.resolve(import.meta.dir, "../watcherMemory.ts"))};
+      import { parseWorkflowSource } from ${JSON.stringify(path.resolve(import.meta.dir, "parser.ts"))};
+      import { runWorkflow, stopRunOnSignals } from ${JSON.stringify(path.resolve(import.meta.dir, "runner.ts"))};
+      machineMemoryProbe.read = () => null;
+      process.on("exit", () => fs.writeFileSync(${JSON.stringify(exited)}, "1"));
+      const g = parseWorkflowSource(\`digraph g {
+        start [shape=Mdiamond]
+        ci [shape=parallelogram, machine_slot="local_ci", timeout=60, script="echo 1 > ${holding}; sleep 60"]
+        exit [shape=Msquare]
+        start -> ci -> exit
+      }\`, ${JSON.stringify(dir)});
+      const options = { cwd: ${JSON.stringify(dir)}, runId: "run-sigint", apiToken: "tok", convexSiteUrl: "http://127.0.0.1:${server.port}" };
+      stopRunOnSignals(options as any);
+      await runWorkflow(g, options as any);
+    `);
+    const child = Bun.spawn(["bun", script], { cwd: dir, env: { ...process.env, CAST_LOCAL_CI_MAX: "2" }, stdout: "ignore", stderr: "ignore" });
+    const { pollUntil } = await import("../test-helpers/pollUntil.js");
+    const { listMachineSlots } = await import("../machineSlot.js");
+    const holders = () => listMachineSlots().find((s) => s.name === "local_ci")!.running;
+    try {
+      await pollUntil(() => fs.existsSync(holding) && holders().length === 1, "the station to hold its place and run", { ms: 30_000 });
+      child.kill("SIGINT");
+      expect(await child.exited).toBe(130);
+      expect(fs.existsSync(exited)).toBe(true);
+      expect(reports.some((r) => r.run_status === "failed" && String(r.fail_reason).includes("stopped (SIGINT) at ci"))).toBe(true);
+      expect(holders()).toEqual([]);
+    } finally {
+      child.kill("SIGKILL");
+      server.stop(true);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
 });
 
 describe("machine_slot= in a flow", () => {
@@ -158,29 +254,39 @@ describe("machine_slot= in a flow", () => {
 
   test("names a slot of this machine's caps, on a command station", () => {
     expect(validateWorkflow(graph(`shape=parallelogram, script="true", machine_slot="local_ci"`))).toEqual([]);
-    expect(validateWorkflow(graph(`shape=parallelogram, script="true", machine_slot="local_cii"`))).toEqual([`s [machine_slot="local_cii"]: local_cii names no machine slot; the slots: local_ci`]);
+    expect(validateWorkflow(graph(`shape=parallelogram, script="true", machine_slot="local_cii"`))).toEqual([`s [machine_slot="local_cii"]: local_cii names no machine slot; the slots: local_ci, worktree`]);
     // The typecheck watchers' count is a machine cap, but not one a station takes a place in.
-    expect(validateWorkflow(graph(`shape=parallelogram, script="true", machine_slot="check"`))).toEqual([`s [machine_slot="check"]: check names no machine slot; the slots: local_ci`]);
+    expect(validateWorkflow(graph(`shape=parallelogram, script="true", machine_slot="check"`))).toEqual([`s [machine_slot="check"]: check names no machine slot; the slots: local_ci, worktree`]);
     expect(validateWorkflow(graph(`prompt="Do it", machine_slot="local_ci"`))).toEqual([`s [machine_slot="local_ci"]: only a command station (shape=parallelogram) takes a machine slot`]);
+  });
+
+  test("no_slot= names a station of the flow, on a station that takes a machine slot", () => {
+    expect(validateWorkflow(graph(`shape=parallelogram, script="true", machine_slot="local_ci", no_slot="exit"`))).toEqual([]);
+    expect(validateWorkflow(graph(`shape=parallelogram, script="true", machine_slot="local_ci", no_slot="nowhere"`))).toEqual([`s [no_slot="nowhere"] names no station of this flow`]);
+    expect(validateWorkflow(graph(`shape=parallelogram, script="true", no_slot="exit"`))).toEqual([`s [no_slot="exit"]: only a station that takes a machine slot (machine_slot=) can end no_slot`]);
   });
 
   test("Codecast's change flow runs Local CI in local_ci, and a wait that runs out goes on to the pull request", () => {
     const g = parseWorkflowFile(path.resolve(import.meta.dir, "../../../../.codecast/flows/change.cast"));
     expect(validateWorkflow(g)).toEqual([]);
     expect(g.nodes.get("local_ci")!.machine_slot).toBe("local_ci");
+    expect(g.nodes.get("local_ci")!.no_slot).toBe("pr");
+    expect(g.nodes.has("pr")).toBe(true);
+    // Placing it wrote its routes; it writes none of its own, which a cast that predates machine slots refuses.
     const out = g.edges.filter((e) => e.from === "local_ci").map((e) => `${e.condition} -> ${e.to}`).sort();
-    expect(out).toEqual(["outcome = failure -> local_ci_fix", "outcome = no_slot -> pr", "outcome = success -> pr"]);
+    expect(out).toEqual(["outcome = failure -> local_ci_fix", "outcome = success -> pr"]);
   });
 
-  test("a placed station writes routes only for its other outcomes", () => {
+  test("a placed station still writes no edges of its own, a no_slot route included", () => {
     const files: Record<string, string> = {
       "/r/base.cast": `digraph base { start [shape=Mdiamond] a [shape=parallelogram, script="true"] exit [shape=Msquare] start -> a -> exit }`,
-      "/r/ok.cast": `digraph v { graph [extends="base.cast"] n [before="a", shape=parallelogram, script="true", machine_slot="local_ci"] n -> exit [condition="outcome = no_slot"] }`,
-      "/r/bad.cast": `digraph v { graph [extends="base.cast"] n [before="a", shape=parallelogram, script="true"] n -> exit [condition="outcome = success"] }`,
+      "/r/ok.cast": `digraph v { graph [extends="base.cast"] n [before="a", shape=parallelogram, script="true", machine_slot="local_ci", no_slot="exit"] }`,
+      "/r/edge.cast": `digraph v { graph [extends="base.cast"] n [before="a", shape=parallelogram, script="true", machine_slot="local_ci"] n -> exit [condition="outcome = no_slot"] }`,
     };
     const read = (abs: string) => files[abs] ?? null;
     const ok = parseWorkflowFile("/r/ok.cast", { read });
-    expect(ok.edges.filter((e) => e.from === "n").map((e) => `${e.condition} -> ${e.to}`).sort()).toEqual(["outcome = no_slot -> exit", "outcome = success -> a"]);
-    expect(() => parseWorkflowFile("/r/bad.cast", { read })).toThrow("n is placed with before= and also routed here");
+    expect(ok.nodes.get("n")!.no_slot).toBe("exit");
+    expect(validateWorkflow(ok)).toEqual([]);
+    expect(() => parseWorkflowFile("/r/edge.cast", { read })).toThrow("n is placed with before= and also routed here");
   });
 });

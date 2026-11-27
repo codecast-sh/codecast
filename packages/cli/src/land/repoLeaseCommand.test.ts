@@ -53,6 +53,90 @@ describe("cast repo lease", () => {
     expect(missing.ops).toEqual(["take", "release"]);
   });
 
+  test("--team and --run go to the server as team_id and run_id", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const post = async (_p: string, body: Record<string, unknown>) => { bodies.push(body); return body.op === "release" ? { released: true } : { held: true, expires_at: 0 }; };
+    expect(await runUnderLease({ post, repository: "o/r", holder: "x", log: () => {}, teamId: "teams_1", runId: "workflow_runs_1", cmd: ["sh", "-c", "exit 0"] })).toBe(0);
+    expect(bodies.map((b) => [b.op, b.team_id, b.run_id])).toEqual([["take", "teams_1", "workflow_runs_1"], ["release", "teams_1", "workflow_runs_1"]]);
+  });
+
+  test("--wait: a line that outlasts it leaves the line and starts nothing, as a refused lease does", async () => {
+    const s = server(Infinity);
+    const started = Date.now();
+    const err = await runUnderLease({ post: s.post, repository: "o/r", holder: "x", log: () => {}, waitMs: 30, pollMs: 5, cmd: ["sh", "-c", "exit 0"] }).then(() => null, (e: Error) => e);
+    expect(err?.message).toStartWith("still waiting for the lease after 0m: 2nd in line behind the merge of PR #9 on host-2");
+    expect(Date.now() - started).toBeLessThan(2000);
+    // It gave its place up: the last ask leaves the line, and no command ran under a lease.
+    expect(s.ops.at(-1)).toBe("release");
+    expect(s.ops.filter((o) => o !== "take")).toEqual(["release"]);
+  });
+
+  test("a lease lost while the command runs is said loudly; with --strict the command is ended", async () => {
+    // The renewal finds another holder: the lease went to the next in line while this one ran.
+    const lostServer = () => {
+      const ops: string[] = [];
+      const post = async (_p: string, body: Record<string, unknown>) => {
+        ops.push(String(body.op));
+        if (body.op === "renew") return { held: false, holder: "the merge of PR #9 on host-2", since: 0, expires_at: 0 };
+        return body.op === "release" ? { released: false } : { held: true, expires_at: 0 };
+      };
+      return { ops, post };
+    };
+    const loose = lostServer();
+    const said: string[] = [];
+    expect(await runUnderLease({ post: loose.post, repository: "o/r", holder: "x", log: (l) => said.push(l), renewMs: 5, cmd: ["sh", "-c", "sleep 0.3; exit 4"] })).toBe(4);
+    expect(said.filter((l) => l.includes("was LOST"))).toEqual(["!! the lease on o/r was LOST while `sh -c sleep 0.3; exit 4` runs: another merge or deploy may now run beside it"]);
+    const strict = lostServer();
+    const started = Date.now();
+    expect(await runUnderLease({ post: strict.post, repository: "o/r", holder: "x", log: () => {}, renewMs: 5, strict: true, cmd: ["sleep", "30"] })).toBe(143);
+    expect(Date.now() - started).toBeLessThan(10_000);
+    expect(strict.ops.at(-1)).toBe("release");
+  });
+
+  test("a SIGINT that comes during a take ends the wait at once, never after another poll", async () => {
+    const ops: string[] = [];
+    let answer: (v: unknown) => void = () => {};
+    const post = (_p: string, body: Record<string, unknown>) => {
+      ops.push(String(body.op));
+      if (body.op === "release") return Promise.resolve({ released: false });
+      return new Promise((res) => { answer = res; });
+    };
+    const signals = new EventEmitter();
+    // A poll of a minute: a wait that sat through it would outlast the test.
+    const running = runUnderLease({ post, repository: "o/r", holder: "x", log: () => {}, signals, pollMs: 60_000, cmd: ["sh", "-c", "exit 0"] });
+    await pollUntil(() => ops.length === 1, "the take in flight");
+    signals.emit("SIGINT");
+    answer({ held: false, holder: "merge A", since: 0, position: 2 });
+    expect(await running).toBe(130);
+    expect(ops).toEqual(["take", "release"]);
+  }, 5000);
+
+  test("a SIGINT the command got from the terminal is not sent again; without a terminal it is passed on", async () => {
+    const shared = server();
+    const signals = new EventEmitter();
+    const dir = mkdtempSync(join(tmpdir(), "repo-lease-"));
+    const started = join(dir, "started");
+    // The command finishes on its own (sleep exits 0): our SIGINT never reached it, which would have ended it at 130.
+    const own = runUnderLease({ post: shared.post, repository: "o/r", holder: "x", log: () => {}, signals, forwardInt: false, cmd: ["sh", "-c", `touch ${started}; exec sleep 0.5`] });
+    await pollUntil(() => { try { readFileSync(started); return true; } catch { return false; } }, "the command started");
+    signals.emit("SIGINT");
+    expect(await own).toBe(0);
+    rmSync(started);
+    const passed = runUnderLease({ post: server().post, repository: "o/r", holder: "x", log: () => {}, signals, forwardInt: true, cmd: ["sh", "-c", `touch ${started}; exec sleep 30`] });
+    await pollUntil(() => { try { readFileSync(started); return true; } catch { return false; } }, "the command started");
+    signals.emit("SIGINT");
+    expect(await passed).toBe(130);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("a command spawn refuses outright is reported as one that could not start, and the lease goes back", async () => {
+    const s = server();
+    const said: string[] = [];
+    expect(await runUnderLease({ post: s.post, repository: "o/r", holder: "x", log: (l) => said.push(l), cmd: ["bad\u0000name"] })).toBe(127);
+    expect(said.some((l) => l.startsWith("could not start bad"))).toBe(true);
+    expect(s.ops).toEqual(["take", "release"]);
+  });
+
   test("a signal while waiting in line leaves the line and starts nothing", async () => {
     const s = server(Infinity);
     const signals = new EventEmitter();

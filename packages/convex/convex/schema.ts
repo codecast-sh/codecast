@@ -519,6 +519,8 @@ export default defineSchema({
     // machines below it update themselves. A device is held to the highest of
     // this, its other teams' floors and the global min_cli_version.
     min_cli_version: v.optional(v.string()),
+    // When it was last raised: the release sweep names a machine still below it half an hour later.
+    min_cli_version_at: v.optional(v.number()),
     // Installed apps (docs/architecture/installed-apps.md), set by an admin
     // in Team settings (teams.setAppsPolicy): may members install the team's
     // pages as desktop apps (unset: yes), and may those apps get full access
@@ -5824,7 +5826,9 @@ export default defineSchema({
     ),
     // Sent up to the owner's manager, else the workspace admins (escalateCore):
     // who sent it, why, when, and whom it went to. It sorts first for them; a later pass or unassign clears it.
-    escalated: v.optional(v.object({ by: v.id("users"), at: v.number(), note: v.string(), to: v.array(v.id("users")) })),
+    // No `by`: codecast escalated it because `waiting` changes wait on it (lib/cardWaiters.ts), to the people it was
+    // already asked of.
+    escalated: v.optional(v.object({ by: v.optional(v.id("users")), at: v.number(), note: v.string(), to: v.array(v.id("users")), waiting: v.optional(v.number()) })),
     // Asked of named people (`cast decide --to`): Share out leaves it with them (decisionRouting.ts).
     addressed: v.optional(v.boolean()),
     // The people it is visible to; materialized one row each in decision_inbox.
@@ -9397,9 +9401,10 @@ export default defineSchema({
     // (cast workflow resume --queue): the line's sweep resumes it there, ahead
     // of new starts (orgLine.planSweep), onto the current flow when asked.
     resume_queued: v.optional(v.object({ at: v.string(), current_flow: v.optional(v.boolean()), by: v.id("users"), since: v.number() })),
-    // The run's last stop at a stop exit (flowStops.ts): the station that failed it and the key its stop files a
-    // flowstop signal under. `incident_task_id`: the cause the same stop on other changes made an incident of; the
-    // run's task waits on it, and the run is queued to resume at stop_station when it closes.
+    // The run's last stop at a stop exit (flowStops.ts): the station to resume it at and, for a stop of the shared
+    // pipeline only (an exit marked shared), the key its stop files a flowstop signal under. `incident_task_id`: the
+    // cause the same stop on other changes made an incident of; the run's task waits on it, and the run resumes at
+    // stop_station when it closes.
     stop_station: v.optional(v.string()),
     stop_fingerprint: v.optional(v.string()),
     incident_task_id: v.optional(v.id("tasks")),
@@ -9448,7 +9453,7 @@ export default defineSchema({
     .index("by_workspace_graph", ["workspace", "graph_hash", "updated_at"])
     // Sparse in effect: only runs queued to resume carry resume_queued, read oldest first by the sweep.
     .index("by_resume_queued", ["resume_queued.since"])
-    // Sparse in effect: the runs an incident holds, resumed when it closes (flowStops.resumeIncidentRuns).
+    // Sparse in effect: the runs an incident holds, resumed when it closes (flowStops.settleIncidentRuns).
     .index("by_incident_status", ["incident_task_id", "status"])
     // The run behind a pull request (changeApprovals.ts).
     .index("by_pr", ["pr.repository", "pr.number"]),

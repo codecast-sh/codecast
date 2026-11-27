@@ -850,19 +850,35 @@ global one. The heartbeat and the daemon's forced-update check
 floor (`systemConfig.effectiveMinCliVersion`).
 
 A team's admins raise its floor, and so does its Release Captain: the role
-holding the team's deploy grant, from its session
-(`teamCliFloor.set`). A floor only rises. `cast force-update <version>
---team <team>` sets it; without `--team`, platform staff set the global
-floor and anyone else their active team's.
+holding the team's deploy grant, from its standing session, never a
+session a member merely filed under the role (`teamCliFloor.set`). The
+Release Captain only raises; the team's admins also lower or clear it
+(`teamCliFloor.lower`), the way back from a floor no release reaches.
+`cast force-update <version> --team <team>` raises it, `--team <team>
+--lower-to <version>` and `--team <team> --clear` lower and clear it;
+without `--team` only platform staff may run it, and it sets the global
+floor (anyone else is told which `--team` they meant). The CLI refuses a
+floor above the release latest.json names. A daemon below its floor that
+already runs the release latest.json names waits for a newer one rather
+than reinstall the same binary and restart below the floor on every
+check.
 
 Codecast's `cli` target finishes with `cast force-update $version --deploy
 $deploy` (releaseFinish.ts). Forcing restarts every daemon, so it is worth
 it only when the daemon changed: the finish compares the daemon build id
-(daemonBuildIdCompute) of the tree at the deploy's sha with the one at its
-`previous_sha`, the release live before it, each read from `git archive`.
-Equal ids force nothing. Different ids, or no previous release on record,
-raise the deploy's team floor to the release, then read the team's fleet
+(daemonBuildIdCompute) of the tree at the deploy's sha with the one at the
+release the team's machines were last forced onto: the live deploy of the
+same target whose version is the team's effective floor, else the global
+floor (`teamCliFloor.forcedRelease`), each tree read from `git archive`.
+So a release that skipped its force is made up by the next one. Equal ids
+force nothing. Different ids, or no such deploy on record, raise the
+deploy's team floor to the release, then read the team's fleet
 (`teamCliFloor.fleet`: every member's machine seen in the last day) each
 minute for up to 20 minutes (`--wait`), until no online machine lags. The
 decision and the fleet (took it, lagging, offline, cannot update itself:
-a source checkout or a managed install) are appended to the deploy's note.
+a source checkout, a managed install, or automatic update turned off) are
+appended to the deploy's note, re-read after the wait so a note written
+meanwhile is kept. A finish whose runner may not raise the team's floor
+records "Not forced" with the refusal, and the team's @release hears it
+with the version (`teamCliFloor.tellRelease`); machines still lagging after
+the wait reach @release by name and version, once.
