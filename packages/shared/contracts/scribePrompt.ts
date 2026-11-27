@@ -159,7 +159,12 @@ const SCRIBE_LANE: Record<ChunkLane, string> = {
   context: `Nobody named you: update the board if the talk moved, then end with exactly ${HUDDLE_PASS}. People talking about the board, or to another agent, have not named you.`,
 };
 
-export function scribeChunkHeader(opts: ChunkHeaderOpts): string {
+/** Said once, in the last message Scribe gets: nothing else tells it the call is over. */
+export const SCRIBE_ENDED = `The call has ended: do your final pass now (see Pace), then end with ${HUDDLE_PASS}.`;
+
+/** `ended`: the stop's last message (convex deliverRoutes), with whatever
+ *  words were still unsent, or none. */
+export function scribeChunkHeader(opts: ChunkHeaderOpts & { ended?: boolean }): string {
   const where = [
     opts.board ? `The board is doc:${opts.board}.` : null,
     opts.call ? `The call is ${opts.call}.` : null,
@@ -168,5 +173,6 @@ export function scribeChunkHeader(opts: ChunkHeaderOpts): string {
     `Huddle transcript (live).${opts.held ? " These words waited while you worked and arrive together." : ""} ${SCRIBE_LANE[opts.lane]}${where ? ` ${where}` : ""}`,
     opts.full ? SCRIBE_REMINDER : null,
     opts.full ? HUDDLE_GUEST_NOTE : null,
+    opts.ended ? SCRIBE_ENDED : null,
   ].filter(Boolean).join("\n\n");
 }

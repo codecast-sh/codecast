@@ -5,7 +5,7 @@
 import { afterEach, expect, setDefaultTimeout, setSystemTime, test } from "bun:test";
 import { convexTest } from "convex-test";
 import { anyApi } from "convex/server";
-import { dmRoomKey, HUDDLE_REBRIEF_EVERY, HUDDLE_REPLY_NOTE, HUDDLE_WORK_NOTE, SCRIBE_CLAIM_TTL_MS, SCRIBE_REMINDER, scribeStatus } from "@codecast/shared/contracts";
+import { dmRoomKey, HUDDLE_REBRIEF_EVERY, HUDDLE_REPLY_NOTE, HUDDLE_WORK_NOTE, SCRIBE_CLAIM_TTL_MS, SCRIBE_REMINDER, scribeStatus, SCRIBE_ENDED, scribeChunkHeader } from "@codecast/shared/contracts";
 import schema from "./schema";
 import { allModules } from "./testModules.testkit";
 import { internal } from "./_generated/api";
@@ -213,6 +213,72 @@ test("Scribe's chunks carry its own header, on the first chunk and on a rebrief"
   const rebrief = await lastBody();
   expect(rebrief).toContain("point 2");
   scribeOnly(rebrief);
+});
+
+async function scribeAtStop() {
+  const { t, ana, room, anaAgent, benAgent, as, seat, call } = await seed();
+  const claim = await as(String(ana)).mutation(api.transcripts.inviteScribe, { room_key: room });
+  await seat(String(ana), String(anaAgent), claim.claim_id);
+  const call0 = (await call())._id;
+  // Another agent fed the room: the end is Scribe's alone.
+  await t.run(async (ctx: any) => {
+    const c = await ctx.db.get(call0);
+    await ctx.db.patch(call0, { routes: [...c.routes, { kind: "session", target: String(benAgent), mode: "live", sent_seq: 0, added_by: ana }] });
+  });
+  const say = (seq: number) =>
+    t.run(async (ctx: any) => {
+      await ctx.db.insert("transcript_segments", { transcript_id: call0, seq, speaker_id: String(ana), speaker_name: "Ana", text: `point ${seq}`, t0: seq, t1: seq + 1 } as any);
+      await ctx.db.patch(call0, { last_seq: seq });
+    });
+  // Everything said so far has reached every route, as a live flush leaves it.
+  const caughtUp = (seq: number) =>
+    t.run(async (ctx: any) => {
+      const c = await ctx.db.get(call0);
+      await ctx.db.patch(call0, { routes: c.routes.map((r: any) => ({ ...r, sent_seq: seq })) });
+    });
+  // What the call's stop schedules (endTranscript).
+  const stop = () => t.action(internal.transcripts.deliverRoutes, { transcript_id: call0, include_after_routes: true });
+  const bodies = (to: any) =>
+    t.run(async (ctx: any) =>
+      (await ctx.db.query("pending_messages").collect()).filter((r: any) => String(r.conversation_id) === String(to)).map((r: any) => r.content as string),
+    );
+  return { say, caughtUp, stop, scribe: () => bodies(anaAgent), other: () => bodies(benAgent) };
+}
+
+test("at the stop, Scribe's last words and the end arrive in one message", async () => {
+  const { say, stop, scribe, other } = await scribeAtStop();
+  await say(1);
+  await stop();
+  const got = await scribe();
+  expect(got).toHaveLength(1);
+  expect(got[0]).toContain("point 1");
+  expect(got[0]).toContain(SCRIBE_ENDED);
+  // The other agent gets the words, and nothing about a final pass.
+  const theirs = await other();
+  expect(theirs).toHaveLength(1);
+  expect(theirs[0]).toContain("point 1");
+  expect(theirs[0]).not.toContain(SCRIBE_ENDED);
+});
+
+test("at the stop with nothing left unsent, the end still reaches Scribe, once", async () => {
+  const { say, caughtUp, stop, scribe, other } = await scribeAtStop();
+  await say(1);
+  await caughtUp(1);
+  await stop();
+  const got = await scribe();
+  expect(got).toHaveLength(1);
+  expect(got[0]).toContain(SCRIBE_ENDED);
+  expect(got[0]).not.toContain("point 1");
+  // A route with nothing new gets nothing at the end.
+  expect(await other()).toHaveLength(0);
+  // The stop's retry (a failed route elsewhere) does not send the end twice.
+  await stop();
+  expect(await scribe()).toHaveLength(1);
+});
+
+test("ordinary flushes never tell Scribe the call ended", async () => {
+  expect(scribeChunkHeader({ name: "Scribe", lane: "context", held: false, full: true })).not.toContain(SCRIBE_ENDED);
+  expect(scribeChunkHeader({ name: "Scribe", lane: "context", held: false, full: false, ended: true })).toContain(SCRIBE_ENDED);
 });
 
 test("Scribe never gets a face", async () => {
