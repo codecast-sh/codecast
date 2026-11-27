@@ -49,7 +49,7 @@ export function dormantWakeLabel(wake: DormantWake, now: number): DormantWakeLab
     case "unconfirmed":
       return { what: `${wake.wake === "run" ? "a run it started" : "a pending wait"} · unconfirmed ${fmtDuration(Math.max(0, now - wake.since))}`, when: "yours now", warn: DORMANT_UNCONFIRMED_TITLE };
     case "snoozed":
-      return { what: "snoozed", when: fmtClock(wake.at, now), warn: null };
+      return { what: "snoozed until", when: fmtClock(wake.at, now), warn: null };
     case "parked":
       return { what: "parked by you", when: "on next activity", warn: null };
     case "claim":

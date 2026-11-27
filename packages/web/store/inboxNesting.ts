@@ -125,3 +125,16 @@ export function isSpawnedWorker(s: InboxSession): boolean {
   if (!s.spawned_by_conversation_id) return false;
   return !(s.agent_team_name && s.agent_name === "team-lead");
 }
+
+/** The snoozed rows Sleeping lists: a snooze is one more wake a row waits on
+ *  (sessionActivity's snoozed flavor). A row snoozed with its parent (the
+ *  snooze and its wake cascade) is not listed apart from it, unless it is the
+ *  open one: the row being viewed never vanishes. */
+export function snoozedSleepingRows(snoozed: readonly InboxSession[], activeId?: string | null): InboxSession[] {
+  const ids = new Set(snoozed.map((s) => s._id));
+  const parentOf = inboxNestParentOf(snoozed);
+  return snoozed.filter((s) => {
+    const parent = parentOf(s);
+    return !parent || !ids.has(parent) || s._id === activeId;
+  });
+}

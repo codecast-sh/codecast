@@ -5212,7 +5212,7 @@ export function visualOrderSessions(
   const needs = splitHostedStops(chipped(placed.needsInput), (id) => opts.messagesOf?.(id));
   // The status view's order (questions … working, shipping, dormant split as the rail
   // draws it): the chokepoint's own sections, so the walk and the render agree.
-  const [working, shipping, sleeping] = splitDormantWalk(chipped(placed.working), chipped(placed.dormant), opts.dormantSplit);
+  const [working, shipping, sleeping] = splitDormantWalk(chipped(placed.working), [...chipped(placed.dormant), ...chipped(snoozedSleepingRows(placed.snoozed))], opts.dormantSplit);
   const sections: Array<[InboxSession[], string]> = [
     [chipped(placed.questions), "questions"], [chipped(placed.pinned), "pinned"], [chipped(placed.newSessions), "new"],
     [needs.asks, "needs_input"], [needs.stopped, "hosted_stopped"], [chipped(placed.done), "done"],
@@ -5729,7 +5729,7 @@ import { SESSION_STATUSES, sessionStatusOf, type SessionStatus, type StatusLive 
 import type { SubagentActivityOf } from "../lib/railActivity";
 import { nestOwnedChildren, ownedChildrenOf, resolveShowSubagents, resolveSubagentFilter, subagentKept, withOpenOwnedChild, type SubagentFilter, type SubagentRow, type SubagentRowsMode } from "./subagentCards";
 export { cardOfNested, drawnUnderParentIds, flatHeaderCount, fullRowsCounts, isOwnedChildRow, resolveShowSubagents, resolveSubagentFilter, resolveSubagentRows, SUBAGENT_FILTER_STATES, subagentKept, subagentPasses, type SubagentFilter, type SubagentRow, type SubagentRowsMode } from "./subagentCards";
-import { dropOrphanSubagents, hoistNestedUnderParent, inboxNestParentOf, isSpawnedWorker, nestedSessionIds } from "./inboxNesting";
+import { dropOrphanSubagents, hoistNestedUnderParent, inboxNestParentOf, isSpawnedWorker, nestedSessionIds, snoozedSleepingRows } from "./inboxNesting";
 export { inboxNestParentOf, isSpawnedWorker } from "./inboxNesting";
 import type { PriorityRow } from "@codecast/shared/contracts/priorities";
 import { teamMembersOf } from "../lib/activeTeam";
