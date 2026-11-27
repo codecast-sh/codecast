@@ -22,7 +22,7 @@ import type { ThreadStateStatus } from "@codecast/shared/contracts";
 import { ORG_STATE_META } from "./org/orgMeta";
 import { StatusDot } from "./StatusDot";
 import type { WorkState } from "@codecast/shared/contracts";
-import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, chipFilterSection, computeManualSortKey, isConvexId, placeInboxRows, placementDecisionsSig, getProjectName, pendingSendWakeSig, isSessionHidden, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipFilterOpts, chipProjectFilters, passesFilterTerms, projectAxisKeys, projectOfFromState, groupSessionsForLabelView, groupSessionsByPlan, groupSessionsByMachine, groupSessionsForOrgLens, isOrgLensMode, orgLensAvailable, orgLensSourcesOf, orgLensWakeSig, ORG_LENS_MODES, sessionWorkState, personSessionWorkState, selectFavoriteSessions, isFavoriteInStore, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, chipFilterSection, computeManualSortKey, isConvexId, placeInboxRows, placementDecisionsSig, getProjectName, pendingSendWakeSig, isSessionHidden, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipFilterOpts, chipProjectFilters, passesFilterTerms, priorityRankOfFromState, cardPriorityRankOf, priorityChipRows, projectAxisKeys, projectOfFromState, groupSessionsForLabelView, groupSessionsByPlan, groupSessionsByMachine, groupSessionsForOrgLens, isOrgLensMode, orgLensAvailable, orgLensSourcesOf, orgLensWakeSig, ORG_LENS_MODES, sessionWorkState, personSessionWorkState, selectFavoriteSessions, isFavoriteInStore, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
 import { hiddenBucketTree, killAllIds } from "../store/hiddenBucketTree";
 import { sessionsWakeSig, teamInboxIdsOf, resolveInboxViewMode, resolveInboxOldestFirst, manualOrderKeysForDrop, resolveShowOld, classifySession, inboxNestParentOf, drawnUnderParentIds, flatHeaderCount, cardOfNested, isSpawnedWorker, nestsWorkers, NEW_SESSION_HOLD_MS, ensureHydrated } from "../store/inboxStore";
 import { loadMoreKilledSessions } from "../hooks/killedShelf";
@@ -1572,6 +1572,7 @@ const STALE_PROMPT_SNOOZE_MS = 7 * 24 * 60 * 60 * 1000;
 // favorites view (a fresh [] each render would defeat downstream memoization).
 const EMPTY_FAVORITES: InboxSession[] = [];
 const NO_MACHINE_CHIPS: Array<[string, number]> = [];
+const NO_PRIORITY_CHIPS: Array<[string, number]> = [];
 // The Dismissed bucket only renders sessions dismissed within this window — a bulk
 // sweep can dismiss thousands, and an unbounded list is noise.
 const DISMISSED_VISIBLE_MS = 45 * 24 * 60 * 60 * 1000;
@@ -1764,9 +1765,8 @@ function SessionListPanelImpl({
     s => orgLensWakeSig(s),
     // Every plan a "By plan" group may name, from any workspace: only while the lens is up.
     s => (resolveInboxViewMode(s) === "plan" ? allPlansSig(s.plans) : ""),
-    // What the Priorities view sorts and labels by: each session's priority
-    // link and each priority's owner, rank and milestones. Only while it is up.
-    s => (resolveInboxViewMode(s) === "priorities" ? priorityOrderSig(s) : ""),
+    // Each session's priority link and each priority's rank: the Priorities view and the filter's Top N read them.
+    s => priorityOrderSig(s),
     // The view mode itself: Priorities reads as grouped while the workspace has the feature off.
     s => resolveInboxViewMode(s),
     // Open browser tabs per session (the Browser view): changes only when a daemon reports.
@@ -1979,11 +1979,21 @@ function SessionListPanelImpl({
   // is_favorite out, so a placed row still carries the flag from before the toggle.
   // Resolved to a scalar so each card memoizes on it.
   const cardIsFavorite = (sess: InboxSession) => isFavoriteInStore(s, sess._id);
+  // Top N ranks, built as the keyboard walk builds them (chipFilterOpts), so the list and the walk agree.
+  const priorityRanksKey = priorityOrderSig(s);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const priorityRankOf = useMemo(() => priorityRankOfFromState(useInboxStore.getState()), [priorityRanksKey]);
   const { bucketCounts, projectCounts, projectPathByName, projectActivity, machineCounts } = useMemo(
     // Project chips resolve each session's project off the store's sessions,
     // tasks and plans (store/workProjects, memoized on their refs).
-    () => computeChipCounts(activeSessions, bucketByConv, projectOfFromState(useInboxStore.getState())),
-    [activeSessions, bucketByConv],
+    // The Decisions section's rows count too: the filter draws them.
+    () => computeChipCounts([...placedQuestions, ...activeSessions], bucketByConv, projectOfFromState(useInboxStore.getState())),
+    [placedQuestions, activeSessions, bucketByConv],
+  );
+  // Whether the menus offer Top N (shown without counts): a card counts when it or a nested session ranks there.
+  const priorityCounts = useMemo(
+    () => priorityChipRows([...placedQuestions, ...activeSessions], cardPriorityRankOf(priorityRankOf, globalSubByParent)),
+    [placedQuestions, activeSessions, priorityRankOf, globalSubByParent],
   );
   // Machines are offered (as chips and as a grouping) only when the viewer can
   // name them: their own roster. A teammate's machine has no name here.
@@ -2006,7 +2016,8 @@ function SessionListPanelImpl({
       if (!opts.projectFilters?.length && !opts.bucketFilters?.length) return items;
       return chipFilterSection(items, globalSubByParent, (sess) => chipMatchesSession(sess, opts));
     },
-    [s.activeProjectFilter, s.activeBucketFilter, s.chipFilterExclude, s.extraBucketFilters, s.extraProjectFilters, bucketByConv, globalSubByParent],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [s.activeProjectFilter, s.activeBucketFilter, s.chipFilterExclude, s.extraBucketFilters, s.extraProjectFilters, bucketByConv, globalSubByParent, priorityRanksKey],
   );
 
   // The Stashed / Killed buckets' open state is ephemeral and closed by
@@ -2395,8 +2406,9 @@ function SessionListPanelImpl({
   const recentFreezeOrder = s.recentFreezeOrder;
   const fullKeptIds = showSubagents ? keptSubIds : null;
   const flatList = useMemo(
-    () =>
-      flatViewSessions(sortedSessions, globalSubByParent, {
+    () => {
+      const chipOpts = chipFilterOpts(s, bucketByConv);
+      return flatViewSessions(sortedSessions, globalSubByParent, {
         mode: viewMode === "recent" ? "recent" : "time",
         showSubagents,
         nestWorkers,
@@ -2405,10 +2417,11 @@ function SessionListPanelImpl({
         freezeOrder: viewMode === "recent" ? recentFreezeOrder : null,
         oldestFirst,
         keepSub: fullKeptIds ? (sess) => fullKeptIds.has(sess._id) : undefined,
-        chipMatches: (sess) =>
-          chipMatchesSession(sess, chipFilterOpts(s, bucketByConv)),
-      }),
-    [sortedSessions, showSubagents, globalSubByParent, activeSessionId, viewMode, manualOrder, recentFreezeOrder, oldestFirst, fullKeptIds, s.activeProjectFilter, s.activeBucketFilter, s.chipFilterExclude, s.extraBucketFilters, s.extraProjectFilters, bucketByConv],
+        chipMatches: (sess) => chipMatchesSession(sess, chipOpts),
+      });
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sortedSessions, showSubagents, globalSubByParent, activeSessionId, viewMode, manualOrder, recentFreezeOrder, oldestFirst, fullKeptIds, s.activeProjectFilter, s.activeBucketFilter, s.chipFilterExclude, s.extraBucketFilters, s.extraProjectFilters, bucketByConv, priorityRanksKey],
   );
   const flatShown = useMemo(() => withoutCompactOpen(flatList), [flatList, withoutCompactOpen]);
   const totalSubagentCount = useMemo(() => {
@@ -2475,8 +2488,13 @@ function SessionListPanelImpl({
   // Whichever session holds the tab is listed, stashed rows and workers
   // included (they are most of the browser work), flat; the chips still narrow it.
   const browserView = useMemo(
-    () => (viewMode === "browser" ? groupSessionsByBrowser(Object.values(s.sessions).filter((x) => chipMatchesSession(x, chipFilterOpts(s, bucketByConv))), browserTabsByConv) : null),
-    [viewMode, browserTabsByConv, s.sessions, s.activeProjectFilter, s.activeBucketFilter, s.chipFilterExclude, s.extraBucketFilters, s.extraProjectFilters, bucketByConv],
+    () => {
+      if (viewMode !== "browser") return null;
+      const chipOpts = chipFilterOpts(s, bucketByConv);
+      return groupSessionsByBrowser(Object.values(s.sessions).filter((x) => chipMatchesSession(x, chipOpts)), browserTabsByConv);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [viewMode, browserTabsByConv, s.sessions, s.activeProjectFilter, s.activeBucketFilter, s.chipFilterExclude, s.extraBucketFilters, s.extraProjectFilters, bucketByConv, priorityRanksKey],
   );
   // Offer the "By plan" option only when a plan is actually in play, mirroring how
   // "By label" appears only with buckets.
@@ -2541,16 +2559,16 @@ function SessionListPanelImpl({
     if (!favoritesView) return null;
     const projectFilters = chipProjectFilters(s);
     const scoped = projectFilters.length
-      ? allFavorites.filter((x) => passesFilterTerms(projectFilters, projectAxisKeys(x, projectOfFromState(useInboxStore.getState()))))
+      ? allFavorites.filter((x) => passesFilterTerms(projectFilters, projectAxisKeys(x, projectOfFromState(useInboxStore.getState()), priorityRankOf)))
       : allFavorites;
     const pinned = scoped.filter((x) => x.is_pinned).sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
     const rest = scoped.filter((x) => !x.is_pinned);
     const { projectGroups } = groupSessionsForLabelView(rest, {}, {});
     return { pinned, projectGroups, count: scoped.length };
-  }, [favoritesView, allFavorites, s.activeProjectFilter, s.chipFilterExclude, s.extraProjectFilters]);
+  }, [favoritesView, allFavorites, s.activeProjectFilter, s.chipFilterExclude, s.extraProjectFilters, priorityRankOf]);
   const favChipCounts = useMemo(
-    () => (favoritesView ? computeChipCounts(allFavorites, bucketByConv, projectOfFromState(useInboxStore.getState())) : null),
-    [favoritesView, allFavorites, bucketByConv],
+    () => (favoritesView ? { ...computeChipCounts(allFavorites, bucketByConv, projectOfFromState(useInboxStore.getState())), priorityCounts: priorityChipRows(allFavorites, priorityRankOf) } : null),
+    [favoritesView, allFavorites, bucketByConv, priorityRankOf],
   );
   // Machines are a filter only once sessions run on more than one.
   const machineChipsAll = favoritesView ? favChipCounts!.machineCounts.filter(([key]) => namedMachine(machineIdOfChipKey(key)!)) : namedMachineCounts;
@@ -3284,6 +3302,7 @@ function SessionListPanelImpl({
             projectPathByName={favoritesView ? favChipCounts!.projectPathByName : projectPathByName}
             projectActivity={favoritesView ? favChipCounts!.projectActivity : projectActivity}
             machineCounts={machineChips}
+            priorityCounts={!prioritiesOn ? NO_PRIORITY_CHIPS : favoritesView ? favChipCounts!.priorityCounts : priorityCounts}
             dropSessionOnLabel={dropSessionOnLabel}
           />
         ) : (
@@ -3291,7 +3310,9 @@ function SessionListPanelImpl({
             bucketCounts={favoritesView ? favChipCounts!.bucketCounts : bucketCounts}
             projectCounts={favoritesView ? favChipCounts!.projectCounts : projectCounts}
             projectPathByName={favoritesView ? favChipCounts!.projectPathByName : projectPathByName}
+            projectActivity={favoritesView ? favChipCounts!.projectActivity : projectActivity}
             machineCounts={machineChips}
+            priorityCounts={!prioritiesOn ? NO_PRIORITY_CHIPS : favoritesView ? favChipCounts!.priorityCounts : priorityCounts}
             dropSessionOnLabel={dropSessionOnLabel}
           />
         )}

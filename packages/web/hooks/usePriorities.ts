@@ -1,6 +1,6 @@
 // Priorities (convex priorities.ts): the feeder and reader of the `priorities`
 // collection, and the person's controls with their put-back on a refusal.
-// Fed by /priorities and, while the inbox's Priorities view is up, by the
+// Fed by /priorities and, wherever the workspace has Priorities on, by the
 // sync host's feeders (useSyncInboxPriorities).
 import { useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -8,7 +8,8 @@ import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { serverErrorText } from "../lib/errorCause";
 import { listMeta, listRows, prioritySig, withLiveRanks, type PriorityListMeta, type PriorityRow, type PriorityWrites } from "../lib/priorities";
 import { priorityWrites } from "../lib/priorityWrites";
-import { resolveInboxViewMode, useInboxStore } from "../store/inboxStore";
+import { useInboxStore } from "../store/inboxStore";
+import { useWorkspaceFeature } from "../lib/teamFeatures";
 import { isRefusedDispatchError } from "../store/mutativeMiddleware";
 // Installs sonner as the undo notifier, which raises a check-off's Undo receipt (lib/priorityWrites).
 import "../store/undoStack";
@@ -28,14 +29,15 @@ export function useSyncPriorities(on = true) {
 }
 
 /**
- * The priorities the inbox's Priorities view sorts by, while that view is up in
- * a workspace with the feature on. Mounted in the sync host's feeders
- * (DashboardLayout HostFeeders), so the host feeds them whether or not its own
- * window draws the inbox panel; followers read the replicated rows.
+ * The priorities the inbox sorts by in its Priorities view and filters by in
+ * its Top 3 / 5 / 10, in any workspace with the feature on: the filter is
+ * offered in every view, so the ranks it reads stay live in every view.
+ * Mounted in the sync host's feeders (DashboardLayout HostFeeders), so the
+ * host feeds them whether or not its own window draws the inbox panel;
+ * followers read the replicated rows.
  */
 export function useSyncInboxPriorities() {
-  // The view reads as grouped where the feature is off (resolveInboxViewMode).
-  useSyncPriorities(useInboxStore((s) => resolveInboxViewMode(s) === "priorities"));
+  useSyncPriorities(useWorkspaceFeature("priorities"));
 }
 
 /** When the pass runs, read off the same list answer the feeder takes (one subscription: same query, same args). */

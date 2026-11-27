@@ -268,7 +268,9 @@ import { stampSessionCommand } from "./sessionCommandStamp";
 import { isConvexId } from "../lib/entityLinks";
 import { pathOnMyMachines, savedDefaultProject, wakesOnUse, type MachineCandidate } from "../lib/machinePicker";
 import type { DeviceNameSource } from "@codecast/shared/contracts";
-import { machineChipKey, projectAxisLabel, projectAxisNoun, projectChipLabel, workProjectChipKey, workProjectOf, type WorkProjectSource } from "./workProjects";
+import { priorityRankOfForFilters, type PriorityRankOf } from "./priorityChips";
+export { cardPriorityRankOf, priorityChipRows, priorityRankOfFromState, type PriorityRankOf } from "./priorityChips";
+import { machineChipKey, priorityChipKeysOf, projectAxisLabel, projectAxisNoun, projectChipLabel, workProjectChipKey, workProjectOf, type WorkProjectSource } from "./workProjects";
 import { pendingJoinRow } from "../lib/teamMachines";
 import { browserTabsByConversation, groupSessionsByBrowser, type BrowserTabRow } from "./browserTabsView";
 import { projectRootOf } from "../lib/recentProjectPaths";
@@ -5155,6 +5157,8 @@ export function visualOrderSessions(
     walk?: InboxWalk;
     // Which project each session works in, for project chips (store/workProjects).
     projectOf?: (sessionId: string) => string | null;
+    // The viewer's priority rank per session, for Top N chips (`pr:` keys).
+    priorityRankOf?: PriorityRankOf;
     // The Priorities view: each status section, Decisions included, sorted by
     // the viewer's priority a session serves (store/priorityOrder). Pinned
     // keeps the person's order.
@@ -5174,6 +5178,7 @@ export function visualOrderSessions(
     bucketFilters: opts.bucketFilters,
     bucketByConv: opts.bucketByConv ?? {},
     projectOf: opts.projectOf,
+    priorityRankOf: opts.priorityRankOf,
   });
   const chipped = (rows: InboxSession[]) => (chipOn ? chipFilterSection(rows, placed.subsByParent, matches) : rows);
   // Needs You splits as the panel draws it: the person's real turns, then the
@@ -5690,7 +5695,7 @@ export function groupSessionsByPlan(
 
 export { ORG_LENS_MODES, groupSessionsForOrgLens, isOrgLensMode, orgLensAvailable, orgLensSourcesOf, orgLensWakeSig, sessionProjectId, type OrgLensGroup, type OrgLensMode, type OrgLensSources } from "./orgLens";
 import { ORG_LENS_MODES, isOrgLensMode, groupSessionsForOrgLens, orgLensAvailable, orgLensSourcesOf, type OrgLensMode, type OrgLensSources, type OrgLensState } from "./orgLens";
-import { priorityPlaceReader, sortByPriority, type PriorityRankEntry, type PriorityStanding } from "./priorityOrder";
+import { priorityPlaceReader, sortByPriority, type PriorityOrderState, type PriorityRankEntry, type PriorityStanding } from "./priorityOrder";
 import { hostedStopOf, splitHostedStops } from "../lib/hostedNotice";
 import { SESSION_STATUSES, sessionStatusOf, type SessionStatus, type StatusLive } from "../lib/sessionStatus";
 import { nestOwnedChildren, ownedChildrenOf, resolveShowSubagents, resolveSubagentFilter, subagentKept, withOpenOwnedChild, type SubagentFilter, type SubagentRow, type SubagentRowsMode } from "./subagentCards";
@@ -5775,9 +5780,10 @@ export function selectFavoriteSessions(
   projectFilters?: readonly ProjectFilterTerm[],
   favoritesList?: any[],
   projectOf?: (sessionId: string) => string | null,
+  priorityRankOf?: PriorityRankOf,
 ): InboxSession[] {
   const matchesProject = (s: InboxSession) =>
-    passesFilterTerms(projectFilters, projectAxisKeys(s, projectOf));
+    passesFilterTerms(projectFilters, projectAxisKeys(s, projectOf, priorityRankOf));
   const out: InboxSession[] = [];
   const seen = new Set<string>();
   for (const fav of favoritesList ?? []) {
@@ -5806,8 +5812,9 @@ export function favoritesVisualOrder(
   projectFilters?: readonly ProjectFilterTerm[],
   favoritesList?: any[],
   projectOf?: (sessionId: string) => string | null,
+  priorityRankOf?: PriorityRankOf,
 ): InboxSession[] {
-  const favs = selectFavoriteSessions(sessions, projectFilters, favoritesList, projectOf);
+  const favs = selectFavoriteSessions(sessions, projectFilters, favoritesList, projectOf, priorityRankOf);
   const pinned = favs.filter((s) => s.is_pinned).sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
   const rest = favs.filter((s) => !s.is_pinned);
   const { projectGroups } = groupSessionsForLabelView(rest, {}, {});
@@ -6061,15 +6068,18 @@ export function passesFilterTerms(terms: readonly BucketFilterTerm[] | undefined
 }
 
 /** The keys a session answers to on the project chip axis: its folder's name,
- *  `pj:<id>` for the project it works in, and `mc:<device>` for the machine
- *  that runs it (store/workProjects). */
-export function projectAxisKeys(s: Pick<InboxSession, "_id" | "git_root" | "project_path" | "owner_device_id">, projectOf?: (sessionId: string) => string | null): string[] {
+ *  `pj:<id>` for the project it works in, `mc:<device>` for the machine
+ *  that runs it, and `pr:<n>` for each Top N its priority falls in
+ *  (store/workProjects). */
+export function projectAxisKeys(s: Pick<InboxSession, "_id" | "git_root" | "project_path" | "owner_device_id">, projectOf?: (sessionId: string) => string | null, priorityRankOf?: PriorityRankOf): string[] {
   const keys = [getProjectName(s.git_root, s.project_path)];
   const project = projectOf?.(s._id);
   if (project) keys.push(workProjectChipKey(project));
   if (s.owner_device_id) keys.push(machineChipKey(s.owner_device_id));
+  if (priorityRankOf) keys.push(...priorityChipKeysOf(priorityRankOf(s)));
   return keys;
 }
+
 
 // Does a session pass the active project/bucket chips? ONE predicate behind both
 // the panel's filterByChip and the flat-view keyboard order so a chip narrows
@@ -6080,10 +6090,11 @@ export function projectAxisKeys(s: Pick<InboxSession, "_id" | "git_root" | "proj
 // lists with per-term polarity, judged by passesFilterTerms.
 /** The chip filters off a store snapshot, as chipMatchesSession takes them. */
 export function chipFilterOpts(
-  state: Parameters<typeof chipProjectFilters>[0] & Parameters<typeof chipBucketFilters>[0] & Partial<WorkProjectSource>,
+  state: Parameters<typeof chipProjectFilters>[0] & Parameters<typeof chipBucketFilters>[0] & Partial<WorkProjectSource> & PriorityOrderState,
   bucketByConv: Record<string, string | undefined>,
 ): ChipFilterOpts {
-  return { projectFilters: chipProjectFilters(state), bucketFilters: chipBucketFilters(state), bucketByConv, projectOf: projectOfFromState(state) };
+  const projectFilters = chipProjectFilters(state);
+  return { projectFilters, bucketFilters: chipBucketFilters(state), bucketByConv, projectOf: projectOfFromState(state), priorityRankOf: priorityRankOfForFilters(state, projectFilters) };
 }
 
 /** The session → project resolver off a store snapshot, for the chip axis. */
@@ -6093,7 +6104,7 @@ export function projectOfFromState(state: Partial<WorkProjectSource>): ((session
   return (id) => workProjectOf(source, id);
 }
 
-export type ChipFilterOpts = { projectFilters?: readonly ProjectFilterTerm[]; bucketFilters?: readonly BucketFilterTerm[]; bucketByConv: Record<string, string | undefined>; projectOf?: (sessionId: string) => string | null };
+export type ChipFilterOpts = { projectFilters?: readonly ProjectFilterTerm[]; bucketFilters?: readonly BucketFilterTerm[]; bucketByConv: Record<string, string | undefined>; projectOf?: (sessionId: string) => string | null; priorityRankOf?: PriorityRankOf };
 
 const MID_CREATE_STUB_MS = 60 * 60_000;
 
@@ -6108,7 +6119,7 @@ export function chipMatchesSession(
   // A draft left unsent for days is not mid-create: it answers to the chips
   // like any other row.
   if (!isConvexId(s._id) && Date.now() - Math.max(s.started_at ?? 0, s.updated_at ?? 0) < MID_CREATE_STUB_MS) return true;
-  if (opts.projectFilters?.length && !passesFilterTerms(opts.projectFilters, projectAxisKeys(s, opts.projectOf))) return false;
+  if (opts.projectFilters?.length && !passesFilterTerms(opts.projectFilters, projectAxisKeys(s, opts.projectOf, opts.priorityRankOf))) return false;
   return passesFilterTerms(opts.bucketFilters, opts.bucketByConv[s._id]);
 }
 
@@ -6365,7 +6376,8 @@ function visualOrderOf(state: {
   // Favorites view walks its own project-grouped order so Ctrl+J/K moves through
   // the shelf, not the active desk underneath it.
   if (state.showFavorites) {
-    const order = favoritesVisualOrder(state.sessions, chipProjectFilters(state), state.favorites, projectOfFromState(state));
+    const projectFilters = chipProjectFilters(state);
+    const order = favoritesVisualOrder(state.sessions, projectFilters, state.favorites, projectOfFromState(state), priorityRankOfForFilters(state, projectFilters));
     return opts.walk ? order.filter(walkFilterOf(placed, opts.walk)) : order;
   }
   const bucketByConv = convBucketMap(state.bucketAssignments);
@@ -6379,6 +6391,7 @@ function visualOrderOf(state: {
     // Full rows list only the nested rows the "Which ones" filter keeps, as
     // the panel draws them, on the clock the panel draws on.
     const showSubagents = resolveShowSubagents(state.clientState.ui);
+    const chipOpts = chipFilterOpts(state, bucketByConv);
     const flat = flatViewSessions(placed.sorted, placed.subsByParent, {
       mode,
       showSubagents,
@@ -6386,7 +6399,7 @@ function visualOrderOf(state: {
       focusedId,
       manualOrder: state.clientState.ui?.inbox_manual_order,
       freezeOrder: mode === "recent" ? state.recentFreezeOrder : null,
-      chipMatches: (s) => chipMatchesSession(s, chipFilterOpts(state, bucketByConv)),
+      chipMatches: (s) => chipMatchesSession(s, chipOpts),
       nestWorkers: nestsWorkers(state.clientState.ui),
       oldestFirst: resolveInboxOldestFirst(state.clientState.ui),
     });
@@ -6398,7 +6411,8 @@ function visualOrderOf(state: {
   // included, flat (GlobalSessionPanel's browserView).
   if (mode === "browser") {
     if (collapsed.browser) return [];
-    const rows = Object.values(state.sessions).filter((s) => chipMatchesSession(s, chipFilterOpts(state, bucketByConv)));
+    const chipOpts = chipFilterOpts(state, bucketByConv);
+    const rows = Object.values(state.sessions).filter((s) => chipMatchesSession(s, chipOpts));
     return groupSessionsByBrowser(rows, browserTabsByConversation(state.browserTabs, Date.now()));
   }
   // Grouped and the lenses: the placed status sections over the SAME visible
@@ -6410,6 +6424,7 @@ function visualOrderOf(state: {
     collapsedSections: mode === "grouped" || mode === "priorities" ? collapsed : undefined,
     walk: opts.walk,
     projectOf: projectOfFromState(state),
+    priorityRankOf: priorityRankOfForFilters(state, chipProjectFilters(state)),
     priorityPlaceOf: mode === "priorities" ? priorityPlaceReader(state) : undefined,
     messagesOf: (id) => state.messages?.[id],
   });

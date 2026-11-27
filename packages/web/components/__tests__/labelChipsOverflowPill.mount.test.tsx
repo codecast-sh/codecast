@@ -57,7 +57,7 @@ beforeEach(() => {
   } as any);
 });
 
-async function mountRow(machineCounts: Array<[string, number]> = []) {
+async function mountRow(machineCounts: Array<[string, number]> = [], priorityCounts: Array<[string, number]> = [], bucketCounts: Record<string, number> = {}) {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
@@ -66,10 +66,11 @@ async function mountRow(machineCounts: Array<[string, number]> = []) {
     root.render(
       <MemoryRouter>
         <LabelChipsRow
-          bucketCounts={{}}
+          bucketCounts={bucketCounts}
           projectCounts={[]}
           projectPathByName={{}}
           machineCounts={machineCounts}
+          priorityCounts={priorityCounts}
           dropSessionOnLabel={() => {}}
         />
       </MemoryRouter>,
@@ -166,6 +167,91 @@ test("the popover is placed under the pill and capped to the room below it", asy
     const cap = Math.min(window.innerHeight - 100 - 16, window.innerHeight * 0.6);
     expect(parseFloat(pop.style.maxHeight)).toBeLessThanOrEqual(cap);
     expect(parseFloat(pop.style.maxHeight)).toBeGreaterThan(0);
+  } finally {
+    await act(() => root.unmount());
+    container.remove();
+  }
+});
+
+const openPopover = async (pill: HTMLElement) => {
+  pill.getBoundingClientRect = () =>
+    ({ left: 900, right: 940, top: 80, bottom: 100, width: 40, height: 20, x: 900, y: 80, toJSON() {} }) as DOMRect;
+  await act(() => {
+    pill.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+  });
+  return popoverEl() as HTMLElement;
+};
+const TOP_N: Array<[string, number]> = [["pr:3", 2], ["pr:5", 3], ["pr:10", 5]];
+
+test("the popover reads Projects, Folders, Machines, Priorities, then Labels", async () => {
+  useInboxStore.setState({ machineRoster: [{ device_id: "m2", label: "jb-m2-pro" }] } as any);
+  const { container, root, pill } = await mountRow([["mc:m2", 4]], TOP_N);
+  try {
+    const pop = await openPopover(pill);
+    const text = pop.textContent ?? "";
+    const at = (s: string) => text.indexOf(s);
+    expect(at("Machines")).toBeGreaterThanOrEqual(0);
+    expect(at("Machines")).toBeLessThan(at("Priorities"));
+    expect(at("Priorities")).toBeLessThan(at("Labels"));
+    expect([...pop.querySelectorAll<HTMLElement>("[data-popover-axis-row]")].map((el) => el.dataset.popoverAxisRow)).toEqual(["mc:m2", "pr:3", "pr:5", "pr:10"]);
+    // Top N rows carry no count; machine rows keep theirs.
+    expect(pop.querySelector('[data-popover-axis-row="pr:10"]')?.textContent?.trim()).toBe("Top 10");
+    expect(pop.querySelector('[data-popover-axis-row="mc:m2"]')?.textContent).toContain("4");
+  } finally {
+    await act(() => root.unmount());
+    container.remove();
+    useInboxStore.setState({ machineRoster: [] } as any);
+  }
+});
+
+test("the pill stays reachable for Top N even when every label chip fits", async () => {
+  // Both labels hold sessions, so nothing hides; only the Top N rows need the popover.
+  const { container, root, pill } = await mountRow([], TOP_N, { [A]: 1, [B]: 2 });
+  try {
+    expect(pill?.textContent?.trim()).toBe("+3");
+  } finally {
+    await act(() => root.unmount());
+    container.remove();
+  }
+});
+
+test("a Top N in the filter joins the row as a chip", async () => {
+  const { container, root } = await mountRow([], TOP_N);
+  const rowChip = () => [...container.querySelectorAll("button")].find((b) => b.textContent?.includes("Top 3"));
+  try {
+    expect(rowChip()).toBeUndefined();
+    await act(() => useInboxStore.setState({ activeProjectFilter: "pr:3" } as any));
+    expect(rowChip()).toBeTruthy();
+    // The chip draws its label twice (an invisible copy holds the width) and no count.
+    expect(rowChip()!.textContent?.replaceAll("Top 3", "").trim()).toBe("");
+  } finally {
+    await act(() => root.unmount());
+    container.remove();
+    await act(() => useInboxStore.setState({ activeProjectFilter: null } as any));
+  }
+});
+
+test("a long folder list shows five, the rest behind a fold, so Priorities stays near the top", async () => {
+  const many: Array<[string, number]> = Array.from({ length: 12 }, (_, i) => [`folder${i}`, 12 - i]);
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  await act(() =>
+    root.render(
+      <MemoryRouter>
+        <LabelChipsRow bucketCounts={{}} projectCounts={many} projectPathByName={{}} machineCounts={[]} priorityCounts={TOP_N} dropSessionOnLabel={() => {}} />
+      </MemoryRouter>,
+    ),
+  );
+  try {
+    const pill = [...container.querySelectorAll("button")].find((b) => /^\+\d+$/.test((b.textContent || "").trim())) as HTMLElement;
+    const pop = await openPopover(pill);
+    const folderRows = () => [...pop.querySelectorAll<HTMLElement>("[data-popover-axis-row]")].filter((el) => el.dataset.popoverAxisRow?.startsWith("folder"));
+    expect(folderRows().length).toBe(5);
+    const fold = pop.querySelector<HTMLElement>('[data-popover-axis-fold="Folders"]')!;
+    expect(fold.textContent).toContain("7 more folders");
+    await act(() => fold.click());
+    expect(folderRows().length).toBe(12);
   } finally {
     await act(() => root.unmount());
     container.remove();

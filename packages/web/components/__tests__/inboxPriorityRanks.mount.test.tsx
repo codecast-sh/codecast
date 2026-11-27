@@ -281,12 +281,13 @@ test("the host's feeders feed the priorities the view sorts by, with no inbox pa
   expect(asked).toContain("priorities:list");
   expect(asked).toContain("priorityRanks:mine");
   await act(async () => hostRoot.unmount());
-  // Not while another view is up.
+  // In another view the workspace's priorities still feed, since the filter's
+  // Top 3 / 5 / 10 reads them there; other workspaces' ranks only the view reads.
   seed("grouped");
   asked.length = 0;
   const idleRoot = createRoot(document.createElement("div"));
   await act(async () => idleRoot.render(<MemoryRouter initialEntries={["/inbox"]}><HostFeeders /></MemoryRouter>));
-  expect(asked).not.toContain("priorities:list");
+  expect(asked).toContain("priorities:list");
   expect(asked).not.toContain("priorityRanks:mine");
   await act(async () => idleRoot.unmount());
   // The follower's panel subscribes to nothing of its own, and its ranks follow the rows the host replicates.

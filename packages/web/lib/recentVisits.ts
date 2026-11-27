@@ -147,10 +147,12 @@ export function resolveVisit(
         sessionCount: counts.byBucket.get(id) ?? 0, bucketId: id,
       };
     }
-    const name = v.label ?? v.key.slice("project:".length);
+    // The key is the filter term ("app", "mc:<device>", "pr:3"); the label is
+    // only how it read ("jb-m2-pro", "Top 3"), so reopening filters by the key.
+    const term = v.key.slice("project:".length);
     return {
-      key: v.key, kind: v.kind, ts: v.ts, title: name, objectType: "project",
-      sessionCount: counts.byProject.get(name) ?? 0, projectName: name, projectPath: v.path ?? null,
+      key: v.key, kind: v.kind, ts: v.ts, title: v.label ?? term, objectType: "project",
+      sessionCount: counts.byProject.get(term) ?? 0, projectName: term, projectPath: v.path ?? null,
     };
   }
   const path = v.path ?? v.key.slice("page:".length);

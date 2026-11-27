@@ -88,7 +88,7 @@ afterEach(async () => {
   cleanup = null;
 });
 
-async function mount() {
+async function mount(priorityCounts: Array<[string, number]> = [], machineCounts: Array<[string, number]> = []) {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
@@ -99,7 +99,8 @@ async function mount() {
           bucketCounts={{ [A]: 3 }}
           projectCounts={projectCounts}
           projectPathByName={projectPathByName}
-          machineCounts={[]}
+          machineCounts={machineCounts}
+          priorityCounts={priorityCounts}
           projectActivity={projectActivity}
           dropSessionOnLabel={() => {}}
         />
@@ -223,4 +224,47 @@ test("⇧-click adds a term and keeps the menu open; ⌥+Enter on the keyboard h
   expect(useInboxStore.getState().activeProjectFilter).toBe("littlebird");
   expect(useInboxStore.getState().chipFilterExclude).toBe(true);
   expect(m.button().textContent).toBe("Not littlebird");
+});
+
+test("the menu reads Projects, Folders, Machines, Priorities, then Labels", async () => {
+  useInboxStore.setState({ machineRoster: [{ device_id: "m2", label: "jb-m2-pro" }] } as any);
+  const m = await mount([["pr:3", 2], ["pr:5", 3], ["pr:10", 5]], [["mc:m2", 4]]);
+  try {
+    await m.open();
+    const menu = document.querySelector<HTMLElement>("[data-sv-rail-filter-menu]")!;
+    const headings = [...menu.querySelectorAll<HTMLElement>("[role=group], [data-radix-collection-item], div")]
+      .map((el) => el.textContent?.trim())
+      .filter((t): t is string => ["Folders", "Machines", "Priorities", "Labels"].includes(t ?? ""));
+    expect([...new Set(headings)]).toEqual(["Folders", "Machines", "Priorities", "Labels"]);
+    expect(m.folders().filter((f) => f?.startsWith("pr:"))).toEqual(["pr:3", "pr:5", "pr:10"]);
+    expect(document.querySelector('[data-filter-folder="pr:5"]')?.textContent).toContain("Top 5");
+    // No count on a Top N row: what its filter keeps differs by view.
+    expect(document.querySelector('[data-filter-folder="pr:5"]')?.textContent?.trim()).toBe("Top 5");
+    expect(document.querySelector('[data-filter-folder="mc:m2"]')?.textContent).toContain("4");
+  } finally {
+    useInboxStore.setState({ machineRoster: [] } as any);
+  }
+});
+
+test("no session in the top 10: no Priorities section", async () => {
+  const m = await mount([]);
+  await m.open();
+  expect(document.querySelector("[data-sv-rail-filter-menu]")?.textContent).not.toContain("Priorities");
+});
+
+test("picking Top 3 filters to it and the button reads Top 3", async () => {
+  const m = await mount([["pr:3", 2], ["pr:5", 3], ["pr:10", 5]]);
+  await m.open();
+  await act(async () => {
+    document.querySelector<HTMLElement>('[data-filter-folder="pr:3"]')!.click();
+  });
+  expect(useInboxStore.getState().activeProjectFilter).toBe("pr:3");
+  expect(m.button().textContent).toContain("Top 3");
+});
+
+test("a Top N in the filter keeps its section when nothing ranks there now", async () => {
+  useInboxStore.setState({ activeProjectFilter: "pr:3" } as any);
+  const m = await mount([]);
+  await m.open();
+  expect(document.querySelector('[data-filter-folder="pr:3"]')?.getAttribute("data-term")).toBe("include");
 });

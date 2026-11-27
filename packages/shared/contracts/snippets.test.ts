@@ -107,9 +107,19 @@ describe("delegated worker guidance", () => {
   it("keeps worker briefs and labeled launches out of the inbox", () => {
     expect(FORKS_SNIPPET).toContain("cast spawn --subagent -- - - <<'EOF'");
     const guide = guideText(snippetBySlug("forks")!);
-    expect(guide).toContain('cast spawn --subagent --label rollout "<task>" "<task>"');
     expect(guide).toContain("A label or a task/plan binding does not nest it");
     expect(FORKS_SNIPPET).not.toContain("Use it to hand off self-contained work — a parallel audit");
+  });
+
+  it("labels only what the human asked for or two or more sessions watched together", () => {
+    // Agents coined a label per spawn, mostly for --subagent workers that
+    // label counts skip, and people spent their time deleting labels holding
+    // zero or one session.
+    const guide = guideText(snippetBySlug("forks")!);
+    expect(guide).toContain("two or more independent inbox sessions");
+    expect(guide).toContain("Never label a single session or `--subagent` workers");
+    expect(guide).not.toMatch(/--subagent --label/);
+    expect(FORKS_SNIPPET).not.toContain("--label");
   });
 });
 
