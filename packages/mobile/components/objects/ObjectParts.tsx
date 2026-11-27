@@ -72,10 +72,11 @@ export function ObjectHeader({ type, shortId, refId, link, title, menu }: {
 
 /** A fact as a chip: an icon, a word, its colour. Tappable when it opens or changes something. */
 /** `link`: the press opens another object (a right caret); otherwise a press picks a value here (a down caret). */
-export function FactChip({ icon, label, color, onPress, link, testID }: { icon?: IconName; label: string; color: string; onPress?: () => void; link?: boolean; testID?: string }) {
+/** `mark`: web's glyph for the fact (components/marks), drawn in place of `icon`. */
+export function FactChip({ icon, mark, label, color, onPress, link, testID }: { icon?: IconName; mark?: ReactNode; label: string; color: string; onPress?: () => void; link?: boolean; testID?: string }) {
   const body = (
     <>
-      {icon && <FontAwesome name={icon} size={11} color={color} />}
+      {mark ?? (icon && <FontAwesome name={icon} size={11} color={color} />)}
       <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={[chipText, { color }]} numberOfLines={1}>{label}</RNText>
       {onPress && <FontAwesome name={link ? 'angle-right' : 'angle-down'} size={11} color={color} style={{ opacity: 0.7 }} />}
     </>
