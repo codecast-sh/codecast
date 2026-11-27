@@ -588,7 +588,7 @@ export function CardSubagentsLine({ rows, onOpen }: {
   if (rows.length === 0) return null;
   return (
     <div data-card-bar data-sv-subagents-line={rows.length} className="flex w-full items-center gap-2.5 pl-2 pr-3 py-[3px] text-meta leading-tight tabular-nums text-sol-text-muted">
-      <SchedChildArrow label="Subagents" className="text-sol-violet/70" />
+      <SchedChildArrow label="Subagents" markId="inbox.subagents" className="text-sol-violet/70" />
       {subagentStateGroups(rows).map((g) => {
         const words = `${g.count} ${g.count === 1 ? "subagent" : "subagents"} ${SESSION_STATUS[g.status].word.toLowerCase()}`;
         return (
@@ -623,7 +623,7 @@ export function CardSubagentRows({ rows, activeSessionId, onOpen }: {
             {...KEEP_DRAG_OFF_CARD}
             onClick={(e) => { e.stopPropagation(); onOpen(session, e); }}
             className={`flex w-full min-h-[24px] items-center gap-2 pl-[13px] pr-3 text-left text-meta leading-tight hover:bg-sol-text/[0.04] [@media(pointer:coarse)]:min-h-11 ${active ? "bg-sol-text/[0.06]" : ""}`}>
-            <SessionStatusMark status={status} size={9} />
+            <SessionStatusMark status={status} size={9} labeled />
             <span className="min-w-0 truncate text-sol-text-secondary">{cleanTitle(sessionCardTitle(session))}</span>
             <span className={`shrink-0 ${meta.text}`}>{meta.word}</span>
           </button>

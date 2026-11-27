@@ -311,7 +311,7 @@ describe("the Modern session card", () => {
     for (const id of new Set(marks.map((m) => m.split(" ")[0]))) expect(MARK_BY_ID.has(id)).toBe(true);
     // A flag's own native title would double the mark's tooltip.
     expect(html).not.toContain('title="Pinned"');
-    const nested = render({ _id: "c-sub-mark", is_subagent: true, parent_conversation_id: "c-lead", is_idle: false, agent_status: "working" } as never, { variant: "working" });
+    const nested = render({ _id: "c-sub-mark", is_subagent: true, parent_conversation_id: "c-lead", is_idle: false, agent_status: "working" } as never, { variant: "working", underParent: true });
     expect(nested).toContain('data-mark="inbox.spawned"');
   });
 

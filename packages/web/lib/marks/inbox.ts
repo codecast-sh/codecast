@@ -43,7 +43,7 @@ export const inboxMarks: MarkDef[] = inbox([
   { id: "inbox.running", name: "Running", meaning: "A run or background job is live now" },
   { id: "inbox.run_failed", name: "Run failed", meaning: "The trigger's last run failed" },
   { id: "inbox.run_flagged", name: "Run flagged", meaning: "The trigger's last run asked for a look" },
-  { id: "inbox.subagents_running", name: "Subagents running", meaning: "Subagents running now, folded under the card" },
+  { id: "inbox.subagents", name: "Subagents", meaning: "The card's subagents by state; a count opens the newest" },
 
   { id: "inbox.label", name: "Label", meaning: "The label it's filed under" },
   { id: "inbox.repo", name: "Repository", meaning: "The repository it runs in" },

@@ -70,9 +70,9 @@ function schedBadgeTone(task: { status: string; run_at?: number }, now: number):
 // The ↳ corner arrow an attached/grouped row wears — the SAME glyph the
 // subagent rows carry (in schedule-amber, not subagent violet), so the child
 // connectors line up under a card and the amber alone says "schedule".
-export function SchedChildArrow({ label, className }: { label: string; className?: string }) {
+export function SchedChildArrow({ label, className, markId = "inbox.inside" }: { label: string; className?: string; markId?: string }) {
   return (
-    <Mark id="inbox.inside" className="self-start">
+    <Mark id={markId} className="self-start">
       <span className={`flex items-center self-start mt-[3px] shrink-0 ${className ?? "text-sol-amber/70"}`} role="img" aria-label={label}>
         <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M6 4v12h12" />
