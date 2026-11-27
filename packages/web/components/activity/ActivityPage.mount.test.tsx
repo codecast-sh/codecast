@@ -6,7 +6,7 @@
 // is gone from it): Modern in its page bar, Classic and Minimal with their own
 // header at the top of the column and their own shapes on every piece. A
 // liveness heartbeat re-renders nothing.
-import { afterAll, describe, expect, mock, spyOn, test } from "bun:test";
+import { afterAll, describe, expect, mock, setSystemTime, spyOn, test } from "bun:test";
 import type { ReactNode } from "react";
 import { JSDOM } from "jsdom";
 import { IDBFactory, IDBKeyRange } from "fake-indexeddb";
@@ -29,7 +29,11 @@ const restore = replaceGlobals({
   ResizeObserver: class { observe() {} unobserve() {} disconnect() {} },
   indexedDB: new IDBFactory(), IDBKeyRange,
 });
-afterAll(() => { closeDomWindow(dom); restore(); });
+// The feed's "today" rows sit minutes before now, so the clock is pinned to
+// midday: near midnight they would clamp into the future and fall off the page.
+const midday = new Date(); midday.setHours(12, 0, 0, 0);
+setSystemTime(midday);
+afterAll(() => { closeDomWindow(dom); restore(); setSystemTime(); });
 
 const convexReact = { ...(await import("convex/react")) };
 const client = { query: async () => ({ conversations: [], nextCursor: null }), mutation: async () => null };
