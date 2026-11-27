@@ -187,6 +187,13 @@ test("an ask queued for the viewer in Decisions needs you wherever its session s
   }
 });
 
+test("a priority card sitting in a session is its person's, not the session's question: it never makes the milestone need you", () => {
+  const card = fixtureId("dqcard");
+  useInboxStore.setState({ sessionDecisions: { pc: { _id: "pc", conversation_id: card, status: "pending", blocking: true, in_queue: true, priority_card: { kind: "merges" }, created_at: NOW - MIN, updated_at: NOW - MIN, question: "Merge these?", options: [] } } } as any);
+  for (const inbox of ["sidebar", "phone"] as const) expect([inbox, drawn(card, inbox)]).toEqual([inbox, null]);
+  useInboxStore.setState({ sessionDecisions: {} } as any);
+});
+
 test("a stashed session the inbox lifts into Decisions (its own question, or a decide) asks on the phone too, never New session", () => {
   const auq = fixtureId("stashauq");
   const dq = fixtureId("stashdq");
