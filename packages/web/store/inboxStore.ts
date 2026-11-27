@@ -16965,10 +16965,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   deleteMyVoiceprints: asyncAction(function (this: Draft) {
     if (this.myVoiceprint) clearVoiceSamples(this.myVoiceprint);
   }),
-  setDictationEnabled: asyncAction(function (this: Draft, enabled: boolean) {
-    if (this.currentUser) (this.currentUser as any).dictation_enabled = enabled;
-    return { enabled };
-  }),
+  setDictationEnabled: asyncAction(function (this: Draft, enabled: boolean) { if (this.currentUser) (this.currentUser as any).dictation_enabled = enabled; return { enabled }; }),
 
   // =====================
   // SELECTORS

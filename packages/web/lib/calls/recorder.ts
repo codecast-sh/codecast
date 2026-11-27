@@ -33,7 +33,7 @@
 // subscribe/getSnapshot, and no audio machinery goes anywhere near React.
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { CALL_HEARTBEAT_MS, recRoomKey } from "@codecast/shared/contracts";
-import { finishRunningDictation } from "@codecast/shared/contracts/dictation";
+import { finishDictationEverywhere } from "../dictation/crossWindow";
 import { useInboxStore } from "../../store/inboxStore";
 import { uploadBlobToStorage } from "../uploadBlob";
 import { mutateOnUnload } from "../keepaliveMutation";
@@ -188,7 +188,7 @@ export async function startRecording(): Promise<string | null> {
     return null;
   }
   // The room recording takes the microphone: a recording in a text box keeps its words and stops.
-  void finishRunningDictation();
+  void finishDictationEverywhere();
   setPhase("starting");
 
   try {
