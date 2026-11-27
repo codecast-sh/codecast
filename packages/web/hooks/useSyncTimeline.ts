@@ -21,7 +21,7 @@ export function useSyncPullRequests(args: { repository?: string; limit?: number 
 }
 
 /** What an open pull request's Deploys card draws: a change to any of it redraws the column. */
-const deployCardSig = (p: OpenPr) => `${p.state}|${p.title}|${p.created_at}|${p.author_github_username ?? ""}|${p.task_ids?.join(",") ?? ""}|${p.draft ? 1 : 0}|${p.checks_state ?? ""}|${p.review_decision ?? ""}|${p.mergeable_state ?? ""}|${p.behind_by ?? ""}|${p.head_ref ?? ""}`;
+const deployCardSig = (p: OpenPr) => `${p.state}|${p.title}|${p.created_at}|${p.author_github_username ?? ""}|${p.task_ids?.join(",") ?? ""}|${p.draft ? 1 : 0}|${p.checks_state ?? ""}|${p.review_decision ?? ""}|${p.mergeable_state ?? ""}|${p.behind_by ?? ""}|${p.head_ref ?? ""}|${p.head_sha ?? ""}`;
 
 /**
  * Reader with its feeder: one repository's open pull requests (the Deploys page's Shipping column); null while nothing
