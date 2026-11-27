@@ -457,12 +457,14 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       }
       // The branch is this run's alone before anything moves or checks it out, and before a task is made for a run
       // that would be refused (workflow/runBranch.ts, ct-98893). A task not made yet has no branch or tree of its own.
+      // Said at once, under --json too: a detach of the caller's own worktree stands even if a later step fails.
+      let freed: string | null = null;
       if (branch || task) {
         const { claimRunBranchVia } = await import("./workflow/runBranch.js");
         const own = task ? runSlug(graph, { task_id: task }, "run") : null;
-        const freed = await claimRunBranchVia(top, own, branch ?? `codecast/${own}`, { task, rewrites: !branch }, deps.cliPost)
+        freed = await claimRunBranchVia(top, own, branch ?? `codecast/${own}`, { task, rewrites: !branch }, deps.cliPost)
           .catch((err: Error) => { console.error(err.message); process.exit(1); });
-        if (freed && !opts.json) console.error(dim(`  ${freed}`));
+        if (freed) console.error(dim(`  ${freed}`));
       }
       if (!task) {
         const made = await cast(["task", "create", changeTitle, "-d", `A change run through the ${found.label} flow (${found.slug}).`, "--found-during", "none"], top);
@@ -558,7 +560,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
           process.exitCode = 1;
         }
       }
-      const result = { run_id: runId, task, flow: found.slug, branch: change?.branch ?? null, worktree: change ? worktree : null, files: change?.paths ?? [], shared: change?.shared ?? [], held: change?.held ?? [], ...(placed ? { device: placed.device_id } : {}) };
+      const result = { run_id: runId, task, flow: found.slug, branch: change?.branch ?? null, worktree: change ? worktree : null, files: change?.paths ?? [], shared: change?.shared ?? [], held: change?.held ?? [], ...(freed ? { freed } : {}), ...(placed ? { device: placed.device_id } : {}) };
       if (opts.json) { console.log(JSON.stringify(result)); return; }
       const stages = (await import("./flowStagePath.js")).flowStagePath(found);
       console.log(`${bold(found.label)} started on ${task}${placed ? ` on ${placed.name}` : ""}${stages ? `: ${stages}` : ""}`);

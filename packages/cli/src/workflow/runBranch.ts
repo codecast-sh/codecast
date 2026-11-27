@@ -10,21 +10,22 @@
  * - a run of the same task is live: it reads the branch again itself when its
  *   subject ends its turn, and a second freeze would move the branch and reset
  *   its tree under it;
- * - another worktree holding the branch is a live run's, or one too young to
+ * - another worktree holding the branch is not a run's (a person's, an
+ *   agent's) and not the caller's own, or is a live run's, or one too young to
  *   tell (its run may still be being created), or one whose liveness or
- *   processes cannot be read;
+ *   processes cannot be read: no process or session signal proves nobody
+ *   commits there next;
  * - that worktree holds uncommitted files: a process list is no proof nobody
- *   edits it, and an ended run's leftovers are not this change's to push;
- * - it is no run's and an agent session other than the caller's is working in
- *   it (its next commit would land on no branch), or it is the repository's main
- *   checkout, which is everyone's;
+ *   edits it, an ended run's leftovers are not this change's to push, and the
+ *   caller's own may be meant for the branch;
  * - a freeze, which replaces the branch's commits, would replace commits no
  *   freeze of this run made that the checkout lacks.
  * Only then is a clean worktree an ended run left holding the branch released
  * (lineTrialBranch.ts freeBranch), so a rerun after a failed run needs no hand
- * cleanup, and a clean one no run made (an agent's, a session's) is detached at
- * the same commit, its files untouched, and the run says so: agents no longer
- * `git switch --detach` by hand before shipping their branch (ct-102064).
+ * cleanup, and the caller's own clean worktree (not the main checkout) is
+ * detached at the same commit, its files untouched, and the caller told: an
+ * agent shipping its own branch no longer `git switch --detach`es first
+ * (ct-102064).
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -67,9 +68,10 @@ export function liveTreeStates(repo: string, data: LiveRunsOnDevice | null | und
 /**
  * Make `branch` free for the run whose worktree is `slug` (null for a task not made yet, which has no tree), or throw
  * why it is not, having moved nothing. `rewrites`: the run freezes its change onto the branch (a session's or the
- * checkout's edits) rather than running the branch as it stands. Returns a line saying what it released, or null.
+ * checkout's edits) rather than running the branch as it stands. `cwd`: where the caller works (process.cwd()), whose
+ * own worktree alone it may detach. Returns a line saying what it released or detached, or null.
  */
-export async function claimRunBranch(repo: string, slug: string | null, branch: string, opts: { task?: string; rewrites: boolean; live: RunLiveness; hands?: RunHands; now?: number }): Promise<string | null> {
+export async function claimRunBranch(repo: string, slug: string | null, branch: string, opts: { task?: string; rewrites: boolean; live: RunLiveness; hands?: RunHands; now?: number; cwd?: string }): Promise<string | null> {
   const now = opts.now ?? Date.now();
   const worktrees = real(path.join(repo, ".codecast", "worktrees"));
   const ownTree = slug ? path.join(worktrees, slug) : null;
@@ -91,7 +93,7 @@ export async function claimRunBranch(repo: string, slug: string | null, branch: 
   if (holder && real(holder) !== ownTree) {
     const name = path.dirname(real(holder)) === worktrees ? path.basename(holder) : null;
     if (!name || !runTreeNames(repo).has(name)) {
-      await refuseUnlessDetachable(repo, holder, branch, opts.hands);
+      refuseUnlessCallersOwn(repo, holder, branch, opts.cwd ?? process.cwd());
       detach = holder;
     } else {
       const trees = await opts.live.trees().catch(() => null);
@@ -119,7 +121,7 @@ export async function claimRunBranch(repo: string, slug: string | null, branch: 
   }
   if (detach) {
     if (git(detach, ["switch", "-q", "--detach"]) === null) throw new Error(`${branch} is checked out in ${detach}, and switching that worktree off it failed: run git switch --detach there, then run this again`);
-    return `Detached ${detach} from ${branch} at the same commit (it had nothing uncommitted) so the run can check the branch out: a commit made there now is on no branch, so push one with git push origin HEAD:refs/heads/${branch}`;
+    return `Detached your worktree ${detach} from ${branch} at the same commit (it had nothing uncommitted) so the run can check the branch out: a commit made there now is on no branch, so push one with git push origin HEAD:refs/heads/${branch}`;
   }
   if (!release) return null;
   // Clean, so nothing is committed on the way: freeBranch only takes the tree away, its branch left as it was.
@@ -129,33 +131,23 @@ export async function claimRunBranch(repo: string, slug: string | null, branch: 
 }
 
 /**
- * Throw why worktree `holder`, which no run made, may not be switched off `branch`: it is the main checkout, holds
- * uncommitted files (they may be meant for the branch, and the run would ship it without them), or a session other
- * than the caller's is working in it. Switching a clean tree to a detached HEAD at the same commit moves no file, so a
- * settled session, a dev server or a shell there loses nothing.
+ * Throw unless worktree `holder`, which no run made, is the caller's own (the worktree `cwd` is in) and may be switched
+ * off `branch`: not the main checkout, which is everyone's, and nothing uncommitted, which may be meant for the branch.
+ * Anyone else's worktree is theirs to switch: no process or session signal tells reliably that nobody commits there
+ * next, and a commit made there after a detach lands on no branch.
  */
-async function refuseUnlessDetachable(repo: string, holder: string, branch: string, hands?: RunHands): Promise<void> {
+function refuseUnlessCallersOwn(repo: string, holder: string, branch: string, cwd: string): void {
   const main = git(repo, ["worktree", "list", "--porcelain"])?.split("\n")[0]?.replace(/^worktree /, "");
   if (main && real(main) === real(holder)) {
-    throw new Error(`${branch} is checked out in the main checkout ${holder}: switch it off the branch there, or run this change on another branch`);
+    throw new Error(`${branch} is checked out in the main checkout ${holder}: switch it off the branch there (git switch --detach), or run this change on another branch`);
+  }
+  const own = git(cwd, ["rev-parse", "--show-toplevel"]);
+  if (!own || real(own) !== real(holder)) {
+    throw new Error(`${branch} is checked out in ${holder}, which no run made: switch that worktree off it (git -C ${holder} switch --detach), or run this change on another branch`);
   }
   const shown = uncommitted(holder);
   if (shown) {
-    throw new Error(`${branch} is checked out in ${holder}, which no run made, with uncommitted files (${shown}): commit what belongs on ${branch} there and switch it off the branch (git switch --detach), then run this again`);
-  }
-  const { processesIn, ownersOf } = await import("../lineTrialBranch.js");
-  let busy: Array<{ pid: number }>;
-  try { busy = processesIn(real(holder)); } catch {
-    throw new Error(`${branch} is checked out in ${holder}, which no run made, and which processes work in it cannot be read: switch it off the branch there (git switch --detach), then run this again`);
-  }
-  if (!busy.length || !hands) return;
-  const owners = ownersOf([process.pid, ...busy.map((p) => p.pid)]);
-  const caller = owners.get(process.pid)?.session;
-  const others = [...new Set(busy.map((p) => owners.get(p.pid)?.session).filter((s): s is string => !!s && s !== caller))];
-  const working = (await hands.live(others).catch(() => null))?.filter((h) => h.working);
-  if (!working) throw new Error(`${branch} is checked out in ${holder}, which no run made, and whether the sessions in it are working cannot be told: run this again, or switch it off the branch there (git switch --detach)`);
-  if (working.length) {
-    throw new Error(`${branch} is checked out in ${holder}, where session ${working.map((h) => h.id.slice(0, 7)).join(", ")} is still working: let it finish, or switch that worktree off the branch (git switch --detach), then run this again`);
+    throw new Error(`${branch} is checked out in your worktree ${holder}, with uncommitted files (${shown}): commit what belongs on ${branch} and switch it off the branch (git switch --detach), then run this again`);
   }
 }
 
