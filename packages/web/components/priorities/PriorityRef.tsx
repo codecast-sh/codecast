@@ -46,7 +46,7 @@ export function CriticalMeter({ done, total, size = "card", className }: { done:
 export function RankMark({ rank, className }: { rank: number | null; className?: string }) {
   if (rank == null) return <Target data-rank-mark="none" className={cn("inline size-[0.95em] shrink-0 opacity-80", className)} aria-hidden />;
   return (
-    <span data-rank-mark={rank} aria-label={`Rank ${rank}`} className={cn("inline-grid h-[1.25em] min-w-[1.25em] shrink-0 place-items-center rounded-[0.3em] bg-sol-orange px-[0.25em] text-[0.75em] font-bold leading-none tabular-nums text-sol-bg", className)}>
+    <span data-rank-mark={rank} role="img" aria-label={`Rank ${rank}`} className={cn("inline-grid h-[1.25em] min-w-[1.25em] shrink-0 place-items-center rounded-[0.3em] bg-sol-orange px-[0.25em] text-[0.75em] font-bold leading-none tabular-nums text-sol-bg", className)}>
       {rank}
     </span>
   );
@@ -56,9 +56,11 @@ export function RankMark({ rank, className }: { rank: number | null; className?:
 export function OwnerFace({ row, size = "1.1em", className }: { row: PriorityRow; size?: string | number; className?: string }) {
   // AuthorAvatar's initial shrinks its own font, so an em size measured inside it would shrink the circle too: the box takes the size and the avatar fills it.
   const em = typeof size === "string";
+  const who = row.mine ? "You" : row.owner;
   return (
-    <span data-owner-face className={cn("inline-flex shrink-0", className)} style={em ? { width: size, height: size } : undefined} title={row.mine ? "You" : row.owner}>
-      <AuthorAvatar name={row.mine ? "You" : row.owner} avatar={row.owner_image} size={em ? "100%" : size} />
+    <span data-owner-face role="img" aria-label={who} title={who} className={cn("inline-flex shrink-0", className)} style={em ? { width: size, height: size } : undefined}>
+      {/* The owner's own name, yours included: the initial is theirs, never "Y". */}
+      <AuthorAvatar name={row.owner} avatar={row.owner_image} size={em ? "100%" : size} />
     </span>
   );
 }
@@ -123,6 +125,27 @@ export function PrioritySheet({ row, open, onOpenChange }: { row: PriorityRow; o
 const FACE_MID = "align-middle -translate-y-[0.1em]";
 const RANK_MID = "align-middle -translate-y-[0.133em]";
 
+/** A wide pill's parts as prose: the face, the badge and the title's first word never part at a line break, nor its last word and the meter. */
+function WideParts({ row, label }: { row: PriorityRow; label: string }) {
+  const words = label.trim().split(/\s+/);
+  const first = words[0];
+  const last = words.length > 1 ? words[words.length - 1] : null;
+  const middle = words.slice(1, -1).join(" ");
+  const meter = row.counts.critical_total > 0 && <CriticalMeter done={row.counts.critical_done} total={row.counts.critical_total} size="inline" className={cn(FACE_MID, "ml-[0.3em]")} />;
+  return (
+    <>
+      <span data-pill-lead className="whitespace-nowrap">
+        <OwnerFace row={row} className={cn(FACE_MID, "mr-[0.3em]")} />
+        <RankMark rank={row.rank} className={cn(row.rank == null ? FACE_MID : RANK_MID, "mr-[0.3em]")} />
+        {first}
+        {!last && meter}
+      </span>
+      {middle && ` ${middle}`}
+      {last && <> <span data-pill-tail className="whitespace-nowrap">{last}{meter}</span></>}
+    </>
+  );
+}
+
 /**
  * `pri-N` in prose: face, rank, title, critical meter. A mouse hovers it for
  * the card and clicks through to the page; a finger taps it for the sheet.
@@ -143,14 +166,18 @@ export function PriorityPill({ row, href, label, suffix, wide }: { row: Priority
       title={row.title}
       className={cn(
         "not-prose entity-ref rounded-[0.2em] bg-sol-orange/[0.08] px-[0.2em] align-baseline text-[1em] font-medium text-sol-orange no-underline decoration-current/40 underline-offset-2 hover:bg-sol-orange/[0.16] hover:underline",
-        wide ? "inline leading-[1.55] [box-decoration-break:clone] [-webkit-box-decoration-break:clone] [&>*]:mr-[0.3em] [&>*:last-child]:mr-0" : "inline-flex max-w-[24em] items-center gap-[0.3em] leading-snug",
+        wide ? "inline leading-[1.55] [box-decoration-break:clone] [-webkit-box-decoration-break:clone]" : "inline-flex max-w-[24em] items-center gap-[0.3em] leading-snug",
       )}
     >
-      <OwnerFace row={row} className={wide ? FACE_MID : undefined} />
-      <RankMark rank={row.rank} className={wide ? (row.rank == null ? FACE_MID : RANK_MID) : undefined} />
-      {/* One line: every part centred, the title alone on the baseline so the pill sits on the sentence's. */}
-      <span className={wide ? undefined : "min-w-0 self-baseline truncate"}>{label}</span>
-      <CriticalMeter done={row.counts.critical_done} total={row.counts.critical_total} size="inline" className={wide ? FACE_MID : undefined} />
+      {wide ? <WideParts row={row} label={label} /> : (
+        <>
+          <OwnerFace row={row} />
+          <RankMark rank={row.rank} />
+          {/* One line: every part centred, the title alone on the baseline so the pill sits on the sentence's. */}
+          <span className="min-w-0 self-baseline truncate">{label}</span>
+          <CriticalMeter done={row.counts.critical_done} total={row.counts.critical_total} size="inline" />
+        </>
+      )}
     </Link>
   );
   return (

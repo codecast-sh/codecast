@@ -91,11 +91,16 @@ test("pri-N in a message is a pill: face, rank badge, title, critical meter, and
     expect(pill.getAttribute("href")).toBe("/priorities/pri-60");
     expect(pill.textContent).toContain("Priorities for Union");
     expect(pill.querySelector("[data-critical-meter]")?.textContent).toBe("2/4");
-    // The owner's face (their initial, with no picture), then the rank badge, then the title.
+    // The owner's face (your own initial, with no picture), then the rank badge, then the title; each an image with its name.
     const face = pill.querySelector("[data-owner-face]")!;
+    expect(face.getAttribute("role")).toBe("img");
+    expect(face.getAttribute("aria-label")).toBe("You");
     expect(face.getAttribute("title")).toBe("You");
-    expect(face.textContent).toBe("Y");
-    expect(pill.querySelector("[data-rank-mark]")?.textContent).toBe("7");
+    expect(face.textContent).toBe("D");
+    const badge = pill.querySelector("[data-rank-mark]")!;
+    expect(badge.textContent).toBe("7");
+    expect(badge.getAttribute("role")).toBe("img");
+    expect(badge.getAttribute("aria-label")).toBe("Rank 7");
     expect([...pill.children].map((c) => (c.hasAttribute("data-owner-face") ? "face" : c.hasAttribute("data-rank-mark") ? "rank" : c.hasAttribute("data-critical-meter") ? "meter" : "title"))).toEqual(["face", "rank", "title", "meter"]);
     // Not in a wide row: the title truncates.
     expect(pill.className).toContain("inline-flex");
@@ -144,7 +149,7 @@ test("a teammate's card: their face and real rank, each open milestone a box the
   try {
     await page.waitFor(() => !!page.container.querySelector("[data-priority-card]"));
     const card = page.container.querySelector("[data-priority-card]")!;
-    expect(card.querySelector("[data-owner-face]")?.getAttribute("title")).toBe("Sam Teammate");
+    expect(card.querySelector("[data-owner-face]")?.getAttribute("aria-label")).toBe("Sam Teammate");
     expect(card.querySelector("[data-owner-face]")?.textContent).toBe("S");
     expect(card.querySelector("[data-rank-mark]")?.textContent).toBe("3");
     expect(card.querySelectorAll("[data-priority-milestones] li")).toHaveLength(2);
@@ -155,7 +160,7 @@ test("a teammate's card: their face and real rank, each open milestone a box the
   }
 });
 
-test("a priority with no rank shows the target in the badge's place; a wide pill wraps as prose", async () => {
+test("a priority with no rank shows the target in the badge's place; a wide pill wraps as prose, never between its face, badge and first word", async () => {
   answers["priorities:show"] = { ...DETAIL, status: "set_aside", rank: null, ai_rank: null };
   const page = await inRouter(<p><EntityIdPill shortId="pri-60" wide /></p>);
   try {
@@ -165,6 +170,16 @@ test("a priority with no rank shows the target in the badge's place; a wide pill
     expect(pill.className).not.toContain("inline-flex");
     expect(pill.className).toContain("[box-decoration-break:clone]");
     expect(pill.querySelector(".truncate")).toBeNull();
+    // "Priorities for Union": face, badge and "Priorities" hold together, as do "Union" and the meter; "for" may wrap.
+    const lead = pill.querySelector("[data-pill-lead]")!;
+    expect(lead.className).toContain("whitespace-nowrap");
+    expect(lead.querySelector("[data-owner-face]")).not.toBeNull();
+    expect(lead.querySelector("[data-rank-mark]")).not.toBeNull();
+    expect(lead.textContent).toBe("DPriorities");
+    const tail = pill.querySelector("[data-pill-tail]")!;
+    expect(tail.className).toContain("whitespace-nowrap");
+    expect(tail.textContent).toBe("Union2/4");
+    expect(pill.textContent).toBe("DPriorities for Union2/4");
   } finally {
     await page.unmount();
     answers["priorities:show"] = DETAIL;
