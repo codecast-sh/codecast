@@ -139,9 +139,12 @@ export function parseBunCheck(output: string, exitCode: number | null): { errors
 }
 
 /**
- * The tree as git sees it: HEAD, every uncommitted path (untracked included)
- * and every ignored entry git lists (an ignored directory as one entry), each
- * with its stat. Two asks with the same signature see the same files, so one
+ * The tree as git sees it: HEAD, every uncommitted path (each untracked file
+ * listed) and every ignored entry (an ignored directory as one entry), each
+ * with its stat. Bounded on a big tree: `git status` never expands ignored
+ * directories (with --ignored it walked 1.6 million node_modules entries in
+ * 32 s on Union's checkout), and the ignored entries come collapsed from
+ * `git ls-files --directory`. Two asks with the same signature see the same files, so one
  * run answers both. An ignored directory counts by its own stat, which an
  * install or a generator that replaces files changes; an edit in place deep
  * inside one (node_modules, a codegen folder) during a run is not seen, which
@@ -152,12 +155,17 @@ export function treeSignature(root: string): string | null {
   const env = { ...process.env, GIT_OPTIONAL_LOCKS: "0" };
   const head = spawnSync("git", ["-C", root, "rev-parse", "HEAD"], { encoding: "utf-8", timeout: 10_000, env });
   if (head.status !== 0) return null;
-  const status = spawnSync("git", ["-C", root, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=traditional", "--no-renames"], { encoding: "utf-8", timeout: 30_000, maxBuffer: 256 * 1024 * 1024, env });
+  const opts = { encoding: "utf-8" as const, timeout: 10_000, maxBuffer: 64 * 1024 * 1024, env };
+  const status = spawnSync("git", ["-C", root, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames"], opts);
   if (status.status !== 0) return null;
+  const ignored = spawnSync("git", ["-C", root, "ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory"], opts);
+  if (ignored.status !== 0) return null;
   const hash = createHash("sha256").update(String(head.stdout).trim());
-  for (const entry of String(status.stdout).split("\0")) {
-    if (!entry) continue;
-    const file = entry.slice(3);
+  const entries = [
+    ...String(status.stdout).split("\0").filter(Boolean).map((e) => [e, e.slice(3)] as const),
+    ...String(ignored.stdout).split("\0").filter(Boolean).map((f) => [`!! ${f}`, f] as const),
+  ];
+  for (const [entry, file] of entries) {
     let stat = "-";
     try {
       const st = fs.statSync(path.join(root, file));
@@ -212,17 +220,21 @@ function writeBunResult(dir: string, result: BunRunResult, now = Date.now()): vo
 // ---------------------------------------------------------------------------
 
 /** The foreground body of one bun run: check once, leave the result, exit. */
-export async function runBunCheck(root: string, project: string, tsconfig: string, bin: string, runId: string): Promise<void> {
+export async function runBunCheck(root: string, project: string, tsconfig: string, bin: string, runId: string, signature?: (root: string) => string | null): Promise<void> {
   const dir = watchDir(root, project);
   fs.mkdirSync(dir, { recursive: true });
   const repo = repoOf(root);
   const startedAt = Date.now();
   console.log(`bun run ${process.pid} started (${new Date(startedAt).toISOString()})`);
+  // The state goes first, before anything slow: the ask that started this run waits a bounded time to see it.
   const state: WatchState = {
     pid: process.pid, project, tsconfig, root, repo, startedAt, inProgress: true, askedAt: startedAt, passStartedAt: startedAt,
-    checker: "bun", runId, tree: treeSignature(root) ?? undefined,
+    checker: "bun", runId,
   };
   writeWatchState(dir, state);
+  // Then the tree this run checks, before bun reads it, so a later ask on the same tree can share the run.
+  const tree = (signature ?? treeSignature)(root);
+  if (tree) writeWatchState(dir, Object.assign(state, { tree }));
   const finish = (result: Omit<BunRunResult, "runId" | "startedAt" | "finishedAt">): void => {
     writeBunResult(dir, { runId, startedAt, finishedAt: Date.now(), ...result });
     try {
