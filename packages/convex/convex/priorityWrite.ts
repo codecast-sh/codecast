@@ -230,7 +230,7 @@ export async function doSessionMove(ctx: Ctx, viewer: Id<"users">, sessionRef: s
  * priority's owner may say it of a teammate's session on theirs, which only
  * unlinks it: what the session may map to stays its owner's to say.
  */
-export async function doSessionNotThis(ctx: Ctx, viewer: Id<"users">, sessionRef: string): Promise<Result<PriorityRow>> {
+export async function doSessionNotThis(ctx: Ctx, viewer: Id<"users">, sessionRef: string): Promise<Result<PriorityRow | { short_id: string }>> {
   const isViewer = (id: Id<"users"> | undefined) => String(id ?? "") === String(viewer);
   const conv: Doc<"conversations"> | null = await findConversationByAnyRefWhere(ctx, sessionRef, async (c) =>
     isViewer(c.user_id) || (!!c.priority_id && isViewer(((await ctx.db.get(c.priority_id)) as Priority | null)?.user_id)));
@@ -240,13 +240,16 @@ export async function doSessionNotThis(ctx: Ctx, viewer: Id<"users">, sessionRef
   if (isViewer(held.user_id)) {
     const p = await owned(ctx, viewer, held.short_id);
     if ("error" in p) return p;
-  } else if (held.status === "merged" || !(await (await readerFor(ctx, viewer)).canRead(held))) return { error: `${sessionRef} is not on a priority you can see` };
+  }
+  // Otherwise the session is the viewer's own (the lookup above): they may always take it off, even a priority they can no
+  // longer read, and then learn nothing of it but the id their session was linked to.
+  const readable = isViewer(held.user_id) || (held.status !== "merged" && (await (await readerFor(ctx, viewer)).canRead(held)));
   const { move, recount } = sessionMover(ctx);
   await move(conv, undefined, undefined);
   const not = conv.priority_not ?? [];
   if (isViewer(conv.user_id) && !not.some((id) => String(id) === String(held._id))) await ctx.db.patch(conv._id, { priority_not: [...not, held._id] });
   await recount();
-  return echo(ctx, viewer, held._id);
+  return readable ? echo(ctx, viewer, held._id) : { short_id: held.short_id };
 }
 
 const MAX_CORRECTION = 2_000;

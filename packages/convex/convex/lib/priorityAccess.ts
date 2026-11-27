@@ -31,6 +31,8 @@ export const TEAMMATE_SESSIONS = 4;
  * would make the links read the same sessions again.
  */
 export const ACCESS_SESSIONS_READ = 10;
+/** The wider window access reads, once, when teammates' Starts leave fewer than TEAMMATE_SESSIONS of the owner's among the newest; past it, hidden. */
+export const ACCESS_SESSIONS_WIDE = 50;
 
 type Ctx = { db: any };
 type Priority = Doc<"priorities">;
@@ -108,7 +110,13 @@ export async function readerFor(ctx: Ctx, viewer: Id<"users">): Promise<Reader> 
     }
     const ws = parseWorkspaceKey(p.workspace);
     if (ws?.type !== "team") return false;
-    const owners = (await sessionsOf(p, ACCESS_SESSIONS_READ)).filter((c) => String(c.user_id) === String(p.user_id));
+    let window = await sessionsOf(p, ACCESS_SESSIONS_READ);
+    let owners = window.filter((c) => String(c.user_id) === String(p.user_id));
+    // Teammates' Starts crowd the newest: when they leave fewer than TEAMMATE_SESSIONS of the owner's, look further back once.
+    if (owners.length < TEAMMATE_SESSIONS && window.length === ACCESS_SESSIONS_READ) {
+      window = await sessionsOf(p, ACCESS_SESSIONS_WIDE);
+      owners = window.filter((c) => String(c.user_id) === String(p.user_id));
+    }
     for (const c of owners.slice(0, TEAMMATE_SESSIONS)) if (await vis.listedTo(c, ws.teamId)) return true;
     return false;
   };

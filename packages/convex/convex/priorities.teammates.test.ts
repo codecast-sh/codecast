@@ -185,6 +185,38 @@ describe("a teammate's reads", () => {
     expect(await t.run(async (ctx) => (await readerFor(ctx, cy)).canRead((await ctx.db.get(p1))!))).toBe(false);
   });
 
+  test("a dozen teammates' Starts crowding the newest sessions never hide the owner's priority: access looks further back once", async () => {
+    const { t, as, bea, cy, acme, ws, p1 } = await world();
+    await t.run(async (ctx) => {
+      await ctx.db.insert("team_memberships", { user_id: cy, team_id: acme, role: "member", joined_at: 1 } as any);
+      for (let i = 0; i < 12; i++) {
+        await ctx.db.insert("conversations", {
+          user_id: bea, team_id: acme, agent_type: "claude_code", session_id: `crowd-${i}`, short_id: `jx7cr${String(i).padStart(2, "0")}`, title: `crowd ${i}`,
+          started_at: NOW, updated_at: NOW + 1, message_count: 1, is_private: false, team_visibility: "full", status: "active", priority_id: p1, priority_set_by: "link",
+        } as any);
+      }
+    });
+    expect(await t.run(async (ctx) => (await readerFor(ctx, cy)).canRead((await ctx.db.get(p1))!))).toBe(true);
+    expect((await rowsOf(as(cy), { workspace: ws })).map((r: any) => r.short_id)).toContain("pri-1");
+  });
+
+  test("a starter takes their own session off a priority they can no longer read, and learns nothing of it but its id", async () => {
+    const { t, as, ada, bea, acme, p1 } = await world();
+    const started = await t.run(async (ctx) => {
+      const conv = await ctx.db.insert("conversations", {
+        user_id: bea, team_id: acme, agent_type: "claude_code", session_id: "start-gone", short_id: "jx7gone", title: "started",
+        started_at: NOW, updated_at: NOW + 1, message_count: 1, is_private: false, team_visibility: "full", status: "active",
+      } as any);
+      expect(await linkFromStart(ctx, bea, conv, "pri-1", "s2")).toBe(true);
+      // Ada leaves the team: her sessions no longer list to it, and Bea cannot read pri-1.
+      await ctx.db.delete((await ctx.db.query("team_memberships").withIndex("by_user_team", (q: any) => q.eq("user_id", ada).eq("team_id", acme)).first())!._id);
+      return conv;
+    });
+    expect(await t.run(async (ctx) => (await readerFor(ctx, bea)).canRead((await ctx.db.get(p1))!))).toBe(false);
+    expect(await as(bea).mutation(pri.sessionNotThis, { session: "jx7gone" })).toEqual({ short_id: "pri-1" });
+    expect((await t.run((ctx) => ctx.db.get(started)))?.priority_id).toBeUndefined();
+  });
+
   test("a teammate's Start can be undone by either side, and the priority it left is counted again", async () => {
     const { t, as, ada, bea, acme, p1 } = await world();
     const startOn = (short_id: string) => t.run(async (ctx) => {
