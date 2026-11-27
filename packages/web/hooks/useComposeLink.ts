@@ -10,6 +10,7 @@ import { useServerAuthenticated } from "./useServerAuthSettled";
 import { toast } from "sonner";
 import { useInboxStore, findProjectPathByName } from "../store/inboxStore";
 import { parseComposeLink, draftForTask, resolveLinkProject, stripComposeLink } from "../lib/composeLink";
+import { startFolderInStore } from "../lib/priorityStartFolder";
 import { useSyncTaskDetail } from "./useSyncTasks";
 import { useWatchEffect } from "./useWatchEffect";
 
@@ -99,7 +100,9 @@ export function useComposeLink(active: boolean): void {
     const taskPath: string | undefined = linked
       ? linked.project_path || (linked.project_id ? st.projects[linked.project_id]?.project_path : undefined)
       : undefined;
-    const projectPath = taskPath || resolveLinkProject(link.project, known);
+    // A Start on a team priority opens in a folder whose rule keeps the session in that team, so its link holds (lib/priorityStartFolder).
+    const startFolder = !taskPath && !link.project && link.priority ? startFolderInStore(st, link.priority) : null;
+    const projectPath = taskPath || resolveLinkProject(link.project, known) || startFolder?.path;
     const draft = linked ? draftForTask(link.draft, linked.short_id) : link.draft;
     // The priority and plan go to the create as written: the server links
     // them only when they are the starter's (linkFromStart, bindStartPlan).
@@ -113,6 +116,7 @@ export function useComposeLink(active: boolean): void {
       ...(link.agent ? { agentType: link.agent } : {}),
       ...(linked ? { linkedTask: { _id: String(linked._id), short_id: linked.short_id, title: linked.title, status: linked.status } } : {}),
       ...(Object.keys(start).length ? { start } : {}),
+      ...(startFolder?.visibility ? { visibility: startFolder.visibility } : {}),
     });
     // What the link asked for and did not get is said, never dropped quietly:
     // a task the session will not be linked to, a folder it will not start in.

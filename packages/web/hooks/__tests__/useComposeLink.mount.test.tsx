@@ -190,6 +190,33 @@ test("a milestone's Start opens its brief as the draft and carries the priority,
   expect(toasts.at(-1)).toBe("dismiss");
 });
 
+test("a Start on a team priority opens in a folder its owner maps to that team: an auto-share one, else one with Summary preselected", async () => {
+  const { milestoneStartHref } = await import("../../lib/priorities");
+  const { settingsDataKey } = await import("../../lib/settingsData");
+  const key = settingsDataKey("directoryMappings", "me")!;
+  const rules = (codecastAutoShare: boolean) => [
+    { path_prefix: "/Users/me/code/union", team_id: "union", auto_share: true },
+    { path_prefix: "/Users/me/code/codecast", team_id: "codecast", auto_share: codecastAutoShare },
+  ];
+  useInboxStore.setState({
+    currentUser: { _id: "me" },
+    priorities: { p58: { _id: "p58", short_id: "pri-58", workspace: "team:codecast" } },
+    machineRoster: [{ device_id: "d1", local_project_roots: ["/Users/me/code"] }],
+    recentProjects: [{ path: "/Users/me/code/union/app", count: 9, lastActive: 2 }, { path: "/Users/me/code/codecast/web", count: 3, lastActive: 1 }],
+    settingsData: { [key]: { _id: key, value: rules(true) } },
+  } as any);
+  const href = milestoneStartHref({ short_id: "pri-58", plan: null }, { step: { key: "s1", title: "Ship it", refs: [] } }, () => undefined);
+  await open(href);
+  expect(opened.at(-1)!.context).toEqual({ projectPath: "/Users/me/code/codecast/web", gitRoot: "/Users/me/code/codecast/web", start: { priority: "pri-58", priority_step: "s1" } });
+  useInboxStore.setState({ settingsData: { [key]: { _id: key, value: rules(false) } } } as any);
+  await open(href);
+  expect(opened.at(-1)!.context).toMatchObject({ projectPath: "/Users/me/code/codecast/web", visibility: "summary" });
+  // A personal priority keeps the composer's usual folder.
+  useInboxStore.setState({ priorities: { p58: { _id: "p58", short_id: "pri-58", workspace: "user:me" } } } as any);
+  await open(href);
+  expect(opened.at(-1)!.context).toEqual({ start: { priority: "pri-58", priority_step: "s1" } });
+});
+
 test("an unknown folder and an unknown agent are dropped; known ones carry", async () => {
   await open("/inbox?compose=x&project=%2Fetc&agent=gpt");
   expect(opened).toEqual([{ text: "x", context: {} }]);

@@ -32,6 +32,8 @@ export type ComposeContext = {
   agentType?: string;
   linkedTask?: { _id: string; short_id: string; title?: string; status?: string };
   start?: SessionStart;
+  /** What the team sees of the session, preselected (a Start in a folder mapped to its team without auto-share: lib/priorityStartFolder). */
+  visibility?: "summary";
 };
 
 /** What a new session is born linked to besides its task: createSession's

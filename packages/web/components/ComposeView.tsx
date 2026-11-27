@@ -179,6 +179,7 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
     if (context?.deviceId && sid !== resumeStubId) store.setSessionTargetDevice(sid, context.deviceId, { picked: true });
     if (context?.linkedTask && sid !== resumeStubId) bindComposeTask(store, sid, context.linkedTask);
     if (context?.start && sid !== resumeStubId) bindComposeStart(store, sid, context.start);
+    if (context?.visibility && sid !== resumeStubId) store.setStubVisibility(sid, context.visibility);
     setSessionId(sid);
     setRestored(sid === resumeStubId);
     setSkillCtx({ projectPath: (sid === resumeStubId ? resumed?.project_path : path) || undefined, agentType });
