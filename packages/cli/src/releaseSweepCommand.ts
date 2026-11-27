@@ -8,7 +8,8 @@
 
 import type { Command } from "commander";
 import { TRIGGER_PRECHECK_MESSAGE_CHARS, TRIGGER_PRECHECK_STATE_CHARS, TRIGGER_PRECHECK_STATE_ENV } from "@codecast/shared/contracts";
-import { apiPost, type PublishDeps } from "./castApi.js";
+import { apiPost } from "./castApi.js";
+import type { GroupDeps } from "./commandGroupTypes.js";
 import { commandGroup } from "./commandGroupLookup.js";
 
 export const SWEEP_FOUND_EXIT = 0;
@@ -30,6 +31,9 @@ export type Sweep = {
   failed_kinds?: SweepKind[];
   /** Sessions the server could not judge for retirement this time, left out of `unretired` (absent from an older server). */
   unretired_skipped?: number;
+  /** The list stopped at its cap with more left unread (absent from an older server). */
+  unretired_more?: boolean;
+  failed_runs_more?: boolean;
 };
 
 const SWEEP_KINDS = ["incidents", "late_targets", "failed_runs", "laggards", "unretired"] as const;
@@ -46,6 +50,8 @@ export function project(s: Sweep): Sweep {
     // Only the kind names this CLI knows: anything else a server sent is dropped.
     ...(Array.isArray(s.failed_kinds) && s.failed_kinds.length ? { failed_kinds: SWEEP_KINDS.filter((k) => s.failed_kinds!.includes(k)) } : {}),
     ...(Number.isInteger(s.unretired_skipped) && s.unretired_skipped! > 0 ? { unretired_skipped: s.unretired_skipped } : {}),
+    ...(s.unretired_more === true ? { unretired_more: true } : {}),
+    ...(s.failed_runs_more === true ? { failed_runs_more: true } : {}),
   };
 }
 
@@ -54,7 +60,8 @@ const span = (ms: number) => {
   return m < 60 ? `${m}m` : m < 48 * 60 ? `${Math.round(m / 60)}h` : `${Math.round(m / 1440)}d`;
 };
 
-export const sweepCount = (s: Sweep) => s.incidents.length + s.late_targets.length + s.failed_runs.length + s.laggards.length + s.unretired.length;
+/** Every exception, a kind that could not be read among them: its own exceptions are hidden, so it is never quiet. */
+export const sweepCount = (s: Sweep) => s.incidents.length + s.late_targets.length + s.failed_runs.length + s.laggards.length + s.unretired.length + (s.failed_kinds?.length ?? 0);
 
 /** A body the server answered with: every list there, or the read failed (an empty 200 is no quiet hour). */
 const isSweep = (s: unknown): s is Sweep =>
@@ -83,6 +90,9 @@ export function formatSweep(s: Sweep, now: number): string[] {
   for (const u of s.unretired) {
     lines.push(`${u.short_id}  live everywhere and settled, not retired  retire: cast kill ${u.short_id}`);
   }
+  for (const k of s.failed_kinds ?? []) {
+    lines.push(`${k}  could not be read this time, so any of its exceptions are hidden  read again: cast release sweep`);
+  }
   return lines;
 }
 
@@ -99,6 +109,8 @@ export function sweepKeys(s: Sweep): string[] {
     ...s.failed_runs.map((r) => `failed ${r.task_short_id} ${r.station} ${r.failed_at}`),
     ...s.laggards.map((l) => `lagging ${l.device} below ${l.floor}`),
     ...s.unretired.map((u) => `unretired ${u.short_id}`),
+    // Wakes once when a kind starts failing, not every hour it stays failed.
+    ...(s.failed_kinds ?? []).map((k) => `unreadable ${k}`),
   ].sort();
 }
 
@@ -167,6 +179,7 @@ export async function runSweep(o: { read: () => Promise<Sweep>; json?: boolean; 
     return SWEEP_ERROR_EXIT;
   }
   if (failedKinds.length && !o.quiet) o.error(`release sweep could not read ${failedKinds.join(", ")} this time; listed as empty`);
+  for (const kind of ["unretired", "failed_runs"] as const) if (s[`${kind}_more`] && !o.quiet) o.error(`more ${kind} than this sweep read`);
   if (s.unretired_skipped && !o.quiet) o.error(`release sweep could not judge ${s.unretired_skipped} session${s.unretired_skipped === 1 ? "" : "s"} for retirement this time; left out of unretired`);
   if (o.newSince !== undefined) {
     o.log(JSON.stringify(sweepVerdict(s, previous, (o.now ?? Date.now)())));
@@ -180,7 +193,13 @@ export async function runSweep(o: { read: () => Promise<Sweep>; json?: boolean; 
   return code;
 }
 
-export function registerReleaseCommand(program: Command, deps: PublishDeps): void {
+/** The sweep's request: the workspace, and the calling session when there is one, so the Release Captain's standing
+ *  session reads the team's laggards (anyone else needs to be a team admin). */
+export function sweepRequest(scope: Record<string, unknown>, session: string | undefined): Record<string, unknown> {
+  return { ...scope, ...(session ? { from_session: session } : {}) };
+}
+
+export function registerReleaseCommand(program: Command, deps: GroupDeps): void {
   const release = program.command("release").description(commandGroup("release").description);
   release.command("sweep")
     .description("What the Release Captain must act on now: open incidents, targets past their deadline, failed runs outside an incident, machines below the floor, live sessions not retired. Exits 0 when something needs action, 1 when quiet, 2 on error (a precheck)")
@@ -206,7 +225,8 @@ what stands then. An error (exit 2) skips and keeps the state. cast trigger log
         const { loadWorkspaceRoster, resolveWorkspaceForRead, workspaceScope } = await import("./resolveWorkspace.js");
         // Every failure throws, so it reads as an error (2), never as a quiet hour (1).
         const roster = await loadWorkspaceRoster(async () => await apiPost(deps, "/cli/teams", {}, { read: true, exitOnError: false }));
-        return await apiPost(deps, "/cli/release/sweep", workspaceScope(resolveWorkspaceForRead(roster, opts.team)), { read: true, exitOnError: false }) as Sweep;
+        // The Release Captain's own session reads the team's laggards; anyone else needs to be a team admin.
+        return await apiPost(deps, "/cli/release/sweep", sweepRequest(workspaceScope(resolveWorkspaceForRead(roster, opts.team)), deps.flow.callingSession()), { read: true, exitOnError: false }) as Sweep;
       };
       // A state precheck always sets the variable ("null" on its first firing); unset, this is no state precheck.
       const newSince = opts.new ? (process.env[TRIGGER_PRECHECK_STATE_ENV] ?? null) : undefined;

@@ -53,7 +53,12 @@ async function world(features: Record<string, boolean> = { retire_on_live: true 
   /** A live deploy of `target` at commit `n`, written as a row so no retire pass is scheduled under the test. */
   const live = (name: string, n: number, createdAt = NOW - 5 * MIN) =>
     insert("deploys", { short_id: `dp-${name}-${n}`, workspace: ids.ws, team_id: ids.team, target: name, status: "live", trigger: "outside", source: "m", event_ids: [], carries: [], repository: REPO, sha: sha(n), created_at: createdAt, live_at: createdAt, updated_at: createdAt });
-  return { t, ids, sweep, insert, task, run, target, commit, commitRow, live };
+  /** Ana becomes a team admin, who may read the team's fleet. */
+  const admin = () => t.run(async (ctx: any) => {
+    const m = await ctx.db.query("team_memberships").withIndex("by_user_team", (q: any) => q.eq("user_id", ids.me).eq("team_id", ids.team)).first();
+    await ctx.db.patch(m._id, { role: "admin" });
+  });
+  return { t, ids, sweep, insert, task, run, target, commit, commitRow, live, admin };
 }
 
 const QUIET = { incidents: [], late_targets: [], failed_runs: [], laggards: [], unretired: [] };
@@ -172,6 +177,9 @@ describe("cast release sweep's read", () => {
     await dev(w.ids.bo, "bo-mac", "1.1.299");
     await dev(w.ids.bo, "bo-away", "1.1.299", NOW - HOUR);
     await dev(w.ids.me, "ana-new", "1.1.306");
+    // A member who may not read the team's fleet (no admin, no role's standing session) is shown none of it.
+    expect(((await w.sweep()) as any).laggards).toEqual([]);
+    await w.admin();
     const s: any = await w.sweep();
     expect(s.laggards.map((l: any) => [l.device_id, l.floor, l.own]).sort()).toEqual([["ana-mac", "1.1.306", true], ["bo-mac", "1.1.306", false]]);
 
@@ -190,6 +198,7 @@ describe("cast release sweep's read", () => {
       await ctx.db.insert("devices", { user_id: w.ids.bo, device_id: `x; ${INJECT}`, label: "x", platform: "darwin", last_seen: NOW, cli_version: INJECT });
       await ctx.db.patch(w.ids.team, { min_cli_version: "1.1.306", min_cli_version_at: NOW - 40 * MIN });
     });
+    await w.admin();
     // An incident titled with it, holding runs stopped with it.
     const fingerprint = "flowstop:acme/app:ci_unread";
     const cause = await w.task("ct-500");
@@ -251,6 +260,57 @@ describe("cast release sweep's read", () => {
     expect(s.unretired.map((u: any) => u.short_id)).toEqual(["jx7done"]);
     expect(s.unretired_skipped).toBe(1);
     expect(s.failed_runs.map((r: any) => r.task_short_id)).toEqual(["ct-701"]);
+  });
+
+  test("failed runs read past their cap say so: more failed runs in the window than one read takes", async () => {
+    const w = await world();
+    const crashes = (from: number, count: number) => w.t.run(async (ctx: any) => {
+      for (let i = from; i < from + count; i++) {
+        const task = await ctx.db.insert("tasks", { user_id: w.ids.me, team_id: w.ids.team, workspace: w.ids.ws, short_id: `ct-${1000 + i}`, title: "t", status: "in_progress", task_type: "task", priority: "medium", source: "human", created_at: 1, updated_at: 1 });
+        await ctx.db.insert("workflow_runs", {
+          user_id: w.ids.me, workflow_id: w.ids.wf, task_id: task, workspace: w.ids.ws, team_id: w.ids.team, status: "failed", current_node_id: "land__ci",
+          node_statuses: [], fail_reason: "Runner exited", created_at: NOW - HOUR, updated_at: NOW - 10 * MIN - i,
+        });
+      }
+    });
+    await crashes(0, 100);
+    expect(((await w.sweep()) as any)).toMatchObject({ failed_runs_more: false });
+    await crashes(100, 1);
+    const s: any = await w.sweep();
+    expect(s.failed_runs_more).toBe(true);
+    expect(s.failed_runs).toHaveLength(100);
+  });
+
+  /** A settled session whose change went live, as a sweep lists it unless something keeps it. */
+  const settledSession = (w: Awaited<ReturnType<typeof world>>, short_id: string, extra: Record<string, unknown> = {}) => w.insert("conversations", {
+    user_id: w.ids.me, team_id: w.ids.team, agent_type: "claude_code", started_at: NOW - HOUR, updated_at: NOW - 40 * MIN, status: "active", short_id, session_id: `s-${short_id}`, title: `Fix ${short_id}`,
+    message_count: 12, is_private: false, git_root: "/work/app", thread_state: "Shipped", thread_state_status: "done", thread_state_at: NOW - 30 * MIN, thread_state_msg_count: 12, ...extra,
+  });
+
+  test("the unretired are judged in order past a run of kept sessions: retirable ones behind the first twelve judged are still listed", async () => {
+    const w = await world();
+    await w.target("web", ["web/**"]);
+    // Oldest first: two retirable sessions, then fourteen a person pinned, whose commits are the newest.
+    let n = 1;
+    for (const short of ["jx7ok1", "jx7ok2"]) await w.commit(n, [`web/${short}.tsx`], NOW - HOUR + n++, await settledSession(w, short));
+    for (let i = 0; i < 14; i++) await w.commit(n, [`web/pin${i}.tsx`], NOW - HOUR + n++, await settledSession(w, `jx7pin${i}`, { inbox_pinned_at: NOW - MIN }));
+    await w.live("web", n - 1);
+    const s: any = await w.sweep();
+    expect(s.failed_kinds).toEqual([]);
+    expect(s.unretired.map((u: any) => u.short_id).sort()).toEqual(["jx7ok1", "jx7ok2"]);
+    expect(s.unretired_more).toBe(false);
+  });
+
+  test("the unretired judging budget running out with candidates left says so", async () => {
+    const w = await world();
+    // Two repositories: forty kept candidates in one, one more in the other, past the forty judgments one sweep makes.
+    await w.target("web", ["web/**"]);
+    await w.insert("deploy_targets", { workspace: w.ids.ws, team_id: w.ids.team, repository: "acme/api", name: "api", runs: "push", live: { kind: "marker" }, policy: "press", paths: ["api/**"], publisher_user_id: w.ids.me, published_at: 1, updated_at: 1 });
+    for (let i = 0; i < 40; i++) await w.commit(i + 1, [`web/pin${i}.tsx`], NOW - HOUR + i, await settledSession(w, `jx7pin${i}`, { inbox_pinned_at: NOW - MIN }));
+    await w.insert("commits", { ...w.commitRow(100, ["api/x.ts"], NOW - HOUR, await settledSession(w, "jx7api")), repository: "acme/api" });
+    const s: any = await w.sweep();
+    expect(s.unretired).toEqual([]);
+    expect(s.unretired_more).toBe(true);
   });
 
   async function liveSessions(features?: Record<string, boolean>) {

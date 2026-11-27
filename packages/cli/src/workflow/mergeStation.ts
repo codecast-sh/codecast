@@ -44,7 +44,7 @@ import type { ShipDeployStep } from "../workspace/types.js";
 import { keepEnds } from "./keepEnds";
 import { CI_APPROVAL_FILE } from "./changeVerdicts";
 import { LEASE_LINE_MS, LeaseLineWait, holdRepoLease, leaseAccessRefused, leaseHolder, leaseRouteMissing, type RepoLease } from "../land/repoLease.js";
-import { acquiredTree, mainCheckout, noteLanded, noteRestoring, sweepScratchTrees, takeMergeLock, trackStep, type ScratchTree } from "./mergeScratch";
+import { acquiredTree, holdExit, mainCheckout, noteLanded, noteRestoring, stopSteps, sweepScratchTrees, takeMergeLock, trackStep, type ScratchTree } from "./mergeScratch";
 import { chainBetween, recordRebase, verifyRebaseChain, type RebaseLink, type RegeneratedRebase } from "./rebaseRecord";
 import { GENERATED_FILE, generatorsFor, readGenerators, writtenBy, type Generator } from "./generatedFiles";
 
@@ -79,8 +79,9 @@ export type MergeStationArgs = {
 const LEASE_WAIT_MS = 15 * 60_000;
 /** The token of a place in line a station gave up waiting in (exit 4), in $run_dir: the next visit asks with it. */
 const LINE_TOKEN_FILE = "merge-lease-token";
-/** How long a signalled station waits for its lease's release before it exits, inside the runner's kill grace. */
-const STOP_RELEASE_MS = 5000;
+/** How long a signalled station has to stop its running step and release its lease before it exits, inside the
+ *  runner's kill grace (STATION_KILL_GRACE_MS, 10s). */
+const STOP_BUDGET_MS = 8000;
 
 type Outcome = { step: ShipDeployStep; ok: boolean; sha: string; output?: string };
 
@@ -475,8 +476,8 @@ async function mergeStation(args: MergeStationArgs): Promise<MergeStationResult>
 }
 
 /**
- * Until the returned off, SIGINT and SIGTERM end the station: its wait leaves the line, or its held lease is released,
- * and then it exits 128 + the signal. A station the runner ended (its timeout, a cancelled run) kept the lease for the
+ * Until the returned off, SIGINT and SIGTERM end the station: its wait leaves the line, or its running step is stopped
+ * and then its held lease released, and then it exits 128 + the signal. A station the runner ended (its timeout, a cancelled run) kept the lease for the
  * ten minutes it takes to lapse, and every merge behind it waited. The listeners stay on until the exit: a signal that
  * another handler raises again (lockFile.ts) must not take the default exit before the release has gone out.
  */
@@ -486,7 +487,15 @@ function stopOnSignal(args: MergeStationArgs, stopping: AbortController, release
   const handlers = ([["SIGINT", 2], ["SIGTERM", 15]] as const).map(([sig, n]) => [sig, () => {
     if (stopping.signal.aborted) return;
     stopping.abort();
-    void Promise.race([release(), new Promise((r) => setTimeout(r, STOP_RELEASE_MS))]).finally(() => exit(128 + n));
+    const until = Date.now() + STOP_BUDGET_MS;
+    // The running step first: a deploy still pushing when the lease goes lets the next merge in line push over it.
+    // A step that will not stop in time keeps the lease until it lapses rather than hand it on mid-push.
+    const ending = stopSteps(until - Date.now()).then(async (stopped) => {
+      if (stopped) await Promise.race([release(), new Promise((r) => setTimeout(r, Math.max(0, until - Date.now())))]);
+      else args.log?.(`a before-merge step did not stop within ${STOP_BUDGET_MS / 1000}s; the lease stays held until it lapses`);
+    });
+    holdExit(ending);
+    void ending.finally(() => exit(128 + n));
   }] as const);
   for (const [sig, h] of handlers) signals.on(sig, h);
   return () => { for (const [sig, h] of handlers) signals.off(sig, h); };

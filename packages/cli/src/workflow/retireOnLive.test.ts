@@ -83,8 +83,8 @@ function server(row: Record<string, unknown> = {}) {
 }
 
 const SINCE = Date.now() - 90_000;
-/** No pane on this machine: nobody can be watching it. */
-const detached = { paneFor: async () => null, tmuxSessions: async () => new Map<string, number>() };
+/** No pane and no agent process on this machine: nobody can be watching it. */
+const detached = { terminalOf: async () => ({ pane: null, running: false }), tmuxSessions: async () => new Map<string, number>() };
 
 describe("a daemon asked to retire a session whose change is live", () => {
   test("its checkout holds nothing of its own beside what landed: retired, at the transcript length it read", async () => {
@@ -161,7 +161,7 @@ describe("a daemon asked to retire a session whose change is live", () => {
     const ask = { conversation_id: CONV, root, since: SINCE, commits: [{ sha: landed }] };
     const panes: string[] = [];
     const terminal = (clients: number | undefined) => ({
-      paneFor: async (id: string) => { panes.push(id); return "cc-jx7aaaa:0.0"; },
+      terminalOf: async (id: string) => { panes.push(id); return { pane: "cc-jx7aaaa:0.0", running: true }; },
       tmuxSessions: async () => new Map(clients === undefined ? [] : [["cc-jx7aaaa", clients]]),
     });
     const watching = server();
@@ -169,11 +169,25 @@ describe("a daemon asked to retire a session whose change is live", () => {
     const gone = server();
     expect(await retireOnLive(gone.call, ask, terminal(undefined))).toEqual({ retired: false, reason: "its terminal could not be read" });
     const broken = server();
-    expect(await retireOnLive(broken.call, ask, { paneFor: async () => "cc-jx7aaaa:0.0", tmuxSessions: async () => { throw new Error("no server"); } })).toEqual({ retired: false, reason: "its terminal could not be read" });
+    expect(await retireOnLive(broken.call, ask, { terminalOf: async () => ({ pane: "cc-jx7aaaa:0.0", running: true }), tmuxSessions: async () => { throw new Error("no server"); } })).toEqual({ retired: false, reason: "its terminal could not be read" });
     expect([...watching.retires, ...gone.retires, ...broken.retires]).toEqual([]);
     const idle = server();
     expect(await retireOnLive(idle.call, ask, terminal(0))).toEqual({ retired: true });
     expect(idle.retires).toEqual([{ session: CONV, expected_message_count: 7 }]);
     expect(panes.every((id) => id === CONV)).toBe(true);
+  });
+
+  test("a live agent outside any tmux pane (a plain terminal window) keeps it, as does one this machine cannot look up; no process at all is retired", async () => {
+    const { root, landed } = landedWorld();
+    const ask = { conversation_id: CONV, root, since: SINCE, commits: [{ sha: landed }] };
+    const unpaned = (running: boolean | null) => ({ terminalOf: async () => ({ pane: null, running }), tmuxSessions: async () => new Map<string, number>() });
+    const windowed = server();
+    expect(await retireOnLive(windowed.call, ask, unpaned(true))).toEqual({ retired: false, reason: "it runs outside a pane this machine can watch" });
+    const unknown = server();
+    expect(await retireOnLive(unknown.call, ask, unpaned(null))).toEqual({ retired: false, reason: "its agent process could not be looked up" });
+    expect([...windowed.retires, ...unknown.retires]).toEqual([]);
+    const ended = server();
+    expect(await retireOnLive(ended.call, ask, unpaned(false))).toEqual({ retired: true });
+    expect(ended.retires).toEqual([{ session: CONV, expected_message_count: 7 }]);
   });
 });

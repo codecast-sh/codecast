@@ -157,6 +157,11 @@ export function noteLanded(sha: string): void { landedAs = sha; }
 let restoring: string | null = null;
 export function noteRestoring(what: string | null): void { restoring = what; }
 
+/** What a signalled station finishes before a tree's handler here may exit the process: its lease's release, which
+ *  must not be cut off by a tree released first. */
+let exitHold: Promise<unknown> = Promise.resolve();
+export function holdExit(work: Promise<unknown>): void { exitHold = Promise.all([exitHold, work.catch(() => {})]); }
+
 /** On SIGTERM or SIGINT: stop the running step, then release the tree; a step that will not stop leaves its tree to
  *  the age-based sweep. Returns whether the tree was released. */
 export async function shutDown(release: () => Promise<void>, graceMs = STOP_GRACE_MS): Promise<boolean> {
@@ -183,7 +188,7 @@ export async function acquiredTree(repo: string, at: string): Promise<ScratchTre
   };
   function onSignal(sig: NodeJS.Signals) {
     if (restoring) console.log(`stopped while ${restoring}: production may run a backend the default branch lacks until the next merge or deploy`);
-    void shutDown(release).finally(() => {
+    void shutDown(release).finally(() => exitHold).finally(() => {
       if (landedAs) { console.log(landedAs); process.exit(0); }
       process.exit(sig === "SIGINT" ? 130 : 143);
     });
