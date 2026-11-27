@@ -29,7 +29,7 @@ import { requireDestructiveConfirm } from "../destructiveCommands.js";
 import { promptHiddenSecret } from "../hiddenSecret.js";
 import { encryptProviderKey } from "../providerKeyCrypto.js";
 import { deviceLine, pickDevice } from "./resolve.js";
-import { isCurrent, notCurrent, settle, summaryLine, unsettled, verdictLine, type Verdict } from "./updateReport.js";
+import { isCurrent, notCurrent, settle, summaryLine, unsettled, verdictLine, versionMark, type Verdict } from "./updateReport.js";
 
 export type Team = { _id: string; name: string; role?: string };
 
@@ -96,11 +96,18 @@ function listNames(rows: any[]): Map<string, string> {
 
 const seen = (d: any) => (d.online ? fmt.success("online") : fmt.muted(`${formatAgeShort(Date.now() - d.last_seen)} ago`));
 
-function version(d: any): string {
+function version(d: any, latest: string | null): string {
   if (!d.cli_version) return fmt.muted("—");
-  if (d.update_required) return fmt.error(`${d.cli_version} (below floor)`);
-  if (d.update_available) return fmt.warning(`${d.cli_version} (update)`);
+  const mark = versionMark(d, latest);
+  if (mark === "below floor") return fmt.error(`${d.cli_version} (below floor)`);
+  if (mark === "update") return fmt.warning(`${d.cli_version} (update)`);
   return d.cli_version;
+}
+
+/** The release the manifest names now (updateReport.versionMark), or null when it cannot be read. */
+async function latestRelease(): Promise<string | null> {
+  const { updater } = await import("../update.js");
+  return (await updater.fetchManifest().catch(() => null))?.version ?? null;
 }
 
 /** Wait for the daemon's answer to a watched command, up to `seconds`. */
@@ -154,14 +161,14 @@ export function registerDevicesCommand(program: Command): void {
     .option("--json", "Machine-readable")
     .action(async (o: { json?: boolean }) => {
       const b = await backend();
-      const [own, team, teams] = await Promise.all([ownDevices(b), teamMachines(b), myTeams(b)]);
+      const [own, team, teams, latest] = await Promise.all([ownDevices(b), teamMachines(b), myTeams(b), o.json ? null : latestRelease()]);
       if (o.json) { console.log(JSON.stringify({ this_device: localDeviceId(), devices: own, team_machines: team, teams }, null, 2)); return; }
       const here = localDeviceId();
       const now = Date.now();
       const sorted = [...own].sort((a, b2) => Number(b2.online) - Number(a.online) || b2.last_seen - a.last_seen);
       const names = listNames([...own, ...team]);
       const line = (d: any, tail: string) =>
-        console.log(`  ${fmt.id(d.device_id.slice(0, 8))}  ${pad(names.get(d.device_id)!, 44)}${pad(d.platform, 7)}${pad(version(d), 19)}${pad(seen(d), 14)}${tail}`);
+        console.log(`  ${fmt.id(d.device_id.slice(0, 8))}  ${pad(names.get(d.device_id)!, 44)}${pad(d.platform, 7)}${pad(version(d, latest), 19)}${pad(seen(d), 14)}${tail}`);
       console.log(fmt.highlight(`Your machines`) + fmt.muted(`  ${own.filter((d) => d.online).length} of ${own.length} online`));
       for (const d of sorted) {
         const tags = [
@@ -191,7 +198,7 @@ export function registerDevicesCommand(program: Command): void {
     .option("--json", "Machine-readable")
     .action(async (needle: string, o: { json?: boolean }) => {
       const b = await backend();
-      const [own, team, teams] = await Promise.all([ownDevices(b), teamMachines(b), myTeams(b)]);
+      const [own, team, teams, latest] = await Promise.all([ownDevices(b), teamMachines(b), myTeams(b), latestRelease()]);
       const r = pickDevice([...own, ...team.filter((t) => !own.some((d) => d.device_id === t.device_id))], needle);
       if ("error" in r) die(r.error);
       const d = r.device;
@@ -201,7 +208,7 @@ export function registerDevicesCommand(program: Command): void {
       row("id", d.device_id);
       row("platform", `${d.platform}${d.is_remote ? " (cloud host)" : ""}${d.hostname ? `  ${d.hostname}` : ""}`);
       row("state", seen(d));
-      row("version", version(d));
+      row("version", version(d, latest));
       if (d.ssh_host) row("ssh", d.ssh_host);
       if (d.owner_user_id) {
         row("owner", d.is_bot ? `bot ${d.bot_name ?? ""}` : (d.runner_name ?? "a teammate"));

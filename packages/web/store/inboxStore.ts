@@ -7441,7 +7441,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   setAccountDevices: (email: string, deviceIds: string[] | null) => void;
   setDeviceSnippet: (deviceId: string, change: DeviceSnippetChange) => Promise<unknown>;
   setProviderKey: (deviceId: string, change: ProviderKeyCommand) => Promise<{ command_id?: string } | undefined>;
-  requestDeviceUpdate: (deviceId: string) => Promise<unknown>;
+  requestDeviceUpdate: (deviceId: string, version?: string) => Promise<unknown>;
   /** Start, stop or adjust keeping a cloud session's folder in step with a laptop copy (dispatch setLocalMirror → cloud_live_sync on that laptop): a mode, a conflict pick, or watch-only's overwrite. */
   setLocalMirror: (conversationId: string, enable: boolean, deviceId?: string, opts?: { overwrite?: boolean; mode?: import("@codecast/shared/contracts").LocalMirrorMode; resolve?: import("@codecast/shared/contracts").MirrorResolve }) => void;
   /** Wake, sleep, apply setup, save or delete an image on a cloud host, or launch another like it (dispatch cloudHostAction → cloud_host_action on the laptop that manages it). `arg`: the image to delete, or the new host's size. */
@@ -11177,10 +11177,12 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // managed ids (never the key); the setProviderKey side effect sends the
   // sealed key to the device and answers with the command to watch.
   // Settings > Daemon's Update paints the request on the roster row; the
-  // requestDeviceUpdate side effect writes it to the device row.
-  requestDeviceUpdate: asyncAction(function (this: Draft, deviceId: string) {
+  // requestDeviceUpdate side effect writes it to the device row, naming
+  // `version` (the release the manifest names now) so a machine's stale
+  // cached check cannot clear the request before it updates.
+  requestDeviceUpdate: asyncAction(function (this: Draft, deviceId: string, version?: string) {
     const row = this.machineRoster.find((d) => d.device_id === deviceId) as any;
-    if (row) Object.assign(row, { update_state: "requested", update_requested_at: Date.now(), update_error: undefined });
+    if (row) Object.assign(row, { update_state: "requested", update_requested_at: Date.now(), update_error: undefined, ...(version ? { update_requested_version: version } : {}) });
   }),
   setProviderKey: asyncAction(function (this: Draft, deviceId: string, change: ProviderKeyCommand) {
     const row = this.machineRoster.find((d) => d.device_id === deviceId) as any;
