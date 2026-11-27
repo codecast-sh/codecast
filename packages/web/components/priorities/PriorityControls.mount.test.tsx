@@ -53,7 +53,7 @@ const sess = (tag: string, title: string, state: string, extra: Record<string, u
 });
 const links = (key: string, sessions: unknown[], extra: Record<string, unknown> = {}) => ({ key, sessions, sessions_more: 0, plan: null, part_of: [], looks_done: false, correction_pending: false, ...extra });
 const counts = (steps: any[]) => ({ critical_done: steps.filter((s) => s.tier === "critical" && s.done).length, critical_total: steps.filter((s) => s.tier === "critical").length });
-const base = { summary: "", person_pos: null, rank_source: "ai", serves: null, workspace: `team:${TEAM_ID}`, user_id: VIEWER_ID, owner: "Dana Viewer", mine: true, first_seen_at: NOW - 3 * DAY, last_active_at: NOW, done_at: null, session_count: 1, session_count_more: false, status: "active", status_set_by: "pass", correction_pending: false, plan: null };
+const base = { summary: "", person_pos: null, rank_source: "ai", serves: null, workspace: `team:${TEAM_ID}`, user_id: VIEWER_ID, owner: "Dana Viewer", owner_image: null, mine: true, first_seen_at: NOW - 3 * DAY, last_active_at: NOW, done_at: null, session_count: 1, session_count_more: false, status: "active", status_set_by: "pass", correction_pending: false, plan: null };
 const row = (id: number, title: string, rank: number, steps: any[], extra: Record<string, unknown> = {}) => ({
   ...base, _id: fixtureId(`pri${id}`), short_id: `pri-${id}`, title, rank, ai_rank: rank, steps, counts: counts(steps), sessions: [], links: steps.map((s) => links(s.key, [])), ...extra,
 });
