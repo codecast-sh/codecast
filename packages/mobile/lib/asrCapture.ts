@@ -46,24 +46,31 @@ export type MicTap = {
   close(): void;
 };
 
-/** Null when this binary cannot tap PCM (old app, no LiveKit, getUserMedia refused). */
-export async function openMicTap(): Promise<MicTap | null> {
-  if (!callsNativeAvailable()) return null;
+/** A tap, or why there is none: `permanent` when this binary cannot tap PCM
+ *  (old app, no LiveKit sink), `transient` when the OS refused the mic this
+ *  time (backgrounded, an interruption, a pending permission). */
+export type MicTapOpen = { tap: MicTap } | { unavailable: "permanent" | "transient" };
+
+const PERMANENT: MicTapOpen = { unavailable: "permanent" };
+const TRANSIENT: MicTapOpen = { unavailable: "transient" };
+
+export async function openMicTap(): Promise<MicTapOpen> {
+  if (!callsNativeAvailable()) return PERMANENT;
   let webrtc: typeof import("@livekit/react-native-webrtc");
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     webrtc = require("@livekit/react-native-webrtc");
   } catch {
-    return null;
+    return PERMANENT;
   }
   const LiveKitModule = NativeModules.LivekitReactNativeModule;
-  if (!LiveKitModule?.createAudioSinkListener) return null;
+  if (!LiveKitModule?.createAudioSinkListener) return PERMANENT;
 
   let stream: { getAudioTracks(): any[]; getTracks(): { stop(): void }[] } | null = null;
   try {
     stream = await webrtc.mediaDevices.getUserMedia({ audio: true, video: false });
   } catch {
-    return null;
+    return TRANSIENT;
   }
   const stopStream = () => {
     try {
@@ -74,7 +81,7 @@ export async function openMicTap(): Promise<MicTap | null> {
   const track = stream?.getAudioTracks?.()[0];
   if (!track) {
     stopStream();
-    return null;
+    return TRANSIENT;
   }
 
   let sink: ((samples: Int16Array, sampleRate: number) => void) | null = null;
@@ -110,13 +117,15 @@ export async function openMicTap(): Promise<MicTap | null> {
     tag = LiveKitModule.createAudioSinkListener(track._peerConnectionId ?? -1, track.id);
   } catch {
     close();
-    return null;
+    return TRANSIENT;
   }
   return {
-    setSink(next) {
-      if (!closed) sink = next;
+    tap: {
+      setSink(next) {
+        if (!closed) sink = next;
+      },
+      close,
     },
-    close,
   };
 }
 
@@ -130,8 +139,9 @@ export async function startAsrCapture(opts: {
   clock: () => number;
   events?: AsrCaptureEvents;
 }): Promise<AsrCapture | null> {
-  const tap = await openMicTap();
-  if (!tap) return null;
+  const opened = await openMicTap();
+  if (!("tap" in opened)) return null;
+  const tap = opened.tap;
 
   let session: AsrPcmSession | null = null;
   let closed = false;
@@ -139,7 +149,7 @@ export async function startAsrCapture(opts: {
   function close() {
     if (closed) return;
     closed = true;
-    tap!.close();
+    tap.close();
     try {
       session?.close();
     } catch {}

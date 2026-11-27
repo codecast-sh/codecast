@@ -19,6 +19,10 @@ export type MicTapLike = {
   close(): void;
 };
 
+/** A tap, or why there is none: `permanent` when this binary cannot tap the
+ *  mic at all, `transient` when the OS refused it this time. */
+export type MicTapOpen = { tap: MicTapLike } | { unavailable: "permanent" | "transient" };
+
 export type PhoneScribeDeps = {
   engine: ScribeEngine;
   convex: ConvexHandle;
@@ -27,7 +31,7 @@ export type PhoneScribeDeps = {
   roomFlags(roomKey: string): { transcribe_off?: boolean; transcribe_off_at?: number | null } | undefined;
   /** transcripts.getLive for one room: undefined while loading, null with no record. */
   watchLive(roomKey: string, onLive: (live: LiveView | null | undefined) => void): () => void;
-  openTap(): Promise<MicTapLike | null>;
+  openTap(): Promise<MicTapOpen>;
   openSession(o: Parameters<AsrPipeOpener>[0]): AsrPcmSession;
   flush(transcriptId: string): Promise<unknown>;
   release(roomKey: string): Promise<unknown>;
@@ -38,6 +42,7 @@ export type PhoneScribeDeps = {
 export const MIC_KEY = "local:mic";
 // A start that did not make this phone the scribe (refused, observer, off)
 // waits before asking again: reconcile runs on every call-snapshot change.
+// So does a mic the OS refused for now.
 export const RETRY_MS = 10_000;
 
 /** The room this phone sits in: connected, or reconnecting to the same room. */
@@ -51,10 +56,12 @@ export function createPhoneScribe(d: PhoneScribeDeps) {
   let unwatchLive: (() => void) | null = null;
   let live: LiveView | null | undefined;
   let tap: MicTapLike | null = null;
-  // This binary cannot tap the mic: never take a seat it cannot fill.
+  // This binary cannot tap the mic: never take a seat it cannot fill. Kept
+  // for the app's life; the binary does not change under it.
   let tapUnavailable = false;
   let busy = false;
   let retryAt = 0;
+  let micRetryAt = 0;
 
   function watchRoom(roomKey: string | null): void {
     unwatchLive?.();
@@ -101,8 +108,8 @@ export function createPhoneScribe(d: PhoneScribeDeps) {
     const call = d.call();
     const roomKey = seatedRoom(call);
     if (roomKey !== watchedRoom) {
-      tapUnavailable = false;
       retryAt = 0;
+      micRetryAt = 0;
       watchRoom(roomKey);
       if (engine.getStatus().active) return run(() => retire({ graceful: true, keepLive: true }));
     }
@@ -131,6 +138,8 @@ export function createPhoneScribe(d: PhoneScribeDeps) {
     else if (verdict === "yield") run(() => retire({ graceful: false, keepLive: true }));
     else if (verdict === "stop") run(() => retire({ graceful: false, keepLive: false }));
     else if (verdict === "release") run(() => retire({ graceful: true, keepLive: true, releaseRoom: roomKey }));
+    // The run is ours but no mic feeds it: the OS refused the mic a moment ago.
+    else if (status.active && !tap && meId && d.now() >= micRetryAt) run(() => attachMic(roomKey, meId));
   }
 
   async function begin(roomKey: string, meId: string): Promise<void> {
@@ -140,15 +149,28 @@ export function createPhoneScribe(d: PhoneScribeDeps) {
       d.later(reconcile, RETRY_MS);
       return;
     }
-    const micTap = tap ?? (await d.openTap());
+    await attachMic(roomKey, meId);
+  }
+
+  async function attachMic(roomKey: string, meId: string): Promise<void> {
+    const opened: MicTapOpen = tap ? { tap } : await d.openTap();
     // The mic can take a while (a permission sheet, the audio session): the
     // call may have ended or moved rooms by the time it opens.
-    if (!micTap || seatedRoom(d.call()) !== roomKey) {
-      micTap?.close();
-      if (!micTap) tapUnavailable = true;
-      await retire({ graceful: false, keepLive: true, releaseRoom: micTap ? undefined : roomKey });
+    if (seatedRoom(d.call()) !== roomKey || !engine.getStatus().active) {
+      if ("tap" in opened && opened.tap !== tap) opened.tap.close();
       return;
     }
+    if (!("tap" in opened)) {
+      if (opened.unavailable === "permanent") {
+        tapUnavailable = true;
+        await retire({ graceful: false, keepLive: true, releaseRoom: roomKey });
+      } else {
+        micRetryAt = d.now() + RETRY_MS;
+        d.later(reconcile, RETRY_MS);
+      }
+      return;
+    }
+    const micTap = opened.tap;
     tap = micTap;
     const me = d.call().participants.find((p) => p.isLocal);
     engine.attachPcm(

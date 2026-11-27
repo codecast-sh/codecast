@@ -64,7 +64,7 @@ function harness(opts: { roomKey?: string; openTap?: () => Promise<any> } = {}) 
       onLive = cb;
       return () => { onLive = null; };
     },
-    openTap: opts.openTap ?? (async () => newTap()),
+    openTap: opts.openTap ?? (async () => ({ tap: newTap() })),
     openSession: (o) => {
       const s: any = {
         speaking: false,
@@ -164,10 +164,34 @@ describe("phone scribe", () => {
     h.call.roomKey = null;
     h.scribe.reconcile();
     const tap = h.newTap();
-    resolveTap(tap);
+    resolveTap({ tap });
     await settle();
     expect(tap.closed).toBe(true);
     expect(h.sessions).toHaveLength(0);
     expect(h.engine.getStatus().active).toBe(false);
+  });
+
+  test("a mic refused for a moment (backgrounded, interrupted) is asked for again", async () => {
+    const answers: any[] = [{ unavailable: "transient" }];
+    const h = harness({ openTap: async () => answers.shift() ?? { tap: h.newTap() } });
+    h.scribe.reconcile();
+    h.live(null);
+    await settle();
+    expect(h.engine.getStatus()).toMatchObject({ active: true, trackCount: 0 });
+    h.advance(60_000);
+    await settle();
+    expect(h.engine.getStatus().trackCount).toBe(1);
+  });
+
+  test("a binary with no mic tap gives the seat back and never asks again", async () => {
+    const h = harness({ openTap: async () => ({ unavailable: "permanent" }) });
+    h.scribe.reconcile();
+    h.live(null);
+    await settle();
+    expect(h.log).toEqual(["start", "release"]);
+    h.live({ startedBy: null });
+    h.advance(60_000);
+    await settle();
+    expect(h.log).toEqual(["start", "release"]);
   });
 });
