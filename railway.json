@@ -4,7 +4,7 @@
     "builder": "RAILPACK",
     "buildCommand": "bunx turbo run build --filter=@codecast/web",
     "watchPatterns": [
-      "/**",
+      "**",
       "!/packages/cli/**",
       "!/packages/mobile/**",
       "!/packages/evals/**",

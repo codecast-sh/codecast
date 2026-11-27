@@ -171,6 +171,9 @@ const STATUS_TO_DEPLOY: Record<string, "running" | "live" | "failed" | undefined
   error: "failed",
 };
 
+/** A success status that says no deployment happened (Railway: "No deployment needed - watched paths not modified"). */
+const SKIPPED_DEPLOY = /no deployment needed|watched paths not modified/i;
+
 /**
  * A commit status (`status` webhook) or a deployment status on a repository's
  * default branch, as a deploy of every target whose reader names its context
@@ -180,7 +183,9 @@ export async function recordGithubDeployStatus(
   ctx: any,
   e: { repository: string; sha: string; context: string; state: string; url?: string; at: number; on_default_branch: boolean; actor?: string; description?: string },
 ): Promise<string[]> {
-  const status = STATUS_TO_DEPLOY[e.state];
+  // Railway reports a deploy it skipped (no watched path changed) as a success: nothing went out, so it is cancelled.
+  const skipped = e.state === "success" && SKIPPED_DEPLOY.test(e.description ?? "");
+  const status = skipped ? "cancelled" : STATUS_TO_DEPLOY[e.state];
   if (!status || !e.on_default_branch) return [];
   const repository = normalizeRepository(e.repository);
   const rows: Doc<"deploy_targets">[] = (await ctx.db.query("deploy_targets").withIndex("by_repository_name", (q: any) => q.eq("repository", repository)).take(50))
@@ -197,7 +202,7 @@ export async function recordGithubDeployStatus(
       ...(e.url ? { url: e.url } : {}),
       status,
       // What GitHub says about a failure ("Deployment failed", "crashed"), as the deploy's note.
-      ...(status === "failed" && e.description ? { note: e.description } : {}),
+      ...((status === "failed" || skipped) && e.description ? { note: e.description } : {}),
       ...(e.actor ? { started_by: { kind: "source" as const, name: e.actor } } : {}),
       at: e.at,
     });
