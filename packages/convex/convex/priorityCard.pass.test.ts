@@ -199,23 +199,94 @@ describe("a pass run", () => {
     }
   });
 
-  test("a merge into a new priority: the priority is created at once, and the card names it", async () => {
+  test("a merge into a new priority waits whole: nothing of it is written; accepting makes it and merges; declining leaves nothing", async () => {
+    const grading = () => reply({ title: "Grading", summary: "new", status: "active", serves: null, rank: 1, merges: ["pri-2"], steps: [{ key: "pri-2/s1", title: "Calibrate the grader", tier: "critical", refs: [] }, { title: "Grade essays", tier: "critical", refs: [] }], sessions: [{ session: "jx7old", step: "pri-2/s1" }, { session: "jx7team", step: "Grade essays" }] });
+    for (const answerIt of [true, false]) {
+      const w = await graderWorld();
+      await cardsOn(w);
+      model.reply = grading;
+      await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team });
+      // Nothing of it: no Grading, Grader calibration as it was, both sessions where they were.
+      expect((await rows(w)).some((p) => p.title === "Grading")).toBe(false);
+      expect((await row(w, "pri-2")).status).toBe("active");
+      expect((await w.conversation(w.teamConv))?.priority_id).toBe((await row(w, "pri-1"))._id);
+      const [d] = await cards(w);
+      expect((d.priority_card as PriorityCard).changes.map((c) => [c.kind, c.priority, c.target, c.parent])).toEqual([["merge", "new-1", "pri-2", undefined]]);
+      expect(d.question).toBe("Merge “Grader calibration” into “Grading”?");
+      if (answerIt) {
+        await answer(w, d, [0]);
+        const made = (await rows(w)).find((p) => p.title === "Grading")!;
+        expect([(await row(w, "pri-2")).status, made.steps.map((s) => s.title)]).toEqual(["merged", ["Grade essays", "Calibrate the grader"]]);
+        expect((await w.conversation(w.oldConv))?.priority_id).toBe(made._id);
+        expect((await w.conversation(w.teamConv))?.priority_id).toBe(made._id);
+      } else {
+        await w.t.run((ctx) => finalizeAnswer(ctx as any, d, { status: "dismissed" }, ANA(w), { deliver: false }));
+        expect((await rows(w)).some((p) => p.title === "Grading")).toBe(false);
+        // Declined: the same new priority absorbing it is not proposed again.
+        await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team, force: true });
+        expect(await cards(w)).toHaveLength(1);
+        expect(model.prompts.at(-1)).toContain(`- pri-2 "Grader calibration" and a new priority "grading"`);
+      }
+    }
+  });
+
+  test("a milestone the survivor would carry is held back by the same match the merge makes, by its task as much as its words", async () => {
+    const w = await world();
+    await seed(w, [
+      create(w.now, "new-1", "Trusted evals", 1, [step("s1", "Grader faults under 10%")]),
+      create(w.now, "new-2", "Grader calibration", 2, [{ ...step("s1", "Calibrate grader"), refs: [{ kind: "task", id: "ct-7" }] }, { ...step("s2", "Benchmark nightly"), dropped: true }]),
+      create(w.now, "new-3", "Docs", 3),
+    ], [{ session: "jx7team", priority: "new-1", step_key: "s1" }, { session: "jx7old", priority: "new-2", step_key: "s1" }]);
+    await w.send(w.ana, w.teamConv, w.now - H, TYPED);
+    await cardsOn(w);
+    // No key: the step matches pri-2/s1 by its task; another repeats a milestone the person dropped on Grader calibration.
+    model.reply = () => reply(evals({ steps: [{ key: "s1", title: "Grader faults under 5%", tier: "critical", refs: [] }, { title: "Grader calibration", tier: "critical", refs: [{ kind: "task", id: "ct-7" }] }, { title: "Benchmark nightly", tier: "polish", refs: [] }], sessions: [{ session: "jx7team", step: "s1" }] }));
+    await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team });
+    expect((await row(w, "pri-1")).steps.map((s) => s.title)).toEqual(["Grader faults under 5%"]);
+    expect(await cards(w)).toHaveLength(1);
+  });
+
+  test("a session the reply moves off the absorbed priority to an unrelated one moves at once; one it puts on the survivor waits", async () => {
     const w = await graderWorld();
     await cardsOn(w);
-    model.reply = () => reply({ title: "Grading", summary: "new", status: "active", serves: null, rank: 1, merges: ["pri-2"], steps: [{ key: "pri-2/s1", title: "Calibrate the grader", tier: "critical", refs: [] }, { title: "Grade essays", tier: "critical", refs: [] }], sessions: [{ session: "jx7old", step: "pri-2/s1" }] });
+    await w.t.run(async (ctx) => {
+      const grader = (await ctx.db.query("priorities").collect()).find((p) => p.short_id === "pri-2")!;
+      await ctx.db.patch(w.personalConv, { team_id: w.acme, is_private: false, team_visibility: "full", priority_id: grader._id, priority_step_key: "s1", priority_set_by: "pass" } as any);
+    });
+    await w.send(w.ana, w.personalConv, w.now - H, "the docs need a pass");
+    model.reply = () => reply(evals(), { short_id: "pri-3", title: "Docs", summary: "", status: "active", serves: null, rank: 3, steps: [], sessions: [{ session: "jx7mine" }] });
     await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team });
-    const grading = (await rows(w)).find((p) => p.title === "Grading")!;
-    expect(grading.steps.map((s) => s.title)).toEqual(["Grade essays"]);
-    expect((await row(w, "pri-2")).status).toBe("active");
-    const [d] = await cards(w);
-    const card = d.priority_card as PriorityCard;
-    expect(card.changes.map((c) => [c.kind, c.priority, c.target, c.parent])).toEqual([["merge", grading.short_id, "pri-2", undefined]]);
-    expect(card.groups.map((g) => [g.priority, g.title])).toEqual([[grading.short_id, "Grading"]]);
-    expect(d.question).toBe("Merge “Grader calibration” into “Grading”?");
+    expect((await w.conversation(w.personalConv))?.priority_id).toBe((await row(w, "pri-3"))._id);
+    expect((await w.conversation(w.oldConv))?.priority_id).toBe((await row(w, "pri-2"))._id);
+  });
+
+  test("accepting is the person's own merge of the absorbed priority as it stands then: a milestone it gained since comes too, none twice", async () => {
+    const { w, d } = await posted();
+    const grader = await row(w, "pri-2");
+    const evalsNow = await row(w, "pri-1");
+    await w.t.run(async (ctx) => {
+      await ctx.db.patch(grader._id, { steps: [...grader.steps, step("s2", "Grader faults under 5%"), step("s3", "Publish the rubric")], step_key_max: 3 });
+    });
     await answer(w, d, [0]);
-    const after = (await rows(w)).find((p) => p.title === "Grading")!;
-    expect([(await row(w, "pri-2")).status, after.steps.map((s) => s.title)]).toEqual(["merged", ["Grade essays", "Calibrate the grader"]]);
-    expect((await w.conversation(w.oldConv))?.priority_id).toBe(after._id);
+    const after = await row(w, "pri-1");
+    expect(after.steps.map((s) => s.title)).toEqual([...evalsNow.steps.map((s) => s.title), "Calibrate the grader", "Publish the rubric"]);
+    expect((await row(w, "pri-2")).status).toBe("merged");
+  });
+
+  test("a decline outlives hundreds of other decisions answered since", async () => {
+    const { w, d } = await posted();
+    await w.t.run((ctx) => finalizeAnswer(ctx as any, d, { status: "dismissed" }, ANA(w), { deliver: false }));
+    await w.t.run(async (ctx) => {
+      for (let i = 0; i < 400; i++) {
+        for (const status of ["answered", "dismissed"] as const) {
+          await ctx.db.insert("session_decisions", { conversation_id: w.oldConv, session_id: "jx7old", user_id: w.ana, question: `q${i}`, options: [{ label: "A" }], blocking: true, status, created_at: Date.now() + 1 + i, resolved_at: Date.now() + 1 + i } as any);
+        }
+      }
+    });
+    await tick();
+    await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team, force: true });
+    expect(await cards(w)).toHaveLength(1);
+    expect((await row(w, "pri-2")).status).toBe("active");
   });
 
   test("a merge goes stale when either priority was set aside or merged by hand since: accepting it writes nothing", async () => {

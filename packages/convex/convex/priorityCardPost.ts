@@ -15,15 +15,15 @@ import { syncDecisionInbox } from "./lib/decisionInbox";
 import { parseWorkspaceKey } from "./lib/accessKeys";
 import { activeGroup } from "./lib/priorityGroup";
 import { sessionVisibility } from "./lib/prioritySessionVisibility";
-import { cardContext, cardQuestion, declinedMerges, dropDeclined, dropRepeats, withCreatedIds, type CardDraft } from "./lib/priorityCardPass";
+import { cardContext, cardQuestion, declinedMerges, dropRepeats, type CardDraft } from "./lib/priorityCardPass";
 import { inWorkspace } from "./priorityPassInputs";
 
 type Ctx = { db: any };
 
 /** How many of one person's open decisions are read to find their open cards. */
 const OPEN_READ = 1_000;
-/** How many of one person's newest answered (and dismissed) decisions are read for the merges they declined. */
-const DECLINED_READ = 300;
+/** How many of a pair's newest ok runs are read for the cards they posted, and so the merges the person declined (two small index ranges each). */
+const DECLINED_RUNS_READ = 1_000;
 /** How many of a pair's ok runs are counted for a card's run facts. */
 const RUNS_READ = 1_000;
 /** How many runs back a card looks for the previous card's run (four small index ranges each); past it, it counts this many. */
@@ -53,14 +53,22 @@ export async function cardAnsweredSince(ctx: Ctx, userId: Id<"users">, workspace
 
 /**
  * The merges the person declined on their priority cards in this workspace
- * (unticked on an answered card, or on a dismissed one), from their newest
- * resolved decisions: a run never proposes one again, and its prompt says so.
+ * (unticked on an answered card, or on a dismissed one): a run never proposes
+ * one again, and its prompt says so. A card is posted in its run's own write,
+ * so each is found by the run that posted it: the pair's ok runs newest first,
+ * and for each, the person's answered and dismissed decisions created within
+ * it (two small index ranges), however many other decisions they answered.
  */
 export async function declinedMergesFor(ctx: Ctx, userId: Id<"users">, workspace: string): Promise<Array<{ absorbed: string; into: string }>> {
+  const runs: Doc<"priority_pass_runs">[] = await ctx.db.query("priority_pass_runs").withIndex("by_user_workspace_status", (q: any) => q.eq("user_id", userId).eq("workspace", workspace).eq("status", "ok")).order("desc").take(DECLINED_RUNS_READ);
   const cards: Array<{ status: string; card: PriorityCard }> = [];
-  for (const status of ["answered", "dismissed"] as const) {
-    const rows: Doc<"session_decisions">[] = await ctx.db.query("session_decisions").withIndex("by_user_status_resolved", (q: any) => q.eq("user_id", userId).eq("status", status)).order("desc").take(DECLINED_READ);
-    for (const d of rows) if (isCardOf(d, workspace)) cards.push({ status, card: d.priority_card as PriorityCard });
+  for (const r of runs) {
+    for (const status of ["answered", "dismissed"] as const) {
+      const rows: Doc<"session_decisions">[] = await ctx.db.query("session_decisions")
+        .withIndex("by_user_status_created", (q: any) => q.eq("user_id", userId).eq("status", status).gte("created_at", r.started_at).lte("created_at", r.finished_at))
+        .collect();
+      for (const d of rows) if (isCardOf(d, workspace) && (d.priority_card as PriorityCard).run_id === String(r._id)) cards.push({ status, card: d.priority_card as PriorityCard });
+    }
   }
   return declinedMerges(cards);
 }
@@ -131,27 +139,26 @@ export type PostedCard = { posted: Id<"session_decisions"> } | { skipped: string
  * session in the workspace to ask from, the changes stay unwritten and the
  * reason comes back for the run's record. `open` is the person's open cards
  * here (openCards).
- * The card holds only merges (sd-5035): the run wrote everything else, the
- * new priorities among it (`created`: plan ref -> short id, which a merge
- * into one now names), and a merge the person declined before is left off.
+ * The card holds only merges (sd-5035): the run wrote everything else. A
+ * merge into a priority the run would create names it by its plan ref
+ * ("new-1"), and the card holds that create until the merge is accepted.
  */
 export async function postPriorityCard(
   ctx: Ctx,
-  run: { user_id: Id<"users">; workspace: string; run_id: Id<"priority_pass_runs">; cost_usd?: number; from: number; to: number; conversations?: Record<string, Id<"conversations">>; created: Record<string, string> },
+  run: { user_id: Id<"users">; workspace: string; run_id: Id<"priority_pass_runs">; cost_usd?: number; from: number; to: number; conversations?: Record<string, Id<"conversations">> },
   raw: CardDraft,
   now: number,
   open: ReadonlyArray<Doc<"session_decisions">>,
 ): Promise<PostedCard> {
   const order = effectivePriorityOrder(await activeGroup(ctx, run.user_id, run.workspace));
   const rankOf = new Map(order.map((p, i) => [p.short_id, i + 1]));
-  const titles = new Map<string, string>();
+  // Each survivor as it stands once the run wrote (it may have renamed or moved it); a new one, as the run would make it.
+  const groups = [];
   for (const g of raw.groups) {
-    const id = run.created[g.priority] ?? g.priority;
-    const p: Doc<"priorities"> | null = await ctx.db.query("priorities").withIndex("by_short_id", (q: any) => q.eq("short_id", id)).first();
-    if (p && String(p.user_id) === String(run.user_id) && p.workspace === run.workspace) titles.set(id, p.title);
+    const p: Doc<"priorities"> | null = await ctx.db.query("priorities").withIndex("by_short_id", (q: any) => q.eq("short_id", g.priority)).first();
+    groups.push(p && String(p.user_id) === String(run.user_id) && p.workspace === run.workspace ? { ...g, title: p.title, rank: rankOf.get(p.short_id) ?? null } : g);
   }
-  const named = withCreatedIds(raw, run.created, (id) => (titles.has(id) ? { title: titles.get(id)!, rank: rankOf.get(id) ?? null } : null));
-  const draft = dropRepeats(dropDeclined(named, await declinedMergesFor(ctx, run.user_id, run.workspace)), open.map((d) => d.priority_card as PriorityCard));
+  const draft = dropRepeats({ ...raw, groups }, open.map((d) => d.priority_card as PriorityCard));
   if (!draft.changes.length) return null;
   const asker = await askingConversation(ctx, run.user_id, run.workspace, run.conversations);
   if (!asker) return { skipped: `card not posted: no session in this workspace to ask from (${draft.changes.length} changes left unwritten)` };

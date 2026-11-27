@@ -9,6 +9,7 @@ import type { PriorityCard, PriorityCardGroup, PriorityChange, PriorityEvidence 
 import type { PriorityPassOutput, PriorityProposal, PriorityStep } from "@codecast/shared/contracts/priorities";
 import { findQuote, type HeldPlan, type SplitPlan } from "./priorityCard";
 import { mergePriorities, type MergePlan, type PriorityPassInput } from "./priorityPass";
+import { matchSteps, repeatsDropped } from "./priorityPassSteps";
 
 const MILESTONE_KINDS = new Set<PriorityChange["kind"]>(["new_milestone", "rename_milestone", "to_critical", "to_polish", "milestone_done", "milestone_reopen", "drop_milestone"]);
 const sameTitle = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
@@ -110,54 +111,82 @@ export type CardDraft = {
 
 // ---------------------------------------------------------------- merges wait, the rest is written
 
+/** Each reply proposal's plan target, numbered as mergePriorities numbers new ones. */
+function targetsOf(input: PriorityPassInput, output: PriorityPassOutput): string[] {
+  const existing = new Set(input.priorities.map((p) => p.short_id));
+  let made = 0;
+  return output.priorities.map((p) => (p.short_id && existing.has(p.short_id) ? p.short_id : `new-${++made}`));
+}
+
 /**
  * What a run with the priority cards experiment writes at once when its plan
  * merges (sd-5035: only merges wait on the person): the reply's plan without
  * its merges, written exactly as a run without the experiment writes a reply.
- * Nothing of a merge happens before it is accepted: the absorbed priority is
- * left as it is, a survivor proposes none of the milestones it would carry
- * from it (named by the absorbed one's key, or by a title only the absorbed
- * one has), and a session sitting on an absorbed priority stays there.
+ * Nothing of a merge happens before it is accepted:
+ * - the absorbed priority is left as it is;
+ * - a survivor proposes none of the milestones it would carry from it: each
+ *   proposed milestone the full plan matched to one of the absorbed one's
+ *   (the same matcher, matchSteps, over the same pool), and each new one
+ *   repeating a milestone the person dropped there;
+ * - a session the reply puts on the survivor while it sits on the absorbed
+ *   priority stays there (one it moves anywhere else moves);
+ * - a new priority that absorbs one waits whole: it is not created now.
  */
 export function planWithoutMerges(input: PriorityPassInput, output: PriorityPassOutput, plan: MergePlan): MergePlan {
   const byId = new Map(input.priorities.map((p) => [p.short_id, p]));
-  const absorbed = new Set(plan.merges.map((m) => m.short_id));
-  const priorities = output.priorities.map((prop) => {
-    const merges = (prop.merges ?? []).filter((id) => absorbed.has(id));
+  const into = new Map(plan.merges.map((m) => [m.short_id, m.merged_into]));
+  const targets = targetsOf(input, output);
+  const waitingWhole = new Set<string>();
+  const priorities = output.priorities.map((prop, i) => {
+    const target = targets[i];
     if (!prop.merges) return prop;
     const { merges: _, ...rest } = prop;
-    if (!merges.length) return rest;
-    const own = byId.get(prop.short_id ?? "")?.steps ?? [];
-    const theirs = merges.flatMap((id) => (byId.get(id)?.steps ?? []).filter((s) => !s.dropped).map((s) => ({ owner: id, ...s })));
-    const carried = (s: PriorityProposal["steps"][number]) =>
-      !own.some((o) => o.key === s.key || sameTitle(o.title, s.title)) && theirs.some((t) => s.key === `${t.owner}/${t.key}` || sameTitle(s.title, t.title));
-    return { ...rest, steps: prop.steps.filter((s) => !carried(s)) };
+    const absorbed = prop.merges.filter((id) => into.get(id) === target).map((id) => byId.get(id)!);
+    if (!absorbed.length) return rest;
+    if (!byId.has(target)) waitingWhole.add(target);
+    const ownerOf = new Map<PriorityStep, string>();
+    for (const a of absorbed) for (const s of a.steps) ownerOf.set(s, a.short_id);
+    const pool = [...(byId.get(target)?.steps ?? []), ...ownerOf.keys()];
+    const matched = matchSteps(pool, prop.steps, pool.map((s) => ownerOf.get(s) ?? target), target);
+    const droppedThere = [...ownerOf.keys()].filter((s) => s.dropped);
+    const waiting = new Set(absorbed.flatMap((a) => a.sessions.map((s) => s.id)));
+    const steps = prop.steps
+      .filter((s, k) => !(matched[k] && ownerOf.has(matched[k]!)) && !(!matched[k] && droppedThere.some((d) => repeatsDropped(d.title, s.title))))
+      .map((s) => ({ ...s, refs: s.refs.filter((r) => !(r.kind === "session" && waiting.has(r.id))) }));
+    return { ...rest, steps, sessions: prop.sessions.filter((s) => !waiting.has(s.session)) };
   });
   const direct = mergePriorities(input, { ...output, priorities });
-  const waiting = new Set(input.priorities.filter((p) => absorbed.has(p.short_id)).flatMap((p) => p.sessions.map((s) => s.id)));
-  return { ...direct, sessions: direct.sessions.filter((s) => !waiting.has(s.session)) };
+  if (!waitingWhole.size) return direct;
+  return { ...direct, creates: direct.creates.filter((c) => !waitingWhole.has(c.ref)), sessions: direct.sessions.filter((s) => !waitingWhole.has(s.priority)) };
 }
 
 /**
  * The card for a run's merges: its merge rows (with their evidence) and what
- * accepting each writes. Everything else the run wrote at once, so the card
- * holds no other change, a merge into a priority the run created names it by
- * its plan ref until the post names its short id (withCreatedIds), and the
- * sessions it holds are those waiting on a merge.
+ * accepting each writes. Everything else the run wrote at once. A merge into
+ * an existing priority is the person's own merge when accepted, of the
+ * absorbed priority as it stands then (lib/priorityCardApply), so it holds
+ * nothing more. A merge into a priority the run would create holds that
+ * create whole (its milestones and the sessions the run put on it), made
+ * when the merge is accepted and never otherwise.
  */
 export function mergeCardDraft(split: SplitPlan, plan: MergePlan, direct: MergePlan, input: PriorityPassInput, output: PriorityPassOutput): CardDraft {
-  const merge = new Set(split.changes.filter((c) => c.kind === "merge").map((c) => c.id));
+  const merges = split.changes.filter((c) => c.kind === "merge");
+  const parents = new Set(merges.flatMap((c) => (c.parent ? [c.parent] : [])));
+  const kept = new Set([...merges.map((c) => c.id), ...parents]);
+  for (const c of split.held.changes) if (c.parent && parents.has(c.parent) && c.kind === "new_milestone") kept.add(c.id);
+  const createRefs = new Set(split.held.changes.filter((c) => parents.has(c.id)).map((c) => c.priority));
   const unparented = <T extends { parent?: string }>({ parent: _, ...c }: T): Omit<T, "parent"> => c;
   return {
-    changes: withEvidence(split.changes.filter((c) => merge.has(c.id)).map(unparented), plan, input, output),
-    groups: split.groups.map((g) => ({ ...g, changes: g.changes.filter((id) => merge.has(id)) })).filter((g) => g.changes.length),
+    changes: withEvidence(merges.map(unparented), plan, input, output),
+    groups: split.groups.map((g) => ({ ...g, changes: g.changes.filter((id) => merges.some((c) => c.id === id)) })).filter((g) => g.changes.length),
     held: {
       ...split.held,
-      creates: [],
-      changes: split.held.changes.filter((c) => merge.has(c.id)).map(unparented),
+      creates: split.held.creates.filter((c) => createRefs.has(c.ref)),
+      changes: split.held.changes.filter((c) => kept.has(c.id)),
+      // The sessions the run put on a new priority that waits: placed when it is made. Those of an absorbed one move with the merge.
       sessions: split.held.sessions
-        .filter((s) => s.needs.some((id) => merge.has(id)) || (s.step_from !== null && merge.has(s.step_from)))
-        .map((s) => ({ ...s, needs: s.needs.filter((id) => merge.has(id)), step_from: s.step_from !== null && merge.has(s.step_from) ? s.step_from : null })),
+        .filter((s) => s.needs.length > 0 && s.needs.every((id) => parents.has(id)))
+        .map((s) => ({ ...s, step_from: s.step_from !== null && kept.has(s.step_from) ? s.step_from : null })),
     },
     typed: typedByPriority(input, direct),
     sessions: input.sessions.length,
@@ -165,49 +194,37 @@ export function mergeCardDraft(split: SplitPlan, plan: MergePlan, direct: MergeP
   };
 }
 
-/**
- * The draft once the run's writes landed: each new priority it created named
- * by its short id (`created`: plan ref -> short id), and each group's title
- * and place as the priority stands now (`now`; the run may have renamed or
- * moved it).
- */
-export function withCreatedIds(draft: CardDraft, created: Record<string, string>, now: (shortId: string) => { title: string; rank: number | null } | null): CardDraft {
-  const real = (p: string) => created[p] ?? p;
-  return {
-    ...draft,
-    changes: draft.changes.map((c) => ({ ...c, priority: real(c.priority) })),
-    groups: draft.groups.map((g) => {
-      const priority = real(g.priority);
-      const row = now(priority);
-      return { ...g, priority, ...(row ? { title: row.title, rank: row.rank } : {}) };
-    }),
-    held: {
-      ...draft.held,
-      order: draft.held.order.map(real),
-      changes: draft.held.changes.map((c) => ({ ...c, priority: real(c.priority) })),
-      sessions: draft.held.sessions.map((s) => ({ ...s, priority: real(s.priority) })),
-    },
-  };
-}
-
 /** A merge of two priorities, whichever way round: the person declined it once, and it is never proposed again. */
 export const mergePairKey = (a: string, b: string) => [a, b].sort().join("|");
 
-/** The merges the person declined on these answered or dismissed cards: every merge row they did not tick (one that no longer applied counts as ticked). */
-export function declinedMerges(cards: ReadonlyArray<{ status: string; card: Pick<PriorityCard, "changes" | "outcome"> }>): Array<{ absorbed: string; into: string }> {
+/**
+ * The merges the person declined on these answered or dismissed cards: every
+ * merge row they did not tick (one that no longer applied counts as ticked).
+ * A survivor the card would have created is named by its title ("new:<title>").
+ */
+export function declinedMerges(cards: ReadonlyArray<{ status: string; card: Pick<PriorityCard, "changes" | "outcome" | "held"> }>): Array<{ absorbed: string; into: string }> {
   const out = new Map<string, { absorbed: string; into: string }>();
   for (const { status, card } of cards) {
     if (status === "answered" && !card.outcome) continue;
-    const kept = new Set(status === "answered" ? [...(card.outcome?.accepted ?? []), ...(card.outcome?.skipped ?? [])] : []);
-    for (const c of card.changes) if (c.kind === "merge" && c.target && !kept.has(c.id)) out.set(mergePairKey(c.target, c.priority), { absorbed: c.target, into: c.priority });
+    const ticked = new Set(status === "answered" ? [...(card.outcome?.accepted ?? []), ...(card.outcome?.skipped ?? [])] : []);
+    for (const c of card.changes) {
+      if (c.kind !== "merge" || !c.target || ticked.has(c.id)) continue;
+      const into = priorityIdentity(card, c.priority);
+      out.set(mergePairKey(c.target, into), { absorbed: c.target, into });
+    }
   }
   return [...out.values()];
 }
 
-/** The draft without the merges the person declined, and without the groups left empty. */
+/**
+ * The draft without the merges the person declined (held back from the run
+ * like any other merge, and never proposed again), and without the groups
+ * left empty. What only they held stays in `held`, inert: answering acts on
+ * the card's changes alone.
+ */
 export function dropDeclined(draft: CardDraft, declined: ReadonlyArray<{ absorbed: string; into: string }>): CardDraft {
   const pairs = new Set(declined.map((d) => mergePairKey(d.absorbed, d.into)));
-  const gone = new Set(draft.changes.filter((c) => c.kind === "merge" && c.target && pairs.has(mergePairKey(c.target, c.priority))).map((c) => c.id));
+  const gone = new Set(draft.changes.filter((c) => c.kind === "merge" && c.target && pairs.has(mergePairKey(c.target, priorityIdentity(draft, c.priority)))).map((c) => c.id));
   if (!gone.size) return draft;
   return {
     ...draft,

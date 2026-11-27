@@ -1,9 +1,10 @@
 // Answering a priority change card (shared/contracts/priorityCard.ts),
 // called from sessionDecisions settleResolution beside settleExpectationCard.
-// Only the person the card asked settles it: the changes they ticked are
-// written against their priorities as they stand now (lib/priorityCard
-// planForAccepted, then priorityPassRun writePlan without any run
-// bookkeeping), and its moves land as their own (priorityWrite doMove). Words
+// Only the person the card asked settles it. Each merge they tick is their
+// own merge (priorityWrite doMerge), of the absorbed priority as it stands
+// then, unless either priority was merged by hand, deleted or set aside
+// since; a merge into a priority the run would have created makes it first
+// (lib/priorityCard planForAccepted, then priorityPassRun writePlan). Words
 // with no ticks ("Something else…") write nothing to the priorities and are
 // saved as a correction the next pass reads. A dismissal is the web's "Accept
 // none": nothing is written. Every answer records its outcome on the card.
@@ -15,7 +16,7 @@ import { planForAccepted, type CardRow, type HeldPlan } from "./priorityCard";
 import { activeGroup } from "./priorityGroup";
 import { priorityCardRefusal } from "./priorityCardAccess";
 import { writePlan } from "../priorityPassRun";
-import { doCorrect, doMove } from "../priorityWrite";
+import { doCorrect, doMerge } from "../priorityWrite";
 import { OWN_SCAN_READ } from "../priorityRead";
 
 type Ctx = { db: any; scheduler?: any };
@@ -52,6 +53,27 @@ async function correctionTarget(ctx: Ctx, userId: Id<"users">, card: PriorityCar
   return effectivePriorityOrder(await activeGroup(ctx, userId, card.workspace))[0]?.short_id ?? null;
 }
 
+/** One of the person's priorities in this workspace, by short id, or null. */
+async function ownedRow(ctx: Ctx, userId: Id<"users">, workspace: string, shortId: string): Promise<Doc<"priorities"> | null> {
+  const p: Doc<"priorities"> | null = await ctx.db.query("priorities").withIndex("by_short_id", (q: any) => q.eq("short_id", shortId)).first();
+  return p && String(p.user_id) === String(userId) && p.workspace === workspace ? p : null;
+}
+
+/** Makes the new priority a merge waited on (`parent`, its new_priority change), as the run would have, against the rows as they are now; null when it no longer applies. */
+async function createWaiting(ctx: Ctx, userId: Id<"users">, card: PriorityCard, held: Held, parent: string, now: number): Promise<Doc<"priorities"> | null> {
+  const rowsNow: Doc<"priorities">[] = await ctx.db
+    .query("priorities")
+    .withIndex("by_user_workspace_active", (q: any) => q.eq("user_id", userId).eq("workspace", card.workspace))
+    .order("desc")
+    .take(OWN_SCAN_READ);
+  const create = new Set([parent, ...held.changes.filter((c) => c.parent === parent && c.kind === "new_milestone").map((c) => c.id)]);
+  const answer = planForAccepted(held, create, rowsNow as unknown as CardRow[], now);
+  if (answer.skipped.includes(parent)) return null;
+  const { created } = await writePlan(ctx as any, { user_id: userId, workspace: card.workspace }, answer.plan, { conversations: held.conversations });
+  const ref = held.changes.find((c) => c.id === parent)?.priority;
+  return ref && created[ref] ? ownedRow(ctx, userId, card.workspace, created[ref]) : null;
+}
+
 export async function settlePriorityCard(
   ctx: Ctx,
   row: Pick<Doc<"session_decisions">, "_id" | "short_id" | "user_id" | "priority_card">,
@@ -69,22 +91,19 @@ export async function settlePriorityCard(
   const accepted = answered ? [...new Set(ticked(verdict).map((i) => card.changes[i]?.id).filter((id): id is string => !!id))] : [];
   const text = answered ? verdict.answer_text?.trim() : undefined;
 
-  let skipped: string[] = [];
-  if (accepted.length) {
-    const held = card.held as Held;
-    const rowsNow: Doc<"priorities">[] = await ctx.db
-      .query("priorities")
-      .withIndex("by_user_workspace_active", (q: any) => q.eq("user_id", person).eq("workspace", card.workspace))
-      .order("desc")
-      .take(OWN_SCAN_READ);
-    const answer = planForAccepted(held, new Set(accepted), rowsNow as unknown as CardRow[], now);
-    skipped = answer.skipped;
-    await writePlan(ctx as any, { user_id: person, workspace: card.workspace }, answer.plan, { conversations: held.conversations });
-    for (const m of answer.moves) {
-      const moved = await doMove(ctx, person, m.short_id, m.to);
-      const change = held.changes.find((c) => c.kind === "move" && c.priority === m.short_id);
-      if ("error" in moved && change && !skipped.includes(change.id)) skipped.push(change.id);
-    }
+  const skipped: string[] = [];
+  const held = card.held as Held;
+  for (const id of accepted) {
+    const c = held.changes.find((x) => x.id === id);
+    // A merge stands when neither priority was merged by hand, deleted or set aside since (and the absorbed one is not the person's done).
+    const gone = c?.kind === "merge" && c.target ? await ownedRow(ctx, person, card.workspace, c.target) : null;
+    if (!c || !gone || gone.status === "merged" || gone.status === "set_aside" || gone.status_set_by === "person") { skipped.push(id); continue; }
+    // A merge into a priority the run would have created makes it now, with the milestones and sessions the run gave it.
+    const into = c.parent ? await createWaiting(ctx, person, card, held, c.parent, now) : await ownedRow(ctx, person, card.workspace, c.priority);
+    if (!into || into.status === "merged" || into.status === "set_aside") { skipped.push(id); continue; }
+    // Then it is the person's own merge, of the absorbed priority as it stands now.
+    const merged = await doMerge(ctx as any, person, gone.short_id, into.short_id, { joinSameTitles: true });
+    if ("error" in merged) skipped.push(id);
   }
   // Words with the answer go to the next pass as a correction, on the card's first priority that exists.
   if (text) {

@@ -372,7 +372,7 @@ export function buildPriorityPassPrompt(input: PriorityPassInput, opts: PassProm
   const corrections = (input.corrections ?? []).slice(-PRIORITY_PASS_CAPS.corrections)
     .map((c) => `- ${when(c.at)} · on ${c.priority}${c.step_key ? `/${c.step_key}` : ""}: ${clip(c.text, PRIORITY_PASS_CAPS.correction_chars)}`).join("\n");
   const titleOf = new Map(input.priorities.map((p) => [p.short_id, p.title]));
-  const named = (id: string) => (titleOf.has(id) ? `${id} "${clip(titleOf.get(id)!, 120)}"` : id);
+  const named = (id: string) => (titleOf.has(id) ? `${id} "${clip(titleOf.get(id)!, 120)}"` : id.startsWith("new:") ? `a new priority "${clip(id.slice(4), 120)}"` : id);
   const declined = (opts.declinedMerges ?? []).map((d) => `- ${named(d.absorbed)} and ${named(d.into)}`).join("\n");
   const budget = Math.max(PRIORITY_PASS_CAPS.prompt_chars - priorities.length - calls.length - corrections.length - declined.length, PRIORITY_PASS_CAPS.prompt_chars * PRIORITY_PASS_CAPS.session_share_floor);
   const { kept, omitted } = fitSessions(input.sessions, budget);

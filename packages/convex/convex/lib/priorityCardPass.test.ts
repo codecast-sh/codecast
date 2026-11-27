@@ -51,14 +51,26 @@ describe("merges wait, the rest is written", () => {
     expect(direct.sessions.map((s) => s.session)).not.toContain("b");
   });
 
-  test("the card holds the merge alone, and the session waiting on it", () => {
+  test("the card holds the merge alone: accepting it is the person's own merge, which moves the absorbed one's sessions itself", () => {
     const plan = mergePriorities(inp, output);
     const direct = planWithoutMerges(inp, output, plan);
     const card = mergeCardDraft(splitPlan(plan, inp, output), plan, direct, inp, output);
     expect(card.changes.map((c) => [c.kind, c.priority, c.target])).toEqual([["merge", "pri-1", "pri-2"]]);
     expect(card.held.changes.map((c) => c.kind)).toEqual(["merge"]);
-    expect(card.held.sessions.map((s) => [s.session, s.needs])).toEqual([["b", [card.changes[0].id]]]);
+    expect(card.held.sessions).toEqual([]);
     expect(card.groups.map((g) => g.changes)).toEqual([[card.changes[0].id]]);
+  });
+
+  test("a new priority that absorbs one waits whole: not created now; the card holds it, its milestones and the sessions put on it", () => {
+    const out: PriorityPassOutput = { priorities: [{ title: "Grading", summary: "", status: "active", serves: null, rank: 1, merges: ["pri-2"], steps: [{ key: "pri-2/s1", title: "Calibrate", tier: "critical", refs: [] }, { title: "Essays", tier: "critical", refs: [] }], sessions: [{ session: "a", step: "Essays" }, { session: "b", step: "pri-2/s1" }] }], unassigned: [] };
+    const plan = mergePriorities(inp, out);
+    const direct = planWithoutMerges(inp, out, plan);
+    expect([direct.creates, direct.sessions]).toEqual([[], []]);
+    const card = mergeCardDraft(splitPlan(plan, inp, out), plan, direct, inp, out);
+    expect(card.changes.map((c) => [c.kind, c.priority, c.parent])).toEqual([["merge", "new-1", undefined]]);
+    expect(card.held.changes.map((c) => [c.kind, c.to ?? null])).toEqual([["new_priority", 1], ["merge", null], ["new_milestone", "Essays"]]);
+    expect(card.held.creates.map((c) => c.title)).toEqual(["Grading"]);
+    expect(card.held.sessions.map((s) => s.session)).toEqual(["a"]);
   });
 
   test("a merge declined (unticked, or on a dismissed card) is remembered either way round, and left off a later card", () => {

@@ -236,7 +236,7 @@ function Answers({ total, ticked, suggested, onAnswer, keys }: { total: number; 
       ? { label: "Accept" }
       // Suggested names the pass's own pick: only while the ticks are exactly the ones the card opened with.
       : { label: `${acceptLabel(ticked.length, total)}${sameIds(ticked, suggested) ? " (Suggested)" : ""}`, description: "They show on your priorities page now. Undo from there." },
-    { label: "Accept none", description: "Your priorities stay as they are." },
+    { label: "Accept none", description: "These merges won't be proposed again." },
     { label: "Something else…", description: "Say what the pass got wrong." },
   ];
   const send = () => {
