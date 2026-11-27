@@ -10,6 +10,7 @@ import { FEATURE, TEAMMATE_SESSIONS, featureCheck, readerFor, type Reader } from
 import { activeGroup, positionsOf } from "./lib/priorityGroup";
 import { passTiming } from "./priorityPassSweep";
 import { isSessionOwner } from "./sessionOwners";
+import { mayBeTeamOwned } from "./lib/viewerTriage";
 import { rowPinPredatesTurn } from "@codecast/shared/contracts/inboxPlacement";
 import { isSettleVerdictCurrent } from "@codecast/shared/contracts";
 import { attributePlans, isClosedSession, isWorkflowSession, orderSessions, type PlanFacts } from "@codecast/shared/contracts/priorityDerive";
@@ -22,6 +23,14 @@ export const DAY = 86_400_000;
 /** Sessions a list shows per priority, and how many of the owner's mapped sessions it reads to count them before the pass stored a count ("50+" past that). */
 const LIST_SESSIONS = 3;
 const LIST_COUNT_CAP = 50;
+/**
+ * The most teammates' active priorities one list gives full links (linksFor),
+ * every teammate's #1 first, then each #2, and so on; the rest are linked
+ * from the sessions their row read already. Full links read each milestone's
+ * tasks, their sessions and plans (about 30 reads a priority), and Convex
+ * fails a query past 4,096 reads: per-workspace caps let a list hold hundreds.
+ */
+export const TEAMMATE_LINKED = 25;
 /** The most teammates' priorities one list judges in one workspace, the most recently active first (more with `all` or a status); past that it says `teammates_truncated`. */
 export const TEAMMATE_PRIORITIES_CAP = 60;
 export const TEAMMATE_ALL_CAP = 200;
@@ -35,6 +44,8 @@ const SHOW_SESSIONS = 200;
 const LINK_MAPPED_READ = 10;
 const LINK_TASK_SESSIONS = 2;
 const LINK_STEP_SESSIONS = 6;
+/** The most of the viewer's co-owned sessions a list reads in one go to tell which linked sessions are theirs. */
+const VIEWER_OWNED_READ = 500;
 /** A linked session's last activity, to the 10 minutes: a heartbeat or a streamed message re-runs the list but leaves its answer as it was. */
 const LINK_ACTIVE_ROUND_MS = 10 * 60_000;
 /** The most of today's unassigned sessions a history names. */
@@ -245,11 +256,19 @@ function linkReads(ctx: Ctx, r: Reader): LinkReads {
     };
   };
   const listed = memo((id) => convs(id).then((c) => (c ? r.listed(c) : false)));
+  // The sessions the viewer co-owns, in one read when they are few, so a teammate's sessions cost no read each; past VIEWER_OWNED_READ, one read per session.
+  let owned: Promise<Set<string> | null> | undefined;
+  const ownedIds = () => (owned ??= ctx.db.query("session_owners").withIndex("by_user", (q: any) => q.eq("user_id", r.viewer)).take(VIEWER_OWNED_READ + 1)
+    .then((rows: Doc<"session_owners">[]) => (rows.length > VIEWER_OWNED_READ ? null : new Set(rows.map((o) => String(o.conversation_id))))));
   const mine = memo(async (id) => {
     const c = await convs(id);
     if (!c) return false;
     const viewer = String(r.viewer);
-    return String(c.user_id) === viewer || String(c.owner_user_id ?? "") === viewer || isSessionOwner(ctx, c._id, r.viewer, c);
+    if (String(c.user_id) === viewer || String(c.owner_user_id ?? "") === viewer) return true;
+    const ids = await ownedIds();
+    if (ids?.has(String(c._id))) return true;
+    // A team's share is a row of the team's (sessionOwnerRow): only a session a team may own needs that read.
+    return (!ids || mayBeTeamOwned(c)) && isSessionOwner(ctx, c._id, r.viewer, c);
   });
   const convs = memo(async (ref): Promise<Doc<"conversations"> | null> => {
     const id = ctx.db.normalizeId("conversations", ref);
@@ -291,9 +310,11 @@ const planRef = ({ short_id, title, done, total, size }: PlanFacts): PriorityPla
  * rules (priorityDerive); whether every task it names is done ("Looks
  * done?"); and whether a correction on it waits for a pass. For every active
  * priority the viewer can read (listFor), a teammate's as their own: each
- * session reports its real state, a teammate's needs-you included.
+ * session reports its real state, a teammate's needs-you included. Not
+ * `full`: only the mapped sessions the row read already (listRead), with no
+ * task, ref or plan read, so no plan and nothing looks done.
  */
-async function linksFor(r: Reader, reads: LinkReads, p: Priority, steps: PriorityStep[], now: number): Promise<{ links: PriorityMilestoneLinks[]; plan: PriorityPlanRef | null }> {
+async function linksFor(r: Reader, reads: LinkReads, p: Priority, steps: PriorityStep[], now: number, full = true): Promise<{ links: PriorityMilestoneLinks[]; plan: PriorityPlanRef | null }> {
   const bySteps = new Map<string, Map<string, { c: Doc<"conversations">; why: PriorityLinkWhy[] }>>(steps.map((s) => [s.key, new Map()]));
   const add = async (key: string, c: Doc<"conversations"> | null, why: PriorityLinkWhy) => {
     const into = bySteps.get(key);
@@ -304,13 +325,14 @@ async function linksFor(r: Reader, reads: LinkReads, p: Priority, steps: Priorit
     else if (!had.why.includes(why)) had.why.push(why);
   };
   // The row's own read covers this window (listRead), so it slices that read rather than reading more.
-  for (const c of (await r.sessionsOf(p, Math.max(LINK_MAPPED_READ, listRead(r.viewer, p)))).slice(0, LINK_MAPPED_READ)) if (c.priority_step_key) await add(c.priority_step_key, c, "mapped");
+  const mapped = full ? Math.max(LINK_MAPPED_READ, listRead(r.viewer, p)) : listRead(r.viewer, p);
+  for (const c of (await r.sessionsOf(p, mapped)).slice(0, LINK_MAPPED_READ)) if (c.priority_step_key) await add(c.priority_step_key, c, "mapped");
   const taskPlans = new Map<string, Array<string | null>>();
   const tasksDone = new Map<string, boolean>();
   for (const s of steps) {
     const plans: Array<string | null> = [];
     let allDone = true;
-    for (const ref of s.refs) {
+    for (const ref of full ? s.refs : []) {
       if (ref.kind === "session") await add(s.key, await reads.ownedConv(ref.id, String(p.user_id)), "linked");
       if (ref.kind !== "task") continue;
       const task = await reads.task(ref.id);
@@ -453,13 +475,18 @@ export async function listFor(ctx: Ctx, viewer: Id<"users">, args: { workspace?:
     || STATUS_ORDER[a.status] - STATUS_ORDER[b.status]
     || at(a) - at(b)
     || b.last_active_at - a.last_active_at);
+  const fullLinks = new Set(rows
+    .filter((p) => !isOwner(viewer, p) && p.status === "active")
+    .sort((a, b) => at(a) - at(b) || a.workspace.localeCompare(b.workspace) || String(a.user_id).localeCompare(String(b.user_id)))
+    .slice(0, TEAMMATE_LINKED)
+    .map((p) => String(p._id)));
   const out: PriorityRow[] = [];
   const reads = linkReads(ctx, r);
   const now = Date.now();
   for (const p of rows) {
     const steps = await r.stepsFor(p);
-    // Links on every active priority, a teammate's too: the rows whose milestones show a state.
-    const linked = p.status === "active" ? await linksFor(r, reads, p, steps, now) : null;
+    // Links on every active priority, a teammate's too: the rows a next action is drawn on. Full for the viewer's own and TEAMMATE_LINKED teammates' (the read cap).
+    const linked = p.status === "active" ? await linksFor(r, reads, p, steps, now, isOwner(viewer, p) || fullLinks.has(String(p._id))) : null;
     const row = rowFor(viewer, p, ownerOf(people, p), positions.get(String(p._id)) ?? null, steps, await mappedSessions(r, p, listRead(viewer, p)), await correctionPending(ctx, viewer, p), LIST_SESSIONS);
     out.push(linked ? { ...row, ...linked } : row);
   }
