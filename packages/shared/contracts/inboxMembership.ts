@@ -59,13 +59,9 @@ export function isAdoptedChild(conv: InboxRowIdentity): boolean {
   return !!conv.inbox_adopted_at && isNestedIdentity(conv);
 }
 
-// Under the owners model (team feature session_owners) no row's membership or
-// placement rides a parent: a nested row belongs to whoever owns it, and the
-// row is a member of exactly its owners' inboxes, standing on its own facts. A
-// child its session owns (owner_session_id, in nobody's inbox) is still drawn
-// on that session's card, for display only (web store ownedChildrenOf). The
-// server stamps owners_model only on a row the model applies to: that IS the
-// marker.
+// Under the owners model (team feature session_owners) no row's membership
+// rides a parent: a row is a member of exactly its owners' inboxes. The server
+// stamps owners_model only on a row the model applies to: that IS the marker.
 export function underOwnersModel(row: { owners_model?: boolean | null }): boolean {
   return row.owners_model === true;
 }
@@ -226,12 +222,8 @@ export function isInboxMember(row: OwnersModelRow, viewerId: string | { toString
     || (String(row.wait_up_person ?? "") === me && waitReachedPeople(row));
 }
 
-/** A child its parent session still owns, drawn on that session's card for
- *  display only: under the model, owned by a session (owner_session_id), no
- *  role took it, nobody released it, and it is none of the viewer's own inbox
- *  rows (an owner seat or a wait that reached them makes it one). ONE rule for
- *  the server's feeders (convex conversations nestedOnParentCard) and the web
- *  nest (store isOwnedChildRow), so a child rides the card on both or neither. */
+/** A child its session still owns, drawn on that session's card only: one rule
+ *  for the server's feeders and the web nest. */
 export function ridesParentCard(row: OwnersModelRow & { parent_released_at?: number | null }, viewerId: string | { toString(): string } | null | undefined): boolean {
   return underOwnersModel(row) && !!row.owner_session_id && !row.org_role_id && !row.parent_released_at && !isInboxMember(row, viewerId);
 }

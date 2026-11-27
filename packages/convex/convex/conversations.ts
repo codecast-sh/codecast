@@ -6901,7 +6901,7 @@ export const listFavoriteSessions = query({
     for (const conv of favorites) {
       if (!shouldShowInInbox(conv)) continue;
       // clusterCutoff 0: favorites are deliberately kept — never gap-hide them.
-      const { row } = await enrichInboxSessionRow(ctx, conv, maps, now, false, undefined, getDoc);
+      const { row } = await enrichInboxSessionRow(ctx, conv, maps, now, false, { adopted: true }, getDoc);
       await stampInboxViewerFields(row, conv, userId, await sessionOwnerRow(ctx, conv._id, userId), getDoc);
       results.push(row);
     }
@@ -6939,7 +6939,7 @@ export const listKilledSessions = query({
     const rows: any[] = [];
     for (const conv of result.page) {
       if (isOrphanOrSubagent(conv) || isRunLog(conv)) continue;
-      const { row } = await enrichInboxSessionRow(ctx, conv, EMPTY_INBOX_MAPS, now, false, undefined, getDoc);
+      const { row } = await enrichInboxSessionRow(ctx, conv, EMPTY_INBOX_MAPS, now, false, { adopted: true }, getDoc);
       await stampInboxViewerFields(row, conv, userId, await sessionOwnerRow(ctx, conv._id, userId), getDoc);
       stripInboxLiveness(row);
       rows.push(row);
@@ -6968,7 +6968,7 @@ export const listClosedSessions = query({
     const rows: any[] = [];
     for (const conv of result.page) {
       if (!isClosedSession(conv) || isOrphanOrSubagent(conv) || isRunLog(conv)) continue;
-      const { row } = await enrichInboxSessionRow(ctx, conv, EMPTY_INBOX_MAPS, now, false, undefined, getDoc);
+      const { row } = await enrichInboxSessionRow(ctx, conv, EMPTY_INBOX_MAPS, now, false, { adopted: true }, getDoc);
       await stampInboxViewerFields(row, conv, userId, await sessionOwnerRow(ctx, conv._id, userId), getDoc);
       stripInboxLiveness(row);
       rows.push(row);
@@ -8508,7 +8508,7 @@ function stripInboxLiveness(row: any, fastFieldsToo = false): void {
 // of 0 disables the stale-cluster hide (the crawl passes 0 — completeness wins).
 // Debug-only cost knobs for the temporary timing harness (debugTmp.ts): each
 // flag skips one class of per-row reads so their cost can be measured from
-// outside (Date.now() is frozen inside a query). Production callers pass none.
+// outside (Date.now() is frozen inside a query). Production callers pass only adopted.
 export type InboxEnrichSkip = {
   children?: boolean;
   /** The adopted workers past a full children page: only a read that draws
@@ -11877,7 +11877,7 @@ export async function collectInboxSessionsByIds(ctx: any, userId: Id<"users">, i
       sessions.push(childRow);
       continue;
     }
-    const { row } = await enrichInboxSessionRow(ctx, conv, EMPTY_INBOX_MAPS, now, false, { auq: true }, getDoc);
+    const { row } = await enrichInboxSessionRow(ctx, conv, EMPTY_INBOX_MAPS, now, false, { auq: true, adopted: true }, getDoc);
     await stampInboxViewerFields(row, conv, userId, myOwnerRow, getDoc);
     stripInboxLiveness(row);
     sessions.push(row);

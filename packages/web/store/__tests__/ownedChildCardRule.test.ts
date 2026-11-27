@@ -94,6 +94,16 @@ describe("a session dropped on another card rides that card", () => {
     applySessionOwnersRead(D, read(D, { people: [me] }));
   });
 
+  // A session released from an earlier parent carries parent_released_at; the
+  // adopt clears it (as the server's adopt does), or it would ride no card and
+  // be out of the inbox until the server answered.
+  test("a session once released from a parent is on the target's card on the press", () => {
+    useInboxStore.setState((s: any) => ({ sessions: { ...s.sessions, [D]: { ...s.sessions[D], parent_released_at: NOW - 60_000 } } }));
+    st().applySessionOwners(D, { adopt_parent: P }, { detach_parent: true, restore: [{ user_id: ME, added_by: ME, added_at: 1 }] });
+    expect(rowOf(D).parent_released_at ?? null).toBeNull();
+    expect(onP()).toContain(D);
+  });
+
   test("on the card on the press, and still there after the ack and the echo, past 20 newer children", async () => {
     expect(onP()).not.toContain(D);
     st().applySessionOwners(D, { adopt_parent: P }, { detach_parent: true, restore: [{ user_id: ME, added_by: ME, added_at: 1 }] });

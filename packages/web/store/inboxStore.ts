@@ -10344,7 +10344,7 @@ function retireAckedLockInDraft(draft: any, key: string, restore = true): void {
 export const OWNERS_LOCK_FIELDS: Readonly<Record<string, readonly string[]>> = {
   sessionOwners: ["people_ids", "role", "parent_session"],
   // An adopt's parent link and stamp too: the server's adopted_at is its own clock.
-  sessions: ["owned_by_me", "implicit_owner", "org_role_id", "owner_session_id", "parent_conversation_id", "adopted_at"],
+  sessions: ["owned_by_me", "implicit_owner", "org_role_id", "owner_session_id", "parent_conversation_id", "adopted_at", "parent_released_at"],
 };
 
 function isOwnersLockKey(key: string): boolean {

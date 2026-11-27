@@ -67,7 +67,7 @@ export const TRIAGE_PENDING_FIELDS: readonly string[] = TRIAGE_CONVERSATION_FIEL
 // under the owners model the same way while their locks live, bounded the
 // same. Off the model these fields are no gesture of this kind (a role filing
 // locks org_role_id there, as on main), so they darken nothing.
-export const OWNERS_PENDING_FIELDS: readonly string[] = ["owned_by_me", "implicit_owner", "org_role_id", "owner_session_id", "parent_conversation_id", "adopted_at"];
+export const OWNERS_PENDING_FIELDS: readonly string[] = ["owned_by_me", "implicit_owner", "org_role_id", "owner_session_id", "parent_conversation_id", "adopted_at", "parent_released_at"];
 
 // How long an unconfirmed send keeps its session placed as WORKING. A send's
 // receipt lands within seconds, but only in the window that dispatched it:
