@@ -95,15 +95,20 @@ async function enqueue(ctx: { db: any; scheduler: any }, conv: Doc<"conversation
 /** The most asks one session gets, read in one index range to decide whether to ask again. */
 export const ASKS_PER_SESSION = 12;
 
+/** A pending ask older than this died before it settled (a call gives up after a minute): it no longer holds the next. */
+export const PENDING_STALE_MS = 10 * MINUTE;
+
 /**
  * Whether a typed message, title or pin asks: the session's first ask, or a
- * later one while the last answered "new" and none is still pending, up to
- * ASKS_PER_SESSION. A filed session never reaches here (askClassifier).
+ * later one while the last settled answer was "new" and no live ask is
+ * pending, up to ASKS_PER_SESSION. A filed session never reaches here
+ * (askClassifier).
  */
-export function asksNow(asks: Array<Pick<Doc<"priority_classifications">, "status" | "at">>): boolean {
+export function asksNow(asks: Array<Pick<Doc<"priority_classifications">, "status" | "at">>, now: number): boolean {
   if (!asks.length) return true;
-  if (asks.length >= ASKS_PER_SESSION || asks.some((a) => a.status === "pending")) return false;
-  return asks.reduce((a, b) => (b.at > a.at ? b : a)).status === "new";
+  if (asks.length >= ASKS_PER_SESSION || asks.some((a) => a.status === "pending" && a.at > now - PENDING_STALE_MS)) return false;
+  const settled = asks.filter((a) => a.status !== "pending");
+  return !settled.length || settled.reduce((a, b) => (b.at > a.at ? b : a)).status === "new";
 }
 
 /**
@@ -116,7 +121,7 @@ export async function askClassifier(ctx: { db: any; scheduler?: any }, conv: Doc
   const workspace = await sessionVisibility(ctx).workspaceOf(conv);
   if (!(await classifierOn(ctx, conv.user_id, workspace))) return false;
   const asks = await ctx.db.query("priority_classifications").withIndex("by_conversation_at", (q: any) => q.eq("conversation_id", conv._id)).take(ASKS_PER_SESSION);
-  if (!asksNow(asks)) return false;
+  if (!asksNow(asks, Date.now())) return false;
   return enqueue({ db: ctx.db, scheduler: ctx.scheduler }, conv, workspace, trigger, 0, await roomToday(ctx, conv.user_id, workspace));
 }
 

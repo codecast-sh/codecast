@@ -16,7 +16,7 @@ import { performSetThreadState } from "./conversations";
 import { inheritLink, linkSession } from "./lib/priorityLinks";
 import { mergePriorities } from "./lib/priorityPass";
 import { parsePriorityPassOutput } from "./lib/priorityPassParse";
-import { CLASSIFIER_DAILY_USD, RERUN_DELAY_MS, RERUN_MAX } from "./lib/priorityClassifierHook";
+import { ASKS_PER_SESSION, CLASSIFIER_DAILY_USD, PENDING_STALE_MS, RERUN_DELAY_MS, RERUN_MAX, asksNow } from "./lib/priorityClassifierHook";
 import { PRIORITY_CLASSIFIER_SYSTEM, parseClassifierReply, type ClassifierInput } from "./lib/priorityClassifier";
 import { DAY, H, pass, proposal, stubModel, world } from "./priorityPassRun.testkit";
 import { applyPlan } from "./priorityPassRun";
@@ -124,6 +124,19 @@ describe("when it asks", () => {
     expect(classifierPrompts()).toHaveLength(3);
     expect((await classifications(w, w.teamConv)).map((r) => [r.trigger, r.status])).toEqual([["message", "new"], ["title", "new"], ["pin", "placed"]]);
     expect(await w.conversation(w.teamConv)).toMatchObject({ priority_id: w.grader, priority_step_key: "s1", priority_set_by: "classifier" });
+  });
+
+  test("asksNow: a live pending ask holds the next; one that died (older than PENDING_STALE_MS) does not; a filing or the cap stops asks", () => {
+    const now = 1_000_000_000;
+    const ask = (status: "pending" | "new" | "placed", ago: number) => ({ status, at: now - ago });
+    expect(asksNow([], now)).toBe(true);
+    expect(asksNow([ask("new", 60_000)], now)).toBe(true);
+    expect(asksNow([ask("new", 120_000), ask("pending", 30_000)], now)).toBe(false);
+    // The pending ask's job died before it settled: the session is asked again, by its last settled answer.
+    expect(asksNow([ask("new", PENDING_STALE_MS + 120_000), ask("pending", PENDING_STALE_MS + 60_000)], now)).toBe(true);
+    expect(asksNow([ask("pending", PENDING_STALE_MS + 1)], now)).toBe(true);
+    expect(asksNow([ask("new", 120_000), ask("placed", 60_000)], now)).toBe(false);
+    expect(asksNow(Array.from({ length: ASKS_PER_SESSION }, (_, i) => ask("new", (i + 1) * 60_000)), now)).toBe(false);
   });
 
   test("flag off: no ask, no model call, and a pass's new priority schedules no re-run", async () => {

@@ -310,8 +310,10 @@ export async function mappedMilestone(ctx: Ctx, conv: Conv): Promise<string | nu
 
 // ── Links ───────────────────────────────────────────────────────────────────
 
-/** Who linked a session, weakest first: the pass (unmarked), the classifier, a known link, the person. */
-// A classifier's filing is a first guess at the pass's strength: the pass may move it; a filed session the classifier leaves alone.
+/**
+ * Who linked a session, weakest first: the pass (unmarked) and the classifier, alike; a known link; the person. A
+ * classifier's filing is a first guess: the pass may move it, and the classifier itself never moves a filed session.
+ */
 const STRENGTH = { pass: 0, classifier: 0, link: 2, person: 3 } as const;
 type LinkedBy = "link" | "classifier" | "pass";
 const strengthOf = (by: Conv["priority_set_by"]) => STRENGTH[by ?? "pass"];
@@ -322,9 +324,9 @@ const strengthOf = (by: Conv["priority_set_by"]) => STRENGTH[by ?? "pass"];
  * counts, and mark who linked it: a known link ("link"), the classifier
  * (priorityClassifier.ts), or the pass's strength (unmarked, for a fork of a
  * session the pass placed). Precedence: the person > a known link > the
- * classifier > the pass, so a link never overwrites a stronger one, the
- * classifier maps only a session mapped nowhere, and the pass moves neither a
- * link nor the classifier's (priorityPassRun applyPlan). Refused (false) for
+ * classifier and the pass, alike, so a link never overwrites a stronger one,
+ * the classifier maps only a session mapped nowhere, and the pass moves a
+ * classifier's filing but never a link's (priorityPassRun applyPlan). Refused (false) for
  * a session the person placed, someone else's priority, a merged one, one the
  * person said the session is not part of, a milestone they dropped, or
  * another workspace; a no-op when the session is already there, linked the

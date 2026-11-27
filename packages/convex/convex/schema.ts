@@ -1072,8 +1072,9 @@ export default defineSchema({
     // it the session serves (prioritiesSchema.ts). Written by the pass, by the
     // person (`priority_set_by: "person"`), by a known link at creation
     // ("link", lib/priorityLinks) or by the classifier ("classifier",
-    // priorityClassifier.ts). Precedence: person > link > classifier > pass;
-    // the pass changes none of the three. It drives the priority line under
+    // priorityClassifier.ts). Precedence: person > link > classifier and pass:
+    // the pass never moves the person's or a link's, and may revise the
+    // classifier's, a first guess. It drives the priority line under
     // the pinned state. `priority_not` lists
     // the priorities the person said it is not part of: the pass never maps
     // it to one of them again.
