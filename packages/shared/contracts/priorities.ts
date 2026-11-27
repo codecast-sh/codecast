@@ -120,13 +120,13 @@ export type PriorityRow = {
   title: string;
   summary: string;
   status: PriorityStatus;
-  /** Its position among the owner's active priorities in its workspace (null unless active): priorityPositions over the rows' keys. Null, with the three below, on a teammate's row: a place counts priorities they cannot see. */
+  /** Its position among the owner's active priorities in its workspace (null unless active): priorityPositions over the owner's whole active group. A teammate who can read it gets the owner's real position, as with the three below. */
   rank: number | null;
-  /** Where the person placed it, on one scale with ai_rank (null until they move it). */
+  /** Where its owner placed it, on one scale with ai_rank (null until they move it). */
   person_pos: number | null;
   /** Where the pass slotted it, on the same scale (read only while it is not placed). */
   ai_rank: number | null;
-  /** "person": they placed it ("you placed it"); "ai": the pass did ("ranked by AI"). */
+  /** "person": its owner placed it; "ai": the pass did ("ranked by AI"). */
   rank_source: PriorityRankSource | null;
   /** "person" when the person marked it done or merged it: the pass leaves its status alone. */
   status_set_by: PrioritySetBy;
