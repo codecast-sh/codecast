@@ -2021,14 +2021,18 @@ export function turnStartedAtFor(sessionId: string): number | null {
 
 // The newest turn-starting message in a synced batch: a user turn that is not a
 // tool_result reply (those ride INSIDE a turn — a permissioned tool finishing,
-// an AskUserQuestion answer). Meta/system entries never reach ParsedMessage.
+// an AskUserQuestion answer). Meta/system entries never reach ParsedMessage. A
+// compaction's summary is a user-role line too, but nobody delivered it: an
+// idle compaction writes one into a parked session, and counting it spent the
+// session's dormant or done pin with no turn run (ct-102518).
 export function latestTurnStartTs(
-  messages: Array<{ role: string; timestamp: number; toolResults?: unknown[] }>,
+  messages: Array<{ role: string; timestamp: number; toolResults?: unknown[]; content?: string }>,
 ): number | null {
   let latest: number | null = null;
   for (const m of messages) {
     if (m.role !== "user") continue;
     if (m.toolResults && m.toolResults.length > 0) continue;
+    if (isCompactionSummaryMessage(m.content)) continue;
     if (typeof m.timestamp === "number" && (latest === null || m.timestamp > latest)) latest = m.timestamp;
   }
   return latest;
@@ -17283,6 +17287,8 @@ export function transcriptTailTurnStartTs(tailContent: string, currentSessionId?
     if (d.type !== "user" || d.message?.role !== "user") continue;
     const content = d.message?.content;
     if (Array.isArray(content) && content.some((b) => (b as { type?: string })?.type === "tool_result")) continue;
+    // A compaction's summary starts no turn (latestTurnStartTs).
+    if (d.isCompactSummary || isCompactionSummaryMessage(jsonlMessageText(content))) continue;
     if (latest === null || ts > latest) latest = ts;
   }
   return latest ?? oldest;
