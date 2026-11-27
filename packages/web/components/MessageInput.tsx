@@ -1256,7 +1256,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   }, [conversationId, skills, onSideQuestion, queryMentions, cancelPendingDraft]);
   // Dictation writes through the same setter a keystroke does (useComposerDictation).
   // Dictated words open no picker: an Enter held through the finish must send.
-  const { dictation, focusBox: focusComposerBox } = useComposerDictation(textareaRef, messageRef, (val) => { handleMessageChange(val); setAcTrigger(null); });
+  const { dictation, focusBox: focusComposerBox } = useComposerDictation(textareaRef, messageRef, (val) => { handleMessageChange(val); setAcTrigger(null); }, conversationId);
   useWatchEffect(() => { onDictatingChange?.(dictation.active); }, [onDictatingChange, dictation.active]);
 
   const isSelectionActive = !!(selectedMessageContent && selectedMessageUuid);
@@ -1807,8 +1807,10 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     return true;
   };
 
-  const handleSubmit = async (e: React.FormEvent, forkTail = false) => {
+  const handleSubmit = async (e: React.FormEvent, forkTail = false): Promise<unknown> => {
     e.preventDefault();
+    // Every send (Send and stash, fork, the review panel's) waits for a recording's last words, then runs as pressed.
+    if (dictation.running()) return new Promise((sent) => dictation.finishThen(() => sent(handleSubmitRef.current?.(e, forkTail))));
     if (allowanceOut) return false;
     submitRefusedRef.current = false;
     setAcTrigger(null);
@@ -2190,8 +2192,9 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
 
   // Hand off: the box empties the moment a teammate is picked (the marker is
   // drawn optimistically), and the text comes back only if the server refuses.
-  const handleHandoffPick = (target: { id: string; name: string }, keepSelf: boolean) => {
-    const raw = composeMode && composeRef.current ? composeRef.current.getMarkdown() : message;
+  const handleHandoffPick = (target: { id: string; name: string }, keepSelf: boolean): void => {
+    if (dictation.running()) return dictation.finishThen(() => handleHandoffPick(target, keepSelf));
+    const raw = composeMode && composeRef.current ? composeRef.current.getMarkdown() : messageRef.current;
     const text = raw.trim();
     sendingRef.current = true;
     cancelPendingDraft();
@@ -2243,7 +2246,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
 
   // ⌘↵ in a session: queue the composer's text behind the running turn.
   // `stop` also stops that turn, so the text goes in as soon as it has.
-  const queueComposerText = (stop = false) => {
+  const queueComposerText = (stop = false): void => {
+    if (dictation.running()) return dictation.finishThen(() => queueComposerText(stop));
     const text = messageRef.current.trim();
     if (!text || takeSideQuestion(text)) return;
     sendingRef.current = true;
@@ -2618,16 +2622,11 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     onSubmitWithIntent?.(false);
   };
   const handleFormSubmit = (e: React.FormEvent) => {
-    // Send while dictating sends what was said, once it is all in. The
-    // controller's own state decides (React's still reads "active" for a
-    // render after the recording ends), and the send after it is the send
-    // itself, never this handler again. Cancelled meanwhile, nothing is sent.
-    if (dictation.running()) {
-      e.preventDefault();
-      dictation.finishThen(() => sendFormRef.current?.({ preventDefault: () => {} } as unknown as React.FormEvent));
-      return;
-    }
-    sendForm(e);
+    // Waits here, not in handleSubmit, so the popup is dismissed only once the
+    // send has gone; the send after it is sendForm itself, never this again.
+    e.preventDefault();
+    if (dictation.running()) dictation.finishThen(() => sendFormRef.current?.(e));
+    else sendForm(e);
   };
 
   handleSubmitRef.current = handleSubmit;
@@ -3273,7 +3272,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                     onPaste={handlePaste}
                     onFocus={() => setIsFocused(true)}
                     onBlur={() => { setIsFocused(false); setAcTrigger(null); }}
-                    placeholder={dictation.active ? "Listening…" : ghostVisible ? "" : composerPlaceholder ?? (bareComposer ? "Comment…" : onGateSend ? "Send a message to continue the workflow..." : onWorkflowLaunch ? "Goal override (optional) — press send to run workflow..." : reviewCount > 0 ? (batchWords.placeholder ?? `Send ${batchWords.quotes} quote${batchWords.quotes !== 1 ? "s" : ""} as-is, or add a reply first...`) : hostedConversation ? (allowanceOut ? allowanceOut : hostedComposerWords(hostedLast, hostedAwaitsOk)) : agentStatus === "permission_blocked" ? ((pendingPermissionsCount ?? 0) > 0 ? "Approve or deny permission to continue..." : hasAskUserQuestion ? "Answer the question to continue..." : "Send a message...") : "Send a message...")}
+                    placeholder={dictation.listening ? "Listening…" : ghostVisible ? "" : composerPlaceholder ?? (bareComposer ? "Comment…" : onGateSend ? "Send a message to continue the workflow..." : onWorkflowLaunch ? "Goal override (optional) — press send to run workflow..." : reviewCount > 0 ? (batchWords.placeholder ?? `Send ${batchWords.quotes} quote${batchWords.quotes !== 1 ? "s" : ""} as-is, or add a reply first...`) : hostedConversation ? (allowanceOut ? allowanceOut : hostedComposerWords(hostedLast, hostedAwaitsOk)) : agentStatus === "permission_blocked" ? ((pendingPermissionsCount ?? 0) > 0 ? "Approve or deny permission to continue..." : hasAskUserQuestion ? "Answer the question to continue..." : "Send a message...") : "Send a message...")}
                     dim={isSelectionActive && !isSelectionEditedRef.current}
                   />
                   {shared.active && <SharedCarets inputRef={textareaRef} text={message} rows={shared.others} editors={shared.editors} />}

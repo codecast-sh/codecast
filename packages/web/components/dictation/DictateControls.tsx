@@ -3,11 +3,11 @@
 // records, with a small dot left of ✕ fading in and out while the microphone
 // listens, so a box already full of words still says the mic is on. Shown
 // only once the person has turned dictation on (Settings › Voice); a person in
-// any team without an OpenAI BAA sees the mic and caret dimmed, as the phone
-// draws them, and a click on either says why (the rule the server's mint
-// applies, dictation.authForDictation). A start that failed shows the
-// struck-through mic (no colour needed: the grayscale tablet) named by its
-// reason; useDictation says the reason once. The row keeps its width when
+// any team without an OpenAI BAA sees the struck-through mic and the caret
+// dimmed, and a click on either says why (the rule the server's mint applies,
+// dictation.authForDictation; Settings › Voice says the same line). A start
+// that failed shows the struck-through mic too (no colour needed: the
+// grayscale tablet) named by its reason; useDictation says the reason once. The row keeps its width when
 // blocked, and each target is 44px on a touch screen ([data-dictate-target],
 // app/globals.css, where the dot sits inside ✕'s 44px).
 // The behaviour lives in useDictation; this is only the buttons. Memoized: the
@@ -16,7 +16,6 @@
 import { memo, useState, type MouseEvent, type ReactElement } from "react";
 import { Check, ChevronDown, Loader2, Mic, MicOff, X } from "lucide-react";
 import { toast } from "sonner";
-import { teamVendorBlock } from "@codecast/shared/contracts";
 import { DICTATION_LANGUAGES } from "@codecast/shared/contracts/dictation";
 import { useInboxStore } from "../../store/inboxStore";
 import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
@@ -30,6 +29,7 @@ import {
 } from "../ui/dropdown-menu";
 import { readDictationLanguage, writeDictationLanguage } from "../../lib/dictation/host";
 import type { DictationControls } from "../../lib/dictation/useDictation";
+import { openAiBlock } from "../../lib/dictation/teamBlock";
 
 /** "dock": the session composer's row buttons (expand, stash). "bare": the
  *  comment and chat box, beside its small square send. */
@@ -38,12 +38,15 @@ export type DictateSize = "dock" | "bare";
 const BASE = "transition-colors flex items-center justify-center shrink-0";
 const QUIET = "text-sol-text-dim hover:text-sol-text hover:bg-sol-bg/50";
 
-/** `secondary`: ✕ and ✓. Beside the dock's filled Send they are QUIET like
- *  the row's other icons; beside the bare box's bare send arrow they are
- *  muted further, so the arrow stays the strongest mark in the row. */
-const SIZES: Record<DictateSize, { button: string; caret: string; icon: string; secondary: string }> = {
-  dock: { button: "w-7 h-7 rounded-full", caret: "w-4 h-7 rounded-full", icon: "w-3.5 h-3.5", secondary: QUIET },
-  bare: { button: "w-6 h-6 rounded-md", caret: "w-4 h-6 rounded-md", icon: "w-3.5 h-3.5", secondary: "text-sol-text-dim/55 hover:text-sol-text hover:bg-sol-bg/50" },
+/** ✕ and ✓: at the weight of the row's other secondary icons (stash, hand
+ *  off, fork), so Send, or the bare box's send arrow, stays the strongest
+ *  mark in the row. A color-mix, not an alpha step like /55: Modern resolves
+ *  those to the solid dim token (app/globals.css, "Translucent text"). */
+const SECONDARY = "text-[color-mix(in_srgb,var(--sol-text-dim)_40%,transparent)] hover:text-sol-text hover:bg-sol-bg/50";
+
+const SIZES: Record<DictateSize, { button: string; caret: string; icon: string }> = {
+  dock: { button: "w-7 h-7 rounded-full", caret: "w-4 h-7 rounded-full", icon: "w-3.5 h-3.5" },
+  bare: { button: "w-6 h-6 rounded-md", caret: "w-4 h-6 rounded-md", icon: "w-3.5 h-3.5" },
 };
 
 const dictationOn = (s: { currentUser?: unknown }) => (s.currentUser as { dictation_enabled?: boolean } | null | undefined)?.dictation_enabled === true;
@@ -54,16 +57,6 @@ export const DictateControls = memo(function DictateControls(props: { dictation:
   if (!enabled && !props.dictation.active) return null;
   return <DictateButtons {...props} />;
 });
-
-/** The first of the person's teams that may not send speech to OpenAI, as the
- *  line the mic shows; the server refuses the mint for the same teams. */
-const openAiBlock = (s: { teams?: unknown[] }): string | null => {
-  for (const team of s.teams ?? []) {
-    const t = team as { name?: string; policy?: unknown } | null;
-    if (teamVendorBlock(t, "openai")) return `Dictation isn't available: ${t?.name || "your team"} has no BAA with OpenAI yet.`;
-  }
-  return null;
-};
 
 function DictateButtons({ dictation, size = "dock", onMenuClosed }: { dictation: DictationControls; size?: DictateSize; onMenuClosed?: () => void }) {
   const blocked = useInboxStore(openAiBlock);
@@ -84,7 +77,7 @@ function DictateButtons({ dictation, size = "dock", onMenuClosed }: { dictation:
       <div className="flex items-center gap-0.5" data-dictation={dictation.state.phase} data-dictate-recording>
         {dictation.state.phase === "listening" && <span data-dictate-live role="img" aria-label="Microphone on" />}
         {tip(
-          <button type="button" data-dictate-target onMouseDown={keepFocus} onClick={() => dictation.cancel()} className={`${BASE} ${sz.button} ${sz.secondary}`} aria-label="Cancel dictation">
+          <button type="button" data-dictate-target onMouseDown={keepFocus} onClick={() => dictation.cancel()} className={`${BASE} ${sz.button} ${SECONDARY}`} aria-label="Cancel dictation">
             <X className={sz.icon} />
           </button>,
           "Cancel dictation",
@@ -98,7 +91,7 @@ function DictateButtons({ dictation, size = "dock", onMenuClosed }: { dictation:
             disabled={finishing}
             aria-busy={finishing || undefined}
             // Quiet like ✕: Send stays the one primary in the row.
-            className={`${BASE} ${sz.button} ${sz.secondary} disabled:cursor-wait`}
+            className={`${BASE} ${sz.button} ${SECONDARY} disabled:cursor-wait`}
             aria-label="Finish dictation"
           >
             {finishing ? <Loader2 className={`${sz.icon} animate-spin`} /> : <Check className={sz.icon} />}
@@ -114,8 +107,9 @@ function DictateButtons({ dictation, size = "dock", onMenuClosed }: { dictation:
   const failed = blocked ? null : dictation.state.error;
   const reason = blocked ?? failed;
   if (blocked) {
-    // Blocked, as the phone draws it: mic and caret dimmed, both still pressable,
-    // and a press says why (a touch screen has no hover to show the tooltip).
+    // Blocked: the struck mic (its mark without colour; dimmed alone it read as
+    // the row's other quiet icons) and the caret dimmed in its place, both
+    // still pressable, and a press says why (a touch screen has no hover).
     // One toast however often it is pressed.
     const explain = () => toast.error(blocked, { id: "dictation-blocked", position: "top-center" });
     const dim = `${BASE} text-sol-text-dim/40 cursor-not-allowed`;
@@ -123,7 +117,7 @@ function DictateButtons({ dictation, size = "dock", onMenuClosed }: { dictation:
       <div className="flex items-center gap-0.5" data-dictation="idle" data-dictation-blocked>
         {tip(
           <button type="button" data-dictate-target onMouseDown={keepFocus} onClick={explain} aria-disabled data-dictation-reason={blocked} className={`${dim} ${sz.button}`} aria-label={blocked}>
-            <Mic className={sz.icon} />
+            <MicOff className={sz.icon} />
           </button>,
           blocked,
         )}

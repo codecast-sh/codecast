@@ -25,12 +25,20 @@ function getAudio() {
   return audio;
 }
 
+/** A huddle holds the microphone (the web says the same). Each line fits the
+ *  one-line notice bar: under 40 characters. */
+export const DICTATION_CALL_BUSY = 'A huddle is using the mic';
+/** The room recorder holds the microphone. */
+export const DICTATION_RECORDING_BUSY = 'A recording is using the mic';
+/** The OS refused a microphone the person already granted (an interruption). */
+export const DICTATION_MIC_UNAVAILABLE = 'Mic unavailable. Try again.';
+
 /** Something else holds the microphone: a huddle, or the room recorder. */
 function micBusy(): string | null {
   const call = getCallSnapshot().phase;
-  if (call === 'connecting' || call === 'connected') return 'Leave the huddle first — a call is using the microphone.';
+  if (call === 'connecting' || call === 'connected') return DICTATION_CALL_BUSY;
   const rec = getRecorderSnapshot().phase;
-  if (rec === 'starting' || rec === 'recording' || rec === 'finishing') return 'Stop the recording first — it is using the microphone.';
+  if (rec === 'starting' || rec === 'recording' || rec === 'finishing') return DICTATION_RECORDING_BUSY;
   return null;
 }
 
@@ -95,7 +103,7 @@ export function phoneDictationHost(convex: ConvexReactClient, languages: string[
         releaseAudioSession();
         // The binary can tap PCM (checked above), so the OS refused the
         // microphone this time: a denied prompt, or a pending interruption.
-        throw new Error(a ? 'The microphone is not available right now. Try again.' : DICTATION_NEEDS_MIC);
+        throw new Error(a ? DICTATION_MIC_UNAVAILABLE : DICTATION_NEEDS_MIC);
       }
       let released = false;
       const release = () => {

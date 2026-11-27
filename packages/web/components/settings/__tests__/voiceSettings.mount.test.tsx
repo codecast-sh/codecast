@@ -135,3 +135,30 @@ test("Dictation is a plain switch above recognition: one press turns it on, one 
     await m.done();
   }
 });
+
+test("a team without an OpenAI BAA is named on the Dictation row, the mic's line, and the switch still turns it off", async () => {
+  const { useInboxStore } = await import("../../../store/inboxStore");
+  const teams = useInboxStore.getState().teams;
+  const m = await mount(false, 0);
+  try {
+    const row = () => m.q('button[aria-label="Dictation"]')!.closest("div.flex.justify-between") as HTMLElement;
+    assert.equal(row().textContent, "Dictation", "no line while every team may use it");
+    const writes: boolean[] = [];
+    await (await import("react")).act(async () => {
+      useInboxStore.setState({
+        currentUser: { ...useInboxStore.getState().currentUser, dictation_enabled: true },
+        // Not the team on screen: any of the person's teams blocks it, as the mic and the server's mint do.
+        teams: [{ _id: "team_open", name: "Open", policy: {} }, { _id: "team_clinic", name: "Clinic", policy: { regulated_data: true } }],
+        setDictationEnabled: (on: boolean) => (writes.push(on), Promise.resolve()),
+      } as any);
+    });
+    assert.equal(row().textContent, "DictationDictation isn't available: Clinic has no BAA with OpenAI yet.");
+    const sw = m.q('button[aria-label="Dictation"]')!;
+    assert.equal(sw.hasAttribute("disabled"), false);
+    await m.press(sw);
+    assert.deepEqual(writes, [false]);
+  } finally {
+    await m.done();
+    useInboxStore.setState({ teams } as any);
+  }
+});

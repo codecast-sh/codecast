@@ -44,15 +44,16 @@ export type DictationState = {
 
 export const DICTATION_IDLE: DictationState = { phase: "idle", error: null, stopped: null };
 
-/** The one-line reason a recording stopped by itself, for the mic's tooltip. */
+/** The one-line reason a recording stopped by itself (under 40 characters,
+ *  so a phone's one-line notice bar never cuts it). */
 export function dictationStopLine(stop: DictationStop | null): string | null {
   switch (stop) {
     case "silence":
-      return "Dictation stopped after 1m with no new words";
+      return "Dictation stopped: 1 min of silence";
     case "limit":
-      return "Dictation stopped at its 10m limit";
+      return "Dictation stopped at 10 minutes";
     case "dropped":
-      return "Dictation stopped: lost the connection";
+      return "Dictation stopped: connection lost";
     // The person's own typing stopped it: they know why, so nothing to say.
     case "edited":
       return null;
@@ -320,7 +321,13 @@ export function createDictation(
     const pending = after;
     after = null;
     set({ phase: "idle", stopped, error });
-    pending?.then();
+    try {
+      pending?.then();
+    } catch (err) {
+      // A send that throws is the composer's failure, not the recording's: it
+      // must not turn finish() into a rejected promise nobody awaits.
+      console.error("[dictation] send after finishing threw", err);
+    }
   };
 
   /** Typing into the box mid-recording ends it at once, not at the next word
@@ -394,7 +401,8 @@ export function createDictation(
       // The recording running elsewhere ends first, words kept, and this one
       // opens the microphone only once it has let go: two recognizers never
       // hold the microphone (or the phone's audio session) at once.
-      const prior = running && running !== self ? running.finish() : null;
+      const others = [...live].filter((d) => d !== self);
+      const prior = others.length ? Promise.all(others.map((d) => d.finish())) : null;
       running = self;
       live.add(self);
       const id = ++run;

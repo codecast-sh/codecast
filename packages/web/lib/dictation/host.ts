@@ -3,20 +3,12 @@
 // rather than a room. The behaviour around it (where words go, when it stops)
 // is the shared controller's (@codecast/shared/contracts/dictation).
 import { dictationLanguages, type DictationHost, type DictationPipe, type DictationPipeEvents } from "@codecast/shared/contracts/dictation";
-import { useInboxStore } from "../../store/inboxStore";
-import { claimMicrophoneAcrossWindows } from "./crossWindow";
+import { walkieCallState } from "../calls/walkie";
+import { claimMicrophoneAcrossWindows, microphoneBusyElsewhere, microphoneBusyHere } from "./crossWindow";
+
+export { DICTATION_CALL_BUSY, DICTATION_RECORDING_BUSY } from "./crossWindow";
 
 type ConvexAction = { action: (fn: any, args: any) => Promise<any> };
-
-/** What the mic says when a live, unmuted call in this window holds the
- *  microphone (the phone's words, lib/dictationHost). A muted seat is not
- *  using it: unmuting finishes the recording (callManager.setMuted). */
-export const DICTATION_CALL_BUSY = "Leave the huddle first — a call is using the microphone.";
-
-function callHoldsMicrophone(): boolean {
-  const { phase, muted } = useInboxStore.getState().call;
-  return (phase === "connecting" || phase === "connected") && !muted;
-}
 
 /** The caret menu's choice on this device; null is Auto. */
 const LANGUAGE_KEY = "codecast.dictation.language";
@@ -49,7 +41,7 @@ const testHost = (): DictationHost | undefined => (typeof window !== "undefined"
 /** What a start nobody wants any more rejects with (the controller ignores it). */
 export const DICTATION_ABANDONED = "Dictation was cancelled";
 
-async function openMicrophone(convex: ConvexAction | null, events: DictationPipeEvents, signal: { readonly aborted: boolean }): Promise<DictationPipe> {
+async function openMicrophone(convex: ConvexAction | null, elsewhere: Promise<string | null>, events: DictationPipeEvents, signal: { readonly aborted: boolean }): Promise<DictationPipe> {
   if (!convex) throw new Error("Dictation is not connected");
   // Loaded on the first press, not with every composer.
   const pipeModule = import("../calls/asrPipe");
@@ -69,6 +61,9 @@ async function openMicrophone(convex: ConvexAction | null, events: DictationPipe
     throw new Error("No microphone found");
   }
   try {
+    // A call or recording in another window said no while the browser asked.
+    const busy = await elsewhere;
+    if (busy) throw new Error(busy);
     const { openAsrPipe } = await pipeModule;
     // Cancelled (or taken over) while the browser asked for the microphone:
     // let it go here, before the pipe mints a key nobody will use.
@@ -111,11 +106,18 @@ async function openMicrophone(convex: ConvexAction | null, events: DictationPipe
 export function dictationHost(convex: () => ConvexAction | null): DictationHost {
   return {
     open: (events, signal) => {
-      if (callHoldsMicrophone()) return Promise.reject(new Error(DICTATION_CALL_BUSY));
+      // A call (the voice host's, where it holds the microphone) or a room
+      // recording in this window refuses at once.
+      const busy = microphoneBusyHere(walkieCallState());
+      if (busy) return Promise.reject(new Error(busy));
+      // One in another window is asked while this one opens the microphone,
+      // and refuses before a key is minted.
+      const elsewhere = microphoneBusyElsewhere();
       // One recording at a time across windows: theirs finish as this opens.
       claimMicrophoneAcrossWindows();
       const t = testHost();
-      return t ? t.open(events, signal) : openMicrophone(convex(), events, signal);
+      if (!t) return openMicrophone(convex(), elsewhere, events, signal);
+      return elsewhere.then((why) => (why ? Promise.reject(new Error(why)) : t.open(events, signal)));
     },
     now: () => (testHost()?.now ?? Date.now)(),
     setTimer: (fn, ms) => {

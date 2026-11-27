@@ -25,7 +25,7 @@ import { formatRelativeTime } from "@/components/SessionItem";
 import { taskGraphView, type BlockerRow, type PrKey } from "@/lib/taskGraphRows";
 import { showActionSheet } from "@/lib/popups";
 import { useDictation } from "@/lib/dictation";
-import { DictateControls } from "@/components/DictateControls";
+import { DICTATE_SEND_SLOP, DictateControls } from "@/components/DictateControls";
 import {
   STATUS_CONFIG,
   STATUS_ORDER,
@@ -425,7 +425,8 @@ export default function TaskDetailScreen() {
               style={[styles.commentSend, !commentText.trim() && { opacity: 0.3 }]}
               onPress={() => dictation.send(() => addCommentRef.current())}
               disabled={!commentText.trim()}
-              hitSlop={4}
+              // Beside the dictation controls, send's target starts at its own edge.
+              hitSlop={dictation.shown ? DICTATE_SEND_SLOP : 4}
               accessibilityRole="button"
               accessibilityLabel="Send"
               accessibilityState={dictation.sendWaiting ? { busy: true } : undefined}

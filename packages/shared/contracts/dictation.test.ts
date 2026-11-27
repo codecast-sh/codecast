@@ -545,3 +545,37 @@ test("a send waiting on a recognizer that never answers still runs when the reco
   await h.finished();
   expect(sent).toEqual(["one first", "two second"]);
 });
+
+test("three quick presses: the third opens only after every earlier recording let go", async () => {
+  const a = harness();
+  const b = harness();
+  const c = harness();
+  a.d.start();
+  await a.opened();
+  a.events.onPartial("a words");
+  b.d.start();
+  c.d.start();
+  await new Promise((r) => setTimeout(r, 0));
+  expect(() => c.events).toThrow();
+  await a.finished();
+  expect(c.events).toBeTruthy();
+});
+
+test("a send that throws does not reject finish()", async () => {
+  const h = harness();
+  const err = console.error;
+  console.error = () => {};
+  try {
+    h.d.start();
+    await h.opened();
+    h.events.onPartial("x");
+    h.d.finishThen(() => {
+      throw new Error("boom");
+    });
+    const done = h.d.finish();
+    await h.finished();
+    await expect(done).resolves.toBe(true);
+  } finally {
+    console.error = err;
+  }
+});

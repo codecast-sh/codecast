@@ -11,11 +11,12 @@ mock.module("sonner", () => {
   const say = (kind: string) => (line: string) => { toasts.push(`${kind}: ${line}`); return 1; };
   return { toast: Object.assign(say("info"), { error: say("error"), info: noop, success: noop, warning: noop, dismiss: () => {}, loading: noop, custom: noop, promise: (p: any) => p }), Toaster: () => null };
 });
-import { act } from "react";
+import { act, type ReactElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { ConvexProvider } from "convex/react";
 import { _resetDictationForTests, type DictationPipeEvents, type DictationHost } from "@codecast/shared/contracts/dictation";
 import { useInboxStore } from "../../../store/inboxStore";
+import { _resetCrossWindowForTests } from "../../../lib/dictation/crossWindow";
 // Entered from the composer, the graph reaches ChatMessage through
 // messageMarkdown -> EntityIdPill -> TaskCommentStream; entering from
 // ChatMessage closes that cycle on a lazy read (markdownMapCycles.guard).
@@ -74,6 +75,8 @@ export type FakeHost = ReturnType<typeof fakeHost>;
 /** Each test's start: no recording anywhere, a fresh recognizer, dictation on. */
 export function freshDictationHarness(): FakeHost {
   _resetDictationForTests();
+  // No other window answers here; a test of one passes a wait of its own.
+  _resetCrossWindowForTests(0);
   const host = fakeHost();
   w.__dictationTestHost = host.host;
   (useInboxStore.getState() as any)._setDispatch(async () => undefined);
@@ -100,27 +103,34 @@ export const sayTo = (host: () => FakeHost) => async (fn: (e: DictationPipeEvent
 
 let run = 0;
 
-export async function mountComposer(opts: { bare?: boolean; foot?: boolean; initialDraft?: string; props?: Record<string, unknown> } = {}) {
+export async function mountComposer(opts: { bare?: boolean; foot?: boolean; initialDraft?: string; props?: Record<string, unknown>; wrap?: (composer: ReactElement) => ReactElement } = {}) {
   const sent: string[] = [];
   const { MessageInput } = await import("../../MessageInput");
   const container = w.document.createElement("div");
   w.document.body.appendChild(container);
   const root: Root = createRoot(container);
   const draftKey = `chat-draft:dictation-${++run}`;
-  await act(async () => {
-    root.render(
-      <ConvexProvider client={fakeConvex()}>
-        <MessageInput
-          conversationId={draftKey}
+  const client = fakeConvex();
+  const wrap = opts.wrap ?? ((composer: ReactElement) => composer);
+  const draw = (conversationId: string) => root.render(
+      <ConvexProvider client={client}>
+        {wrap(<MessageInput
           bareComposer={opts.bare}
           initialDraft={opts.initialDraft}
           composerFoot={opts.foot ? <span data-foot-start /> : undefined}
           onGateSend={(content) => { sent.push(content); }}
           {...opts.props}
-        />
+          conversationId={conversationId}
+        />)}
       </ConvexProvider>,
-    );
-  });
+  );
+  const firstKey = (opts.props?.conversationId as string | undefined) ?? draftKey;
+  await act(async () => { draw(firstKey); });
+  /** The same composer, now for another conversation (ComposeView reuses it without a key). */
+  const switchTo = async (conversationId: string) => {
+    await act(async () => { draw(conversationId); });
+    await flush();
+  };
   const q = (sel: string) => container.querySelector(sel) as HTMLElement | null;
   const textarea = () => container.querySelector("textarea") as HTMLTextAreaElement;
   const button = (label: string) => container.querySelector(`button[aria-label="${label}"]`) as HTMLButtonElement | null;
@@ -138,5 +148,5 @@ export async function mountComposer(opts: { bare?: boolean; foot?: boolean; init
     await act(async () => { root.unmount(); });
     container.remove();
   };
-  return { container, q, textarea, button, press, key, sent, unmount };
+  return { container, q, textarea, button, press, key, sent, unmount, switchTo, draftKey: firstKey };
 }

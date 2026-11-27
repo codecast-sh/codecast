@@ -17,8 +17,10 @@ const audio = {
   },
 };
 mock.module('./optionalNative', () => ({ optionalNative: () => audio }));
-mock.module('./calls/callManager', () => ({ getCallSnapshot: () => ({ phase: 'idle' }) }));
-mock.module('./recorder', () => ({ getRecorderSnapshot: () => ({ phase: 'idle' }) }));
+let callPhase = 'idle';
+let recorderPhase = 'idle';
+mock.module('./calls/callManager', () => ({ getCallSnapshot: () => ({ phase: callPhase }) }));
+mock.module('./recorder', () => ({ getRecorderSnapshot: () => ({ phase: recorderPhase }) }));
 let capture: (opts: { signal?: { aborted: boolean } }) => Promise<unknown> = async () => null;
 mock.module('./asrCapture', () => ({
   micTapSupported: () => true,
@@ -28,7 +30,7 @@ mock.module('./asrCapture', () => ({
   },
 }));
 
-const { phoneDictationHost, DICTATION_ABANDONED } = await import('./dictationHost');
+const { phoneDictationHost, DICTATION_ABANDONED, DICTATION_CALL_BUSY, DICTATION_RECORDING_BUSY, DICTATION_MIC_UNAVAILABLE } = await import('./dictationHost');
 const events = { onPartial() {}, onUtterance() {}, onFailed() {}, onDropped() {} };
 const open = (signal: { aborted: boolean }) =>
   phoneDictationHost({} as never, ['en']).open(events, signal).catch((e: Error) => e);
@@ -43,6 +45,22 @@ beforeEach(() => {
   permission = async () => ({ granted: true });
   audioMode = async () => {};
   capture = async () => null;
+  callPhase = 'idle';
+  recorderPhase = 'idle';
+});
+
+test('a huddle, a recording or a refused tap each say why in a line that fits the one-line notice bar', async () => {
+  callPhase = 'connected';
+  const huddle = ((await open({ aborted: false })) as Error).message;
+  callPhase = 'idle';
+  recorderPhase = 'recording';
+  const recording = ((await open({ aborted: false })) as Error).message;
+  recorderPhase = 'idle';
+  // Permission granted, but the OS gave no tap this time.
+  const unavailable = ((await open({ aborted: false })) as Error).message;
+  expect([huddle, recording, unavailable]).toEqual([DICTATION_CALL_BUSY, DICTATION_RECORDING_BUSY, DICTATION_MIC_UNAVAILABLE]);
+  expect([huddle, recording, unavailable]).toEqual(['A huddle is using the mic', 'A recording is using the mic', 'Mic unavailable. Try again.']);
+  for (const line of [huddle, recording, unavailable]) expect(line.length).toBeLessThan(40);
 });
 
 test('cancelled during the permission prompt: no audio session, no tap', async () => {

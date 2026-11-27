@@ -37,6 +37,10 @@ import { setDictationLanguage, useDictationLanguage } from '@/lib/dictationLangu
 // itself and 4pt right.
 const FIRST_SLOP = { top: 6, bottom: 6, left: 8, right: 4 };
 const FINISH_SLOP = { top: 6, bottom: 6, left: 4, right: 8 };
+/** The glyph size of the row's other icons (attach, @, emoji). */
+const ICON = 18;
+/** The live dot's faded floor: lower and it all but vanishes on a dark ground. */
+const LIVE_DOT_FLOOR = 0.45;
 /** The send button's hitSlop beside these controls: nothing to the left. */
 export const DICTATE_SEND_SLOP = { top: 12, bottom: 12, left: 0, right: 12 };
 
@@ -63,7 +67,7 @@ export function DictateControls({ dictation, look = 'quiet' }: { dictation: Phon
           accessibilityRole="button"
           accessibilityLabel="Cancel dictation"
         >
-          <Feather name="x" size={17} color={Theme.textMuted} />
+          <Feather name="x" size={ICON} color={Theme.textMuted} />
         </TouchableOpacity>
         <TouchableOpacity
           style={look === 'bare' ? styles.bare : styles.quiet}
@@ -78,7 +82,7 @@ export function DictateControls({ dictation, look = 'quiet' }: { dictation: Phon
           {finishing ? (
             <ActivityIndicator size="small" color={Theme.textMuted} />
           ) : (
-            <Feather name="check" size={17} color={Theme.textMuted} />
+            <Feather name="check" size={ICON} color={Theme.textMuted} />
           )}
         </TouchableOpacity>
       </RNView>
@@ -120,8 +124,9 @@ export function DictateControls({ dictation, look = 'quiet' }: { dictation: Phon
         accessibilityLabel="Dictate"
         accessibilityHint={blocked ?? state.error ?? undefined}
       >
-        {/* The struck-through mic says "failed" without colour (the grayscale tablet). */}
-        <Feather name={failed ? 'mic-off' : 'mic'} size={17} color={failed ? Theme.red : Theme.textMuted} />
+        {/* The struck-through mic says "failed" or "not available here" without
+            colour (the grayscale tablet). */}
+        <Feather name={failed || blocked ? 'mic-off' : 'mic'} size={ICON} color={failed ? Theme.red : Theme.textMuted} />
       </TouchableOpacity>
       <TouchableOpacity
         style={styles.chevron}
@@ -154,7 +159,7 @@ function LiveDot({ color }: { color: string }) {
       if (reduce) return;
       pulse = Animated.loop(
         Animated.sequence([
-          Animated.timing(opacity, { toValue: 0.25, duration: 900, useNativeDriver: true }),
+          Animated.timing(opacity, { toValue: LIVE_DOT_FLOOR, duration: 900, useNativeDriver: true }),
           Animated.timing(opacity, { toValue: 1, duration: 900, useNativeDriver: true }),
         ]),
       );

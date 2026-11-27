@@ -25,13 +25,15 @@ const openedSettings: number[] = [];
 // the phone's setting, read once and then followed.
 type Loop = { running: boolean; start(): void; stop(): void };
 const loops: Loop[] = [];
+/** Each pulse step's target opacity, in order. */
+const timings: number[] = [];
 const reduceMotion = { on: false, listeners: new Set<(on: boolean) => void>() };
 mock.module('react-native', () => ({
   View: host('View'), Text: host('Text'), TextInput: host('TextInput'), TouchableOpacity,
   Animated: {
     View: host('Animated.View'),
     Value: class { constructor(public value: number) {} setValue(v: number) { this.value = v; } },
-    timing: () => ({}),
+    timing: (_v: unknown, cfg: { toValue: number }) => (timings.push(cfg.toValue), {}),
     sequence: () => ({}),
     loop: () => { const l: Loop = { running: false, start() { l.running = true; }, stop() { l.running = false; } }; loops.push(l); return l; },
   },
@@ -299,7 +301,7 @@ test('typing into the box mid-recording stops it and keeps what was typed', asyn
 });
 
 test('a start that failed says why at once, tints the mic, and a tap says it again and can try again', async () => {
-  const BUSY = 'Leave the huddle first — a call is using the microphone.';
+  const BUSY = 'A huddle is using the mic';
   (globalThis as any).__dictationTestHost = { open: () => Promise.reject(new Error(BUSY)) };
   const m = await mount('');
   await m.press('Dictate');
@@ -501,6 +503,20 @@ test('every target is 44pt and none overlaps its neighbour, send included', asyn
   expect(m.byLabel('Microphone on').length).toBe(1);
 });
 
+// The layout above holds only where send sits beside the controls with no
+// slop to its left: every composer that draws them says so on its Send.
+test('every Send beside the dictation controls reaches nothing to its left while they show', () => {
+  const { readFileSync } = require('node:fs');
+  const { join } = require('node:path');
+  for (const file of ['app/task/[id].tsx', 'components/session/MessageComposer.tsx']) {
+    const src = readFileSync(join(import.meta.dir, '..', file), 'utf8') as string;
+    // From the controls to the Send button's label: that button's props.
+    const after = src.slice(src.indexOf('<DictateControls'));
+    const send = after.slice(0, after.search(/["']Send["']/));
+    expect([file, /hitSlop=\{dictation\.shown \? DICTATE_SEND_SLOP : /.test(send)]).toEqual([file, true]);
+  }
+});
+
 test('a dot left of ✕ says the mic is on while it listens, and only then', async () => {
   let opened: (pipe: unknown) => void = () => {};
   (globalThis as any).__dictationTestHost = { open: (events: any) => new Promise((resolve) => { fake.events = events; opened = resolve; }) };
@@ -522,6 +538,18 @@ test('a dot left of ✕ says the mic is on while it listens, and only then', asy
   expect([dot(), loops.at(-1)!.running]).toEqual([[], false]);
   await m.act(() => release());
   expect(dot()).toEqual([]);
+});
+
+test('the dot fades no lower than 0.45, so it stays visible on a dark ground; glyphs match attach at 18pt', async () => {
+  timings.length = 0;
+  const m = await mount('');
+  const glyph = (label: string) => m.byLabel(label)[0]!.findByType('Feather' as any).props.size;
+  expect(glyph('Dictate')).toBe(18);
+  await m.press('Dictate');
+  expect(m.byLabel('Microphone on').length).toBe(1);
+  expect(timings).toEqual([0.45, 1]);
+  expect([glyph('Cancel dictation'), glyph('Finish dictation')]).toEqual([18, 18]);
+  await m.press('Cancel dictation');
 });
 
 test('under Reduce Motion the dot holds still, and follows the setting as it changes', async () => {

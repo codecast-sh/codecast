@@ -859,7 +859,8 @@
 .modern-style .doc-editor,
 .mention-date-resolved:is(.modern-style *), .draft-lab-button:is(.modern-style *), .draft-panel:is(.modern-style *), .draft-trimbar:is(.modern-style *) { font-family: var(--font-ui), sans-serif; }
 
-/* While dictating into an empty editor its hint says so (CreateTaskModal). */
+/* While the mic listens into an empty editor its hint says so (CreateTaskModal;
+   not while finishing, when the mic has closed). */
 [data-dictating] .doc-editor .tiptap p.is-editor-empty:first-child::before {
   content: "Listening…";
 }

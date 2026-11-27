@@ -2,7 +2,7 @@
 // one text box and the web's microphone. The composer hands in a field
 // adapter (textareaField, editorField) that writes through its own setter, so
 // drafts, autosave and send see dictated words as typed ones.
-import { useCallback, useMemo, useRef, useState, type KeyboardEvent, type MutableRefObject, type RefObject } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MutableRefObject, type RefObject } from "react";
 import { flushSync } from "react-dom";
 import { useConvex } from "convex/react";
 import { toast } from "sonner";
@@ -40,6 +40,9 @@ export type DictationControls = {
   state: DictationState;
   /** React's view of the recording, for drawing. Decide with `running()`. */
   active: boolean;
+  /** The microphone is open or opening: when "Listening…" may show. Not while
+   *  finishing, when the mic has closed and only the last words are awaited. */
+  listening: boolean;
   /** The controller's own live answer: true from the press until its last
    *  words are in. React's `active` lags it by a render. */
   running(): boolean;
@@ -154,7 +157,7 @@ export function useDictation(field: DictationFieldAdapter): DictationControls {
     }
   });
 
-  return useMemo(() => ({ ...methods, state, active: state.phase !== "idle" }), [methods, state]);
+  return useMemo(() => ({ ...methods, state, active: state.phase !== "idle", listening: state.phase === "starting" || state.phase === "listening" }), [methods, state]);
 }
 
 /**
@@ -204,11 +207,17 @@ export function textareaField(
  * through `onChange`: the same setter a keystroke uses, so the draft, its
  * autosave and send see the words. The field is made once and the controls
  * stay put between keystrokes, so typing never draws the mic again.
+ *
+ * `owner` is what the box is writing for (a conversation). A composer reused
+ * for another one without a remount finishes its recording there and drops
+ * the send waiting on it, so an Enter pressed for the old conversation never
+ * sends the new one's draft; the words already in the old draft stay.
  */
 export function useComposerDictation(
   boxRef: RefObject<HTMLTextAreaElement | null>,
   valueRef: MutableRefObject<string>,
   onChange: (value: string) => void,
+  owner?: string,
 ): { dictation: DictationControls; focusBox: () => void } {
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
@@ -223,6 +232,15 @@ export function useComposerDictation(
     ),
   );
   const dictation = useDictation(field);
+  const { running, finishThen } = dictation;
+  const ownerRef = useRef(owner);
+  // A layout effect, so the send is dropped before the new draft is loaded.
+  // finishThen's one slot takes the empty send in place of the waiting one.
+  useLayoutEffect(() => {
+    if (ownerRef.current === owner) return;
+    ownerRef.current = owner;
+    if (running()) finishThen(() => {});
+  }, [owner, running, finishThen]);
   const focusBox = useCallback(() => boxRef.current?.focus(), [boxRef]);
   return { dictation, focusBox };
 }

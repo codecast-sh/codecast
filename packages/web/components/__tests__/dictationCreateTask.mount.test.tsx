@@ -20,6 +20,7 @@ import { ConvexProvider } from "convex/react";
 import { _resetDictationForTests, type DictationHost, type DictationPipeEvents } from "@codecast/shared/contracts/dictation";
 import { useInboxStore } from "../../store/inboxStore";
 import { closeDomWindow } from "../../test-helpers/domGlobals";
+import { _resetCrossWindowForTests } from "../../lib/dictation/crossWindow";
 import { offlineConvexClient } from "../../test-helpers/offlineConvex";
 
 // What the rich editor asks of a browser that jsdom lacks.
@@ -60,6 +61,7 @@ const host: DictationHost = {
 
 beforeEach(() => {
   _resetDictationForTests();
+  _resetCrossWindowForTests(0);
   created.length = 0;
   events = null;
   endFinish = null;
@@ -115,11 +117,15 @@ test("Create mid-recording waits for the last words and creates the task with th
   await m.setTitle("Fix login");
   await act(async () => { m.button("Dictate")!.click(); });
   await flush();
+  // The editor's empty hint reads Listening… (editor.css) only while the mic listens.
+  const listening = () => m.container.querySelector("[data-dictating]") !== null;
+  expect(listening()).toBe(true);
   await m.say((e) => e.onPartial("the redirect"));
   expect(m.editor().getText()).toBe("the redirect");
   await act(async () => { m.create().click(); });
   await flush();
   expect(finishing).toBe(true);
+  expect(listening()).toBe(false);
   expect(created).toEqual([]);
   await m.say((e) => e.onUtterance({ text: "the redirect loop." }));
   await act(async () => { endFinish!(); });

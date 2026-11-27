@@ -153,11 +153,11 @@ test("a live, unmuted call in this window refuses to start dictation and says wh
     const c = await mountComposer();
     await c.press("Dictate");
     expect(host.events).toBeNull();
-    expect(toasts).toEqual(["error: Leave the huddle first — a call is using the microphone."]);
-    expect(c.button("Leave the huddle first — a call is using the microphone.")).not.toBeNull();
+    expect(toasts).toEqual(["error: A huddle is using the mic"]);
+    expect(c.button("A huddle is using the mic")).not.toBeNull();
 
     useInboxStore.setState({ call: { ...before, phase: "connected", roomKey: "room_1", muted: true } } as any);
-    await c.press("Leave the huddle first — a call is using the microphone.");
+    await c.press("A huddle is using the mic");
     expect(host.events).not.toBeNull();
     expect(c.button("Finish dictation")).not.toBeNull();
     await c.key("Escape");

@@ -86,8 +86,10 @@ export function CommentComposer({
   // Esc backs out (capture phase, before MessageInput sees it): cancel a reply
   // first, otherwise close. Enter posts the comment as usual.
   const onKeyDownCapture = (e: React.KeyboardEvent) => {
-    // A recording in this box takes Esc first: it cancels the dictation.
-    if (e.key !== "Escape" || dictatingIn(e.target)) return;
+    // A recording in this box takes Esc first: it cancels the dictation. An
+    // Esc a menu already took (the mic's language menu, portalled but inside
+    // this tree) closed that menu and nothing more.
+    if (e.key !== "Escape" || e.defaultPrevented || dictatingIn(e.target)) return;
     if (replyTo && onCancelReply) { e.preventDefault(); e.stopPropagation(); onCancelReply(); }
     else if (onClose) { e.preventDefault(); e.stopPropagation(); onClose(); }
   };

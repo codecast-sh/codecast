@@ -365,7 +365,7 @@ export function TaskCommentComposer({
               }
             }}
             onPaste={handleCommentPaste}
-            placeholder={dictation.active ? "Listening…" : "Leave a comment..."}
+            placeholder={dictation.listening ? "Listening…" : "Leave a comment..."}
             rows={1}
             // Grows with its text (dictated words included) up to ~8 lines, then scrolls.
             style={FIELD_SIZING_STYLE}

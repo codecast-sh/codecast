@@ -337,7 +337,7 @@ export function CreateTaskModal({ onClose, teamMembers, currentUser, defaults }:
 
       <div
         className="px-5 pb-3 pt-1 min-h-[120px] max-h-[280px] overflow-y-auto doc-editor-compact"
-        data-dictating={dictation.active || undefined}
+        data-dictating={dictation.listening || undefined}
       >
         <DocEditor
           key={editorKey}

@@ -6,7 +6,9 @@
 // "Turn off · delete N"), with none it is one press. Writes are store actions
 // (setVoiceIdEnabled, deleteMyVoiceprints); counts come from useMyVoiceprint.
 // Above it, the Dictation switch (currentUser.dictation_enabled, store
-// setDictationEnabled) shows the composer mic.
+// setDictationEnabled) shows the composer mic. When any of the person's teams
+// has no OpenAI BAA, the row names that team (openAiBlock, the line the mic
+// says); the switch still works, so the dimmed mic can be turned off here.
 import { useRef, useState } from "react";
 import { AudioLines, Trash2 } from "lucide-react";
 import { useInboxStore } from "../../store/inboxStore";
@@ -19,10 +21,12 @@ import { ConsequentialSwitch } from "../consequential/ConsequentialSwitch";
 import { settleSpeakerWrite } from "../calls/speakerContext";
 import { SettingsRow, SettingsSection } from "./ui";
 import { voiceIdLedger } from "./voiceIdLedger";
+import { openAiBlock } from "../../lib/dictation/teamBlock";
 
 export function VoiceSettings({ pad }: { pad?: string }) {
   const enabled = useInboxStore((s) => (s.currentUser as { voice_id_enabled?: boolean } | null | undefined)?.voice_id_enabled === true);
   const dictation = useInboxStore((s) => (s.currentUser as { dictation_enabled?: boolean } | null | undefined)?.dictation_enabled === true);
+  const dictationBlocked = useInboxStore(openAiBlock);
   const mine = useMyVoiceprint();
   const ago = useRelativeTime();
   const [arming, setArming] = useState<null | "delete" | "off">(null);
@@ -53,7 +57,7 @@ export function VoiceSettings({ pad }: { pad?: string }) {
   return (
     <SettingsSection title="Voice" icon={AudioLines}>
       {/* A plain switch: on only shows the composer mic; nothing records until it is pressed. */}
-      <SettingsRow label="Dictation" className={pad}>
+      <SettingsRow label="Dictation" description={dictationBlocked ?? undefined} className={pad}>
         <Switch checked={dictation} onCheckedChange={(on) => settleSpeakerWrite(useInboxStore.getState().setDictationEnabled(on))} aria-label="Dictation" />
       </SettingsRow>
       <SettingsRow label="Recognize my voice in recordings" className={pad}>

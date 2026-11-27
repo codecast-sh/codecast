@@ -82,17 +82,23 @@ test("press the mic, words stream in at the end, ✓ keeps them", async () => {
   await c.unmount();
 });
 
-test("beside the bare box's send arrow ✕ and ✓ are muted; beside the dock's filled Send they stay quiet", async () => {
+test("✕ and ✓ sit at the weight of the row's other secondary icons, in the bare box and the dock", async () => {
+  // The stash/hand-off/fork buttons' colour. Not an alpha step (text-sol-text-dim/55):
+  // .modern-style resolves those to the solid dim token, so the mute never applied.
+  const rowSecondary = "text-[color-mix(in_srgb,var(--sol-text-dim)_40%,transparent)]";
   const tone = async (opts: { bare?: boolean; foot?: boolean }) => {
     const c = await mountComposer(opts);
     await c.press("Dictate");
-    const out = ["Cancel dictation", "Finish dictation"].map((l) => c.button(l)!.className.includes("text-sol-text-dim/55"));
+    const out = ["Cancel dictation", "Finish dictation"].map((l) => {
+      const cls = c.button(l)!.className.split(/\s+/);
+      return cls.includes(rowSecondary) && !cls.some((k) => /^text-sol-text-dim(\/\d+)?$/.test(k));
+    });
     await c.press("Cancel dictation");
     await c.unmount();
     return out;
   };
   expect(await tone({ bare: true, foot: true })).toEqual([true, true]);
-  expect(await tone({})).toEqual([false, false]);
+  expect(await tone({})).toEqual([true, true]);
 });
 
 test("an empty box reads Listening… while recording", async () => {
@@ -201,8 +207,9 @@ test("any team of the person's without an OpenAI BAA dims the mic, and a click o
   const mic = c.button(line)!;
   expect([mic.disabled, mic.getAttribute("aria-disabled")]).toEqual([false, "true"]);
   expect(mic.getAttribute("data-dictation-reason")).toBe(line);
-  // The phone's blocked look: the plain mic and its caret, both dimmed.
-  expect(mic.querySelector("svg")!.getAttribute("class")).toContain("lucide-mic ");
+  // The struck mic: dimmed alone it read as the row's other quiet icons. Its caret
+  // stays, dimmed, so the row keeps its width.
+  expect(mic.querySelector("svg")!.getAttribute("class")).toContain("lucide-mic-off");
   const caret = c.button("Dictation settings")!;
   for (const b of [mic, caret]) expect(b.className).toContain("text-sol-text-dim/40");
   expect(mic.closest("[data-dictation]")!.querySelectorAll("[data-dictate-target]").length).toBe(2);
@@ -349,6 +356,36 @@ test("task comment box: words stream in, Enter posts them once they are in, Esc 
   useInboxStore.setState({ addTaskComment: realAdd } as any);
 });
 
+test("task comment box: ✓ before any words closes the mic, and the box stops saying Listening…", async () => {
+  const { TaskCommentComposer } = await import("../tasks/TaskCommentStream");
+  const container = w.document.createElement("div");
+  w.document.body.appendChild(container);
+  const root = createRoot(container);
+  await act(async () => {
+    root.render(
+      <ConvexProvider client={fakeConvex()}>
+        <TaskCommentComposer shortId="ct-1" autoOpen />
+      </ConvexProvider>,
+    );
+  });
+  const ta = container.querySelector("textarea") as HTMLTextAreaElement;
+  const btn = (l: string) => container.querySelector(`button[aria-label="${l}"]`) as HTMLButtonElement | null;
+  const idle = ta.placeholder;
+  await act(async () => { btn("Dictate")!.click(); });
+  await flush();
+  expect(ta.placeholder).toBe("Listening…");
+  await act(async () => { btn("Finish dictation")!.click(); });
+  await flush();
+  // Finishing: the last words are awaited, but nothing is listening.
+  expect(container.querySelector('[data-dictation="finishing"]')).not.toBeNull();
+  expect(ta.placeholder).toBe(idle);
+  await act(async () => { host.endFinish!(); });
+  await flush();
+  expect(ta.placeholder).toBe(idle);
+  await act(async () => { root.unmount(); });
+  container.remove();
+});
+
 // ── Review regressions ────────────────────────────────────────────────────
 
 test("Send while dictating sends once, after the last words, without spinning", async () => {
@@ -467,6 +504,44 @@ test("a comment box closes on Esc while another box records, and cancels its own
   await act(async () => { root.unmount(); });
   container.remove();
   await other.unmount();
+});
+
+test("a comment box: one Esc on the open language menu closes the menu, not the box", async () => {
+  const { CommentComposer } = await import("../comments/CommentComposer");
+  const container = w.document.createElement("div");
+  w.document.body.appendChild(container);
+  const root = createRoot(container);
+  let closed = 0;
+  await act(async () => {
+    root.render(
+      <ConvexProvider client={fakeConvex()}>
+        <CommentComposer conversationId="jx70000000000000000000000comment" enabled authed onSubmit={() => {}} onClose={() => { closed++; }} />
+      </ConvexProvider>,
+    );
+  });
+  const caret = container.querySelector('button[aria-label="Dictation settings"]') as HTMLButtonElement;
+  await act(async () => {
+    caret.dispatchEvent(new w.PointerEvent("pointerdown", { bubbles: true, button: 0, ctrlKey: false }));
+  });
+  await flush();
+  const menu = () => w.document.querySelector('[role="menu"]') as HTMLElement | null;
+  expect(menu()).not.toBeNull();
+  // Portalled to the body, but inside the box's React tree: its keydown reaches the box's capture handler.
+  const item = menu()!.querySelector('[role="menuitemcheckbox"]') as HTMLElement;
+  await act(async () => {
+    item.dispatchEvent(new w.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+  });
+  await flush();
+  expect(menu()).toBeNull();
+  expect(closed).toBe(0);
+  // With no menu open, Esc in the box closes it as before.
+  await act(async () => {
+    container.querySelector("textarea")!.dispatchEvent(new w.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+  });
+  await flush();
+  expect(closed).toBe(1);
+  await act(async () => { root.unmount(); });
+  container.remove();
 });
 
 test("switching to the rich editor mid-recording carries the last words into it", async () => {
