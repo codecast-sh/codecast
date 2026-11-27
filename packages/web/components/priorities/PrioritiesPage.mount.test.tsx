@@ -505,7 +505,8 @@ test("phone, Daylight and desktop: the list's own width picks the layout", async
 
 test("the page paints from the store over the list's answer, and says how far behind past six hours", async () => {
   answers["priorities:history"] = HISTORY;
-  answers["priorities:list"] = listOf(ROWS, { behind_by_ms: 8 * HOUR });
+  answers["priorities:list"] = listOf(ROWS);
+  answers["priorities:timing"] = { behind_by_ms: 8 * HOUR, next_pass_at: null };
   const late = await mount(<PrioritiesPage />);
   try {
     expect(describeFailures(late)).toBe("");
@@ -514,7 +515,7 @@ test("the page paints from the store over the list's answer, and says how far be
   } finally {
     await late.unmount();
   }
-  answers["priorities:list"] = listOf(ROWS, { behind_by_ms: 2 * HOUR });
+  answers["priorities:timing"] = { behind_by_ms: 2 * HOUR, next_pass_at: null };
   const onTime = await mount(<PrioritiesPage />);
   try {
     expect(onTime.container.querySelector("[data-priorities-behind]")).toBeNull();
@@ -610,7 +611,8 @@ test("a missing backend paints the cached rows, or reads as an error on a cold c
   } finally {
     await missing.unmount();
   }
-  answers["priorities:list"] = listOf([], { next_pass_at: Date.now() + 3 * HOUR });
+  answers["priorities:list"] = listOf([]);
+  answers["priorities:timing"] = { behind_by_ms: null, next_pass_at: Date.now() + 3 * HOUR };
   const empty = await mount(<PrioritiesPage />);
   try {
     expect(empty.text()).toContain("No priorities yet");
@@ -631,7 +633,7 @@ test("a missing backend paints the cached rows, or reads as an error on a cold c
     await phoneEmpty.unmount();
     Object.defineProperty(window, "innerWidth", { configurable: true, value: realWidth });
   }
-  answers["priorities:list"] = listOf([], { next_pass_at: Date.now() - 1000 });
+  answers["priorities:timing"] = { behind_by_ms: null, next_pass_at: Date.now() - 1000 };
   const due = await mount(<PrioritiesPage />);
   try {
     expect(due.container.querySelector("[data-priorities-running]")).not.toBeNull();

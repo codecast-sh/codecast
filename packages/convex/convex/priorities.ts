@@ -30,6 +30,7 @@ import { historyFor } from "./priorityHistory";
 import { doCreate } from "./priorityCreate";
 import { createWorkContext } from "./data";
 import { fromCallWorkspace } from "./callReads";
+import { passTiming } from "./priorityPassSweep";
 import { type MilestoneChange, doCorrect, doCorrectionDelete, doMerge, doMilestone, doMove, doPriorityDone, doRetitle, doSessionMove, doSessionNotThis, doSetAside, doUndoPriorityDone } from "./priorityWrite";
 
 function orThrow<T>(res: Result<T>): T {
@@ -52,12 +53,27 @@ const cliScope = { team_id: v.optional(v.id("teams")), personal: v.optional(v.bo
 // ── Web (signed-in user) ─────────────────────────────────────────────────
 
 export const list = query({
-  // `timing_for`: with no `workspace`, the workspace whose pass timing rides the answer (the viewer's active one).
-  args: { workspace: v.optional(v.string()), status: statusArg, all: v.optional(v.boolean()), timing_for: v.optional(v.string()) },
+  args: { workspace: v.optional(v.string()), status: statusArg, all: v.optional(v.boolean()) },
   handler: async (ctx, args): Promise<PriorityList | null> => {
     const viewer = await getAuthUserId(ctx);
     if (!viewer) return null;
     return listFor(ctx, viewer, args);
+  },
+});
+
+/**
+ * When the viewer's pass in one workspace runs (the header's behind chip and
+ * next pass, beside a list of every workspace): its own small subscription,
+ * so switching workspace never re-runs the list. Nothing for a workspace the
+ * viewer does not hold.
+ */
+export const timing = query({
+  args: { workspace: v.string() },
+  handler: async (ctx, { workspace }): Promise<{ behind_by_ms: number | null; next_pass_at: number | null } | null> => {
+    const viewer = await getAuthUserId(ctx);
+    if (!viewer) return null;
+    if (!(await readerFor(ctx, viewer)).held.has(workspace)) return { behind_by_ms: null, next_pass_at: null };
+    return passTiming(ctx, viewer, workspace, Date.now());
   },
 });
 

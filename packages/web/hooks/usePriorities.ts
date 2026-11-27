@@ -1,7 +1,7 @@
 // Priorities (convex priorities.ts): the feeder and reader of the `priorities`
 // collection, and the person's controls with their put-back on a refusal.
 // One subscription feeds it: priorities.list over every workspace the viewer
-// holds, with the active workspace's pass timing riding the same answer.
+// holds; the active workspace's pass timing is its own small query.
 // /priorities mounts it, and so do the sync host's feeders wherever the
 // active workspace has Priorities on (useSyncInboxPriorities).
 import { useCallback, useMemo, useState } from "react";
@@ -12,7 +12,7 @@ import { listMeta, listRows, prioritySig, withLiveRanks, type PriorityListMeta, 
 import { priorityWrites } from "../lib/priorityWrites";
 import { DEFAULT_GROUP_BY, type GroupBy } from "../lib/prioritySections";
 import { useInboxStore } from "../store/inboxStore";
-import { useWorkspaceFeature } from "../lib/teamFeatures";
+import { useAnyWorkspaceFeature } from "../lib/teamFeatures";
 import { isRefusedDispatchError } from "../store/mutativeMiddleware";
 // Installs sonner as the undo notifier, which raises a check-off's Undo receipt (lib/priorityWrites).
 import "../store/undoStack";
@@ -21,41 +21,36 @@ import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useServerAuthSettled } from "./useServerAuthSettled";
 import { useCoarseNow } from "./useCoarseNow";
 import { useActiveWorkspaceKey, useWorkspacesCollection } from "./useWorkspaceCollection";
-import type { PriorityList } from "@codecast/shared/contracts/priorities";
 
 const api = _api as any;
 
-/** The list's args: every workspace, the active one's pass timing. Every reader passes these, so they share one subscription. */
-function useListArgs(): { timing_for: string } | null {
-  const workspace = useActiveWorkspaceKey();
-  return useMemo(() => (workspace ? { timing_for: workspace } : null), [workspace]);
-}
+/** The list's args, the same object for every caller: every workspace, one subscription. */
+const EVERY_WORKSPACE = {};
 
 /** Feeder: the priorities the viewer can read in every workspace they hold, a snapshot of all of them. */
 export function useSyncPriorities(on = true) {
-  const args = useListArgs();
-  return useSyncCollection("priorities", api.priorities.list, on && args ? args : "skip", { select: listRows });
+  return useSyncCollection("priorities", api.priorities.list, on ? EVERY_WORKSPACE : "skip", { select: listRows });
 }
 
 /**
  * The priorities the inbox sorts by in its Priorities view and filters by in
- * its Top 3 / 5 / 10, in any workspace with the feature on: the filter is
- * offered in every view, so the ranks it reads stay live in every view.
- * Mounted in the sync host's feeders (DashboardLayout HostFeeders), so the
- * host feeds them whether or not its own window draws the inbox panel;
- * followers read the replicated rows. The same call as /priorities, so
- * neither one's snapshot drops the other's rows.
+ * its Top 3 / 5 / 10, while any workspace the viewer holds has the feature on:
+ * the filter is offered in every view, so the ranks it reads stay live in
+ * every view. Mounted in the sync host's feeders (DashboardLayout
+ * HostFeeders), so the host feeds them whether or not its own window draws
+ * the inbox panel; followers read the replicated rows. The same call as
+ * /priorities, so neither one's snapshot drops the other's rows.
  */
 export function useSyncInboxPriorities() {
-  useSyncPriorities(useWorkspaceFeature("priorities"));
+  useSyncPriorities(useAnyWorkspaceFeature("priorities"));
 }
 
-/** When the active workspace's pass runs, read off the same list answer the feeder takes (one subscription: same query, same args). */
+/** When the active workspace's pass runs (priorities.timing): its own small subscription, so a workspace switch never re-runs the list. It only enriches the header. */
 export function usePriorityListMeta(): PriorityListMeta {
-  const args = useListArgs();
+  const workspace = useActiveWorkspaceKey();
   const settled = useServerAuthSettled();
-  const { data } = useQueryNoThrow(api.priorities.list, settled && args ? args : "skip", { remember: true });
-  return listMeta(data as PriorityList | null | undefined);
+  const { data } = useQueryNoThrow(api.priorities.timing, settled && workspace ? { workspace } : "skip", { remember: true });
+  return listMeta(data as PriorityListMeta | null | undefined);
 }
 
 /** Every workspace the viewer holds: each of their teams, and their own. */

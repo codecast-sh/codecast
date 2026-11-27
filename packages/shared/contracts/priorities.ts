@@ -222,7 +222,7 @@ export type PriorityList = {
   own_truncated: boolean;
   /** Teammates' past the most recently active judged were left out. */
   teammates_truncated: boolean;
-  /** How far the viewer's pass here lags now (now − its cursor); null before its first run or with no workspace named (`workspace`, else `timing_for`). */
+  /** How far the viewer's pass here lags now (now − its cursor); null before its first run or with no workspace named. */
   behind_by_ms: number | null;
   /** When the next pass here runs: now while one runs, else the one the viewer's activity scheduled; null when none is pending or no workspace is named. */
   next_pass_at: number | null;

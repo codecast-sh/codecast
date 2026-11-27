@@ -1,6 +1,6 @@
 // priorities.list with no workspace, as /priorities and the inbox feed it:
-// every workspace the viewer holds in one answer, the pass timing of the one
-// `timing_for` names (the viewer's active workspace), and each row's owner's face.
+// every workspace the viewer holds in one answer, each row with its owner's
+// face; and priorities.timing, the one workspace's pass timing beside it.
 import { expect, setDefaultTimeout, test } from "bun:test";
 import { convexTest } from "convex-test";
 import schema from "./schema";
@@ -14,7 +14,7 @@ const pri = (api as any).priorities;
 const NOW = Date.now();
 const HOUR = 3_600_000;
 
-test("a list of every workspace carries the timing of the workspace timing_for names, and each row its owner's face", async () => {
+test("a list of every workspace carries each row's owner's face; timing answers one workspace's pass", async () => {
   const t = convexTest(schema, allModules);
   const { ada, ws } = await t.run(async (ctx) => {
     const ada = await ctx.db.insert("users", { name: "Ada", image: "https://faces.test/ada.png" } as any);
@@ -30,11 +30,9 @@ test("a list of every workspace carries the timing of the workspace timing_for n
 
   const all = await as.query(pri.list, {});
   expect(all.priorities.map((r: any) => r.short_id).sort()).toEqual(["pri-1", "pri-2"]);
-  expect(all.behind_by_ms).toBeNull();
-  const timed = await as.query(pri.list, { timing_for: ws });
-  expect(timed.priorities.map((r: any) => r.short_id).sort()).toEqual(["pri-1", "pri-2"]);
-  expect(Math.floor(timed.behind_by_ms / HOUR)).toBe(8);
-  expect(timed.priorities.every((r: any) => r.owner_image === "https://faces.test/ada.png")).toBe(true);
+  expect(all.priorities.every((r: any) => r.owner_image === "https://faces.test/ada.png")).toBe(true);
+  expect(Math.floor((await as.query(pri.timing, { workspace: ws })).behind_by_ms / HOUR)).toBe(8);
+  expect(await as.query(pri.timing, { workspace: `user:${ada}` })).toEqual({ behind_by_ms: null, next_pass_at: null });
   // A workspace the viewer does not hold times nothing.
-  expect((await as.query(pri.list, { timing_for: "team:nobody" })).behind_by_ms).toBeNull();
+  expect(await as.query(pri.timing, { workspace: "team:nobody" })).toEqual({ behind_by_ms: null, next_pass_at: null });
 });

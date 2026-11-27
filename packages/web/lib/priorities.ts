@@ -21,7 +21,8 @@ export function listRows(payload: PriorityList | null | undefined): PriorityRow[
   return payload?.priorities;
 }
 
-export function listMeta(payload: PriorityList | null | undefined): PriorityListMeta {
+/** The pass timing out of a list or timing answer (priorities.timing). */
+export function listMeta(payload: PriorityListMeta | null | undefined): PriorityListMeta {
   return { next_pass_at: payload?.next_pass_at ?? null, behind_by_ms: payload?.behind_by_ms ?? null };
 }
 
