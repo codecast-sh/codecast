@@ -23,7 +23,11 @@
 //   - Delivered work is Done, cyan; never yellow, never grey.
 //   - Idle is grey and means nothing is happening and nothing is asked; the
 //     board's yellow idle dot is gone.
-//   - Parked on a wake (or a snooze) is Dormant, blue-grey.
+//   - Parked on a wake (or a snooze) is Dormant, blue-grey. A Dormant row
+//     whose own work runs (subagents, workers, a workflow, a long command)
+//     is Working, and one whose change is between CI and live is Shipping, a
+//     neutral grey: the shared sessionActivity splits that bucket for
+//     display, and a caller hands the verdict in as `activity`.
 //   - Process liveness (/sessions' "active / idle 2h+ / dead / hibernated") is
 //     a different axis; it stays on that page as process facts, not a status.
 
@@ -35,12 +39,12 @@ import { agentStatusAt, liveFactsOf } from "./liveness";
 import { apiErrorBadge } from "./apiErrorBadge";
 import { sessionStartupState } from "./sessionLifecycle";
 
-export const SESSION_STATUSES = ["needs_you", "error", "working", "starting", "done", "dormant", "idle", "stashed", "killed"] as const;
+export const SESSION_STATUSES = ["needs_you", "error", "working", "starting", "done", "shipping", "dormant", "idle", "stashed", "killed"] as const;
 export type SessionStatus = (typeof SESSION_STATUSES)[number];
 
 /** The mark a state draws (components/inbox/SessionStatusMark): a shape, so the
  *  state reads without its colour. Every one is static. */
-export type StatusMarkShape = "dot" | "ask" | "alert" | "dashed" | "check" | "moon" | "ring" | "aside" | "cross";
+export type StatusMarkShape = "dot" | "ask" | "alert" | "dashed" | "check" | "rocket" | "moon" | "ring" | "aside" | "cross";
 
 export type SessionStatusMeta = {
   word: string;
@@ -62,6 +66,8 @@ export const SESSION_STATUS: Record<SessionStatus, SessionStatusMeta> = {
   error: { word: "Error", text: "text-sol-red", color: "var(--sol-class-red)", mark: "alert", meaning: "It stopped on a failure you have to clear" },
   starting: { word: "Starting", text: "text-sol-green", color: "var(--sol-class-green)", mark: "dashed", meaning: "The agent is starting up" },
   done: { word: "Done", text: "text-sol-cyan", color: "var(--sol-class-cyan)", mark: "check", meaning: "Finished, waiting for you to review" },
+  // Neutral: shipping needs nothing from the person until a step fails.
+  shipping: { word: "Shipping", text: "text-sol-text-muted", color: "var(--sol-text-muted)", mark: "rocket", meaning: "Its change is on its way from CI to live" },
   dormant: { word: "Sleeping", text: "text-[color:color-mix(in_srgb,var(--sol-class-blue)_55%,var(--sol-text-dim))]", color: DORMANT_COLOR, mark: "moon", meaning: "Asleep until something wakes it" },
   idle: { word: "Idle", text: "text-sol-text-dim", color: "var(--sol-text-dim)", mark: "ring", meaning: "Nothing running, nothing asked" },
   stashed: { word: "Stashed", text: "text-sol-text-dim", color: "var(--sol-text-dim)", mark: "aside", meaning: "Set aside; the agent may still run" },
@@ -83,7 +89,7 @@ export const PLAN_STATE_STATUS: Record<PlanState, { status: SessionStatus; word:
  *  sections (GlobalSessionPanel renderSection keys and hidden buckets) and the
  *  placement buckets they come from. */
 export type StatusSection =
-  | "questions" | "pinned" | "new" | "needs_input" | "hosted_stopped" | "done" | "working" | "dormant"
+  | "questions" | "pinned" | "new" | "needs_input" | "hosted_stopped" | "done" | "working" | "shipping" | "dormant"
   | "snoozed" | "stashed" | "dismissed";
 
 /** The states a row may wear in each section. The mapping never leaves these. */
@@ -92,6 +98,7 @@ export const SECTION_STATUSES: Record<StatusSection, readonly SessionStatus[]> =
   needs_input: ["needs_you", "error"],
   hosted_stopped: ["error"],
   working: ["working"],
+  shipping: ["shipping"],
   done: ["done"],
   dormant: ["dormant"],
   snoozed: ["dormant"],
@@ -99,7 +106,7 @@ export const SECTION_STATUSES: Record<StatusSection, readonly SessionStatus[]> =
   stashed: ["stashed"],
   dismissed: ["killed"],
   // A pinned row keeps its own verdict: pinned is where, not what.
-  pinned: ["needs_you", "error", "working", "starting", "done", "dormant", "idle", "killed"],
+  pinned: ["needs_you", "error", "working", "starting", "done", "shipping", "dormant", "idle", "killed"],
 };
 
 /** The mark a rail section header carries: the state its rows wear. */
@@ -108,6 +115,7 @@ export const SECTION_HEADER_STATUS: Partial<Record<string, SessionStatus>> = {
   needs_input: "needs_you",
   hosted_stopped: "error",
   working: "working",
+  shipping: "shipping",
   done: "done",
   dormant: "dormant",
   new: "starting",
@@ -115,8 +123,8 @@ export const SECTION_HEADER_STATUS: Partial<Record<string, SessionStatus>> = {
 
 /** The board's bands in Modern, in reading order: the rail's sections, so a
  *  tile and a card agree. Error rides with Needs you, as it does in the rail. */
-export type StatusBand = "needs_you" | "working" | "done" | "dormant" | "idle";
-export const STATUS_BANDS: readonly StatusBand[] = ["needs_you", "working", "done", "dormant", "idle"];
+export type StatusBand = "needs_you" | "working" | "shipping" | "done" | "dormant" | "idle";
+export const STATUS_BANDS: readonly StatusBand[] = ["needs_you", "working", "shipping", "done", "dormant", "idle"];
 export function bandOfStatus(status: SessionStatus): StatusBand | null {
   if (status === "needs_you" || status === "error") return "needs_you";
   if (status === "working" || status === "starting") return "working";
@@ -267,7 +275,18 @@ export type SessionStatusInput = {
   /** Drawn nested under its parent's card (a subagent row, a nested card):
    *  a Claude Code subagent there whose turn ended reads Done. */
   nested?: boolean;
+  /** What a Dormant row is really doing (lib/railActivity over the shared
+   *  sessionActivity), read when its placement files it Dormant: its own work
+   *  running reads Working, its change on the way to live reads Shipping.
+   *  Absent, it reads Sleeping. A section, when given, still decides. */
+  activity?: ActivityKind | null;
 };
+
+/** Which section a Dormant row draws in: the shared sessionActivity's state. */
+export type ActivityKind = "working" | "shipping" | "sleeping";
+
+const dormantAs = (activity: ActivityKind | null | undefined): SessionStatus =>
+  activity === "working" ? "working" : activity === "shipping" ? "shipping" : "dormant";
 
 /** The bucket a per-row placement files under once the facts it cannot see
  *  are read, the same overlays placeInboxRows applies: a send in flight
@@ -282,7 +301,7 @@ function overlaidBucket(bucket: string, row: StatusRow, now: number, live: Statu
 }
 
 /** The one state a session shows. */
-export function sessionStatusOf({ row, section, placement, now, live = {}, hosted = false, nested = false }: SessionStatusInput): SessionStatus {
+export function sessionStatusOf({ row, section, placement, now, live = {}, hosted = false, nested = false, activity = null }: SessionStatusInput): SessionStatus {
   const where = section ?? (placement ? sectionOfBucket(overlaidBucket(placement.bucket, row, now, live)) : null);
   // A Claude Code subagent drawn under its parent (the server's rule: the
   // flag, or a parent pointer with no parent message; an agent-switch
@@ -314,8 +333,9 @@ export function sessionStatusOf({ row, section, placement, now, live = {}, hoste
     case "hosted_stopped": return "error";
     case "questions": return "needs_you";
     case "working": return "working";
+    case "shipping": return "shipping";
     case "done": return "done";
-    case "dormant": return "dormant";
+    case "dormant": return section ? "dormant" : dormantAs(activity);
     case "needs_input": return live.stopped || statusFailure(row, now, live) ? "error" : "needs_you";
     case "new": return statusStarting(row, now, live, hosted) ? "starting" : "idle";
   }
@@ -337,7 +357,7 @@ export function sessionStatusOf({ row, section, placement, now, live = {}, hoste
     case "working": return "working";
     case "needs_input": return statusFailure(row, now, live) ? "error" : "needs_you";
     case "done": return "done";
-    case "dormant": return "dormant";
+    case "dormant": return dormantAs(activity);
     default: return "idle";
   }
 }
@@ -412,7 +432,7 @@ export function statusOfStanding(
 /** The rail's renderSection key (and hidden-bucket variant) as a section. */
 export function sectionOfRailKey(key: string | null | undefined): StatusSection | null {
   switch (key) {
-    case "questions": case "new": case "needs_input": case "hosted_stopped": case "done": case "working": case "dormant":
+    case "questions": case "new": case "needs_input": case "hosted_stopped": case "done": case "working": case "shipping": case "dormant":
     case "snoozed": case "stashed": case "dismissed":
       return key;
     default:

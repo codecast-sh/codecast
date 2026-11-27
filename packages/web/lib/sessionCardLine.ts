@@ -96,6 +96,7 @@ function reasonOf(input: CardLineInput): { reason: string | null; reasonTitle?: 
       if (row.user_rest === "needs_input") return { reason: "Filed by you", reasonTitle: "Filed under Needs You until the next wake" };
       return { reason: null };
     case "working":
+    case "shipping":
       return { reason: null };
     case "starting":
       if (input.hosted) return { reason: "Getting started" };

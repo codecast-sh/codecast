@@ -1,0 +1,24 @@
+/* The under-line a Working, Shipping or Sleeping row wears (ActivityLine.tsx),
+   and the conversation header's chip that says the same. */
+
+/* A pill on the line keeps to one line and to the line's vertical centre. */
+.al-pill { display: flex; align-items: center; min-width: 0; }
+.al-pill .entity-ref { white-space: nowrap; max-width: 100%; overflow: hidden; display: inline-flex; align-items: center; vertical-align: middle; line-height: 1.25; }
+.al-pill .entity-ref * { white-space: nowrap; }
+.al-pill .entity-ref > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+
+/* Colour is for attention: a session, task or pull request named here is a
+   reference, not something to act on, so it reads in the line's grey. The
+   person a row waits on keeps its colour. The pill paints its kind's colour
+   on its parts (a task's status disc inline), so these rules win outright. */
+[data-ref-neutral] .entity-ref {
+  color: var(--sol-text-muted) !important;
+  background: color-mix(in srgb, var(--sol-text-dim) 12%, transparent) !important;
+}
+[data-ref-neutral] .entity-ref svg { color: var(--sol-text-dim) !important; }
+[data-ref-neutral] .entity-ref__icon > span { background: var(--sol-text-dim) !important; }
+/* A pull request's track and glyph go grey with it. */
+[data-ref-neutral] .chg-seg[data-tone] .chg-pip { background: color-mix(in srgb, var(--sol-text-dim) 26%, transparent); }
+[data-ref-neutral] .chg-seg[data-tone] .chg-pip[data-state="done"] { background: color-mix(in srgb, var(--sol-text-muted) 70%, transparent); }
+[data-ref-neutral] .chg-seg[data-tone] .chg-pip[data-now] { background: var(--sol-text-muted); }
+[data-ref-neutral] .chg-seg[data-tone] .chg-now { color: var(--sol-text-muted); background: none; }
