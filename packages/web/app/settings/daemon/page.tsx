@@ -12,6 +12,7 @@ import { useDeviceSettingsPanel } from "../../../components/settings/useDeviceSe
 import { relativeSeen, type Device } from "../../../components/DeviceBadge";
 import { useDaemonHealth } from "../../../hooks/useDaemonHealth";
 import { describeDaemonHealth } from "../../../lib/daemonHealthCopy";
+import { behindRelease, useLatestCliRelease } from "../../../lib/latestCliRelease";
 
 /**
  * Daemon: the codecast daemon on one machine. What version it runs, whether it
@@ -89,7 +90,10 @@ function UpdatesSection({ d, panel }: { d: Device; panel: ReturnType<typeof useD
   const forced = autoUpdateLock(useDevicePolicy(d));
   const auto = forced ? forced.on : d.settings?.auto_update !== false;
   const blocked = selfUpdateBlocked(d);
-  const target = d.update_available ? `v${d.update_available}` : "the latest release";
+  // The release the manifest names now; the device's own update_available is a check up to a day old.
+  const latest = useLatestCliRelease();
+  const behind = behindRelease(d.cli_version, latest);
+  const target = latest ? `v${latest}` : d.update_available ? `v${d.update_available}` : "the latest release";
   const held =
     d.update_state === "installing" ||
     (d.update_state === "requested" && Date.now() - (d.update_requested_at ?? 0) < REQUEST_HOLD_MS);
@@ -117,7 +121,7 @@ function UpdatesSection({ d, panel }: { d: Device; panel: ReturnType<typeof useD
           aria-label="Update automatically"
         />
       </SettingsRow>
-      {(d.update_available || d.update_required || d.update_state) && (
+      {(behind || d.update_available || d.update_required || d.update_state) && (
         <SettingsRow
           label="Update now"
           description={
@@ -137,7 +141,7 @@ function UpdatesSection({ d, panel }: { d: Device; panel: ReturnType<typeof useD
             size="sm"
             variant="cyan"
             disabled={!!blocked || held || pending.has("update")}
-            onClick={() => run("update", () => requestUpdate(d.device_id))}
+            onClick={() => run("update", () => requestUpdate(d.device_id, latest ?? undefined))}
           >
             {d.update_state === "failed" ? "Retry" : "Update"}
           </Button>

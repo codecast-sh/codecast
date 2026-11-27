@@ -513,6 +513,10 @@ export default defineSchema({
     // The library flow a session's change is offered first (flows.md FL4): a
     // flow's slug, set by an admin on /flows. Unset: the shipped `change`.
     default_flow: v.optional(v.string()),
+    // The team's CLI floor (systemConfig.setTeamMinCliVersion): its members'
+    // machines below it update themselves. A device is held to the highest of
+    // this, its other teams' floors and the global min_cli_version.
+    min_cli_version: v.optional(v.string()),
     // Installed apps (docs/architecture/installed-apps.md), set by an admin
     // in Team settings (teams.setAppsPolicy): may members install the team's
     // pages as desktop apps (unset: yes), and may those apps get full access

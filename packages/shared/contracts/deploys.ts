@@ -204,6 +204,8 @@ export type DeployView = {
   short_id: string;
   /** The store's stub key of a deploy asked for from the web. */
   client_key?: string;
+  /** The team it deployed for: whose fleet a CLI release's finish forces. */
+  team_id?: string | null;
   project_id: string | null;
   target: string;
   status: DeployStatus;

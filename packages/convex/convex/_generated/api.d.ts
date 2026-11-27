@@ -886,6 +886,7 @@ import type * as taskWaits from "../taskWaits.js";
 import type * as tasks from "../tasks.js";
 import type * as teamActivity from "../teamActivity.js";
 import type * as teamBilling from "../teamBilling.js";
+import type * as teamCliFloor from "../teamCliFloor.js";
 import type * as teamDiscovery from "../teamDiscovery.js";
 import type * as teamFeatures from "../teamFeatures.js";
 import type * as teamHosts from "../teamHosts.js";
@@ -1820,6 +1821,7 @@ declare const fullApi: ApiFromModules<{
   tasks: typeof tasks;
   teamActivity: typeof teamActivity;
   teamBilling: typeof teamBilling;
+  teamCliFloor: typeof teamCliFloor;
   teamDiscovery: typeof teamDiscovery;
   teamFeatures: typeof teamFeatures;
   teamHosts: typeof teamHosts;

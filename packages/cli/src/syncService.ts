@@ -2677,9 +2677,11 @@ export class SyncService {
 
   async getMinCliVersion(): Promise<string | null> {
     try {
+      // The token makes it this user's floor: the global one raised by their
+      // teams' floors (systemConfig.effectiveMinCliVersion).
       const version = await this.client.query(
         "systemConfig:getMinCliVersion" as any,
-        {}
+        { api_token: this.apiToken }
       );
       return version as string | null;
     } catch {

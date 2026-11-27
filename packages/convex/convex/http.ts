@@ -3478,6 +3478,9 @@ cliRoute("/cli/line/fixloop/record", async (ctx, body) => ctx.runMutation((api a
 cliRoute("/cli/line/fixloop/cursor", async (ctx, body) => ctx.runQuery((api as any).landedChanges.cursor, body));
 cliRoute("/cli/line/fixloop/summary", async (ctx, body) => ctx.runQuery((api as any).landedChanges.summary, body));
 cliRoute("/cli/deploys/get", async (ctx, body) => ctx.runQuery(api.deploys.get, body));
+// A team's CLI floor and which of its machines run a release (teamCliFloor.ts).
+cliRoute("/cli/team-cli-floor/set", async (ctx, body) => ctx.runMutation(api.teamCliFloor.set, body));
+cliRoute("/cli/team-cli-floor/fleet", async (ctx, body) => ctx.runQuery(api.teamCliFloor.fleet, body));
 // Our own CI runner's verdict per commit (ciVerdicts.ts): logs upload through /cli/images/upload-url first.
 cliRoute("/cli/ci/record", async (ctx, body) => ctx.runMutation(api.ciVerdicts.record, body));
 for (const r of ["show", "log"] as const) cliRoute(`/cli/ci/${r}`, async (ctx, body) => ctx.runQuery(api.ciVerdicts[r], body));

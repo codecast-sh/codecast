@@ -146,7 +146,7 @@ import { ensureTmux, tryInstallTmux, tmuxRun, hasTmux, listCodecastPanes, pickPa
 import { routeTmuxArgs, socketOfTmuxEnv } from "./tmuxRoute.js";
 import { editHarnessJson, removeHarnessFile, withHarnessCause, writeHarnessFile } from "./harness.js";
 import { isManagedInstall } from "./managedInstall.js";
-import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, getPublishVersion, getStateVersion, getBrowserVersion, getChatVersion, ensureCastAlias, isDevMode, updateRecentlyFailed, recordUpdateFailure, getDecideVersion, getCallsVersion, getLimitsVersion, getComputerVersion, getCheckVersion, getSkillsVersion, getPrVersion, getModsVersion, getSimVersion, getVaultVersion} from "./update.js";
+import { checkForUpdates, performUpdate, UPDATE_IN_PROGRESS, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, getPublishVersion, getStateVersion, getBrowserVersion, getChatVersion, ensureCastAlias, isDevMode, updateRecentlyFailed, recordUpdateFailure, getDecideVersion, getCallsVersion, getLimitsVersion, getComputerVersion, getCheckVersion, getSkillsVersion, getPrVersion, getModsVersion, getSimVersion, getVaultVersion} from "./update.js";
 import { type SectionSpec, getSnippetTargets, installSectionToTargets, cutOwnedSections, REFERENCES_SECTION, installMessagingSnippet, installReferencesSnippet, installPublishSnippet, installBrowserSnippet, installChatSnippet, snippetStale, stampSnippet } from "./snippets.js";
 import { installAllStableHooks, parseStableHookClient, removeAllStableHooks, runStableContextHook } from "./stableContext.js";
 import { isCredentialHelperFastPath, isRelayHookArgv, isStableContextFastPath as isStableContextFastPathArgv, isTaskContextFastPath, messagingOnly, runFastPath } from "./fastPath.js";
@@ -13093,7 +13093,11 @@ program
     // left the machine with no daemon at all.
     const daemonWasRunning = getDaemonPid() !== null;
 
-    const { success } = await performUpdate();
+    const { success, error } = await performUpdate();
+    if (error === UPDATE_IN_PROGRESS) {
+      console.error("Another cast process is updating this install; run `cast update` again in a minute.");
+      process.exit(1);
+    }
     if (success) {
       await refreshEnabledSnippets(config);
 
@@ -13131,9 +13135,12 @@ program
 
 program
   .command("force-update")
-  .description("Set minimum CLI version to force remote clients to update (admin only)")
+  .description("Set the minimum CLI version machines update to: every machine (platform staff) or a team's (its admins and its Release Captain)")
   .argument("<version>", "Minimum version required (e.g., 1.0.12)")
-  .action(async (version) => {
+  .option("--team <team>", "Raise this team's floor (its admins and its Release Captain may); without it, platform staff set the global floor and anyone else their active team's")
+  .option("--deploy <deploy>", "A live CLI release's deploy (dp-N): raise its team's floor only when the daemon changed since the release before it, wait for the team's machines, and record both on the deploy")
+  .option("--wait <minutes>", "With --deploy: how long to wait for the team's online machines to run it", "20")
+  .action(async (version: string, options: { team?: string; deploy?: string; wait: string }) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
       console.error("Not authenticated. Run: cast auth");
@@ -13145,25 +13152,55 @@ program
       process.exit(1);
     }
 
-    const syncService = new SyncService({
-      convexUrl: config.convex_url,
-      authToken: config.auth_token,
-      userId: config.user_id,
-    });
-
-    try {
-      await syncService.getClient().mutation(
-        "systemConfig:setMinCliVersion" as any,
-        { version, api_token: config.auth_token }
-      );
-      console.log(`Minimum CLI version set to ${version}`);
-      console.log("Remote daemons will auto-update within 5 minutes");
-      process.exit(0);
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      console.error(`Failed to set min version: ${errMsg}`);
-      process.exit(1);
+    if (options.deploy) {
+      const { finishCliRelease } = await import("./releaseFinish.js");
+      try {
+        await finishCliRelease({
+          root: process.cwd(), deploy: options.deploy, version, waitMs: (Number(options.wait) || 0) * 60_000,
+          post: (p, body) => cliPost(p, body, { throwOnError: true }), fromSession: callingSession(),
+          setGlobal: async (v) => {
+            const sync = new SyncService({ convexUrl: config.convex_url, authToken: config.auth_token, userId: config.user_id });
+            try { await sync.getClient().mutation("systemConfig:setMinCliVersion" as any, { version: v, api_token: config.auth_token }); return true; }
+            catch (err) { if (String(err instanceof Error ? err.message : err).includes("Admin access required")) return false; throw err; }
+          },
+        });
+        process.exit(0);
+      } catch (err) {
+        console.error(`Release finish failed: ${err instanceof Error ? err.message : String(err)}`);
+        process.exit(1);
+      }
     }
+
+    if (!options.team) {
+      const syncService = new SyncService({
+        convexUrl: config.convex_url,
+        authToken: config.auth_token,
+        userId: config.user_id,
+      });
+      try {
+        await syncService.getClient().mutation(
+          "systemConfig:setMinCliVersion" as any,
+          { version, api_token: config.auth_token }
+        );
+        console.log(`Minimum CLI version set to ${version}`);
+        console.log("Remote daemons will auto-update within 5 minutes");
+        process.exit(0);
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        // Not platform staff: the floor this caller may raise is their team's.
+        if (!errMsg.includes("Admin access required")) {
+          console.error(`Failed to set min version: ${errMsg}`);
+          process.exit(1);
+        }
+      }
+    }
+
+    const ws = await writeWorkspace(options.team, { teamRequired: true });
+    if (ws.kind !== "team") process.exit(1);
+    const set = await cliPost("/cli/team-cli-floor/set", { team_id: ws.teamId, version, from_session: callingSession() });
+    console.log(set.changed ? `${set.team}'s minimum CLI version set to ${set.version}` : `${set.team}'s minimum CLI version already stands at ${set.version}`);
+    console.log(`${set.team}'s daemons below it auto-update within 5 minutes`);
+    process.exit(0);
   });
 
 program
@@ -23317,7 +23354,9 @@ if (!isStableContextFastPath && !isCredentialHelperFastPath(process.argv) && !pr
 
   console.error(`\nAuto-updating to v${available}...`);
   autoUpdateInstalling = true;
-  const { success } = await performUpdate();
+  const { success, error } = await performUpdate();
+  // Another process is installing this release: not a failure to back off from.
+  if (error === UPDATE_IN_PROGRESS) return;
   if (success) {
     // The same refresh `cast update` runs, so an automatic update can never
     // write a different set of files than a manual one. Every write it makes

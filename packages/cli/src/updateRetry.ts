@@ -1,4 +1,8 @@
-// The self update's one retry (update.ts performUpdate loads it on demand).
+// The self update's one retry and its lock (update.ts performUpdate loads
+// this on demand).
+
+import { acquireFileLock } from "./lockFile.js";
+import { UPDATE_IN_PROGRESS } from "./update.js";
 
 /** A download that disagrees with the manifest it was read against: a CDN
  *  serving the new manifest before the new binary (1.1.263, 2026-11-23). */
@@ -17,4 +21,33 @@ export async function updateWithRetry(
   console.error(`Update download did not match the release (${first.error}); fetching the manifest again`);
   await pause();
   return run();
+}
+
+// Two downloads at curl's 180 s bound, the retry's pause and the codesign
+// checks, with room to spare: a holder older than this was killed mid-update.
+const UPDATE_LOCK_STALE_MS = 15 * 60_000;
+
+/**
+ * Run one update holding the update lock, or skip the round when another
+ * updater holds it. The updater downloads to one fixed `<binary>.new`, so two
+ * at once (the daemon's forced update beside a `cast` command's background
+ * check, on a busy machine) truncate each other's download into a checksum
+ * mismatch and delete it from under each other (ENOENT), and neither installs
+ * (ct-102415). A dead holder's lock is reclaimed (lockFile.ts).
+ */
+export async function exclusiveUpdate<T extends { success: boolean; error?: string }>(
+  lockFile: string,
+  run: () => Promise<T>,
+): Promise<T | { success: false; error: typeof UPDATE_IN_PROGRESS }> {
+  let release: () => void;
+  try {
+    release = await acquireFileLock(lockFile, { waitMs: 0, staleMs: UPDATE_LOCK_STALE_MS, what: "update" });
+  } catch {
+    return { success: false, error: UPDATE_IN_PROGRESS };
+  }
+  try {
+    return await run();
+  } finally {
+    release();
+  }
 }
