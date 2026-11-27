@@ -25,7 +25,7 @@ import { EmptyState } from "../ui/empty-state";
 import { SkeletonRows } from "../ui/skeleton";
 import { PageFrame } from "../ui/page-header";
 import { LegendButton } from "../Mark";
-import { LIST_COLUMN, PrioritiesHeader } from "./PrioritiesHeader";
+import { PrioritiesHeader } from "./PrioritiesHeader";
 import { effectivePriorityOrder } from "@codecast/shared/contracts/priorities";
 import { useServerAuthSettled } from "../../hooks/useServerAuthSettled";
 import { useInboxStore } from "../../store/inboxStore";
@@ -104,6 +104,9 @@ export default function PrioritiesPage() {
   );
 }
 
+
+/** The list's column: the same max width as the header's row (PrioritiesHeader), centred. */
+const LIST_COLUMN = "mx-auto w-full max-w-[1280px]";
 
 /** A touch screen at least 900px wide: Daylight gets the desktop grid whatever its sidebars leave the list. */
 const isTablet = () => typeof window !== "undefined" && !!window.matchMedia?.(TABLET_QUERY).matches;

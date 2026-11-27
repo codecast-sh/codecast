@@ -9,9 +9,7 @@ import { BackControl } from "../nav/BackControl";
 import { PageHeader } from "../ui/page-header";
 import { LegendButton, Mark } from "../Mark";
 
-/** The list's column: the same max width, centred. */
-export const LIST_COLUMN = "mx-auto w-full max-w-[1280px]";
-/** The header bar's first row held to the list's column. */
+/** The header bar's first row held to the list's column (PrioritiesPage LIST_COLUMN). */
 const HEAD_IN_COLUMN = "[&>div:first-child]:mx-auto [&>div:first-child]:w-full [&>div:first-child]:max-w-[1280px]";
 
 export function PrioritiesHeader({ legacy, count, status }: { legacy: ReactNode; count: number | null; status?: ReactNode }) {
