@@ -392,7 +392,8 @@ export function frameAround(boxes: readonly Box[], title: string, z: number, pad
  * stacked above everything from `z0`. Connectors come along when both of
  * their ends do (re-pointed at the copies), or when the end they leave out
  * still exists on the board (`exists`). Groups get fresh ids, so a copy of
- * a group is its own group.
+ * a group is its own group. Copy a folded frame together with its holds
+ * (carriedKeys) so the copy has something to hide.
  */
 export function cloneOps(els: readonly ArtifactElement[], dx: number, dy: number, z0: number, exists: (key: string) => boolean = () => false): { ops: ArtifactOp[]; keys: string[]; map: Map<string, string> } {
   const keyMap = new Map(els.map((e) => [e.key, newElementKey("el")]));
@@ -420,6 +421,10 @@ export function cloneOps(els: readonly ArtifactElement[], dx: number, dy: number
     } else {
       if (typeof fields.x === "number") out.x = Math.round(fields.x + dx);
       if (typeof fields.y === "number") out.y = Math.round(fields.y + dy);
+    }
+    // A folded frame's copy hides the copies of what it holds, never the originals.
+    if (kind === "frame" && fields.collapsed && Array.isArray(fields.collapsed.holds)) {
+      out.collapsed = { ...fields.collapsed, holds: fields.collapsed.holds.filter((k: string) => keyMap.has(k)).map((k: string) => keyMap.get(k)!) };
     }
     if (typeof fields.group === "string") {
       if (!groupMap.has(fields.group)) groupMap.set(fields.group, newElementKey("g"));
