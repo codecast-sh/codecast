@@ -235,11 +235,11 @@ describe("reads", () => {
       ["jx7pvt3", "idle", true, false, ["mapped"]],
       ["jx7run1", "killed", true, true, ["via ct-901"]],
     ]);
-    // s2: Bea's blocked session reports needs-you, not Ada's, and ranks as idle among hers.
+    // s2: Bea's blocked session reports needs-you, not Ada's, and ranks first: a teammate's ask reads as the viewer's own would.
     expect(links.s2.sessions.map((s: any) => [s.short_id, s.state, s.mine, s.why])).toEqual([
+      ["jx7bea1", "needs_you", false, ["via ct-902"]],
       ["jx7prk1", "dormant", true, ["linked"]],
       ["jx7one1", "idle", true, ["mapped"]],
-      ["jx7bea1", "needs_you", false, ["via ct-902"]],
     ]);
     // Last activity to the 10 minutes, so a heartbeat leaves the answer as it was.
     for (const l of row.links) for (const s of l.sessions) expect(s.last_active_at % 600_000).toBe(0);

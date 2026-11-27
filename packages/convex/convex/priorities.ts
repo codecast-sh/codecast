@@ -52,7 +52,8 @@ const cliScope = { team_id: v.optional(v.id("teams")), personal: v.optional(v.bo
 // ── Web (signed-in user) ─────────────────────────────────────────────────
 
 export const list = query({
-  args: { workspace: v.optional(v.string()), status: statusArg, all: v.optional(v.boolean()) },
+  // `timing_for`: with no `workspace`, the workspace whose pass timing rides the answer (the viewer's active one).
+  args: { workspace: v.optional(v.string()), status: statusArg, all: v.optional(v.boolean()), timing_for: v.optional(v.string()) },
   handler: async (ctx, args): Promise<PriorityList | null> => {
     const viewer = await getAuthUserId(ctx);
     if (!viewer) return null;
