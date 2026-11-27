@@ -91,7 +91,7 @@ const FULL_WIDTH_PATTERNS: RegExp[] = [
 // (components/ui/page-header PageFrame): the bar spans the pane and the page
 // scrolls its own column under it, so PageShell steps aside. Classic and
 // Minimal keep them in the shell.
-const MODERN_CANVAS = /^\/(notifications|pages|artifacts|feed|team\/activity|expectations|week|mods)$/;
+const MODERN_CANVAS = /^\/(notifications|pages|artifacts|feed|team\/activity|expectations|week|mods|priorities)$/;
 
 export function ownsCanvasInModern(pathname: string): boolean {
   return MODERN_CANVAS.test(routePath(pathname));
@@ -111,6 +111,7 @@ function pageMaxWidth(pathname: string): string {
   const p = routePath(pathname);
   if (p === "/team" || p.startsWith("/team/")) return "max-w-6xl";
   if (p === "/pages" || p === "/artifacts") return "max-w-6xl"; // card grid wants the wider column
+  if (p === "/priorities") return "max-w-[1280px]"; // a table: titles, actions and momentum side by side
   return "max-w-4xl";
 }
 
