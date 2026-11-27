@@ -7,6 +7,7 @@ import type { CommitCiState, DeployTargetPolicy, QueueGroup, TargetDevPush } fro
 import { prNumberOf } from "@codecast/shared/changes";
 import type { DeployPushSummary, DeployView } from "@codecast/shared/contracts/deploys";
 import type { DeployPauseView } from "@codecast/shared/contracts/deployPause";
+import type { SessionPriorityRef } from "@codecast/shared/contracts/priorities";
 import type { TargetState } from "../ship/journey";
 
 export type DeployTargetRow = {
@@ -106,7 +107,7 @@ export type TeamDeployRow = {
  * `user_id`: the session's owner. `priority`: the priority it serves, for a team with priorities on and a viewer who may
  * read it, else null. `task_short_ids`: the tasks this session's commits in the deploy name, every commit counted.
  */
-export type DeploySession = { conversation_id: string; short_id?: string | null; title?: string | null; user_id?: string; priority?: { id: string; title: string | null } | null; task_short_ids?: string[] };
+export type DeploySession = { conversation_id: string; short_id?: string | null; title?: string | null; user_id?: string; priority?: SessionPriorityRef | null; task_short_ids?: string[] };
 
 /**
  * One deploy as its two feeds send it into one store row (hooks/useSyncDeployTargets): the targets view (steps, what
