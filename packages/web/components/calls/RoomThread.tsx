@@ -79,7 +79,7 @@ import { AgentFaceToggle, DensityControl, WorkingDots, type Density } from "./Ro
 export type { RoomThreadSelection } from "./RoomThreadRows";
 export { SegmentedRadio } from "./RoomThreadControls";
 
-export type RoomThreadRoute = { kind: string; target: string; mode: string; added_by: string; face?: boolean };
+export type RoomThreadRoute = { kind: string; target: string; mode: string; added_by: string; face?: boolean; role?: string };
 
 /** What the thread reads of transcripts.webGetCall. */
 export type RoomThreadCall = {
@@ -596,7 +596,7 @@ export const RoomThread = memo(function RoomThread({
                 {agent?.working && transcribing && (
                   <WorkingDots className="text-sol-violet" title={`${agent.name} is working`} />
                 )}
-                {agent && transcribing && facesOn && liveTranscriptId && (
+                {agent && transcribing && facesOn && liveTranscriptId && r.role !== "scribe" && (
                   <AgentFaceToggle
                     on={r.face !== false}
                     name={agent.name}

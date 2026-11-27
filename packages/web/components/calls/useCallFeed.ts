@@ -150,6 +150,8 @@ function spawnSessionWithMessage(
   body: string | ((stubId: string) => string),
   onReady?: (convexId: string) => void,
   teamId?: string | null,
+  // false: the session works out of sight (Scribe keeps the board, not a thread).
+  openPanel = true,
 ): Promise<string> {
   const store = useInboxStore.getState() as any;
   const projectPath = defaultNewSessionPath(store, teamId);
@@ -168,7 +170,7 @@ function spawnSessionWithMessage(
   });
   const text = typeof body === "function" ? body(stubId) : body;
   const clientId = store.addOptimisticMessage(stubId, text);
-  store.openSidePanel(stubId);
+  if (openPanel) store.openSidePanel(stubId);
   return awaitSpawn(stubId).then((convexId: string) => {
     onReady?.(convexId);
     store.sendMessage(convexId, text, undefined, clientId);
@@ -322,6 +324,7 @@ export function useAddLiveFeed(opts: {
               if (character) withoutUndo(() => st.setSessionCharacter(id, { avatar: character!.avatar, name: character!.name }));
             },
             teamId ?? (st.clientState?.ui?.active_team_id as string | undefined),
+            !scribe,
           );
         } catch (err) {
           // Given up on the wait, but the session may have landed by now

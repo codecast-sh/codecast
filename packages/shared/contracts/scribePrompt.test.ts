@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { SCRIBE_CLAIM_TTL_MS, scribeInstructions, scribeStatus } from "./scribePrompt";
+import { SCRIBE_CLAIM_TTL_MS, SCRIBE_REMINDER, scribeChunkHeader, scribeInstructions, scribeStatus } from "./scribePrompt";
+import { HUDDLE_REPLY_NOTE, HUDDLE_WORK_NOTE } from "./transcriptChunk";
 
 describe("scribeInstructions", () => {
   test("a group huddle keeps the group half and drops the solo half", () => {
@@ -43,5 +44,31 @@ describe("scribeStatus", () => {
   test("no transcript or no claim is absent", () => {
     expect(scribeStatus(null, now)).toBe("absent");
     expect(scribeStatus({ routes: [] }, now)).toBe("absent");
+  });
+});
+
+describe("scribeChunkHeader", () => {
+  const base = { name: "Scribe", lane: "context" as const, held: false, call: "cl-9", board: "d1" };
+  const others = (h: string) => {
+    expect(h).not.toContain(HUDDLE_WORK_NOTE);
+    expect(h).not.toContain(HUDDLE_REPLY_NOTE);
+    expect(h).not.toContain("cast publish");
+  };
+
+  test("a rebrief carries the lane, the board, the call and the reminder, and no other feed's notes", () => {
+    const h = scribeChunkHeader({ ...base, full: true });
+    expect(h).toContain("Nobody named you");
+    expect(h).toContain("doc:d1");
+    expect(h).toContain("cl-9");
+    expect(h).toContain(SCRIBE_REMINDER);
+    others(h);
+  });
+
+  test("between rebriefs it is one line, without the reminder", () => {
+    const h = scribeChunkHeader({ ...base, lane: "ask", full: false });
+    expect(h).toContain("Someone named you");
+    expect(h).not.toContain("\n");
+    expect(h).not.toContain(SCRIBE_REMINDER);
+    others(h);
   });
 });

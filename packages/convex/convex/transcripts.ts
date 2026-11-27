@@ -65,6 +65,7 @@ import {
   isMeetRoomKey,
   isRecRoomKey,
   isRoomlessKey,
+  scribeChunkHeader,
   scribeStatus,
   isRecordingActive,
   lineSaidAt,
@@ -225,7 +226,8 @@ export async function syncAgentFeeds(ctx: any, t: Doc<"transcripts">): Promise<v
       // one makes the session a participant in the room.
       await linkCallSession(ctx, t._id, conv._id as Id<"conversations">, addedBy, { live: true });
       if (r.mode !== "live") continue;
-      wanted.set(String(conv._id), { conversationId: conv._id as Id<"conversations">, addedBy, face: r.face !== false });
+      // Scribe never gets a face, whatever its route's flag says.
+      wanted.set(String(conv._id), { conversationId: conv._id as Id<"conversations">, addedBy, face: r.face !== false && r.role !== "scribe" });
     }
   }
   for (const row of existing) {
@@ -655,6 +657,7 @@ export const setAgentFace = mutation({
     }
     if (t.status !== "live") throw new Error("Transcript has ended");
     const i = t.routes.findIndex((r) => r.kind === "session" && r.target === args.target);
+    if (i >= 0 && args.face && t.routes[i].role === "scribe") throw new Error("Scribe has no face");
     if (i < 0 || (t.routes[i].face !== false) === args.face) return;
     const routes = [...t.routes];
     const { face: _face, ...rest } = routes[i];
@@ -2996,7 +2999,7 @@ export const deliverRoutes = internalAction({
           await ctx.runMutation(internal.transcripts.deliverToSession, {
             as_user: asUser,
             to: route.target,
-            body: `${own ? ownRoomChunkHeader(headerOpts) : liveFeedChunkHeader(headerOpts)}\n\n${chunk}`,
+            body: `${route.role === "scribe" ? scribeChunkHeader(headerOpts) : own ? ownRoomChunkHeader(headerOpts) : liveFeedChunkHeader(headerOpts)}\n\n${chunk}`,
             client_id: deliveryClientId(transcript._id, route.target, maxSeq),
           });
         } else if (route.kind === "doc") {
