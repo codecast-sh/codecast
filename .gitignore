@@ -50,6 +50,8 @@ test-results/
 !.codecast/generated.toml
 # The project's own line graph and station prompts (docs/architecture/line-map.md LX5)
 !.codecast/line/
+# How this project's change flow differs from the library's (cast flow edit)
+!.codecast/flows/
 
 # Daemon files
 daemon.pid
