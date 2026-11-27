@@ -212,6 +212,8 @@ function Figure({ label, children, href, onClick, title }: {
 
 /** The checks bar: one segment per outcome, widths animated in on load. */
 function ChecksBar({ checks }: { checks: any[] | undefined }) {
+  // Checks live on the pull request's detail, read after its row: until then they are unknown, never "No checks".
+  if (checks === undefined) return <span className="pr-seg-track w-24 opacity-60" role="img" aria-label="Reading checks" data-pr-checks-reading />;
   const fold = foldChecks(checks);
   if (fold.total === 0) return <span className="text-sol-text-dim">No checks</span>;
   const pct = (n: number) => `${(n / fold.total) * 100}%`;
