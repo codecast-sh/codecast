@@ -33,12 +33,18 @@
 //
 // The run ends with one line per job. Exit 0 green, 1 a test or type failure,
 // 2 no verdict: a step hung or timed out, or cast check could not answer
-// (those are failures of job `ci-station`). --json <path> writes
-// {green, head_sha, dirty, failing, narrowed, jobs}; a station that runs this
-// before the pull request writes it under its own file name, never ci.json,
-// which is the CI station's verdict on GitHub's CI. --list prints the plan.
+// (those are failures of job `ci-station`), as is a crash. Before saying red,
+// each failing test file runs once more alone; one that passes is flaky under
+// load (local-flaky.ts). --budget <minutes>: steps still running then, and
+// jobs left, have no verdict (the re-runs get RERUN_GRACE_MS more, the run
+// HARD_STOP_MS). --no-typecheck leaves typechecking to CI, for a fresh
+// worktree whose programs would start cold. --json <path> writes {green, head_sha, dirty, failing, flaky,
+// narrowed, jobs}; the change flow's Local CI station runs this before the pull
+// request (.codecast/flows/change.cast) and writes it under its own file name,
+// never ci.json, which is the CI station's verdict on GitHub's CI. --list
+// prints the plan.
 //
-//   bun scripts/ci/local.ts [--base <ref>] [--full] [--json <path>] [--list]
+//   bun scripts/ci/local.ts [--base <ref>] [--full] [--no-typecheck] [--budget <minutes>] [--json <path>] [--list]
 
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync, writeSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -46,6 +52,7 @@ import { dirname, join, relative } from "node:path";
 import { LOCAL_AGENT_CLIENTS } from "../../packages/shared/contracts/agentClients";
 import { parseFailures, type CiFailure } from "../../packages/shared/contracts/ciFailures";
 import { alwaysRunFiles, SUITES } from "./always-run-tests";
+import { sortFlaky, suiteOf } from "./local-flaky";
 import { ADVISORY_JOBS, classifyChangedPaths, computerScope, injectionScope } from "./changed-path-scope";
 import { importClosure, jobTestFiles } from "./test-reach";
 import { shard as byTime } from "./test-shards";
@@ -113,7 +120,7 @@ export const HUB_SHARE = 0.25;
  * `typecheck` marks cast check's step: it answers for its own waiting, so no quiet watchdog stops it.
  * Consecutive `shard` steps run at once.
  */
-export type Step = { name: string; cwd: string; argv: string[]; env?: Record<string, string>; typecheck?: boolean; shard?: boolean; timeoutMs?: number };
+export type Step = { name: string; cwd: string; argv: string[]; env?: Record<string, string>; typecheck?: boolean; shard?: boolean; timeoutMs?: number; graceMs?: number };
 /** `selected` of the `total` tests a change reaches in a suite ran: the hub rule left the rest to --full. */
 export type Narrowed = { suite: string; selected: number; total: number };
 export type Plan = { job: string; skip?: string; steps: Step[]; files?: number; narrowed: Narrowed[]; wide: string[] };
@@ -337,7 +344,7 @@ export function hostMismatch(job: string, platform: string = process.platform, w
 }
 
 /** What each CI job runs here for these changed paths, in ci.yml's order. */
-export function planJobs(changed: string[], o: { base: string; full: boolean; temp: string }): Plan[] {
+export function planJobs(changed: string[], o: { base: string; full: boolean; temp: string; noTypecheck?: boolean }): Plan[] {
   const flags = scopeFlags(changed);
   return localJobs().map((job) => {
     const plan = planJob(job, changed, flags, o);
@@ -347,13 +354,14 @@ export function planJobs(changed: string[], o: { base: string; full: boolean; te
   });
 }
 
-function planJob(job: string, changed: string[], flags: Record<string, boolean>, o: { base: string; full: boolean; temp: string }): Plan {
+function planJob(job: string, changed: string[], flags: Record<string, boolean>, o: { base: string; full: boolean; temp: string; noTypecheck?: boolean }): Plan {
   const plan: Plan = { job, steps: [], narrowed: [], wide: [] };
   const gate = jobGate(job);
   if (gate && !flags[gate]) return { ...plan, skip: "nothing it gates on changed" };
   const elsewhere = hostMismatch(job);
   if (elsewhere) return { ...plan, skip: elsewhere };
   if (job === "typecheck") {
+    if (o.noTypecheck) return { ...plan, skip: "left to CI (--no-typecheck)" };
     const argv = ["cast", "check", ...(o.full ? TYPECHECK_PROJECTS : ["--changed-since", o.base]), "--json"];
     return { ...plan, steps: [{ name: argv.join(" "), cwd: ROOT, argv, typecheck: true }] };
   }
@@ -559,6 +567,13 @@ const live = new Set<Bun.Subprocess>();
 /** The person's environment, with CI's bun first on PATH once ciBun() found it: what cast check runs in. */
 const ownEnv: Record<string, string | undefined> = { ...process.env };
 let stepEnv: Record<string, string | undefined> = ownEnv;
+/** When --budget stops the run (epoch ms), or 0 for no budget. */
+let deadline = 0;
+const pastBudget = (graceMs = 0) => deadline > 0 && Date.now() > deadline + graceMs;
+/** The re-runs of failing files alone may use this much past the budget: under load the budget is what runs out first. */
+const RERUN_GRACE_MS = 5 * 60_000;
+/** A run still going this long past its budget (a hang outside any step) ends with no verdict. */
+const HARD_STOP_MS = 8 * 60_000;
 
 /** One step, its output written to its own log file (cast check's JSON answer to a second one). */
 async function runStep(step: Step, log: string): Promise<{ code: number; output: string; stdout: string; stopped: string | null }> {
@@ -577,6 +592,7 @@ async function runStep(step: Step, log: string): Promise<{ code: number; output:
     if (stopped) return;
     if (!step.typecheck && Date.now() - still > QUIET_MS) stopped = `no output for ${QUIET_MS / 1000}s: stopped as hung`;
     else if (step.timeoutMs && Date.now() - began > step.timeoutMs) stopped = `ran past the job's ${step.timeoutMs / 60_000} minute timeout: stopped`;
+    else if (pastBudget(step.graceMs)) stopped = "ran past the run's --budget: stopped";
     if (stopped) void stopTree(proc.pid);
   }, 5000);
   const code = await proc.exited;
@@ -620,6 +636,10 @@ async function runPlan(plan: Plan, logDir: string): Promise<{ result: JobResult 
   const started = performance.now();
   const verdict: Verdict = { failing: [], unjudged: [] };
   for (let i = 0; i < plan.steps.length; ) {
+    if (pastBudget()) {
+      verdict.unjudged.push(unjudged(plan.job, `${plan.steps.length - i} steps`, "not run: past the run's --budget", ""));
+      break;
+    }
     let end = i + 1;
     if (plan.steps[i].shard) while (end < plan.steps.length && end - i < SHARDS && plan.steps[end].shard && plan.steps[end].cwd === plan.steps[i].cwd) end++;
     const batch = plan.steps.slice(i, end).map((step, k) => {
@@ -648,7 +668,7 @@ function ciBun(runDir: string): { version: string; dir: string | null } | null {
   const version = /bun-version:[\s\S]*?default:\s*"([^"]+)"/.exec(action)?.[1];
   if (!version) return null;
   if (version === Bun.version) return { version, dir: null };
-  const probe = Bun.spawnSync(["bunx", `bun@${version}`, "-e", "console.log(process.execPath)"], { cwd: tmpdir() });
+  const probe = Bun.spawnSync(["bunx", `bun@${version}`, "-e", "console.log(process.execPath)"], { cwd: tmpdir(), timeout: 180_000 });
   const binary = probe.stdout.toString().trim().split("\n").at(-1);
   if (probe.exitCode !== 0 || !binary?.startsWith("/")) return { version, dir: null };
   // bunx installs it as bun.exe; PATH needs it named bun.
@@ -675,17 +695,24 @@ function argValue(args: string[], name: string): string | undefined {
   return value;
 }
 
-if (import.meta.main) {
+async function main(): Promise<never> {
   const args = process.argv.slice(2);
   const full = args.includes("--full");
   const list = args.includes("--list");
   const json = argValue(args, "--json");
+  const noTypecheck = args.includes("--no-typecheck");
+  const budget = Number(argValue(args, "--budget") ?? 0);
   const base = argValue(args, "--base") ?? git(["merge-base", "origin/main", "HEAD"]).trim();
   const started = performance.now();
+  if (budget > 0) {
+    deadline = Date.now() + budget * 60_000;
+    const stop = () => Promise.all([...live].map((proc) => stopTree(proc.pid))).then(() => process.exit(2));
+    setTimeout(() => (console.log(`no verdict: still running ${HARD_STOP_MS / 60_000} minutes past the --budget`), stop()), budget * 60_000 + HARD_STOP_MS);
+  }
   const changed = changedPaths(base);
   const scope = classifyChangedPaths(changed);
   const logDir = list ? join(tmpdir(), "ci-local") : mkdtempSync(join(tmpdir(), "ci-local-"));
-  const plans = planJobs(changed, { base, full, temp: logDir });
+  const plans = planJobs(changed, { base, full, temp: logDir, noTypecheck });
   const narrowed = plans.flatMap((plan) => plan.narrowed);
   console.log(`${changed.length} paths changed since ${base.slice(0, 9)}${scope.forcedBy.length ? `; every job runs, unclassified: ${scope.forcedBy.slice(0, 5).join(", ")}` : ""}`);
   for (const n of narrowed) console.log(`narrowed: ${n.suite} runs ${n.selected} of the ${n.total} test files the change reaches (hub files' deeper importers wait for --full)`);
@@ -721,15 +748,27 @@ if (import.meta.main) {
   }
 
   const results: JobResult[] = [];
-  const failing: CiFailure[] = [];
+  const red: CiFailure[] = [];
   const station: CiFailure[] = [];
   for (const plan of plans) {
+    if (!plan.skip && pastBudget()) {
+      plan.skip = `past the run's ${budget} minute --budget`;
+      station.push(unjudged(plan.job, "the job", `not run: ${plan.skip}`, ""));
+    }
     if (!plan.skip) console.log(`${plan.job}...`);
     const run = await runPlan(plan, logDir);
     results.push(run.result);
-    failing.push(...run.failing);
+    red.push(...run.failing);
     station.push(...run.unjudged);
   }
+  const { failing, flaky, unjudged: cutOff } = await sortFlaky(red, async (file) => {
+    const { dir, rel } = suiteOf(ROOT, file);
+    console.log(`again alone: ${file}`);
+    const r = await runStep({ name: `${file} alone`, cwd: dir, argv: ["bun", "test", `./${rel}`], timeoutMs: 120_000, graceMs: RERUN_GRACE_MS }, join(logDir, `alone.${rel.replaceAll("/", "_")}.log`));
+    return r.stopped ? "stopped" : r.code === 0 ? "pass" : "fail";
+  }, () => !pastBudget(RERUN_GRACE_MS));
+  station.push(...cutOff);
+  for (const r of results) if (r.status === "fail" && !failing.some((f) => f.job === r.job)) r.status = station.some((f) => f.job === r.job) ? "no verdict" : "pass";
   sweep();
 
   for (const f of [...failing, ...station]) {
@@ -741,12 +780,21 @@ if (import.meta.main) {
   if (json) {
     const head_sha = git(["rev-parse", "HEAD"]).trim();
     const dirty = git(["status", "--porcelain"]).trim().length > 0;
-    writeFileSync(json, `${JSON.stringify({ green, head_sha, dirty, failing: [...failing, ...station], narrowed, jobs: results }, null, 2)}\n`);
+    writeFileSync(json, `${JSON.stringify({ green, head_sha, dirty, failing: [...failing, ...station], flaky, narrowed, jobs: results }, null, 2)}\n`);
   }
   console.log("");
   for (const r of results) console.log(`${r.job.padEnd(14)} ${r.status.padEnd(10)} ${String(r.seconds).padStart(4)}s${r.reason ? `  ${r.reason}` : ""}`);
+  for (const file of new Set(flaky.map((f) => f.file))) console.log(`flaky under load: ${file} failed in the run and passed alone`);
   for (const n of narrowed) console.log(`narrowed: ${n.suite} ran ${n.selected} of ${n.total} reached test files; --full runs the rest`);
   const verdict = failing.length ? "red" : station.length ? "no verdict" : "green";
   console.log(`${verdict} in ${Math.round((performance.now() - started) / 1000)}s; logs in ${logDir}`);
   process.exit(failing.length ? 1 : station.length ? 2 : 0);
+}
+
+// A crash is this script's failure, never the change's: no verdict, so the change flow's Local CI lets CI judge it.
+if (import.meta.main) {
+  main().catch((err) => {
+    console.log(`no verdict: local.ts crashed: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
+    process.exit(2);
+  });
 }

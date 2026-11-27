@@ -152,6 +152,13 @@ describe("planJobs", () => {
     expect(cli.every((s) => s.argv.includes("--parallel=4"))).toBe(true);
   });
 
+  test("--no-typecheck leaves typechecking to CI and plans the rest as before", () => {
+    const p = Object.fromEntries(planJobs(["packages/cli/src/index.ts"], { base: "BASE", full: false, temp: "/tmp/x", noTypecheck: true }).map((x) => [x.job, x]));
+    expect(p.typecheck.skip).toBe("left to CI (--no-typecheck)");
+    expect(p.typecheck.steps).toEqual([]);
+    expect(p["test-cli"].steps.length).toBeGreaterThan(0);
+  });
+
   test("--full runs each gated job's ci.yml steps once per matrix runner, typecheck still through cast check by program", () => {
     const p = plan(["packages/web/lib/x.ts", "packages/cli/src/x.ts"], true);
     expect(argvs(p.typecheck)).toEqual([["cast", "check", "web", "cli", "evals", "convex", "sim", "playground", "--json"]]);
