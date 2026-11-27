@@ -17,7 +17,14 @@ async function settle() {
 
 /** A phone scribe wired to fakes: the server, the call, the mic tap and the
  *  recognizer all write what happened, in order, to `log`. */
-function harness(opts: { roomKey?: string; openTap?: () => Promise<any>; muted?: boolean; pacing?: (t: () => readonly string[]) => any } = {}) {
+function harness(opts: {
+  roomKey?: string;
+  openTap?: () => Promise<any>;
+  muted?: boolean;
+  pacing?: (t: () => readonly string[]) => any;
+  startGate?: Promise<void>;
+  flush?: () => Promise<void>;
+} = {}) {
   const log: string[] = [];
   let clock = 1_000_000;
   const timers: Array<{ at: number; fn: () => void }> = [];
@@ -46,6 +53,7 @@ function harness(opts: { roomKey?: string; openTap?: () => Promise<any>; muted?:
       if (args.segments) log.push(`append ${args.segments.map((s: any) => s.text).join("|")}`);
       else if (args.room_key && args.auto) {
         log.push("start");
+        await opts.startGate;
         return { transcript_id: "t1", role: "scribe", elapsed_ms: 0 };
       }
       return {};
@@ -81,7 +89,7 @@ function harness(opts: { roomKey?: string; openTap?: () => Promise<any>; muted?:
       sessions.push(s);
       return s;
     },
-    flush: async () => void log.push("flush"),
+    flush: opts.flush ?? (async () => void log.push("flush")),
     release: async () => void log.push("release"),
     pacing: opts.pacing ?? (() => ({ busy: () => false, addressed: () => false })),
     now: () => clock,
@@ -292,5 +300,23 @@ describe("phone scribe", () => {
     expect(h.engine.getStatus().trackCount).toBe(1);
     h.taps[1].push();
     expect(h.sessions.at(-1).fed.length).toBeGreaterThan(0);
+  });
+
+  test("hanging up mid-start waits for the start and then for the stop it leads to", async () => {
+    let open: () => void = () => {};
+    const h = harness({
+      startGate: new Promise<void>((r) => (open = r)),
+      flush: () => new Promise<void>((r) => setTimeout(() => (h.log.push("flush"), r()), 20)),
+    });
+    h.scribe.reconcile();
+    h.live(null);
+    await settle();
+    h.call.phase = "idle";
+    h.call.roomKey = null;
+    const leaving = h.scribe.finishForLeave();
+    open();
+    await leaving;
+    expect(h.log).toContain("flush");
+    expect(h.engine.getStatus().active).toBe(false);
   });
 });

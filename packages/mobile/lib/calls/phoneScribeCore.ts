@@ -231,10 +231,11 @@ export function createPhoneScribe(d: PhoneScribeDeps) {
   }
 
   /** The call is ending: wait for the last line to be committed and flushed,
-   *  so leaving the room (which ends its record) cannot cut it off. */
+   *  so leaving the room (which ends its record) cannot cut it off. An op
+   *  running now (a start) leads to the stop, so wait for each in turn. */
   async function finishForLeave(): Promise<void> {
     reconcile();
-    await op;
+    while (op) await op;
   }
 
   return { reconcile, finishForLeave };
