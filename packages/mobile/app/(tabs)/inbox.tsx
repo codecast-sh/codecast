@@ -42,6 +42,8 @@ import { InboxLensBar } from '@/components/inbox/InboxLensBar';
 import { AreaBar } from '@/components/nav/AreaBar';
 import { LivePulse } from '@/components/calls/LiveRooms';
 import { HiddenSessionRow } from '@/components/inbox/HiddenSessionRow';
+import { SessionStatusMark } from '@/components/marks';
+import { SECTION_HEADER_STATUS } from '@codecast/web/lib/sessionStatus';
 import { useInboxPriorityView, usePrioritySections } from '@/hooks/useInboxPriorityView';
 
 // A thrown Convex query error (e.g. searchConversations timing out on a
@@ -74,6 +76,10 @@ export default function InboxScreen() {
 
 // Rows that fill a phone screen with some to spare, mounted with the list.
 const FIRST_PAINT_ROWS = 14;
+
+/** The web rail section each status heading is (its collapse key), whose mark
+ *  the heading wears (web SECTION_HEADER_STATUS). */
+const WEB_SECTION: Record<string, string> = { questions: 'questions', New: 'new', 'Needs You': 'needs_input', Done: 'done', Working: 'working', Dormant: 'dormant' };
 
 /** One line of the inbox list: a section's heading, a session row, or a whole
  *  state (the skeleton, an empty inbox). The list is virtualized, so only the
@@ -414,7 +420,9 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit, onO
         accessibilityRole="header"
         accessibilityState={{ expanded: !collapsed }}
       >
-        {color ? <RNView style={[styles.sectionDot, { backgroundColor: color }]} /> : null}
+        {SECTION_HEADER_STATUS[WEB_SECTION[section] ?? ''] ? (
+          <RNView style={styles.sectionMark}><SessionStatusMark status={SECTION_HEADER_STATUS[WEB_SECTION[section]]!} /></RNView>
+        ) : color ? <RNView style={[styles.sectionDot, { backgroundColor: color }]} /> : null}
         <RNText style={styles.sectionTitle}>{label}</RNText>
         <RNText style={styles.sectionCount}>{count}</RNText>
         <Feather name={collapsed ? "chevron-right" : "chevron-down"} size={15} color={Theme.textMuted0} style={{ marginLeft: 'auto' }} />
@@ -881,6 +889,7 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     height: 7,
     borderRadius: 4,
   },
+  sectionMark: { width: 10, alignItems: 'center' },
   sectionTitle: {
     fontSize: 14,
     fontWeight: '600',
