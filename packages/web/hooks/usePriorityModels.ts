@@ -7,23 +7,56 @@ import type { PriorityHistory, PriorityRow, PrioritySessionState } from "@codeca
 import { buildModels, stateOfStatus, type MilestoneModel, type PriorityModel } from "../lib/priorityList";
 import { sessionStatusOf } from "../lib/sessionStatus";
 import type { TeamDeployRow } from "../lib/deploys/targets";
-import { railRowPlacement, useInboxStore } from "../store/inboxStore";
+import { isUnderRole } from "@codecast/shared/contracts";
+import { placeInboxRows, railRowPlacement, useInboxStore, waitsOnViewer, type InboxSession } from "../store/inboxStore";
 import { useWorkspaceCollection } from "./useWorkspaceCollection";
 import { useCoarseNow } from "./useCoarseNow";
 import type { DeployInfo } from "../lib/priorityList";
 
+type PlaceState = Parameters<typeof placeInboxRows>[0];
+const asksYouByState = new WeakMap<object, (row: InboxSession) => boolean>();
+
+/**
+ * Whether your sidebar files a row under Questions or Needs You, flat or
+ * nested under a Needs You lead, as that section's count reads it: placed
+ * needs_input, waiting on you (else it sits in Dormant), and not a role's
+ * session (the role triages those). Placed once per store state, however
+ * many priority cards ask.
+ */
+function sidebarAsksYou(s: PlaceState, now: number): (row: InboxSession) => boolean {
+  let hit = asksYouByState.get(s);
+  if (!hit) {
+    const placed = placeInboxRows(s, { scope: "mine", now });
+    const meId = s.currentUser?._id?.toString?.() ?? null;
+    const flat = new Set(placed.needsInput.map((r) => r._id));
+    hit = (row) => placed.isQuestion(row) || flat.has(row._id)
+      || (placed.placements.get(row._id)?.bucket === "needs_input" && waitsOnViewer(row, meId) && !isUnderRole(row));
+    asksYouByState.set(s, hit);
+  }
+  return hit;
+}
+
 /**
  * The inbox's verdict for each linked session the store holds, by
- * conversation id. One subscription to a signature of just those rows'
- * states, so a heartbeat elsewhere wakes nothing.
+ * conversation id. A session needs you exactly when your inbox files it
+ * under Needs You or Questions (placeInboxRows, mine scope); a row's own
+ * facts say how it is otherwise, never that it waits on you, since a wait
+ * that belongs to someone else (a card addressed to a teammate, a session
+ * another person owns) sits in your Dormant. One subscription to a
+ * signature of just those rows' states, so a heartbeat elsewhere wakes
+ * nothing.
  */
 export function usePriorityLiveStates(ids: readonly string[], now: number): (conversationId: string) => PrioritySessionState | undefined {
   const key = ids.join(",");
   const sig = useInboxStore((s) => {
+    const asksYou = sidebarAsksYou(s, now);
     const out: string[] = [];
     for (const id of key.split(",")) {
       const row = (s.sessions as Record<string, any>)[id];
-      if (row) out.push(`${id}:${stateOfStatus(sessionStatusOf({ row, placement: railRowPlacement(row, now), now }))}`);
+      if (!row) continue;
+      const own = stateOfStatus(sessionStatusOf({ row, placement: railRowPlacement(row, now), now }));
+      const state = asksYou(row) ? "needs_you" : own === "needs_you" ? "dormant" : own;
+      out.push(`${id}:${state}`);
     }
     return out.join(",");
   });
