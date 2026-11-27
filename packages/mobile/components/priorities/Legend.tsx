@@ -1,5 +1,5 @@
 // What the priorities' icons mean, behind a quiet ⓘ in the Priorities
-// header (web's components/priorities/Legend): the milestone and session
+// header (web lists the same marks in its shared icon legend, lib/marks/priorities): the milestone and session
 // states (the two bordered ones are the actions), the task states, and the
 // other kinds an open milestone lists, each drawn with the phone's own mark.
 import { useState, type ReactNode } from 'react';
