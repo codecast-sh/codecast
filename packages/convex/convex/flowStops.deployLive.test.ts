@@ -41,7 +41,7 @@ describe("a live deploy completing runs an incident holds", () => {
     const ids = await t.run(async (ctx: any) => {
       const me = await ctx.db.insert("users", { name: "Ana" });
       await ctx.db.insert("api_tokens", { user_id: me, token_hash: await hashToken(TOKEN), name: "cli", created_at: NOW, last_used_at: NOW });
-      const team = await ctx.db.insert("teams", { name: "Acme", created_at: NOW });
+      const team = await ctx.db.insert("teams", { name: "Acme", created_at: NOW, features: { run_incidents: true } });
       await ctx.db.insert("team_memberships", { user_id: me, team_id: team, role: "member", joined_at: NOW });
       await ctx.db.insert("repo_sources", { user_id: me, team_id: team, repository: REPO, root: "/code/app", enabled: true, last_synced_at: NOW, created_at: NOW, updated_at: NOW });
       const ws = `team:${team}`;

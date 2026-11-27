@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { generateKeyPairSync } from "node:crypto";
 import { publicKeyToBase64, sha256Hex, signManifest, type UpdaterFs } from "@platform/cli-kit/update";
 import { DARWIN_SIGNING_TEAM, RELEASE_BASE_URL, RELEASE_MANIFEST_SIGNING, createCodecastUpdater, makeCurlDownload, makeDarwinSignatureCheck, UPDATE_IN_PROGRESS } from "./update";
-import { UPDATE_DEFER_RETRIES, UPDATE_DEFER_RETRY_MS, forcedUpdateWaits, selfUpdateOutcome } from "./daemonSelfUpdate";
+import { UPDATE_DEFER_RETRIES, UPDATE_DEFER_RETRY_MS, forcedUpdateWaits, selfUpdateOutcome, watchdogUpdateReport } from "./daemonSelfUpdate";
 import { exclusiveUpdate, isReleaseRace, updateWithRetry } from "./updateRetry";
 
 const enc = new TextEncoder();
@@ -268,6 +268,12 @@ describe("a self update another process is already installing", () => {
   it("fails at once on any other error", async () => {
     expect(await run([{ success: false, error: "checksum_mismatch_darwin-arm64" }]).outcome).toEqual({ state: "failed", error: "checksum_mismatch_darwin-arm64", at: 5 });
     expect(await run([{ success: false }]).outcome).toEqual({ state: "failed", error: "unknown error", at: 5 });
+  });
+
+  it("the watchdog reports its force_update as deferred, not failed, while another process installs", () => {
+    expect(watchdogUpdateReport(deferred)).toEqual({ result: "Deferred by watchdog: another process is updating this install" });
+    expect(watchdogUpdateReport({ success: true })).toEqual({ result: "Updated by watchdog" });
+    expect(watchdogUpdateReport({ success: false, error: "checksum_mismatch_darwin-arm64" })).toEqual({ error: "Watchdog update failed: checksum_mismatch_darwin-arm64" });
   });
 });
 

@@ -164,6 +164,18 @@ describe("cast release sweep", () => {
     });
   });
 
+  test("a kind the server could not read is one line, and the rest still answers; every kind failed is a failed read", async () => {
+    const some = capture();
+    expect(await runSweep({ read: async () => ({ ...QUIET, failed_runs: BUSY.failed_runs, failed_kinds: ["unretired", "made up"] }) as any, log: some.log, error: some.error, now: () => NOW })).toBe(0);
+    expect(some.err).toEqual(["release sweep could not read unretired this time; listed as empty"]);
+    expect(some.out.join("\n")).toContain("ct-601");
+    const quiet = capture();
+    expect(await runSweep({ read: async () => ({ ...QUIET, failed_kinds: ["laggards"] }), log: quiet.log, error: quiet.error })).toBe(1);
+    const all = capture();
+    expect(await runSweep({ read: async () => ({ ...QUIET, failed_kinds: ["incidents", "late_targets", "failed_runs", "laggards", "unretired"] }), newSince: "null", log: all.log, error: all.error })).toBe(2);
+    expect(all.out).toEqual([]);
+  });
+
   test("a 200 with no sweep in its body is a failed read, never a quiet hour", async () => {
     for (const body of [null, undefined, "", {}, { incidents: [] }]) {
       for (const opts of [{}, { quiet: true }, { newSince: "null" }]) {

@@ -53,12 +53,17 @@ export function decideForce(sha: string, forced: { sha: string | null; floor: st
   if (!forced?.sha) return { force: true, reason: `no deploy of the release ${forced?.floor ? `the floor names (${forced.floor})` : "the team was last forced onto"} is recorded, so the daemon may have changed` };
   const since = `${forced.floor ?? "the floor's release"} (${forced.sha.slice(0, 10)})`;
   if (forced.sha === sha) return { force: false, reason: `no force: the floor already names this release, ${since}` };
-  const now = buildIdAt(sha);
+  let now: string;
   let before: string;
+  // Either release's commit unreadable here (gone from origin, a shallow clone, git failing): as unknown as no deploy of it.
+  try {
+    now = buildIdAt(sha);
+  } catch {
+    return { force: true, reason: `could not read ${sha.slice(0, 10)}: forced` };
+  }
   try {
     before = buildIdAt(forced.sha);
   } catch {
-    // The earlier release's commit is unreadable here (gone from origin, a shallow clone): as unknown as no deploy of it.
     return { force: true, reason: `could not read ${forced.sha.slice(0, 10)}: forced` };
   }
   return now === before

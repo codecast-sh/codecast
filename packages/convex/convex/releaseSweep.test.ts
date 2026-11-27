@@ -185,6 +185,47 @@ describe("cast release sweep's read", () => {
     expect(JSON.stringify(s)).not.toContain("IGNORE");
   });
 
+  test("the sessions behind 40 landed commits of 500 KB each are read a page at a time, inside one query's 16 MiB", async () => {
+    const w = await world();
+    await w.target("api", ["api/**"]);
+    const sessions = await w.t.run(async (ctx: any) => Promise.all([0, 1, 2, 3].map((i) => ctx.db.insert("conversations", {
+      user_id: w.ids.me, team_id: w.ids.team, agent_type: "claude_code", started_at: NOW - 6 * HOUR, updated_at: NOW - HOUR, status: "active", short_id: `jx7huge${i}`, session_id: `s-huge${i}`, message_count: 3, is_private: false,
+    }))));
+    const patch = "+".repeat(500_000);
+    // Written 8 to a transaction (4 MB), inside the write limit the test enforces too.
+    for (let b = 0; b < 40; b += 8) {
+      await w.t.run(async (ctx: any) => {
+        for (let i = b; i < b + 8; i++) await ctx.db.insert("commits", w.commitRow(10 + i, ["web/huge.tsx"], NOW - 5 * HOUR + i * 1000, sessions[i % 4], patch));
+      });
+    }
+    const s: any = await w.sweep();
+    expect(s.failed_kinds).toEqual([]);
+    expect(s).toMatchObject(QUIET);
+  });
+
+  test("one kind's failed read fails only that kind: it is named and listed empty, and the others still answer", async () => {
+    const w = await world();
+    await w.target("web", ["web/**"]);
+    // A failed run, which the sweep still lists.
+    await w.run(await w.task("ct-701"), { fail_reason: "agent crashed" });
+    // One settled session with 40 commits of 500 KB each: judging it reads them all, past one query's 16 MiB.
+    const heavy = await w.insert("conversations", {
+      user_id: w.ids.me, team_id: w.ids.team, agent_type: "claude_code", started_at: NOW - HOUR, updated_at: NOW - 40 * MIN, status: "active", short_id: "jx7heavy", session_id: "s-heavy", title: "Heavy",
+      message_count: 12, is_private: false, git_root: "/work/app", thread_state: "Shipped", thread_state_status: "done", thread_state_at: NOW - 30 * MIN, thread_state_msg_count: 12,
+    });
+    const patch = "+".repeat(500_000);
+    for (let b = 0; b < 40; b += 8) {
+      await w.t.run(async (ctx: any) => {
+        for (let i = b; i < b + 8; i++) await ctx.db.insert("commits", w.commitRow(10 + i, ["web/huge.tsx"], NOW - 50 * MIN + i * 1000, heavy, patch));
+      });
+    }
+    await w.live("web", 49);
+    const s: any = await w.sweep();
+    expect(s.failed_kinds).toEqual(["unretired"]);
+    expect(s.unretired).toEqual([]);
+    expect(s.failed_runs.map((r: any) => r.task_short_id)).toEqual(["ct-701"]);
+  });
+
   test("a settled session whose change is live everywhere and that nothing keeps is listed; a retired one is not", async () => {
     const w = await world();
     await w.target("web", ["web/**"]);
