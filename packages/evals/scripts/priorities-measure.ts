@@ -373,7 +373,7 @@ type EvalResult = {
 };
 
 /** A staff run of an internal function against prod (packages/convex/run.sh), its JSON result. */
-function convexRun<T>(fn: string, args: Record<string, unknown>): T {
+export function convexRun<T>(fn: string, args: Record<string, unknown>): T {
   // Into a file, not a pipe: the convex CLI exits before a pipe drains, which cuts a large reply off near 64 KB.
   const file = join(tmpdir(), `priorities-measure-${process.pid}-${Date.now()}.json`);
   try {
@@ -389,7 +389,7 @@ function convexRun<T>(fn: string, args: Record<string, unknown>): T {
 const DAY = 86_400_000;
 
 /** Current task statuses through the CLI (`cast task show`), one call for all, one per id when a batch fails. */
-const castTaskStatus: TaskStatus = async (ids) => {
+export const castTaskStatus: TaskStatus = async (ids) => {
   const out = new Map<string, string>();
   const show = (batch: string[]) => {
     const r = Bun.spawnSync(['cast', 'task', 'show', ...batch, '--json', '--fields', 'status'], { stdout: 'pipe', stderr: 'pipe' });
@@ -533,7 +533,7 @@ export function seedState(golden: Golden, window_start: number) {
 }
 
 /** The user's workspaces in scope and the window, from the flags. */
-function replayScope(golden: Golden, arg: (name: string, fallback?: string) => string) {
+export function replayScope(golden: Golden, arg: (name: string, fallback?: string) => string) {
   const scope = arg('workspace', 'all');
   const from = arg('from', golden.window[0]);
   const to = arg('to', golden.window[1]);
@@ -548,7 +548,7 @@ function replayScope(golden: Golden, arg: (name: string, fallback?: string) => s
 }
 
 /** What a scored replay produced, keyed `<workspace name>:<pri-N>`. */
-function producedOf(runs: Array<{ name: string; priorities: PassPriority[] }>): Produced[] {
+export function producedOf(runs: Array<{ name: string; priorities: PassPriority[] }>): Produced[] {
   return runs.flatMap((r) => r.priorities.map((p) => ({
     key: `${r.name}:${p.short_id}`,
     workspace: r.name,
