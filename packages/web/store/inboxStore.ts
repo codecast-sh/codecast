@@ -1655,8 +1655,7 @@ export type SessionDecisionItem = {
   holder_key?: string;
   /** A person handed it to a teammate or a role (convex decisionHandoff), with their note; null when nobody did. */
   passed_to?: { by?: string; id: string; kind: "user" | "role"; note?: string } | null;
-  /** Sent up to the owner's manager, else the admins (convex escalateCore): who, why, when, to whom. No `by`: codecast
-   *  escalated it because `waiting` changes wait on it (convex lib/cardWaiters.ts). */
+  /** Sent up to the owner's manager, else the admins (convex escalateCore); no `by`: `waiting` changes wait on it. */
   escalated?: { at: number; by?: string; note: string; to: string[]; waiting?: number } | null;
   /** Whether it sits in the viewer's own queue (convex decisionRowsForViewer). A row the team's line decisions
    *  brought in that is not the viewer's says false; the queue surfaces read inViewerQueue. */
@@ -11178,9 +11177,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // managed ids (never the key); the setProviderKey side effect sends the
   // sealed key to the device and answers with the command to watch.
   // Settings > Daemon's Update paints the request on the roster row; the
-  // requestDeviceUpdate side effect writes it to the device row, naming
-  // `version` (the release the manifest names now) so a machine's stale
-  // cached check cannot clear the request before it updates.
+  // requestDeviceUpdate side effect writes it to the device row, naming the release so a stale check can't clear it.
   requestDeviceUpdate: asyncAction(function (this: Draft, deviceId: string, version?: string) {
     const row = this.machineRoster.find((d) => d.device_id === deviceId) as any;
     if (row) Object.assign(row, { update_state: "requested", update_requested_at: Date.now(), update_error: undefined, ...(version ? { update_requested_version: version } : {}) });
