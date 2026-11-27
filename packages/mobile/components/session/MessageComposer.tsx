@@ -367,7 +367,7 @@ export function MessageComposer({
           stop: the same interrupt web's Escape sends. Typing turns it back
           into send, so a follow-up can always be queued. */}
       <NativePressable
-        style={[styles.sendButton, showStop ? styles.stopButton : !canSend && styles.sendButtonDisabled]}
+        style={[styles.sendButton, showStop ? styles.stopButton : !canSend && styles.sendButtonDisabled, dictation.sendWaiting && styles.sendButtonWaiting]}
         onPress={showStop ? stop!.onPress : send}
         activeOpacity={0.7}
         delayPressIn={0}
@@ -377,10 +377,14 @@ export function MessageComposer({
         pressRetentionOffset={{ top: 20, bottom: 20, left: 20, right: 20 }}
         accessibilityRole="button"
         accessibilityLabel={showStop ? stop!.label : 'Send'}
+        accessibilityState={dictation.sendWaiting ? { busy: true } : undefined}
       >
+        {/* A send pressed mid-dictation waits here for the last words. */}
         {showStop
           ? <FontAwesome name="stop" size={11} color="#fff" />
-          : <FontAwesome name={sendIcon} size={14} color="#fff" />}
+          : dictation.sendWaiting
+            ? <ActivityIndicator size="small" color="#fff" />
+            : <FontAwesome name={sendIcon} size={14} color="#fff" />}
       </NativePressable>
     </RNView>
   );
@@ -659,6 +663,11 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   },
   sendButtonDisabled: {
     backgroundColor: Theme.bgHighlight,
+  },
+  // The spinner is wider than the arrow: the button stays a 32pt circle.
+  sendButtonWaiting: {
+    paddingLeft: 6,
+    paddingRight: 6,
   },
   stopButton: {
     backgroundColor: mixColor(Theme.red, 80, Theme.text),
