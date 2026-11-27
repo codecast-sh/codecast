@@ -50,6 +50,8 @@ when = ["packages/cli/**", "packages/shared/**", "platform/**"]
 run = "scripts/cut-cli-release.sh"
 live = "json:https://dl.codecast.sh/latest.json#sourceCommit,version"
 policy = "release"
+# A send can wait up to 80 min for a release in flight before it cuts (scripts/cut-cli-release.sh).
+deadline = "3h"
 finish = "cast force-update $version"
 
 # An OTA update to every channel, after the backend it calls is live. The app bundles
