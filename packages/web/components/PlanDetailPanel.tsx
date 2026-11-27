@@ -63,6 +63,7 @@ import { useRunCost } from "./consequential/useRunCost";
 import { workflowAgentSteps, workflowRunLedger, workflowSteps } from "./work/startLedgers";
 import { useWorkflow } from "../hooks/useSyncWorkflows";
 import { teamMembersOf } from "../lib/activeTeam";
+import { FilePathContext, useFolderPathContext } from "../lib/filePathLinks";
 
 const api = _api as any;
 
@@ -220,8 +221,10 @@ export function DriveRoundIndicator({ driveState }: { driveState: { current_roun
   );
 }
 
-function CollapsibleDoc({ content }: { content: string }) {
+function CollapsibleDoc({ content, projectPath }: { content: string; projectPath?: string }) {
   const [expanded, setExpanded] = useState(false);
+  // A path the doc cites (`lib/x.ts:38`) is relative to the plan's project.
+  const fileCtx = useFolderPathContext(projectPath);
   const MAX_HEIGHT = 200;
 
   return (
@@ -234,7 +237,9 @@ function CollapsibleDoc({ content }: { content: string }) {
           prose-code:text-sol-cyan prose-code:bg-sol-bg-highlight prose-code:px-1 prose-code:rounded prose-code:text-xs
           prose-strong:text-sol-text prose-a:text-sol-cyan
           [&_pre]:overflow-x-auto [&_pre]:max-w-full">
-          <Markdown remarkPlugins={entityRemarkPlugins} components={{ a: EntityAwareLink, code: EntityAwareCode }}>{content}</Markdown>
+          <FilePathContext.Provider value={fileCtx}>
+            <Markdown remarkPlugins={entityRemarkPlugins} components={{ a: EntityAwareLink, code: EntityAwareCode }}>{content}</Markdown>
+          </FilePathContext.Provider>
         </div>
       </div>
       <button
@@ -1135,7 +1140,7 @@ export function PlanDetailPanel({ planId, closeHref }: { planId: string; /** Whe
         )}
       </div>
 
-      {plan.doc_content && <CollapsibleDoc content={plan.doc_content} />}
+      {plan.doc_content && <CollapsibleDoc content={plan.doc_content} projectPath={plan.project_path} />}
 
       {liveProgress && liveProgress.total > 0 && (
         <PlanProgressBar progress={liveProgress} />

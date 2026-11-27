@@ -1,12 +1,16 @@
 // Symbols in a file, for the outline pick (goto.symbol): the language
 // server's documentSymbol when one is attached, else what the file's Lezer
 // syntax tree shows (functions, classes, types, methods, top-level bindings),
-// so the pick works for every language with a grammar.
+// so the pick works for every language with a grammar. The breadcrumbs
+// (workspace/symbolPath.ts) read the same classifier, `symbolOfNode`, so a
+// symbol has one kind and one color on both surfaces.
 
 import type * as lsp from "./protocol";
 import type { EditorState } from "@codemirror/state";
 import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
 import { offsetIn } from "./edits";
+
+type SyntaxNode = ReturnType<ReturnType<typeof syntaxTree>["resolveInner"]>;
 
 export type SymbolKindName =
   | "file" | "module" | "namespace" | "class" | "method" | "property" | "field" | "constructor" | "enum"
@@ -20,6 +24,8 @@ export interface OutlineSymbol {
   detail?: string;
   /** Offsets in the document the symbols were read from. */
   from: number;
+  /** Where the symbol's text ends. */
+  to: number;
   /** Where the cursor goes: the name. */
   nameFrom: number;
 }
@@ -63,6 +69,7 @@ export function flattenLspSymbols(result: readonly (lsp.DocumentSymbol | lsp.Sym
         container,
         detail: s.detail || undefined,
         from: offsetIn(doc, s.range.start),
+        to: offsetIn(doc, s.range.end),
         nameFrom: offsetIn(doc, s.selectionRange.start),
       });
       if (s.children?.length) walk(s.children, s.name);
@@ -71,7 +78,7 @@ export function flattenLspSymbols(result: readonly (lsp.DocumentSymbol | lsp.Sym
   if ("location" in result[0]) {
     for (const s of result as lsp.SymbolInformation[]) {
       const from = offsetIn(doc, s.location.range.start);
-      out.push({ name: s.name, kind: lspKindName(s.kind), container: s.containerName || undefined, from, nameFrom: from });
+      out.push({ name: s.name, kind: lspKindName(s.kind), container: s.containerName || undefined, from, to: offsetIn(doc, s.location.range.end), nameFrom: from });
     }
   } else walk(result as lsp.DocumentSymbol[]);
   return out.sort((a, b) => a.from - b.from);
@@ -103,10 +110,50 @@ const NAME_NODE = /^(VariableDefinition|PropertyDefinition|PropertyName|TypeDefi
 /** Bodies whose locals are not outline entries. */
 const FUNCTION_BODY = /^(Function|Method|Arrow|Lambda|Closure|Func)/;
 
+/** A binding is a function or class when its value is one (`const X = () =>`,
+ *  `{ run: function () {} }`, `f = lambda: 0`). */
+const FUNCTION_VALUE = /^(ArrowFunction|FunctionExpression|Lambda|LambdaExpression|ClosureExpression|FuncLiteral)$/;
+const CLASS_VALUE = /^(ClassExpression)$/;
+/** Object members, which are symbols only when their value is a function. */
+const MEMBER = /^(Property)$/;
+
 const kindFor = (name: string): SymbolKindName | null => {
   for (const [re, kind] of DECLARATIONS) if (re.test(name)) return kind;
   return null;
 };
+
+/** Kinds that hold other symbols: the breadcrumbs' levels. */
+export const isContainerKind = (kind: SymbolKindName) => kind !== "variable" && kind !== "property" && kind !== "constant" && kind !== "field" && kind !== "member";
+
+/** What one syntax node declares, if anything: its name and kind. */
+export function symbolOfNode(state: EditorState, node: SyntaxNode): { name: string; kind: SymbolKindName; nameFrom: number } | null {
+  let kind = kindFor(node.name);
+  const member = !kind && MEMBER.test(node.name);
+  if (!kind && !member) return null;
+  // The declared name: the first name-like direct child (or grandchild, for
+  // grammars that wrap it, like a C declarator).
+  let nameNode: SyntaxNode | null = null;
+  let value: string | null = null;
+  for (let c = node.firstChild; c; c = c.nextSibling) {
+    if (!nameNode) {
+      if (NAME_NODE.test(c.name)) nameNode = c;
+      else if (/Declarator|Pattern|Signature|Head/.test(c.name)) {
+        for (let g = c.firstChild; g; g = g.nextSibling) if (NAME_NODE.test(g.name)) { nameNode = g; break; }
+      }
+    } else if (FUNCTION_VALUE.test(c.name) || CLASS_VALUE.test(c.name)) {
+      value = c.name;
+      break;
+    }
+  }
+  if (!nameNode) return null;
+  if (kind === "variable" || kind === "property" || member) {
+    if (value) kind = CLASS_VALUE.test(value) ? "class" : member || kind === "property" ? "method" : "function";
+    else if (member) return null;
+  }
+  const name = state.sliceDoc(nameNode.from, nameNode.to);
+  if (!name || name.length >= 200) return null;
+  return { name, kind: kind!, nameFrom: nameNode.from };
+}
 
 /** The outline of a file from its syntax tree. Waits up to `timeoutMs` for
  *  the parser to reach the end of the file, else reads what it has. */
@@ -120,23 +167,13 @@ export function lezerSymbols(state: EditorState, timeoutMs = 200): OutlineSymbol
       while (containers.length && containers[containers.length - 1].to <= node.from) containers.pop();
       while (functionEnds.length && functionEnds[functionEnds.length - 1] <= node.from) functionEnds.pop();
       const kind = kindFor(node.name);
+      const candidate = kind || MEMBER.test(node.name);
       const insideFunction = functionEnds.length > 0;
-      if (kind && !(insideFunction && (kind === "variable" || kind === "property"))) {
-        // The declared name: the first name-like direct child (or grandchild,
-        // for grammars that wrap it, like a C declarator).
-        let nameNode = null as null | { from: number; to: number };
-        for (let c = node.node.firstChild; c && !nameNode; c = c.nextSibling) {
-          if (NAME_NODE.test(c.name)) nameNode = c;
-          else if (/Declarator|Pattern|Signature|Head/.test(c.name)) {
-            for (let g = c.firstChild; g; g = g.nextSibling) if (NAME_NODE.test(g.name)) { nameNode = g; break; }
-          }
-        }
-        if (nameNode) {
-          const name = state.sliceDoc(nameNode.from, nameNode.to);
-          if (name && name.length < 200) {
-            out.push({ name, kind, container: containers[containers.length - 1]?.name, from: node.from, nameFrom: nameNode.from });
-            if (kind !== "variable" && kind !== "property") containers.push({ name, to: node.to });
-          }
+      if (candidate && !(insideFunction && (kind === "variable" || kind === "property" || !kind))) {
+        const sym = symbolOfNode(state, node.node);
+        if (sym) {
+          out.push({ ...sym, container: containers[containers.length - 1]?.name, from: node.from, to: node.to });
+          if (isContainerKind(sym.kind)) containers.push({ name: sym.name, to: node.to });
         }
       }
       if (FUNCTION_BODY.test(node.name) && kind !== "class") functionEnds.push(node.to);

@@ -13,3 +13,21 @@ export function whenIdle<T>(fn: () => T, timeout = 2000): Promise<T> {
     else setTimeout(run, 0);
   });
 }
+
+/** Run `fn` now if the page is visible, else once it next becomes visible.
+ *  For refreshes nobody can see: a hidden tab (an agent's, a window behind
+ *  others) asks the daemon nothing until it is looked at. Returns a cancel
+ *  while it waits, null when it already ran. */
+export function whenVisible(fn: () => void): (() => void) | null {
+  if (typeof document === "undefined" || document.visibilityState !== "hidden") {
+    fn();
+    return null;
+  }
+  const onChange = () => {
+    if (document.visibilityState === "hidden") return;
+    document.removeEventListener("visibilitychange", onChange);
+    fn();
+  };
+  document.addEventListener("visibilitychange", onChange);
+  return () => document.removeEventListener("visibilitychange", onChange);
+}

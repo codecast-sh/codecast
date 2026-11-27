@@ -237,6 +237,14 @@ export interface StatusItemView {
  * and returns the unsubscribe (null when there is nothing to follow); it runs
  * at creation and again after every reconfiguration, never on a keystroke.
  */
+/** Name a status item for a screen reader and a pointer at once: what it
+ *  shows and what a press does, since its visible text is a bare count or a
+ *  mode. Writes only when the name changes, so it may sit in a render path. */
+export function nameStatusItem(el: HTMLElement, name: string, title = name): void {
+  if (el.getAttribute("aria-label") !== name) el.setAttribute("aria-label", name);
+  if (el.title !== title) el.title = title;
+}
+
 export function liveStatusItem(dom: HTMLElement, bind: () => (() => void) | null): StatusItemView {
   let unsubscribe = bind();
   return {

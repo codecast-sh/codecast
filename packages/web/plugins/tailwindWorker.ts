@@ -120,6 +120,46 @@ function sharedBuilder(configPath: string): Build {
   return build;
 }
 
+/** Each stylesheet Tailwind built, by file: the source it was built from and
+ *  the CSS every connected window holds, so a content edit can tell whether it
+ *  changed anything (contentOnlyHmr.ts). `pushed` moves only when every window
+ *  gets the CSS: on a source edit (Vite updates them all) or a reload sent by
+ *  contentOnlyHmr. A window loading the sheet on its own does not move it, so
+ *  a class it picked up still reaches the windows already open. */
+interface Sheet {
+  build: Build;
+  source: string;
+  pushed: string;
+}
+
+const SHEETS_KEY = Symbol.for("codecast.tailwindWorker.sheets");
+
+function sheets(): Map<string, Sheet> {
+  const g = globalThis as { [SHEETS_KEY]?: Map<string, Sheet> };
+  return (g[SHEETS_KEY] ??= new Map());
+}
+
+/**
+ * Rebuild every stylesheet Tailwind has built, and name the ones whose CSS
+ * changed. Tailwind re-reads only content files whose mtime moved, and almost
+ * every edit uses classes that already exist, so this is usually an unchanged
+ * answer and nothing for a window to fetch.
+ */
+export async function rebuildTailwindSheets(): Promise<string[]> {
+  const changed: string[] = [];
+  for (const [from, sheet] of sheets()) {
+    try {
+      const out = await sheet.build(sheet.source, from);
+      if (out.css === sheet.pushed) continue;
+      sheet.pushed = out.css;
+      changed.push(from);
+    } catch {
+      // A broken stylesheet reports itself when a window next asks for it.
+    }
+  }
+  return changed;
+}
+
 /** The `tailwindcss` PostCSS plugin, run in the shared worker. */
 export function tailwindInWorker(configPath: string): postcss.Plugin {
   const build = sharedBuilder(configPath);
@@ -130,9 +170,16 @@ export function tailwindInWorker(configPath: string): postcss.Plugin {
       if (!TAILWIND_SYNTAX.test(source)) return;
       const from = result.opts.from ?? "";
       const built = await build(source, from);
+      const known = sheets().get(from);
+      if (!known || known.source !== source) sheets().set(from, { build, source, pushed: built.css });
       root.removeAll();
       root.append(postcss.parse(built.css, { from }).nodes);
-      result.messages.push(...built.messages);
+      // Content globs are not handed to Vite. As dependencies they made every
+      // scanned file an import of the stylesheet, so each save anywhere pushed
+      // the whole stylesheet (about 900 KB) to every open window, 181 of 182
+      // updates in one afternoon. contentOnlyHmr.ts sends it only when a save
+      // changed the CSS. The config and its imports stay dependencies.
+      result.messages.push(...built.messages.filter((m) => m.type !== "dir-dependency"));
     },
   };
 }

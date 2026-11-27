@@ -143,8 +143,8 @@ export interface VaultAgentState {
 
 /** The picker's sessions for a place. Every candidate works in a folder
  *  holding the root, so it overlaps it. */
-export function placeCandidates(s: InboxState, place: VaultPlace): AgentSessionRow[] {
-  return candidateSessions(overlapping(s, place), place.root, place.machine, viewerId(s));
+export function placeCandidates(s: InboxState, place: VaultPlace, limit?: number): AgentSessionRow[] {
+  return candidateSessions(overlapping(s, place), place.root, place.machine, viewerId(s), limit);
 }
 
 /** Everything AgentLayer keeps current for one vault. */

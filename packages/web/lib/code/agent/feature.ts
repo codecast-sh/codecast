@@ -1,7 +1,9 @@
 // The agent integration inside the editor chunk: the marks extension, the
 // Cmd-L / Cmd-K keys, the status bar chip's host, and the commands
 // (agent.quoteSelection, agent.inlineInstruction, agent.newSession,
-// agent.nextEdit / prevEdit, agent.pickSession, agent.dismissEdits).
+// agent.nextEdit / prevEdit, agent.pickSession, agent.dismissEdits), and the
+// edits status item (how many agent edits the buffer holds, in the writer's
+// color: a press steps to the next, its × clears them).
 // Registered once from the editor core (editorHost.registerCoreFeatures).
 //
 // The linked session is resolved by AgentLayer (components/code/agent), which
@@ -13,9 +15,9 @@ import { useInboxStore, sessionWorkState, type InboxSession } from "../../../sto
 import { useCodeStore } from "../../../store/codeStore";
 import { codeBuffers, currentState, updateBuffer } from "../buffers";
 import { registerCodeCommands, type CodeCommandContext } from "../commands";
-import { featureContext, focusedEditorView, registerEditorFeature, registerStatusItem, type StatusItemView } from "../features";
+import { featureContext, focusedEditorView, nameStatusItem, registerEditorFeature, registerStatusItem, type StatusItemView } from "../features";
 import { inlineDraft, useAgentStore, joinRoot } from "./agentStore";
-import { codeQuoteComment, fenceLang, newSessionText, type CodeRange } from "./compose";
+import { codeQuoteComment, fenceLang, newSessionText, sendInstruction, type CodeRange } from "./compose";
 import {
   QUOTE_FLASH_MS,
   addFlash,
@@ -27,10 +29,15 @@ import {
   hasAgentMarks,
   setAgentMarkHooks,
   setInlineSpot,
+  setSentState,
   stepAgentEdit,
+  type SentMark,
 } from "./editorMarks";
 import { composeInVault, sessionRow, vaultRootOf, writerNow } from "./live";
-import { sessionColor, sessionShortTitle, UNKNOWN_WRITER_COLOR } from "./sessions";
+import { blameSessionBases, sessionColor, sessionGitRefs, sessionShortTitle, UNKNOWN_WRITER_COLOR } from "./sessions";
+import { addGitDiffTargets, type GitDiffTarget } from "../git";
+import { blameHunksOf } from "../blame";
+import { useDiffViewerStore } from "../../../store/diffViewerStore";
 
 const FEATURE = "agent";
 /** Lines of context kept around a quoted range for its comment anchor. */
@@ -163,9 +170,7 @@ export function openInlineInstruction(view: EditorView, sessionId: string | null
       // The spot's range has mapped through every edit since the box opened
       // (an agent edit above it, the person's typing).
       const spot = agentMarks(holder.state).inline!;
-      const row = sessionRow(target);
-      const mark = { from: spot.from, to: spot.to, key: clientId, sessionId: target, color: sessionColor(row ?? target), label: sessionShortTitle(row) };
-      holder.apply({ effects: [setInlineSpot.of(null), addSentMark.of(mark)] });
+      holder.apply({ effects: [setInlineSpot.of(null), addSentMark.of(sentMark(spot, target, clientId))] });
       watchTurn(target, clientId);
       if (holder.state === view.state) view.focus();
     },
@@ -177,6 +182,28 @@ export function openInlineInstruction(view: EditorView, sessionId: string | null
   });
   if (text) inlineDraft(id).text = text;
   view.dispatch({ effects: setInlineSpot.of({ id, pos: to, from, to }) });
+  leaveVisual(view);
+  return true;
+}
+
+/** The marker for a range sent to `target` as message `clientId`. */
+function sentMark(range: { from: number; to: number }, target: string, clientId: string): SentMark {
+  const row = sessionRow(target);
+  return { from: range.from, to: range.to, key: clientId, sessionId: target, color: sessionColor(row ?? target), label: sessionShortTitle(row), state: "queued" };
+}
+
+/** Send `text` about the range to `sessionId` now, with no box: `:Ask fix
+ *  this` typed whole on the command line. The marker and its turn watch are
+ *  the box's own (sentMark, watchTurn). */
+export function askNow(view: EditorView, sessionId: string, text: string): boolean {
+  const vaultId = vaultOf(view);
+  const root = vaultId ? vaultRootOf(vaultId) : null;
+  const range = root ? selectedRange(view, root) : null;
+  if (!range) return false;
+  const clientId = sendInstruction(useInboxStore.getState(), sessionId, range, text);
+  if (!clientId) return false;
+  view.dispatch({ effects: addSentMark.of(sentMark(lineBounds(view, range), sessionId, clientId)) });
+  watchTurn(sessionId, clientId);
   leaveVisual(view);
   return true;
 }
@@ -214,11 +241,14 @@ const QUICK_TURN_MS = 60_000;
 const watched = new Map<string, SentWatch>();
 let unwatch: (() => void) | null = null;
 
-function clearSentEverywhere(clientId: string): void {
+/** Apply an effect to every buffer holding the sent message's marker. */
+function forSentMark(clientId: string, effect: () => TransactionSpec["effects"]): void {
   for (const b of codeBuffers.all()) {
-    if (agentMarks(currentState(b)).sent.some((s) => s.key === clientId)) updateBuffer(b, { effects: clearSentMarks.of(clientId) });
+    if (agentMarks(currentState(b)).sent.some((s) => s.key === clientId)) updateBuffer(b, { effects: effect() });
   }
 }
+
+const clearSentEverywhere = (clientId: string) => forSentMark(clientId, () => clearSentMarks.of(clientId));
 
 type InboxState = ReturnType<typeof useInboxStore.getState>;
 
@@ -246,8 +276,10 @@ export function checkSentTurns(s: InboxState = useInboxStore.getState(), now = D
     }
     const row = s.sessions[sid] as InboxSession | undefined;
     const working = !!row && sessionWorkState(row, now) === "working";
-    if (working) w.seenWorking = true;
-    else if (w.seenWorking || now - w.deliveredAt > QUICK_TURN_MS) {
+    if (working) {
+      if (!w.seenWorking) forSentMark(clientId, () => setSentState.of({ key: clientId, state: "working" }));
+      w.seenWorking = true;
+    } else if (w.seenWorking || now - w.deliveredAt > QUICK_TURN_MS) {
       watched.delete(clientId);
       clearSentEverywhere(clientId);
     }
@@ -289,6 +321,54 @@ function chipItem(view: EditorView): StatusItemView | null {
   };
 }
 
+// ── agent edits status item ───────────────────────────────────────────────
+
+/** How many agent edits the buffer holds, as a bar in the latest writer's
+ *  color and a count. A press steps to the next; × clears them all. Hidden
+ *  while there are none. Rewritten only when the count or color changes, so
+ *  typing (which maps the edits) writes nothing. */
+export function editsItem(view: EditorView): StatusItemView | null {
+  const dom = document.createElement("span");
+  dom.className = "cm-agent-edits";
+  dom.hidden = true;
+  const next = document.createElement("button");
+  next.type = "button";
+  next.className = "cm-agent-editsNext";
+  const bar = document.createElement("span");
+  bar.className = "cm-agent-editsBar";
+  const count = document.createTextNode("0");
+  next.append(bar, count);
+  next.onclick = () => {
+    stepAgentEdit(view, 1);
+    view.focus();
+  };
+  const clear = document.createElement("button");
+  clear.type = "button";
+  clear.className = "cm-agent-editsClear";
+  clear.title = "Clear agent edits";
+  clear.setAttribute("aria-label", "Clear agent edits");
+  clear.textContent = "×";
+  clear.onclick = () => {
+    view.dispatch({ effects: dismissAgentEdits.of("all") });
+    view.focus();
+  };
+  dom.append(next, clear);
+  let shown = "";
+  const render = (state: EditorState) => {
+    const { edits } = agentMarks(state);
+    const color = edits.length ? edits.reduce((a, b) => (b.from > a.from ? b : a)).color : "";
+    const sig = `${edits.length}|${color}`;
+    if (sig === shown) return;
+    shown = sig;
+    dom.hidden = edits.length === 0;
+    count.nodeValue = String(edits.length);
+    nameStatusItem(next, `${edits.length} agent edits, go to next`, "Next agent edit");
+    dom.style.setProperty("--agent-c", color);
+  };
+  render(view.state);
+  return { dom, update: (u) => void (agentMarks(u.startState).edits !== agentMarks(u.state).edits && render(u.state)) };
+}
+
 // ── a disk change waiting on unsaved edits: who wrote it ──────────────────
 
 function watchConflicts(): void {
@@ -300,7 +380,7 @@ function watchConflicts(): void {
       const before = prev.conflicts[key];
       if (now === before) continue;
       if (!now) agent.setConflictWriter(key, null);
-      else if (now.kind === "stale" && before?.kind !== "stale" && before?.kind !== "merge") {
+      else if ((now.kind === "stale" || now.kind === "merge") && before?.kind !== "stale" && before?.kind !== "merge") {
         const [vaultId, path] = key.split("\u0000");
         agent.setConflictWriter(key, writerNow(vaultId, path));
       }
@@ -310,13 +390,40 @@ function watchConflicts(): void {
 
 // ── registration ───────────────────────────────────────────────────────────
 
-/** Cmd-L and Cmd-K. Exported for mount tests. */
+/** Cmd-L and Cmd-K, and Alt-F6 / Shift-Alt-F6 to step through agent edits,
+ *  beside the git hunk pair on Alt-F5 (vim has ]a / [a). Cmd-Alt-arrows stay
+ *  the workspace's focus moves. Exported for mount tests. */
 export const agentKeys = Prec.high(
   keymap.of([
     { key: "Mod-l", preventDefault: true, run: quoteToLinked },
     { key: "Mod-k", preventDefault: true, run: (v) => openInlineInstruction(v, linkedOf(v)) },
+    { key: "Alt-F6", preventDefault: true, run: (v) => stepAgentEdit(v, 1) },
+    { key: "Shift-Alt-F6", preventDefault: true, run: (v) => stepAgentEdit(v, -1) },
   ]),
 );
+
+/**
+ * The diff picker's session refs: the linked session's base (the parent of
+ * its first commit, from the changes the diff panel holds for it: the same
+ * refs the panel's Edit opens, sessionGitRefs) and the base of every other
+ * session the file's blame names, each in the session's color. A session
+ * that has committed nothing stands on HEAD, which the picker lists already.
+ */
+export function sessionDiffTargets(vaultId: string, state: EditorState): GitDiffTarget[] {
+  const out: GitDiffTarget[] = [];
+  const target = (id: string, ref: string, title?: string): GitDiffTarget => {
+    const row = sessionRow(id);
+    return { ref, label: `${row ? sessionShortTitle(row) : (title ?? "Session")} base`, color: sessionColor(row ?? id) };
+  };
+  const linked = useAgentStore.getState().links[vaultId]?.sessionId ?? null;
+  const panel = useDiffViewerStore.getState();
+  if (linked && panel.conversationId === linked) {
+    const { base } = sessionGitRefs(panel.changes);
+    if (base && base !== "HEAD") out.push(target(linked, base));
+  }
+  for (const [id, b] of blameSessionBases(blameHunksOf(state))) if (id !== linked) out.push(target(id, b.ref, b.title));
+  return out;
+}
 
 let registered = false;
 
@@ -331,7 +438,9 @@ export function registerAgentFeature(): void {
   });
   registerEditorFeature(FEATURE, () => [agentMarksExtension(), agentKeys], { needsVault: true });
   registerStatusItem({ id: "agent.link", side: "right", order: 5, priority: 60, needsVault: true, create: chipItem });
+  registerStatusItem({ id: "agent.edits", side: "right", order: 4, priority: 65, needsVault: true, create: (v) => (hasAgentMarks(v.state) ? editsItem(v) : null) });
   watchConflicts();
+  addGitDiffTargets(({ vaultId, state }) => sessionDiffTargets(vaultId, state));
 
   const withView = (fn: (view: EditorView, args: Record<string, unknown> | undefined) => boolean) => (args: Record<string, unknown> | undefined, ctx: CodeCommandContext) => {
     const view = viewFor(ctx);
@@ -339,7 +448,14 @@ export function registerAgentFeature(): void {
   };
   registerCodeCommands({
     "agent.quoteSelection": withView(quoteToLinked),
-    "agent.inlineInstruction": withView((v, args) => openInlineInstruction(v, linkedOf(v), typeof args?.text === "string" ? args.text : "")),
+    // With the instruction already typed (`:Ask fix this`) and a session
+    // linked, it goes at once; otherwise the box opens with it filled in.
+    "agent.inlineInstruction": withView((v, args) => {
+      const text = typeof args?.text === "string" ? args.text : "";
+      const linked = linkedOf(v);
+      if (text.trim() && linked) return askNow(v, linked, text);
+      return openInlineInstruction(v, linked, text);
+    }),
     "agent.newSession": withView((v) => newSession(v)),
     "agent.nextEdit": withView((v) => stepAgentEdit(v, 1)),
     "agent.prevEdit": withView((v) => stepAgentEdit(v, -1)),

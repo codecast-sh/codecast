@@ -26,6 +26,8 @@ export interface VaultBody {
    *  BOM and masks undecodable bytes, so the code editor reads both off this,
    *  never off the scan's row, which can describe a different version. */
   size?: number;
+  /** The mode ("0444") when it refuses writes (VaultFileContent.lockedMode). */
+  lockedMode?: string;
 }
 
 /** What a rename did to the links pointing at the renamed file. */
@@ -104,7 +106,9 @@ export interface VaultState {
    *  cause we did not anticipate is still diagnosable from the screen. */
   unreachableDetail: string | null;
   openRemoteVault: (vaultId: string) => Promise<void>;
-  loadRemoteBody: (path: string) => Promise<void>;
+  /** Null once the body is in (or a read is already under way); else why
+   *  there is none ("Not mirrored", "Not found"). */
+  loadRemoteBody: (path: string) => Promise<string | null>;
   /** Last failed file operation, for a dismissible strip in the UI. */
   opError: string | null;
   clearOpError: () => void;
@@ -147,11 +151,14 @@ export interface VaultState {
   /** Pull a non-markdown file's text on demand. Markdown bodies all arrive with
    *  the scan; code is fetched only when someone opens it. Declines past
    *  `maxBytes` (the preview cap unless the caller, the code editor, says). */
-  loadTextBody: (path: string, opts?: { maxBytes?: number }) => Promise<void>;
+  loadTextBody: (path: string, opts?: { maxBytes?: number }) => Promise<string | null>;
   /** A version some writer outside the store put on disk (the code editor's
    *  own compare-and-swap save): the body and its etag, and the row's size and
    *  mtime, so the watcher's echo of that write is recognized as ours. */
   adoptBody: (vaultId: string, path: string, body: VaultBody) => void;
+  /** The code editor let go of a file (its buffer was closed or evicted): drop
+   *  the text held for it. Markdown stays; notes are always held. */
+  releaseCodeBody: (vaultId: string, path: string) => void;
   /** Path whose explorer row should be in inline-rename mode. Set by the store
    *  so a freshly created note lands in rename regardless of which surface
    *  (header button, row context menu) created it. */
@@ -172,7 +179,10 @@ export interface VaultState {
   setLeftPaneTab: (tab: "files" | "search") => void;
   searchQuery: string;
   setSearchQuery: (query: string) => void;
-  openSearch: (query: string) => void;
+  /** Show the Search tab, with `query` in the box when given. Bumps
+   *  searchPaneRequest, so the Files page opens a hidden tree to show it. */
+  openSearch: (query?: string) => void;
+  searchPaneRequest: number;
 
   /** Bookmarks for the active vault, oldest first. Persisted to the vault's
    *  own IndexedDB — a bookmark names a path on THIS machine. */
@@ -211,6 +221,9 @@ export interface VaultState {
   setDirsExpanded: (paths: string[], expanded: boolean) => void;
   noteOpened: (path: string) => void;
   connect: (convex: ConvexReactClient, opts?: { force?: boolean }) => Promise<void>;
+  /** Connect again with the client the last connect used (a Retry that has
+   *  no Convex client of its own); nothing before the first connect. */
+  reconnect: () => Promise<void>;
   selectVault: (vaultId: string) => Promise<void>;
   refresh: () => Promise<void>;
   writeFile: (path: string, content: string, baseEtag?: string) => Promise<void>;

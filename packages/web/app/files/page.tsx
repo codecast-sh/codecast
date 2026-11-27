@@ -9,6 +9,7 @@
 
 import { Suspense, useCallback, useMemo, useRef, useState } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
+import { useOnRequest } from "../../hooks/useOnRequest";
 import { useTabContext } from "../../lib/tabParams";
 import { useVaultLocalPath } from "../../hooks/useVaultLocalPath";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -21,6 +22,7 @@ import {
 } from "react-resizable-panels";
 import {
   ArrowUpDown,
+  ChevronRight,
   CopyMinus,
   FilePlus2,
   FolderPlus,
@@ -32,10 +34,10 @@ import {
   RefreshCw,
   Search,
   Waypoints,
-  WifiOff,
   X,
 } from "lucide-react";
 import { AuthGuard } from "../../components/AuthGuard";
+import { LoadingBar } from "../../components/ui/LoadingBar";
 import { LocalDaemonUnreachable } from "../../components/LocalDaemonUnreachable";
 import {
   DropdownMenu,
@@ -56,9 +58,9 @@ import { VaultRightPanel } from "../../components/vault/VaultRightPanel";
 import { VaultFindBar } from "../../components/vault/VaultFindBar";
 import { HoverPreviewProvider } from "../../components/vault/VaultHoverPreview";
 import { VaultSearchPane } from "../../components/vault/VaultSearchPane";
+import { projectSearch } from "../../lib/code/search/controller";
 import { VaultPicker } from "../../components/vault/VaultPicker";
 import { VaultMachineBar } from "../../lib/vault/hosts/VaultMachineBar";
-import { hostOfVault } from "../../lib/vault/hosts/routes";
 import { EmptyVaultTeaching } from "../../components/vault/EmptyVaultTeaching";
 import { VaultScopeLine } from "../../components/vault/VaultScopeLine";
 import { useDocForFile, useVaultTeamResolver } from "../../components/vault/useVaultScope";
@@ -66,7 +68,7 @@ import { vaultPresence } from "../../lib/vault/scopeModel";
 import { vaultLandingPath } from "../../lib/vault/projectVault";
 import { filesHref } from "../../lib/vault/vaultHref";
 import { collapsePanelSoon } from "../../lib/vault/collapsePanelSoon";
-import { useVaultStore } from "../../store/vaultStore";
+import { readTreeLayout, useVaultStore, writeTreeLayout, type TreeLayout } from "../../store/vaultStore";
 import { SIDE_MIN_PX, useVaultSidePanel } from "../../components/vault/useVaultSidePanel";
 import {
   toggleVaultEditMode,
@@ -78,6 +80,7 @@ import {
 import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 import { lazyNamed } from "../../lib/lazyNamed";
 import { CodeWorkspace } from "../../components/code/workspace/CodeWorkspace";
+import { LinkedFilePending } from "../../components/vault/FileUnavailable";
 import { workspaceFor } from "../../store/codeStore";
 
 // sigma + graphology are ~40kB gzip: nobody who doesn't open the graph pays.
@@ -151,7 +154,11 @@ function VaultContent() {
   // is known to be wide enough — mounting it into a pane that cannot satisfy
   // its pixel minimums livelocks the panel library.
   const [paneNarrow, setPaneNarrow] = useState<boolean | null>(null);
-  const [treeOpen, setTreeOpen] = useState(!inSplitPane);
+  // A full tab comes back with the tree as it was left; a split leaf starts closed.
+  const savedTreeRef = useRef<TreeLayout | null | undefined>(undefined);
+  if (savedTreeRef.current === undefined) savedTreeRef.current = inSplitPane ? null : readTreeLayout();
+  const savedTree = savedTreeRef.current;
+  const [treeOpen, setTreeOpen] = useState(savedTree?.open ?? false);
   const treeAppliedRef = useRef<boolean | null>(null);
   const treeExpandingRef = useRef(false);
   const firstMeasureRef = useRef(true);
@@ -190,7 +197,11 @@ function VaultContent() {
       collapsePanelSoon(treePanelRef, () => treeAppliedRef.current === false);
       return;
     }
-    if (firstSync) return; // the panel mounts expanded already
+    if (firstSync) {
+      // The panel mounts expanded at the default share; a saved width wins.
+      if (savedTree?.px) ref.resize(`${savedTree.px}px`);
+      return;
+    }
     treeExpandingRef.current = true;
     ref.resize("20%");
     // 20% of a modest pane can fall under the pixel minimum and the library
@@ -202,6 +213,14 @@ function VaultContent() {
       });
     });
   }, [treeOpen, paneNarrow, connection]);
+  // Only a choice made on a wide pane is remembered: the narrow overlay
+  // closes itself after every pick.
+  useWatchEffect(() => {
+    if (savedTree && paneNarrow === false && treeOpen !== savedTree.open) {
+      savedTree.open = treeOpen;
+      writeTreeLayout({ open: treeOpen });
+    }
+  }, [treeOpen, paneNarrow]);
   // Picking a file from the overlay closes it — on a narrow pane the reader
   // is the point, and the drawer covers most of it.
   useWatchEffect(() => {
@@ -261,10 +280,13 @@ function VaultContent() {
   // binding, which shares it.
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   usePaneShortcutAction("vault.search", () => {
-    setLeftTab("search");
-    requestAnimationFrame(() => searchInputRef.current?.select());
+    useVaultStore.getState().openSearch();
+    projectSearch.requestBox();
     return true;
   });
+  // Every way of asking for search (the chord, :grep, the palette, a saved
+  // search) goes through openSearch; a hidden tree opens to show it.
+  useOnRequest(useVaultStore((s) => s.searchPaneRequest), () => setTreeOpen(true));
 
   const [editModeBump, bumpEditMode] = useState(0);
   // Mode memory is per vault: scoping it here means a vault switch forgets the
@@ -422,19 +444,13 @@ function VaultContent() {
     );
   if ((connection === "connected" || connection === "cached") && vaults.length === 0 && !activeVaultId)
     return <EmptyVaultTeaching />;
-  if (connection === "idle" || connection === "discovering") {
-    return (
-      <div className="h-full flex items-center justify-center text-sm text-sol-text-dim">
-        Connecting to your files…
-      </div>
-    );
-  }
+  if (connection === "idle" || connection === "discovering") return <ConnectingShell path={localPath ?? activePath} />;
 
   // The explorer column, rendered either as a split panel (wide pane) or an
   // overlay drawer (narrow pane).
   const treePane = (
           <div className="h-full flex flex-col border-r-0 bg-sol-bg-alt/40">
-            <div ref={titlebarRef} className="flex items-center gap-2 px-3 py-2 border-b border-sol-border/30">
+            <div ref={titlebarRef} className="flex h-8 shrink-0 items-center gap-2 px-3 border-b border-sol-border/30">
               <VaultPicker
                 vaults={vaults}
                 remoteVaults={remoteVaults}
@@ -572,13 +588,6 @@ function VaultContent() {
     // (CodeWorkspace's code.closeTab).
     <div ref={rootRef} data-files-surface className="h-full flex flex-col">
       <VaultMachineBar activePath={activePath} onNavigate={(href) => router.push(href)} />
-      {/* A host vault's reconnect shows on its machine chip above. */}
-      {connection === "cached" && !hostOfVault(activeVaultId) && (
-        <div className="flex items-center gap-2 px-3 py-1 text-meta bg-sol-bg-alt text-sol-text-muted border-b border-sol-border/30">
-          <WifiOff className="w-3 h-3" />
-          Showing cached copy — reconnecting to the local daemon…
-        </div>
-      )}
       {opError && (
         <div className="flex items-center gap-2 px-3 py-1 text-meta bg-sol-red/10 text-sol-red border-b border-sol-red/30">
           <span className="flex-1 truncate" title={opError}>
@@ -615,6 +624,14 @@ function VaultContent() {
       <Group
         orientation="horizontal"
         className="flex-1 min-h-0"
+        onLayoutChanged={() => {
+          // A drag ended: remember the tree's width.
+          const px = treePanelRef.current?.getSize().inPixels;
+          if (savedTree && paneNarrow === false && treeOpen && px && px >= 180 && Math.round(px) !== savedTree.px) {
+            savedTree.px = Math.round(px);
+            writeTreeLayout({ px: savedTree.px });
+          }
+        }}
         defaultLayout={{
           "vault-tree": treeOpen ? 20 : 0,
           "vault-content": 100 - (treeOpen ? 20 : 0) - (rightPanelOpen ? 22 : 0),
@@ -695,6 +712,9 @@ function VaultContent() {
                 onClose={toggleGraph}
               />
             </Suspense>
+          ) : localPath && !opError ? (
+            // The link's file, until its folder resolves: never the last vault's tab.
+            <LinkedFilePending path={localPath} />
           ) : activeVaultId ? (
             <HoverPreviewProvider onNavigate={(p) => openNote(p)}>
               {findOpen && <VaultFindBar onClose={() => setFindOpen(false)} />}
@@ -748,6 +768,28 @@ function VaultContent() {
           </>
         )}
       </Group>
+    </div>
+  );
+}
+
+/** Files while this machine's daemon is first reached: the file a link asked
+ *  for, named where its breadcrumbs will be, over the loading sweep. */
+function ConnectingShell({ path }: { path: string | null }) {
+  const segments = path ? path.split("/").filter(Boolean) : [];
+  const name = segments.pop();
+  const dir = segments.slice(-2);
+  return (
+    <div className="h-full flex flex-col" data-files-connecting>
+      <div className="flex h-7 shrink-0 items-center border-b border-sol-border/30 pl-3 pr-2 text-meta text-sol-text-dim whitespace-nowrap overflow-hidden">
+        {dir.map((seg, i) => (
+          <span key={i} className="flex min-w-0 shrink items-center">
+            <span className="truncate">{seg}</span>
+            <ChevronRight className="mx-0.5 h-3 w-3 shrink-0 opacity-60" />
+          </span>
+        ))}
+        {name && <span className="shrink-0 text-sol-text-muted">{name}</span>}
+      </div>
+      <LoadingBar />
     </div>
   );
 }

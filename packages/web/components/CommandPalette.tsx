@@ -44,7 +44,7 @@ import { useVaultStore } from "../store/vaultStore";
 import { filesHref, isFilesPath } from "../lib/vault/vaultHref";
 import { openFiles } from "../lib/filesPane";
 import { rankPaletteFiles } from "../lib/paletteFiles";
-import { EDITOR_PALETTE_COMMANDS, editorCommandsLead, runEditorPaletteCommand } from "../lib/editorPaletteCommands";
+import { EDITOR_PALETTE_COMMANDS, editorCommandsLead, editorPaletteKey, editorPaletteLabel, runEditorPaletteCommand } from "../lib/editorPaletteCommands";
 import { useInboxStore, isConvexId, InboxSession, TaskItem, DocItem, BucketItem, BucketAssignmentItem, placeInboxRows, lastPlacedInbox, filterInboxScopeFromState, convBucketMap, sortLabels, computeChipCounts, projectOfFromState, getProjectName, RecentVisit, selectSessionRailOpen, sessionRowFromSummary } from "../store/inboxStore";
 import { projectChipLabel } from "../store/workProjects";
 import { resolveRecentVisits, visitTimeAgo, visitObjectLabel, type ResolvedVisit } from "../lib/recentVisits";
@@ -2416,7 +2416,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
       // The palette's row can predate a toggle; the store says what the star shows now.
       if (actionKey === "session_parent") { navigate(`/conversation/${session.parent_conversation_id}`); return; }
       if (actionKey === "session_branch") { void copyToClipboard(session.git_branch || "").then(() => toast.success("Branch copied")); closePalette(); return; }
-      if (actionKey === "session_files") { navigate(filesHref({ localPath: session.project_path || session.git_root })); return; }
+      if (actionKey === "session_files") { navigate(filesHref({ localPath: session.project_path || session.git_root, device: session.owner_device_id })); return; }
       const each: Record<string, (id: string) => void> = {
         session_restore: (id) => state.restoreSession(id),
         // The teardown rides the hide transition server side (dispatch.applyPatches);
@@ -2747,8 +2747,8 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     <CommandPrimitive.Group heading="Editor" className={groupClass}>
       {EDITOR_PALETTE_COMMANDS.map((c) => (
         <CommandPrimitive.Item
-          key={`editor-${c.id}`}
-          value={`editor ${c.label} ${c.keywords}`}
+          key={`editor-${editorPaletteKey(c)}`}
+          value={`editor ${editorPaletteLabel(c)} ${c.keywords}`}
           onSelect={() => {
             closePalette();
             runEditorPaletteCommand(c);
@@ -2756,7 +2756,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
           className={itemClass}
         >
           <c.icon className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
-          <span className="truncate flex-1">{c.label}</span>
+          <span className="truncate flex-1">{editorPaletteLabel(c)}</span>
           {c.shortcut && <MenuKeyCaps action={c.shortcut} />}
           {c.editorKey && (
             <span className="ml-auto flex items-center gap-[2px]">

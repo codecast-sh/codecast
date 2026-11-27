@@ -39,6 +39,7 @@ import {
   getVaultEndpoint,
   listVaults,
   locateVault,
+  readFailureLabel,
   readVaultFile,
   scanVault,
   subscribeVaultEvents,
@@ -198,6 +199,22 @@ function recordMoves(moves: { from: string; to: string }[]) {
   for (const [k, v] of recentMoves) if (now - v.at > 30_000) recentMoves.delete(k);
 }
 
+// Paths the person deleted here (the tree's Delete), as against a file that
+// left disk under the app (an agent's rm, a branch switch, a stash): an editor
+// tab closes for the first and stays, marked deleted, for the second, so the
+// file comes back into it when it returns.
+const recentDeletes = new Map<string, number>();
+
+/** The person deleted this path (or a folder holding it) moments ago. */
+export function resolveRecentDelete(path: string): boolean {
+  const now = Date.now();
+  for (const [p, at] of recentDeletes) {
+    if (now - at > 30_000) recentDeletes.delete(p);
+    else if (p === path || path.startsWith(`${p}/`)) return true;
+  }
+  return false;
+}
+
 // Bookmark ids only have to be unique within one vault's list; the counter
 // keeps two bookmarks made in the same millisecond apart.
 let bookmarkSeq = 0;
@@ -269,6 +286,30 @@ function readRightPanelOpen(): boolean {
   }
 }
 
+const TREE_LAYOUT_KEY = "vault.treeLayout";
+
+/** Whether a full-tab Files page shows its tree, and how wide (px; null is
+ *  the default share). A split-pane leaf keeps its own, unsaved. */
+export interface TreeLayout {
+  open: boolean;
+  px: number | null;
+}
+
+export function readTreeLayout(): TreeLayout {
+  try {
+    const raw = JSON.parse(localStorage.getItem(TREE_LAYOUT_KEY) ?? "null") as Partial<TreeLayout> | null;
+    if (raw && typeof raw === "object") return { open: raw.open !== false, px: typeof raw.px === "number" && raw.px > 0 ? Math.round(raw.px) : null };
+  } catch {}
+  return { open: true, px: null };
+}
+
+export function writeTreeLayout(patch: Partial<TreeLayout>): void {
+  try {
+    const next = { ...readTreeLayout(), ...patch };
+    localStorage.setItem(TREE_LAYOUT_KEY, JSON.stringify(next));
+  } catch {}
+}
+
 const SHOW_IGNORED_KEY = "cast_vault_show_ignored";
 
 /** A per-vault boolean the user set explicitly, or null when they never did. */
@@ -311,7 +352,9 @@ async function fetchBodies(
   vaultId: string,
   paths: string[],
   { persist = true }: { persist?: boolean } = {},
-): Promise<void> {
+): Promise<Record<string, string>> {
+  /** Each path whose read brought no body, with why (readFailureLabel). */
+  const failures: Record<string, string> = {};
   const queue = [...paths];
   const workers = Array.from({ length: Math.min(BODY_FETCH_CONCURRENCY, queue.length) }, async () => {
     while (queue.length) {
@@ -329,21 +372,24 @@ async function fetchBodies(
         if (file && now && now !== before && file.mtime <= now.mtime) {
           useVaultStore.setState((st) => ({ loadingPaths: omit(st.loadingPaths, path) }));
         } else if (file) {
-          const body: VaultBody = { content: file.content, mtime: file.mtime, etag: file.etag, size: file.size };
+          const body: VaultBody = { content: file.content, mtime: file.mtime, etag: file.etag, size: file.size, ...(file.lockedMode ? { lockedMode: file.lockedMode } : {}) };
           useVaultStore.setState((st) => ({
             bodies: { ...st.bodies, [path]: body },
             loadingPaths: omit(st.loadingPaths, path),
           }));
           if (persist) stageBody(vaultId, path, body);
         } else {
+          failures[path] = "Not found";
           useVaultStore.setState((st) => ({ loadingPaths: omit(st.loadingPaths, path) }));
         }
-      } catch {
+      } catch (e) {
+        failures[path] = readFailureLabel(e);
         useVaultStore.setState((st) => ({ loadingPaths: omit(st.loadingPaths, path) }));
       }
     }
   });
   await Promise.all(workers);
+  return failures;
 }
 
 function omit<T extends Record<string, unknown>>(rec: T, key: string): T {
@@ -514,47 +560,88 @@ export function setCodeBodyHolder(held: (vaultId: string, path: string) => boole
   codeBodyHeld = held;
 }
 
+// Watcher events land in the file table in batches. Each write copies the
+// whole table (20,000 rows in a repo) and wakes everything that reads it (the
+// tree, git status, quick open), so a checkout's thousands of events, or an
+// agent's steady saves, cost one write per batch instead of one per file.
+const WS_BATCH_MS = 100;
+/** Path to its new row, or null when it was removed; in arrival order. */
+let pendingRows = new Map<string, VaultFileEntry | null>();
+let pendingVault: string | null = null;
+let pendingTimer: ReturnType<typeof setTimeout> | null = null;
+
+function flushWsRows(): void {
+  if (pendingTimer) clearTimeout(pendingTimer);
+  pendingTimer = null;
+  const rows = pendingRows;
+  const vaultId = pendingVault;
+  pendingRows = new Map();
+  pendingVault = null;
+  if (!rows.size || useVaultStore.getState().activeVaultId !== vaultId) return;
+  useVaultStore.setState((st) => {
+    const files = { ...st.files };
+    let bodies = st.bodies;
+    for (const [path, row] of rows) {
+      if (row) files[path] = row;
+      else {
+        delete files[path];
+        if (path in bodies) bodies = omit(bodies, path);
+      }
+    }
+    return { files, bodies };
+  });
+}
+
+function queueWsRow(vaultId: string, path: string, row: VaultFileEntry | null): void {
+  if (pendingVault !== vaultId) flushWsRows();
+  pendingVault = vaultId;
+  pendingRows.delete(path);
+  pendingRows.set(path, row);
+  pendingTimer ??= setTimeout(flushWsRows, WS_BATCH_MS);
+}
+
 function applyWsEvent(ev: VaultWsEvent) {
   const s = useVaultStore.getState();
   const vaultId = s.activeVaultId;
   if (!vaultId || ev.vault !== vaultId) return;
   if (ev.type === "reset") {
+    flushWsRows();
     // The server sends reset right after every successful hello; when the
     // connect path just scanned, this would be a duplicate whole-vault walk.
     if (Date.now() - lastScanStartedAt > SCAN_DEDUPE_MS) void s.refresh();
     return;
   }
   if (ev.type === "removed") {
-    useVaultStore.setState((st) => ({
-      files: omit(st.files, ev.path),
-      bodies: omit(st.bodies, ev.path),
-    }));
+    queueWsRow(vaultId, ev.path, null);
     stageDelete(vaultId, ev.path);
     return;
   }
   // add | change
-  useVaultStore.setState((st) => ({
-    files: {
-      ...st.files,
-      [ev.path]: { path: ev.path, mtime: ev.mtime, size: ev.size },
-    },
-  }));
+  queueWsRow(vaultId, ev.path, { path: ev.path, mtime: ev.mtime, size: ev.size });
   // Markdown is always held, so it always refetches. A code file refetches only
   // when someone has it open (its body is held, or an editor holds the file
   // after a 'removed' dropped the body), which keeps a repo's build output
   // from pulling megabytes through here.
   const isMarkdown = isVaultMarkdownPath(ev.path);
   const known = s.bodies[ev.path];
-  if (s.endpoint && (isMarkdown || known || codeBodyHeld(vaultId, ev.path))) {
-    // Skip refetch when the change is our own write echo (same mtime already stored).
-    if (!known || known.mtime !== ev.mtime) {
-      void fetchBodies(s.endpoint, vaultId, [ev.path], { persist: isMarkdown });
-    }
+  // Skip refetch when the change is our own write echo (same mtime already stored).
+  if (known && known.mtime === ev.mtime) return;
+  if (s.endpoint && (isMarkdown || codeBodyHeld(vaultId, ev.path))) {
+    void fetchBodies(s.endpoint, vaultId, [ev.path], { persist: isMarkdown });
+  } else if (known && !isMarkdown) {
+    // Text no editor holds is not read again on every write: it goes, and the
+    // next view of the file reads it.
+    useVaultStore.setState((st) => ({ bodies: omit(st.bodies, ev.path) }));
   }
 }
 
 /** Tests: deliver a watcher event as the subscription would. */
-export const _applyVaultWsEventForTests = (ev: VaultWsEvent) => applyWsEvent(ev);
+export const _applyVaultWsEventForTests = (ev: VaultWsEvent) => {
+  applyWsEvent(ev);
+  flushWsRows();
+};
+/** Tests: deliver a watcher event and leave it in the batch. */
+export const _queueVaultWsEventForTests = (ev: VaultWsEvent) => applyWsEvent(ev);
 
 /** The file table without the rows a scan flagged ignored. */
 function withoutIgnored(files: Record<string, VaultFileEntry>): Record<string, VaultFileEntry> {
@@ -582,10 +669,18 @@ async function syncActiveVault(ep: VaultEndpoint, vaultId: string): Promise<void
   // otherwise land in the search index and the graph as a note.
   const prevBodies = s.bodies;
   const toFetch: string[] = [];
+  const heldCode: string[] = [];
   for (const f of scan.files) {
-    if (f.dir || f.ignored || !isVaultMarkdownPath(f.path)) continue;
+    if (f.dir) continue;
     const known = prevBodies[f.path];
-    if (!known || known.mtime !== f.mtime) toFetch.push(f.path);
+    const changed = !known || known.mtime !== f.mtime;
+    // An open code buffer is read again when its file moved while the socket
+    // was down (a daemon restart, a dropped WS): the watcher events that would
+    // have told it are gone, and it would keep showing text disk no longer
+    // holds. One batch with the notes, limited to buffers held (contract 10).
+    if (isVaultMarkdownPath(f.path)) {
+      if (!f.ignored && changed) toFetch.push(f.path);
+    } else if (changed && codeBodyHeld(vaultId, f.path)) heldCode.push(f.path);
   }
   const removed = Object.keys(prevBodies).filter((p) => !files[p]);
 
@@ -609,7 +704,8 @@ async function syncActiveVault(ep: VaultEndpoint, vaultId: string): Promise<void
   for (const p of removed) stageDelete(vaultId, p);
   schedulePersist();
 
-  await fetchBodies(ep, vaultId, toFetch);
+  // Code is never cached across reloads: only the open buffer wants it.
+  await Promise.all([fetchBodies(ep, vaultId, toFetch), heldCode.length ? fetchBodies(ep, vaultId, heldCode, { persist: false }) : null]);
 }
 
 /** The endpoint requests for `vaultId` start from: its host's forward, or
@@ -737,7 +833,13 @@ export const useVaultStore = create<VaultState>((set, get) => ({
 
   setLeftPaneTab: (tab) => set({ leftPaneTab: tab }),
   setSearchQuery: (query) => set({ searchQuery: query }),
-  openSearch: (query) => set({ leftPaneTab: "search", searchQuery: query }),
+  searchPaneRequest: 0,
+  openSearch: (query) =>
+    set((s) => ({
+      leftPaneTab: "search",
+      searchQuery: query ?? s.searchQuery,
+      searchPaneRequest: s.searchPaneRequest + 1,
+    })),
 
   loadBookmarks: async () => {
     const vaultId = get().activeVaultId;
@@ -820,13 +922,19 @@ export const useVaultStore = create<VaultState>((set, get) => ({
 
   loadTextBody: async (path, opts) => {
     const { endpoint, activeVaultId, bodies, files, loadingPaths } = get();
-    if (!endpoint || !activeVaultId) return;
-    if (bodies[path] || loadingPaths[path]) return;
+    if (!endpoint || !activeVaultId) return null;
+    if (bodies[path] || loadingPaths[path]) return null;
     // Decline BEFORE the round trip: the scan already told us how big it is, so
     // a 40MB bundle never crosses the wire, let alone reaches the highlighter.
-    if ((files[path]?.size ?? 0) > (opts?.maxBytes ?? VAULT_MAX_PREVIEW_BYTES)) return;
+    if ((files[path]?.size ?? 0) > (opts?.maxBytes ?? VAULT_MAX_PREVIEW_BYTES)) return "Too large";
     set((s) => ({ loadingPaths: { ...s.loadingPaths, [path]: true } }));
-    await fetchBodies(endpoint, activeVaultId, [path], { persist: false });
+    const failures = await fetchBodies(endpoint, activeVaultId, [path], { persist: false });
+    return failures[path] ?? null;
+  },
+  releaseCodeBody: (vaultId, path) => {
+    const s = get();
+    if (s.activeVaultId !== vaultId || isVaultMarkdownPath(path) || !(path in s.bodies)) return;
+    set((st) => ({ bodies: omit(st.bodies, path) }));
   },
   adoptBody: (vaultId, path, body) => {
     if (get().activeVaultId !== vaultId) return;
@@ -884,6 +992,9 @@ export const useVaultStore = create<VaultState>((set, get) => ({
       recentPaths: [path, ...s.recentPaths.filter((p) => p !== path)].slice(0, 50),
     })),
 
+  reconnect: async () => {
+    if (convexRef) await get().connect(convexRef, { force: true });
+  },
   connect: async (convex, opts) => {
     convexRef = convex;
     // Reopening a host's forward goes through this machine's daemon and the
@@ -1140,11 +1251,11 @@ export const useVaultStore = create<VaultState>((set, get) => ({
   loadRemoteBody: async (path) => {
     const convex = convexRef;
     const { activeVaultId, isRemote, bodies } = get();
-    if (!convex || !activeVaultId || !isRemote || bodies[path]) return;
+    if (!convex || !activeVaultId || !isRemote || bodies[path]) return null;
     const vault = get().remoteVaults.find((v) => v.id === activeVaultId);
     set((s) => ({ loadingPaths: { ...s.loadingPaths, [path]: true } }));
     const res = await fetchRemoteBody(convex, activeVaultId, path, vault?.device_id);
-    if (get().activeVaultId !== activeVaultId) return;
+    if (get().activeVaultId !== activeVaultId) return null;
     set((s) => ({
       loadingPaths: omit(s.loadingPaths, path),
       bodies:
@@ -1156,6 +1267,8 @@ export const useVaultStore = create<VaultState>((set, get) => ({
           ? `${path} isn't mirrored — its body lives on the machine that owns this vault.`
           : s.opError,
     }));
+    if (res.content !== null) return null;
+    return res.reason === "not-uploaded" ? "Not mirrored" : "Mirror unreachable";
   },
 
   refresh: async () => {
@@ -1287,11 +1400,13 @@ export const useVaultStore = create<VaultState>((set, get) => ({
     if (!endpoint || !activeVaultId) throw new Error("vault not connected");
     const prevEntry = get().files[path];
     const prevBody = get().bodies[path];
+    recentDeletes.set(path, Date.now());
     set((s) => ({ files: omit(s.files, path), bodies: omit(s.bodies, path), opError: null }));
     try {
       await vaultOp(endpoint, activeVaultId, { op: "delete", path });
       stageDelete(activeVaultId, path);
     } catch (e) {
+      recentDeletes.delete(path);
       set((s) => ({
         files: prevEntry ? { ...s.files, [path]: prevEntry } : s.files,
         bodies: prevBody ? { ...s.bodies, [path]: prevBody } : s.bodies,

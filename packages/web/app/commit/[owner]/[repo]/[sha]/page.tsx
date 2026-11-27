@@ -27,6 +27,7 @@ import { CodeMenuItem, CodeShareMenu } from "../../../../../components/menus/Cod
 import { copyText } from "../../../../../lib/copyText";
 import { CommitRail } from "../../../../../components/repo/CommitRail";
 import { RepoPageShell } from "../../../../../components/repo/RepoPageShell";
+import { useLocalEditAction } from "../../../../../components/repo/LocalEditButton";
 import { RepoWindowControl } from "../../../../../components/repo/RepoWindowControl";
 import { useRepoFamily } from "../../../../../components/repo/useRepoFamily";
 import { FileDiffLayout, type DiffFile, type FileLineThreads } from "../../../../../components/FileDiffLayout";
@@ -505,6 +506,12 @@ function CommitContent({
     (path: string) => repoBlobHref(repository, sha, path, family),
     [repository, sha, family],
   );
+  // Each file's "Edit": the file in this machine's checkout, with the
+  // editor's diff against the commit's parent when the checkout sits on this
+  // commit (anywhere else that diff would mix in other commits' changes).
+  const editAction = useLocalEditAction(repository, "", (c) =>
+    c.head && c.head === commit?.sha ? { ref: `${commit.sha}^`, label: "Parent" } : null,
+  );
   const jumpToThread = useCallback(
     (path: string, line?: number) => goTo(path, line ? { side: "RIGHT", lineNumber: line } : undefined),
     [goTo],
@@ -574,7 +581,7 @@ function CommitContent({
               </div>
             </div>
           )}
-          <FileDiffLayout files={files} flow={flow} lineThreads={lineThreads} fileHref={fileHref} />
+          <FileDiffLayout files={files} flow={flow} lineThreads={lineThreads} fileHref={fileHref} fileAction={editAction} />
         </>
       )}
     </div>

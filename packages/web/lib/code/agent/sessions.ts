@@ -118,7 +118,8 @@ export function candidateSessions<T extends AgentSessionRow>(rows: Iterable<T>, 
  *  (/conversation/<id>, the stage's own rule), an inbox deep link
  *  (/inbox?s=<id>), or the bare inbox showing the focused conversation. */
 export function sessionOfPanePath(path: string, currentSessionId: string | null): string | null {
-  const direct = directConversationId(path) ?? inboxTabSessionId(path);
+  // A pane opened at a message (`/conversation/<id>#msg-<mid>`) is still that conversation.
+  const direct = directConversationId(path.replace(/#msg-[^#]*$/, "")) ?? inboxTabSessionId(path);
   if (direct) return direct;
   const pathname = path.split("?")[0];
   return pathname === "/inbox" || pathname.startsWith("/inbox/") ? currentSessionId : null;
@@ -181,6 +182,15 @@ export function resolveLink(opts: {
   return first ? { sessionId: first._id, source: "folder" } : { sessionId: null, source: "none" };
 }
 
+/** The picker's filter: every word of the query appears in the session's
+ *  title or short title, ignoring case. An empty query matches all. */
+export function matchesSessionQuery(s: Pick<AgentSessionRow, "title" | "short_title">, query: string): boolean {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return true;
+  const hay = `${s.short_title ?? ""} ${s.title ?? ""}`.toLowerCase();
+  return words.every((w) => hay.includes(w));
+}
+
 /** What a session is called in tight chrome. */
 export function sessionShortTitle(s: Pick<AgentSessionRow, "title" | "short_title"> | null | undefined): string {
   const raw = (s?.short_title || s?.title || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
@@ -190,8 +200,15 @@ export function sessionShortTitle(s: Pick<AgentSessionRow, "title" | "short_titl
 
 const SOL_NAMES = new Set(["blue", "green", "magenta", "orange", "cyan", "violet", "yellow", "red"]);
 
+/** The hues a session without its own color is given in the editor. Green,
+ *  red and blue are left out: beside the code they mean added, deleted and
+ *  modified (the git gutter), and a session bar in them would read as one. */
+export const EDITOR_SESSION_HUES = SESSION_BLAME_HUES.filter(
+  (h) => h !== "var(--sol-green)" && h !== "var(--sol-red)" && h !== "var(--sol-blue)",
+);
+
 /** A session's color: its own icon color when it has one, else a stable hue
- *  from the palette session blame uses. */
+ *  from EDITOR_SESSION_HUES. */
 export function sessionColor(s: Pick<AgentSessionRow, "_id" | "icon_color"> | string | null | undefined): string {
   if (!s) return "var(--sol-text-dim)";
   const row = typeof s === "string" ? { _id: s } : s;
@@ -202,8 +219,52 @@ export function sessionColor(s: Pick<AgentSessionRow, "_id" | "icon_color"> | st
   }
   let h = 0;
   for (let i = 0; i < row._id.length; i++) h = (h * 31 + row._id.charCodeAt(i)) >>> 0;
-  return SESSION_BLAME_HUES[h % SESSION_BLAME_HUES.length];
+  return EDITOR_SESSION_HUES[h % EDITOR_SESSION_HUES.length];
 }
 
 /** The neutral color of an edit no session can be named for. */
 export const UNKNOWN_WRITER_COLOR = "var(--sol-text-muted)";
+
+// ── the session's git refs ──────────────────────────────────────────────────
+
+/** A session's change as the diff panel holds it: a commit carries its hash
+ *  when the commit's output named one. */
+export interface SessionChangeRef {
+  changeType: string;
+  commitHash?: string;
+}
+
+/**
+ * The git refs a session's own work stands on, from its commits in order:
+ * `base` is where its work starts (the parent of its first commit; HEAD while
+ * it has committed nothing, so all its work is uncommitted) and `last` is its
+ * last commit. A commit whose hash went unrecorded leaves that ref null, and
+ * the caller falls back. Read off the session's own commits, never the
+ * branch's: on a trunk checkout other sessions' commits sit beside its own.
+ */
+export function sessionGitRefs(changes: readonly SessionChangeRef[]): { committed: boolean; base: string | null; last: string | null } {
+  const commits = changes.filter((c) => c.changeType === "commit");
+  if (!commits.length) return { committed: false, base: "HEAD", last: null };
+  const hash = (c: SessionChangeRef | undefined) => (c?.commitHash && /^[0-9a-f]{7,64}$/i.test(c.commitHash) ? c.commitHash : null);
+  const first = hash(commits[0]);
+  return { committed: true, base: first ? `${first}^` : null, last: hash(commits[commits.length - 1]) };
+}
+
+/**
+ * The base of each session that wrote committed lines of a file, from the
+ * file's blame: the parent of the session's oldest commit still standing in
+ * it, keyed by the session's full conversation id (its short one when that
+ * is all the blame carries). Lines a session wrote but has not committed
+ * name no commit and count for nothing here.
+ */
+export function blameSessionBases(hunks: readonly { sha?: string; time?: number; uncommitted?: boolean; session?: { id: string; conversation_id?: string; title?: string } }[]): Map<string, { ref: string; title?: string }> {
+  const oldest = new Map<string, { sha: string; time: number; title?: string }>();
+  for (const h of hunks) {
+    if (!h.session || h.uncommitted || !h.sha || !/^[0-9a-f]{7,64}$/i.test(h.sha)) continue;
+    const id = h.session.conversation_id ?? h.session.id;
+    const time = h.time ?? Number.MAX_SAFE_INTEGER;
+    const was = oldest.get(id);
+    if (!was || time < was.time) oldest.set(id, { sha: h.sha, time, title: h.session.title });
+  }
+  return new Map([...oldest].map(([id, o]) => [id, { ref: `${o.sha}^`, title: o.title }]));
+}

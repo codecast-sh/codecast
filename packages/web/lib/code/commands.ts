@@ -15,22 +15,37 @@ export const CODE_COMMAND_IDS = [
   "file.save",
   "file.saveAll",
   "file.saveAndClose", // vim's :wq / :x; close only once the write lands. Unhandled: vim runs file.save then file.close
+  // The tab verbs take args?: { group?: "<workspace>:<group id>"; path?: string }
+  // (a tab's menu names its tab); without them, the active tab of the
+  // command's group.
   "file.close",
   "file.closeOthers",
   "file.reopenClosed",
   "file.open", // args: { path: string; line?: number; column?: number; split?: "right" | "down" }
   "file.revert",
+  "file.overwrite", // vim's :w!: write a file its mode refuses (0444), after the confirm
   "file.copyPath", // args?: { relative?: boolean }
   "file.reveal",
+  "tabs.pin", // pins, or unpins a pinned tab
+  "tabs.closeRight",
+  "tabs.keep", // a preview tab stays open
+  // a file changed on disk under unsaved edits (the conflict strip's verbs)
+  "merge.withDisk",
+  "merge.takeDisk",
+  "merge.keepMine",
+  "merge.next",
+  "merge.prev",
+  "breadcrumbs.focus",
   // navigation
   "quickOpen", // args?: { query?: string }
   "tabs.switcher",
   "tabs.next",
   "tabs.prev",
   "tabs.goto", // args: { index: number }
+  "tabs.alternate", // vim's :b# and <C-^>: the tab used before this one
   "goto.line", // args?: { line?: number }
-  "goto.symbol",
-  "goto.workspaceSymbol",
+  "goto.symbol", // args?: { query?: string; container?: string | null; current?: string }
+  "goto.workspaceSymbol", // args?: { query?: string }
   "nav.back",
   "nav.forward",
   // layout
@@ -38,10 +53,18 @@ export const CODE_COMMAND_IDS = [
   "split.down",
   "split.close",
   "split.only",
+  "split.equalize",
+  "split.maximize", // args: { axis: "width" | "height" }
+  "split.resize", // args: { axis: "width" | "height"; by: number (percent, negative shrinks) }
+  "split.exchange",
+  "split.rotate", // args?: { delta: 1 | -1 }
+  "split.moveToEdge", // args: { edge: "left" | "right" | "top" | "bottom" }
   "focus.left",
   "focus.right",
   "focus.up",
   "focus.down",
+  "focus.previous", // vim's <C-w>p: the group focused before this one
+  "focus.cycle", // args: { delta: 1 | -1 } in layout order, wrapping; or { to: "first" | "last" }
   "tree.toggle",
   "tree.reveal",
   "terminal.toggle",
@@ -130,4 +153,16 @@ export function runCodeCommand(id: CodeCommandId, args?: Record<string, unknown>
 
 export function hasCodeCommand(id: CodeCommandId): boolean {
   return (handlers.get(id)?.length ?? 0) > 0;
+}
+
+const labels = new Map<CodeCommandId, () => string>();
+
+/** A command whose name depends on state (vim on or off) says what running it
+ *  would do now; menus read it through codeCommandLabel when they draw. */
+export function registerCodeCommandLabel(id: CodeCommandId, label: () => string): void {
+  labels.set(id, label);
+}
+
+export function codeCommandLabel(id: CodeCommandId): string | undefined {
+  return labels.get(id)?.();
 }

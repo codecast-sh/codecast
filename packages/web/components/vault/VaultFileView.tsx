@@ -6,15 +6,15 @@ import { memo, Suspense, useMemo, useState } from "react";
 import { lazyNamed } from "../../lib/lazyNamed";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { FileQuestion, FileWarning } from "lucide-react";
+import { FileUnavailable } from "./FileUnavailable";
 import { VAULT_MAX_PREVIEW_BYTES, vaultFileKind } from "@codecast/shared/contracts";
 import { CODE_EDITOR_MAX_BYTES } from "../../lib/code/limits";
-import { vaultAssetUrl } from "../../lib/vault/client";
+import { readFailureLabel, vaultAssetUrl } from "../../lib/vault/client";
 import { useVaultStore } from "../../store/vaultStore";
 import { bufferKey, useCodeStore } from "../../store/codeStore";
-import { VaultFileHeader, RevealButton } from "./VaultFileHeader";
+import { VaultFileHeader } from "./VaultFileHeader";
 import { CodeFileBar } from "../code/CodeFileBar";
 import { useVaultEntryState } from "./useVaultEntry";
-import { buttonVariants } from "../ui/button";
 
 /** Bytes, in the unit a person would say out loud. */
 function formatSize(bytes: number): string {
@@ -27,36 +27,6 @@ function formatSize(bytes: number): string {
     i++;
   }
   return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[i]}`;
-}
-
-/** A centered dead end with one honest sentence and a way out to Finder. */
-function NoPreview({
-  path,
-  icon,
-  title,
-  detail,
-}: {
-  path: string;
-  icon: React.ReactNode;
-  title: string;
-  detail: string;
-}) {
-  const canReveal = useVaultStore((s) => !!s.endpoint && !s.isRemote);
-  return (
-    <div className="flex flex-col items-center justify-center gap-2 py-20 text-center">
-      {icon}
-      <div className="text-sm text-sol-text-muted">{title}</div>
-      <div className="text-xs text-sol-text-dim">{detail}</div>
-      {canReveal && (
-        <RevealButton
-          path={path}
-          className={buttonVariants({ variant: "outline", size: "xs", className: "mt-2" })}
-        >
-          Show in Finder
-        </RevealButton>
-      )}
-    </div>
-  );
 }
 
 // The editor is its own chunk: nobody who only browses images pays for
@@ -99,7 +69,10 @@ export const VaultFileView = memo(function VaultFileView({ path, line }: { path:
   // asked yet" never flashes as "couldn't read", and a file that returns (an
   // add or change event) is read again.
   const readKey = `${path}@${entry?.mtime ?? ""}`;
-  const [failedRead, setFailedRead] = useState<string | null>(null);
+  // The last failed read: which version of the entry, and why (a status a
+  // person can act on). Retry clears it and asks again.
+  const [failedRead, setFailedRead] = useState<{ key: string; reason: string } | null>(null);
+  const [attempt, setAttempt] = useState(0);
   useWatchEffect(() => {
     if (kind !== "text" || body) return;
     const store = useVaultStore.getState();
@@ -109,18 +82,24 @@ export const VaultFileView = memo(function VaultFileView({ path, line }: { path:
         ? store.loadTextBody(path, { maxBytes: CODE_EDITOR_MAX_BYTES })
         : null;
     void read?.then(
-      () => {
+      (reason) => {
         const s = useVaultStore.getState();
-        if (!s.bodies[path] && !s.loadingPaths[path]) setFailedRead(readKey);
+        if (!s.bodies[path] && !s.loadingPaths[path]) setFailedRead({ key: readKey, reason: reason ?? "Unreadable" });
       },
-      () => setFailedRead(readKey),
+      (e) => setFailedRead({ key: readKey, reason: readFailureLabel(e) }),
     );
-  }, [kind, readKey, !!body, endpoint, isRemote]);
+  }, [kind, readKey, !!body, endpoint, isRemote, attempt]);
   // No daemon and none coming: no read will run, so say so rather than load
-  // forever. A cached boot is not that: the daemon is still being reached (the
-  // page says so in its banner), and the read runs once the endpoint lands.
+  // forever. A cached boot is not that: the daemon is still being reached, and
+  // the read runs once the endpoint lands (CodeFileView marks a long wait).
   const unreachable = !isRemote && !endpoint && connection === "no-daemon";
-  const readFailedRaw = !body && !unsaved && (failedRead === readKey || unreachable);
+  const failReason = failedRead?.key === readKey ? failedRead.reason : unreachable ? "No daemon" : null;
+  const readFailedRaw = !body && !unsaved && failReason !== null;
+  const retryRead = () => {
+    setFailedRead(null);
+    if (unreachable) void useVaultStore.getState().reconnect();
+    else setAttempt((n) => n + 1);
+  };
   const missing = entryState === "missing";
   // A text path with nothing on disk, in a vault this machine writes: the
   // editor stays (CodeFileView opens an empty buffer under that name, created
@@ -129,12 +108,7 @@ export const VaultFileView = memo(function VaultFileView({ path, line }: { path:
   const readFailed = !newFile && readFailedRaw;
 
   if (missing && !newFile && !(kind === "text" && unsaved)) {
-    return (
-      <div className="h-full flex flex-col items-center justify-center gap-2 text-sol-text-muted">
-        <FileQuestion className="w-8 h-8 opacity-30" />
-        <div className="text-sm">This file does not exist.</div>
-      </div>
-    );
+    return <FileUnavailable path={path} icon={<FileQuestion className="w-8 h-8 text-sol-text-dim opacity-40" />} title="Not on disk" />;
   }
 
   const assetSrc =
@@ -143,11 +117,11 @@ export const VaultFileView = memo(function VaultFileView({ path, line }: { path:
   const renderBody = () => {
     if (tooLarge) {
       return (
-        <NoPreview
+        <FileUnavailable
           path={path}
           icon={<FileWarning className="w-8 h-8 text-sol-text-dim opacity-40" />}
-          title="Too large to preview"
-          detail={`${formatSize(size)} — open it in your editor instead.`}
+          title="Too large"
+          detail={`${formatSize(size)} · limit ${formatSize(kind === "text" ? CODE_EDITOR_MAX_BYTES : VAULT_MAX_PREVIEW_BYTES)}`}
         />
       );
     }
@@ -175,17 +149,23 @@ export const VaultFileView = memo(function VaultFileView({ path, line }: { path:
       }
       // Only the scan's own size can tell "empty" from "we don't have it":
       // calling a failed read "empty" would be a quiet lie about the file.
-      return (
-        <div className="text-sm text-sol-text-dim py-8">
-          {size === 0 ? "This file is empty." : "Couldn't read this file."}
-        </div>
+      return size === 0 ? (
+        <FileUnavailable path={path} icon={<FileQuestion className="w-8 h-8 text-sol-text-dim opacity-40" />} title="Empty file" />
+      ) : (
+        <FileUnavailable
+          path={path}
+          icon={<FileWarning className="w-8 h-8 text-sol-yellow opacity-70" />}
+          title="Couldn't read"
+          detail={failReason ?? undefined}
+          onRetry={retryRead}
+        />
       );
     }
     return (
-      <NoPreview
+      <FileUnavailable
         path={path}
         icon={<FileQuestion className="w-8 h-8 text-sol-text-dim opacity-40" />}
-        title="No preview for this file type"
+        title="No preview"
         detail={formatSize(size)}
       />
     );
@@ -194,8 +174,9 @@ export const VaultFileView = memo(function VaultFileView({ path, line }: { path:
   // A text file fills the pane and scrolls inside the editor, which renders
   // only what is on screen; everything else scrolls as a page. One compact row
   // names the file; the editor owns the rest of the height. A text file keeps
-  // this layout while its body loads, so the editor is never rebuilt.
-  if (kind === "text" && !tooLarge && !readFailed) {
+  // this layout while its body loads, and when it cannot be shown, so the
+  // breadcrumbs, reveal and bookmark stay put.
+  if (kind === "text") {
     return (
       <div className="h-full flex flex-col min-h-0 overflow-hidden">
         <CodeFileBar path={path} />
@@ -206,7 +187,7 @@ export const VaultFileView = memo(function VaultFileView({ path, line }: { path:
 
   return (
     <div className="h-full overflow-y-auto" data-vault-note-scroll>
-      <div className={kind === "text" ? "px-6 pr-10 py-5" : "max-w-4xl mx-auto px-8 py-6"}>
+      <div className="max-w-4xl mx-auto px-8 py-6">
         <VaultFileHeader path={path} title={title} />
         {renderBody()}
       </div>

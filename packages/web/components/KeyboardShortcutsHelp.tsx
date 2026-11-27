@@ -7,6 +7,8 @@ import { visibleShortcutSections } from "../shortcuts/visibleSections";
 import { useKeyBindingsVersion, useShortcutParts } from "../shortcuts/registry";
 import { rebindShortcut } from "../lib/keyboardSettings";
 import { SEND_CHORDS } from "../shortcuts/sendChords";
+import { EDITOR_PALETTE_COMMANDS, editorPaletteKey } from "../lib/editorPaletteCommands";
+import type { ShortcutSection } from "../shortcuts/visibleSections";
 import { useTrackedStore } from "../store/inboxStore";
 import { useEventListener } from "../hooks/useEventListener";
 import { DESKTOP_SHORTCUTS, getDesktopShortcutConfig } from "../lib/desktop";
@@ -19,6 +21,8 @@ import { setLegendTab, useLegendState } from "../lib/iconLegend";
 import { useWorkspaceFeature } from "../lib/teamFeatures";
 
 export { KeyCap };
+
+const isEditorAction = (action: string) => action.startsWith("code.");
 
 export function KeyboardShortcutsPanel() {
   const s = useTrackedStore([
@@ -62,9 +66,26 @@ export function KeyboardShortcutsPanel() {
   const sections = useMemo(() => {
     type Row = { key: string; description: string; parts: string[]; action?: ShortcutAction };
     const result: { label: string; accent: string; rows: Row[] }[] = [];
+    const rowOf = (a: ShortcutSection["actions"][number]): Row => ({ key: a.action, action: a.def.fixed ? undefined : a.action, description: a.label, parts: formatShortcutParts(a.def) });
+    // The code editor's keys in one section: its app shortcuts (code.*),
+    // then each key the editor claims itself, read from the palette's list,
+    // so the panel and the palette show one set.
+    const editor = {
+      label: "Editor",
+      accent: "bg-sol-cyan",
+      rows: [
+        ...visibleShortcutSections(flowsOn, getShortcutsByContext).flatMap((sec) => sec.actions.filter((a) => isEditorAction(a.action)).map(rowOf)),
+        ...EDITOR_PALETTE_COMMANDS.filter((c) => c.editorKey).map((c) => ({ key: `editor:${editorPaletteKey(c)}`, description: c.label, parts: formatAcceleratorParts(c.editorKey!) })),
+      ],
+    };
     for (const sec of visibleShortcutSections(flowsOn, getShortcutsByContext)) {
-      if (sec.actions.length > 0) {
-        result.push({ label: sec.label, accent: sec.accent, rows: sec.actions.map((a) => ({ key: a.action, action: a.def.fixed ? undefined : a.action, description: a.label, parts: formatShortcutParts(a.def) })) });
+      const actions = sec.actions.filter((a) => !isEditorAction(a.action));
+      if (actions.length > 0) result.push({ label: sec.label, accent: sec.accent, rows: actions.map(rowOf) });
+      // After Global, or first while a code editor is on screen.
+      if (sec.when === undefined) {
+        const editorOnScreen = s.shortcutsPanelOpen && typeof document !== "undefined" && !!document.querySelector("[data-code-workspace]");
+        if (editorOnScreen) result.unshift(editor);
+        else result.push(editor);
       }
       // The composer's send chords live in their own table (they run from a
       // focused textarea, outside the registry); they read as the

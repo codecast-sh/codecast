@@ -115,6 +115,30 @@ describe("hunk actions", () => {
   });
 });
 
+describe("peek colors", () => {
+  it("paints the old lines with the buffer's own language", async () => {
+    const { StreamLanguage, syntaxHighlighting, defaultHighlightStyle } = await import("@codemirror/language");
+    const { javascript } = await import("@codemirror/legacy-modes/mode/javascript");
+    const view = new EditorView({
+      parent,
+      state: EditorState.create({
+        doc: "const a = 2;\n",
+        extensions: [
+          StreamLanguage.define(javascript),
+          syntaxHighlighting(defaultHighlightStyle),
+          git.gitEditorExtension({ kit, vaultId: "v", path: "a.js", base: Text.of(["const a = 1;", ""]), fetchBase: async () => null, targets: () => [] }),
+        ],
+      }),
+    });
+    git.toggleGitPeek(view, 0);
+    const old = view.dom.querySelector(".cm-git-peek-old")!;
+    expect(old.textContent).toBe("const a = 1;");
+    // The keyword and the number each carry a highlight class.
+    expect(old.querySelectorAll("span").length).toBeGreaterThanOrEqual(2);
+    view.destroy();
+  });
+});
+
 describe("diff view", () => {
   it("opens an inline diff against HEAD that stays editable, then closes", () => {
     const view = mount();
@@ -231,6 +255,29 @@ describe("side by side", () => {
     expect(view.scrollDOM.style.display).toBe("");
     // The cursor lands where it was on the right side.
     expect(view.state.selection.main.head).toBe(view.state.doc.line(3).from + 2);
+    view.destroy();
+  });
+
+  it("knows the editor its right side mirrors, so hunk keys there act on the diff", async () => {
+    const view = mount();
+    git.openGitDiff(view, { ref: "HEAD" }, "split");
+    await settle();
+    const b = rightSide(view)!;
+    expect(git.splitOwner(b)).toBe(view);
+    expect(git.splitOwner(view)).toBe(view);
+    git.closeGitDiff(view);
+    await settle();
+    expect(git.splitOwner(b)).toBe(b);
+    view.destroy();
+  });
+
+  it("offers Revert as the inline diff's one per-hunk action", async () => {
+    const view = mount();
+    git.openGitDiff(view, { ref: "HEAD" });
+    await settle();
+    expect(view.dom.querySelectorAll(".cm-git-merge-reject").length).toBeGreaterThan(0);
+    expect(view.dom.querySelector("[class*='cm-git-merge-accept']")).toBeNull();
+    expect([...view.dom.querySelectorAll(".cm-chunkButtons button, .cm-chunkButtons span:not([hidden])")].map((e) => e.textContent).filter(Boolean)).not.toContain("Keep");
     view.destroy();
   });
 

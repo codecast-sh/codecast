@@ -153,7 +153,7 @@ describe("document symbols", () => {
       ["Circle", "class", null],
       ["radius", "property", "Circle"],
       ["area", "method", "Circle"],
-      ["top", "variable", null],
+      ["top", "function", null],
     ]);
   });
 

@@ -1,66 +1,87 @@
 import { isCSSRequest, type Plugin } from "vite";
+import { rebuildTailwindSheets } from "./tailwindWorker";
 
 /**
- * Keeps an edit to a file no window has loaded from reloading every window.
+ * A save to a file Tailwind scans updates the stylesheet only when the CSS
+ * Tailwind generates changed.
  *
- * Tailwind reports each file it scans as a dependency of the stylesheet, and
- * Vite records one as a module node whose only importer is that stylesheet.
- * Once a window imports the file, the node gains its script importers and its
- * own Fast Refresh boundary, and an edit hot-swaps. Until then the stylesheet
- * is the only importer, and Vite's rule for a non-CSS file imported only by CSS
- * is a full page reload, broadcast to every connected window. With lazy routes
- * that is most of the tree: saving a component of a page nobody has open
- * reloaded all four desktop windows, a dozen times in twenty minutes while
- * other sessions worked on /line (2026-10-08).
+ * Tailwind reports its content globs as dependencies of the stylesheet, and
+ * Vite turns each scanned file into a module the stylesheet imports. Two costs
+ * followed. A save to a file no window had loaded reloaded every window
+ * (2026-10-08: a dozen reloads of four desktop windows in twenty minutes). And
+ * a save to any scanned file, loaded or not, pushed the whole stylesheet,
+ * about 900 KB, to every connected window: Vite walks a module's stylesheet
+ * importers on every update. With agents saving all day that was 30 MB a
+ * minute into each open tab, hidden ones too, and it took down the shared
+ * Chrome bridge (2026-11-26).
  *
- * The only thing such an edit can change for a connected window is the set of
- * classes Tailwind generates, so the stylesheets that scan the file are the
- * modules to update.
+ * So the dev Tailwind plugin (tailwindWorker.ts) keeps the content globs from
+ * Vite, and this plugin does the one thing such a save can do to a connected
+ * window: when Tailwind's output for a stylesheet changed (a class no file
+ * used before), it reloads that stylesheet module. A save to a loaded module
+ * hot-swaps through Vite as before; one to an unloaded module touches nothing.
  */
 
 const PLUGIN_NAME = "codecast-content-only-hmr";
 
-/** The part of a module node this decision reads. */
-export type GraphNode = {
-  url: string;
-  isSelfAccepting?: boolean;
-  importers: Set<GraphNode>;
-  importedModules: Set<unknown>;
-};
+/** What Tailwind scans here (tailwind.config.ts `content`, less index.html,
+ *  which reloads on its own). */
+const SCANNED = /\.(?:[cm]?[jt]sx?|mdx)$/;
 
-/**
- * A node no window has loaded: Vite never analyzed it (it accepts nothing and
- * records no imports of its own) and only stylesheets point at it. The entry
- * script is scanned too and has no script importer either, which is why the
- * imports matter: an edit to it must still reload.
- */
-function scannedOnly(mod: GraphNode): boolean {
-  if (mod.isSelfAccepting || mod.importedModules.size > 0 || isCSSRequest(mod.url)) return false;
-  return mod.importers.size > 0 && [...mod.importers].every((i) => isCSSRequest(i.url));
+export function isScannedSave(file: string): boolean {
+  return SCANNED.test(file) && !isCSSRequest(file) && !file.includes("/node_modules/");
 }
 
 /**
- * The modules to update for one changed file, or null to leave Vite's list as
- * it is. Pure, so it is testable without a server.
+ * Runs `check` for a burst of saves at most twice: one run, and one more for
+ * every save that landed while it ran.
  */
-export function swapScannedOnly<T extends GraphNode>(modules: T[]): T[] | null {
-  if (!modules.some(scannedOnly)) return null;
-  const out = new Set<T>();
-  for (const mod of modules) {
-    if (!scannedOnly(mod)) out.add(mod);
-    else for (const sheet of mod.importers) out.add(sheet as T);
-  }
-  return [...out];
+export function coalesced(check: () => Promise<void>): () => void {
+  let running = false;
+  let again = false;
+  const run = async () => {
+    if (running) {
+      again = true;
+      return;
+    }
+    running = true;
+    try {
+      do {
+        again = false;
+        await check();
+      } while (again);
+    } catch (err) {
+      // Never an unhandled rejection in the dev server: Node exits on one.
+      console.warn(`[${PLUGIN_NAME}] stylesheet check failed`, err);
+    } finally {
+      running = false;
+    }
+  };
+  return () => void run();
 }
 
-export function contentOnlyHmrPlugin(): Plugin {
+export function contentOnlyHmrPlugin(rebuild: () => Promise<string[]> = rebuildTailwindSheets): Plugin {
+  let schedule: (() => void) | null = null;
+  // With no window connected there is nobody to update; a window that
+  // connects later loads the stylesheet fresh, and the next check still sees
+  // it as changed against what was last pushed (tailwindWorker.ts).
+  let windows: { size: number } | null = null;
   return {
     name: PLUGIN_NAME,
     apply: "serve",
-    hotUpdate({ file, modules }) {
-      // An html change reloads by design, and only the browser has windows.
-      if (this.environment.name !== "client" || file.endsWith(".html")) return;
-      return swapScannedOnly(modules) ?? undefined;
+    configureServer(server) {
+      windows = server.ws.clients;
+    },
+    hotUpdate({ file }) {
+      if (this.environment.name !== "client" || !isScannedSave(file)) return;
+      if (windows && windows.size === 0) return;
+      const env = this.environment;
+      schedule ??= coalesced(async () => {
+        for (const from of await rebuild()) {
+          for (const mod of env.moduleGraph.getModulesByFile(from) ?? []) await env.reloadModule(mod);
+        }
+      });
+      schedule();
     },
   };
 }

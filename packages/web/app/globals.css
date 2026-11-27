@@ -547,17 +547,6 @@ html, body {
      (tailwind amber-600). One token so every surface's links match. */
   --sol-link: #d97706;
 
-  /* Syntax highlighting - Light mode optimized */
-  --hljs-keyword: #859900;
-  --hljs-string: #2aa198;
-  --hljs-number: #d33682;
-  --hljs-function: #268bd2;
-  --hljs-comment: #93a1a1;
-  --hljs-type: #b58900;
-  --hljs-variable: #cb4b16;
-  --hljs-attr: #b58900;
-  --hljs-tag: #268bd2;
-  --hljs-built-in: #dc322f;
 }
 
 /* The homepage hero renders real product views in light Classic whatever the
@@ -583,9 +572,6 @@ html, body {
   --sol-text-muted0: #839496;
 
   --logo-c: #93a1a1;
-
-  /* Syntax highlighting - Dark mode (same accent colors work well) */
-  --hljs-comment: #586e75;
 }
 
 .minimal-style {
@@ -701,6 +687,42 @@ html, body {
   --border: 60 2% 21%;
   --input: 60 2% 21%;
   --ring: 45 4% 60%;
+}
+
+/* Syntax colors: the theme's own accents, so code in a transcript, a diff
+   and the editor all follow the colour theme (lib/code/theme.ts reads these).
+   A var() resolves on the element that declares it, so the map is declared
+   on every element that redefines the palette; a colour theme writes its
+   tokens inline on <html>, which :root covers. Comments take the dim ink,
+   which every theme tunes to read on its own background. */
+:root,
+.hero-sandbox,
+.dark,
+.minimal-style {
+  --hljs-keyword: var(--sol-green);
+  --hljs-string: var(--sol-cyan);
+  --hljs-number: var(--sol-magenta);
+  --hljs-function: var(--sol-blue);
+  --hljs-comment: var(--sol-text-dim);
+  --hljs-type: var(--sol-yellow);
+  --hljs-variable: var(--sol-orange);
+  --hljs-attr: var(--sol-yellow);
+  --hljs-tag: var(--sol-blue);
+  --hljs-built-in: var(--sol-red);
+  /* Diff tints, the one set every diff draws (Pierre's cards, the editor's
+     merge and review views, the git peek): a line's wash, opaque over the
+     page, and the stronger mark on the words that changed in it. */
+  --diff-add-line: color-mix(in srgb, var(--sol-green) 10%, var(--sol-bg));
+  --diff-del-line: color-mix(in srgb, var(--sol-red) 8%, var(--sol-bg));
+  --diff-add-word: color-mix(in srgb, var(--sol-green) 25%, transparent);
+  --diff-del-word: color-mix(in srgb, var(--sol-red) 22%, transparent);
+}
+/* On a dark page the same wash all but disappears, so it is a little stronger. */
+.dark {
+  --diff-add-line: color-mix(in srgb, var(--sol-green) 12%, var(--sol-bg));
+  --diff-del-line: color-mix(in srgb, var(--sol-red) 10%, var(--sol-bg));
+  --diff-add-word: color-mix(in srgb, var(--sol-green) 30%, transparent);
+  --diff-del-word: color-mix(in srgb, var(--sol-red) 25%, transparent);
 }
 
 @layer components {
@@ -1582,18 +1604,11 @@ diffs-container {
   --diffs-modified-color-override: var(--sol-blue);
   --diffs-bg-context-override: transparent;
   --diffs-bg-context-gutter-override: transparent;
-  --diffs-bg-addition-override: color-mix(in srgb, var(--sol-green) 10%, var(--sol-bg));
-  --diffs-bg-deletion-override: color-mix(in srgb, var(--sol-red) 8%, var(--sol-bg));
-  --diffs-bg-addition-emphasis-override: color-mix(in srgb, var(--sol-green) 25%, transparent);
-  --diffs-bg-deletion-emphasis-override: color-mix(in srgb, var(--sol-red) 22%, transparent);
+  --diffs-bg-addition-override: var(--diff-add-line);
+  --diffs-bg-deletion-override: var(--diff-del-line);
+  --diffs-bg-addition-emphasis-override: var(--diff-add-word);
+  --diffs-bg-deletion-emphasis-override: var(--diff-del-word);
   --diffs-bg-separator-override: var(--sol-bg-alt);
-}
-
-.dark diffs-container {
-  --diffs-bg-addition-override: color-mix(in srgb, var(--sol-green) 12%, var(--sol-bg));
-  --diffs-bg-deletion-override: color-mix(in srgb, var(--sol-red) 10%, var(--sol-bg));
-  --diffs-bg-addition-emphasis-override: color-mix(in srgb, var(--sol-green) 30%, transparent);
-  --diffs-bg-deletion-emphasis-override: color-mix(in srgb, var(--sol-red) 25%, transparent);
 }
 
 /* --row-h is set from JS (undoActions.ts) to the row's measured height just

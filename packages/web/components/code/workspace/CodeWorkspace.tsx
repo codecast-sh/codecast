@@ -1,5 +1,5 @@
-// The Files content area as a code workspace: up to three editor groups side
-// by side (or stacked), each with its own tabs, plus quick open, the tab
+// The Files content area as a code workspace: up to three editor groups in a
+// two-level split (columns that stack, or rows that divide), each with its own tabs, plus quick open, the tab
 // switcher and the line prompt. The workspace lives in codeStore per vault
 // and persists across reloads; the URL's ?f= stays the address of the file in
 // the focused group, so links, history, Share and the app's own tabs work as
@@ -11,29 +11,51 @@
 
 import { memo, useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import { useConvex } from "convex/react";
-import { Group, Panel, Separator } from "react-resizable-panels";
+import { Group, Panel, Separator, useGroupRef } from "react-resizable-panels";
 import type { EditorView } from "@codemirror/view";
 import { useCodeStore, workspaceFor } from "../../../store/codeStore";
 import { useInboxStore } from "../../../store/inboxStore";
 import { useVaultStore } from "../../../store/vaultStore";
 import { useMountEffect } from "../../../hooks/useMountEffect";
+import { useDerivedSize } from "../../../hooks/useDerivedSize";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useTabActive } from "../../../hooks/usePagePresence";
 import { usePaneShortcutAction } from "../../../shortcuts";
-import { registerCodeCommands, type CodeCommandContext } from "../../../lib/code/commands";
+import { registerCodeCommands, runCodeCommand, type CodeCommandContext, type CodeCommandId } from "../../../lib/code/commands";
 import { isVirtualTab, SEARCH_RESULTS_TAB } from "../../../lib/code/workspace/virtualTabs";
 import { workspaceActions as A } from "../../../lib/code/workspace/controller";
-import { groupKeyOfView, viewOfGroup } from "../../../lib/code/workspace/groupRegistry";
+import { focusGroup, groupKeyOfView, viewOfGroup } from "../../../lib/code/workspace/groupRegistry";
 import { followVaultFiles, forgetFile, isFolderPath } from "../../../lib/code/workspace/followFiles";
 import { peekHistory, stepHistory } from "../../../lib/code/workspace/navHistory";
 import { persistWorkspaces } from "../../../lib/code/workspace/persist";
-import { MAX_GROUPS, activeGroup, groupById, mruTabs, neighborGroup, type FocusDirection, type MruEntry } from "../../../lib/code/workspace/model";
+import { registerExCompletionSource } from "../../../lib/code/vim/completionSource";
+import {
+  MIN_GROUP_SIZE,
+  activeGroup,
+  alternateTab,
+  canSplitMore,
+  cycleGroup,
+  groupById,
+  groupRects,
+  laneGroups,
+  lanesOf,
+  mruTabs,
+  neighborGroup,
+  previousGroup,
+  type FocusDirection,
+  type GroupEdge,
+  type MruEntry,
+  type SplitDirection,
+  type Workspace,
+  type WsGroup,
+} from "../../../lib/code/workspace/model";
 import { EditorGroup } from "./EditorGroup";
 import { QuickOpen } from "./QuickOpen";
 import { TabSwitcher } from "./TabSwitcher";
 import { GotoLine } from "./GotoLine";
 import type { TabMenuAction } from "./TabBar";
 import { resolveVaultPath } from "../../../lib/code/vaultPath";
+import { filesHref, navigateToFiles } from "../../../lib/vault/vaultHref";
 import { AgentLayer } from "../agent/AgentLayer";
 
 let persisting = false;
@@ -44,6 +66,16 @@ function startPersistence(): void {
 }
 
 let instances = 0;
+
+/** What a group with tabs gets for its recent list: the same empty array
+ *  every render, so a tab change elsewhere leaves it alone. */
+const NO_RECENT: readonly string[] = [];
+
+/** The real file the focused group shows, if any. */
+const activeOf = (ws: Parameters<typeof activeGroup>[0]): string | null => {
+  const path = activeGroup(ws).active;
+  return path && !isVirtualTab(path) ? path : null;
+};
 
 // A hairline between groups with a wider grab area, lit while dragged.
 // One status bar for the workspace: every group keeps the bar's row, so the
@@ -59,9 +91,47 @@ const separatorClass = {
     "relative z-10 h-px bg-sol-border/50 before:absolute before:inset-x-0 before:-top-[2px] before:-bottom-[2px] before:content-[''] before:transition-colors before:duration-150 hover:before:bg-sol-cyan data-[resize-handle-active]:before:bg-sol-cyan",
 };
 
+/** The smallest a group may be, in px: a tab, the breadcrumbs and a status
+ *  row still fit, and a few lines of code under them. */
+const MIN_GROUP_PX = { width: 260, height: 160 } as const;
+/** Size changes smaller than this re-render nothing. */
+const SIZE_QUANTUM = 20;
+
+/** A group's minimum share of a split `px` long holding `n` groups: the pixel
+ *  floor as a percentage, never more than an equal share, so it can always
+ *  be met (a pixel minimum the pane cannot meet livelocks the panel library). */
+export function minShare(px: number, n: number, floor: number): number {
+  if (!px) return MIN_GROUP_SIZE;
+  return Math.min(100 / n - 0.5, Math.max(MIN_GROUP_SIZE, (floor / px) * 100));
+}
+
+/** Whether `groupId` has room to split in `dir`: under the group limit, and
+ *  each half at least the pixel floor (an unmeasured workspace has room). */
+export function roomToSplit(ws: Workspace, groupId: string, dir: SplitDirection, size: { w: number; h: number }): boolean {
+  if (!canSplitMore(ws)) return false;
+  const r = groupRects(ws).get(groupId);
+  if (!r) return false;
+  const [len, floor] = dir === "right" ? [r.w * size.w, MIN_GROUP_PX.width] : [r.h * size.h, MIN_GROUP_PX.height];
+  return !len || len / 2 >= floor;
+}
+
+/** What each item of a tab's menu runs. */
+const TAB_MENU_COMMANDS: Record<TabMenuAction, [CodeCommandId, Record<string, unknown>?]> = {
+  close: ["file.close"],
+  closeOthers: ["file.closeOthers"],
+  closeRight: ["tabs.closeRight"],
+  pin: ["tabs.pin"],
+  keep: ["tabs.keep"],
+  splitRight: ["split.right"],
+  copyPath: ["file.copyPath"],
+  copyRelative: ["file.copyPath", { relative: true }],
+  reveal: ["file.reveal"],
+};
+
 type Overlay =
   | { kind: "quickOpen"; query?: string }
   | { kind: "switcher"; held: boolean }
+  | { kind: "groupTabs"; groupId: string }
   | { kind: "gotoLine"; line: number; lines: number }
   | null;
 
@@ -90,8 +160,17 @@ export const CodeWorkspace = memo(function CodeWorkspace(props: CodeWorkspacePro
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [overlay, setOverlay] = useState<Overlay>(null);
   const tabActive = useTabActive();
-  const live = useRef({ props, ws, tabActive, convex });
-  live.current = { props, ws, tabActive, convex };
+  const sizeKey = useDerivedSize(
+    rootRef,
+    (w, h) => `${Math.round(w / SIZE_QUANTUM) * SIZE_QUANTUM}x${Math.round(h / SIZE_QUANTUM) * SIZE_QUANTUM}`,
+    () => "0x0",
+  );
+  const size = useMemo(() => {
+    const [w, h] = sizeKey.split("x").map(Number);
+    return { w, h };
+  }, [sizeKey]);
+  const live = useRef({ props, ws, tabActive, convex, size });
+  live.current = { props, ws, tabActive, convex, size };
 
   // page.tsx keys this component by vault, so `vaultId` is fixed for its life
   // and every verb below may close over it.
@@ -184,6 +263,24 @@ export const CodeWorkspace = memo(function CodeWorkspace(props: CodeWorkspacePro
     [instance],
   );
 
+  /** The tab a tab verb acts on: the one a tab's menu names (args.group is
+   *  the group's key, `<instance>:<id>`), else the active tab of the
+   *  command's group. Null when the command belongs to another workspace. */
+  const tabFor = (args: Record<string, unknown> | undefined, ctx: CodeCommandContext | undefined): { group: WsGroup; path: string } | null => {
+    const key = typeof args?.group === "string" ? args.group : null;
+    if (key && !key.startsWith(`${instance}:`)) return null;
+    const group = groupById(live.current.ws, key ? key.slice(instance.length + 1) : groupFor(ctx));
+    const path = typeof args?.path === "string" ? args.path : group?.active;
+    return group && path && group.tabs.some((t) => t.path === path) ? { group, path } : null;
+  };
+
+  /** Split a group, when it has room; false (vim's E36) when it has none. */
+  const split = (groupId: string, path: string, dir: SplitDirection, opts?: { at?: string; preview?: boolean }) => {
+    if (!roomToSplit(live.current.ws, groupId, dir, live.current.size)) return false;
+    A.split(vaultId, groupId, path, dir, opts);
+    return true;
+  };
+
   const copy = (text: string) => void navigator.clipboard?.writeText(text).catch(() => {});
   const absolute = (path: string) => (live.current.props.vaultRoot ? `${live.current.props.vaultRoot.replace(/\/$/, "")}/${path}` : path);
 
@@ -208,6 +305,16 @@ export const CodeWorkspace = memo(function CodeWorkspace(props: CodeWorkspacePro
     if (target) A.focusGroup(vaultId, target);
     return !!target;
   };
+
+  /** Run a layout verb with the command's group focused; false when the
+   *  command came from another workspace. */
+  const onGroup = (ctx: CodeCommandContext | undefined, verb: () => void) => {
+    const g = groupFor(ctx);
+    if (!g) return false;
+    A.focusGroup(vaultId, g);
+    verb();
+  };
+  const axisOf = (args: Record<string, unknown> | undefined) => (args?.axis === "height" ? "height" : "width");
 
   const showGotoLine = () => {
     const key = `${instance}:${live.current.ws.activeGroup}`;
@@ -235,6 +342,17 @@ export const CodeWorkspace = memo(function CodeWorkspace(props: CodeWorkspacePro
     else terms.openTerminal({ endpoint, kind: "shell", cwd: root });
   };
 
+  // The `:` line's Tab completion reads this folder's files and tabs.
+  useMountEffect(() =>
+    registerExCompletionSource((view) => {
+      if (!groupKeyOfView(view)?.startsWith(`${instance}:`)) return null;
+      return {
+        files: () => useVaultStore.getState().files,
+        tabs: () => [...new Set(mruTabs(live.current.ws).map((e) => e.path))].filter((p) => !isVirtualTab(p)),
+      };
+    }),
+  );
+
   useMountEffect(() =>
     registerCodeCommands({
       // The results editor is a tab: brought forward where it is open, else
@@ -252,35 +370,57 @@ export const CodeWorkspace = memo(function CodeWorkspace(props: CodeWorkspacePro
         const { path } = resolved;
         const line = typeof args?.line === "number" ? args.line : undefined;
         const at = line ? (typeof args?.column === "number" ? `${line}:${args.column}` : `${line}`) : undefined;
-        const split = args?.split === "right" || args?.split === "down" ? args.split : null;
-        if (split) A.split(vaultId, g, path, split, { at });
-        else A.open(vaultId, path, { groupId: g, at });
+        const splitDir = args?.split === "right" || args?.split === "down" ? args.split : null;
+        if (splitDir) return split(g, path, splitDir, { at });
+        A.open(vaultId, path, { groupId: g, at });
       },
-      "file.close": (_a, ctx) => {
-        const g = groupFor(ctx);
-        const group = groupById(live.current.ws, g);
-        if (!group?.active) return false;
-        A.close(vaultId, group.id, group.active);
+      "file.close": (args, ctx) => {
+        const t = tabFor(args, ctx);
+        if (!t) return false;
+        A.close(vaultId, t.group.id, t.path);
       },
-      "file.closeOthers": (_a, ctx) => {
-        const group = groupById(live.current.ws, groupFor(ctx));
-        if (!group?.active) return false;
-        A.closeOthers(vaultId, group.id, group.active);
+      "file.closeOthers": (args, ctx) => {
+        const t = tabFor(args, ctx);
+        if (!t) return false;
+        A.closeOthers(vaultId, t.group.id, t.path);
+      },
+      "tabs.closeRight": (args, ctx) => {
+        const t = tabFor(args, ctx);
+        if (!t) return false;
+        A.closeToRight(vaultId, t.group.id, t.path);
+      },
+      "tabs.pin": (args, ctx) => {
+        const t = tabFor(args, ctx);
+        if (!t) return false;
+        A.pin(vaultId, t.group.id, t.path);
+      },
+      "tabs.keep": (args, ctx) => {
+        const t = tabFor(args, ctx);
+        if (!t) return false;
+        A.keepOpen(vaultId, t.group.id, t.path);
       },
       "file.reopenClosed": (_a, ctx) => {
         if (!groupFor(ctx) || !live.current.ws.closed.length) return false;
         A.reopen(vaultId);
       },
       "file.copyPath": (args, ctx) => {
-        const group = groupById(live.current.ws, groupFor(ctx));
-        if (!group?.active) return false;
-        copy(args?.relative ? group.active : absolute(group.active));
+        const t = tabFor(args, ctx);
+        if (!t || isVirtualTab(t.path)) return false;
+        copy(args?.relative ? t.path : absolute(t.path));
       },
-      "file.reveal": (_a, ctx) => {
-        const group = groupById(live.current.ws, groupFor(ctx));
-        if (!group?.active) return false;
+      "file.reveal": (args, ctx) => {
+        const t = tabFor(args, ctx);
+        if (!t || isVirtualTab(t.path)) return false;
         live.current.props.onToggleTree(true);
-        useVaultStore.getState().requestReveal(group.active);
+        useVaultStore.getState().requestReveal(t.path);
+      },
+      // The breadcrumbs take focus at the file's own crumb; arrows walk them
+      // and Escape comes back (CodeFileBar).
+      "breadcrumbs.focus": (_a, ctx) => {
+        const g = groupFor(ctx);
+        const crumb = g && rootRef.current?.querySelector<HTMLElement>(`[data-code-group="${g}"] [data-crumbs] [aria-current]`);
+        if (!crumb) return false;
+        crumb.focus();
       },
       quickOpen: (args, ctx) => {
         if (!groupFor(ctx)) return false;
@@ -316,15 +456,15 @@ export const CodeWorkspace = memo(function CodeWorkspace(props: CodeWorkspacePro
       },
       "nav.back": (_a, ctx) => navStep(ctx, -1),
       "nav.forward": (_a, ctx) => navStep(ctx, 1),
-      "split.right": (_a, ctx) => {
-        const group = groupById(live.current.ws, groupFor(ctx));
-        if (!group?.active) return false;
-        A.split(vaultId, group.id, group.active, "right");
+      "split.right": (args, ctx) => {
+        const t = tabFor(args, ctx);
+        if (!t) return false;
+        return split(t.group.id, t.path, "right");
       },
       "split.down": (_a, ctx) => {
         const group = groupById(live.current.ws, groupFor(ctx));
         if (!group?.active) return false;
-        A.split(vaultId, group.id, group.active, "down");
+        return split(group.id, group.active, "down");
       },
       "split.close": (_a, ctx) => {
         const g = groupFor(ctx);
@@ -335,6 +475,36 @@ export const CodeWorkspace = memo(function CodeWorkspace(props: CodeWorkspacePro
         const g = groupFor(ctx);
         if (!g) return false;
         A.only(vaultId, g);
+      },
+      "tabs.alternate": (_a, ctx) => {
+        const g = groupFor(ctx);
+        if (!g) return false;
+        A.focusGroup(vaultId, g);
+        const alt = alternateTab(live.current.ws);
+        if (!alt) return false;
+        A.activate(vaultId, alt.groupId, alt.path);
+      },
+      // Window commands act on the group the command came from.
+      "split.equalize": (_a, ctx) => onGroup(ctx, () => A.equalize(vaultId)),
+      "split.maximize": (args, ctx) => onGroup(ctx, () => A.maximize(vaultId, axisOf(args))),
+      "split.resize": (args, ctx) => onGroup(ctx, () => A.resize(vaultId, axisOf(args), typeof args?.by === "number" ? args.by : 1)),
+      "split.exchange": (_a, ctx) => onGroup(ctx, () => A.exchange(vaultId)),
+      "split.rotate": (args, ctx) => onGroup(ctx, () => A.rotate(vaultId, args?.delta === -1 ? -1 : 1)),
+      "split.moveToEdge": (args, ctx) => onGroup(ctx, () => A.moveToEdge(vaultId, (args?.edge as GroupEdge) ?? "left")),
+      "focus.previous": (_a, ctx) => {
+        if (!groupFor(ctx)) return false;
+        const target = previousGroup(live.current.ws);
+        if (target) A.focusGroup(vaultId, target);
+        return !!target;
+      },
+      "focus.cycle": (args, ctx) => {
+        const g = groupFor(ctx);
+        if (!g) return false;
+        A.focusGroup(vaultId, g);
+        const w = live.current.ws;
+        const target = args?.to === "first" ? w.groups[0].id : args?.to === "last" ? w.groups[w.groups.length - 1].id : cycleGroup(w, args?.delta === -1 ? -1 : 1);
+        if (target) A.focusGroup(vaultId, target);
+        return !!target;
       },
       "focus.left": (_a, ctx) => !!groupFor(ctx) && focusDir("left"),
       "focus.right": (_a, ctx) => !!groupFor(ctx) && focusDir("right"),
@@ -376,8 +546,16 @@ export const CodeWorkspace = memo(function CodeWorkspace(props: CodeWorkspacePro
     return !!surface && !!rootRef.current && surface.contains(rootRef.current);
   };
   usePaneShortcutAction("code.closeTab", () => {
-    const group = activeGroup(live.current.ws);
-    if (!surfaceHasFocus() || !group.active) return false;
+    const w = live.current.ws;
+    const group = activeGroup(w);
+    if (!surfaceHasFocus()) return false;
+    // An empty group in a split closes, as in Zed; the last one leaves the
+    // press to the app.
+    if (!group.active) {
+      if (w.groups.length < 2) return false;
+      A.closeGroup(vaultId, group.id);
+      return true;
+    }
     A.close(vaultId, group.id, group.active);
     return true;
   });
@@ -388,39 +566,19 @@ export const CodeWorkspace = memo(function CodeWorkspace(props: CodeWorkspacePro
   });
   usePaneShortcutAction("code.splitRight", () => {
     const group = activeGroup(live.current.ws);
-    if (!group.active || live.current.ws.groups.length >= MAX_GROUPS) return false;
-    A.split(vaultId, group.id, group.active, "right");
-    return true;
+    return !!group.active && split(group.id, group.active, "right");
   });
 
   // ── render ────────────────────────────────────────────────────────────────
 
+  // A tab's menu runs the same commands the palette and the keys do, on the
+  // tab it was opened on.
   const onMenu = useCallback(
     (groupId: string, action: TabMenuAction, path: string) => {
-      switch (action) {
-        case "close":
-          return A.close(vaultId, groupId, path);
-        case "closeOthers":
-          return A.closeOthers(vaultId, groupId, path);
-        case "closeRight":
-          return A.closeToRight(vaultId, groupId, path);
-        case "pin":
-          return A.pin(vaultId, groupId, path);
-        case "keep":
-          return A.keepOpen(vaultId, groupId, path);
-        case "splitRight":
-          return A.split(vaultId, groupId, path, "right");
-        case "copyPath":
-          return copy(absolute(path));
-        case "copyRelative":
-          return copy(path);
-        case "reveal":
-          live.current.props.onToggleTree(true);
-          return useVaultStore.getState().requestReveal(path);
-      }
+      const [id, extra] = TAB_MENU_COMMANDS[action];
+      runCodeCommand(id, { ...extra, group: `${instance}:${groupId}`, path }, { source: "menu" });
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [vaultId],
+    [instance],
   );
   const handlers = useMemo(
     () => ({
@@ -428,11 +586,13 @@ export const CodeWorkspace = memo(function CodeWorkspace(props: CodeWorkspacePro
       onActivate: (g: string, p: string) => A.activate(vaultId, g, p),
       onClose: (g: string, p: string) => A.close(vaultId, g, p),
       onKeep: (g: string, p: string) => A.keepOpen(vaultId, g, p),
+      onOpen: (g: string, p: string) => A.open(vaultId, p, { groupId: g, preview: true }),
       onMove: (from: string, p: string, to: string, i: number) => A.move(vaultId, from, p, to, i),
       onSplit: (g: string) => {
         const group = groupById(live.current.ws, g);
-        if (group?.active) A.split(vaultId, g, group.active, "right");
+        if (group?.active) split(g, group.active, "right");
       },
+      onListTabs: (g: string) => setOverlay({ kind: "groupTabs", groupId: g }),
     }),
     [vaultId],
   );
@@ -446,21 +606,79 @@ export const CodeWorkspace = memo(function CodeWorkspace(props: CodeWorkspacePro
     return out;
   }, [ws]);
 
-  const closeOverlay = useCallback(() => {
-    setOverlay(null);
-    const view = viewOfGroup(`${instance}:${live.current.ws.activeGroup}`) as EditorView | null;
-    requestAnimationFrame(() => view?.focus());
-  }, [instance]);
+  const closeOverlay = useCallback(() => setOverlay(null), []);
+
+  // Focus that was in the workspace stays in it when what held it goes away:
+  // a tab or a group closing by any route (Cmd-W, :q, the close button, a
+  // file deleted on disk), or a dialog closing. It lands on the focused
+  // group's editor, else on the group's body, never on <body>, where the
+  // next Cmd-W would close the app tab.
+  const lastFocus = useRef<Element | null>(null);
+  useMountEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const onIn = (e: FocusEvent) => void (lastFocus.current = e.target as Element);
+    // Focus the person moved out (a click elsewhere) is theirs; only focus
+    // whose element was removed comes back.
+    const onOut = (e: FocusEvent) => {
+      const el = e.target as Element;
+      queueMicrotask(() => {
+        if (el.isConnected && lastFocus.current === el && !root.contains(document.activeElement)) lastFocus.current = null;
+      });
+    };
+    root.addEventListener("focusin", onIn);
+    root.addEventListener("focusout", onOut);
+    return () => {
+      root.removeEventListener("focusin", onIn);
+      root.removeEventListener("focusout", onOut);
+    };
+  });
+  useWatchEffect(() => {
+    const raf = requestAnimationFrame(() => {
+      const was = lastFocus.current;
+      const now = document.activeElement;
+      if (!was || was.isConnected || (now && now !== document.body)) return;
+      focusGroup(`${instance}:${live.current.ws.activeGroup}`);
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [ws, overlay]);
 
   const horizontal = ws.orientation === "horizontal";
   const groups = ws.groups;
   const multi = groups.length > 1;
-  const canSplit = groups.length < MAX_GROUPS;
-  const layout = useMemo(() => {
-    const sizes = ws.sizes && ws.sizes.length === groups.length ? ws.sizes : groups.map(() => 100 / groups.length);
-    return Object.fromEntries(groups.map((g, i) => [g.id, sizes[i]]));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [groups.map((g) => g.id).join(","), ws.orientation]);
+  const lanes = lanesOf(ws);
+  const blocks = useMemo(() => laneGroups(ws), [ws]);
+  const rects = useMemo(() => groupRects(ws), [ws]);
+  // Each split's minimum share: its pixel floor over its own length. Lanes
+  // run along the outer axis; the groups in a lane across it.
+  const outerPx = horizontal ? size.w : size.h;
+  const innerPx = horizontal ? size.h : size.w;
+  const outerFloor = horizontal ? MIN_GROUP_PX.width : MIN_GROUP_PX.height;
+  const innerFloor = horizontal ? MIN_GROUP_PX.height : MIN_GROUP_PX.width;
+  const outerOrientation = horizontal ? "horizontal" : "vertical";
+  const innerOrientation = horizontal ? "vertical" : "horizontal";
+
+  const renderGroup = (g: WsGroup) => {
+    const r = rects.get(g.id);
+    const top = !r || r.y < 1e-6;
+    return (
+      <EditorGroup
+        instance={instance}
+        vaultId={vaultId}
+        group={g}
+        focused={multi ? g.id === ws.activeGroup : true}
+        leftInset={!treeOpen && top && (!r || r.x < 1e-6)}
+        rightInset={top && (!r || r.x + r.w > 1 - 1e-6)}
+        canSplit={roomToSplit(ws, g.id, "right", size)}
+        groupNumber={groupNumbers?.get(g.id)}
+        recent={g.tabs.length ? NO_RECENT : recent}
+        deepLinking={!!props.deepLinking}
+        renderNote={renderNote}
+        onMenu={onMenu}
+        {...handlers}
+      />
+    );
+  };
 
   const groupNumbers = useMemo(() => (multi ? new Map(groups.map((g, i) => [g.id, i + 1])) : null), [groups, multi]);
 
@@ -482,35 +700,31 @@ export const CodeWorkspace = memo(function CodeWorkspace(props: CodeWorkspacePro
     >
       <style>{STATUS_CSS}</style>
       <AgentLayer vaultId={vaultId} root={props.vaultRoot} />
-      <Group
-        key={horizontal ? "h" : "v"}
-        orientation={horizontal ? "horizontal" : "vertical"}
-        className="h-full min-h-0"
-        defaultLayout={layout}
-        onLayoutChanged={(l) => {
-          if (multi) A.sizes(vaultId, groups.map((g) => l[g.id] ?? 0));
-        }}
+      <SplitRun
+        key={outerOrientation}
+        orientation={outerOrientation}
+        ids={blocks.map((b) => `lane:${b[0].id}`)}
+        sizes={ws.sizes}
+        minSize={minShare(outerPx, blocks.length, outerFloor)}
+        onSizes={(sizes) => A.sizes(vaultId, null, sizes)}
       >
-        {groups.map((g, i) => (
-          <GroupPanel key={g.id} id={g.id} separator={i > 0 ? (horizontal ? "horizontal" : "vertical") : null}>
-            <EditorGroup
-              instance={instance}
-              vaultId={vaultId}
-              group={g}
-              focused={multi ? g.id === ws.activeGroup : true}
-              leftInset={!treeOpen && i === 0}
-              rightInset={horizontal ? i === groups.length - 1 : i === 0}
-              canSplit={canSplit}
-              renderNote={renderNote}
-              onMenu={onMenu}
-              {...handlers}
-            />
-          </GroupPanel>
-        ))}
-      </Group>
+        {(laneId, li) => (
+          <SplitRun
+            orientation={innerOrientation}
+            ids={blocks[li].map((g) => g.id)}
+            sizes={lanes[li]?.sizes ?? null}
+            minSize={minShare(innerPx, blocks[li].length, innerFloor)}
+            onSizes={(sizes) => A.sizes(vaultId, li, sizes)}
+          >
+            {(_id, gi) => renderGroup(blocks[li][gi])}
+          </SplitRun>
+        )}
+      </SplitRun>
       {overlay?.kind === "quickOpen" && (
         <QuickOpen
           vaultId={vaultId}
+          root={props.vaultRoot}
+          activePath={activeOf(ws)}
           initialQuery={overlay.query}
           recent={recent}
           onClose={closeOverlay}
@@ -519,11 +733,20 @@ export const CodeWorkspace = memo(function CodeWorkspace(props: CodeWorkspacePro
             setOverlay(null);
             if (group.active) A.activate(vaultId, group.id, group.active, at);
           }}
-          onOpen={(path, at, split) => {
+          onOpen={(path, at, toSide) => {
             setOverlay(null);
             const group = activeGroup(live.current.ws);
-            if (split) A.split(vaultId, group.id, path, "right", { at, preview: true });
-            else A.open(vaultId, path, { preview: true, at });
+            // No room beside it: the file opens here.
+            if (!(toSide && split(group.id, path, "right", { at, preview: true }))) A.open(vaultId, path, { preview: true, at });
+          }}
+          onSymbols={(scope, query) => {
+            setOverlay(null);
+            // Once the dialog is gone and focus is back in the editor (contract 9).
+            setTimeout(() => runCodeCommand(scope === "file" ? "goto.symbol" : "goto.workspaceSymbol", { query }, { source: "palette" }), 0);
+          }}
+          onOpenLocal={(localPath, at) => {
+            setOverlay(null);
+            navigateToFiles(filesHref({ localPath, line: at }));
           }}
         />
       )}
@@ -537,6 +760,17 @@ export const CodeWorkspace = memo(function CodeWorkspace(props: CodeWorkspacePro
           onPick={(entry: MruEntry) => {
             setOverlay(null);
             A.activate(vaultId, entry.groupId, entry.path);
+          }}
+        />
+      )}
+      {overlay?.kind === "groupTabs" && (
+        <GroupTabList
+          vaultId={vaultId}
+          group={groupById(ws, overlay.groupId)}
+          onClose={closeOverlay}
+          onPick={(e) => {
+            setOverlay(null);
+            A.activate(vaultId, e.groupId, e.path);
           }}
         />
       )}
@@ -556,13 +790,83 @@ export const CodeWorkspace = memo(function CodeWorkspace(props: CodeWorkspacePro
   );
 });
 
-function GroupPanel({ id, separator, children }: { id: string; separator: "horizontal" | "vertical" | null; children: ReactNode }) {
+/** One group's tabs, in strip order, from its overflow count. */
+function GroupTabList({ vaultId, group, onPick, onClose }: { vaultId: string; group: WsGroup | undefined; onPick(e: MruEntry): void; onClose(): void }) {
+  const entries = useMemo(() => (group ? group.tabs.map((t) => ({ groupId: group.id, path: t.path })) : []), [group]);
+  const pinned = useMemo(() => new Set(group?.tabs.filter((t) => t.pinned).map((t) => t.path)), [group]);
+  if (!group || !entries.length) return null;
+  return (
+    <TabSwitcher
+      vaultId={vaultId}
+      entries={entries}
+      groupNumbers={null}
+      held={false}
+      initial={Math.max(0, entries.findIndex((e) => e.path === group.active))}
+      pinned={pinned}
+      onClose={onClose}
+      onPick={onPick}
+    />
+  );
+}
+
+/** One run of a split: panels along one axis with hairlines between them.
+ *  Sizes set by a command (<C-w>=, <C-w>_, 5<C-w><) reach the panels here; a
+ *  drag already shows its sizes and comes back equal, so it sets nothing. */
+function SplitRun({
+  orientation,
+  ids,
+  sizes,
+  minSize,
+  onSizes,
+  children,
+}: {
+  orientation: "horizontal" | "vertical";
+  ids: string[];
+  sizes: number[] | null;
+  /** Percent, so it can always be met. */
+  minSize: number;
+  onSizes(sizes: number[]): void;
+  children(id: string, index: number): ReactNode;
+}) {
+  const key = ids.join(",");
+  const want = sizes && sizes.length === ids.length ? sizes : ids.map(() => 100 / ids.length);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const defaultLayout = useMemo(() => Object.fromEntries(ids.map((id, i) => [id, want[i]])), [key]);
+  const groupRef = useGroupRef();
+  const live = useRef({ ids, onSizes });
+  live.current = { ids, onSizes };
+  useWatchEffect(() => {
+    const handle = groupRef.current;
+    if (!handle || ids.length < 2) return;
+    const have = handle.getLayout();
+    if (ids.every((id, i) => Math.abs((have[id] ?? 0) - want[i]) < 0.5)) return;
+    handle.setLayout(Object.fromEntries(ids.map((id, i) => [id, want[i]])));
+  }, [want.join(","), key]);
+  return (
+    <Group
+      groupRef={groupRef}
+      orientation={orientation}
+      className="h-full min-h-0"
+      defaultLayout={defaultLayout}
+      onLayoutChanged={(l) => {
+        const { ids: now, onSizes: emit } = live.current;
+        if (now.length > 1) emit(now.map((id) => l[id] ?? 0));
+      }}
+    >
+      {ids.map((id, i) => (
+        <SplitPanel key={id} id={id} separator={i > 0 ? orientation : null} minSize={minSize}>
+          {children(id, i)}
+        </SplitPanel>
+      ))}
+    </Group>
+  );
+}
+
+function SplitPanel({ id, separator, minSize, children }: { id: string; separator: "horizontal" | "vertical" | null; minSize: number; children: ReactNode }) {
   return (
     <>
       {separator && <Separator className={separatorClass[separator]} />}
-      {/* A percentage minimum can always be met; a pixel one in a pane too
-          narrow for it livelocks the panel library (see app/files/page.tsx). */}
-      <Panel id={id} minSize="12%" className="min-h-0 min-w-0">
+      <Panel id={id} minSize={`${minSize}%`} className="min-h-0 min-w-0">
         {children}
       </Panel>
     </>
