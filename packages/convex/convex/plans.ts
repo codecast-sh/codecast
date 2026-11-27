@@ -38,7 +38,7 @@ import { inlineForeignText } from "@codecast/shared/contracts";
 import { listLiveManagedSessions, liveConversationIdSet } from "./lib/liveSessions";
 import { graphOutside, sortGraphRefs, stampGraphStatus } from "./lib/taskGraph";
 import { patchDepMirror } from "./tasks";
-import { resolveFromCall } from "./transcripts";
+import { resolveFromCall } from "./callReads";
 import { isTeamMember, teamVisibleConvTeam } from "./privacy";
 import { linkConversationToEntityBestEffort } from "./conversationLinks";
 import { cliDocWriter, docLiveState, docRevision, writeDocBody } from "./lib/docBody";

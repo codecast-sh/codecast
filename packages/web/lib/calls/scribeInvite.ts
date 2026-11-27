@@ -1,12 +1,13 @@
 // Inviting the call's Scribe, one flow for web and the phone (pl-1145). The
-// server holds one slot per call (transcripts.inviteScribe): the client whose
+// server holds one slot per call (transcriptsScribe.inviteScribe): the client whose
 // invite claims it spawns the agent session, briefed with the Scribe prompt
 // and working out of sight, then seats it on the live transcript as the
 // "scribe" route, with no face. A failure past the claim gives the slot back
 // at once (rather than hold it until the claim expires) and tells a spawned
 // session that no words are coming. No React here: the surfaces bring the
 // press state and say the error their own way.
-import { HUDDLE_FEED_DISREGARD, scribeInstructions } from "@codecast/shared/contracts";
+import { HUDDLE_FEED_DISREGARD } from "@codecast/shared/contracts";
+import { scribeInstructions } from "@codecast/shared/contracts/scribePrompt";
 import type { Character } from "@codecast/shared/contracts/sessionCharacter";
 
 /** The slice of transcripts.getLive the invite reads. */

@@ -5,7 +5,7 @@ import { briefBudget, briefBudgetWords, briefOverBudgetMessage } from '@codecast
 import { patchBriefNarrative } from '../../../../cli/src/briefLines';
 import { parseFindings } from '../../../../cli/src/reviewFindings';
 
-import { BOARD_HANDLERS, BOARD_WRITES, underOf } from './board';
+import { BOARD_WRITES, underOf } from './board';
 import type { Parsed } from './tree';
 import { mint, type FakeTask, type FakeWorld } from './world';
 
@@ -29,7 +29,7 @@ export interface Answer {
   cli?: true;
 }
 
-type Handler = (p: Parsed, ctx: Ctx) => Answer | null;
+export type Handler = (p: Parsed, ctx: Ctx) => Answer | null;
 
 const ok = (...lines: string[]): Answer => ({ out: `${lines.join('\n')}\n`, exit: 0 });
 const fail = (...lines: string[]): Answer => ({ out: `${lines.join('\n')}\n`, exit: 1 });
@@ -462,5 +462,4 @@ export const VERBS: Record<string, Handler> = {
   decide,
   'chat send': chatSend,
   'chat dm': chatDm,
-  ...BOARD_HANDLERS,
 };

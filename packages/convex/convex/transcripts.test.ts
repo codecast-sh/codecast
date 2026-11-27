@@ -11,7 +11,6 @@ import {
   finishRecordingTranscript,
   flush,
   HOLD_MAX_MS,
-  sessionDeliveryVerdict,
   start,
   stop,
   ROLLING_SUMMARY_GAP_MS,
@@ -45,12 +44,11 @@ import {
   deliveryClientId,
   dropDeadRoute,
   readUnsent,
-  CATCH_UP_QUIET_MS,
-  CONTEXT_MIN_GAP_MS,
   DELIVER_RETRY_MAX,
   DELIVER_RETRY_MS,
   removeAgentFromRoom,
 } from "./transcripts";
+import { CATCH_UP_QUIET_MS, CONTEXT_MIN_GAP_MS, sessionDeliveryVerdict } from "./lib/sessionDelivery";
 import { LIVE_TRANSCRIBE_MODEL, lineSaidAt } from "@codecast/shared/contracts";
 import { makeFakeDb } from "./testDb";
 import { captureFetch, goldenBody, recordGolden, type GoldenCase } from "./__golden__/golden.testkit";

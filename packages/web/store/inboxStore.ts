@@ -382,6 +382,7 @@ import { createExpectationsSlice, type ExpectationsSliceActions } from "./expect
 import { createOpsSlice, type OpsSliceActions } from "./opsSlice";
 import { createLiveArtifactsSlice, type LiveArtifactsSliceActions } from "./liveArtifactsSlice";
 import { createMeetingBotsSlice, type MeetingBotsSliceActions } from "./meetingBotsSlice";
+import { createHuddleSlice, type HuddleSliceActions } from "./huddleSlice";
 import { createSessionOwnersSlice, type SessionOwnersSliceActions } from "./sessionOwnersSlice";
 import { createAgentConnectionsSlice, type AgentConnectionsSliceActions } from "./agentConnectionsSlice";
 import { createComposeSlice, composeDraftContent, type ComposeInstance, type ComposeSliceState, type SessionStart } from "./composeSlice";
@@ -6603,7 +6604,7 @@ function dropGuestKnock(draft: any, guestId: string): void {
 // RegisteredCollectionSlots: every collection in CLIENT_SYNC_REGISTRY gets a
 // typed `Record<string, any>` slot here by registration alone; the explicit
 // fields below narrow the ones with a real row type.
-interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSliceActions, ProjectUpdatesSliceActions, LineWorkflowSliceActions, LineSliceActions, PrioritiesSliceActions, TrialSliceActions, ExpectationsSliceActions, OpsSliceActions, LiveArtifactsSliceActions, MeetingBotsSliceActions, AgentConnectionsSliceActions, SessionOwnersSliceActions, ComposeSliceState, Omit<RegisteredCollectionSlots, keyof ChatSliceState | keyof OrgSliceState> {
+interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSliceActions, ProjectUpdatesSliceActions, LineWorkflowSliceActions, LineSliceActions, PrioritiesSliceActions, TrialSliceActions, ExpectationsSliceActions, OpsSliceActions, LiveArtifactsSliceActions, MeetingBotsSliceActions, HuddleSliceActions, AgentConnectionsSliceActions, SessionOwnersSliceActions, ComposeSliceState, Omit<RegisteredCollectionSlots, keyof ChatSliceState | keyof OrgSliceState> {
   sessions: Record<string, InboxSession>;
   pending: Record<string, PendingEntry>;
   currentSessionId: string | null;
@@ -7951,21 +7952,6 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   unpinFromStage: (roomKey: string, ref: string) => void;
   /** The call's board on the stage, made if the call has none (callStage.pinCallBoard); resolves to its doc id. */
   pinCallBoard: (roomKey: string) => Promise<{ doc_id: string } | undefined>;
-  /** The call's board for this person's board view, made if the call has none, never pinned (callStage.openCallBoard). */
-  openCallBoard: (roomKey: string) => Promise<{ doc_id: string } | undefined>;
-  /** Ask for the call's Scribe (transcripts.inviteScribe); resolves to the claim answer, so the claimer spawns the agent.
-   *  `auto`: the person's standing setting, refused once somebody removed Scribe from the call. */
-  inviteScribe: (
-    roomKey: string,
-    auto?: boolean,
-  ) => Promise<{ claimed: true; claim_id: number; transcript_id: string } | { claimed: false; existing: "joining" | "listening" | "removed" } | undefined>;
-  /** Show the call's Scribe out (transcripts.removeScribe); with `claim`, only give back this client's failed claim. */
-  removeScribe: (roomKey: string, claim?: number) => Promise<unknown>;
-  /** Point a live call's words at a feed (transcripts.addRoute): a session, doc or Slack thread, or the Scribe seated in its claim. */
-  addLiveRoute: (
-    transcriptId: string,
-    route: { kind: "session" | "doc" | "slack"; target: string; mode: "live" | "after"; face?: boolean; role?: "scribe"; claim?: number },
-  ) => Promise<unknown>;
   setTeamFeature: (teamId: string, feature: string, enabled: boolean) => void;
   setTeamBudget: (teamId: string, capUsd: number) => void;
   setTeamPolicy: (teamId: string, policy: Record<string, unknown>) => void;
@@ -16823,21 +16809,6 @@ const inboxStoreConfig = (set: any, get: any) => ({
   pinCallBoard: asyncAction(function (this: Draft, roomKey: string) {
     return { roomKey };
   }),
-  openCallBoard: asyncAction(function (this: Draft, roomKey: string) {
-    return { roomKey };
-  }),
-  // The call's Scribe. What a surface shows while the press is on its way is
-  // useScribe's press (the live transcript is a query, not a store row), so
-  // the draft has nothing to paint; these carry the press to the server.
-  inviteScribe: asyncAction(function (this: Draft, roomKey: string, auto?: boolean) {
-    return { roomKey, auto };
-  }),
-  removeScribe: asyncAction(function (this: Draft, roomKey: string, claim?: number) {
-    return { roomKey, claim };
-  }),
-  addLiveRoute: asyncAction(function (this: Draft, transcriptId: string, route: { kind: string; target: string }) {
-    return { transcriptId, route };
-  }),
   setRoomTranscribeOff: asyncAction(function (this: Draft, roomKey: string, off: boolean) {
     const row = (this.callRooms[roomKey] ??= { _id: roomKey, locked: false, transcribe_off: false, transcribe_off_at: null });
     row.transcribe_off = off;
@@ -17040,6 +17011,8 @@ const inboxStoreConfig = (set: any, get: any) => ({
   ...createLiveArtifactsSlice(),
   // Meeting bot writes (store/meetingBotsSlice.ts): send to a pasted link, remove.
   ...createMeetingBotsSlice(),
+  // A huddle's board view, Scribe and live feeds (store/huddleSlice.ts).
+  ...createHuddleSlice(),
   // Outside agents over MCP (store/agentConnectionsSlice.ts): disconnect from Settings.
   ...createAgentConnectionsSlice(),
   // Session owners under the session_owners model (store/sessionOwnersSlice.ts).

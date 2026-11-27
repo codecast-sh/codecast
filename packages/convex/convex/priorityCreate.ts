@@ -15,7 +15,7 @@ import { askRerun } from "./lib/priorityClassifierHook";
 import { insertPriority } from "./lib/priorityInsert";
 import { teamRoster } from "./lib/mentionResolve";
 import { teamFeatureOffMessage } from "./lib/teamFeatureGuard";
-import { resolveFromCall } from "./transcripts";
+import { resolveFromCall } from "./callReads";
 import type { Doc, Id } from "./_generated/dataModel";
 import { type Result, readable } from "./priorityRead";
 

@@ -1,8 +1,8 @@
 import { BOARD_VERBS } from '@codecast/shared/artifacts/board';
 
-import { boardVerb } from './board';
+import { BOARD_HANDLERS, boardVerb } from './board';
 import { parseWith, resolveCommand, type Tree } from './tree';
-import { VERBS, type Answer } from './verbs';
+import { VERBS, type Answer, type Handler } from './verbs';
 import { loadWorld, saveWorld, withLock, type FakeWorld, type WorldSeed } from './world';
 
 // The fake `cast`: one call in, the answer prod would give out, the world
@@ -10,6 +10,10 @@ import { loadWorld, saveWorld, withLock, type FakeWorld, type WorldSeed } from '
 // what it always did.
 
 export const DECLINE_EXIT = 125;
+
+/** A command path's handler: the fake's own verbs, then the board's. Looked up
+ *  at call time, so verbs.ts stays a plain table that grow may edit. */
+export const handlerOf = (path: string): Handler | undefined => VERBS[path] ?? BOARD_HANDLERS[path];
 
 /**
  * One call's answer. An argv the CLI refuses at parse time (an unknown
@@ -28,7 +32,7 @@ export function answer(argv: string[], stdin: string, w: FakeWorld, tree: Tree):
     w.seq++;
     return boardVerb(hit.node.path[1]!, hit.rest, stdin, { w, stdin });
   }
-  const handler = VERBS[path];
+  const handler = handlerOf(path);
   if (!handler) return null;
   const r = parseWith(hit.node, hit.rest, stdin);
   w.seq++;

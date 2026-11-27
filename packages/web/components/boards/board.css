@@ -188,7 +188,7 @@ html.light .board-root {
 }
 /* Theme frames (pl-1145): the "new" mark, the object's chip. */
 .board-frame-new {
-  font-size: 10px;
+  font-size: var(--fs-mark);
   font-weight: 600;
   line-height: 16px;
   padding: 0 5px;

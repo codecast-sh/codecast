@@ -3456,10 +3456,10 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // The call's Scribe (web useScribe): the claim answer goes back to the
   // inviter, who spawns the agent only when it claimed the slot.
   inviteScribe: async (ctx, _userId, [roomKey, auto]: [string, boolean?]) => {
-    return await ctx.runMutation!(api.transcripts.inviteScribe, { room_key: roomKey, ...(auto ? { auto: true } : {}) });
+    return await ctx.runMutation!(api.transcriptsScribe.inviteScribe, { room_key: roomKey, ...(auto ? { auto: true } : {}) });
   },
   removeScribe: async (ctx, _userId, [roomKey, claim]: [string, number?]) => {
-    return await ctx.runMutation!(api.transcripts.removeScribe, { room_key: roomKey, ...(claim !== undefined ? { claim } : {}) });
+    return await ctx.runMutation!(api.transcriptsScribe.removeScribe, { room_key: roomKey, ...(claim !== undefined ? { claim } : {}) });
   },
   // Point a live call's words at a session, doc or Slack thread (web useCallFeed),
   // or seat the Scribe session a claimer spawned (lib/calls/scribeInvite).

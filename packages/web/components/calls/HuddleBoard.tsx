@@ -13,6 +13,7 @@ import { pinShare } from "../../lib/calls/stagePins";
 import type { StagePinRow } from "../../hooks/useStagePins";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { AppLoader } from "../AppLoader";
+import { Button } from "../ui/button";
 import { AutoStage } from "./StageViews";
 import { SwitchReview } from "../consequential/ConsequentialSwitch";
 import { autoScribeLedger } from "../consequential/ledgers";
@@ -150,16 +151,17 @@ export function BoardBanner({
       <div className={BANNER} role="status" data-banner="invite">
         <PenLine className="h-3.5 w-3.5 shrink-0 text-sol-violet" />
         <span className="min-w-0 truncate">{SCRIBE_INVITE_WORDS}</span>
-        <button
-          type="button"
+        <Button
+          variant="violet"
+          size="xs"
           onClick={() => {
             noteBanner(callKey, { invited: true });
             scribe.invite();
           }}
-          className="shrink-0 rounded-md bg-sol-violet px-2.5 py-1 text-[12.5px] font-medium text-white transition-opacity hover:opacity-90"
+          className="shrink-0"
         >
           Invite Scribe
-        </button>
+        </Button>
         <button type="button" onClick={() => noteBanner(callKey, { dismissed: true })} className={CLOSE} aria-label="Dismiss for this call">
           <X className="h-3.5 w-3.5" />
         </button>

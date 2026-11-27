@@ -29,7 +29,8 @@ import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 import { artifactView, type ArtifactElement } from '@codecast/shared/artifacts';
-import { addressesAgent, formatTranscriptChunk, HUDDLE_REBRIEF_EVERY, isHuddlePass, needsFullBrief, scribeChunkHeader, scribeInstructions } from '@codecast/shared/contracts';
+import { addressesAgent, formatTranscriptChunk, HUDDLE_REBRIEF_EVERY, isHuddlePass, needsFullBrief } from '@codecast/shared/contracts';
+import { scribeChunkHeader, scribeInstructions } from '@codecast/shared/contracts/scribePrompt';
 
 import { enclosingFrameKeys, frameCollapsed, frameRef, hiddenKeys } from '../../shared/artifacts/boardFrames';
 

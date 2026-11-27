@@ -2,9 +2,8 @@ import { createHash } from 'node:crypto';
 
 import { stripAnsi } from '@platform/cli-kit/render';
 
-import { answer } from './cast';
+import { answer, handlerOf } from './cast';
 import type { Tree } from './cast/tree';
-import { VERBS } from './cast/verbs';
 import { newWorld, type Role } from './cast/world';
 import { applyPipe, type Capture } from './capture';
 
@@ -94,7 +93,7 @@ export interface VerbScore {
 export function verbOf(argv: string[]): string | null {
   for (const n of [2, 1]) {
     const k = argv.slice(0, n).join(' ');
-    if (VERBS[k]) return k;
+    if (handlerOf(k)) return k;
   }
   return null;
 }

@@ -146,7 +146,7 @@ async function teamScope(deps: PublishDeps, team: string): Promise<{ workspace: 
 
 /** A call as `cast calls` names it (cl-42, its id, or a unique prefix of one), as task and plan create resolve it. */
 async function callId(deps: PublishDeps, ref: string): Promise<string> {
-  const { findCallIdIn } = await import("./callSnap.js");
+  const { findCallIdIn } = await import("./callFind.js");
   return findCallIdIn((urlPath, body) => apiPost(deps, urlPath, body, { read: true }), ref).catch((err: Error) => fail(err.message));
 }
 

@@ -1,5 +1,5 @@
 // The standing instructions of Scribe, the silent agent a huddle invites to
-// keep its board (transcripts.inviteScribe). Sent as the first message of the
+// keep its board (transcriptsScribe.inviteScribe). Sent as the first message of the
 // session spawned for it, so the agent reads them before the first words of
 // the call reach it. Lives here, beside huddleVoiceInstructions, so every
 // client that invites Scribe sends the same words.

@@ -1,6 +1,7 @@
 import { useCallback, useSyncExternalStore } from "react";
 import { toast } from "sonner";
-import { humanizeConvexError, SCRIBE_CLAIM_TTL_MS, scribeStatus, type ScribeStatus } from "@codecast/shared/contracts";
+import { humanizeConvexError } from "@codecast/shared/contracts";
+import { SCRIBE_CLAIM_TTL_MS, scribeStatus, type ScribeStatus } from "@codecast/shared/contracts/scribePrompt";
 import { SessionCreatePendingError, useInboxStore } from "../../store/inboxStore";
 import { withoutUndo } from "../../store/undoStack";
 import { useNowWhen } from "../../hooks/useCoarseNow";
@@ -8,7 +9,7 @@ import { inviteScribeFlow, type ScribeInviteDeps } from "../../lib/calls/scribeI
 import { characterForRoom, charactersInRoom, spawnSessionWithMessage } from "../../lib/calls/spawnFeedSession";
 
 // The call's Scribe: the silent agent that keeps the board (convex
-// transcripts.inviteScribe). One per call, held by the server: an invite
+// transcriptsScribe.inviteScribe). One per call, held by the server: an invite
 // claims the slot, and only the claimer spawns the agent and seats it.
 //
 // Whether Scribe is here is the live transcript's (getLive's scribe route and

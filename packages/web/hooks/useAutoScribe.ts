@@ -1,6 +1,6 @@
 // "Invite Scribe to every huddle" (lib/calls/huddleSettings), as a hook both
 // apps mount: web's HuddleAutoScribe and the phone's call screen. The server
-// holds the rules (transcripts.inviteScribe): one Scribe per call, and an
+// holds the rules (transcriptsScribe.inviteScribe): one Scribe per call, and an
 // automatic invite is refused once somebody removed Scribe from the call.
 // Only a person's own seat in a real huddle asks: never a recording or a
 // meeting room (no room) and never a guest.

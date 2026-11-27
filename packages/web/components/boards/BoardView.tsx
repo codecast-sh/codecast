@@ -18,7 +18,6 @@ import {
   BOARD_TEMPLATE_LABELS,
   bottomZ,
   carriedKeys,
-  frameCollapsed,
   moveFrameOps,
   stickyFitHeight,
   stickyIconHeight,
@@ -50,7 +49,7 @@ import { BOARD_ASK_SLOT, MOD, SHIFT, editField } from "./boardModel";
 import { BoardContextMenu, type BoardMenuItem, type BoardMenuPayload } from "./BoardContextMenu";
 import { useContextMenu } from "../ui/context-menu";
 import { isMac } from "../../shortcuts";
-import { BoardOverlay, type RemoteSelection } from "./BoardOverlay";
+import { BoardOverlay } from "./BoardOverlay";
 import { BoardToolbar } from "./BoardToolbar";
 import { BoardSelectionBar, type BarAction } from "./BoardSelectionBar";
 import { BoardPrompt, type PromptMode } from "./BoardPrompt";
@@ -72,9 +71,9 @@ import { clearVotingOps, readSession, sessionOp, startVotingOps, toggleVoteOps, 
 import { runBoardBar } from "./boardCommands";
 import { useBoardOpeningFit } from "./useBoardOpeningFit";
 import { useBoardSelectionChrome } from "./useBoardSelectionChrome";
-import { boardFolds } from "./boardFolds";
-import { BoardFrameContext, type BoardFrameActions } from "../../lib/boards/frameContext";
-import { boardLayoutActions } from "./boardLayoutActions";
+import { useBoardFolds } from "./useBoardFolds";
+import { BoardFrameContext } from "../../lib/boards/frameContext";
+import { useBoardFrameActions } from "./useBoardFrameActions";
 import { useFrameHover } from "./useFrameHover";
 
 const MINIMAP_KEY = "board-minimap";
@@ -123,18 +122,10 @@ export default function BoardView({ doc, live, selection: selectionIn, setSelect
   // Gestures add the elements they create here until the next render brings them from the store.
   const byKeyRef = useRef(byKey);
   byKeyRef.current = byKey;
-  // What folded frames hold is off the canvas: not drawn, hit, marqueed, fitted or overviewed.
-  const folds = useMemo(() => boardFolds(elements, byKey), [elements, byKey]);
-  const shown = folds.shown;
-  const foldsRef = useRef(folds);
-  foldsRef.current = folds;
+  // What folded frames hold is off the canvas, and out of every selection.
+  const { folds, foldsRef, shown, selection, remote } = useBoardFolds(elements, byKey, selectionIn, setSelection, others);
   const ordered = useMemo(() => drawOrder(shown), [shown]);
   const frameHover = useFrameHover(shown);
-  // The selection never holds what a fold hides: nothing folded away is moved, deleted or edited through a stale pick.
-  const selection = useMemo(() => (folds.hidden.size ? selectionIn.filter((k) => !folds.hidden.has(k)) : selectionIn), [selectionIn, folds]);
-  useWatchEffect(() => {
-    if (selection.length !== selectionIn.length) setSelection(selection);
-  }, [selection, selectionIn]);
 
   const [tool, setToolState] = useState<BoardTool>("select");
   const [shapeKind, setShapeKind] = useState("rect");
@@ -224,18 +215,13 @@ export default function BoardView({ doc, live, selection: selectionIn, setSelect
   useWatchEffect(() => {
     live.setPresence({ position: lastPointer.current ? { point: lastPointer.current } : undefined, selection });
   }, [selection.join(",")]);
-  // Someone else's pick of something folded away draws nothing.
-  const remote = useMemo<RemoteSelection[]>(() => others
-    .map((p) => ({ p, keys: (p.selection ?? []).filter((k) => !folds.hidden.has(k)) }))
-    .filter(({ keys }) => keys.length)
-    .map(({ p, keys }) => ({ actor: p.actor, name: p.kind === "agent" ? `✳ ${p.name}` : p.name, color: p.color, keys, agent: p.kind === "agent" })), [others, folds]);
 
   // ── Edit in place ──────────────────────────────────────────────────────────
   const startEdit = useCallback((key: string) => {
     const el = byKeyRef.current.get(key);
     if (readOnly || !el || !editField(el) || foldsRef.current.hidden.has(key)) return;
     setEditing(key);
-  }, [readOnly]);
+  }, [readOnly, foldsRef]);
   // Text being typed into an element that just folded away is done.
   useWatchEffect(() => {
     if (editing && folds.hidden.has(editing)) { live.commit(); setEditing(null); }
@@ -346,32 +332,12 @@ export default function BoardView({ doc, live, selection: selectionIn, setSelect
     for (const e of byKeyRef.current.values()) if (e.kind === "connector" && (set.has(String(e.from)) || set.has(String(e.to)))) set.add(e.key);
     return [...set];
   };
-  /** The board as the frame layout functions read it. */
-  const boardView = () => ({ elements: allEls(), get: (k: string) => byKeyRef.current.get(k) });
-  // A folded frame goes with what it holds.
-  const withHeld = (keys: string[]) => {
-    const pills = keys.filter((k) => frameCollapsed(byKeyRef.current.get(k)));
-    return pills.length ? [...new Set([...keys, ...carriedKeys(boardView(), pills)])] : keys;
-  };
+  const { boardView, withHeld, organize, frameActions } = useBoardFrameActions({ live, byKeyRef, docId: String(doc._id), readOnly, myName: me?.name, others });
   const deleteSelection = () => {
     if (!selection.length) return;
     live.apply(withAttached(withHeld(selection)).map((k) => ({ k, del: true as const })));
     setSelection([]);
   };
-  // Frame layout (pl-1145): each runs as one batch, so it is one undo step and one change for every viewer.
-  const layout = boardLayoutActions(live, boardView, (m) => toast.error(m));
-  // The people on the board: a frame titled with one of their names is an agenda frame.
-  const organize = () => layout.organize([me?.name, ...others.filter((p) => p.kind !== "agent").map((p) => p.name)].filter((n): n is string => typeof n === "string" && !!n));
-  const frameActionsRef = useRef<BoardFrameActions | null>(null);
-  frameActionsRef.current = { docId: String(doc._id), readOnly, reflow: layout.reflow, toggleFold: layout.toggleFold, get: (key) => byKeyRef.current.get(key) };
-  // Stable while the board stays the same board and mode, so memoized frames do not redraw on every render.
-  const frameActions = useMemo<BoardFrameActions>(() => ({
-    docId: String(doc._id),
-    readOnly,
-    reflow: (k) => frameActionsRef.current!.reflow(k),
-    toggleFold: (k) => frameActionsRef.current!.toggleFold(k),
-    get: (k) => frameActionsRef.current!.get(k),
-  }), [doc._id, readOnly]);
   const copy = (cut: boolean) => {
     if (!selectedEls.length) return;
     // A frame copies (and cuts) with what is inside it or folded into it, and arrows between copied things come along.

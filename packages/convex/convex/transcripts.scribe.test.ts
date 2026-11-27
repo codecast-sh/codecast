@@ -5,7 +5,8 @@
 import { afterEach, expect, setDefaultTimeout, setSystemTime, test } from "bun:test";
 import { convexTest } from "convex-test";
 import { anyApi } from "convex/server";
-import { dmRoomKey, HUDDLE_REBRIEF_EVERY, HUDDLE_REPLY_NOTE, HUDDLE_WORK_NOTE, SCRIBE_CLAIM_TTL_MS, SCRIBE_REMINDER, scribeStatus, SCRIBE_ENDED, scribeChunkHeader } from "@codecast/shared/contracts";
+import { dmRoomKey, HUDDLE_REBRIEF_EVERY, HUDDLE_REPLY_NOTE, HUDDLE_WORK_NOTE } from "@codecast/shared/contracts";
+import { SCRIBE_CLAIM_TTL_MS, SCRIBE_REMINDER, scribeStatus, SCRIBE_ENDED, scribeChunkHeader } from "@codecast/shared/contracts/scribePrompt";
 import schema from "./schema";
 import { allModules } from "./testModules.testkit";
 import { internal } from "./_generated/api";
@@ -59,8 +60,8 @@ async function seed() {
 test("two people inviting at once yield one claim and one Scribe", async () => {
   const { ana, ben, room, anaAgent, as, call, feeds, seat } = await seed();
   const answers = await Promise.all([
-    as(String(ana)).mutation(api.transcripts.inviteScribe, { room_key: room }),
-    as(String(ben)).mutation(api.transcripts.inviteScribe, { room_key: room }),
+    as(String(ana)).mutation(api.transcriptsScribe.inviteScribe, { room_key: room }),
+    as(String(ben)).mutation(api.transcriptsScribe.inviteScribe, { room_key: room }),
   ]);
   const won = answers.filter((a: any) => a.claimed);
   expect(won).toHaveLength(1);
@@ -78,7 +79,7 @@ test("two people inviting at once yield one claim and one Scribe", async () => {
   expect(rows[0].face).toBe(false);
 
   // A third invite finds Scribe listening and claims nothing.
-  expect(await as(String(ana)).mutation(api.transcripts.inviteScribe, { room_key: room })).toEqual({ claimed: false, existing: "listening" });
+  expect(await as(String(ana)).mutation(api.transcriptsScribe.inviteScribe, { room_key: room })).toEqual({ claimed: false, existing: "listening" });
   const live = await as(String(ben)).query(api.transcripts.getLive, { room_key: room });
   expect(live.routes[0].role).toBe("scribe");
   expect(live.scribe_claim).toBeNull();
@@ -86,7 +87,7 @@ test("two people inviting at once yield one claim and one Scribe", async () => {
 
 test("only the claim's holder seats Scribe", async () => {
   const { ana, ben, room, benAgent, as, seat, call } = await seed();
-  const claim = await as(String(ana)).mutation(api.transcripts.inviteScribe, { room_key: room });
+  const claim = await as(String(ana)).mutation(api.transcriptsScribe.inviteScribe, { room_key: room });
   await expect(seat(String(ben), String(benAgent), claim.claim_id)).rejects.toThrow(/no longer holds/);
   await expect(seat(String(ana), String(benAgent), claim.claim_id + 1)).rejects.toThrow(/no longer holds/);
   expect((await call()).routes).toEqual([]);
@@ -95,12 +96,12 @@ test("only the claim's holder seats Scribe", async () => {
 test("a claim whose agent never landed expires, and a later invite takes the slot", async () => {
   const { ana, ben, room, anaAgent, benAgent, as, seat, call } = await seed();
   const start = Date.now();
-  const first = await as(String(ana)).mutation(api.transcripts.inviteScribe, { room_key: room });
+  const first = await as(String(ana)).mutation(api.transcriptsScribe.inviteScribe, { room_key: room });
   setSystemTime(start + SCRIBE_CLAIM_TTL_MS - 1);
-  expect(await as(String(ben)).mutation(api.transcripts.inviteScribe, { room_key: room })).toEqual({ claimed: false, existing: "joining" });
+  expect(await as(String(ben)).mutation(api.transcriptsScribe.inviteScribe, { room_key: room })).toEqual({ claimed: false, existing: "joining" });
 
   setSystemTime(start + SCRIBE_CLAIM_TTL_MS + 1);
-  const second = await as(String(ben)).mutation(api.transcripts.inviteScribe, { room_key: room });
+  const second = await as(String(ben)).mutation(api.transcriptsScribe.inviteScribe, { room_key: room });
   expect(second.claimed).toBe(true);
   // The first inviter's agent landing late cannot take the slot back.
   await expect(seat(String(ana), String(anaAgent), first.claim_id)).rejects.toThrow(/no longer holds/);
@@ -111,23 +112,23 @@ test("a claim whose agent never landed expires, and a later invite takes the slo
 test("giving back a failed claim frees the slot without touching someone else's", async () => {
   const { ana, ben, room, as, call } = await seed();
   const start = Date.now();
-  const mine = await as(String(ana)).mutation(api.transcripts.inviteScribe, { room_key: room });
-  await as(String(ana)).mutation(api.transcripts.removeScribe, { room_key: room, claim: mine.claim_id });
+  const mine = await as(String(ana)).mutation(api.transcriptsScribe.inviteScribe, { room_key: room });
+  await as(String(ana)).mutation(api.transcriptsScribe.removeScribe, { room_key: room, claim: mine.claim_id });
   expect((await call()).scribe_claim).toBeUndefined();
 
-  const bens = await as(String(ben)).mutation(api.transcripts.inviteScribe, { room_key: room });
+  const bens = await as(String(ben)).mutation(api.transcriptsScribe.inviteScribe, { room_key: room });
   setSystemTime(start + 5);
-  await as(String(ana)).mutation(api.transcripts.removeScribe, { room_key: room, claim: mine.claim_id });
+  await as(String(ana)).mutation(api.transcriptsScribe.removeScribe, { room_key: room, claim: mine.claim_id });
   expect((await call()).scribe_claim?.at).toBe(bens.claim_id);
 });
 
 test("anyone in the call removes Scribe: its route and feed go, and the removal is on record", async () => {
   const { ana, ben, room, anaAgent, as, seat, call, feeds } = await seed();
-  const claim = await as(String(ana)).mutation(api.transcripts.inviteScribe, { room_key: room });
+  const claim = await as(String(ana)).mutation(api.transcriptsScribe.inviteScribe, { room_key: room });
   await seat(String(ana), String(anaAgent), claim.claim_id);
   expect(await feeds()).toHaveLength(1);
 
-  await as(String(ben)).mutation(api.transcripts.removeScribe, { room_key: room });
+  await as(String(ben)).mutation(api.transcriptsScribe.removeScribe, { room_key: room });
   const after = await call();
   expect(after.routes).toEqual([]);
   expect(after.scribe_claim).toEqual({ by: ben, at: expect.any(Number), removed: true });
@@ -140,22 +141,22 @@ test("anyone in the call removes Scribe: its route and feed go, and the removal 
 
 test("after a removal, automatic invites are refused for the call; a person's invite brings Scribe back", async () => {
   const { ana, ben, room, anaAgent, benAgent, as, seat, call } = await seed();
-  const first = await as(String(ana)).mutation(api.transcripts.inviteScribe, { room_key: room, auto: true });
+  const first = await as(String(ana)).mutation(api.transcriptsScribe.inviteScribe, { room_key: room, auto: true });
   expect(first.claimed).toBe(true);
   await seat(String(ana), String(anaAgent), first.claim_id);
-  await as(String(ben)).mutation(api.transcripts.removeScribe, { room_key: room });
+  await as(String(ben)).mutation(api.transcriptsScribe.removeScribe, { room_key: room });
 
   // Ana reloads, or Ben joins late with the setting on: both refused.
-  expect(await as(String(ana)).mutation(api.transcripts.inviteScribe, { room_key: room, auto: true })).toEqual({ claimed: false, existing: "removed" });
-  expect(await as(String(ben)).mutation(api.transcripts.inviteScribe, { room_key: room, auto: true })).toEqual({ claimed: false, existing: "removed" });
+  expect(await as(String(ana)).mutation(api.transcriptsScribe.inviteScribe, { room_key: room, auto: true })).toEqual({ claimed: false, existing: "removed" });
+  expect(await as(String(ben)).mutation(api.transcriptsScribe.inviteScribe, { room_key: room, auto: true })).toEqual({ claimed: false, existing: "removed" });
   // Even past the claim's lifetime.
   setSystemTime(Date.now() + SCRIBE_CLAIM_TTL_MS + 1000);
-  expect((await as(String(ana)).mutation(api.transcripts.inviteScribe, { room_key: room, auto: true })).claimed).toBe(false);
+  expect((await as(String(ana)).mutation(api.transcriptsScribe.inviteScribe, { room_key: room, auto: true })).claimed).toBe(false);
   // The old claim's agent cannot sit in the removed slot.
   await expect(seat(String(ana), String(anaAgent), first.claim_id)).rejects.toThrow(/no longer holds/);
 
   // A press: the removal clears and Scribe joins.
-  const manual = await as(String(ben)).mutation(api.transcripts.inviteScribe, { room_key: room });
+  const manual = await as(String(ben)).mutation(api.transcriptsScribe.inviteScribe, { room_key: room });
   expect(manual.claimed).toBe(true);
   expect((await call()).scribe_claim).toEqual({ by: ben, at: manual.claim_id });
   await seat(String(ben), String(benAgent), manual.claim_id);
@@ -164,20 +165,20 @@ test("after a removal, automatic invites are refused for the call; a person's in
 
 test("an automatic invite with nobody having removed Scribe claims as usual", async () => {
   const { ana, room, as } = await seed();
-  expect((await as(String(ana)).mutation(api.transcripts.inviteScribe, { room_key: room, auto: true })).claimed).toBe(true);
+  expect((await as(String(ana)).mutation(api.transcriptsScribe.inviteScribe, { room_key: room, auto: true })).claimed).toBe(true);
 });
 
 test("someone outside the call can neither invite nor remove Scribe", async () => {
   const { ana, cat, room, as, call } = await seed();
-  await expect(as(String(cat)).mutation(api.transcripts.inviteScribe, { room_key: room })).rejects.toThrow(/Not in this huddle/);
-  await as(String(ana)).mutation(api.transcripts.inviteScribe, { room_key: room });
-  await expect(as(String(cat)).mutation(api.transcripts.removeScribe, { room_key: room })).rejects.toThrow(/Not in this huddle/);
+  await expect(as(String(cat)).mutation(api.transcriptsScribe.inviteScribe, { room_key: room })).rejects.toThrow(/Not in this huddle/);
+  await as(String(ana)).mutation(api.transcriptsScribe.inviteScribe, { room_key: room });
+  await expect(as(String(cat)).mutation(api.transcriptsScribe.removeScribe, { room_key: room })).rejects.toThrow(/Not in this huddle/);
   expect((await call()).scribe_claim).toBeDefined();
 });
 
 test("Scribe's chunks carry its own header, on the first chunk and on a rebrief", async () => {
   const { t, ana, room, anaAgent, as, seat, call } = await seed();
-  const claim = await as(String(ana)).mutation(api.transcripts.inviteScribe, { room_key: room });
+  const claim = await as(String(ana)).mutation(api.transcriptsScribe.inviteScribe, { room_key: room });
   await seat(String(ana), String(anaAgent), claim.claim_id);
   const call0 = (await call())._id;
   const say = (seq: number) =>
@@ -217,7 +218,7 @@ test("Scribe's chunks carry its own header, on the first chunk and on a rebrief"
 
 async function scribeAtStop() {
   const { t, ana, room, anaAgent, benAgent, as, seat, call } = await seed();
-  const claim = await as(String(ana)).mutation(api.transcripts.inviteScribe, { room_key: room });
+  const claim = await as(String(ana)).mutation(api.transcriptsScribe.inviteScribe, { room_key: room });
   await seat(String(ana), String(anaAgent), claim.claim_id);
   const call0 = (await call())._id;
   // Another agent fed the room: the end is Scribe's alone.
@@ -283,7 +284,7 @@ test("ordinary flushes never tell Scribe the call ended", async () => {
 
 test("Scribe never gets a face", async () => {
   const { ana, room, anaAgent, as, call, feeds } = await seed();
-  const claim = await as(String(ana)).mutation(api.transcripts.inviteScribe, { room_key: room });
+  const claim = await as(String(ana)).mutation(api.transcriptsScribe.inviteScribe, { room_key: room });
   // Seated without the face flag: still faceless.
   await as(String(ana)).mutation(api.transcripts.addRoute, {
     transcript_id: (await call())._id, kind: "session", target: String(anaAgent), mode: "live", role: "scribe", claim: claim.claim_id,
@@ -297,7 +298,7 @@ test("Scribe never gets a face", async () => {
 
 test("a retried seat that already landed succeeds and changes nothing", async () => {
   const { ana, room, anaAgent, as, seat, call, feeds } = await seed();
-  const claim = await as(String(ana)).mutation(api.transcripts.inviteScribe, { room_key: room });
+  const claim = await as(String(ana)).mutation(api.transcriptsScribe.inviteScribe, { room_key: room });
   await seat(String(ana), String(anaAgent), claim.claim_id);
   // The answer was lost and the outbox sends the same seat again: the claim is gone, the seat is done.
   await expect(seat(String(ana), String(anaAgent), claim.claim_id)).resolves.toBeNull();
@@ -307,24 +308,24 @@ test("a retried seat that already landed succeeds and changes nothing", async ()
 
 test("the claimer asking again gets its own claim back; anyone else still finds it joining", async () => {
   const { ana, ben, room, anaAgent, as, seat } = await seed();
-  const first = await as(String(ana)).mutation(api.transcripts.inviteScribe, { room_key: room, auto: true });
+  const first = await as(String(ana)).mutation(api.transcriptsScribe.inviteScribe, { room_key: room, auto: true });
   expect(first.claimed).toBe(true);
   // A replay of the same invite (lost answer, outbox after a reload).
-  const replay = await as(String(ana)).mutation(api.transcripts.inviteScribe, { room_key: room, auto: true });
+  const replay = await as(String(ana)).mutation(api.transcriptsScribe.inviteScribe, { room_key: room, auto: true });
   expect(replay).toEqual({ claimed: true, claim_id: first.claim_id, transcript_id: first.transcript_id });
-  expect(await as(String(ben)).mutation(api.transcripts.inviteScribe, { room_key: room })).toEqual({ claimed: false, existing: "joining" });
+  expect(await as(String(ben)).mutation(api.transcriptsScribe.inviteScribe, { room_key: room })).toEqual({ claimed: false, existing: "joining" });
   // The flow carries on with the claim it got back.
   await seat(String(ana), String(anaAgent), replay.claim_id);
   // Past the claim's life, or after a removal, it is no longer the claimer's to replay.
-  await as(String(ben)).mutation(api.transcripts.removeScribe, { room_key: room });
-  expect(await as(String(ana)).mutation(api.transcripts.inviteScribe, { room_key: room, auto: true })).toEqual({ claimed: false, existing: "removed" });
+  await as(String(ben)).mutation(api.transcriptsScribe.removeScribe, { room_key: room });
+  expect(await as(String(ana)).mutation(api.transcriptsScribe.inviteScribe, { room_key: room, auto: true })).toEqual({ claimed: false, existing: "removed" });
 });
 
 test("an expired claim is not the claimer's to replay: a new invite claims afresh", async () => {
   const { ana, room, as } = await seed();
-  const first = await as(String(ana)).mutation(api.transcripts.inviteScribe, { room_key: room });
+  const first = await as(String(ana)).mutation(api.transcriptsScribe.inviteScribe, { room_key: room });
   setSystemTime(Date.now() + SCRIBE_CLAIM_TTL_MS + 1000);
-  const again = await as(String(ana)).mutation(api.transcripts.inviteScribe, { room_key: room });
+  const again = await as(String(ana)).mutation(api.transcriptsScribe.inviteScribe, { room_key: room });
   expect(again.claimed).toBe(true);
   expect(again.claim_id).not.toBe(first.claim_id);
 });
@@ -347,7 +348,7 @@ test("Scribe's arrival makes the call's board without pinning it; another agent'
   const { t, ana, room, anaAgent, benAgent, as, seat, call } = await seed();
   const scheduled = () =>
     t.run(async (ctx: any) => (await ctx.db.system.query("_scheduled_functions").collect()).filter((f: any) => f.name.includes("ensureBoardForFeed")).map((f: any) => f.args[0]));
-  const claim = await as(String(ana)).mutation(api.transcripts.inviteScribe, { room_key: room });
+  const claim = await as(String(ana)).mutation(api.transcriptsScribe.inviteScribe, { room_key: room });
   await seat(String(ana), String(anaAgent), claim.claim_id);
   const [forScribe] = await scheduled();
   expect(forScribe).toMatchObject({ conversation_id: anaAgent, pin: false });

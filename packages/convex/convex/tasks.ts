@@ -14,7 +14,7 @@ import { chainAssignees, roleAssigneeInfo, type AssigneeInfo } from "@codecast/s
 import { enqueueStartSession } from "./devices";
 import { resolveSpawnDefinition, resolveTaskSpawnDevice } from "./spawn";
 import { resolveDefinitionFor } from "./agentDefinitions";
-import { resolveFromCall } from "./transcripts";
+import { resolveFromCall } from "./callReads";
 import { appendTaskStep, priorityForTaskStep } from "./priorityCreate";
 import { outcomeOfDeclaration, subagentEnded } from "./subagentFleet";
 import { formatTaskCommentMessage, fromConvexAgentType, inlineForeignText, toConvexAgentType } from "@codecast/shared/contracts";

@@ -8796,12 +8796,12 @@ export default defineSchema({
         // waits CONTEXT_MIN_GAP_MS unless a line names the agent.
         context_at: v.optional(v.number()),
         // Session routes: "scribe" marks the call's Scribe, the silent agent
-        // keeping its board (transcripts.inviteScribe). At most one per call.
+        // keeping its board (transcriptsScribe.inviteScribe). At most one per call.
         role: v.optional(v.literal("scribe")),
       }),
     ),
     // A claim on the call's one Scribe slot while its inviter starts the
-    // agent (transcripts.inviteScribe). Cleared when the agent's route lands
+    // agent (transcriptsScribe.inviteScribe). Cleared when the agent's route lands
     // (addRoute with role "scribe") or Scribe is removed; a claim older than
     // SCRIBE_CLAIM_TTL_MS no longer holds the slot, judged when read.
     // `removed`: somebody showed Scribe out (removeScribe) at `at`, by `by`;

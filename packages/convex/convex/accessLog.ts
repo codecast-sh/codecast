@@ -12,7 +12,7 @@ import type { Id } from "./_generated/dataModel";
 import { recordRowAccess, recordStaffRead } from "./lib/accessLog";
 import { checkConversationAccess } from "./privacy";
 import { readableConversation } from "./conversations";
-import { resolveCallRef } from "./transcripts";
+import { resolveCallRef } from "./callReads";
 import { requireTeamAdmin } from "./lib/access";
 import { verifyApiToken } from "./apiTokens";
 
