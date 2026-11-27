@@ -24,6 +24,14 @@ export type AsrCapture = {
 export type AsrCaptureEvents = {
   onUtterance?: (u: { text: string; t0: number; t1: number }) => void;
   onPartial?: (text: string) => void;
+  /** The recognizer never opened (the server refused). Given, the caller hears
+   *  why and the capture closes; left out, the capture just closes (the
+   *  recorder's file still transcribes after stop). */
+  onFailed?: (message: string) => void;
+  /** The socket closed while still wanted. Given, the caller decides what
+   *  happens next (dictation stops and keeps its words); left out, the capture
+   *  opens a fresh recognizer on the same tap a second later. */
+  onDropped?: () => void;
 };
 
 function b64ToInt16(b64: string): Int16Array {
@@ -53,6 +61,12 @@ export type MicTapOpen = { tap: MicTap } | { unavailable: "permanent" | "transie
 
 const PERMANENT: MicTapOpen = { unavailable: "permanent" };
 const TRANSIENT: MicTapOpen = { unavailable: "transient" };
+
+/** Whether this binary can tap the microphone as PCM at all (LiveKit's native
+ *  module with its audio sink). False means an app update, not a retry. */
+export function micTapSupported(): boolean {
+  return callsNativeAvailable() && !!NativeModules.LivekitReactNativeModule?.createAudioSinkListener;
+}
 
 export async function openMicTap(): Promise<MicTapOpen> {
   if (!callsNativeAvailable()) return PERMANENT;
@@ -135,9 +149,13 @@ export async function openMicTap(): Promise<MicTapOpen> {
  */
 export async function startAsrCapture(opts: {
   convex: ConvexReactClient;
-  roomKey: string;
+  /** The call room the key is minted against, or null for dictation (asrPipe
+   *  mints a dictation key then). */
+  roomKey: string | null;
   clock: () => number;
   events?: AsrCaptureEvents;
+  /** The recognizer's language allowlist; the device's languages when left out. */
+  languages?: string[];
 }): Promise<AsrCapture | null> {
   const opened = await openMicTap();
   if (!("tap" in opened)) return null;
@@ -162,11 +180,16 @@ export async function startAsrCapture(opts: {
       convex: opts.convex,
       roomKey: opts.roomKey,
       clock: opts.clock,
+      ...(opts.languages ? { languages: opts.languages } : {}),
       events: {
         onUtterance: opts.events?.onUtterance,
         onPartial: opts.events?.onPartial,
         onDropped: () => {
           if (closed) return;
+          if (opts.events?.onDropped) {
+            opts.events.onDropped();
+            return;
+          }
           try {
             session?.close();
           } catch {}
@@ -175,9 +198,11 @@ export async function startAsrCapture(opts: {
             if (!closed) attachSession();
           }, 1000);
         },
-        onFailed: () => {
-          // Live words are extra. The file still transcribes after stop.
+        onFailed: (message) => {
+          // Live words are extra for the recorder: its file still transcribes
+          // after stop. Dictation has nothing else, so it hears why.
           close();
+          opts.events?.onFailed?.(message);
         },
       },
     });

@@ -3546,6 +3546,10 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   deleteMyVoiceprints: async (ctx) => {
     return await ctx.runMutation!(api.voiceprints.deleteMyVoiceprints, {});
   },
+  // The dictation switch (store setDictationEnabled paints first).
+  setDictationEnabled: async (ctx, _userId, [enabled]: [boolean]) => {
+    return await ctx.runMutation!(api.dictation.setDictationEnabled, { enabled: !!enabled });
+  },
   // A picture of the call taken off its public link (store
   // deleteCallFrameShare drops the row first). Already gone is acknowledged.
   deleteCallFrameShare: async (ctx, _userId, [shareId]: [string]) => {
