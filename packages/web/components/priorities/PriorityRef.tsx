@@ -15,6 +15,7 @@ import { HoverCard } from "../ui/HoverCard";
 import { Sheet, SheetContent, SheetTitle } from "../ui/sheet";
 import { useCoarsePointer } from "../../hooks/useCoarsePointer";
 import { usePriorityModel } from "../../hooks/usePriorityModels";
+import { useSidebarFocusId } from "../../hooks/useSidebarFocusId";
 import { publicUrl } from "@codecast/shared/entities";
 import { priorityHref, rankProvenance } from "../../lib/priorities";
 import { cn } from "../../lib/utils";
@@ -41,7 +42,7 @@ const CARD_MILESTONES = 3;
 
 /** The card a reference opens: what it is, its open milestones and their states, where it stands, Share and Open. `tall`: 44px rows and buttons, for a finger. */
 export function PriorityCard({ row, onOpen, tall }: { row: PriorityRow; onOpen?: () => void; tall?: boolean }) {
-  const model = usePriorityModel(row);
+  const model = usePriorityModel(row, undefined, undefined, "sidebar", useSidebarFocusId());
   const open = model.milestones.filter((m) => m.tier === "critical" && !m.done);
   const why = rankProvenance(row);
   // "#1 Sarah Chen placed it" already names a teammate who placed it.

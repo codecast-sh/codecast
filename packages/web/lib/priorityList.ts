@@ -42,11 +42,13 @@ export function ago(ts: number, now: number): string {
 }
 
 /**
- * A mark an inbox draws (lib/sessionStatus) in the milestone vocabulary. A
- * mark outside it (the error mark of a hosted stop, a done check, a stashed
- * tray) reads as idle; starting is working; a dismissed row is closed.
+ * A mark an inbox draws (lib/sessionStatus) in the milestone vocabulary, for
+ * the milestone's state and the order of its sessions; the session's own row
+ * still draws the mark itself (SessionLine.mark). A mark outside the
+ * vocabulary (the error mark of a hosted stop, a done check, a stashed tray)
+ * reads as idle; starting is working; a dismissed row is closed.
  */
-export function stateOfMark(s: SessionStatus): PrioritySessionState {
+function stateOfMark(s: SessionStatus): PrioritySessionState {
   switch (s) {
     case "needs_you": return "needs_you";
     case "working": case "starting": return "working";
@@ -75,19 +77,26 @@ export const MILESTONE_STATE_WORD: Record<Exclude<MilestoneStateKind, "none">, s
  * done/delivered check) reads as idle. The milestone takes the most urgent of
  * its live sessions' marks: needs_you › working › dormant › idle.
  *
- * `live` answers the drawn mark (hooks/usePriorityModels liveStateOf over
- * store/inboxMark inboxMarkOf, already in this vocabulary: stateOfMark); the server's
- * state is the session's own.
+ * `live` answers the drawn mark (hooks/usePriorityModels liveMarkOf over
+ * store/inboxMark inboxMarkOf), or undefined when the inbox draws none; the
+ * server's state is the session's own.
  */
-const sessionState = (s: Pick<PriorityLinkedSession, "mine" | "state" | "conversation_id">, live: (conversationId: string) => PrioritySessionState | undefined): PrioritySessionState => {
-  const state = live(s.conversation_id);
-  if (state) return state;
-  if (s.state !== "needs_you") return s.state;
-  return s.mine === false ? "idle" : "dormant";
+const lineOf = (s: PriorityLinkedSession, live: (conversationId: string) => SessionStatus | undefined): SessionLine => {
+  const mark = live(s.conversation_id);
+  const href = `/conversation/${s.conversation_id}`;
+  if (mark) return { ...s, state: stateOfMark(mark), mark, href };
+  return { ...s, state: s.state !== "needs_you" ? s.state : s.mine === false ? "idle" : "dormant", href };
 };
 
-/** A linked session as the list draws it: the inbox's live state over the server's, and where it opens. */
-export type SessionLine = PriorityLinkedSession & { href: string };
+/**
+ * A linked session as the list draws it: its state in the milestone
+ * vocabulary, the mark its inbox draws when it draws one (its row shows that
+ * mark), and where it opens.
+ */
+export type SessionLine = PriorityLinkedSession & { href: string; mark?: SessionStatus };
+
+/** The mark a session's row draws (both apps): its inbox's mark (Done's check, the stash tray, an error), else its own state's. */
+export const sessionRowMark = (s: Pick<SessionLine, "mark" | "state">): SessionStatus => s.mark ?? s.state;
 
 export type MilestoneModel = {
   key: string;
@@ -120,14 +129,13 @@ export type PriorityModel = {
 };
 
 /**
- * Every priority's model. `live` answers the inbox's verdict for a session
- * the store holds (by conversation id); the server's doc-only state stands
- * for the rest.
+ * Every priority's model. `live` answers the mark its inbox draws for a
+ * session (by conversation id); the server's state stands for the rest.
  */
 export function buildModels(
   rows: readonly PriorityRow[],
   history: PriorityHistory | undefined,
-  live: (conversationId: string) => PrioritySessionState | undefined,
+  live: (conversationId: string) => SessionStatus | undefined,
   days: readonly string[],
 ): PriorityModel[] {
   const lanes = new Map((history?.lanes ?? []).map((l) => [l.short_id ?? l.key, l]));
@@ -138,11 +146,7 @@ export function buildModels(
     // Reads never return a dropped milestone; a row cached before that rule is held to it here.
     const milestones = row.steps.filter((step) => !step.dropped).map((step): MilestoneModel => {
       const l = links.get(step.key);
-      const sessions = orderSessions((l?.sessions ?? []).map((s) => ({
-        ...s,
-        state: sessionState(s, live),
-        href: `/conversation/${s.conversation_id}`,
-      })));
+      const sessions = orderSessions((l?.sessions ?? []).map((s) => lineOf(s, live)));
       return {
         key: step.key,
         tier: step.tier,

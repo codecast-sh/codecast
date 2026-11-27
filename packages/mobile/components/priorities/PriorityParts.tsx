@@ -15,7 +15,8 @@ import { CHROME_FONT_CAP, themedStyles, useTheme } from '@/constants/Theme';
 import { codeFont } from '@/constants/fonts';
 import { CODECAST_BASE_URL } from '@codecast/shared/entities';
 import type { PriorityPlanRef, PriorityRow, PriorityStep } from '@codecast/shared/contracts/priorities';
-import { STATE_WORD, type MilestoneModel, type PriorityModel, type SessionLine } from '@codecast/web/lib/priorityList';
+import { sessionRowMark, type MilestoneModel, type PriorityModel, type SessionLine } from '@codecast/web/lib/priorityList';
+import { SESSION_STATUS } from '@codecast/web/lib/sessionStatus';
 import { priorityHref } from '@codecast/web/lib/priorities';
 import { priorityWrites } from '@codecast/web/lib/priorityWrites';
 import { branchesOf, type LinkLookups } from '@codecast/web/hooks/usePriorityModels';
@@ -376,14 +377,15 @@ function SessionRow({ s, now, onPress, menu }: { s: SessionLine; now: number; on
   // A workflow step's title names its task or plan by id: read the store's title for it.
   const ref = workflowRef(s.title);
   const refTitle = useInboxStore((st) => (ref ? (lookup(ref.startsWith('pl-') ? (st as any).plans : st.tasks, ref)?.title as string | undefined) ?? '' : ''));
-  const asks = s.state === 'needs_you';
-  const icon = s.workflow && !asks ? <Feather name={KIND_ICON.workflow} size={13} color={Theme.textDim} accessibilityLabel="Workflow run" /> : <SessionStatusMark status={s.state} size={12} />;
+  const mark = sessionRowMark(s);
+  const asks = mark === 'needs_you';
+  const icon = s.workflow && !asks ? <Feather name={KIND_ICON.workflow} size={13} color={Theme.textDim} accessibilityLabel="Workflow run" /> : <SessionStatusMark status={mark} size={12} />;
   return (
     <Item
       testID={`priorities-session-${s.short_id}`}
       icon={icon}
       title={sessionLabel(s, () => refTitle || undefined)}
-      meta={<><RNText style={asks ? { color: Theme.yellow, fontWeight: '600' } : undefined}>{STATE_WORD[s.state]}</RNText> · {age(s.last_active_at, now)}</>}
+      meta={<><RNText style={asks ? { color: Theme.yellow, fontWeight: '600' } : undefined}>{SESSION_STATUS[mark].word}</RNText> · {age(s.last_active_at, now)}</>}
       onPress={onPress}
       menu={menu ? <More label={`Fix the link to ${sessionLabel(s)}`} onPress={menu} testID={`priorities-session-menu-${s.short_id}`} /> : undefined}
     />

@@ -3,7 +3,7 @@
 // the coarse-pointer targets, and the layout the list's width and the screen pick.
 // Run: cd packages/web && bun test --isolate components/priorities/PrioritiesLines.mount.test.tsx
 import { expect, test } from "bun:test";
-import { fixtureId, TEAM_ID, installDom, installMissingBackend, seedViewer } from "../../test-helpers/missingBackend";
+import { fixtureId, TEAM_ID, VIEWER_ID, installDom, installMissingBackend, seedViewer } from "../../test-helpers/missingBackend";
 
 installDom("https://app.test/priorities");
 // Radix's focus scope walks the popover with a TreeWalker.
@@ -128,6 +128,42 @@ test("on a phone, Looks done? and correction pending sit on a line under the tit
     expect(title.parentElement!.nextElementSibling).toBe(marks);
     // The title wraps onto two lines rather than giving way to the marks.
     expect(title.className).toContain("line-clamp-2");
+  } finally {
+    await page.unmount();
+  }
+}, 60_000);
+
+test("a session's row draws the mark the sidebar draws for it, its Done check and word, while the milestone reads it as idle", async () => {
+  useInboxStore.setState((s: any) => ({ sessions: { ...s.sessions, [fixtureId("donemark")]: { _id: fixtureId("donemark"), title: "Finished", message_count: 4, status: "completed", updated_at: NOW - 10 * 60_000, last_turn_at: NOW - 11 * 60_000, user_id: VIEWER_ID, thread_state_status: "done", thread_state_at: NOW - 10 * 60_000 } } }));
+  const r = row(14, "Done marks", 1, [step("s1", "Has a finished session", "critical")], { links: [links("s1", [sess("donemark", "Finished", "idle", 1)])] });
+  const page = await mount(view({ rows: [r] }));
+  try {
+    const b = block(page.container, "pri-14");
+    expect(b.querySelector('[data-milestone="s1"]')!.getAttribute("data-state")).toBe("idle");
+    const c = await openLine(b, "s1");
+    const item = c.querySelector(`[data-session-row="${fixtureId("donemark")}"]`)!;
+    expect([item.getAttribute("data-state"), item.getAttribute("data-mark")]).toEqual(["idle", "done"]);
+    expect(item.querySelector('[data-status-mark="done"]')).not.toBeNull();
+    expect(item.textContent).toContain("Done");
+  } finally {
+    await page.unmount();
+    useInboxStore.setState((s: any) => {
+      const { [fixtureId("donemark")]: _, ...rest } = s.sessions;
+      return { sessions: rest };
+    });
+  }
+}, 60_000);
+
+test("a task whose row has not loaded draws a neutral dot under its id, never the Open circle", async () => {
+  useInboxStore.setState({ tasks: {} } as any);
+  const r = row(15, "Unloaded", 1, [step("s1", "Names a task", "critical", false, { refs: [{ kind: "task", id: "ct-8199" }] })], { links: [links("s1", [])] });
+  const page = await mount(view({ rows: [r] }));
+  try {
+    const c = await openLine(block(page.container, "pri-15"), "s1");
+    const item = c.querySelector('[data-group="tasks"] li')!;
+    expect(item.querySelector("[data-task-status]")!.getAttribute("data-task-status")).toBe("unknown");
+    expect(item.querySelector("svg")).toBeNull();
+    expect(item.textContent).toBe("ct-8199");
   } finally {
     await page.unmount();
   }
