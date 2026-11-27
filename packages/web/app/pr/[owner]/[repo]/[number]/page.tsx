@@ -26,7 +26,7 @@ import { useCurrentUser } from "../../../../../hooks/useCurrentUser";
 import { useEventListener } from "../../../../../hooks/useEventListener";
 import { useWatchEffect } from "../../../../../hooks/useWatchEffect";
 import { repoBlobHref } from "../../../../../lib/repoView";
-import { useLocalEditAction, useLocalEditAt } from "../../../../../components/repo/LocalEditButton";
+import { useLocalEditAction, useLocalEditAt } from "../../../../../hooks/useLocalEdit";
 import { landOn, useDiffAddress } from "../../../../../hooks/useDiffAddress";
 import { useFollowScroll } from "../../../../../hooks/useFollowSurface";
 import { useLinkedSessions } from "../../../../../hooks/useLinkedSessions";

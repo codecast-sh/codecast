@@ -18,7 +18,6 @@ import {
   Panel,
   Group,
   Separator,
-  usePanelRef,
 } from "react-resizable-panels";
 import {
   ArrowUpDown,
@@ -67,8 +66,8 @@ import { useDocForFile, useVaultTeamResolver } from "../../components/vault/useV
 import { vaultPresence } from "../../lib/vault/scopeModel";
 import { vaultLandingPath } from "../../lib/vault/projectVault";
 import { filesHref } from "../../lib/vault/vaultHref";
-import { collapsePanelSoon } from "../../lib/vault/collapsePanelSoon";
-import { readTreeLayout, useVaultStore, writeTreeLayout, type TreeLayout } from "../../store/vaultStore";
+import { useVaultStore } from "../../store/vaultStore";
+import { useFilesTree } from "../../components/vault/useFilesTree";
 import { SIDE_MIN_PX, useVaultSidePanel } from "../../components/vault/useVaultSidePanel";
 import {
   toggleVaultEditMode,
@@ -139,93 +138,7 @@ function VaultContent() {
   // The side panel (backlinks / outline / tags): open state and its panel.
   const inSplitPane = !!useTabContext()?.leafId;
   const { rightPanelOpen, setRightPanelOpen, sidePanelRef, sideAppliedRef } = useVaultSidePanel(inSplitPane, showGraph, connection);
-  // The explorer column costs ~200px that a narrow pane can't spare — Files
-  // opened beside a conversation, mostly. Local state: a split pane starts
-  // with the tree hidden, as does any pane narrow at first layout; a full tab
-  // shows it. The toggles live in the tree titlebar (hide) and the
-  // content pane's top-left corner (show).
-  const treePanelRef = usePanelRef();
-  const rootRef = useRef<HTMLDivElement | null>(null);
-  // Below this width the explorer column and the content can no longer share
-  // the pane (their pixel minimums do not fit), so the tree renders as an
-  // overlay drawer instead of a split — and starts hidden. Typical case:
-  // Files opened beside a conversation.
-  // null until the first measure: the split panel only mounts once the pane
-  // is known to be wide enough — mounting it into a pane that cannot satisfy
-  // its pixel minimums livelocks the panel library.
-  const [paneNarrow, setPaneNarrow] = useState<boolean | null>(null);
-  // A full tab comes back with the tree as it was left; a split leaf starts closed.
-  const savedTreeRef = useRef<TreeLayout | null | undefined>(undefined);
-  if (savedTreeRef.current === undefined) savedTreeRef.current = inSplitPane ? null : readTreeLayout();
-  const savedTree = savedTreeRef.current;
-  const [treeOpen, setTreeOpen] = useState(savedTree?.open ?? false);
-  const treeAppliedRef = useRef<boolean | null>(null);
-  const treeExpandingRef = useRef(false);
-  const firstMeasureRef = useRef(true);
-  useWatchEffect(() => {
-    const el = rootRef.current;
-    if (!el) return;
-    const measure = () => {
-      const narrow = el.offsetWidth < 640;
-      if (firstMeasureRef.current) {
-        firstMeasureRef.current = false;
-        if (narrow) setTreeOpen(false);
-      }
-      setPaneNarrow((prev) => {
-        if (prev !== narrow) treeAppliedRef.current = null;
-        return narrow;
-      });
-    };
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [connection]);
-  // Mirror treeOpen onto the split panel (wide layout only; the overlay
-  // renders from state directly).
-  useWatchEffect(() => {
-    if (paneNarrow !== false) return;
-    const ref = treePanelRef.current;
-    if (!ref) return;
-    if (treeAppliedRef.current === treeOpen) return;
-    const firstSync = treeAppliedRef.current === null;
-    treeAppliedRef.current = treeOpen;
-    if (!treeOpen) {
-      // The mounting-commit case is real here: widening a narrow pane flips
-      // paneNarrow to false and mounts the tree panel in the same commit this
-      // effect runs in, so a direct collapse() throws.
-      collapsePanelSoon(treePanelRef, () => treeAppliedRef.current === false);
-      return;
-    }
-    if (firstSync) {
-      // The panel mounts expanded at the default share; a saved width wins.
-      if (savedTree?.px) ref.resize(`${savedTree.px}px`);
-      return;
-    }
-    treeExpandingRef.current = true;
-    ref.resize("20%");
-    // 20% of a modest pane can fall under the pixel minimum and the library
-    // collapses instead of resizing; ask for the minimum itself on the retry.
-    requestAnimationFrame(() => {
-      if (treePanelRef.current?.isCollapsed()) treePanelRef.current.resize("180px");
-      requestAnimationFrame(() => {
-        treeExpandingRef.current = false;
-      });
-    });
-  }, [treeOpen, paneNarrow, connection]);
-  // Only a choice made on a wide pane is remembered: the narrow overlay
-  // closes itself after every pick.
-  useWatchEffect(() => {
-    if (savedTree && paneNarrow === false && treeOpen !== savedTree.open) {
-      savedTree.open = treeOpen;
-      writeTreeLayout({ open: treeOpen });
-    }
-  }, [treeOpen, paneNarrow]);
-  // Picking a file from the overlay closes it — on a narrow pane the reader
-  // is the point, and the drawer covers most of it.
-  useWatchEffect(() => {
-    if (paneNarrow) setTreeOpen(false);
-  }, [activePath, paneNarrow]);
+  const { treePanelRef, rootRef, paneNarrow, treeOpen, setTreeOpen, rememberTreeWidth, onTreeResize } = useFilesTree(inSplitPane, connection, activePath);
   const leftTab = useVaultStore((s) => s.leftPaneTab);
   const setLeftTab = useVaultStore((s) => s.setLeftPaneTab);
 
@@ -624,14 +537,7 @@ function VaultContent() {
       <Group
         orientation="horizontal"
         className="flex-1 min-h-0"
-        onLayoutChanged={() => {
-          // A drag ended: remember the tree's width.
-          const px = treePanelRef.current?.getSize().inPixels;
-          if (savedTree && paneNarrow === false && treeOpen && px && px >= 180 && Math.round(px) !== savedTree.px) {
-            savedTree.px = Math.round(px);
-            writeTreeLayout({ px: savedTree.px });
-          }
-        }}
+        onLayoutChanged={rememberTreeWidth}
         defaultLayout={{
           "vault-tree": treeOpen ? 20 : 0,
           "vault-content": 100 - (treeOpen ? 20 : 0) - (rightPanelOpen ? 22 : 0),
@@ -648,14 +554,7 @@ function VaultContent() {
           collapsible
           collapsedSize={0}
           className="min-w-0"
-          onResize={(size) => {
-            // A drag all the way shut is a close; keep the state honest so
-            // the corner button reopens it instead of doing nothing.
-            if (size.asPercentage === 0 && treeAppliedRef.current && !treeExpandingRef.current) {
-              treeAppliedRef.current = false;
-              setTreeOpen(false);
-            }
-          }}
+          onResize={onTreeResize}
         >
           {treePane}
         </Panel>

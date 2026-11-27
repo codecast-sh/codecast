@@ -32,7 +32,7 @@ mock.module("../../OpenInEditorButton", () => ({
 
 const { act } = await import("react");
 const { createRoot } = await import("react-dom/client");
-const { useLocalEditAt } = await import("../LocalEditButton");
+const { useLocalEditAt } = await import("../../../hooks/useLocalEdit");
 const { useInboxStore } = await import("../../../store/inboxStore");
 useInboxStore.setState({ localDevice: { viewer: "u1", deviceId: "dev-1" }, currentUser: { _id: "u1" } } as never);
 

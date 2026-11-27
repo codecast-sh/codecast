@@ -11,7 +11,6 @@
 
 import { memo, useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import { useConvex } from "convex/react";
-import { Group, Panel, Separator, useGroupRef } from "react-resizable-panels";
 import type { EditorView } from "@codemirror/view";
 import { useCodeStore, workspaceFor } from "../../../store/codeStore";
 import { useInboxStore } from "../../../store/inboxStore";
@@ -50,6 +49,8 @@ import {
   type WsGroup,
 } from "../../../lib/code/workspace/model";
 import { EditorGroup } from "./EditorGroup";
+import { SplitRun } from "./SplitRun";
+import { MIN_GROUP_PX, SIZE_QUANTUM, minShare, roomToSplit } from "../../../lib/code/workspace/splitRoom";
 import { QuickOpen } from "./QuickOpen";
 import { TabSwitcher } from "./TabSwitcher";
 import { GotoLine } from "./GotoLine";
@@ -83,37 +84,6 @@ const activeOf = (ws: Parameters<typeof activeGroup>[0]): string | null => {
 // narrow bar drops items by their priority (lib/code/statusBar.ts).
 const STATUS_CSS = `
 [data-code-workspace] [data-code-group][data-group-idle] .cm-code-status > * { visibility: hidden; }`;
-
-const separatorClass = {
-  horizontal:
-    "relative z-10 w-px bg-sol-border/50 before:absolute before:inset-y-0 before:-left-[2px] before:-right-[2px] before:content-[''] before:transition-colors before:duration-150 hover:before:bg-sol-cyan data-[resize-handle-active]:before:bg-sol-cyan",
-  vertical:
-    "relative z-10 h-px bg-sol-border/50 before:absolute before:inset-x-0 before:-top-[2px] before:-bottom-[2px] before:content-[''] before:transition-colors before:duration-150 hover:before:bg-sol-cyan data-[resize-handle-active]:before:bg-sol-cyan",
-};
-
-/** The smallest a group may be, in px: a tab, the breadcrumbs and a status
- *  row still fit, and a few lines of code under them. */
-const MIN_GROUP_PX = { width: 260, height: 160 } as const;
-/** Size changes smaller than this re-render nothing. */
-const SIZE_QUANTUM = 20;
-
-/** A group's minimum share of a split `px` long holding `n` groups: the pixel
- *  floor as a percentage, never more than an equal share, so it can always
- *  be met (a pixel minimum the pane cannot meet livelocks the panel library). */
-export function minShare(px: number, n: number, floor: number): number {
-  if (!px) return MIN_GROUP_SIZE;
-  return Math.min(100 / n - 0.5, Math.max(MIN_GROUP_SIZE, (floor / px) * 100));
-}
-
-/** Whether `groupId` has room to split in `dir`: under the group limit, and
- *  each half at least the pixel floor (an unmeasured workspace has room). */
-export function roomToSplit(ws: Workspace, groupId: string, dir: SplitDirection, size: { w: number; h: number }): boolean {
-  if (!canSplitMore(ws)) return false;
-  const r = groupRects(ws).get(groupId);
-  if (!r) return false;
-  const [len, floor] = dir === "right" ? [r.w * size.w, MIN_GROUP_PX.width] : [r.h * size.h, MIN_GROUP_PX.height];
-  return !len || len / 2 >= floor;
-}
 
 /** What each item of a tab's menu runs. */
 const TAB_MENU_COMMANDS: Record<TabMenuAction, [CodeCommandId, Record<string, unknown>?]> = {
@@ -806,70 +776,6 @@ function GroupTabList({ vaultId, group, onPick, onClose }: { vaultId: string; gr
       onClose={onClose}
       onPick={onPick}
     />
-  );
-}
-
-/** One run of a split: panels along one axis with hairlines between them.
- *  Sizes set by a command (<C-w>=, <C-w>_, 5<C-w><) reach the panels here; a
- *  drag already shows its sizes and comes back equal, so it sets nothing. */
-function SplitRun({
-  orientation,
-  ids,
-  sizes,
-  minSize,
-  onSizes,
-  children,
-}: {
-  orientation: "horizontal" | "vertical";
-  ids: string[];
-  sizes: number[] | null;
-  /** Percent, so it can always be met. */
-  minSize: number;
-  onSizes(sizes: number[]): void;
-  children(id: string, index: number): ReactNode;
-}) {
-  const key = ids.join(",");
-  const want = sizes && sizes.length === ids.length ? sizes : ids.map(() => 100 / ids.length);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const defaultLayout = useMemo(() => Object.fromEntries(ids.map((id, i) => [id, want[i]])), [key]);
-  const groupRef = useGroupRef();
-  const live = useRef({ ids, onSizes });
-  live.current = { ids, onSizes };
-  useWatchEffect(() => {
-    const handle = groupRef.current;
-    if (!handle || ids.length < 2) return;
-    const have = handle.getLayout();
-    if (ids.every((id, i) => Math.abs((have[id] ?? 0) - want[i]) < 0.5)) return;
-    handle.setLayout(Object.fromEntries(ids.map((id, i) => [id, want[i]])));
-  }, [want.join(","), key]);
-  return (
-    <Group
-      groupRef={groupRef}
-      orientation={orientation}
-      className="h-full min-h-0"
-      defaultLayout={defaultLayout}
-      onLayoutChanged={(l) => {
-        const { ids: now, onSizes: emit } = live.current;
-        if (now.length > 1) emit(now.map((id) => l[id] ?? 0));
-      }}
-    >
-      {ids.map((id, i) => (
-        <SplitPanel key={id} id={id} separator={i > 0 ? orientation : null} minSize={minSize}>
-          {children(id, i)}
-        </SplitPanel>
-      ))}
-    </Group>
-  );
-}
-
-function SplitPanel({ id, separator, minSize, children }: { id: string; separator: "horizontal" | "vertical" | null; minSize: number; children: ReactNode }) {
-  return (
-    <>
-      {separator && <Separator className={separatorClass[separator]} />}
-      <Panel id={id} minSize={`${minSize}%`} className="min-h-0 min-w-0">
-        {children}
-      </Panel>
-    </>
   );
 }
 

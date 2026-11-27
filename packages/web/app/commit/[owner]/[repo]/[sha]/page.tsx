@@ -27,7 +27,7 @@ import { CodeMenuItem, CodeShareMenu } from "../../../../../components/menus/Cod
 import { copyText } from "../../../../../lib/copyText";
 import { CommitRail } from "../../../../../components/repo/CommitRail";
 import { RepoPageShell } from "../../../../../components/repo/RepoPageShell";
-import { useLocalEditAction } from "../../../../../components/repo/LocalEditButton";
+import { useLocalEditAction } from "../../../../../hooks/useLocalEdit";
 import { RepoWindowControl } from "../../../../../components/repo/RepoWindowControl";
 import { useRepoFamily } from "../../../../../components/repo/useRepoFamily";
 import { FileDiffLayout, type DiffFile, type FileLineThreads } from "../../../../../components/FileDiffLayout";

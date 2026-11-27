@@ -78,6 +78,20 @@ import {
 } from "../lib/vault/explorerModel";
 import { applySpanEdits, planFolderRewrites, type FileRewrite } from "../lib/vault/linkRewrite";
 import { syncVaultIndex, vaultIndex } from "../lib/vault/indexSingleton";
+import {
+  SHOW_ALL_KEY,
+  SHOW_IGNORED_KEY,
+  cachedRepo,
+  readCachedVaults,
+  readLastVaultId,
+  readRightPanelOpen,
+  writeRightPanelOpen,
+  readShowAllFiles,
+  readShowIgnoredFiles,
+  writeCachedVaults,
+  writeLastVaultId,
+  writeVaultFlag,
+} from "./vaultPrefs";
 
 import type {
   HostConnectionState,
@@ -219,127 +233,6 @@ export function resolveRecentDelete(path: string): boolean {
 // keeps two bookmarks made in the same millisecond apart.
 let bookmarkSeq = 0;
 
-// Last-opened vault id, so the IDB cache can paint on a boot where the daemon
-// is unreachable (discovery failing must not blank a vault we've already seen).
-const LAST_VAULT_KEY = "cast_vault_last";
-
-function readLastVaultId(): string | null {
-  try {
-    return localStorage.getItem(LAST_VAULT_KEY);
-  } catch {
-    return null;
-  }
-}
-
-function writeLastVaultId(id: string): void {
-  try {
-    localStorage.setItem(LAST_VAULT_KEY, id);
-  } catch {}
-}
-
-// The vault LIST lives in localStorage rather than in the IndexedDB cache
-// beside the file tables, and deliberately: the picker has to be populated on
-// the very first render, and an IDB read — however fast — is a frame of empty
-// list first. It matters more now that the list includes every project on the
-// machine: discovering those costs the daemon a readdir per project, and first
-// paint must never wait on that. The whole list is a few hundred short records.
-const VAULT_LIST_KEY = "cast_vault_list";
-
-function readCachedVaults(): VaultInfo[] {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(VAULT_LIST_KEY) ?? "null");
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (v): v is VaultInfo =>
-        !!v && typeof v === "object" && typeof v.id === "string" && typeof v.root === "string",
-    );
-  } catch {
-    return [];
-  }
-}
-
-function writeCachedVaults(vaults: VaultInfo[]): void {
-  try {
-    localStorage.setItem(VAULT_LIST_KEY, JSON.stringify(vaults));
-  } catch {}
-}
-
-// "Show all files", per vault. localStorage and not the IDB prefs table for the
-// same reason the vault list lives here: the tree paints on the first frame,
-// and an async read would render the wrong file set and then flip.
-const SHOW_ALL_KEY = "cast_vault_show_all";
-
-/**
- * Whether a vault opens showing everything on disk. The default follows what
- * the folder IS (a discovered project, or any git checkout once the scan says
- * so): a code project whose tree hides its own source is the wrong
- * first impression, and a notes folder full of dotfiles is too. An explicit
- * choice, once made, outranks both.
- */
-const RIGHT_PANEL_KEY = "vault.rightPanelOpen";
-
-function readRightPanelOpen(): boolean {
-  try {
-    return localStorage.getItem(RIGHT_PANEL_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-
-const TREE_LAYOUT_KEY = "vault.treeLayout";
-
-/** Whether a full-tab Files page shows its tree, and how wide (px; null is
- *  the default share). A split-pane leaf keeps its own, unsaved. */
-export interface TreeLayout {
-  open: boolean;
-  px: number | null;
-}
-
-export function readTreeLayout(): TreeLayout {
-  try {
-    const raw = JSON.parse(localStorage.getItem(TREE_LAYOUT_KEY) ?? "null") as Partial<TreeLayout> | null;
-    if (raw && typeof raw === "object") return { open: raw.open !== false, px: typeof raw.px === "number" && raw.px > 0 ? Math.round(raw.px) : null };
-  } catch {}
-  return { open: true, px: null };
-}
-
-export function writeTreeLayout(patch: Partial<TreeLayout>): void {
-  try {
-    const next = { ...readTreeLayout(), ...patch };
-    localStorage.setItem(TREE_LAYOUT_KEY, JSON.stringify(next));
-  } catch {}
-}
-
-const SHOW_IGNORED_KEY = "cast_vault_show_ignored";
-
-/** A per-vault boolean the user set explicitly, or null when they never did. */
-function readVaultFlag(key: string, vaultId: string): boolean | null {
-  try {
-    const stored = localStorage.getItem(`${key}:${vaultId}`);
-    if (stored === "1") return true;
-    if (stored === "0") return false;
-  } catch {}
-  return null;
-}
-
-function writeVaultFlag(key: string, vaultId: string, value: boolean): void {
-  try {
-    localStorage.setItem(`${key}:${vaultId}`, value ? "1" : "0");
-  } catch {}
-}
-
-function readShowAllFiles(vaultId: string, vaults: VaultInfo[], isRepo = false): boolean {
-  return readVaultFlag(SHOW_ALL_KEY, vaultId) ?? (isRepo || vaults.find((v) => v.id === vaultId)?.kind === "project");
-}
-
-/** What a cached boot knows of the root being a checkout, until the scan says. */
-function cachedRepo(vaultId: string, vaults: VaultInfo[], meta: { isRepo?: boolean }): Partial<Pick<VaultState, "isRepo" | "showAllFiles">> {
-  return meta.isRepo ? { isRepo: true, showAllFiles: readShowAllFiles(vaultId, vaults, true) } : {};
-}
-
-function readShowIgnoredFiles(vaultId: string): boolean {
-  return readVaultFlag(SHOW_IGNORED_KEY, vaultId) ?? false;
-}
 
 /** Fetch a set of file bodies with bounded concurrency, patching the store as
  *  each lands so the UI streams in rather than waiting for the batch.
@@ -951,9 +844,7 @@ export const useVaultStore = create<VaultState>((set, get) => ({
 
   setRightPanelTab: (tab) => set({ rightPanelTab: tab }),
   setRightPanelOpen: (open) => {
-    try {
-      localStorage.setItem(RIGHT_PANEL_KEY, open ? "1" : "0");
-    } catch {}
+    writeRightPanelOpen(open);
     set({ rightPanelOpen: open });
   },
   revealTarget: null,

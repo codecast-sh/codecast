@@ -6,7 +6,8 @@
 // tab kept in view. Pinned tabs stay put at the left, outside the scroll, and
 // a count of the tabs scrolled out of view opens the group's tab list.
 
-import { FileStateMark, deletedNameClass, fileStateWords } from "./FileStateMark";
+import { FileStateMark } from "./FileStateMark";
+import { deletedNameClass, fileStateWords } from "../../../lib/code/workspace/fileState";
 import { memo, useMemo, useRef, useState } from "react";
 import { File, FileStack, FileText, Image as ImageIcon, Pin, SquareSplitHorizontal, X } from "lucide-react";
 import { isVaultAssetPath, isVaultMarkdownPath } from "@codecast/shared/contracts";

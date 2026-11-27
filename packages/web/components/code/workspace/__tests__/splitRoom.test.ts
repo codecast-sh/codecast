@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { minShare, roomToSplit } from "../CodeWorkspace";
+import { minShare, roomToSplit } from "../../../../lib/code/workspace/splitRoom";
 import { emptyWorkspace, openTab, splitTo } from "../../../../lib/code/workspace/model";
 
 test("the pixel floor becomes a share that can always be met", () => {

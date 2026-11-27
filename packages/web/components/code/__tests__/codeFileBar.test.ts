@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { foldedFolders } from "../CodeFileBar";
+import { foldedFolders } from "../../../lib/code/workspace/crumbFold";
 
 test("leading folders fold first; the nearest one never folds", () => {
   const widths = [70, 40, 80, 60];

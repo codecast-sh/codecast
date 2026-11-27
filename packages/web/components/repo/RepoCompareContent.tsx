@@ -7,7 +7,7 @@ import { useRepoCompare } from "../../hooks/useRepoBrowse";
 import { commitPageHref, repoCompareHref, type RepoRouteFamily } from "../../lib/repoView";
 import { serverErrorText } from "../../lib/errorCause";
 import { useDiffAddress } from "../../hooks/useDiffAddress";
-import { useLocalEditAction } from "./LocalEditButton";
+import { useLocalEditAction } from "../../hooks/useLocalEdit";
 
 export function RepoCompareContent({ repository, base, head, family }: {
   repository: string; base: string; head: string; family: RepoRouteFamily;

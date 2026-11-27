@@ -3,7 +3,7 @@
 // mode bits, and still compares the etag, so disk that moved merges first.
 import { SwitchReview, type SwitchLedger } from "../consequential/ConsequentialSwitch";
 
-export function overwriteLedger(path: string, mode: string): SwitchLedger {
+function overwriteLedger(path: string, mode: string): SwitchLedger {
   return {
     name: "Overwrite read-only file",
     subject: path,

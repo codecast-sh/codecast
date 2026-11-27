@@ -13,26 +13,12 @@ import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { bindGroupCrumbs, focusGroup } from "../../lib/code/workspace/groupRegistry";
 import { ContextMenu, CtxItem, useContextMenu } from "../ui/context-menu";
 import { useCodeGroup } from "./workspace/groupContext";
+import { foldedFolders } from "../../lib/code/workspace/crumbFold";
 
 const reveal = (path: string) => () => useVaultStore.getState().requestReveal(path);
 
 /** A crumb: a quiet press, and a ring when keys reach it. */
 const CRUMB = "rounded-sm outline-none transition-colors focus-visible:ring-1 focus-visible:ring-sol-cyan";
-
-/** Width the "…" crumb takes with its chevron, in px. */
-const ELLIPSIS_PX = 30;
-
-/** How many leading folders to fold into "…" so the rest fit `avail` px:
- *  none when everything fits, never the nearest folder. */
-export function foldedFolders(widths: readonly number[], avail: number): number {
-  let total = widths.reduce((a, b) => a + b, 0);
-  if (total <= avail) return 0;
-  for (let hide = 1; hide < widths.length; hide++) {
-    total -= widths[hide - 1];
-    if (total + ELLIPSIS_PX <= avail) return hide;
-  }
-  return Math.max(0, widths.length - 1);
-}
 
 /** The folder crumbs. Each crumb's width is measured once per path; after
  *  that a resize (of the row, or of the symbol path beside it) only compares

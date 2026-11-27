@@ -5,9 +5,9 @@
 // holds the file. Shared by the vault views and the code editor's loading
 // state, so every dead end on Files has the same shape and a way out.
 
-import { useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { RotateCw, WifiOff } from "lucide-react";
-import { useWatchEffect } from "../../hooks/useWatchEffect";
+import { useStalled } from "../../hooks/useStalled";
 import { LoadingBar } from "../ui/LoadingBar";
 import { useVaultStore } from "../../store/vaultStore";
 import { fileManagerName } from "../../lib/vault/reveal";
@@ -51,26 +51,6 @@ export function FileUnavailable({
       )}
     </div>
   );
-}
-
-/** How long a read waits on a reconnecting daemon before saying so. */
-export const FILE_STALL_MS = 4000;
-
-/** True once `waiting` has held for FILE_STALL_MS for the same `key`; the
- *  second value starts the wait over (a Retry). */
-export function useStalled(waiting: boolean, key: string): [boolean, () => void] {
-  const [stalled, setStalled] = useState<string | null>(null);
-  const [attempt, setAttempt] = useState(0);
-  useWatchEffect(() => {
-    if (!waiting) return;
-    const t = setTimeout(() => setStalled(key), FILE_STALL_MS);
-    return () => clearTimeout(t);
-  }, [waiting, key, attempt]);
-  const retry = () => {
-    setStalled(null);
-    setAttempt((n) => n + 1);
-  };
-  return [waiting && stalled === key, retry];
 }
 
 /** The daemon is being reached and the file cannot be read yet. */
