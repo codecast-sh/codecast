@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CiFailure } from "../../packages/shared/contracts/ciFailures";
-import { MAX_RERUNS, sortFlaky, suiteOf } from "./local-flaky";
+import { MAX_RERUNS, settledJobs, sortFlaky, suiteOf } from "./local-flaky";
 
 const failure = (file: string | null, test = "t", job = "test-web"): CiFailure => ({ job, test, assertion: null, file, line: null, excerpt: "" });
 
@@ -58,5 +58,25 @@ describe("suiteOf", () => {
     expect(suiteOf(root, "packages/cli/src/workflow/x.test.ts")).toEqual({ dir: join(root, "packages/cli"), rel: "src/workflow/x.test.ts" });
     mkdirSync(join(root, "scripts/ci"), { recursive: true });
     expect(suiteOf(root, "scripts/ci/y.test.ts")).toEqual({ dir: root, rel: "scripts/ci/y.test.ts" });
+  });
+});
+
+describe("settledJobs", () => {
+  const logs = "logs /tmp/ci-local-x/test-cli.*.log";
+  test("a red job's summary counts what the reruns alone left, never the count it ran with", () => {
+    const flaky = failure("packages/platform/a.test.ts", "a", "test-platform");
+    const red = failure("packages/cli/b.test.ts", "b", "test-cli");
+    const out = settledJobs([
+      { job: "test-platform", status: "fail", seconds: 30, reason: `1 failing, ${logs}` },
+      { job: "test-cli", status: "fail", seconds: 365, reason: `3 failing, ${logs}` },
+      { job: "test-web", status: "fail", seconds: 9, reason: `1 failing, ${logs}` },
+      { job: "lint", status: "pass", seconds: 36 },
+    ], { failing: [red, red], flaky: [flaky, failure("packages/cli/c.test.ts", "c", "test-cli")], unjudged: [failure("packages/web/d.test.ts", "d", "test-web")] });
+    expect(out.map((r) => [r.job, r.status, r.reason])).toEqual([
+      ["test-platform", "pass", `1 flaky (passed alone), ${logs}`],
+      ["test-cli", "fail", `2 failing, 1 flaky (passed alone), ${logs}`],
+      ["test-web", "no verdict", `1 not judged, ${logs}`],
+      ["lint", "pass", undefined],
+    ]);
   });
 });

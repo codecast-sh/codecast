@@ -5,5 +5,7 @@ digraph change {
   // Local CI's own way back: the Fix findings brief reads CI's and the reviewer's verdicts, which do not exist yet here.
   // It sends a change back once per run; red again, it goes on to CI, which tells the change's failures from main's.
   local_ci_fix [label="Fix Local CI", backend=subject, max_visits=3, prompt="@change/local_ci_fix.md"]
+  // A turn that changed nothing (every failure main's, or none the session's) would only fail the same way again.
+  local_ci_fix -> pr [condition="local_ci_fix.moved = false", label="changed nothing"]
   local_ci_fix -> local_ci
 }

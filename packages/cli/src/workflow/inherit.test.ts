@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import * as path from "node:path";
+import { evalCondition } from "./condition";
 import { graphDiff, graphHash, parseWorkflowFile, parseWorkflowSource, validateWorkflow } from "./parser";
 import { BUILTIN_WORKFLOW_TEMPLATES } from "./templates";
 import { planGraphEdit } from "../lineGraphEdit";
@@ -183,6 +185,27 @@ describe("variant edits: after=, before=, skip, when=, guide=", () => {
     expect([next("build"), next("a"), next("b")]).toEqual([["a"], ["b"], ["review"]]);
     expect(g.edges.filter((e) => e.to === "c").map((e) => [e.from, e.condition])).toEqual([["review", "outcome = success"]]);
     expect(next("c")).toEqual(["push"]);
+  });
+
+  test("before= leaves an edge the variant writes into the anchor itself going there", () => {
+    const g = parse(`digraph v { graph [extends="live.cast"]
+      c [before="push", shape=parallelogram, script="c", fix="c_fix"]
+      c_fix [shape=parallelogram, script="fix"]
+      c_fix -> push [condition="c_fix.exit_code = 3"]
+      c_fix -> c }`);
+    expect(g.edges.filter((e) => e.from === "c_fix").map((e) => [e.to, e.condition])).toEqual([["push", "c_fix.exit_code = 3"], ["c", undefined]]);
+    expect(g.edges.filter((e) => e.to === "c").map((e) => e.from).sort()).toEqual(["c_fix", "review"]);
+  });
+
+  test("codecast's own Fix Local CI goes straight to PR when its turn changed nothing, else to Local CI again", () => {
+    const g = parseWorkflowFile(path.resolve(import.meta.dir, "../../../../.codecast/flows/change.cast"));
+    expect(validateWorkflow(g)).toEqual([]);
+    const out = g.edges.filter((e) => e.from === "local_ci_fix");
+    const next = (ctx: Record<string, string>) => out.find((e) => e.condition && evalCondition(e.condition, ctx))?.to ?? out.find((e) => !e.condition)?.to;
+    expect(next({ "local_ci_fix.moved": "false" })).toBe("pr");
+    expect(next({ "local_ci_fix.moved": "true" })).toBe("local_ci");
+    // A cast from before the station said whether the change moved runs Local CI again, as it always did.
+    expect(next({})).toBe("local_ci");
   });
 
   test("skip joins a station's neighbours and drops what nothing reaches after it", () => {

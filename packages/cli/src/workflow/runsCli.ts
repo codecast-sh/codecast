@@ -11,6 +11,8 @@ import { c, fmt } from "../colors.js";
 import { formatAge } from "../decideCommand.js";
 import { ownRestartOf } from "@codecast/shared/contracts/runRestart";
 import { failedDeploysOf, stuckTargetsOf } from "@codecast/shared/contracts/deployStop";
+import { sessionEndWords } from "@codecast/shared/contracts/sessionEnd";
+import { runFlow } from "../taskShow.js";
 
 export interface RunNode {
   node_id: string;
@@ -35,6 +37,7 @@ export interface RunListRow {
   task_short_id?: string;
   plan_short_id?: string;
   workflow_name?: string;
+  workflow_slug?: string;
   workflow_label?: string;
   gate_decision_short_id?: string;
   gate_decision_status?: string;
@@ -112,7 +115,7 @@ export function gateAnswers(edges: ReadonlyArray<{ from: string; label?: string 
 
 /** `cast workflow show`: the run, then each station it reached in order, with its session, time and outcome. */
 export function formatRunDetail(run: RunListRow, labels: Map<string, string> = new Map(), now: number = Date.now(), answers: Map<string, Map<string, string>> = new Map()): string {
-  const flow = run.workflow_label ?? run.workflow_name ?? "workflow";
+  const flow = runFlow(run);
   const bound = run.task_short_id ?? run.plan_short_id;
   const lines = [`${c.bold}${flow}${c.reset}${bound ? ` ${bound}` : ""}  ${run.status}  ${fmt.muted(run._id)}`];
   const facts = [
@@ -121,7 +124,7 @@ export function formatRunDetail(run: RunListRow, labels: Map<string, string> = n
     run.runner_device ? `machine ${run.runner_device.slice(0, 12)}` : null,
   ].filter(Boolean);
   lines.push(`  ${fmt.muted(facts.join(", "))}`);
-  if (run.fail_reason) lines.push(`  ${c.red}failed:${c.reset} ${run.fail_reason}`);
+  if (run.fail_reason) lines.push(`  ${c.red}failed:${c.reset} ${sessionEndWords(run.fail_reason)}`);
   if (run.gate_decision_short_id) {
     lines.push(`  gate ${run.gate_decision_short_id} ${run.gate_decision_status ?? ""}${run.gate_answer ? `: ${run.gate_answer}` : ""}`.trimEnd());
   }

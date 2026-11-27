@@ -54,6 +54,8 @@ describe("the session is the run's subject", () => {
     expect(progress.some((b) => b.node_id === "check" && b.visits === 2)).toBe(true);
     // The session is never reported as a hand of the run's.
     expect(progress.some((b) => b.session_id)).toBe(false);
+    // Its turn moved the change, which a route can read.
+    expect(readCheckpoint(runDir, "run-9")?.context["fix_check.moved"]).toBe("true");
   }, 60_000);
 
   // A finding names the run's worktree, so the subject may fix it there and end its turn with nothing committed (ct-99118).
@@ -179,10 +181,11 @@ describe("the session is the run's subject", () => {
   test("a session that never fixes it is sent back three times, then the run stops and says why", async () => {
     const { root } = world("bad\n");
     const s = server(() => {});
-    const { outcome } = await start(root);
+    const { outcome, runDir } = await start(root);
     expect(outcome).toBe("failed");
     const sent = s.sent();
     expect(sent.filter((m) => /^Check failed/.test(m.body))).toHaveLength(3);
+    expect(readCheckpoint(runDir, "run-9")?.context["fix_check.moved"]).toBe("false");
     expect(sent.at(-1)!.body).toContain("stopped at Fix check: Check sent the change back 3 times, the most one run allows, and the last round still found something to fix.");
   }, 60_000);
 });

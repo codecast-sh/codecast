@@ -61,7 +61,9 @@ digraph change {
   the way Check fails without a word about edges. Where that station has no
   way back, the backbone's `graph [fix="<station>"]` names one (a change flow
   sends a failed added check to Brief, which tells the session); `fix=` on the
-  new station overrides both.
+  new station overrides both. `before=` takes the edges the base has into that
+  station; an edge the variant writes into it itself goes there as written
+  (codecast's own Fix Local CI goes straight to PR when it changed nothing).
 - `guide=` appends text to the inherited prompt, so the project's house rules
   sit on top of the team's prompt and improvements to the team's prompt still
   arrive. `prompt=` still replaces it, for when a project needs its own.

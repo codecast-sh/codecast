@@ -52,7 +52,7 @@ import { dirname, join, relative } from "node:path";
 import { LOCAL_AGENT_CLIENTS } from "../../packages/shared/contracts/agentClients";
 import { parseFailures, type CiFailure } from "../../packages/shared/contracts/ciFailures";
 import { alwaysRunFiles, SUITES } from "./always-run-tests";
-import { sortFlaky, suiteOf } from "./local-flaky";
+import { settledJobs, sortFlaky, suiteOf } from "./local-flaky";
 import { ADVISORY_JOBS, classifyChangedPaths, computerScope, injectionScope } from "./changed-path-scope";
 import { importClosure, jobTestFiles } from "./test-reach";
 import { shard as byTime } from "./test-shards";
@@ -768,7 +768,7 @@ async function main(): Promise<never> {
     return r.stopped ? "stopped" : r.code === 0 ? "pass" : "fail";
   }, () => !pastBudget(RERUN_GRACE_MS));
   station.push(...cutOff);
-  for (const r of results) if (r.status === "fail" && !failing.some((f) => f.job === r.job)) r.status = station.some((f) => f.job === r.job) ? "no verdict" : "pass";
+  results.splice(0, results.length, ...settledJobs(results, { failing, flaky, unjudged: station }));
   sweep();
 
   for (const f of [...failing, ...station]) {
