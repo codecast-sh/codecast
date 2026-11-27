@@ -400,13 +400,16 @@ Between its own stations the run does not need the session, so it parks it
 (`subjectPark.ts`). Before every other station, and every minute while one runs
 (Deploy's wait can last days), the runner reads the subject; once it has
 settled (`done`, `dormant` or `idle`, live, not parked, not killed) the runner
-stashes it hidden, once per settle, so it leaves the inbox, and asks its daemon
-to hibernate it, at most every five minutes while it stays live. The daemon's
-parking gate may refuse (attached, mid turn, resumed in the last ten minutes);
-the run asks again later. A subject that is back in the inbox at the settle the
-run stashed was brought back by a person: the run stashes and parks it no more,
-and notes it in the run's context (`subject_kept`), so a resumed runner keeps
-to that. A dry run and a run with no subject park nothing.
+asks its daemon to hibernate it, at most every five minutes while it stays
+live. The daemon's parking gate may refuse (attached, mid turn, resumed in the
+last ten minutes); the run asks again later. The subject stays in the inbox:
+the live run is a wake the server sees (`parked_wake_kind` `run`), so a settled
+subject files under Dormant until the run ends. A subject that opens a turn
+from a person after the runner began watching it (`last_turn_origin` `person`,
+`last_turn_at` past `subject_watch_since` in the run's context) is theirs: the
+run parks it no more and never retires it, and notes that in the run's context
+(`subject_kept`), so a resumed runner keeps to it. The run's own sends are
+machine turns. A dry run and a run with no subject park nothing.
 
 Everything the run sends its subject carries a `client_id` of its own (the
 run, what it sends, and a nonce), never one built from visit counts, which
@@ -416,9 +419,9 @@ and a gate's answer go out as quiet sends (`sendSessionMessage` `quiet`): like
 a trigger's wake, a quiet send from a session leaves a hidden stash and a
 snooze in place, and a closed session's close becomes a hidden stash
 (`wakeHideFields`), while a killed or dismissed session still revives. So a
-session working on a failed check stays out of the inbox, and surfaces on its
-own only when it pins blocked (or, for an ordinary session a person
-closed, done: `pinHideFields`). A run with no session of its own sends no
+subject a person put out of sight stays there while it works on a failed
+check, and surfaces on its own only when it pins blocked (or, for an ordinary
+session a person closed, done: `pinHideFields`). A run with no session of its own sends no
 quiet briefs, and its log says so. A hibernated subject is not resumed to hear
 a gate's answer. A server older than `quiet` refuses the send, and the runner
 sends it again plain under the same `client_id`, so a first send that did land

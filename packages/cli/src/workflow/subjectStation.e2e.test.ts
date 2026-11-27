@@ -183,23 +183,22 @@ describe("the subject between its turns: restarted, parked, retired", () => {
     expect(git(root, "show", "codecast/change-ct-9:a.txt")).toBe("good");
   }, 60_000);
 
-  test("a settled subject is stashed out of sight and asked to park while Check runs, never during its own station; its brief is quiet", async () => {
+  test("a settled subject stays in the inbox and is asked to park while Check runs, never during its own station; its brief is quiet", async () => {
     const { root, edit } = world("bad\n");
     const s = server(() => edit("good\n"), { lag: 30 });
     const { outcome } = await start(root, graphIn(root), { run: { subjectParkMs: 1 } });
     expect(outcome).toBe("completed");
     const [brief] = s.sent();
     expect(brief.quiet).toBe(true);
-    expect(routes(s, "/cli/sessions/dismiss")[0]).toEqual({ api_token: "tok", session: CONV, hidden: true });
+    // The live run is its wake, so it files under Dormant: the run never stashes it out of sight.
+    expect(routes(s, "/cli/sessions/dismiss")).toEqual([]);
     expect(routes(s, "/cli/sessions/hibernate")[0]).toEqual({ api_token: "tok", session: CONV });
-    // Each settle is stashed once: the one before the first Check, and the one after the session fixed it.
-    expect(routes(s, "/cli/sessions/dismiss")).toHaveLength(2);
     // Hibernate is asked again no sooner than five minutes later.
     expect(routes(s, "/cli/sessions/hibernate")).toHaveLength(1);
     // Nothing parks the session between its brief and its settle, though it read settled through the whole lag.
     const sentAt = indexOf(s, (c) => c.route === "/cli/messages/send" && /^Check failed/.test(c.body.body));
     const settledAt = indexOf(s, (c) => c.route === "/cli/workflow-runs/progress" && c.body.waiting_on_session === null);
-    const parkedDuring = s.calls.slice(sentAt, settledAt).filter((c) => c.route === "/cli/sessions/dismiss" || c.route === "/cli/sessions/hibernate");
+    const parkedDuring = s.calls.slice(sentAt, settledAt).filter((c) => c.route === "/cli/sessions/hibernate");
     expect(settledAt - sentAt).toBeGreaterThan(30);
     expect(parkedDuring).toEqual([]);
     // The quiet brief's run sends the end message as usual: the change did not land.
@@ -235,22 +234,21 @@ describe("the subject between its turns: restarted, parked, retired", () => {
     expect((await start(root, graph, { run: { subjectParkMs: 20 } })).outcome).toBe("completed");
     const waitRan = indexOf(s, waitRunning);
     const waitDone = indexOf(s, (c) => c.route === "/cli/workflow-runs/progress" && c.body.node_id === "wait" && c.body.node_status === "completed");
-    const stashed = indexOf(s, (c) => c.route === "/cli/sessions/dismiss");
-    expect(stashed).toBeGreaterThan(waitRan);
-    expect(stashed).toBeLessThan(waitDone);
+    const parked = indexOf(s, (c) => c.route === "/cli/sessions/hibernate");
+    expect(parked).toBeGreaterThan(waitRan);
+    expect(parked).toBeLessThan(waitDone);
   }, 60_000);
 
-  test("a subject a person brought back from the run's stash is parked no more, and the run's context remembers it", async () => {
+  test("a subject a person wrote to after the run began is parked no more, and the run's context remembers it", async () => {
     const { root } = world("good\n");
-    // Once the run has stashed it, a person restores it: it files in the inbox again at the settle the run stashed.
-    const dismissed = () => s.calls.filter((c) => c.route === "/cli/sessions/dismiss").length;
-    let restoredReads = 0;
+    // Once the run has asked to park it, a person types to it.
+    const hibernated = () => s.calls.filter((c) => c.route === "/cli/sessions/hibernate").length;
     const s: ReturnType<typeof server> = server(() => {}, {
       row: () => {
-        if (!dismissed()) return {};
-        // Wait ends once the run has read it back in the inbox, however slow the machine.
-        if (++restoredReads >= 1) fs.writeFileSync(`${root}.go`, "");
-        return { bucket: "done" };
+        if (!hibernated()) return {};
+        // Wait ends once the run has read the person's turn, however slow the machine.
+        fs.writeFileSync(`${root}.go`, "");
+        return { last_person_turn_at: Date.now() };
       },
     });
     const graph = parseWorkflowSource(`digraph slow {
@@ -263,73 +261,63 @@ describe("the subject between its turns: restarted, parked, retired", () => {
     }`, root);
     const { outcome, runDir } = await start(root, graph, { run: { subjectParkMs: 20 } });
     expect(outcome).toBe("completed");
-    expect(dismissed()).toBe(1);
+    expect(hibernated()).toBe(1);
+    expect(routes(s, "/cli/sessions/dismiss")).toEqual([]);
     expect(readCheckpoint(runDir, "run-9")?.context.subject_kept).toBe("1");
   }, 60_000);
 
-  test("once a person has brought the subject back, a later settle is not stashed: the parker stops", async () => {
-    let row = { id: CONV, work_state: "done", bucket: "done", is_live: true, message_count: 3 };
+  // The parker alone, against a row it reads: what counts as a person taking the subject over.
+  const parkerOn = (rowOf: () => Record<string, unknown>) => {
     const calls: string[] = [];
     const parker = startSubjectParker(async (route) => {
       calls.push(route);
-      if (route === "/cli/sessions/dismiss") row = { ...row, bucket: "stashed" };
-      return { sessions: [row] };
+      return { sessions: [{ id: CONV, work_state: "done", bucket: "dormant", is_live: true, message_count: 3, ...rowOf() }] };
     }, { conversationId: CONV, shortId: "jx7ssss" }, 60_000, () => {});
-    const context: Record<string, string> = {};
-    parker.bind(context);
-    await parker.tick();
-    expect(calls.filter((r) => r === "/cli/sessions/dismiss")).toHaveLength(1);
-    row = { ...row, bucket: "done" };
-    await parker.tick();
-    expect(context.subject_kept).toBe("1");
-    row = { ...row, message_count: 40 };
-    await parker.tick();
-    await parker.stop();
-    expect(calls.filter((r) => r === "/cli/sessions/dismiss")).toHaveLength(1);
-  });
+    return { parker, calls };
+  };
 
-  test("a subject a person restored and then typed to is theirs: its next settle is neither stashed nor parked", async () => {
-    let row = { id: CONV, work_state: "done", bucket: "done", is_live: true, message_count: 3 };
-    const calls: string[] = [];
-    const parker = startSubjectParker(async (route) => {
-      calls.push(route);
-      if (route === "/cli/sessions/dismiss") row = { ...row, bucket: "stashed" };
-      return { sessions: [row] };
-    }, { conversationId: CONV, shortId: "jx7ssss" }, 60_000, () => {});
+  test("once a person has written to the subject, the parker stops: no more reads, no more parking", async () => {
+    let turn: Record<string, unknown> = {};
+    const { parker, calls } = parkerOn(() => turn);
     const context: Record<string, string> = {};
     parker.bind(context);
     await parker.tick();
-    expect(calls.filter((r) => r === "/cli/sessions/dismiss")).toHaveLength(1);
-    // Restored, and already answering the person: the run first reads it working at a new length.
-    row = { ...row, bucket: "working", work_state: "working", message_count: 9 };
-    await parker.tick();
-    expect(context.subject_kept).toBe("1");
-    row = { ...row, bucket: "done", work_state: "done", message_count: 12 };
-    await parker.tick();
-    await parker.stop();
-    expect(calls.filter((r) => r === "/cli/sessions/dismiss")).toHaveLength(1);
     expect(calls.filter((r) => r === "/cli/sessions/hibernate")).toHaveLength(1);
+    turn = { last_person_turn_at: Number(context.subject_watch_since) + 1 };
+    await parker.tick();
+    expect(context.subject_kept).toBe("1");
+    const seen = calls.length;
+    await parker.tick();
+    await parker.stop();
+    expect(calls.length).toBe(seen);
   });
 
-  test("the subject's own station bringing it back is the run's doing, not a person's: it is stashed again at its next settle", async () => {
-    let row = { id: CONV, work_state: "done", bucket: "done", is_live: true, message_count: 3 };
-    const calls: string[] = [];
-    const parker = startSubjectParker(async (route) => {
-      calls.push(route);
-      if (route === "/cli/sessions/dismiss") row = { ...row, bucket: "stashed" };
-      return { sessions: [row] };
-    }, { conversationId: CONV, shortId: "jx7ssss" }, 60_000, () => {});
+  test("a person's turn from before the run began, or a machine turn since, is not a takeover", async () => {
+    let turn: Record<string, unknown> = {};
+    const { parker, calls } = parkerOn(() => turn);
     const context: Record<string, string> = {};
     parker.bind(context);
+    const since = Number(context.subject_watch_since);
+    expect(since).toBeGreaterThan(0);
+    // The person's "ship it" that started the run.
+    turn = { last_person_turn_at: since - 1 };
     await parker.tick();
-    // A brief sent plain (a server that refuses quiet) files it in the inbox again while the station runs.
-    await parker.pause();
-    row = { ...row, bucket: "done", message_count: 8 };
-    parker.resume();
+    // The run's own brief, or another session's message.
+    turn = { last_person_turn_at: since - 1, last_turn_origin: "machine", last_turn_at: since + 1 };
     await parker.tick();
     await parker.stop();
     expect(context.subject_kept).toBeUndefined();
-    expect(calls.filter((r) => r === "/cli/sessions/dismiss")).toHaveLength(2);
+    expect(calls).toContain("/cli/sessions/hibernate");
+  });
+
+  test("a resumed runner keeps the first watch time, so a person's turn during the gap still counts", async () => {
+    const { parker } = parkerOn(() => ({ last_person_turn_at: 1_500 }));
+    const context: Record<string, string> = { subject_watch_since: "1000" };
+    parker.bind(context);
+    expect(context.subject_watch_since).toBe("1000");
+    await parker.tick();
+    await parker.stop();
+    expect(context.subject_kept).toBe("1");
   });
 
   test("a parker does nothing until it is bound to the run's context, so a resumed runner reads subject_kept first", async () => {
@@ -347,7 +335,7 @@ describe("the subject between its turns: restarted, parked, retired", () => {
     fresh.bind({});
     await new Promise((r) => setTimeout(r, 30));
     await fresh.stop();
-    expect(calls).toContain("/cli/sessions/dismiss");
+    expect(calls).toContain("/cli/sessions/hibernate");
   });
 
   test("a parker bound to a run whose context says a person kept the subject does nothing", async () => {
@@ -437,9 +425,9 @@ describe("the subject between its turns: restarted, parked, retired", () => {
     expect(end.result_preview).toMatch(/^Retired jx7ssss: its change is live from main at [0-9a-f]{10} and it has no other work\.$/);
   }, 60_000);
 
-  test("a subject a person brought back from the run's stash is never retired: it hears the end instead", async () => {
+  test("a subject a person wrote to while the run went on is never retired: it hears the end instead", async () => {
     const w = landWorld(PUSH);
-    // Land waits until the run has read the subject back in the inbox after stashing it.
+    // Land waits until the run has read the person's turn, after asking to park it.
     const graph = parseWorkflowSource(`digraph change {
       graph [label="Change", on_failure=stop]
       start [shape=Mdiamond]
@@ -449,9 +437,9 @@ describe("the subject between its turns: restarted, parked, retired", () => {
     }`, w.root);
     const s: ReturnType<typeof server> = server(() => {}, {
       row: () => {
-        if (!routes(s, "/cli/sessions/dismiss").length) return {};
+        if (!routes(s, "/cli/sessions/hibernate").length) return {};
         fs.writeFileSync(`${w.root}.go`, "");
-        return { bucket: "done" };
+        return { last_person_turn_at: Date.now() };
       },
     });
     const { outcome, runDir } = await start(w.root, graph, { run: { subjectParkMs: 20 } });

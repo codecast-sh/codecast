@@ -121,8 +121,6 @@ export function server(fix: () => void, play: Play = {}) {
   let briefed = false;
   let lagLeft = 0;
   let owed = 0;
-  // The run's stash puts the row out of sight; a send that is not quiet brings it back.
-  let stashed = false;
   // A message the server already holds under a client_id is not queued again (enqueuePendingMessage).
   const held = new Set<string>();
   let cards = 0;
@@ -135,17 +133,15 @@ export function server(fix: () => void, play: Play = {}) {
     if (route === "/cli/inbox") {
       if (lagLeft > 0) lagLeft--;
       else { messages += owed; owed = 0; }
-      return reply({ sessions: [{ id: CONV, work_state: dormant ? "dormant" : "done", bucket: stashed ? "stashed" : "done", is_live: true, is_killed: false, message_count: messages, ...play.row?.(briefed) }] });
+      return reply({ sessions: [{ id: CONV, work_state: dormant ? "dormant" : "done", bucket: "done", is_live: true, is_killed: false, message_count: messages, ...play.row?.(briefed) }] });
     }
     if (route === "/cli/sessions/state/get" && dormant) return reply({ state: "Fixed it; the run re-checks when this turn ends", status: "dormant", at: play.pinnedAt ?? Date.now() });
-    if (route === "/cli/sessions/dismiss") stashed = true;
     if (route === "/cli/deploys/targets") return reply({ targets: play.targets?.() ?? [] });
     if (route === "/cli/sessions/retire") return reply(play.retire?.() ?? { retired: true, short_id: CONV.slice(0, 7) });
     if (route === "/cli/messages/send") {
       if (play.refuseQuiet && body.quiet) return new Response(JSON.stringify({ error: "ArgumentValidationError: Object contains extra field `quiet`" }), { status: 400 });
       if (body.client_id && held.has(body.client_id)) return reply({ ok: true });
       if (body.client_id) held.add(body.client_id);
-      if (!body.quiet) stashed = false;
       // A brief starts a turn; the run's end and a gate's answer only inform.
       if (/^Check failed/.test(body.body)) {
         briefed = true;
