@@ -12,7 +12,7 @@ import { createScribeEngine } from "@codecast/web/lib/calls/scribeEngine";
 import { useInboxStore } from "@codecast/web/store/inboxStore";
 import { convex } from "../convex";
 import { openMicTap } from "../asrCapture";
-import { getCallSnapshot, subscribeCall } from "./callManager";
+import { getCallSnapshot, setBeforeLeave, subscribeCall } from "./callManager";
 import { createPhoneScribe } from "./phoneScribeCore";
 
 const engine = createScribeEngine();
@@ -55,6 +55,7 @@ export function startPhoneScribe(): void {
   if (started) return;
   started = true;
   subscribeCall(scribe.reconcile);
+  setBeforeLeave(scribe.finishForLeave);
   engine.subscribe(scribe.reconcile);
   useInboxStore.subscribe((s: any, prev: any) => {
     if (s.callRooms !== prev.callRooms || s.currentUser?._id !== prev.currentUser?._id) scribe.reconcile();

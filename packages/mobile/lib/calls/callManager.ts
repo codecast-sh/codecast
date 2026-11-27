@@ -346,6 +346,13 @@ export async function joinCall(roomKey: string, opts: JoinOpts = {}): Promise<vo
  *  says the call fell away under them: the server stops a recording the
  *  moment the last teammate hangs up, and gives a fall-away the time to come
  *  back (calls.leaveRoom). */
+// What must finish before the seat is given up: the phone scribe's last line
+// (phoneScribe registers it), since leaving the room ends its record.
+let beforeLeave: (() => Promise<void>) | null = null;
+export function setBeforeLeave(fn: (() => Promise<void>) | null): void {
+  beforeLeave = fn;
+}
+
 export async function leaveCall(opts?: { hangup?: boolean }): Promise<void> {
   const hangup = opts?.hangup !== false;
   const roomKey = currentRoomKey ?? snap.roomKey;
@@ -355,6 +362,7 @@ export async function leaveCall(opts?: { hangup?: boolean }): Promise<void> {
   // lease swept mid-call).
   emit({ ...IDLE });
   await teardownMedia();
+  await beforeLeave?.().catch(() => {});
   if (roomKey) {
     await convex.mutation(api.calls.leaveRoom, { room_key: roomKey, ...(hangup ? { hangup: true } : {}) }).catch(() => {});
   }

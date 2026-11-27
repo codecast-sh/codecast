@@ -119,4 +119,25 @@ describe("phone scribe", () => {
     await settle();
     expect(h.log).toContain("append hello");
   });
+
+  test("handing over to a web seat: last line, then flush, then release, then the mic closes", async () => {
+    const h = await scribing();
+    h.log.length = 0;
+    h.join(WEB, false);
+    // The engine emits during the graceful stop; nothing may cut it short.
+    h.scribe.reconcile();
+    h.scribe.reconcile();
+    await settle();
+    expect(h.log).toEqual(["finish", "append last words", "flush", "release", "tap closed"]);
+  });
+
+  test("hanging up commits and flushes the last line before the seat is given up", async () => {
+    const h = await scribing();
+    h.log.length = 0;
+    h.call.phase = "idle";
+    h.call.roomKey = null;
+    h.scribe.reconcile();
+    await h.scribe.finishForLeave();
+    expect(h.log).toEqual(["finish", "append last words", "flush", "tap closed"]);
+  });
 });

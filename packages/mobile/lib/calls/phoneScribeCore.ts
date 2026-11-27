@@ -64,22 +64,44 @@ export function createPhoneScribe(d: PhoneScribeDeps) {
     });
   }
 
-  async function letGo(opts: { keepLive: boolean }): Promise<void> {
+  // One thing at a time: a start, a hand-over or a stop runs to its end
+  // before anything else is decided. The engine emits all through a graceful
+  // stop, and a decision taken mid-stop would cut its last line off.
+  let op: Promise<void> | null = null;
+  function run(fn: () => Promise<void>): void {
+    busy = true;
+    op = fn().finally(() => {
+      busy = false;
+      op = null;
+      reconcile();
+    });
+  }
+
+  // End this phone's part in the run. Graceful: commit the line being spoken
+  // (the tap still feeding it) and flush the words to the run's agents while
+  // this phone is still the scribe, since the server refuses its writes once
+  // the run moves on or the room ends. Then the hand-over, if any: Convex
+  // applies one client's mutations in order, so it lands after both.
+  async function retire(o: { graceful: boolean; keepLive: boolean; releaseRoom?: string }): Promise<void> {
+    const id = engine.getStatus().transcriptId;
+    await engine.stop({ keepLive: o.keepLive, graceful: o.graceful });
+    if (o.graceful && id) await d.flush(id).catch(() => {});
+    if (o.releaseRoom) await d.release(o.releaseRoom).catch(() => {});
     tap?.close();
     tap = null;
-    await engine.stop(opts);
   }
 
   function reconcile(): void {
+    if (busy) return;
     const call = d.call();
     const roomKey = call.phase === "connected" ? call.roomKey : null;
     if (roomKey !== watchedRoom) {
-      if (engine.getStatus().active) void letGo({ keepLive: true });
       tapUnavailable = false;
       retryAt = 0;
       watchRoom(roomKey);
+      if (engine.getStatus().active) return run(() => retire({ graceful: true, keepLive: true }));
     }
-    if (busy || !roomKey) return;
+    if (!roomKey) return;
     const meId = d.meId();
     const flags = d.roomFlags(roomKey);
     const status = engine.getStatus();
@@ -97,69 +119,50 @@ export function createPhoneScribe(d: PhoneScribeDeps) {
       live: live === undefined ? undefined : live && { startedBy: live.startedBy },
       scribeActive: status.active,
     });
-    if (verdict === "start" && !tapUnavailable && meId && d.now() >= retryAt) void begin(roomKey, meId);
-    else if (verdict === "yield") void letGo({ keepLive: true });
-    else if (verdict === "stop") void letGo({ keepLive: false });
-    else if (verdict === "release") void release(roomKey);
-  }
-
-  // Hand the run to a seat that hears every track. The last words go first: a
-  // graceful stop commits the line being spoken and appends it, and the flush
-  // delivers them to the run's agents, while this phone is still the scribe
-  // (after the hand-over the server refuses its writes). Convex applies one
-  // client's mutations in order, so the release lands after both.
-  async function release(roomKey: string): Promise<void> {
-    busy = true;
-    try {
-      const id = engine.getStatus().transcriptId;
-      tap?.close();
-      tap = null;
-      await engine.stop({ keepLive: true, graceful: true });
-      if (id) await d.flush(id).catch(() => {});
-      await d.release(roomKey).catch(() => {});
-    } finally {
-      busy = false;
-    }
-    reconcile();
+    if (verdict === "start" && !tapUnavailable && meId && d.now() >= retryAt) run(() => begin(roomKey, meId));
+    // Adopted by someone else: its writes would be refused, so nothing to save.
+    else if (verdict === "yield") run(() => retire({ graceful: false, keepLive: true }));
+    else if (verdict === "stop") run(() => retire({ graceful: false, keepLive: false }));
+    else if (verdict === "release") run(() => retire({ graceful: true, keepLive: true, releaseRoom: roomKey }));
   }
 
   async function begin(roomKey: string, meId: string): Promise<void> {
-    busy = true;
-    try {
-      const id = await engine.start({ convex: d.convex, roomKey, auto: true }).catch(() => null);
-      if (!id) {
-        retryAt = d.now() + RETRY_MS;
-        d.later(reconcile, RETRY_MS);
-        return;
-      }
-      const micTap = tap ?? (await d.openTap());
-      if (!micTap || watchedRoom !== roomKey) {
-        micTap?.close();
-        if (!micTap) tapUnavailable = true;
-        await engine.stop({ keepLive: true });
-        if (!micTap) await d.release(roomKey).catch(() => {});
-        return;
-      }
-      tap = micTap;
-      const me = d.call().participants.find((p) => p.isLocal);
-      engine.attachPcm(
-        MIC_KEY,
-        (o) => {
-          const session = d.openSession(o);
-          // The tap hears the microphone whether or not the huddle is muted, so
-          // a muted mic is fed silence: nothing said is heard, and a turn spoken
-          // just before muting still closes.
-          micTap.setSink((samples, rate) => session.feedInt16(d.call().muted ? new Int16Array(samples.length) : samples, rate));
-          return session;
-        },
-        meId,
-        me?.name || "Me",
-      );
-    } finally {
-      busy = false;
+    const id = await engine.start({ convex: d.convex, roomKey, auto: true }).catch(() => null);
+    if (!id) {
+      retryAt = d.now() + RETRY_MS;
+      d.later(reconcile, RETRY_MS);
+      return;
     }
-    reconcile();
+    const micTap = tap ?? (await d.openTap());
+    if (!micTap || watchedRoom !== roomKey) {
+      micTap?.close();
+      if (!micTap) tapUnavailable = true;
+      await retire({ graceful: false, keepLive: true, releaseRoom: micTap ? undefined : roomKey });
+      return;
+    }
+    tap = micTap;
+    const me = d.call().participants.find((p) => p.isLocal);
+    engine.attachPcm(
+      MIC_KEY,
+      (o) => {
+        const session = d.openSession(o);
+        // The tap hears the microphone whether or not the huddle is muted, so
+        // a muted mic is fed silence: nothing said is heard, and a turn spoken
+        // just before muting still closes.
+        micTap.setSink((samples, rate) => session.feedInt16(d.call().muted ? new Int16Array(samples.length) : samples, rate));
+        return session;
+      },
+      meId,
+      me?.name || "Me",
+    );
   }
 
-  return { reconcile };
+  /** The call is ending: wait for the last line to be committed and flushed,
+   *  so leaving the room (which ends its record) cannot cut it off. */
+  async function finishForLeave(): Promise<void> {
+    reconcile();
+    await op;
+  }
+
+  return { reconcile, finishForLeave };
 }
