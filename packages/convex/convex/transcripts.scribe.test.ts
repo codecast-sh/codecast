@@ -5,9 +5,10 @@
 import { afterEach, expect, setDefaultTimeout, setSystemTime, test } from "bun:test";
 import { convexTest } from "convex-test";
 import { anyApi } from "convex/server";
-import { dmRoomKey, SCRIBE_CLAIM_TTL_MS } from "@codecast/shared/contracts";
+import { dmRoomKey, HUDDLE_REBRIEF_EVERY, HUDDLE_REPLY_NOTE, HUDDLE_WORK_NOTE, SCRIBE_CLAIM_TTL_MS, SCRIBE_REMINDER } from "@codecast/shared/contracts";
 import schema from "./schema";
 import { allModules } from "./testModules.testkit";
+import { internal } from "./_generated/api";
 
 setDefaultTimeout(60_000);
 
@@ -140,4 +141,58 @@ test("someone outside the call can neither invite nor remove Scribe", async () =
   await as(String(ana)).mutation(api.transcripts.inviteScribe, { room_key: room });
   await expect(as(String(cat)).mutation(api.transcripts.removeScribe, { room_key: room })).rejects.toThrow(/Not in this huddle/);
   expect((await call()).scribe_claim).toBeDefined();
+});
+
+test("Scribe's chunks carry its own header, on the first chunk and on a rebrief", async () => {
+  const { t, ana, room, anaAgent, as, seat, call } = await seed();
+  const claim = await as(String(ana)).mutation(api.transcripts.inviteScribe, { room_key: room });
+  await seat(String(ana), String(anaAgent), claim.claim_id);
+  const call0 = (await call())._id;
+  const say = (seq: number) =>
+    t.run(async (ctx: any) => {
+      await ctx.db.insert("transcript_segments", { transcript_id: call0, seq, speaker_id: String(ana), speaker_name: "Ana", text: `point ${seq}`, t0: seq, t1: seq + 1 } as any);
+      await ctx.db.patch(call0, { last_seq: seq });
+    });
+  const deliver = () => t.action(internal.transcripts.deliverRoutes, { transcript_id: call0, include_after_routes: true });
+  const lastBody = async () =>
+    t.run(async (ctx: any) => {
+      const rows = await ctx.db.query("pending_messages").collect();
+      return rows.filter((r: any) => String(r.conversation_id) === String(anaAgent)).at(-1)?.content as string;
+    });
+  const scribeOnly = (body: string) => {
+    expect(body).toContain("Huddle transcript (live).");
+    expect(body).toContain(SCRIBE_REMINDER);
+    expect(body).not.toContain(HUDDLE_WORK_NOTE);
+    expect(body).not.toContain(HUDDLE_REPLY_NOTE);
+    expect(body).not.toContain("cast publish");
+  };
+
+  await say(1);
+  await deliver();
+  scribeOnly(await lastBody());
+
+  // The chunk a rebrief falls on.
+  await t.run(async (ctx: any) => {
+    const c = await ctx.db.get(call0);
+    await ctx.db.patch(call0, { routes: c.routes.map((r: any) => ({ ...r, briefed_chunks: HUDDLE_REBRIEF_EVERY })) });
+  });
+  await say(2);
+  await deliver();
+  const rebrief = await lastBody();
+  expect(rebrief).toContain("point 2");
+  scribeOnly(rebrief);
+});
+
+test("Scribe never gets a face", async () => {
+  const { ana, room, anaAgent, as, call, feeds } = await seed();
+  const claim = await as(String(ana)).mutation(api.transcripts.inviteScribe, { room_key: room });
+  // Seated without the face flag: still faceless.
+  await as(String(ana)).mutation(api.transcripts.addRoute, {
+    transcript_id: (await call())._id, kind: "session", target: String(anaAgent), mode: "live", role: "scribe", claim: claim.claim_id,
+  });
+  expect((await feeds())[0].face).toBe(false);
+  await expect(
+    as(String(ana)).mutation(api.transcripts.setAgentFace, { transcript_id: (await call())._id, target: String(anaAgent), face: true }),
+  ).rejects.toThrow(/Scribe has no face/);
+  expect((await feeds())[0].face).toBe(false);
 });

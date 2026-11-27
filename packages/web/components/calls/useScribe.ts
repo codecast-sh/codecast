@@ -2,10 +2,10 @@ import { useCallback, useSyncExternalStore } from "react";
 import { toast } from "sonner";
 import { useConvex } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { humanizeConvexError, scribeInstructions, scribeStatus, type ScribeStatus } from "@codecast/shared/contracts";
+import { humanizeConvexError, SCRIBE_CLAIM_TTL_MS, scribeInstructions, scribeStatus, type ScribeStatus } from "@codecast/shared/contracts";
 import { SessionCreatePendingError, useInboxStore } from "../../store/inboxStore";
 import { getRoom } from "../../lib/calls/callManager";
-import { useCoarseNow } from "../../hooks/useCoarseNow";
+import { useNowWhen } from "../../hooks/useCoarseNow";
 import { useAddLiveFeed } from "./useCallFeed";
 
 // The call's Scribe: the silent agent that keeps the board (convex
@@ -54,8 +54,9 @@ export function scribeShownStatus(server: ScribeStatus, press: Press | null): Sc
 export function useScribe(roomKey: string | null, live: ScribeLive) {
   const convex = useConvex();
   // A claim whose agent never landed stops holding the slot by the clock
-  // alone, so the status is re-judged as time passes.
-  const now = useCoarseNow(15_000);
+  // alone: the one moment worth a re-render is that claim's expiry.
+  const expiresAt = live?.scribe_claim ? live.scribe_claim.at + SCRIBE_CLAIM_TTL_MS : null;
+  const now = useNowWhen((t) => (expiresAt === null ? "" : t < expiresAt ? "held" : "expired"), 15_000);
   const press = useSyncExternalStore(
     subscribe,
     () => (roomKey ? (presses.get(roomKey) ?? null) : null),
@@ -95,7 +96,8 @@ export function useScribe(roomKey: string | null, live: ScribeLive) {
         if (claim !== null) void convex.mutation(api.transcripts.removeScribe, { room_key: roomKey, claim }).catch(() => {});
         toast.error(
           err instanceof SessionCreatePendingError
-            ? "Scribe's session is still starting. Invite it again once it lands."
+            // addFeed waited the spawn out and told the session to stand down.
+            ? "Scribe's session did not start in time, so Scribe did not join. Invite it again."
             : humanizeConvexError(err, "Could not invite Scribe"),
         );
       } finally {
