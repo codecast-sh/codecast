@@ -1,9 +1,8 @@
 // A theme frame's title band and hover tools (pl-1145): the live chip of the
 // object it is about, its discussion status, a "new" mark for objects this
-// board's call made, and the Reflow and Collapse controls. The board passes
-// what a frame may do through BoardFrameContext, so each memoized FrameView
-// re-renders only when its own row changes.
-import { createContext, useContext } from "react";
+// board's call made, and the Reflow and Collapse controls. What a frame may
+// do arrives through BoardFrameContext (lib/boards/frameContext).
+import { useContext } from "react";
 import { ChevronsDownUp, LayoutDashboard } from "lucide-react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { frameRef, frameStatus } from "@codecast/shared/artifacts/board";
@@ -11,26 +10,8 @@ import { EntityIdPill } from "../EntityIdPill";
 import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
 import { useEntityResolution } from "../../lib/entityDisplay";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
+import { BoardFrameContext } from "../../lib/boards/frameContext";
 import type { BoardEl } from "./boardTypes";
-
-export type BoardFrameActions = {
-  /** The board's doc id: a chip's object made in the call whose board this is reads "new". */
-  docId: string | null;
-  readOnly: boolean;
-  reflow(key: string): void;
-  /** Collapse an open frame, expand a folded one. */
-  toggleFold(key: string): void;
-  /** The board's element by key, folded away or not: the pill counts what it holds. */
-  get(key: string): BoardEl | undefined;
-};
-
-export const BoardFrameContext = createContext<BoardFrameActions>({
-  docId: null,
-  readOnly: true,
-  reflow: () => {},
-  toggleFold: () => {},
-  get: () => undefined,
-});
 
 /** The object's chip, or the frame's own title when the object can't be read. */
 function FrameChip({ refId, title }: { refId: string; title: string }) {

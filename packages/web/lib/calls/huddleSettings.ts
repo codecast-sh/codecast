@@ -28,14 +28,30 @@ export function setHuddleSettings(workspace: string, values: Partial<Record<Hudd
   if (Object.keys(patch).length) s.updateClientUI(patch);
 }
 
+/** Whether the person has been shown the "Next time" banner in this workspace. */
+export function useNextTimeSeen(workspace: string | null): boolean {
+  return useInboxStore((s) => !!workspace && s.clientState?.ui?.huddleNextTimeSeen?.[workspace] === true);
+}
+
+/** Record that the "Next time" banner was shown in `workspace`: it never shows there again for this person. */
+export function markNextTimeSeen(workspace: string): void {
+  const s = useInboxStore.getState();
+  const seen = s.clientState.ui?.huddleNextTimeSeen;
+  if (seen?.[workspace]) return;
+  s.updateClientUI({ huddleNextTimeSeen: { ...seen, [workspace]: true } });
+}
+
 /** What one person did with the board's banners in one call: dismissed the
- *  invite, invited Scribe from it, closed or saved the "Next time" one. */
-export type BannerMemo = { dismissed?: true; invited?: true; nextClosed?: true };
+ *  invite, invited Scribe from it, was shown, closed or saved the "Next
+ *  time" one. */
+export type BannerMemo = { dismissed?: true; invited?: true; nextShown?: true; nextClosed?: true };
 
 /** Which banner shows over the board, if any. */
-export function boardBannerState(opts: { present: boolean; memo: BannerMemo; boardViewOn: boolean; autoScribeOn: boolean }): "invite" | "next" | null {
+/** `nextSeen`: the person was shown "Next time" in this workspace before; it
+ *  stays up through the call that first showed it, and never shows again. */
+export function boardBannerState(opts: { present: boolean; memo: BannerMemo; boardViewOn: boolean; autoScribeOn: boolean; nextSeen: boolean }): "invite" | "next" | null {
   const { present, memo } = opts;
   if (!present) return memo.dismissed ? null : "invite";
-  if (memo.invited && !memo.nextClosed && !(opts.boardViewOn && opts.autoScribeOn)) return "next";
+  if (memo.invited && !memo.nextClosed && (memo.nextShown || (!opts.nextSeen && !(opts.boardViewOn && opts.autoScribeOn)))) return "next";
   return null;
 }

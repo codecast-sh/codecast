@@ -63,21 +63,25 @@ const reviewButton = (text: string) => [...review()!.querySelectorAll("button")]
 const confirmReview = () => act(() => reviewButton("Invite to every huddle").click());
 const button = (c: Element, text: string) => [...c.querySelectorAll("button")].find((b) => b.textContent?.trim() === text) as HTMLButtonElement | undefined;
 
-test("which banner shows: invite while absent, Next time after this person invited, none once both are on", () => {
-  expect(boardBannerState({ present: false, memo: {}, boardViewOn: false, autoScribeOn: false })).toBe("invite");
-  expect(boardBannerState({ present: false, memo: { dismissed: true }, boardViewOn: false, autoScribeOn: false })).toBeNull();
+test("which banner shows: invite while absent, Next time after this person invited, once per workspace", () => {
+  const base = { boardViewOn: false, autoScribeOn: false, nextSeen: false };
+  expect(boardBannerState({ ...base, present: false, memo: {} })).toBe("invite");
+  expect(boardBannerState({ ...base, present: false, memo: { dismissed: true } })).toBeNull();
   // Somebody else's Scribe: no banner to save from.
-  expect(boardBannerState({ present: true, memo: {}, boardViewOn: false, autoScribeOn: false })).toBeNull();
-  expect(boardBannerState({ present: true, memo: { invited: true }, boardViewOn: true, autoScribeOn: false })).toBe("next");
-  expect(boardBannerState({ present: true, memo: { invited: true }, boardViewOn: true, autoScribeOn: true })).toBeNull();
-  expect(boardBannerState({ present: true, memo: { invited: true, nextClosed: true }, boardViewOn: false, autoScribeOn: false })).toBeNull();
+  expect(boardBannerState({ ...base, present: true, memo: {} })).toBeNull();
+  expect(boardBannerState({ ...base, present: true, memo: { invited: true }, boardViewOn: true })).toBe("next");
+  expect(boardBannerState({ ...base, present: true, memo: { invited: true }, boardViewOn: true, autoScribeOn: true })).toBeNull();
+  expect(boardBannerState({ ...base, present: true, memo: { invited: true, nextClosed: true } })).toBeNull();
+  // Seen before in this workspace: never again, except through the call that first showed it.
+  expect(boardBannerState({ ...base, present: true, memo: { invited: true }, nextSeen: true })).toBeNull();
+  expect(boardBannerState({ ...base, present: true, memo: { invited: true, nextShown: true }, nextSeen: true })).toBe("next");
 });
 
 test("absent → Invite → Next time → Save writes both settings for that workspace only", async () => {
   const invite = mock(() => {});
   const banner = (status: Status) => <BoardBanner callKey="call-1" workspace={WS} workspaceName="Codecast" scribe={scribeOf(status, invite)} />;
   const m = await mount(banner("absent"));
-  expect(m.container.querySelector("[data-banner=invite]")?.textContent).toContain("Scribe lays out this huddle as you talk");
+  expect(m.container.querySelector("[data-banner=invite]")?.textContent).toContain("Scribe can diagram your huddles as you talk");
   await act(() => button(m.container, "Invite Scribe")!.click());
   expect(invite).toHaveBeenCalledTimes(1);
   await m.render(banner("joining"));
@@ -119,6 +123,32 @@ test("Next time with Invite Scribe unchecked saves on the press; backing out of 
   // Off was already off (absent): nothing to write.
   expect(ui().huddleAutoScribe).toBeUndefined();
   await act(() => m.root.unmount());
+});
+
+test("Next time shows once per person per workspace: shown, then gone for good there, whatever they did", async () => {
+  const banner = (call: string, status: Status, ws = WS) => <BoardBanner callKey={call} workspace={ws} workspaceName="Codecast" scribe={scribeOf(status)} />;
+  const inviteIn = async (m: Awaited<ReturnType<typeof mount>>, call: string, ws = WS) => {
+    await m.render(banner(call, "absent", ws));
+    await act(() => button(m.container, "Invite Scribe")!.click());
+    await m.render(banner(call, "listening", ws));
+  };
+  const m = await mount(banner("seen-1", "absent"));
+  await inviteIn(m, "seen-1");
+  expect(m.container.querySelector("[data-banner=next]")).not.toBeNull();
+  // Being shown is enough: recorded at once, for this workspace only.
+  expect(ui().huddleNextTimeSeen).toEqual({ [WS]: true });
+  // It stays up for the rest of that call, across a remount (switching views and back)…
+  await act(() => m.root.unmount());
+  const back = await mount(banner("seen-1", "listening"));
+  expect(back.container.querySelector("[data-banner=next]")).not.toBeNull();
+  // …and is never shown again in that workspace, though both settings are still off.
+  await inviteIn(back, "seen-2");
+  expect(back.container.querySelector("[data-banner]")).toBeNull();
+  // Another workspace still gets its one showing.
+  await inviteIn(back, "seen-3", "team:t2");
+  expect(back.container.querySelector("[data-banner=next]")).not.toBeNull();
+  expect(ui().huddleNextTimeSeen).toEqual({ [WS]: true, "team:t2": true });
+  await act(() => back.root.unmount());
 });
 
 test("dismissing the invite lasts for the call, across remounts; a new call asks again", async () => {
