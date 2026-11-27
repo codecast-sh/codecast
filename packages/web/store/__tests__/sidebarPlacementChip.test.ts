@@ -126,6 +126,20 @@ describe("sidebarStatusOf: the chip follows the section the sidebar drew", () =>
     off();
   });
 
+  it("a done session parked on its own live run sleeps, and a person speaking last alone moves it to Done", () => {
+    const shipped = session(ASKER, {
+      user_id: ME, agent_status: "done", thread_state_status: "done", parked_wake_kind: "run",
+      last_heartbeat: NOW - 5_000, daemon_alive_until: NOW + 60_000, last_turn_allows_park: true,
+    });
+    const s = state({ [ASKER]: shipped }, "mine");
+    expect(placeInboxRows(s, { now: NOW }).dormant.map((r) => r._id)).toEqual([ASKER]);
+    // Nothing else about the row moves: only who delivered the last turn.
+    const asked = { ...s, sessions: { [ASKER]: { ...shipped, last_turn_allows_park: false } } } as PlaceInboxState;
+    const placed = placeInboxRows(asked, { now: NOW });
+    expect(placed.done.map((r) => r._id)).toEqual([ASKER]);
+    expect(placed.dormant).toEqual([]);
+  });
+
   it("a row the sidebar has not drawn reads its own placement", () => {
     const asker = session(ASKER, { user_id: ME, agent_status: "dormant", thread_state_status: "dormant" });
     expect(sidebarStatusOf(state({ [ASKER]: asker }, "mine"), asker, NOW)).toBe("dormant");
