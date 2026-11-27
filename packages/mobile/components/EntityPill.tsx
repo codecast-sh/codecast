@@ -28,6 +28,7 @@ import { deployPillElapsed, deployPillState, deployPillSuffix, deployTone, runRe
 import { usePrPillLook, useRefLifecycle } from '@codecast/web/hooks/useRefLifecycle';
 import type { PrGlyph } from '@codecast/web/lib/changes/prPill';
 import { ChangeWords } from '@/components/ChangeText';
+import { PriorityPillMarks } from '@/components/priorities/PriorityPillMarks';
 import { useNowWhen } from '@codecast/web/hooks/useCoarseNow';
 
 
@@ -219,7 +220,7 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback, to }
   return (
     <RNText
       style={[styles.pill, { backgroundColor: color + (deployState === 'failed' ? FAILED_TINT : '1a'), color }]}
-      accessibilityLabel={deployState ? `${label}, ${deployPillSuffix(entity, now)}` : prLook?.word ? `${label}, ${prLook.word}` : undefined}
+      accessibilityLabel={deployState ? `${label}, ${deployPillSuffix(entity, now)}` : prLook?.word ? `${label}, ${prLook.word}` : type === 'priority' && entity ? [label, entity.owner, entity.rank != null ? `rank ${entity.rank}` : null].filter(Boolean).join(', ') : undefined}
       onPress={to ? () => void openLink(to) : route ? () => router.push(route as any) : undefined}
       onLongPress={messageLongPress ? () => messageLongPress([{ label: 'Copy ID', text: entity?.short_id ?? rawId }]) : undefined}
       suppressHighlighting
@@ -236,6 +237,8 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback, to }
           // A failure wears web's heavier stroke; a replaced deploy fades.
           return <WebIcon icon={look.Icon} color={deployState === 'replaced' ? mixColor(color, 50, Theme.bg) : color} size={PILL_GLYPH} strokeWidth={deployState === 'failed' ? 3 : undefined} />;
         })()
+      ) : type === 'priority' && entity ? (
+        <PriorityPillMarks row={entity} />
       ) : (
         <MobileIdentityFace row={identityRow} size={12} fallback={<EntityKindIcon type={type} size={PILL_GLYPH} color={color} />} />
       )}

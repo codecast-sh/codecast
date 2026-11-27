@@ -15,7 +15,7 @@ export const VERB = { answer: 'Answer', open: 'Open', resume: 'Resume', start: '
 
 export const sessionLabel = (s: Pick<SessionLine, 'title'>) => s.title || 'Untitled session';
 
-/** Where the priority stands, first on the meta line: "#7 · ranked by AI", or why it is past; nothing for an active one with no rank (a teammate's). */
+/** Where the priority stands, first on the meta line: "#7 · ranked by AI", or why it is past; nothing for an active one not ranked yet. */
 export function standing(row: Pick<PriorityRow, 'status' | 'rank' | 'rank_source' | 'mine' | 'owner' | 'done_at' | 'last_active_at'>): string | null {
   if (row.status === 'active') return row.rank != null ? `#${row.rank} · ${rankProvenance(row)}` : null;
   if (row.status === 'done') return row.done_at ? `Done ${shortDate(row.done_at)}` : 'Done';
