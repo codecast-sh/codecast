@@ -3,8 +3,7 @@ import { hasDeliverableMessage } from "./lib/closeAside";
 import { sanitizeConvexObjectKeys } from "./lib/convexFieldNames";
 import { noteWriteCause } from "./lifecycleEvents";
 import { isClaudeSubagentSessionId } from "@codecast/shared/contracts/claudeSubagentSession";
-import { launchedHeadless, runsInParentProcess } from "@codecast/shared/contracts/runsInParent";
-import { rebindRunsInParentPatch, runsInParentAtCreate } from "./lib/runsInParentStamp";
+import { processRowFields, rebindRunsInParentPatch, runsInParentAtCreate } from "./lib/runsInParentStamp";
 import { wakeFieldsOf } from "./wakeCost";
 import { cliSessionClassifier, recencyRankOf, type RecencyRank } from "./cliSessionClassifier";
 import { mutation, query, internalMutation, internalQuery, type QueryCtx, type MutationCtx } from "./functions";
@@ -1772,8 +1771,7 @@ export async function insertStartedConversation(
     updated_at: fields.started_at,
     message_count: 0,
     ...privacy,
-    status: "active",
-    runs_in_parent: false,
+    status: "active", runs_in_parent: false,
     ...fields.extra,
   });
   await ctx.db.patch(conversationId, {
@@ -6001,8 +5999,7 @@ export const forkConversation = mutation({
     // does not need an exact precomputed total.
     const now = Date.now();
     const newConversationId = await ctx.db.insert("conversations", {
-      user_id: authUserId,
-      runs_in_parent: false,
+      user_id: authUserId, runs_in_parent: false,
       team_id: forkTeamId,
       agent_type: original.agent_type,
       session_id: `forked-${original.session_id}-${crypto.randomUUID()}`,
@@ -6330,8 +6327,7 @@ export const forkFromMessage = mutation({
     });
 
     const newConversationId = await ctx.db.insert("conversations", {
-      user_id: userId,
-      runs_in_parent: false,
+      user_id: userId, runs_in_parent: false,
       team_id: isAgentSwitch ? original.team_id : forkTeamId,
       agent_type: agentType,
       session_id: forkSessionId,
@@ -8878,10 +8874,7 @@ async function enrichInboxSessionRow(
     inbox_killed_at: conv.inbox_killed_at ?? null,
     inbox_closed_at: conv.inbox_closed_at ?? null,
     inbox_adopted_at: conv.inbox_adopted_at ?? null,
-    // Launched as a program (cli_flags --print, never sent): what a close of
-    // its lead reads (shared goesDownWithLead).
-    headless_launch: launchedHeadless(conv),
-    runs_in_parent: runsInParentProcess(conv), // every process gate reads it
+    ...processRowFields(conv),
     // The daemon's own status: every reader derives what it means at its own
     // clock (trustedStatusAt), since a verdict does not replay (ct-56054).
     agent_status: maps.agentStatusMap.get(conv._id.toString()) ?? null,
@@ -9018,7 +9011,6 @@ async function enrichInboxSessionRow(
     // The owners model (lib/inboxOwners): its marker, implicit starter and
     // owning session only where the model applies, which every placement reads.
     ...(await inboxOwnerRowFields(ctx, conv)),
-    parent_released_at: conv.parent_released_at ?? null, // who hears it (answersToParent)
     user_id: conv.user_id,
     acting_user_id: (conv as any).acting_user_id ?? null,
     is_anchor: !!(conv as any).anchor_id,
@@ -9149,9 +9141,7 @@ async function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: nu
     inbox_killed_at: child.inbox_killed_at ?? null,
     inbox_closed_at: child.inbox_closed_at ?? null,
     inbox_adopted_at: child.inbox_adopted_at ?? null,
-    headless_launch: launchedHeadless(child),
-    runs_in_parent: runsInParentProcess(child),
-    parent_released_at: child.parent_released_at ?? null,
+    ...processRowFields(child),
     // The child's own rest verdict, carried like every other stamp above (the
     // is_deferred/is_pinned twins over it are hardcoded because a child never
     // holds those). Without these three the verdict is write-only on a
@@ -14153,8 +14143,7 @@ export async function resolveRestartTarget(
   const { teamId, isPrivate, autoShared } = resolveTeamForPath(mappings, ghost.project_path, undefined);
   const agentType = toConvexAgentType(fromConvexAgentType(ghost.agent_type));
   const newId = await ctx.db.insert("conversations", {
-    user_id: userId,
-    runs_in_parent: false,
+    user_id: userId, runs_in_parent: false,
     team_id: teamId,
     agent_type: agentType,
     session_id: sessionId,

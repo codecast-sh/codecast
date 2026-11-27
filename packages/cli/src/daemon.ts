@@ -342,8 +342,8 @@ import {
   performReconciliation,
   repairDiscrepancies,
 } from "./reconciliation.js";
-import { SubagentFinishTracker, readSubagentRunFacts, subagentRunState } from "./subagentFinish.js";
-import { promotionHold } from "./subagentPromotion.js";
+import { SubagentFinishTracker } from "./subagentFinish.js";
+import { holdForInProcessSubagent } from "./subagentPromotionGate.js";
 import { TEST_SCRATCH_DIRNAME, isTestArtifactPath, isProjectAllowedToSync, launchScopeRefusal, markLaunched, transcriptScopeRefusal, wasLaunched, watchDirFilter, watchFilter } from "./syncScope.js";
 import { folderOnThisMachine } from "@codecast/shared/team/folderLists";
 import { parseOrphanProcessIdentity } from "./orphanProcessIdentity.js";
@@ -12503,35 +12503,6 @@ export function resetSubagentActivityForTests(): void {
 // Marks a finished Task subagent completed after its transcript goes quiet,
 // and reopens it when its transcript grows again (subagentFinish.ts).
 export const subagentFinish = new SubagentFinishTracker();
-
-// A message that would resume a Claude Code subagent as its own process waits
-// while the copy inside its parent's process may still run, and the agent goes
-// on the SendMessage deny list first (subagentPromotion.ts). A workflow agent
-// is refused later in delivery instead: it is never resumed.
-async function holdForInProcessSubagent(sessionId: string, conversationId: string): Promise<void> {
-  const file = findSessionFile(sessionId);
-  if (!file || file.agentType !== "claude" || !isSubagentTranscriptPath(file.path) || isWorkflowAgentTranscriptPath(file.path)) return;
-  const reason = await promotionHold(file.path, conversationId.slice(0, 7), {
-    configDir: CONFIG_DIR,
-    now: Date.now,
-    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
-    runState: async (jsonlPath) => {
-      const facts = await readSubagentRunFacts(jsonlPath);
-      return facts ? subagentRunState(facts) : "running";
-    },
-    mtimeMs: (jsonlPath) => {
-      try {
-        return fs.statSync(jsonlPath).mtimeMs;
-      } catch {
-        return null;
-      }
-    },
-  });
-  if (reason) {
-    logDelivery(`[PROMOTE] ${sessionId.slice(0, 20)} still runs in its parent's process; holding`);
-    throw new PromotionHoldError(reason);
-  }
-}
 
 // Cap how many bytes a single sync pass reads from a file. A large unsynced
 // backlog (e.g. an old, image-heavy session that gets resumed) used to be re-read
@@ -28654,7 +28625,7 @@ async function deliverMessageIntoSession(
 
   logDelivery(`Delivering to session=${sessionId.slice(0, 12)} conv=${conversationId.slice(0, 12)} type=${detectedType}`);
   // Before any lookup: a subagent's process lookup can only find its parent's.
-  if (detectedType === "claude") await holdForInProcessSubagent(sessionId, conversationId);
+  if (detectedType === "claude") await holdForInProcessSubagent(findSessionFile(sessionId), conversationId, CONFIG_DIR);
   // The agent has to redraw the paste for the Enter gate to see it: out of background priority first.
   await holdForDelivery(sessionId);
 

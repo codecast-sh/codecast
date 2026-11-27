@@ -65,7 +65,7 @@ function fixture(transport = "tmux", cached = true) {
   const captureSizes: number[] = [];
   const reaped: number[] = [];
   const killed: string[] = [];
-  const hooks = { resume: fail("resume") as (...args: unknown[]) => unknown, capture: () => {}, input: (_event: string) => {}, loaded: () => {}, exec: async (_args: string[]) => {}, prepare: async (): Promise<unknown> => null, markWrite: undefined as undefined | ((id: string) => Promise<unknown>), promote: async (_sessionId: string): Promise<void> => {} };
+  const hooks = { resume: fail("resume") as (...args: unknown[]) => unknown, capture: () => {}, input: (_event: string) => {}, loaded: () => {}, exec: async (_args: string[]) => {}, prepare: async (): Promise<unknown> => null, markWrite: undefined as undefined | ((id: string) => Promise<unknown>), promote: async (_conversationId: string): Promise<void> => {} };
   const timers: Array<{ fn: () => unknown; ms: number; cancelled: boolean }> = [];
   const clock = { now: 1_000_000, steps: 0 };
   const step = (ms = 0) => {
@@ -282,7 +282,7 @@ function fixture(transport = "tmux", cached = true) {
     reapPidTree: async (pid: number) => { reaped.push(pid); return 1; }, sessionProcessCache: new Map(),
     workflowAgentTranscriptPathFor: async () => null, isSessionCircuitOpen: () => false,
     // No session here is a subagent transcript (subagentPromotion.ts).
-    holdForInProcessSubagent: (sessionId: string) => hooks.promote(sessionId),
+    holdForInProcessSubagent: (file: unknown, conversationId: string) => hooks.promote(conversationId),
     // No session here last ran by hand in another terminal (handHostGrace.ts).
     waitForHandHost, deadClaims: new Map(), registryRegistrationFor: () => null, MACHINE_BOOTED_AT: 0,
     resetSessionDeliveryFailures: () => {}, materializedSessions: new Set(), postDeliveryHealthCheck: async () => {},
