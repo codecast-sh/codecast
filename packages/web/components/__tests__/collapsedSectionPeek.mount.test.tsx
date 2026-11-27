@@ -136,3 +136,36 @@ test("an open section draws its cards without the peek mark", async () => {
   await act(async () => root.unmount());
   host.remove();
 });
+
+// Closed (and Stashed) sit at the bottom of the rail, closed by default: they
+// peek the open session the same way instead of opening for it.
+test("the open session peeks out of the closed Closed group, which stays closed", async () => {
+  const closed = (_id: string, title: string) => ({ ...row(_id, title), inbox_dismissed_at: NOW - 30_000, inbox_closed_at: NOW - 30_000 });
+  useInboxStore.setState({ sessions: { [A]: closed(A, "Alpha"), [B]: closed(B, "Bravo") }, collapsedSections: {} } as any);
+  const host = document.createElement("div");
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  const render = (active: string | null) => act(async () => root.render(
+    <MemoryRouter initialEntries={["/inbox"]}><SessionListPanel activeSessionId={active} /></MemoryRouter>,
+  ));
+  const head = () => [...host.querySelectorAll("[data-sv-hidden-label]")].find((el) => el.textContent?.startsWith("Closed"));
+
+  await render(A);
+  expect(head()?.textContent).toBe("Closed (2)");
+  expect(peekRowOf(host, A)).not.toBeNull();
+  expect(cardOf(host, B)).toBeNull();
+
+  await render(null);
+  expect(cardOf(host, A)).toBeNull();
+  expect(cardOf(host, B)).toBeNull();
+
+  // Opened by hand, it draws every card, none as a peek.
+  await act(async () => { (head()!.closest("button") as HTMLButtonElement).click(); });
+  await render(A);
+  expect(cardOf(host, A)).not.toBeNull();
+  expect(cardOf(host, B)).not.toBeNull();
+  expect(host.querySelector(".inbox-peek")).toBeNull();
+
+  await act(async () => root.unmount());
+  host.remove();
+});
