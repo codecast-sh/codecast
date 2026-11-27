@@ -2,6 +2,8 @@ import { isClosedSession } from "@codecast/shared/contracts";
 import { UNCONFIRMED_DELIVERY_REASON, isReservedDevice } from "@codecast/shared/contracts";
 import { noteScreenRecordingSent } from "./lib/screenRecordingSent";
 import { steeringOwnerFor, suggestFromTeammate } from "./teamSuggestions";
+import { runsInParentProcess } from "@codecast/shared/contracts/runsInParent";
+import { takeOverOnPersonSend } from "./lib/inProcessTakeover";
 import { unreachableTerminalOf } from "@codecast/shared/contracts/deliveryHold";
 import { isWorkflowRunLog } from "./lib/runLog";
 import { clientRunAnswerRefusal } from "./lib/commandRuns";
@@ -533,6 +535,10 @@ export async function enqueuePendingMessage(
     return messageId;
   }
 
+  // A person's message to a session inside its parent's process takes it
+  // over: it continues as its own process once the parent's copy has stopped.
+  if (fields.human === true) await takeOverOnPersonSend(ctx, fromUserId, conversation);
+
   if (fields.origin === "scheduler" && !fields.client_id
     && !conversation.execution_protocol_state && !fields.image_storage_id && !fields.image_storage_ids?.length) {
     for (const status of ["pending", "injected", "failed", "undeliverable", "held"]) {
@@ -1038,6 +1044,14 @@ export async function performSessionSend(
   }
   if (target.ended_at) {
     throw new Error(`Session ${target.short_id ?? target._id.toString().slice(0, 7)} has ended; the message was not sent`);
+  }
+  // Only the parent's own tools reach a session inside its process; a line
+  // from another session would land in the parent's pane, or start a second
+  // copy of it. A person's message takes it over instead (lib/inProcessTakeover).
+  if (fromRef && !args.direct && runsInParentProcess(target)) {
+    const parent = target.parent_conversation_id ? await ctx.db.get(target.parent_conversation_id) : null;
+    const parentShort = parent ? (parent.short_id ?? String(parent._id).slice(0, 7)) : "its parent";
+    throw new Error(`${target.short_id ?? target._id.toString().slice(0, 7)} runs inside ${parentShort}'s process; message its parent instead.`);
   }
 
   const isCrossUser = target.user_id.toString() !== authUserId.toString();

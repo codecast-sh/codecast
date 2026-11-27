@@ -1,0 +1,126 @@
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
+import { convexTest } from "convex-test";
+import schema from "./schema";
+import { api } from "./_generated/api";
+import { hashToken } from "./apiTokens";
+import { allModules } from "./testModules.testkit";
+
+setDefaultTimeout(60_000);
+
+// pl-1134: a person's message to a session inside its parent's process takes
+// it over (the parent is released and told once to stop its copy); a message
+// from another session is refused, naming the parent.
+
+const TOKEN = "takeover-token";
+const AGENT = "a8665f73ab2350b5e";
+
+async function world(opts: { owners?: boolean } = {}) {
+  const t = convexTest(schema, allModules);
+  const ids = await t.run(async (ctx) => {
+    const now = Date.now();
+    const me = await ctx.db.insert("users", { name: "Jason", emailVerificationTime: 1 } as any);
+    await ctx.db.insert("api_tokens", { user_id: me, token_hash: await hashToken(TOKEN), name: "cli", created_at: now, last_used_at: now } as any);
+    let team: any;
+    if (opts.owners) {
+      team = await ctx.db.insert("teams", { name: "Acme", features: { session_owners: true } } as any);
+      await ctx.db.insert("team_memberships", { user_id: me, team_id: team, role: "admin", joined_at: 1 } as any);
+    }
+    const base = { user_id: me, agent_type: "claude_code", project_path: "/tmp/p", started_at: now, updated_at: now, message_count: 2, status: "active", ...(team ? { team_id: team } : {}) };
+    const parent = await ctx.db.insert("conversations", { ...base, session_id: "86a160aa-623c-4db9-9ce0-f1f1c403cace", short_id: "jxpar01", runs_in_parent: false } as any);
+    const child = await ctx.db.insert("conversations", {
+      ...base, session_id: `agent-${AGENT}`, short_id: "jxkid01", parent_conversation_id: parent, is_subagent: true, runs_in_parent: true, subagent_description: "bg wait test",
+    } as any);
+    const ownProcess = await ctx.db.insert("conversations", {
+      ...base, session_id: "0b6e2c1a-0000-4000-8000-000000000001", short_id: "jxown01", parent_conversation_id: parent, is_subagent: true, runs_in_parent: false,
+    } as any);
+    return { me, parent, child, ownProcess };
+  });
+  const personSend = (conversation_id: any, content: string) =>
+    t.mutation(api.pendingMessages.sendMessageToSession, { conversation_id, content, human: true, api_token: TOKEN });
+  const parentLines = () => t.run(async (ctx) =>
+    (await ctx.db.query("pending_messages").collect()).filter((r: any) => String(r.conversation_id) === String(ids.parent)).map((r: any) => r.content as string));
+  const row = (id: any) => t.run((ctx) => ctx.db.get(id)) as Promise<any>;
+  return { t, ids, personSend, parentLines, row };
+}
+
+describe("a person's message to an in-process child", () => {
+  test("releases it from its parent and tells the parent once", async () => {
+    const w = await world();
+    await w.personSend(w.ids.child, "take it from here");
+    expect((await w.row(w.ids.child)).parent_released_at).toBeNumber();
+    const lines = await w.parentLines();
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain(`Jason took over your subagent "bg wait test" (agent ${AGENT}). It now continues as its own session jxkid01. If it is still running, stop it with TaskStop ${AGENT}. Do not SendMessage it again; reach it with \`cast send jxkid01\`.`);
+    // The person's message itself waits for the child's promotion.
+    const mine = await w.t.run(async (ctx) => (await ctx.db.query("pending_messages").collect()).filter((r: any) => String(r.conversation_id) === String(w.ids.child)));
+    expect(mine.map((r: any) => r.content)).toEqual(["take it from here"]);
+
+    await w.personSend(w.ids.child, "and one more thing");
+    expect(await w.parentLines()).toHaveLength(1);
+  });
+
+  test("under session owners it is the take-over change: the person owns it and the parent hears once", async () => {
+    const w = await world({ owners: true });
+    await w.personSend(w.ids.child, "take it from here");
+    await w.personSend(w.ids.child, "again");
+    expect((await w.row(w.ids.child)).parent_released_at).toBeNumber();
+    const owners = await w.t.run(async (ctx) => (await ctx.db.query("session_owners").collect()).filter((r: any) => String(r.conversation_id) === String(w.ids.child)));
+    expect(owners.map((r: any) => String(r.user_id))).toEqual([String(w.ids.me)]);
+    const told = (await w.parentLines()).filter((l) => l.includes("took over your subagent"));
+    expect(told).toHaveLength(1);
+  });
+
+  test("Take it over without a message releases it and tells the parent the same way", async () => {
+    const w = await world({ owners: true });
+    await w.t.mutation(api.sessionOwnership.applyOwnersChange, { session_id: "jxkid01", take_over: true, api_token: TOKEN });
+    expect((await w.row(w.ids.child)).parent_released_at).toBeNumber();
+    await w.personSend(w.ids.child, "now the message");
+    expect((await w.parentLines()).filter((l) => l.includes("took over your subagent"))).toHaveLength(1);
+  });
+
+  test("wakes a parent whose prompt cache went cold: a copy running inside it is what the message waits on", async () => {
+    const w = await world();
+    const longAgo = Date.now() - 3 * 60 * 60 * 1000;
+    await w.t.run((ctx) => ctx.db.patch(w.ids.parent, { updated_at: longAgo, usage_totals: { updated_at: longAgo, context_tokens: 150_000 } } as any));
+    await w.personSend(w.ids.child, "take it from here");
+    const rows = await w.t.run(async (ctx) => (await ctx.db.query("pending_messages").collect()).filter((r: any) => String(r.conversation_id) === String(w.ids.parent)));
+    expect(rows.map((r: any) => r.status)).toEqual(["pending"]);
+  });
+
+  test("a child with its own process is a plain send", async () => {
+    const w = await world();
+    await w.personSend(w.ids.ownProcess, "hello");
+    expect((await w.row(w.ids.ownProcess)).parent_released_at).toBeUndefined();
+    expect(await w.parentLines()).toEqual([]);
+  });
+});
+
+describe("another session's message to an in-process child", () => {
+  test("is refused, naming the parent to message instead", async () => {
+    const w = await world();
+    await expect(w.t.mutation(api.pendingMessages.sendSessionMessage, { to: "jxkid01", from: "jxpar01", body: "status?", api_token: TOKEN }))
+      .rejects.toThrow("jxkid01 runs inside jxpar01's process; message its parent instead.");
+    expect((await w.row(w.ids.child)).parent_released_at).toBeUndefined();
+  });
+  test("reaches a child with its own process as before", async () => {
+    const w = await world();
+    const sent = await w.t.mutation(api.pendingMessages.sendSessionMessage, { to: "jxown01", from: "jxpar01", body: "status?", api_token: TOKEN });
+    expect(sent.message_id).toBeTruthy();
+  });
+});
+
+describe("the daemon's rebind of a promoted child", () => {
+  test("moving a claude row off its agent id onto a UUID clears runs_in_parent", async () => {
+    const w = await world();
+    await w.t.mutation(api.conversations.updateSessionId, { conversation_id: w.ids.child, session_id: "5f0c3c1e-8d0a-4a51-9c6e-2b1f0e7d9a10", api_token: TOKEN });
+    const child = await w.row(w.ids.child);
+    expect(child.session_id).toBe("5f0c3c1e-8d0a-4a51-9c6e-2b1f0e7d9a10");
+    expect(child.runs_in_parent).toBe(false);
+  });
+  test("any other rebind leaves it alone", async () => {
+    const w = await world();
+    await w.t.run((ctx) => ctx.db.patch(w.ids.child, { session_id: `agent-${AGENT}`, runs_in_parent: true }));
+    await w.t.mutation(api.conversations.updateSessionId, { conversation_id: w.ids.child, session_id: "agent-b000000000000001", api_token: TOKEN });
+    expect((await w.row(w.ids.child)).runs_in_parent).toBe(true);
+  });
+});

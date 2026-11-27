@@ -13691,6 +13691,11 @@ export const updateSessionId = mutation({
     }
 
     const patch: Record<string, any> = { session_id: args.session_id };
+    // A Claude Code subagent resumed under a UUID of its own (the daemon's
+    // promotion, subagentPromotion.ts) runs in its own process from now on.
+    if (conv.agent_type === "claude_code" && conv.session_id && isClaudeSubagentSessionId(conv.session_id) && !isClaudeSubagentSessionId(args.session_id)) {
+      patch.runs_in_parent = false;
+    }
     if (args.project_path) patch.project_path = args.project_path;
     if (args.git_root) patch.git_root = args.git_root;
     if (args.git_remote_url) patch.git_remote_url = args.git_remote_url;
