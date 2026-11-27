@@ -72,6 +72,7 @@ function fold(els: BoardEl[], key: string): BoardEl[] {
   });
 }
 const folded = fold(board, "f");
+const pill = () => folded.find((e) => e.key === "f")!;
 const byKey = new Map(folded.map((e) => [e.key, e]));
 
 type Calls = { reflow: string[]; toggleFold: string[] };
@@ -211,10 +212,9 @@ describe("hover follows the pointer through the frame's box", () => {
 });
 
 describe("a frame titled by an object", () => {
-  test("shows its status tag, the object's chip and a new mark when this board's call made it", async () => {
-    await draw([el("f", "frame", { x: 0, y: 0, w: 600, h: 400, title: "Budget", ref: "ct-1", status: "decided" })]);
+  test("shows the object's chip and a new mark when this board's call made it", async () => {
+    await draw([el("f", "frame", { x: 0, y: 0, w: 600, h: 400, title: "Budget", ref: "ct-1" })]);
     const title = q("[data-part=frame-title]")!;
-    expect(title.querySelector(".board-frame-status.is-decided")!.textContent).toBe("decided");
     expect(title.querySelector('[data-pill="ct-1"]')).not.toBeNull();
     expect(title.querySelector(".board-frame-new")).not.toBeNull();
     // The chip takes its own press (link, hover card) instead of starting a drag.
@@ -223,13 +223,47 @@ describe("a frame titled by an object", () => {
   test("no new mark on another call's board", async () => {
     await draw([el("f", "frame", { x: 0, y: 0, w: 600, h: 400, title: "Budget", ref: "ct-1" })], { docId: "doc_other" });
     expect(q(".board-frame-new")).toBeNull();
-    expect(q(".board-frame-status")).toBeNull();
+  });
+  test("a status left on a frame by an older writer shows nowhere: not on the title, not on the pill", async () => {
+    await draw([el("f", "frame", { x: 0, y: 0, w: 600, h: 400, title: "Budget", ref: "ct-1", status: "decided" }), { ...pill(), status: "parked" } as BoardEl]);
+    expect(container.textContent).not.toContain("decided");
+    expect(container.textContent).not.toContain("parked");
   });
   test("an object the viewer can't read falls back to the frame's title", async () => {
-    await draw([el("f", "frame", { x: 0, y: 0, w: 600, h: 400, title: "Parked idea", ref: "ct-9", status: "parked" })]);
+    await draw([el("f", "frame", { x: 0, y: 0, w: 600, h: 400, title: "Parked idea", ref: "ct-9" })]);
     const title = q("[data-part=frame-title]")!;
     expect(title.querySelector("[data-pill]")).toBeNull();
-    expect(title.textContent).toBe("parkedParked idea");
+    expect(title.textContent).toBe("Parked idea");
+  });
+});
+
+// Reflow narrows a resolved frame and sets its summary text's w (h left unset): the words must wrap to the new width.
+const SUMMARY = "To summarize: keep budgets in software; budgets read Ramp limits and show prod headroom on every raise. Two cards only if it breaks again.";
+const summary = (w: number) => el("t", "text", { x: 40, y: 64, w, text: SUMMARY, size: 15 });
+
+describe("a text element whose width changes", () => {
+  test("on the canvas, takes that width and wraps in it", async () => {
+    await draw([summary(560)]);
+    const wide = q('[data-key="t"]')!;
+    expect(wide.style.width).toBe("560px");
+    // Not the auto-width form, which never wraps (max-content, pre).
+    expect(wide.style.whiteSpace).toBe("");
+    const wideH = parseFloat(wide.style.height);
+    await draw([summary(240)]);
+    const narrow = q('[data-key="t"]')!;
+    expect(narrow.style.width).toBe("240px");
+    // Its box grows taller with the lines it now needs.
+    expect(parseFloat(narrow.style.height)).toBeGreaterThan(wideH);
+  });
+  test("in export, breaks into more lines at the narrower width", async () => {
+    const lineCount = async (w: number) => {
+      const t = summary(w);
+      const svg = await boardSvg({ elements: [t], byKey: new Map([["t", t]]), root: container });
+      return (svg.match(/<text /g) ?? []).length;
+    };
+    const wide = await lineCount(560), narrow = await lineCount(240);
+    expect(wide).toBeGreaterThan(0);
+    expect(narrow).toBeGreaterThan(wide);
   });
 });
 
