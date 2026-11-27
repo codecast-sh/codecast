@@ -13,6 +13,7 @@ import { isSessionOwner } from "../sessionOwners";
 import type { PriorityRef, PriorityStep } from "@codecast/shared/contracts/priorities";
 import type { Doc, Id } from "../_generated/dataModel";
 import { findConversationByAnyRefWhere } from "../conversationSessionLookup";
+import { canReadCall } from "../callReads";
 
 export const FEATURE = "priorities" as const;
 /**
@@ -58,9 +59,10 @@ export type Reader = {
   listed: (c: Doc<"conversations">) => Promise<boolean>;
   /**
    * Who may read a priority (the feature check is the caller's): its owner;
-   * a teammate holding its workspace key only while it needs no rewrite and
-   * at least one of its newest TEAMMATE_SESSIONS sessions is listed to that
-   * team.
+   * else someone holding its workspace key, while it needs no rewrite, who
+   * can read the call it was pulled from (`from_call`: the people in the
+   * meeting saw it made) or, in a team, sees at least one of its newest
+   * TEAMMATE_SESSIONS sessions listed to that team.
    */
   canRead: (p: Priority) => Promise<boolean>;
   /** The priority's steps as the viewer may see them (stepsFor). */
@@ -87,6 +89,10 @@ export async function readerFor(ctx: Ctx, viewer: Id<"users">): Promise<Reader> 
   const canRead = async (p: Priority) => {
     if (String(p.user_id) === String(viewer)) return true;
     if (p.needs_rewrite || !authorizedFor(accessStampFromDoc("priorities", p), String(viewer), held)) return false;
+    if (p.from_call) {
+      const call: Doc<"transcripts"> | null = await ctx.db.get(p.from_call);
+      if (call && (await canReadCall(ctx, viewer, call))) return true;
+    }
     const ws = parseWorkspaceKey(p.workspace);
     if (ws?.type !== "team") return false;
     for (const c of (await sessionsOf(p, TEAMMATE_SESSIONS + 1)).slice(0, TEAMMATE_SESSIONS)) if (await vis.listedTo(c, ws.teamId)) return true;

@@ -1,13 +1,15 @@
 // A priority, or a milestone of one, that a person names rather than the pass
-// infers: `cast priorities create` and `cast task create --under pri-N`. Any
-// member of the priority's workspace may write them, for themselves or a
-// teammate (Scribe files a call's themes for whoever owns them). No Convex
+// infers: `cast priorities create` and `cast task create --under pri-N`. A
+// member of a workspace may create one there for themselves or a teammate
+// (Scribe files a call's themes for whoever owns them); one pulled from a call
+// is readable by whoever can read the call (lib/priorityAccess canRead), and
+// a milestone goes only on a priority the writer can read. No Convex
 // functions here.
 
 import { lastPriorityKey } from "@codecast/shared/contracts/priorities";
 import { matchHandle } from "@codecast/shared/chat";
 import { heldKeysFor, parseWorkspaceKey } from "./lib/accessKeys";
-import { FEATURE, featureCheck } from "./lib/priorityAccess";
+import { FEATURE, featureCheck, readerFor } from "./lib/priorityAccess";
 import { activeGroup, stepKeyMark } from "./lib/priorityGroup";
 import { askRerun } from "./lib/priorityClassifierHook";
 import { insertPriority } from "./lib/priorityInsert";
@@ -15,7 +17,7 @@ import { teamRoster } from "./lib/mentionResolve";
 import { teamFeatureOffMessage } from "./lib/teamFeatureGuard";
 import { resolveFromCall } from "./transcripts";
 import type { Doc, Id } from "./_generated/dataModel";
-import type { Result } from "./priorityRead";
+import { type Result, readable } from "./priorityRead";
 
 type Ctx = { db: any; scheduler?: any };
 const MAX_TITLE = 200;
@@ -69,13 +71,13 @@ export async function doCreate(
 
 /**
  * The priority `cast task create --under pri-N` files a milestone on, judged
- * before the task exists so a refusal files nothing: one the caller's
- * workspace holds, not merged, in the task's own workspace.
+ * before the task exists so a refusal files nothing: one the caller can read
+ * (priorityRead readable, so a missing and an unreadable one answer alike),
+ * in the task's own workspace.
  */
 export async function priorityForTaskStep(ctx: Ctx, viewer: Id<"users">, shortId: string, taskWorkspace: string): Promise<Doc<"priorities">> {
-  const p: Doc<"priorities"> | null = await ctx.db.query("priorities").withIndex("by_short_id", (q: any) => q.eq("short_id", shortId.trim().toLowerCase())).first();
-  if (!p || !(await heldKeysFor(ctx, viewer)).has(p.workspace) || !(await featureCheck(ctx)(p.workspace))) throw new Error(`Priority not found: ${shortId}`);
-  if (p.status === "merged") throw new Error(`${p.short_id} was merged; file under the priority it went into`);
+  const p = await readable(ctx, await readerFor(ctx, viewer), shortId);
+  if ("error" in p) throw new Error(p.error);
   if (p.workspace !== taskWorkspace) throw new Error(`${p.short_id} is in another workspace than this task; pass --team to file the task where the priority is`);
   return p;
 }

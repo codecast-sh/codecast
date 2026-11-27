@@ -3,7 +3,8 @@
 //
 // Access follows the workspace's sharing settings (lib/priorityAccess.ts): a
 // priority is readable by its owner, and by a teammate holding its `workspace`
-// key only while the owner lists their sessions to that team; nothing is
+// key only while the owner lists their sessions to that team or the teammate
+// can read the call it was pulled from (`from_call`); nothing is
 // readable, writable or run while the `priorities` feature is off there. Only the owner
 // changes a priority (a member of its workspace may create one for them or add
 // a task's milestone to it, priorityCreate.ts), and every change marks its
@@ -27,6 +28,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { type Priority, type Result, cliWorkspace, criticalCounts, isOwner, listFor, positionOf, showFor, tokenUser } from "./priorityRead";
 import { historyFor } from "./priorityHistory";
 import { doCreate } from "./priorityCreate";
+import { createWorkContext } from "./data";
 import { type MilestoneChange, doCorrect, doCorrectionDelete, doMerge, doMilestone, doMove, doPriorityDone, doSessionMove, doSessionNotThis, doSetAside, doUndoPriorityDone } from "./priorityWrite";
 
 function orThrow<T>(res: Result<T>): T {
@@ -235,15 +237,29 @@ export const cliHistory = query({
   },
 });
 
-/** `cast priorities create`: a priority a person names, in the workspace the CLI resolved for the write. */
+/**
+ * `cast priorities create`: a priority a person names, in the workspace a task
+ * filed from the same place lands in (createWorkContext: the named one, else
+ * the calling session's team when it is team visible, else the directory
+ * rule), so `cast task create --under` it needs no --team either.
+ */
 export const cliCreate = mutation({
-  args: { api_token: v.string(), title: v.string(), summary: v.optional(v.string()), owner: v.optional(v.string()), from_call: v.optional(v.string()), ...cliScope },
+  args: {
+    api_token: v.string(),
+    title: v.string(),
+    summary: v.optional(v.string()),
+    owner: v.optional(v.string()),
+    from_call: v.optional(v.string()),
+    workspace: v.optional(v.union(v.literal("personal"), v.literal("team"))),
+    team_id: v.optional(v.id("teams")),
+    conversation_id: v.optional(v.string()),
+    project_path: v.optional(v.string()),
+  },
   handler: async (ctx, args) => {
     const viewer = await tokenUser(ctx, args.api_token);
     if (!viewer) return { error: "Unauthorized" };
-    const workspace = cliWorkspace(viewer, args);
-    if (!workspace) return { error: "name a workspace: a team, or personal" };
-    return doCreate(ctx, viewer, { workspace, title: args.title, summary: args.summary, owner: args.owner, from_call: args.from_call });
+    const { db } = await createWorkContext(ctx, { userId: viewer, workspace: args.workspace, team_id: args.team_id, project_path: args.project_path, conversation_id: args.conversation_id });
+    return doCreate(ctx, viewer, { workspace: db.workspaceKey, title: args.title, summary: args.summary, owner: args.owner, from_call: args.from_call });
   },
 });
 

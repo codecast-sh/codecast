@@ -81,12 +81,22 @@ describe("underTarget", () => {
   });
 });
 
-test("priorities create sends the title, owner, call and the active team, and prints the new id", async () => {
+test("priorities create sends the title, owner and call, and where it is run from so it lands where a task filed there does", async () => {
   const r = await withStub(["priorities", "create", "Ship", "the", "board", "--summary", "Frames", "--owner", "@ana", "--from-call", "cl-7"]);
   expect(r.stderr).toBe("");
   expect(r.code).toBe(0);
-  expect(r.bodies["/cli/priorities/create"]).toEqual([{ api_token: "test-token", title: "Ship the board", summary: "Frames", owner: "@ana", from_call: "cl-7", team_id: "team1" }]);
+  const [body] = r.bodies["/cli/priorities/create"];
+  expect(body).toMatchObject({ api_token: "test-token", title: "Ship the board", summary: "Frames", owner: "@ana", from_call: "cl-7" });
+  expect(typeof body.project_path).toBe("string");
+  expect(body).not.toHaveProperty("team_id");
+  expect(r.bodies["/cli/teams"]).toBeUndefined();
   expect(r.stdout).toContain("ok Created pri-9: Ship the board");
+}, 30_000);
+
+test("priorities create --team names the workspace as task create --team does", async () => {
+  const r = await withStub(["priorities", "create", "Ship", "--team", "Acme"]);
+  expect(r.code).toBe(0);
+  expect(r.bodies["/cli/priorities/create"]?.[0]).toMatchObject({ workspace: "team", team_id: "team1" });
 }, 30_000);
 
 test("plan create --from-call sends the call", async () => {
