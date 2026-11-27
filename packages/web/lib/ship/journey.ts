@@ -650,8 +650,10 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
     const exit = at ? byId.get(at) : undefined;
     const atExit = exit?.type === "exit" && !exit.segment;
     // A deliberate stop (an exit that says why, or the runner's "Stopped:") repeats if run again; only an unplanned failure,
-    // or one the machine caused, is worth another run.
-    const deliberate = atExit ? !!exit?.stop && !exit?.machine : !!run.fail_reason?.startsWith("Stopped");
+    // or one the machine caused, is worth another run. An exit whose words the app could not read (a flow whose source only
+    // extends another file, as Union's change.cast does: stored nodes carry no `stop`) is judged by the runner's "Stopped:",
+    // which it writes only at an exit with `stop` (ct-102100).
+    const deliberate = atExit && exit?.stop ? !exit.machine : !!run.fail_reason?.startsWith("Stopped");
     const subject = [at, ...walked].find((id) => id && isSubject(byId.get(segmentTopOf(id))));
     // A Deploy that deploys itself has no deploy targets to open: the run is where to look, or Ship again.
     // Once the change is on main, running it again would land nothing: the run is the way on, never Ship again.
