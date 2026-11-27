@@ -6,8 +6,10 @@ import { SESSION_STATUS, type SessionStatus, type StatusMarkShape } from "../../
 // tile, a /sessions row and a section header can never draw one differently.
 // Marks are shapes as well as colours, and none of them moves: a list draws
 // one per row, and one animating mark per row re-layers the page every frame.
+// The phone draws these same shapes (mobile components/marks).
 
-const SHAPES: Record<StatusMarkShape, ReactNode> = {
+/** Each mark's shapes, in a 10×10 box, painted in currentColor. */
+export const STATUS_MARK_SHAPES: Record<StatusMarkShape, ReactNode> = {
   // Working: the steady dot.
   dot: <circle cx="5" cy="5" r="3.5" fill="currentColor" />,
   // Needs you: a dot held in a ring, for something waiting on you.
@@ -33,7 +35,7 @@ export function SessionStatusMark({ status, size = 10, className = "" }: { statu
   const meta = SESSION_STATUS[status];
   return (
     <svg data-status-mark={status} viewBox="0 0 10 10" width={size} height={size} aria-hidden className={`shrink-0 ${meta.text} ${className}`}>
-      {SHAPES[meta.mark]}
+      {STATUS_MARK_SHAPES[meta.mark]}
     </svg>
   );
 }
