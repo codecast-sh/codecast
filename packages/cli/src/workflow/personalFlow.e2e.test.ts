@@ -52,7 +52,7 @@ describe("the shipped personal flow", () => {
     // The checkout it catches up is named, as `cast land level --checkout` takes it.
     expect(fs.readFileSync(path.join(process.env.FAKE_STATE!, "calls.log"), "utf-8")).toContain(`land level --checkout ${w.root} --to ${w.originMain()}`);
     expect(s.spawned("deploy")[0].prompt).toContain(`The landed commit: ${w.originMain()}`);
-    expect(s.sent().at(-1).body).toContain("The Ship run on ct-9 is over: Live.");
+    expect(s.sent().at(-1).body).toMatch(/The Ship run on ct-9 is over: Live[.:] /);
   }, 120_000);
 
   test("a red check goes back to the session as one brief; its fix comes round again and lands", async () => {
@@ -116,7 +116,7 @@ describe("the shipped personal flow", () => {
     expect(s.ran("land")).toBe(1);
     expect(s.spawned("review")).toHaveLength(1);
     expect(s.spawned("deploy")[1].prompt).toContain(`The landed commit: ${w.originMain()}`);
-    expect(s.sent().at(-1).body).toContain("is over: Live.");
+    expect(s.sent().at(-1).body).toMatch(/is over: Live[.:] /);
     expectLanded(w);
   }, 120_000);
 
@@ -210,7 +210,7 @@ describe("the shipped personal flow", () => {
     expect(w.onMain("deploy.sh")).toBe("#!/bin/sh\nexit 0\n");
     expect(w.onMain("b.txt")).toBe("x\n");
     expect(s.spawned("deploy")[1].prompt).toContain(`The landed commit: ${w.originMain()}`);
-    expect(s.sent().at(-1).body).toContain("is over: Live.");
+    expect(s.sent().at(-1).body).toMatch(/is over: Live[.:] /);
   }, 120_000);
 
   test("regression P3: a session that lands a reworked change itself, in another file, stops: the run deployed nothing", async () => {
@@ -237,7 +237,7 @@ describe("the shipped personal flow", () => {
     expect(first).toBe(w.originMain());
     expect(JSON.parse(s.result("landed")!).note).toContain("pushed main");
     expect(JSON.parse(s.result("after_fix")!)).toMatchObject({ next: "deploy" });
-    expect(s.sent().at(-1).body).toContain("is over: Live.");
+    expect(s.sent().at(-1).body).toMatch(/is over: Live[.:] /);
     expectLanded(w);
   }, 120_000);
 
@@ -326,7 +326,7 @@ describe("the shipped personal flow", () => {
     const s = server(w);
     expect(await run(w)).toBe("completed");
     expect(seen).toEqual([w.originMain()]);
-    expect(s.sent().at(-1).body).toContain("is over: Live.");
+    expect(s.sent().at(-1).body).toMatch(/is over: Live[.:] /);
   }, 120_000);
 
   test("regression U3b: own edits rebased under Land, then a deploy fix outside the repository, deploys again by tree", async () => {
@@ -346,7 +346,7 @@ describe("the shipped personal flow", () => {
     const [first, second] = s.spawned("deploy").map((d) => /The landed commit: ([0-9a-f]{40})/.exec(d.prompt)![1]);
     expect(second).toBe(first);
     expect(w.onMain("m.txt")).toBe("1\nTWO\n3\n4\nFIVE\n6\n7\n");
-    expect(s.sent().at(-1).body).toContain("is over: Live.");
+    expect(s.sent().at(-1).body).toMatch(/is over: Live[.:] /);
   }, 180_000);
 
   test("regression U5: the person's own earlier unpushed commit is not taken for the session's fix", async () => {
@@ -360,7 +360,7 @@ describe("the shipped personal flow", () => {
     expect(await run(w)).toBe("completed");
     expect(JSON.parse(s.result("after_fix")!).next).toBe("deploy");
     expect(s.spawned("deploy")).toHaveLength(2);
-    expect(s.sent().at(-1).body).toContain("is over: Live.");
+    expect(s.sent().at(-1).body).toMatch(/is over: Live[.:] /);
   }, 180_000);
 
   test("main that moves under Land four times in a row stops at Main keeps moving", async () => {
@@ -414,7 +414,7 @@ describe("the shipped personal flow", () => {
     const w = world({ find: FOUND, review: [SHIP], deploy: [{ ...LIVE, left_for_you: step }] });
     const s = server(w);
     expect(await run(w)).toBe("completed");
-    expect(s.sent().at(-1).body).toContain("is over: Live.");
+    expect(s.sent().at(-1).body).toMatch(/is over: Live[.:] /);
     const log = fs.readFileSync(path.join(process.env.FAKE_STATE!, "calls.log"), "utf-8");
     expect(log).toContain(`task comment ct-9 One step left for you: ${step} -t review`);
     expect(JSON.parse(s.result("deploy")!)).toMatchObject({ outcome: "live", left_for_you: step });
@@ -528,7 +528,7 @@ describe("the shipped personal flow", () => {
     expect(fs.existsSync(git(w.wt, "rev-parse", "--git-path", "rebase-merge"))).toBe(true);
     const s = server(w);
     expect(await run(w)).toBe("completed");
-    expect(s.sent().at(-1).body).toContain("is over: Live.");
+    expect(s.sent().at(-1).body).toMatch(/is over: Live[.:] /);
     expectLanded(w);
   }, 120_000);
 

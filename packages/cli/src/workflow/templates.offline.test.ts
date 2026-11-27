@@ -146,7 +146,8 @@ describe("line.cast offline run through the session path", () => {
     expect(s[5].prompt).toContain('{"wrong":""}');
     expect(s.every((x) => x.agent_type === "claude_code")).toBe(true);
     const gate = calls.find((c) => c.route === "/cli/workflow-runs/gate")!.body;
-    expect(gate).toMatchObject({ node_id: "decide", prompt: "Should the thing be added?", category: "review", asker_session_id: "s6" });
+    // The card names the repository the run merges into first (gatePayload): this checkout has no origin, so its directory.
+    expect(gate).toMatchObject({ node_id: "decide", prompt: expect.stringMatching(/^In line-\w+: Should the thing be added\?$/), category: "review", asker_session_id: "s6" });
     // The presenting station reads codecast's base presenter, then the line's addendum.
     expect(s[5].prompt).toContain(PRESENTER_BASE);
     expect(gate.stack).toBeUndefined();

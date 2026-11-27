@@ -73,6 +73,22 @@ describe("the session is the run's subject", () => {
     expect(git(tree, "status", "--porcelain", "--", "a.txt")).toBe("");
   }, 60_000);
 
+  // ct-102477: the session rebased the run's worktree; it heard a restart that re-carried what it dropped.
+  test("a worktree the session reset off the change stops the run naming who moved it and the one restart", async () => {
+    const { root } = world("bad\n");
+    const tree = path.join(root, ".codecast", "worktrees", "change-ct-9");
+    const s = server(() => { git(tree, "reset", "-q", "--hard", "main"); fs.writeFileSync(path.join(tree, "a.txt"), "good\n"); git(tree, "commit", "-qam", "trimmed"); });
+    const { outcome } = await start(root);
+    expect(outcome).toBe("failed");
+    const end = s.sent().at(-1)!.body;
+    expect(end).toMatch(/stopped at Fix check: Could not freeze session \S+'s change again: Something reset or rebased the run's worktree to [0-9a-f]{10}, off the change as last frozen \([0-9a-f]{10}\), so the run left it as it is\. To ship that worktree's branch as it stands now, run it again on this task: `cast flow run \S+ --task ct-9 --branch codecast\/change-ct-9`\.$/);
+    expect(end).not.toContain("once it is ready");
+    // The run's reason is what `cast workflow show` and the run page read: they name the same restart.
+    const { ownRestartOf } = await import("@codecast/shared/contracts/runRestart");
+    const failed = s.calls.find((c) => c.route === "/cli/workflow-runs/progress" && c.body.run_status === "failed")!.body;
+    expect(ownRestartOf(failed.fail_reason)).toMatch(/^cast flow run \S+ --task ct-9 --branch codecast\/change-ct-9$/);
+  }, 60_000);
+
   test("a session that pins dormant naming the run as its wake has answered: the run goes on (ct-85419)", async () => {
     const { root, edit } = world("bad\n");
     const s = server(() => edit("good\n"), { dormant: true });
@@ -717,6 +733,12 @@ describe("runEndMessage", () => {
       .toBe("The Checked run on ct-1 stopped at Fix check: Check sent the change back 3 times and it still does not pass. The change was not merged. Run it again with `cast flow run checked` once it is ready.");
     expect(runEndMessage(g, { taskId: "ct-1", endLabel: "Deploy failed", failed: true, failReason: "Stopped: The deploy that carried abc failed: web dp-2 (exit 1).", landed: true }))
       .toBe("The Checked run on ct-1 stopped at Deploy failed: The deploy that carried abc failed: web dp-2 (exit 1). The change is on the default branch; nothing after this stage ran.");
+  });
+  test("an end whose last words open with its own name says it once", () => {
+    expect(runEndMessage(g, { taskId: "ct-1", endLabel: "Live", failed: false, lastOutput: "Live: e180ae0 on backend dp-1, web dp-2." }))
+      .toBe("The Checked run on ct-1 is over: Live: e180ae0 on backend dp-1, web dp-2. Nothing more is waiting on this session for it.");
+    expect(runEndMessage(g, { taskId: "ct-1", endLabel: "Merged", failed: false, lastOutput: "4a6e413" }))
+      .toBe("The Checked run on ct-1 is over: Merged. 4a6e413 Nothing more is waiting on this session for it.");
   });
 });
 

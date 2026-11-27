@@ -139,8 +139,10 @@ describe("a run stopped at Deploy reads Live once a later deploy carries its cha
     // The session that heard the stop (not the conductor that started the run) hears the run is over, once.
     const heard = told(t, "conv_subject");
     expect(heard.length).toBe(1);
-    expect(heard[0].content).toContain("The Ship run on ct-1 is over: Live.");
-    expect(heard[0].content).toContain(wait.result_preview);
+    // Said once ("is over: Live: <sha> on …"), from the run itself: here a run with no session of its own, by name.
+    expect(heard[0].content).toContain(`The Ship run on ct-1 is over: ${wait.result_preview} It had stopped at Deploy`);
+    expect(heard[0].content).toStartWith('<session-message from="unknown" name="the Ship run on ct-1">');
+    expect(heard[0].content).not.toContain("Live. Live:");
     expect(told(t, "conv_conductor").length).toBe(0);
 
     // Its change touching web keeps run B stopped; run C stopped before Deploy and is not read at all.
@@ -152,6 +154,16 @@ describe("a run stopped at Deploy reads Live once a later deploy carries its cha
     await mark("cli", 4, "live");
     expect(await drain()).toEqual([]);
     expect(told(t, "conv_subject").length).toBe(1);
+  });
+
+  test("a run with a session of its own says it is over from that session, as its runner's messages do", async () => {
+    const { t, mark, drain } = await world();
+    t.conversations.push({ _id: "conv_run", short_id: "jx7run1", user_id: ME, agent_type: "claude_code", status: "active", message_count: 2, title: "Ship ct-1" });
+    run(t, "run_a").primary_conversation_id = "conv_run";
+    await mark("cli", 2, "live");
+    expect(await drain()).toEqual(["run_a"]);
+    expect(told(t, "conv_subject")[0].content).toStartWith('<session-message from="jx7run1">');
+    expect(told(t, "conv_run")).toHaveLength(0);
   });
 
   test("a run stopped days ago is found by its merge sha, past hundreds of newer failed runs", async () => {

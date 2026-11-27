@@ -20,7 +20,7 @@ describe("the personal flow's Land, when origin, the push or the station misbeha
     // Six visits to Land, four of them moves: one before the first landing, three after it.
     expect(s.ran("land")).toBe(6);
     expect(w.onMain("deploy.sh")).toBe("#!/bin/sh\nexit 0\n");
-    expect(s.sent().at(-1).body).toContain("is over: Live.");
+    expect(s.sent().at(-1).body).toMatch(/is over: Live[.:] /);
   }, 240_000);
 
   test("a Land run again on a head it set out to push, which origin already holds, goes straight to recording", async () => {
@@ -48,7 +48,7 @@ describe("the personal flow's Land, when origin, the push or the station misbeha
     expect(fs.existsSync(flag)).toBe(true);
     expect(s.ran("land")).toBe(1);
     expect(fs.readFileSync(path.join(w.runDir, "land-pushed-run-9"), "utf-8").trim()).toBe(w.originMain());
-    expect(s.sent().at(-1).body).toContain("is over: Live.");
+    expect(s.sent().at(-1).body).toMatch(/is over: Live[.:] /);
     expectLanded(w);
   }, 120_000);
 
@@ -90,7 +90,7 @@ describe("the personal flow's Land, when origin, the push or the station misbeha
     expect(s2.ran("round")).toBe(0);
     expect(JSON.parse(s2.result("land")!)).toMatchObject({ outcome: "landed", sha: head });
     expect(s2.spawned("deploy")[0].prompt).toContain(`The landed commit: ${head}`);
-    expect(s2.sent().at(-1).body).toContain("is over: Live.");
+    expect(s2.sent().at(-1).body).toMatch(/is over: Live[.:] /);
     expectLanded(w);
   }, 180_000);
 
@@ -115,7 +115,7 @@ describe("the personal flow's Land, when origin, the push or the station misbeha
     // Once origin can be read, the same resume lands it.
     const s3 = server(w);
     expect(await resumeAt(w, "land")).toBe("completed");
-    expect(s3.sent().at(-1).body).toContain("is over: Live.");
+    expect(s3.sent().at(-1).body).toMatch(/is over: Live[.:] /);
   }, 240_000);
 
   test("r7 #3: when the lost push never reached origin, resuming at land pushes it and lands", async () => {
@@ -137,7 +137,7 @@ describe("the personal flow's Land, when origin, the push or the station misbeha
     expect(await resumeAt(w, "land")).toBe("completed");
     expect(w.originMain()).toBe(head);
     expect(JSON.parse(s2.result("land")!)).toMatchObject({ outcome: "landed", sha: head });
-    expect(s2.sent().at(-1).body).toContain("is over: Live.");
+    expect(s2.sent().at(-1).body).toMatch(/is over: Live[.:] /);
     expectLanded(w);
   }, 180_000);
 
@@ -222,7 +222,7 @@ describe("the personal flow's Land, when origin, the push or the station misbeha
     const s2 = server(w);
     expect(await resumeAt(w, "land")).toBe("completed");
     expect(JSON.parse(s2.result("land")!).note).toContain("caught up");
-    expect(s2.sent().at(-1).body).toContain("is over: Live.");
+    expect(s2.sent().at(-1).body).toMatch(/is over: Live[.:] /);
     expectLanded(w);
   }, 180_000);
 

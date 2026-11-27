@@ -356,7 +356,7 @@ export function JourneyNowBar({ now, run, now_ms, children, again, personal = fa
           {now.fix !== "deploy" && now.fix !== "run" && again && !now.landed && !now.mayHaveLanded && !resume ? again(now.fix === "again" || (inSession && !briefId)) : null}
           {children}
           {/* A stop's reason is whole: its last words are what the person does next. */}
-          {now.why ? <p className="sj-note" data-whole={personal || undefined} data-journey-why>{now.why}</p> : null}
+          {now.why ? <p className="sj-note" data-whole={personal || now.whole || undefined} data-journey-why>{now.why}</p> : null}
         </div>
       );
   }

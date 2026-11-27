@@ -15,6 +15,9 @@
  *   tell (its run may still be being created), or one whose liveness or
  *   processes cannot be read: no process or session signal proves nobody
  *   commits there next;
+ * - a process the ended run did not leave behind works in that worktree (each
+ *   named by pid and command); orphans the run left (started before it ended)
+ *   are stopped with the release;
  * - that worktree holds uncommitted files: a process list is no proof nobody
  *   edits it, an ended run's leftovers are not this change's to push, and the
  *   caller's own may be meant for the branch;
@@ -71,7 +74,7 @@ export function liveTreeStates(repo: string, data: LiveRunsOnDevice | null | und
  * checkout's edits) rather than running the branch as it stands. `cwd`: where the caller works (process.cwd()), whose
  * own worktree alone it may detach. Returns a line saying what it released or detached, or null.
  */
-export async function claimRunBranch(repo: string, slug: string | null, branch: string, opts: { task?: string; rewrites: boolean; live: RunLiveness; hands?: RunHands; now?: number; cwd?: string }): Promise<string | null> {
+export async function claimRunBranch(repo: string, slug: string | null, branch: string, opts: { task?: string; rewrites: boolean; live: RunLiveness; hands?: RunHands; now?: number; cwd?: string; processes?: Reader }): Promise<string | null> {
   const now = opts.now ?? Date.now();
   const worktrees = real(path.join(repo, ".codecast", "worktrees"));
   const ownTree = slug ? path.join(worktrees, slug) : null;
@@ -90,6 +93,7 @@ export async function claimRunBranch(repo: string, slug: string | null, branch: 
   const holder = worktreeOf(repo, branch);
   let release: string | null = null;
   let detach: string | null = null;
+  let leftovers: TreeProcess[] = [];
   if (holder && real(holder) !== ownTree) {
     const name = path.dirname(real(holder)) === worktrees ? path.basename(holder) : null;
     if (!name || !runTreeNames(repo).has(name)) {
@@ -100,12 +104,7 @@ export async function claimRunBranch(repo: string, slug: string | null, branch: 
       if (!trees) throw new Error(`${branch} is checked out by worktree ${name}, and whether the run there is still live cannot be told (the server did not answer): run this again, or release it with cast ws destroy ${name}`);
       const state = trees.get(name) ?? (young(holder, now) ? "just made" : null);
       if (state) throw new Error(`${branch} is checked out by worktree ${name}, where a run is live (${state}): wait for that run to end, or stop it, then run this change again`);
-      const { readProcessCwds } = await import("../land/scan.js");
-      const cwds = await readProcessCwds();
-      const tree = real(holder);
-      if (!cwds || cwds.some((p) => p === tree || p.startsWith(`${tree}/`))) {
-        throw new Error(`${branch} is checked out by worktree ${name}, ${cwds ? "and a process still works in it" : "and which processes work in it cannot be read"}: stop it, or release the worktree with cast ws destroy ${name}, then run this again`);
-      }
+      leftovers = await runTreeLeftovers(repo, name, real(holder), branch, opts.processes ?? treeProcesses);
       const shown = uncommitted(holder);
       if (shown) {
         throw new Error(`${branch} is checked out by worktree ${name}, which an ended run left with uncommitted files (${shown}): commit what belongs on ${branch} there and remove the rest, or release it with cast ws destroy ${name}, then run this again`);
@@ -124,10 +123,85 @@ export async function claimRunBranch(repo: string, slug: string | null, branch: 
     return `Detached your worktree ${detach} from ${branch} at the same commit (it had nothing uncommitted) so the run can check the branch out: a commit made there now is on no branch, so push one with git push origin HEAD:refs/heads/${branch}`;
   }
   if (!release) return null;
+  // Every check has passed: what the ended run left working in its tree stops before the tree goes.
+  const stopped = await stopLeftovers(release, real(holder!), branch, leftovers, opts.processes ?? treeProcesses);
   // Clean, so nothing is committed on the way: freeBranch only takes the tree away, its branch left as it was.
   const { freeBranch } = await import("../lineTrialBranch.js");
   await freeBranch(repo, release, branch, `the run in ${release}`, opts.hands);
-  return `Released worktree ${release}, which an ended run left holding ${branch}`;
+  return `Released worktree ${release}, which an ended run left holding ${branch}${stopped}`;
+}
+
+/** A process whose working directory is in a tree: `orphan` when nothing but init adopted it (its parent ended). */
+export type TreeProcess = { pid: number; command: string; orphan: boolean; startedAt: number };
+
+/**
+ * The processes that work in an ended run's worktree `tree` (named `name`), which the run left behind: orphans started
+ * before its last checkpoint (a test server, a watcher its Local CI started), for the release to stop. Any other
+ * process (a session's shell there, one started after the run ended) refuses, naming each by pid and command, and so
+ * does a tree whose processes cannot be read (ct-102477 said only "a process still works in it").
+ */
+async function runTreeLeftovers(repo: string, name: string, tree: string, branch: string, read: Reader): Promise<TreeProcess[]> {
+  const procs = await read(tree);
+  if (!procs) throw new Error(`${branch} is checked out by worktree ${name}, and which processes work in it cannot be read: release the worktree with cast ws destroy ${name}, then run this again`);
+  const ended = runEndedAt(repo, name);
+  const leftover = (p: TreeProcess) => p.orphan && ended > 0 && p.startedAt > 0 && p.startedAt <= ended;
+  if (!procs.every(leftover)) throw stillWorking(name, branch, procs, leftover, "Something other than the ended run is using it");
+  return procs;
+}
+
+/** Stop what an ended run left working in its tree before the tree goes; returns the words for the release line. */
+async function stopLeftovers(name: string, tree: string, branch: string, procs: TreeProcess[], read: Reader): Promise<string> {
+  if (!procs.length) return "";
+  for (const p of procs) { try { process.kill(p.pid, "SIGTERM"); } catch {} }
+  let left = procs;
+  for (let i = 0; i < 25 && left.length; i++) {
+    await new Promise((r) => setTimeout(r, 200));
+    const now = await read(tree);
+    left = (now ?? procs).filter((p) => procs.some((q) => q.pid === p.pid));
+  }
+  if (left.length) throw stillWorking(name, branch, left, () => true, "The ended run's leftovers did not stop when asked");
+  return ` (stopped what the ended run left working in it: ${procs.map(procName).join(", ")})`;
+}
+
+type Reader = (tree: string) => Promise<TreeProcess[] | null>;
+const procName = (p: TreeProcess) => `pid ${p.pid} (${p.command.length > 60 ? `${p.command.slice(0, 59)}…` : p.command})`;
+const stillWorking = (name: string, branch: string, procs: TreeProcess[], leftover: (p: TreeProcess) => boolean, why: string) =>
+  new Error(`${branch} is checked out by worktree ${name}, and ${procs.length === 1 ? "a process still works" : `${procs.length} processes still work`} in it: ${procs.map((p) => `${procName(p)}, ${leftover(p) ? "the ended run's leftover" : "not the ended run's"}`).join("; ")}. ${why}: stop ${procs.length === 1 ? "it" : "them"} (kill ${procs.map((p) => p.pid).join(" ")}), or release the worktree with cast ws destroy ${name}, then run this again`);
+
+/** When the run whose worktree is `name` last wrote its checkpoint (ms), or 0 when it never ran here. */
+function runEndedAt(repo: string, name: string): number {
+  const dir = path.join(lineRunsRoot(repo), name, "runs");
+  try { return Math.max(0, ...fs.readdirSync(dir).map((f) => fs.statSync(path.join(dir, f)).mtimeMs)); } catch { return 0; }
+}
+
+/** Every process whose working directory is `tree` or under it, read with lsof and ps; null when they cannot be read. */
+export async function treeProcesses(tree: string): Promise<TreeProcess[] | null> {
+  const env = { ...process.env, LC_ALL: "C" };
+  const lsof = spawnSync("lsof", ["-a", "-d", "cwd", "-F", "pn"], { encoding: "utf-8", timeout: 30_000, maxBuffer: 64 * 1024 * 1024, env });
+  // lsof exits 1 when some processes cannot be read, with the rest on stdout.
+  if (lsof.error || lsof.signal || !lsof.stdout) return null;
+  const pids: number[] = [];
+  let pid = 0;
+  for (const l of lsof.stdout.split("\n")) {
+    if (l.startsWith("p")) pid = Number(l.slice(1));
+    else if (l.startsWith("n") && pid && pid !== process.pid && (l.slice(1) === tree || l.slice(1).startsWith(`${tree}/`))) pids.push(pid);
+  }
+  if (!pids.length) return [];
+  const ps = (fields: string, ids: number[]) => spawnSync("ps", ["-o", fields, "-p", ids.join(",")], { encoding: "utf-8", timeout: 10_000, env }).stdout ?? "";
+  // Elapsed time, [[dd-]hh:]mm:ss, since a start time is printed in a zone and form that differ by platform.
+  const now = Date.now();
+  const elapsed = (t: string) => { const [d, rest] = t.includes("-") ? t.split("-") : ["0", t]; return rest.split(":").map(Number).reduce((a, n) => a * 60 + n, 0) + Number(d) * 86_400; };
+  const rows = ps("pid=,ppid=,etime=,command=", [...new Set(pids)]).split("\n").flatMap((l) => {
+    const m = /^\s*(\d+)\s+(\d+)\s+([\d:-]+)\s+(.*)$/.exec(l);
+    return m ? [{ pid: Number(m[1]), ppid: Number(m[2]), startedAt: now - elapsed(m[3]) * 1000, command: m[4].trim() }] : [];
+  });
+  // An orphan is adopted by init, or by a user's service manager that reaps for it (systemd --user on Linux).
+  const parents = new Map(ps("pid=,comm=", [...new Set(rows.map((r) => r.ppid).filter((p) => p > 1))]).split("\n").flatMap((l) => {
+    const m = /^\s*(\d+)\s+(.*)$/.exec(l);
+    return m ? [[Number(m[1]), m[2].trim()] as const] : [];
+  }));
+  const reaper = (ppid: number) => ppid === 1 || /(^|\/)(launchd|systemd|init)$/.test(parents.get(ppid) ?? "");
+  return rows.map((r) => ({ pid: r.pid, command: r.command, orphan: reaper(r.ppid), startedAt: r.startedAt }));
 }
 
 /**

@@ -17,6 +17,7 @@ import { stationResult } from "./stationResult";
 import { personalRound, shortWhy } from "./personalRound";
 import { personalStages } from "./personalJourney";
 import { askStopWhy, readableWhy, stopWhy } from "./journeyWords";
+import { ownRestartOf } from "@codecast/shared/contracts/runRestart";
 import { resumeOf, type ResumeAt } from "./resumeAt";
 import { roundsOnOwnResults } from "./ownRound";
 import type { SessionAsk } from "./sessionAsk";
@@ -96,7 +97,9 @@ export type JourneyNow =
       /** The change may be on main (Landing unknown): shipping again could land it twice, so the run is the way on. */
       mayHaveLanded?: boolean;
       /** The station the stop's reason says to resume the run at (Landing unknown, CI never reported: resumeAt.ts). */
-      resume?: ResumeAt };
+      resume?: ResumeAt;
+      /** The runner's own words for the stop name its one restart (shared/contracts/runRestart.ts): `why` is whole. */
+      whole?: true };
 
 /** `personal`: a personal Ship's run (ownRound.ts), whose bar reads by its own rules. */
 export type Journey = { stages: JourneyStage[]; now: JourneyNow; personal?: true };
@@ -668,12 +671,14 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
       : subject ? "session"
       : deliberate ? "run"
       : "again";
+    // A stop whose runner words name its restart (a worktree something moved) keeps every word: the restart is last.
+    const restart = !!ownRestartOf(run.fail_reason);
     // Not merged is said only of a run that ended where its change should have been on main (Deploy found no merge).
     if (!sha && !landedStep && stage?.role === "deploy") now = { kind: "unlanded", why: (own ? stopWhy(run.fail_reason) : readableWhy(run.fail_reason)) ?? "The run ended with no merge recorded", waits: [] };
     // An own-results round's stops are ends of their own, each said by its name with its reason (a result's note, a
     // rejection's findings), never as where on the track it stopped.
-    else now = { kind: run.fail_reason?.startsWith("Stopped") || atExit ? "stopped" : "failed", stage: stageLabel(stopStage), why: own ? stopWhy(run.fail_reason) : askStopWhy(run.fail_reason) ?? readableWhy(run.fail_reason), fix, session: run.spawner_conversation_id ? String(run.spawner_conversation_id) : null, briefAt: subject ? statusOf(subject)?.started_at ?? null : null, end: atExit && ((own && !!exit?.stop) || walked.some((id) => id !== at && byId.get(id)?.type !== "exit")) ? exit?.label ?? null : null,
-      ...(landedAlready || landedStep ? { landed: true } : {}), ...(landUnknown ? { mayHaveLanded: true } : {}), ...(resume ? { resume } : {}) };
+    else now = { kind: run.fail_reason?.startsWith("Stopped") || atExit ? "stopped" : "failed", stage: stageLabel(stopStage), why: own ? stopWhy(run.fail_reason) : askStopWhy(run.fail_reason) ?? readableWhy(run.fail_reason, restart), fix, session: run.spawner_conversation_id ? String(run.spawner_conversation_id) : null, briefAt: subject ? statusOf(subject)?.started_at ?? null : null, end: atExit && ((own && !!exit?.stop) || walked.some((id) => id !== at && byId.get(id)?.type !== "exit")) ? exit?.label ?? null : null,
+      ...(landedAlready || landedStep ? { landed: true } : {}), ...(landUnknown ? { mayHaveLanded: true } : {}), ...(resume ? { resume } : {}), ...(restart ? { whole: true as const } : {}) };
   } else if (allLive && shortOfLive) now = sha ? { kind: "merged", sha, at: run.merge?.at ?? null, end: offEnd ?? "Landed", ...(view && deployStage ? { why: shortWhy(statusOf(deployStage.id)?.result_preview, sha) } : {}) } : { kind: "passed" };
   else if (allLive) now = { kind: "live", targets: liveOn.map((t) => t.name), line };
   else if (!plan.some((s) => s.role === "land")) now = { kind: "passed" };

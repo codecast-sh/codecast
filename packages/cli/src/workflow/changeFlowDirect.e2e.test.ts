@@ -173,7 +173,7 @@ describe("the shipped change flow, in a repository that ships straight to main",
     const nodes = s.progressNodes();
     expect([...nodes].some((id) => ["pr", "ci", "merge", "verdicts"].includes(id))).toBe(false);
     expect(nodes.has("land__ship")).toBe(true);
-    expect(s.sent().at(-1).body).toContain("The Ship run on ct-9 is over: Live.");
+    expect(s.sent().at(-1).body).toMatch(/The Ship run on ct-9 is over: Live[.:] /);
   }, 120_000);
 
   test("the checkout's own edits pick neither the path nor the land command: main's ship command lands the change", async () => {

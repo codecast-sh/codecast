@@ -9,6 +9,7 @@
 import { apiPost, isOlderBackendRefusal, type PublishDeps } from "../castApi.js";
 import { c, fmt } from "../colors.js";
 import { formatAge } from "../decideCommand.js";
+import { ownRestartOf } from "@codecast/shared/contracts/runRestart";
 
 export interface RunNode {
   node_id: string;
@@ -142,15 +143,20 @@ function fail(message: string): never {
 /**
  * How a failed run goes on, the same restart the session heard and the run page offers: the resume its stop names in
  * the graph's own words (`stop`, read before any $var was filled in, so a reviewer's finding or a merge's output quoted
- * into the reason names none), else for a run that ships a change a fresh run once the change is fixed (Ship again),
- * else a resume at the station that fits.
+ * into the reason names none), else the restart the runner's own words for the stop name (a worktree something reset
+ * or rebased: shared/contracts/runRestart.ts), else for a run that ships a change a fresh run once the change is fixed
+ * (Ship again), else a resume at the station it stopped at. A run bound to no task cannot be resumed.
  */
-export function restartHint(run: { task_short_id?: string | null; workflow_slug?: string | null; takes_change?: boolean | null }, stop?: string | null): string {
-  const task = run.task_short_id ?? "<ct-N>";
+export function restartHint(run: { task_short_id?: string | null; workflow_slug?: string | null; takes_change?: boolean | null; current_node_id?: string | null; fail_reason?: string | null }, stop?: string | null): string {
+  const task = run.task_short_id;
+  if (!task) return "it is bound to no task, so it cannot be resumed: start it again";
   const at = /`cast workflow resume \S*\s*--at ([\w-]+)`/.exec(stop ?? "")?.[1];
   if (at) return `resume it: cast workflow resume ${task} --at ${at}`;
+  const own = ownRestartOf(run.fail_reason);
+  if (own) return `to ship the run's worktree as it stands now, run it again: ${own}`;
   if (run.takes_change && run.workflow_slug) return `once the change is fixed, run it again: cast flow run ${run.workflow_slug} --task ${task}`;
-  return `try it again: cast workflow resume ${task} --at <station>`;
+  if (run.current_node_id) return `try it again from where it stopped: cast workflow resume ${task} --at ${run.current_node_id}`;
+  return `try it again from its start: cast workflow resume ${task} --at start`;
 }
 
 /**

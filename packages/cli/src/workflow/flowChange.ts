@@ -34,6 +34,8 @@ import { BRIEF_TREE, branchChangePaths, heldDir, type FrozenChange } from "./flo
 import { readRebaseChain } from "./rebaseRecord.js";
 import { originSupersedes, originTip } from "./originBranch.js";
 import { ownVersion, sessionTranscripts, type Writer } from "./ownLines.js";
+import { unpushedCommits } from "./unpushedCommits.js";
+import { worktreeMovedWords } from "@codecast/shared/contracts/runRestart";
 import type { RunHands } from "../lineTrialBranch.js";
 export { frozenChangeContext, writeFrozenChange, type FrozenChange } from "./flowChangeFile.js";
 
@@ -114,24 +116,28 @@ const heldReason = ({ credentials, stale }: Pick<FrozenAttribution, "credentials
  * $diff_base): upstream, or where HEAD left it when the change is behind, so
  * a review sees the checkout's own unpushed commits the ship carries with it.
  */
-async function cutChange(root: string, frozen: Frozen, upstream: string, specs: CommitSpec[], branch: string): Promise<Pick<FrozenChange, "base" | "tip" | "behind">> {
+async function cutChange(root: string, frozen: Frozen, upstream: string, specs: CommitSpec[], branch: string): Promise<Pick<FrozenChange, "base" | "tip" | "behind" | "unpushed">> {
   const { tip: onHead } = await buildCommits(root, frozen, specs);
   let [base, tip] = [frozen.base, onHead];
   let behind: FrozenChange["behind"];
+  // HEAD's own unpushed commits travel with the change; one the replay drops (upstream already holds it) does not.
+  let unpushed = await unpushedCommits(root, frozen.base, upstream);
   const upstreamSha = upstream === "HEAD" ? null : await gitTry(root, ["rev-parse", `${upstream}^{commit}`]);
   if (upstreamSha && (await isAncestor(root, upstreamSha, frozen.base))) base = upstreamSha;
   else if (upstreamSha) {
     // A throw is a history the replay cannot carry (a merge commit in the checkout's own) or merge-tree failing, not a conflict.
     const replayed = await replayOnto(root, upstreamSha, onHead, upstreamSha)
       .catch((err: Error) => ({ ok: false as const, why: "unreplayable" as const, conflicts: [] as string[], reason: err.message }));
-    if (replayed.ok) [base, tip] = [upstreamSha, replayed.tip];
-    else {
+    if (replayed.ok) {
+      [base, tip] = [upstreamSha, replayed.tip];
+      unpushed = unpushed.filter((c) => !replayed.dropped.includes(c.sha));
+    } else {
       behind = { upstream: upstreamSha, why: "why" in replayed ? replayed.why : "conflict", conflicts: replayed.conflicts, reason: replayed.reason };
       base = (await gitTry(root, ["merge-base", frozen.base, upstreamSha])) ?? frozen.base;
     }
   }
   await git(root, ["update-ref", `refs/heads/${branch}`, tip]);
-  return { base, tip, ...(behind ? { behind } : {}) };
+  return { base, tip, ...(behind ? { behind } : {}), ...(unpushed.length ? { unpushed } : {}) };
 }
 
 /** What a session's change would hold, read from the frozen tree: its files, the ones another session also wrote, and the ones held out. */
@@ -186,7 +192,8 @@ export async function previewSessionChange(root: string, session: string, only?:
   const paths = kept.filter((p) => !unchanged.has(p));
   const cut = cuts.size ? { ...frozen, changes: frozen.changes.map((c) => (cuts.has(c.path) ? { ...c, blob: cuts.get(c.path)! } : c)) } : frozen;
   const landed = await landedOn(root, cut, upstream, paths);
-  return { frozen: cut, upstream, session: idOf(mine), conversation: mine.conversationId ?? null, agentSession: mine.sessionId, paths, shared, held, landed, unmatched };
+  const unpushed = await unpushedCommits(root, frozen.base, upstream);
+  return { frozen: cut, upstream, session: idOf(mine), conversation: mine.conversationId ?? null, agentSession: mine.sessionId, paths, shared, held, landed, unmatched, unpushed };
 }
 
 /**
@@ -264,7 +271,7 @@ export async function previewCheckoutChange(root: string, opts: { roster?: Roste
     ...plan.groups.filter((g) => g.ship).flatMap((g) => g.paths).flatMap((p) => { const v = verdict(p); return typeof v === "string" ? [{ path: p, why: v }] : []; }),
   ];
   const landed = await landedOn(root, fa.frozen, upstream, groups.flatMap((g) => g.paths));
-  return { frozen: fa.frozen, upstream, groups, held, landed };
+  return { frozen: fa.frozen, upstream, groups, held, landed, unpushed: await unpushedCommits(root, fa.frozen.base, upstream) };
 }
 
 /**
@@ -287,6 +294,13 @@ export async function freezeCheckoutChange(root: string, opts: { branch: string;
     source: "checkout", ...cut, ...(landed ? { landed } : {}), branch: opts.branch, worktree: opts.worktree, paths: groups.flatMap((g) => g.paths).sort(), shared: [], held, writers,
     ...(opts.title ? { title: opts.title } : {}),
   };
+}
+
+/** Something reset or rebased the run's worktree off the change as last frozen: the refreeze leaves it as it is. */
+export class WorktreeMovedError extends Error {
+  constructor(readonly head: string, readonly frozenTip: string, readonly branch: string) {
+    super(worktreeMovedWords(head, frozenTip));
+  }
 }
 
 /** A branch here holds commits origin never had: moving it to origin's tip would drop them. */
@@ -711,7 +725,7 @@ export async function refreezeSessionChange(root: string, runDir: string, worktr
     if (rebuilt) {
       await refuseCommittedCredentials(root, before.tip, head);
       // The run's worktree held the change as last frozen: one reset or rebased there holds something else.
-      if (!(await isAncestor(root, before.tip, head))) throw new Error(`The run's worktree is at ${head.slice(0, 10)}, which does not hold the change as last frozen (${before.tip.slice(0, 10)}): it was reset or rebased there, so it is left as it is`);
+      if (!(await isAncestor(root, before.tip, head))) throw new WorktreeMovedError(head, before.tip, before.branch);
       change = before.source === "checkout" ? await refreezeCheckoutChange(root, before, opts.roster, opts.since) : await refreezeOwnChange(root, before);
       // The freeze has moved the branch: put it back where the worktree had it when the carry cannot go on top.
       change = await carryOntoFreeze(root, before, change, top).catch(async (err) => {

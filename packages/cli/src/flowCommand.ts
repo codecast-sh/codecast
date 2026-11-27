@@ -441,6 +441,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
           }
           for (const h of preview.held) console.log(`  held out: ${h.path} (${h.why})`);
         }
+        for (const l of (await import("./workflow/unpushedCommits.js")).unpushedLines((preview ?? pass)?.unpushed)) console.log(l);
         console.log(dim("Nothing started (--dry-run)."));
         if (slug === "-") await keepSessionFlow(found, deps);
         return;
@@ -562,7 +563,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
           process.exitCode = 1;
         }
       }
-      const result = { run_id: runId, task, flow: found.slug, branch: change?.branch ?? null, worktree: change ? worktree : null, files: change?.paths ?? [], shared: change?.shared ?? [], held: change?.held ?? [], ...(freed ? { freed } : {}), ...(placed ? { device: placed.device_id } : {}) };
+      const result = { run_id: runId, task, flow: found.slug, branch: change?.branch ?? null, worktree: change ? worktree : null, files: change?.paths ?? [], shared: change?.shared ?? [], held: change?.held ?? [], ...(change?.unpushed?.length ? { unpushed: change.unpushed.map(({ files, ...c }) => ({ ...c, files: files.length })) } : {}), ...(freed ? { freed } : {}), ...(placed ? { device: placed.device_id } : {}) };
       if (opts.json) { console.log(JSON.stringify(result)); return; }
       const stages = (await import("./flowStagePath.js")).flowStagePath(found);
       console.log(`${bold(found.label)} started on ${task}${placed ? ` on ${placed.name}` : ""}${stages ? `: ${stages}` : ""}`);
@@ -577,6 +578,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
         for (const [w, n] of bySession) console.log(`  ${w}: ${n} file${n === 1 ? "" : "s"}`);
         for (const h of change.held) console.log(`  held out: ${h.path} (${h.why})`);
       } else if (change) console.log(`  on ${change.branch}`);
+      for (const l of (await import("./workflow/unpushedCommits.js")).unpushedLines(change?.unpushed)) console.log(`  ${l}`);
       console.log(dim(`  run ${runId} · cast workflow runs --task ${task}`));
     });
 

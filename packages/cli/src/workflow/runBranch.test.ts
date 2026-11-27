@@ -114,6 +114,46 @@ describe("another run's worktree holding the branch (ct-98893)", () => {
     expect(fs.readFileSync(path.join(treeOf(OTHER), "scratch-debug.log"), "utf8")).toBe("junk\n");
   });
 
+  // ct-102477: the refusal said only "a process still works in it", and the ended run's own leftovers dead-ended a rerun.
+  test("a process in an ended run's worktree is named; one the run left behind is stopped and the tree released", async () => {
+    await runTreeOn(OTHER);
+    const runs = path.join(lineRunDir(repo, OTHER), "runs");
+    fs.mkdirSync(runs, { recursive: true });
+    fs.writeFileSync(path.join(runs, "r1.json"), "{}");
+    const ended = fs.statSync(path.join(runs, "r1.json")).mtimeMs;
+    // A session's shell there, started after the run ended: refused, named, nothing stopped.
+    const shell = { pid: 4242, command: "/bin/zsh", orphan: false, startedAt: ended + 1000 };
+    await expect(claimRunBranch(repo, "change-ct-3", BRANCH, { task: "ct-3", rewrites: false, live: live(), now: later(), processes: async () => [shell] }))
+      .rejects.toThrow(`${BRANCH} is checked out by worktree ${OTHER}, and a process still works in it: pid 4242 (/bin/zsh), not the ended run's. Something other than the ended run is using it: stop it (kill 4242), or release the worktree with cast ws destroy ${OTHER}, then run this again`);
+    expect(fs.existsSync(treeOf(OTHER))).toBe(true);
+    // A test server the run's Local CI left: an orphan from before the run ended, a real process, stopped on the way.
+    const orphan = spawn("/bin/sh", ["-c", "sleep 60"], { cwd: treeOf(OTHER), stdio: "ignore" });
+    const leftover = { pid: orphan.pid!, command: "sleep 60", orphan: true, startedAt: ended - 1000 };
+    const gone = new Promise((r) => orphan.on("exit", r));
+    try {
+      const notice = await quiet(() => claimRunBranch(repo, "change-ct-3", BRANCH, { task: "ct-3", rewrites: false, live: live(), now: later(), processes: async () => (orphan.exitCode === null && orphan.signalCode === null ? [leftover] : []) }));
+      expect(notice).toBe(`Released worktree ${OTHER}, which an ended run left holding ${BRANCH} (stopped what the ended run left working in it: pid ${orphan.pid} (sleep 60))`);
+      await gone;
+      expect(orphan.signalCode).toBe("SIGTERM");
+      expect(fs.existsSync(treeOf(OTHER))).toBe(false);
+    } finally {
+      orphan.kill("SIGKILL");
+    }
+  }, 60_000);
+
+  test("the processes in a tree are read by pid and command", async () => {
+    const { treeProcesses } = await import("./runBranch.js");
+    const child = spawn("/bin/sleep", ["30"], { cwd: repo, stdio: "ignore" });
+    try {
+      await new Promise((r) => setTimeout(r, 300));
+      const got = await treeProcesses(repo);
+      expect(got?.find((p) => p.pid === child.pid)).toMatchObject({ command: "/bin/sleep 30", orphan: false });
+      expect(got?.find((p) => p.pid === child.pid)!.startedAt).toBeGreaterThan(Date.now() - 120_000);
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }, 60_000);
+
   test("a freeze over foreign commits refuses before releasing the worktree that holds them", async () => {
     await runTreeOn(OTHER);
     await expect(claimRunBranch(repo, OURS, BRANCH, { task: "ct-1", rewrites: true, live: live(), now: later() }))

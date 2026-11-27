@@ -1401,6 +1401,15 @@ describe("gatePayload asker", () => {
     expect(gatePayload(node, g, { change_conversation: "jx7maker" })).toMatchObject({ subject_conversation_id: "jx7maker" });
     expect(gatePayload(node, g, {})).not.toHaveProperty("subject_conversation_id");
   });
+  // sd-5046: a union-mobile change's card, asked from a codecast session, never said which repository it merges into.
+  test("a run that merges a change names the repository first; a question that names it, or a run with no change, stands", () => {
+    const g = parseWorkflowSource(src);
+    const node = g.nodes.get("decide")!;
+    expect(gatePayload(node, g, { repo_name: "union-mobile", branch: "codecast/change-ct-1" }).prompt).toBe("In union-mobile: Ship?");
+    const named = parseWorkflowSource(src.replace('prompt="Ship?"', 'prompt="Ship this union-mobile fix?"'));
+    expect(gatePayload(named.nodes.get("decide")!, named, { repo_name: "union-mobile", branch: "b" }).prompt).toBe("Ship this union-mobile fix?");
+    expect(gatePayload(node, g, { repo_name: "union-mobile" }).prompt).toBe("Ship?");
+  });
 });
 
 describe("refreshedOnResume (line-versions.md LV4)", () => {

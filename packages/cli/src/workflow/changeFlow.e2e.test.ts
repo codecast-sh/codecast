@@ -297,7 +297,7 @@ describe("the shipped change flow", () => {
     expect(ciCall).toContain("--pushed");
     expect(JSON.parse(fs.readFileSync(path.join(w.runDir, "ci.json"), "utf-8")).head_sha).toBe(pushed);
     expect(s.briefs()).toEqual([]);
-    expect(s.sent().at(-1).body).toContain("The Ship run on ct-9 is over: Live.");
+    expect(s.sent().at(-1).body).toMatch(/The Ship run on ct-9 is over: Live[.:] /);
   }, 120_000);
 
   test("red CI goes back to the session as one brief with each failure's file, line and excerpt; the fix goes up as the PR again", async () => {
@@ -503,7 +503,7 @@ describe("the shipped change flow", () => {
     expect(fs.readFileSync(path.join(process.env.FAKE_STATE!, "deploy-cwd"), "utf-8").trim()).toBe(w.root);
     const deploy = fs.readFileSync(path.join(process.env.FAKE_STATE!, "calls.log"), "utf-8").split("\n").find((l) => l.startsWith("flow await-deploy "))!;
     expect(deploy).toContain(`--merge ${w.runDir}/merge.json`);
-    expect(s.sent().at(-1).body).toContain("The Ship run on ct-9 is over: Live.");
+    expect(s.sent().at(-1).body).toMatch(/The Ship run on ct-9 is over: Live[.:] /);
   }, 120_000);
 
   test("a deploy that fails after the merge tells the session its change landed but did not go live", async () => {
@@ -749,8 +749,10 @@ describe("what only the machine can fix never reaches the session", () => {
     expect(await run(w)).toBe("completed");
     expect(count(w.calls(), "flow ci")).toBe(2);
     expect(s.briefs()).toHaveLength(1);
-    expect(s.briefs()[0]).toContain("conflicts with the default branch, so GitHub runs no CI on it");
-    expect(s.briefs()[0]).toContain("has a merge conflict with main");
+    // Said once: the brief's lead does not restate what CI's words say (polish round 2).
+    expect(s.briefs()[0]).toContain("cannot merge: #7 has a merge conflict with main, so GitHub runs no CI on it.");
+    expect(s.briefs()[0].match(/runs no CI/g)).toHaveLength(1);
+    expect(s.briefs()[0]).not.toContain("Rebase it and push");
   }, 120_000);
 
   test("a push to the branch while CI waits starts a new round, so the new head is reviewed", async () => {

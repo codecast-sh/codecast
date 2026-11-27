@@ -5,6 +5,8 @@ import { definitionLaunchFlags } from "../agentLaunch.js";
 import { CHEAP_MODEL } from "@codecast/shared/contracts/modelOptions";
 import { NO_CAUSE_HISTORY } from "@codecast/shared/contracts/causeHistory";
 import { gateDoc } from "@codecast/shared/contracts/changeCard";
+import { PERSONAL_FLOW_SLUG } from "@codecast/shared/contracts/flowPool";
+import { worktreeMovedRestart, worktreeMovedRestartWords } from "@codecast/shared/contracts/runRestart";
 import { ParkedClock, taskWaiting } from "./parkedClock.js";
 import { HandWatch, handTimeouts, steadyTail } from "./handWatch.js";
 import { diskFullFailReason, requeueAfterDiskFull } from "../diskFull.js";
@@ -32,7 +34,8 @@ import { c } from "../colors.js";
 import { cliFetch } from "../cliHttp.js";
 import { claudeProjectDirName } from "../projectPathResolver.js";
 import { RUN_CONVERSATION_ENV } from "../sessionIdentity.js";
-import { behindWords, frozenChangeContext, heldWords } from "./flowChangeFile.js";
+import { behindWords, frozenChangeContext, heldWords, readFrozenChange } from "./flowChangeFile.js";
+import { carriedFailureNote } from "./unpushedCommits.js";
 import { webBaseUrl } from "../config/readLocalConfig.js";
 import { checkoutChangeOf, failureExcerpt, findingRoots, gateAnswerMessage, runEndMessage, runWorktreePath, sentBackWords, subjectOf, writerBrief, writersNamed, type Subject, type Writer } from "./subjectStation.js";
 import { notLiveYet, startSubjectParker, subjectOtherWork, subjectRow, subjectSettled, subjectTakenOver, type SubjectParker } from "./subjectPark.js";
@@ -456,7 +459,10 @@ async function executeSubjectNode(node: WorkflowNode, graph: WorkflowGraph, cont
   }
   // A subject someone stopped (or the run retired after an earlier land) still holds the change: the brief restarts it.
   if (row.is_killed) console.log(`  ${c.yellow}${subject.shortId} was stopped; the brief restarts it to work on this${c.reset}`);
-  const brief = withHeld(expandAgentPrompt(node.prompt ?? "", graph, context).trim(), context);
+  // Failures that fall only in the checkout's unpushed commits the change carries are said to be someone else's.
+  const expanded = expandAgentPrompt(node.prompt ?? "", graph, context).trim();
+  const carried = carriedFailureNote(readFrozenChange(context["run_dir"]) ?? { paths: [] }, `${context["stop_reason"] ?? ""}\n${expanded}`, await findingRoots(cwd, context["worktree"]));
+  const brief = withHeld(carried ? `${expanded}\n\n${carried}` : expanded, context);
   // Quiet: a subject a person put out of sight stays there; it surfaces itself if it pins blocked.
   if (!options.runSession) console.log(`${c.dim}  this run has no session of its own, so the brief to ${subject.shortId} cannot go quietly: it brings it back to the inbox${c.reset}`);
   await recordBriefTree(cwd, context);
@@ -493,11 +499,20 @@ async function executeSubjectNode(node: WorkflowNode, graph: WorkflowGraph, cont
     console.log(`  ${c.green}✓${c.reset} ${said}`);
     recordNodeOutput(context, node.id, said);
   } catch (err) {
-    context["last_error"] = `Could not freeze session ${subject.shortId}'s change again: ${err instanceof Error ? err.message : String(err)}`;
+    context["last_error"] = `Could not freeze session ${subject.shortId}'s change again: ${refreezeWords(err, graph, options)}`;
     context["station_dead"] = node.id;
     return "failure";
   }
   return "success";
+}
+
+/** Why a refreeze failed; a worktree something moved names the one restart that fits (shared/contracts/runRestart.ts). */
+function refreezeWords(err: unknown, graph: WorkflowGraph, options: RunOptions): string {
+  const said = err instanceof Error ? err.message : String(err);
+  if (!(err instanceof Error && "frozenTip" in err && "branch" in err) || !options.taskId) return said;
+  // The personal Ship runs as `change` in the workspace it ships (subjectStation.ts runEndMessage).
+  const flow = graph.name === PERSONAL_FLOW_SLUG ? "change" : graph.name;
+  return `${said}. ${worktreeMovedRestartWords(worktreeMovedRestart(flow, options.taskId, String(err.branch)))}`;
 }
 
 /** The last thing a station said in words: a segment's exit steps only say which exit they took. */
@@ -604,7 +619,7 @@ async function briefWriters(node: WorkflowNode, graph: WorkflowGraph, context: R
     recordNodeOutput(context, node.id, said);
     context[`${node.id}.briefed`] = writers.map((w) => w.shortId).join(" ");
   } catch (err) {
-    return dead(`Could not freeze the checkout's change again: ${err instanceof Error ? err.message : String(err)}`);
+    return dead(`Could not freeze the checkout's change again: ${refreezeWords(err, graph, options)}`);
   }
   return "success";
 }
@@ -1483,7 +1498,7 @@ export { gateDoc };
 export function gatePayload(node: WorkflowNode, graph: WorkflowGraph, context: Record<string, string>) {
   const card = node.card ? readGateCard(expandPromptVars(node.card, graph, context).trim()) : null;
   return {
-    prompt: node.prompt ? expandPromptVars(node.prompt, graph, context) : node.label,
+    prompt: inRepo(node.prompt ? expandPromptVars(node.prompt, graph, context) : node.label, context),
     ...(node.doc ? { doc_md: gateDoc(expandPromptVars(node.doc, graph, context)) } : {}),
     ...(node.category ? { category: node.category } : {}),
     ...(graph.stack ? { stack: expandPromptVars(graph.stack, graph, context) } : {}),
@@ -1496,6 +1511,24 @@ export function gatePayload(node: WorkflowNode, graph: WorkflowGraph, context: R
     // The session the change came from (flows.md FL4): a run nobody's session started asks from it, not its own log.
     ...(context["change_conversation"] ? { subject_conversation_id: context["change_conversation"] } : {}),
   };
+}
+
+/**
+ * A card a run that merges a change asks names the repository it merges into, first: its session may sit in another
+ * repository, and a person reads the card cold (sd-5046 asked about a union-mobile change from a codecast session). A
+ * question that already names the repository stands.
+ */
+function inRepo(question: string, context: Record<string, string>): string {
+  const repo = context["repo_name"];
+  if (!repo || !context["branch"] || new RegExp(`(^|[^\\w-])${repo.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^\\w-]|$)`, "i").test(question.split("\n")[0])) return question;
+  return `In ${repo}: ${question}`;
+}
+
+/** The repository a checkout is of, as its origin names it (owner/name's name), else its directory's name. */
+function repoNameOf(cwd: string): string {
+  const r = spawnSync("git", ["-C", cwd, "remote", "get-url", "origin"], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] });
+  const origin = r.status === 0 ? r.stdout.trim() : "";
+  return origin.replace(/\.git$/, "").replace(/\/+$/, "").split(/[/:]/).pop() || path.basename(cwd);
 }
 
 // LE1.4 one live run per cause: a run the server could not register must not
@@ -2240,6 +2273,8 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
   initialContext["project_path"] = cwd;
   Object.assign(initialContext, facts);
   initialContext["default_branch"] = detectDefaultBranch(cwd);
+  // The repository the run merges into, which its cards name (gatePayload).
+  initialContext["repo_name"] = repoNameOf(cwd);
   // Where a reviewer's diff starts ($diff_base...$branch): the default branch as the remote has it (a local one can
   // lag), unless the run's change says where it was cut.
   initialContext["diff_base"] = defaultDiffBase(cwd, initialContext["default_branch"]);

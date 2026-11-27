@@ -11,6 +11,7 @@ import { defaultExec, type Exec } from "../lineMerge.js";
 import { reviewedHeads } from "./changeVerdicts.js";
 import { chainBetween, recordRebase, type RebaseLink } from "./rebaseRecord.js";
 import { readFrozenChange } from "./flowChangeFile.js";
+import { unpushedBody } from "./unpushedCommits.js";
 
 /**
  * `round` is a fresh nonce each round: a reviewer pins it with its verdict, and Verdicts counts only a verdict that
@@ -154,7 +155,9 @@ export function prStation(args: { cwd: string; dir: string; branch: string; base
     ({ url, number } = open[0]);
   } else {
     const title = args.title?.trim() || change?.title || exec("git", ["log", "-1", "--format=%s", sha], cwd).stdout.trim() || branch;
-    const create = exec("gh", ["pr", "create", "--head", branch, "--base", base, "--title", title, "--body", args.body ?? ""], cwd);
+    // A change frozen from a checkout carries the checkout's unpushed commits: the pull request names them.
+    const body = [args.body ?? "", change?.branch === branch ? unpushedBody(change.unpushed) : ""].filter(Boolean).join("\n\n");
+    const create = exec("gh", ["pr", "create", "--head", branch, "--base", base, "--title", title, "--body", body], cwd);
     if (create.status !== 0) return { ok: false, reason: `gh pr create failed: ${firstLine(create)}` };
     url = create.stdout.trim().split("\n").pop() ?? "";
     number = Number(/\/pull\/(\d+)/.exec(url)?.[1]);

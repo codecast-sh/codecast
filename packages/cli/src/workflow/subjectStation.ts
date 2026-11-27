@@ -11,6 +11,7 @@ import * as path from "node:path";
 import type { WorkflowGraph } from "./types";
 import { readFrozenChange, type FrozenChange } from "./flowChangeFile.js";
 import { PERSONAL_FLOW_SLUG } from "@codecast/shared/contracts/flowPool";
+import { ownRestartOf } from "@codecast/shared/contracts/runRestart";
 
 export type Subject = { conversationId: string; shortId: string };
 
@@ -177,11 +178,13 @@ export function runEndMessage(graph: WorkflowGraph, opts: { taskId?: string; end
   const on = opts.taskId ? ` on ${opts.taskId}` : "";
   if (!opts.failed) {
     const said = (opts.lastOutput ?? "").replace(ANSI, "").split("\n").map((l) => l.trim()).filter(Boolean).pop();
-    return `The ${flow} run${on} is over: ${opts.endLabel}.${said && !said.startsWith("{") ? ` ${said}` : ""} Nothing more is waiting on this session for it.`;
+    // Words that open with the end's own name ("Live: e180ae0 on …") say it once.
+    const words = !said || said.startsWith("{") ? `${opts.endLabel}.` : said.startsWith(`${opts.endLabel}:`) ? (/[.!?]$/.test(said) ? said : `${said}.`) : `${opts.endLabel}. ${said}`;
+    return `The ${flow} run${on} is over: ${words} Nothing more is waiting on this session for it.`;
   }
   const why = (opts.failReason ?? "it failed").replace(/^Stopped:\s*/, "").replace(/\.$/, "");
-  // A stop that says all of it (whole_stop) stands as it is.
-  if (opts.whole) return `The ${flow} run${on} stopped at ${opts.endLabel}: ${why}.`;
+  // A stop that says all of it (whole_stop, or the runner's own words naming its restart) stands as it is.
+  if (opts.whole || ownRestartOf(opts.failReason)) return `The ${flow} run${on} stopped at ${opts.endLabel}: ${why}.`;
   // A stop after Land leaves the change on the default branch: only what comes after it did not happen.
   // The personal Ship lands with no merge, and runs as `change` in the workspace it ships (flowPool.ts workspacePool).
   const personal = graph.name === PERSONAL_FLOW_SLUG;

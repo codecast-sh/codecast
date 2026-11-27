@@ -367,9 +367,14 @@ async function tellStoppedSession(ctx: any, run: Doc<"workflow_runs">, task: Doc
     const again = await ctx.db.query("pending_messages").withIndex("by_conversation_client_id", (q: any) => q.eq("conversation_id", id).eq("client_id", clientId)).first();
     const conversation = await ctx.db.get(id);
     if (again || !conversation || conversation.inbox_killed_at) return;
-    const content = `The ${flow} run${task?.short_id ? ` on ${task.short_id}` : ""} is over: Live. ${line} It had stopped at Deploy; a later deploy took the change live. Nothing more is waiting on this session for it.`;
+    const named = `The ${flow} run${task?.short_id ? ` on ${task.short_id}` : ""}`;
+    // The deploy's line opens with "Live:" itself: the end is said once.
+    const content = `${named} is over: ${/^Live:/.test(line) ? line : `Live. ${line}`} It had stopped at Deploy; a later deploy took the change live. Nothing more is waiting on this session for it.`;
+    // From the run, as its runner's own messages are: its session when it has one, else the run by name.
+    const runSession = run.primary_conversation_id ? await ctx.db.get(run.primary_conversation_id) : null;
+    const from = runSession ? runSession.short_id ?? String(runSession._id).slice(0, 7) : "unknown";
     // A send refused (a hosted session the run's owner does not own) leaves the run completed all the same.
-    await enqueuePendingMessage(ctx, conversation, run.user_id, { content: formatSessionMessage("unknown", content, { name: "codecast" }), client_id: clientId }).catch(() => {});
+    await enqueuePendingMessage(ctx, conversation, run.user_id, { content: formatSessionMessage(from, content, runSession ? {} : { name: named.replace(/^The /, "the ") }), client_id: clientId }).catch(() => {});
     return;
   }
 }

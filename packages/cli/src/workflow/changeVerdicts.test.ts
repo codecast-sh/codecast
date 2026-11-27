@@ -156,7 +156,7 @@ describe("changeVerdicts", () => {
 
   test("a pull request that conflicts with main goes to the session to bring up to date, never to a CI rerun", () => {
     const conflict = { ...STATION, excerpt: "#7 has a merge conflict with main, so GitHub runs no CI on it. Rebase it and push." };
-    expect(verdicts({ "ci.json": { ...GREEN, green: false, failing: [conflict] } })).toMatchObject({ next: "conflict", why: conflict.excerpt, ci: "red" });
+    expect(verdicts({ "ci.json": { ...GREEN, green: false, failing: [conflict] } })).toMatchObject({ next: "conflict", why: "#7 has a merge conflict with main, so GitHub runs no CI on it.", ci: "red" });
   });
 
   test("a branch someone pushed to after this round's push starts a new round, whatever CI and the reviewer said", () => {
