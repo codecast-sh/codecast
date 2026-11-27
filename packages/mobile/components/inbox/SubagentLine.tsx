@@ -5,7 +5,7 @@ import { StyleSheet, Pressable, View as RNView } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
 import type { SubagentStateGroup } from '@codecast/web/lib/subagentRows';
 import { Text as RNText } from '@/components/Themed';
-import { StatusMark } from '@/components/StatusMark';
+import { SessionStatusMark } from '@/components/marks';
 import { useTheme } from '@/constants/Theme';
 import { subagentGroupWords } from '@/lib/subagentLine';
 
@@ -26,7 +26,7 @@ export function SubagentLine({ groups, onOpen }: { groups: readonly SubagentStat
           accessibilityLabel={subagentGroupWords(g)}
           accessibilityHint="Opens the newest"
         >
-          <StatusMark status={g.status} theme={Theme} size={9} />
+          <SessionStatusMark status={g.status} size={9} />
           <RNText maxFontSizeMultiplier={1.2} style={[styles.countText, { color: Theme.textMuted0 }]}>{g.count}</RNText>
         </Pressable>
       ))}

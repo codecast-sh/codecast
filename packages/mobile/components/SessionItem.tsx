@@ -27,6 +27,7 @@ import { teamMembersOf } from '@codecast/web/lib/activeTeam';
 import { isConvexId } from '@codecast/web/lib/entityLinks';
 import { useWatchEffect } from '@codecast/web/hooks/useWatchEffect';
 import { CoOwnerFaces } from '@/components/owners/OwnerFace';
+import { RowStatusMark } from '@/components/inbox/RowStatusMark';
 import { SubagentLine } from '@/components/inbox/SubagentLine';
 import type { SubagentStateGroup } from '@codecast/web/lib/subagentRows';
 
@@ -130,12 +131,6 @@ export function PulsingDot({ color }: { color: string }) {
   }, [phase]);
   const opacity = phase.interpolate({ inputRange: PULSE_IN, outputRange: PULSE_OUT });
   return <RNAnimated.View style={[styles.statusDot, { backgroundColor: color, opacity }]} />;
-}
-
-// Rows hold still (web's listRowsHoldStill): the colour says the agent is
-// working.
-function StatusDot({ session }: { session: SessionData }) {
-  return <RNView style={[styles.statusDot, { backgroundColor: statusColor(session) }]} />;
 }
 
 // What every row of a list reads from the store, read once by the list and
@@ -264,7 +259,7 @@ export function SessionItem({ session, isUnread, selected, onPress, onLongPress,
       <RNView style={styles.conversationHeader}>
         <RNView style={styles.titleRow}>
           <RNView style={styles.iconWithStatus}>
-            <StatusDot session={session} />
+            <RowStatusMark session={session} blocked={!!blockedBadge} {...place} />
           </RNView>
           {session.is_favorite && (
             <Feather name="star" size={11} color={Theme.accent} style={{ marginRight: 3 }} />
@@ -621,10 +616,13 @@ export const styles = themedStyles((Theme) => StyleSheet.create({
     flex: 1,
     marginRight: Spacing.md,
   },
+  // The 10pt status mark and its gap take 14pt, the indent of every line under
+  // the title (marginLeft: 14), so those lines start in the title's column.
   iconWithStatus: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginRight: Spacing.sm,
+    width: 10,
+    marginRight: 4,
   },
   statusDot: MOBILE_SESSION_STYLE.dot,
   conversationTitle: {
