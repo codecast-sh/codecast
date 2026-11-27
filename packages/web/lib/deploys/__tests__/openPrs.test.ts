@@ -73,6 +73,15 @@ describe("prStepper and prState", () => {
     expect(prStepper({ checks_state: "success", review_decision: "approved" })).toEqual(["done", "done", "done", "idle"]);
     expect(prState({ checks_state: "success", review_decision: "approved", mergeable_state: "behind", behind_by: 13 })).toEqual({ word: "Ready to merge", tone: "blue", detail: "behind main by 13" });
   });
+
+  // PR #311: the header's Review said "Review passed" (its run's reviewer, on its head) while this rail drew Review hollow.
+  test("a run reviewer's verdict on the head counts as the PR's review, which GitHub never holds", () => {
+    expect(prStepper({ checks_state: "failure" }, "ship")).toEqual(["done", "failed", "done", "idle"]);
+    expect(prState({ checks_state: "success" }, "ship").word).toBe("Ready to merge");
+    expect(prStepper({ checks_state: "success" }, "changes")).toEqual(["done", "done", "failed", "idle"]);
+    expect(prState({ checks_state: "success" }, "rejected").word).toBe("Changes requested");
+    expect(prStepper({ checks_state: "success" }, null)).toEqual(["done", "done", "idle", "idle"]);
+  });
 });
 
 describe("a link to an open PR", () => {

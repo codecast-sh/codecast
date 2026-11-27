@@ -296,23 +296,32 @@ export function openPrs(
 }
 
 /** PR · CI · Review · Merge for a pull request no run carries, read from what GitHub says of it. */
-export function prStepper(pr: Pick<OpenPr, "draft" | "checks_state" | "review_decision" | "mergeable_state">): StepState[] {
+/** The review a pull request has: GitHub's decision, else the verdict a codecast run's reviewer gave on its head
+ *  (changePage reviewOnHead), which never reaches GitHub. */
+const reviewOf = (pr: Pick<OpenPr, "review_decision">, runVerdict?: string | null) =>
+  pr.review_decision === "approved" || runVerdict === "ship" ? "approved"
+    : pr.review_decision === "changes_requested" || runVerdict === "changes" || runVerdict === "rejected" ? "changes_requested"
+    : pr.review_decision;
+
+export function prStepper(pr: Pick<OpenPr, "draft" | "checks_state" | "review_decision" | "mergeable_state">, runVerdict?: string | null): StepState[] {
   const ci: StepState = pr.checks_state === "success" ? "done" : pr.checks_state === "failure" ? "failed" : pr.checks_state === "pending" ? "active" : "idle";
-  const review: StepState = pr.review_decision === "approved" ? "done" : pr.review_decision === "changes_requested" ? "failed" : "idle";
+  const decision = reviewOf(pr, runVerdict);
+  const review: StepState = decision === "approved" ? "done" : decision === "changes_requested" ? "failed" : "idle";
   const merge: StepState = pr.mergeable_state === "dirty" ? "failed" : "idle";
   return [pr.draft ? "waiting" : "done", ci, review, merge];
 }
 
 /** What a pull request no run carries waits on, the first that applies, in the words its card and its page say. */
-export function prState(pr: Pick<OpenPr, "draft" | "checks_state" | "review_decision" | "mergeable_state" | "behind_by">): RunState {
+export function prState(pr: Pick<OpenPr, "draft" | "checks_state" | "review_decision" | "mergeable_state" | "behind_by">, runVerdict?: string | null): RunState {
+  const decision = reviewOf(pr, runVerdict);
   if (pr.draft) return { word: "Draft", tone: "blue" };
   if (pr.checks_state === "failure") return { word: "CI failing", tone: "red" };
   if (pr.mergeable_state === "dirty") return { word: "Merge conflicts", tone: "red" };
-  if (pr.review_decision === "changes_requested") return { word: "Changes requested", tone: "red" };
+  if (decision === "changes_requested") return { word: "Changes requested", tone: "red" };
   if (pr.checks_state === "pending") return { word: "CI running", tone: "yellow" };
   const behind = pr.mergeable_state === "behind" || (pr.behind_by ?? 0) > 0;
   const detail = behind ? `behind main${pr.behind_by ? ` by ${pr.behind_by}` : ""}` : undefined;
-  const state: RunState = pr.review_decision === "approved" ? { word: "Ready to merge", tone: "blue" } : { word: "Waiting on review", tone: "blue" };
+  const state: RunState = decision === "approved" ? { word: "Ready to merge", tone: "blue" } : { word: "Waiting on review", tone: "blue" };
   return detail ? { ...state, detail } : state;
 }
 

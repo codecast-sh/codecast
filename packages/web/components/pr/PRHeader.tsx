@@ -471,6 +471,7 @@ export function PRHeader({
         pr={pr}
         model={deploy}
         authed={authed}
+        runVerdict={runReview ? run?.review_verdict?.verdict ?? null : null}
         shepherd={<ShepherdControl pr={pr} sessionChoices={sessionChoices} onSetShepherd={onSetShepherd} />}
       />
       <PRDeployBand model={deploy} />

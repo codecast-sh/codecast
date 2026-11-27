@@ -18,9 +18,11 @@ import { EntityIdPill } from "../EntityIdPill";
 import { ShipControl } from "../ShipControl";
 import { PRShipsTo } from "./PRDeploy";
 
-export function PRShipStrip({ pr, model, shepherd, authed }: {
+export function PRShipStrip({ pr, model, shepherd, authed, runVerdict }: {
   pr: any;
   model: PrDeployModel;
+  /** The verdict a run's reviewer gave on the PR's head (the header's Review figure), which GitHub never holds. */
+  runVerdict?: string | null;
   /** The shepherd control: the session that owns the pull request until it merges. */
   shepherd: ReactNode;
   authed: boolean;
@@ -35,8 +37,8 @@ export function PRShipStrip({ pr, model, shepherd, authed }: {
     .filter((r) => (r.pr ? r.pr.number === model.number && normalizeRepository(r.pr.repository || model.repository) === repo : !!r.task_id && tasks.has(String(r.task_id))))
     .sort((a, b) => b.updated_at - a.updated_at)[0] ?? null;
   if (!model.open) return null;
-  const state = run ? runState(run) : prState(pr);
-  const steps = run ? stepper(run) : prStepper(pr);
+  const state = run ? runState(run) : prState(pr, runVerdict);
+  const steps = run ? stepper(run) : prStepper(pr, runVerdict);
   const decide = run?.status === "paused" && run.gate_decision_short_id ? <DecisionWord id={run.gate_decision_short_id} word={state.word} /> : undefined;
   const deploysHref = model.teamId ? deploysFocusHref({ team: model.teamId, repository: model.repository, target: model.shipsTo?.[0]?.target.name ?? null, focus: { kind: "pr", pr: model.number } }) : null;
   const goesTo = model.declares && model.shipsTo?.length ? <PRShipsTo model={model} /> : null;
