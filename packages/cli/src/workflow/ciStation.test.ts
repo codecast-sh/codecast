@@ -286,14 +286,35 @@ describe("cast flow ci: splitting a red head (routing only, never green)", () =>
     expect(summary).toBe("CI red on #7: 1 failure in test-cli");
   });
 
-  test("a change to CI carries a digest of its CI files at the head: the same edit, the same digest", async () => {
+  test("a change to CI carries a digest of its CI files at the head: the same edit, the same digest; content, mode or removal changes it", async () => {
     const pass = { polls: [{ rollup: [check("lint", "SUCCESS", 1)] }], files: [".github/workflows/ci.yml", "src/app.ts"] };
-    const edit = (sha: string) => station(fakeGh({ ...pass, fileShas: [`${sha} modified .github/workflows/ci.yml`, "aaa modified src/app.ts"] }));
-    const [a, b, c] = [await edit("111"), await edit("111"), await edit("222")];
-    expect(a.result).toMatchObject({ green: true, ci_changed: true });
-    expect(a.result.ci_edit).toMatch(/^[0-9a-f]{16}$/);
-    expect(b.result.ci_edit).toBe(a.result.ci_edit);
-    expect(c.result.ci_edit).not.toBe(a.result.ci_edit);
+    const edit = (tree: string[] | undefined) => station(fakeGh({ ...pass, tree })).then((s) => s.result);
+    const at = (mode: string, sha: string) => [`${mode} ${sha} .github/workflows/ci.yml`, "100644 aaa src/app.ts"];
+    const a = await edit(at("100644", "111"));
+    expect(a).toMatchObject({ green: true, ci_changed: true });
+    expect(a.ci_edit).toMatch(/^[0-9a-f]{16}$/);
+    expect((await edit(at("100644", "111"))).ci_edit).toBe(a.ci_edit);
+    // A different content, a mode-only change (same blob), and the file removed are each another edit.
+    const others = [await edit(at("100644", "222")), await edit(at("100755", "111")), await edit(["100644 aaa src/app.ts"])].map((r) => r.ci_edit);
+    expect(new Set([a.ci_edit, ...others]).size).toBe(4);
+    // A tree GitHub cut short, or no tree at all, names no edit: a person is asked.
+    expect((await edit(["truncated", ...at("100644", "111")])).ci_edit).toBeNull();
+    expect((await edit(undefined)).ci_edit).toBeNull();
+  });
+
+  test("the real ci.yml's summary job is no failure of its own beside a matrix job's (`test-web (1/4)`, `typecheck (web)`)", async () => {
+    const ciYml = fs.readFileSync(path.join(import.meta.dir, "../../../../.github/workflows/ci.yml"), "utf-8");
+    for (const name of ["build", "test-web (1/4)", "typecheck (web)", "test-cli (daemon)"]) {
+      const gh = redAfterRerun([check(name, "FAILURE", 4), check("verify", "FAILURE", 6)], { logs: { 4: BUN_LOG, 6: VITE_LOG(`${name}: failure`) }, workflows: { ".github/workflows/ci.yml": ciYml }, ...mainWith([job(name, 601, "success"), job("verify", 602, "success")]) });
+      expect((await station(gh)).result.failing.map((f) => f.job)).toEqual([name]);
+    }
+  });
+
+  test("main's CI never judged the job and an earlier run failed another test in it: the change's own failure is unjudged", async () => {
+    const gh = redAfterRerun([check("test-cli", "FAILURE", 4)], { logs: { 4: BUN_LOG, 590: OTHER_TEST_LOG }, ...cancelledAtTested, jobs: { 60: [job("test-cli", 600, "cancelled")], 59: [job("test-cli", 590, "failure")] } });
+    const { result } = await station(gh);
+    expect(result).toMatchObject({ failing: [], preexisting: [], blocked_by_main: true });
+    expect(tests(result.unjudged)).toEqual([["test-cli", BUN_TEST]]);
   });
 
   test("one failure main has and one it does not: the change's goes back, nothing is blocked by main", async () => {

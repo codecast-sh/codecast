@@ -362,9 +362,9 @@ describe("stops", () => {
   });
   // ct-102369: the session, `cast workflow show` and this page each named a different restart for CI never reported.
   test("a stop that names its resume offers that resume, the restart the session and the CLI name too", () => {
-    const why = "Stopped: CI never reported on the pushed head, also after running it again. The change is not at fault: resume this run at CI (`cast workflow resume ct-9 --at ci`) once GitHub runs CI on the pull request. What CI said: x";
+    const why = "Stopped: CI never reported on the pushed head, also after running it again. The change is not at fault: resume this run at PR (`cast workflow resume ct-9 --at pr`) to run CI and a fresh review on the same change once GitHub runs CI on pull requests again. What CI said: x";
     const j = journeyOf(change, run({ status: "failed", current_node_id: "noci", spawner_conversation_id: "c1", fail_reason: why, node_statuses: [...ROUND, verdicts("no_ci", "timed_out", "ship"), st("noci", "failed", 20)] }));
-    expect(j.now).toMatchObject({ kind: "stopped", resume: { at: "ci", label: "CI" } });
+    expect(j.now).toMatchObject({ kind: "stopped", resume: { at: "pr", label: "PR" } });
   });
   test("a deploy that missed its deadline opens the deploy; a runner crash runs again", () => {
     expect(journeyOf(change, run({ status: "failed", current_node_id: "deploy__failed", merge: { sha: "4a6e413b2c" }, fail_reason: "Stopped: Deploy stuck: cli is not live with 4a6e413 after 45m.", node_statuses: [...MERGED, st("deploy__wait", "failed", 16)] })).now).toMatchObject({ stage: "Deploy", fix: "deploy" });

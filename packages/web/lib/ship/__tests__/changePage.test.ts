@@ -133,10 +133,11 @@ describe("B: the head is structure, never a station's free text", () => {
 
   // ct-102369: CI never reported offered Ship again here, a resume in `cast workflow show`, and a fresh run to the session.
   test("a stop that names its resume never offers Ship again beside the bar's Resume", () => {
-    const noci = run({ status: "failed", current_node_id: "noci", fail_reason: "Stopped: CI never reported on the pushed head, also after running it again. The change is not at fault: resume this run at CI (`cast workflow resume ct-1 --at ci`) once GitHub runs CI on the pull request. What CI said: x", node_statuses: [...ROUND, verdicts("no_ci", "timed_out", "ship"), st("noci", "failed", 20)] });
-    expect(journeyOf(change, noci, [], null).now).toMatchObject({ kind: "stopped", resume: { at: "ci" } });
+    const noci = run({ status: "failed", current_node_id: "noci", fail_reason: "Stopped: CI never reported on the pushed head, also after running it again. The change is not at fault: resume this run at PR (`cast workflow resume ct-1 --at pr`) to run CI and a fresh review on the same change once GitHub runs CI on pull requests again. What CI said: x", node_statuses: [...ROUND, verdicts("no_ci", "timed_out", "ship"), st("noci", "failed", 20)] });
+    expect(journeyOf(change, noci, [], null).now).toMatchObject({ kind: "stopped", resume: { at: "pr", label: "PR" } });
     expect(act(noci)).toEqual({ kind: "session", label: "Open session", href: "/conversation/subj" });
-    expect(act({ ...noci, fail_reason: "runner crashed" })).toMatchObject({ kind: "again" });
+    // A runner that crashed at a station whose words name no resume runs again.
+    expect(act({ ...noci, current_node_id: "checks", fail_reason: "runner crashed", node_statuses: [st("pr", "completed", 1), st("checks", "failed", 2)] })).toMatchObject({ kind: "again" });
   });
 
   test("an earlier round's failure is not this stop", () => {

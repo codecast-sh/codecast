@@ -518,9 +518,9 @@ class Station {
    * How main's CI ran a job: its run of the workflow on the tested sha. Where that run skipped the job (codecast's
    * CI skips the jobs a commit's paths do not reach) or main has no run there, the nearest earlier main run where
    * the job ran. Where that run never reached a verdict on it (cancelled, still going), the nearest later run of
-   * main that holds the tested sha, and failing that only an earlier run's failure: an earlier pass says nothing of
-   * the commits after it, so the job is `unjudged`. Null when no run within reach ran it. Returns whether it failed
-   * and the failures its log names.
+   * main that holds the tested sha, and failing that an earlier run speaks only for the failures it has (`unsure`):
+   * an earlier pass says nothing of the commits after it, so the job is `unjudged`. Null when no run within reach ran
+   * it. Returns whether it failed and the failures its log names.
    */
   private mainJob(workflow: string, base: string, tested: string, name: string): MainJob | "unjudged" | null {
     const atTested = this.mainRunsOf(workflow, ["--commit", tested]);
@@ -562,7 +562,8 @@ class Station {
       const v = verdictIn(run);
       if (typeof v !== "object") continue;
       const main = judged(v);
-      return open && !main.failed ? "unjudged" : main;
+      // An earlier run vouches only for what it failed: a failure of the change's it lacks is unjudged, not the change's.
+      return !open ? main : main.failed ? { ...main, unsure: true } : "unjudged";
     }
     return open ? "unjudged" : null;
   }
@@ -578,15 +579,18 @@ class Station {
   }
 
   /**
-   * A digest of the CI paths the pull request touches, each with its content at the head (GitHub's blob sha), or null
-   * when they could not be read: what a person approves when they let a CI edit merge.
+   * A digest of the CI paths the pull request touches, each as the head's tree holds it (its mode and blob sha, or
+   * absent when the change removed it), or null when the tree could not be read whole: what a person approves when
+   * they let a CI edit merge. A mode-only change keeps the blob sha, so the mode counts too.
    */
-  private ciEdit(ciFiles: string[]): string | null {
-    const r = this.call(["api", "--paginate", `repos/${this.repo}/pulls/${this.o.pr}/files`, "--jq", `.[] | "\\(.sha // "-") \\(.status) \\(.filename)"`]);
+  private ciEdit(ciFiles: string[], head: string): string | null {
+    const r = this.call(["api", `repos/${this.repo}/git/trees/${head}?recursive=1`, "--jq", `(if .truncated then "truncated" else empty end), (.tree[] | select(.type != "tree") | "\\(.mode) \\(.sha) \\(.path)")`]);
     if (r.code !== 0) return null;
-    const wanted = new Set(ciFiles);
-    const lines = r.out.split("\n").map((l) => l.trim()).filter((l) => /^\S+ \S+ \S/.test(l) && wanted.has(l.split(" ").slice(2).join(" "))).sort();
-    return lines.length ? createHash("sha256").update(lines.join("\n")).digest("hex").slice(0, 16) : null;
+    const lines = r.out.split("\n").map((l) => l.trim()).filter(Boolean);
+    if (lines.includes("truncated")) return null;
+    const at = new Map(lines.map((l) => { const [mode, sha, ...p] = l.split(" "); return [p.join(" "), `${mode} ${sha}`] as const; }));
+    const entries = [...new Set(ciFiles)].sort().map((f) => `${at.get(f) ?? "absent"} ${f}`);
+    return createHash("sha256").update(entries.join("\n")).digest("hex").slice(0, 16);
   }
 
   /**
@@ -596,9 +600,12 @@ class Station {
   private gatesOnFailed(workflow: string | undefined, job: Job, bad: Job[]): boolean {
     const jobs = workflow ? this.workflowJobs.get(workflow) : undefined;
     if (!jobs) return false;
+    // A matrix job's runs carry its name with each `${{ … }}` filled in (`test-web (1/4)` from
+    // `test-web (${{ matrix.shard }}/4)`), or, with no expression in it, the name and its matrix values in parentheses.
     const named = (id: string, j: Job) => {
       const n = jobs[id]?.name ?? id;
-      return j.name === n || j.name.startsWith(`${n} (`);
+      const shape = new RegExp(`^${n.split(/\$\{\{.*?\}\}/).map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".+")}(?: \\(.+\\))?$`);
+      return shape.test(j.name);
     };
     const own = Object.keys(jobs).find((id) => named(id, job));
     return !!own && jobs[own]!.needs.some((need) => bad.some((b) => b !== job && named(need, b)));
@@ -643,7 +650,7 @@ class Station {
     const ciPatterns = [...ALWAYS_CI, ...this.baseCiPaths(tested ?? base)];
     const ciFiles = files ? files.filter((f) => ciPatterns.some((p) => filterMatches(f, p))) : null;
     result.ci_changed = !files || ciFiles!.length > 0;
-    result.ci_edit = ciFiles?.length ? this.ciEdit(ciFiles) : null;
+    result.ci_edit = ciFiles?.length ? this.ciEdit(ciFiles, pr.headRefOid) : null;
     for (const run of failedRuns) {
       const workflow = run.workflowName ?? `run ${run.databaseId}`;
       const bad = this.jobsOf(run.databaseId).filter((j) => j.status === "completed" && !JOB_PASSED.has(j.conclusion));
@@ -663,7 +670,8 @@ class Station {
         }
         const main = tested && run.workflowName ? this.mainJob(run.workflowName, base, tested, j.name) : null;
         for (const named of jobFailures(j.name, log.out)) {
-          (main === "unjudged" ? result.unjudged : onMain(main, named) ? result.preexisting : result.failing).push(named.failure);
+          const unjudged = main === "unjudged" || (!!main?.unsure && !onMain(main, named));
+          (unjudged ? result.unjudged : onMain(main as MainJob | null, named) ? result.preexisting : result.failing).push(named.failure);
         }
       }
     }
@@ -743,7 +751,7 @@ function ghCli(args: string[]): { code: number; out: string } {
 }
 
 /** How main's CI ran a job: whether it failed, and the failures its log names. */
-type MainJob = { failed: boolean; failures: NamedFailure[] };
+type MainJob = { failed: boolean; failures: NamedFailure[]; /** From a run before the tested sha, which main's CI never judged. */ unsure?: boolean };
 
 /**
  * Whether a change's failure is one main's job has too: a named one by its test and file. One the log cannot name

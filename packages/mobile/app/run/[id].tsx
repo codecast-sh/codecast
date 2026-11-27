@@ -189,8 +189,8 @@ export default function RunScreen() {
   // A personal Ship lands, maybe twice: its latest landing, as its journey shows it.
   const landing = landingOf(run, workflow as any);
   // A stop that says to resume the run (a personal Ship's Landing unknown, a change run's CI never reported) offers that
-  // press, as its card and the web's run page do.
-  const resumeAt = resumeOf(run, (workflow as any)?.nodes);
+  // press, as its card and the web's run page do. Its words are the run's flow's (a stored row keeps no `stop`).
+  const resumeAt = resumeOf(run, (runFlow as any)?.nodes ?? (workflow as any)?.nodes);
   // The session the run waits on asks a person: whom it waits on and what, as the run's card says it.
   const asking = live && run.waiting_on_session?.blocked && ask?.open !== false
     ? { head: ask?.mine ? 'Waiting on you' : 'Waiting for a person', body: [ask?.question, run.waiting_on_session.note].filter(Boolean).join('\n') }

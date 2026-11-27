@@ -196,12 +196,12 @@ export function registerFlowStations(flow: Command, deps: FlowDeps): Command {
     .option("--review <json>", "The reviewer's pinned verdict, {verdict, findings, round}; it counts only with this round's nonce from pr.json")
     .option("--run <id>", "The run whose station this is (default: $run_id): a ship carried in pr.json counts only as the server holds it")
     .action(async (opts: { dir: string; review?: string; run?: string }) => {
-      const [{ changeVerdicts }, { readPr }] = await Promise.all([import("./workflow/changeVerdicts.js"), import("./workflow/prStation.js")]);
+      const [{ changeVerdicts, needsProof }, { readPr }] = await Promise.all([import("./workflow/changeVerdicts.js"), import("./workflow/prStation.js")]);
       // Where origin's branch stands now: a push since this round's would make every verdict about another head.
       const branch = readPr(opts.dir)?.branch;
       const ls = branch ? spawnSync("git", ["ls-remote", "origin", `refs/heads/${branch}`], { cwd: deps.realCwd(), encoding: "utf-8" }) : null;
       const originHead = ls?.status === 0 ? String(ls.stdout).trim().split(/\s/)[0] || null : null;
-      const proof = readPr(opts.dir)?.reviewed ? await mergeProof(opts.run ?? process.env.run_id) : null;
+      const proof = needsProof(opts.dir) ? await mergeProof(opts.run ?? process.env.run_id) : null;
       console.log(JSON.stringify(changeVerdicts(opts.dir, opts.review, originHead, proof)));
     });
 

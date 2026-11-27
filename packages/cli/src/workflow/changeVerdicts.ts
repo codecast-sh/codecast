@@ -98,6 +98,14 @@ function reviewProblem(pin: Record<string, any> | null, round: unknown, heads: S
  * accepted review (the one Merge reads), or nothing when no review was accepted. `proof` is what the server holds for
  * the run's attempt: a carried review counts only when it is the reviewer's ship the server recorded on that head.
  */
+/**
+ * Whether Verdicts needs what the server holds for the run's attempt: for a ship the PR station carried (pr.json's
+ * `reviewed`), and for a change to CI, whose card a person's earlier Ship of the same edit spares (`ci_shipped`).
+ */
+export function needsProof(dir: string): boolean {
+  return !!readJson(path.join(dir, "pr.json"))?.reviewed || readJson(path.join(dir, "ci.json"))?.ci_changed === true;
+}
+
 export function changeVerdicts(dir: string, reviewPin: string | undefined, originHead?: string | null, proof?: MergeProof | null): Verdicts {
   const prFile = path.join(dir, "pr.json");
   const pr = readJson(prFile);

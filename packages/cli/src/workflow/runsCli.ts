@@ -140,16 +140,29 @@ function fail(message: string): never {
 }
 
 /**
- * How a failed run goes on, as its stop says it, the same restart the session heard and the run page offers: the
- * resume its stop names (a change that is ready, one station to go again), else for a run that ships a change a fresh
- * run once the change is fixed (Ship again), else a resume at the station that fits.
+ * How a failed run goes on, the same restart the session heard and the run page offers: the resume its stop names in
+ * the graph's own words (`stop`, read before any $var was filled in, so a reviewer's finding or a merge's output quoted
+ * into the reason names none), else for a run that ships a change a fresh run once the change is fixed (Ship again),
+ * else a resume at the station that fits.
  */
-export function restartHint(run: { fail_reason?: string | null; task_short_id?: string | null; workflow_slug?: string | null; takes_change?: boolean | null }): string {
-  const named = /`(cast workflow resume [^`]+)`/.exec(run.fail_reason ?? "")?.[1];
-  if (named) return `resume it: ${named}`;
+export function restartHint(run: { task_short_id?: string | null; workflow_slug?: string | null; takes_change?: boolean | null }, stop?: string | null): string {
   const task = run.task_short_id ?? "<ct-N>";
+  const at = /`cast workflow resume \S*\s*--at ([\w-]+)`/.exec(stop ?? "")?.[1];
+  if (at) return `resume it: cast workflow resume ${task} --at ${at}`;
   if (run.takes_change && run.workflow_slug) return `once the change is fixed, run it again: cast flow run ${run.workflow_slug} --task ${task}`;
   return `try it again: cast workflow resume ${task} --at <station>`;
+}
+
+/** The graph's own words for the stop a failed run ended at, when it ran a shipped flow (a stored row keeps no stop). */
+export async function stopWords(run: { workflow_slug?: string | null; current_node_id?: string | null }): Promise<string | null> {
+  const { BUILTIN_WORKFLOW_TEMPLATES } = await import("./templates.js");
+  const src = run.workflow_slug ? (BUILTIN_WORKFLOW_TEMPLATES as Record<string, string>)[run.workflow_slug] : undefined;
+  if (!src || !run.current_node_id) return null;
+  try {
+    return (await import("./parser.js")).parseWorkflowSource(src).nodes.get(run.current_node_id)?.stop ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /** `cast workflow show <run>`. */
@@ -164,7 +177,7 @@ export async function showRun(deps: PublishDeps, ref: string, options: { session
   const got = await apiPost(deps, "/cli/workflow-runs/get", { run_id: run._id }, { read: true, exitOnError: false }).catch(() => null);
   const labels = new Map<string, string>((got?.workflow?.nodes ?? []).map((n: { id: string; label?: string }) => [n.id, n.label ?? n.id]));
   console.log(formatRunDetail(run, labels));
-  if (run.status === "failed") console.log(fmt.muted(`\n  ${restartHint(run)}`));
+  if (run.status === "failed") console.log(fmt.muted(`\n  ${restartHint(run, await stopWords(run))}`));
   else if (run.status === "running" || run.status === "paused" || run.status === "pending") console.log(fmt.muted(`\n  stop it: cast workflow cancel ${ref}`));
 }
 

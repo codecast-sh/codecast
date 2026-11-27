@@ -98,18 +98,19 @@ digraph change {
   nopr      [shape=Msquare, label="No pull request", stop="$pr.output"]
   rejected  [shape=Msquare, label="Rejected", stop="The reviewer rejected the change: $verdicts.json.why"]
   found     [shape=Msquare, label="Found work", stop="CI or the reviewer found work, and no session made this change to fix it: $verdicts.json.why"]
-  // A stop where the change is ready and one station needs another go names that resume, whole (whole_stop): the
-  // session hears it, `cast workflow show` prints it, and the run page offers it as its press. The resume comes before
-  // the station's own words, which may be long (a stop keeps its first 1000 characters). Every other stop is the
-  // change's to fix, and a fresh run (Ship again) follows the fix.
-  verdictless [shape=Msquare, label="No verdicts", machine=true, whole_stop=true, stop="Verdicts could not read the round. The change is not at fault: resume this run at Verdicts (`cast workflow resume $task_id --at verdicts`) once that is fixed. Verdicts said: $verdicts.output"]
-  unreviewed [shape=Msquare, label="Review never finished", machine=true, whole_stop=true, stop="The review never finished, also when asked again. The change is not at fault: resume this run at Review (`cast workflow resume $task_id --at review`). What stopped it: $last_error"]
-  noci      [shape=Msquare, label="CI never reported", machine=true, whole_stop=true, stop="CI never reported on the pushed head, also after running it again. The change is not at fault: resume this run at CI (`cast workflow resume $task_id --at ci`) once GitHub runs CI on the pull request. What CI said: $verdicts.json.why"]
-  moving    [shape=Msquare, label="Main keeps moving", whole_stop=true, stop="Main keeps moving under this change: CI ran again 3 times and main moved again each time. Resume this run at Merge (`cast workflow resume $task_id --at merge`) when main is quieter. Merge said: $merge.output"]
+  // A stop where the change is ready and only a station failed it names a resume, whole (whole_stop): the session
+  // hears it, `cast workflow show` prints it, and the run page offers it as its press. Always at PR: a resume is a new
+  // attempt, and Merge clears only on CI and a review the server holds for the attempt, so the round runs again on the
+  // same branch. The resume comes before the station's own words, which may be long (a stop keeps its first 1000
+  // characters). Every other stop is the change's to fix, and a fresh run (Ship again) follows the fix.
+  verdictless [shape=Msquare, label="No verdicts", machine=true, whole_stop=true, stop="Verdicts could not read the round. The change is not at fault: resume this run at PR (`cast workflow resume $task_id --at pr`) to run CI and a fresh review on the same change once that is fixed. Verdicts said: $verdicts.output"]
+  unreviewed [shape=Msquare, label="Review never finished", machine=true, whole_stop=true, stop="The review never finished, also when asked again. The change is not at fault: resume this run at PR (`cast workflow resume $task_id --at pr`) to run CI and a fresh review on the same change. What stopped it: $last_error"]
+  noci      [shape=Msquare, label="CI never reported", machine=true, whole_stop=true, stop="CI never reported on the pushed head, also after running it again. The change is not at fault: resume this run at PR (`cast workflow resume $task_id --at pr`) to run CI and a fresh review on the same change once GitHub runs CI on pull requests again. What CI said: $verdicts.json.why"]
+  moving    [shape=Msquare, label="Main keeps moving", whole_stop=true, stop="Main keeps moving under this change: CI ran again 3 times and main moved again each time. When main is quieter, resume this run at PR (`cast workflow resume $task_id --at pr`) to run CI and a fresh review on the same change. Merge said: $merge.output"]
   lost      [shape=Msquare, label="Pull request lost", stop="$retest.output"]
   moving_branch [shape=Msquare, label="Branch keeps moving", stop="The branch keeps moving: 3 pushes during review or CI, and a 4th: $verdicts.json.why"]
-  mainred   [shape=Msquare, label="Main stayed red", whole_stop=true, stop="Main's CI did not go green while this change waited for it. The change is not at fault: resume this run at Wait for green main (`cast workflow resume $task_id --at wait_main`) once main is green. $wait_main.output"]
-  mainred_again [shape=Msquare, label="Main stayed red", whole_stop=true, stop="Main CI went red under this change again after two waits for it. The change is not at fault: resume this run at Wait for green main (`cast workflow resume $task_id --at wait_main`) once main is green. What CI said: $verdicts.json.why"]
+  mainred   [shape=Msquare, label="Main stayed red", whole_stop=true, stop="Main's CI did not go green while this change waited for it, so the change's failures could not be told from main's. Once main is green, resume this run at PR (`cast workflow resume $task_id --at pr`) to run CI and a fresh review on the same change. $wait_main.output"]
+  mainred_again [shape=Msquare, label="Main stayed red", whole_stop=true, stop="Main CI went red under this change again after two waits for it, so the change's failures could not be told from main's. Once main is green, resume this run at PR (`cast workflow resume $task_id --at pr`) to run CI and a fresh review on the same change. What CI said: $verdicts.json.why"]
   unrebased [shape=Msquare, label="Not onto main", stop="$onto_main.output"]
   nobody    [shape=Msquare, label="Needs a person", stop="This change edits CI, so CI can't vouch for it, and no session is behind the run to take it to a person."]
   dropped   [shape=Msquare, label="Dropped", stop="$stop_reason"]

@@ -134,11 +134,11 @@ async function ciCommand(argv: string[], cwd: string): Promise<number> {
 
 /** `cast flow verdicts`, as flowStations.ts reads where origin's branch stands and what the server holds. */
 async function verdictsCommand(argv: string[], cwd: string): Promise<number> {
-  const [{ changeVerdicts }, { readPr }] = await Promise.all([import("./changeVerdicts.js"), import("./prStation.js")]);
+  const [{ changeVerdicts, needsProof }, { readPr }] = await Promise.all([import("./changeVerdicts.js"), import("./prStation.js")]);
   const dir = arg(argv, "--dir")!;
   const pr = readPr(dir);
   const head = pr?.branch ? originHead(cwd, pr.branch) || null : null;
-  const proof = pr?.reviewed ? await post("/cli/workflow-runs/merge-proof", {}) : null;
+  const proof = needsProof(dir) ? await post("/cli/workflow-runs/merge-proof", {}) : null;
   console.log(JSON.stringify(changeVerdicts(dir, arg(argv, "--review"), head, proof)));
   return 0;
 }
