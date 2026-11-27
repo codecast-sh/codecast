@@ -6,12 +6,12 @@ import { lastPriorityKey, placePriority } from "@codecast/shared/contracts/prior
 import { readerFor } from "./lib/priorityAccess";
 import { moveCorrections } from "./priorityPassRun";
 import { clearDeadStepKeysNow, moveMergedSessionsNow, sessionMover } from "./priorityPassSessions";
-import { activeGroup, stepKeyMark } from "./lib/priorityGroup";
+import { activeGroup, positionsOf, stepKeyMark } from "./lib/priorityGroup";
 import { inWorkspace } from "./priorityPassInputs";
 import { passActivity } from "./lib/priorityPassSchedule";
 import type { PriorDone, PriorityCorrection, PriorityRow, PriorityStep } from "@codecast/shared/contracts/priorities";
 import type { Doc, Id } from "./_generated/dataModel";
-import { type Ctx, OWN_SCAN_READ, type Priority, type Result, correctionOut, echo, owned, positionsOf } from "./priorityRead";
+import { type Ctx, OWN_SCAN_READ, type Priority, type Result, correctionOut, echo, owned } from "./priorityRead";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 
 /** Where the person moves a priority: a position (1 = first), or one up or down from where it shows. */
