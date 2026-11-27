@@ -268,6 +268,8 @@ export type OpenPr = {
   state: string;
   draft?: boolean;
   head_ref?: string;
+  /** The commit the PR is on: a run reviewer's verdict counts for it only on this head (reviewOnHead). */
+  head_sha?: string;
   author_github_username?: string;
   /** When it was opened. Its updated_at is no measure of movement: a push to main restamps every open PR at once. */
   created_at: number;
