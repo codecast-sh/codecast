@@ -80,7 +80,8 @@ import { appAlert } from "@/lib/popups";
 //      gesture); faces shrink to a bottom filmstrip.
 //   2. No share → cameras fill an adaptive grid; nobody on camera → large
 //      avatars with speaking rings.
-//   3. Captions ride the bottom when a scribe (web/desktop) is running.
+//   3. Captions ride the bottom while the huddle is transcribed (a web or
+//      desktop scribe, or this phone's own mic when it is alone: phoneScribe).
 // Controls are one thumb-reachable bar: mute · camera · flip · speaker ·
 // leave. Backgrounding the app does NOT leave the call (UIBackgroundModes
 // audio keeps it alive) — leaving is always an explicit red action.

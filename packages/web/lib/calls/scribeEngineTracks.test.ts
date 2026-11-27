@@ -40,4 +40,35 @@ test("attaching a key with a new track replaces the pipe on the old one", async 
   await engine.stop({ keepLive: true });
 });
 
+// The phone has no MediaStreamTrack: it hands the engine an opener for a PCM
+// session. Its words go out under the speaker it was attached as, like a track's.
+test("attachPcm opens one pipe per opener and attributes its words", async () => {
+  const appended: any[] = [];
+  const phoneConvex = {
+    mutation: async (_fn: unknown, args: any) => {
+      if (args.segments) appended.push(...args.segments);
+      return { transcript_id: "t2", role: "scribe" };
+    },
+    action: async () => ({}),
+  };
+  const engine = createScribeEngine();
+  await engine.start({ convex: phoneConvex, roomKey: "dm:u1" });
+  let events: any = null;
+  let opens = 0;
+  const open = (o: any) => {
+    opens++;
+    events = o.events;
+    return { speaking: false, finish: async () => {}, close: () => {} };
+  };
+  engine.attachPcm("local:mic", open, "u1", "Cam");
+  engine.attachPcm("local:mic", open, "u1", "Cam");
+  expect(opens).toBe(1);
+  expect(engine.getStatus().trackCount).toBe(1);
+
+  events.onUtterance({ text: "hello", t0: 0, t1: 500 });
+  await Promise.resolve();
+  expect(appended).toEqual([{ speaker_id: "u1", speaker_name: "Cam", text: "hello", t0: 0, t1: 500 }]);
+  await engine.stop({ keepLive: true });
+});
+
 afterAll(() => mock.restore());

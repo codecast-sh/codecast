@@ -37,6 +37,7 @@ import { useLiveActivity } from '@/hooks/useLiveActivity';
 import { useViewerIdentity } from '@codecast/web/hooks/useTeamRoster';
 import { initAnalytics, identifyUser, resetUser, trackScreen, wrapRoot } from '@/lib/analytics';
 import { startCallKitBridge, republishVoipToken, notifyCallKitAuth } from '@/lib/calls/callKit';
+import { startPhoneScribe } from '@/lib/calls/phoneScribe';
 import { STORE_SHOTS } from '@/lib/storeShots/flag';
 import { bootMark } from '@/lib/bootProfile';
 import { BOOT_FONTS } from '@/lib/bootFonts';
@@ -136,6 +137,7 @@ function RootLayout() {
   // binaries without the native module (guarded require → no-op).
 
   useEffect(() => { if (!STORE_SHOTS) startCallKitBridge(); }, []);
+  useEffect(() => { if (!STORE_SHOTS) startPhoneScribe(); }, []);
 
   // Splash stays up past fonts. AuthProvider releases it once the SQLite
   // cache has hydrated (clientStateInitialized) and local boot trust is

@@ -33,16 +33,21 @@ function b64ToInt16(b64: string): Int16Array {
   return new Int16Array(bytes.buffer, bytes.byteOffset, Math.floor(bytes.byteLength / 2));
 }
 
-/**
- * Start a live recognizer on the microphone. Resolves to a handle, or null
- * when this binary cannot tap PCM (old app, no LiveKit, getUserMedia refused).
- */
-export async function startAsrCapture(opts: {
-  convex: ConvexReactClient;
-  roomKey: string;
-  clock: () => number;
-  events?: AsrCaptureEvents;
-}): Promise<AsrCapture | null> {
+/** The microphone as PCM, from LiveKit's native audio sink. The sink for a
+ *  local track (pcId -1) is not per track: it hangs off the audio device's
+ *  capture path (iOS: the capture post-processing adapter; Android: the
+ *  record samples dispatcher), so it hears exactly what a published huddle
+ *  mic sends, muted or not. The track opened here only anchors the listener's
+ *  attach and detach, which look a local track up by id. */
+export type MicTap = {
+  /** Where the samples go; null drops them. Replaceable, so a reopened
+   *  recognizer takes over the same tap. */
+  setSink(sink: ((samples: Int16Array, sampleRate: number) => void) | null): void;
+  close(): void;
+};
+
+/** Null when this binary cannot tap PCM (old app, no LiveKit, getUserMedia refused). */
+export async function openMicTap(): Promise<MicTap | null> {
   if (!callsNativeAvailable()) return null;
   let webrtc: typeof import("@livekit/react-native-webrtc");
   try {
@@ -60,24 +65,26 @@ export async function startAsrCapture(opts: {
   } catch {
     return null;
   }
+  const stopStream = () => {
+    try {
+      stream?.getTracks?.().forEach((t) => t.stop());
+    } catch {}
+    stream = null;
+  };
   const track = stream?.getAudioTracks?.()[0];
   if (!track) {
-    stream?.getTracks?.().forEach((t) => {
-      try {
-        t.stop();
-      } catch {}
-    });
+    stopStream();
     return null;
   }
 
-  let session: AsrPcmSession | null = null;
+  let sink: ((samples: Int16Array, sampleRate: number) => void) | null = null;
   let tag: string | null = null;
   let sub: { remove(): void } | null = null;
   let closed = false;
-
   function close() {
     if (closed) return;
     closed = true;
+    sink = null;
     try {
       sub?.remove();
     } catch {}
@@ -88,14 +95,55 @@ export async function startAsrCapture(opts: {
       } catch {}
       tag = null;
     }
+    stopStream();
+  }
+  try {
+    const emitter = new NativeEventEmitter(LiveKitModule);
+    sub = emitter.addListener("LK_AUDIO_DATA", (event: { id?: string; data?: string }) => {
+      if (closed || !sink || !tag || event?.id !== tag || typeof event.data !== "string") return;
+      const samples = b64ToInt16(event.data);
+      if (!samples.length) return;
+      // WebRTC audio processing delivers 10 ms frames, so N samples × 100 is
+      // the capture rate. See LKAudioProcessingAdapter.toPCMBuffer.
+      sink(samples, samples.length * 100);
+    });
+    tag = LiveKitModule.createAudioSinkListener(track._peerConnectionId ?? -1, track.id);
+  } catch {
+    close();
+    return null;
+  }
+  return {
+    setSink(next) {
+      if (!closed) sink = next;
+    },
+    close,
+  };
+}
+
+/**
+ * Start a live recognizer on the microphone. Resolves to a handle, or null
+ * when this binary cannot tap PCM (old app, no LiveKit, getUserMedia refused).
+ */
+export async function startAsrCapture(opts: {
+  convex: ConvexReactClient;
+  roomKey: string;
+  clock: () => number;
+  events?: AsrCaptureEvents;
+}): Promise<AsrCapture | null> {
+  const tap = await openMicTap();
+  if (!tap) return null;
+
+  let session: AsrPcmSession | null = null;
+  let closed = false;
+
+  function close() {
+    if (closed) return;
+    closed = true;
+    tap!.close();
     try {
       session?.close();
     } catch {}
     session = null;
-    try {
-      stream?.getTracks?.().forEach((t) => t.stop());
-    } catch {}
-    stream = null;
   }
 
   function attachSession() {
@@ -125,22 +173,8 @@ export async function startAsrCapture(opts: {
     });
   }
 
-  try {
-    const emitter = new NativeEventEmitter(LiveKitModule);
-    sub = emitter.addListener("LK_AUDIO_DATA", (event: { id?: string; data?: string }) => {
-      if (closed || !tag || event?.id !== tag || typeof event.data !== "string") return;
-      const samples = b64ToInt16(event.data);
-      if (!samples.length) return;
-      // WebRTC audio processing delivers 10 ms frames, so N samples × 100 is
-      // the capture rate. See LKAudioProcessingAdapter.toPCMBuffer.
-      session?.feedInt16(samples, samples.length * 100);
-    });
-    tag = LiveKitModule.createAudioSinkListener(track._peerConnectionId ?? -1, track.id);
-    attachSession();
-  } catch {
-    close();
-    return null;
-  }
+  tap.setSink((samples, rate) => session?.feedInt16(samples, rate));
+  attachSession();
 
   return {
     async finish() {
