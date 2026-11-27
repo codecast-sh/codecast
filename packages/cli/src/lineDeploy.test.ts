@@ -320,6 +320,17 @@ describe("cast line deploy show", () => {
     expect(formatDeploy({ ...base, carries: [{ task_short_id: "ct-1", how: "fixed", task_title: "x" }] })).toContain("carried 1\n  ct-1  fixed  x");
   });
 
+  // dp-3857 printed "CI done · Send failed · Back to the line done" and never why; its note held the Expo line.
+  test("a failed deploy leads with the cause line its note holds, past the send's progress output", () => {
+    const note = "Stopped at Send.\n characters cut …\n\rUpdating files: 100% (14513/14513), done.\n\n$ bash patches/fix.sh\n    Error: channel:list command failed.\nAn Expo user account is required to proceed.\n^\n\nSyntaxError: Unexpected token\nexited 1";
+    const steps = [{ id: "ci", status: "completed" }, { id: "send", status: "failed" }, { id: "returned", status: "completed" }];
+    const lines = formatDeploy({ ...base, status: "failed", live_at: null, note, steps }).split("\n");
+    expect(lines[1]).toBe("Stopped at Send: An Expo user account is required to proceed.");
+    expect(lines).toContain("CI done · Send failed · Back to the line done");
+    // A live deploy's note is no failure.
+    expect(formatDeploy({ ...base, note: "recorded by the marker" })).not.toContain("recorded by");
+  });
+
   test("a long list is cut at twenty", () => {
     const adds = Array.from({ length: 25 }, (_, i) => `fn:m:f${i}`);
     expect(formatDeploy({ ...base, adds })).toContain("… and 5 more");
@@ -337,6 +348,24 @@ describe("cast line deploy targets", () => {
     expect(lines[0]).toStartWith("backend  live: dp-9 7975db5ee");
     expect(lines[1]).toBe("  uncommitted push · ana-mac · Ana · 3m ago · 2 files");
     expect(lines[2]).toBe("  nothing waiting");
+  });
+
+  // dp-3856 was sending the cli queue while targets listed its commits as waiting.
+  test("what an open deploy is sending is going out, not waiting; only what is newer waits", () => {
+    const c = (n: number, at: number) => ({ sha: `${n}`.repeat(12), subject: `change ${n}`, at, main_at: at, ci: "passed", tasks: [], session: null, conversation_id: null });
+    const commits = [c(4, NOW - 1_000), c(3, NOW - 2_000), c(2, NOW - 3_000)];
+    const q = { known: true, commits: 5, untouched: 0, groups: [{ key: "none", session: null, ci: "passed", commits }], shown: 3, head_ci: "passed", head_sha: commits[0].sha };
+    const open = { short_id: "dp-10", status: "running", sha: commits[1].sha, created_at: NOW - 500 };
+    const text = formatTargets({ targets: [{ name: "cli", live: { ...live, status: "live" }, open, queue: q, history: [], dev_push: null }] }, NOW);
+    expect(text).toContain("  4 commits going out in dp-10\n  1 commit waiting, CI on main's head passed");
+    expect(text).toContain("444444444 passed  change 4");
+    expect(text).not.toContain("change 3");
+    // At main's head it sends everything.
+    expect(formatTargets({ targets: [{ name: "cli", live, open: { ...open, sha: commits[0].sha }, queue: q, history: [], dev_push: null }] }, NOW)).toContain("  5 commits going out in dp-10\n  nothing else waiting");
+    // With nothing going out, all of it waits, the unlisted counted as older.
+    const idle = formatTargets({ targets: [{ name: "cli", live, open: null, queue: q, history: [], dev_push: null }] }, NOW);
+    expect(idle).toContain("  5 commits waiting");
+    expect(idle).toContain("    +2 older");
   });
 
   test("with no dev push, nothing is added", () => {

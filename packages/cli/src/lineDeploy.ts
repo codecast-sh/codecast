@@ -12,11 +12,11 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawn, spawnSync } from "./proc.js";
-import { deployCauseLine, deployStepCommand, LINE_DEPLOY_GRAPH, LINE_DEPLOY_STEP_LABELS, LINE_DEPLOY_STEPS, type LineDeployProfile, type LineDeployStep } from "@codecast/shared/contracts/lineDeploy";
+import { deployCauseLine, deployNoteHeadline, deployStepCommand, LINE_DEPLOY_GRAPH, LINE_DEPLOY_STEP_LABELS, LINE_DEPLOY_STEPS, type LineDeployProfile, type LineDeployStep } from "@codecast/shared/contracts/lineDeploy";
 import { resolveCastInvocation } from "./castInvocation.js";
 import { behindCommit, commandAtCommit } from "./deployAtCommit.js";
 import type { ResolvedLineProfile } from "./lineProfile.js";
-import { targetFromLineDeploy, type DeployTarget, type TargetDevPush } from "@codecast/shared/contracts/deployTargets";
+import { groupQueueBySession, splitQueue, targetFromLineDeploy, type DeployTarget, type QueueCommit, type TargetDevPush } from "@codecast/shared/contracts/deployTargets";
 
 export type DeployStageReply = {
   project: { _id: string; short_id: string | null; title: string | null };
@@ -101,8 +101,15 @@ export function formatDeploy(d: any): string {
   const when = (t: number | null) => (t ? new Date(t).toLocaleString() : "-");
   const out = [
     `${d.short_id}  ${d.target}${d.sha ? ` ${String(d.sha).slice(0, 10)}` : ""}  ${d.status}`,
-    `went live ${when(d.live_at)} · started by ${d.started_by?.name ?? d.source} (${d.trigger}) · reported by ${d.source}${d.url ? ` · ${d.url}` : ""}`,
   ];
+  // Why it did not go live, in the cause line the Deploys page leads with (its note's stop and cause, past warnings and
+  // progress output), for a deploy that failed, was cancelled, or went back to the line.
+  const stopped = d.status === "failed" || d.status === "cancelled" || d.steps?.some((s: { id: string }) => s.id === "returned");
+  const cause = stopped ? deployNoteHeadline(d.note) : null;
+  if (cause) out.push(cause);
+  out.push(
+    `went live ${when(d.live_at)} · started by ${d.started_by?.name ?? d.source} (${d.trigger}) · reported by ${d.source}${d.url ? ` · ${d.url}` : ""}`,
+  );
   if (d.pushed_via || d.machine || d.dirty) {
     const from = [d.pushed_via ? `pushed by ${d.pushed_via}` : "pushed", d.machine ? `on ${d.machine}` : null].filter(Boolean).join(" ");
     out.push(`${from}${d.dirty ? ` · ${d.dirty} uncommitted file${d.dirty === 1 ? "" : "s"} went out with ${String(d.sha ?? "").slice(0, 7)}` : ""}`);
@@ -601,16 +608,28 @@ export function formatTargets(view: { targets: any[] }, now: number = Date.now()
     // Prod runs someone's uncommitted work on top of the live deploy.
     if (t.dev_push) out.push(`  ${devPushLine(t.dev_push, now)}`);
     const q = t.queue;
+    // What an open deploy is sending is not waiting: split as the Deploys page splits it (splitQueue). The older
+    // commits the queue counted but did not list go with it when it sends any.
+    const listed: QueueCommit[] = q.groups.flatMap((g: any) => g.commits).sort((a: QueueCommit, b: QueueCommit) => (b.main_at ?? b.at) - (a.main_at ?? a.at));
+    const deploys = [t.open, t.live, ...(t.history ?? [])].filter(Boolean);
+    const { going, sending, next } = splitQueue(listed, deploys, q.head_sha);
+    const older = Math.max(0, q.commits - q.shown);
+    const sent = sending.length ? sending.length + older : 0;
+    const waiting = q.commits - sent;
     if (!q.known) out.push(`  waiting: unknown (the live sha is not on main as codecast knows it)`);
     else if (!q.commits) out.push(`  nothing waiting${q.untouched ? ` (${q.untouched} commit${q.untouched === 1 ? "" : "s"} on main touch none of its paths)` : ""}`);
     else {
-      out.push(`  ${q.commits} commit${q.commits === 1 ? "" : "s"} waiting, CI on main's head ${q.head_ci}`);
-      for (const g of q.groups) {
-        out.push(`    ${g.session ? `${g.session.short_id} ${g.session.title ?? ""}` : "(no session)"}  CI ${g.ci}`);
-        for (const c of g.commits.slice(0, 5)) out.push(`      ${short(c.sha)} ${c.ci.padEnd(7)} ${c.subject}${c.tasks.length ? `  ${c.tasks.map((x: any) => x.short_id).filter(Boolean).join(" ")}` : ""}`);
-        if (g.commits.length > 5) out.push(`      +${g.commits.length - 5} more`);
+      if (going && sent) out.push(`  ${sent} commit${sent === 1 ? "" : "s"} going out in ${going.short_id}`);
+      if (!waiting) out.push(`  nothing else waiting`);
+      else {
+        out.push(`  ${waiting} commit${waiting === 1 ? "" : "s"} waiting, CI on main's head ${q.head_ci}`);
+        for (const g of groupQueueBySession(next)) {
+          out.push(`    ${g.session ? `${g.session.short_id} ${g.session.title ?? ""}` : "(no session)"}  CI ${g.ci}`);
+          for (const c of g.commits.slice(0, 5)) out.push(`      ${short(c.sha)} ${c.ci.padEnd(7)} ${c.subject}${c.tasks.length ? `  ${c.tasks.map((x: any) => x.short_id).filter(Boolean).join(" ")}` : ""}`);
+          if (g.commits.length > 5) out.push(`      +${g.commits.length - 5} more`);
+        }
+        if (!sent && older) out.push(`    +${older} older`);
       }
-      if (q.shown < q.commits) out.push(`    +${q.commits - q.shown} older`);
     }
   }
   return out.join("\n");

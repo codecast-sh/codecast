@@ -517,6 +517,43 @@ export function worstCi(states: readonly CommitCiState[]): CommitCiState {
   return states.length ? "passed" : "none";
 }
 
+/** Two shas name one commit: one is a prefix of the other, seven characters at least. */
+export const sameSha = (a: string, b: string) => a.length >= 7 && b.length >= 7 && (a.startsWith(b) || b.startsWith(a));
+
+/** What an unfinished deploy at `sha` sends, from a queue newest first: that commit and everything older. Nothing when it is not waiting. */
+export function upTo<C extends { sha: string }>(commits: ReadonlyArray<C>, sha: string): C[] {
+  const i = commits.findIndex((c) => sameSha(c.sha, sha));
+  return i < 0 ? [] : commits.slice(i);
+}
+
+/** What remains for Next deploy once a deploy at `sha` goes: everything newer. All of it when `sha` is not waiting. */
+export function after<C extends { sha: string }>(commits: ReadonlyArray<C>, sha: string): C[] {
+  const i = commits.findIndex((c) => sameSha(c.sha, sha));
+  return i < 0 ? [...commits] : commits.slice(0, i);
+}
+
+type QueueDeploy = { status: string; sha?: string | null; created_at: number; live_at?: number | null; commit_rows?: ReadonlyArray<{ sha: string }> };
+
+/**
+ * The queue (newest first) around the newest unfinished deploy: what it is sending (its sha and older) and what is left
+ * for Next deploy. With none going, or one at a sha no longer waiting, everything is next. `head`: main's newest commit
+ * as the queue counted it (queue.head_sha), which may touch none of the target's paths and so go unlisted. The Deploys
+ * page and `cast line deploy targets` both split by this.
+ */
+export function splitQueue<C extends { sha: string }, D extends QueueDeploy>(queue: ReadonlyArray<C>, deploys: ReadonlyArray<D>, head?: string | null): { going: D | null; sending: C[]; next: C[] } {
+  // One asked for before the live deploy never went out: it sends nothing, so everything waits for Next deploy.
+  const live = deploys.filter((d) => d.status === "live").sort((a, b) => (b.live_at ?? b.created_at) - (a.live_at ?? a.created_at))[0] ?? null;
+  const going = [...deploys].sort((a, b) => b.created_at - a.created_at).find((d) => (d.status === "requested" || d.status === "running") && d.sha && !(live && live.created_at > d.created_at)) ?? null;
+  if (!going) return { going, sending: [], next: [...queue] };
+  // A deploy at main's head sends the whole queue, listed or not (a push target's build of main, a marker with no
+  // commits). One at another commit the queue does not list (it touched none of the target's paths) sends what its own
+  // records name, and everything older on main.
+  if (head && sameSha(going.sha!, head) && !queue.some((c) => sameSha(c.sha, going.sha!))) return { going, sending: [...queue], next: [] };
+  const at = queue.some((c) => sameSha(c.sha, going.sha!)) ? going.sha! : queue.find((c) => going.commit_rows?.some((r) => sameSha(r.sha, c.sha)))?.sha;
+  if (!at) return { going, sending: [], next: [...queue] };
+  return { going, sending: upTo(queue, at), next: after(queue, at) };
+}
+
 /** Commits waiting on a target, grouped by the session that wrote them, the group with the newest commit first. */
 export function groupQueueBySession(commits: readonly QueueCommit[]): QueueGroup[] {
   const groups = new Map<string, QueueGroup>();
