@@ -5650,7 +5650,8 @@ const ConversationViewInner = (
           </>}
         </div>
       )}
-      {newSessionPage && <div ref={setNewSessionBelowSlot} className="flex-1 min-h-0 overflow-y-auto pb-6" />}
+      {/* While a picture is open the strip hugs the composer at the bottom, above the picture's backdrop, so the machine stays pickable. */}
+      {newSessionPage && <div ref={setNewSessionBelowSlot} className={`pb-6 ${isImageLightboxActive ? "shrink-0 relative z-[10002]" : "flex-1 min-h-0 overflow-y-auto"}`} />}
 
       {timeline.length > 0 && conversation && composerPresenceEnabled(conversation) && (
         <ReadingMarks
