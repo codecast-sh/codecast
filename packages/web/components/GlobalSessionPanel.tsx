@@ -2194,14 +2194,16 @@ function SessionListPanelImpl({
     }
     return out;
   }, []);
-  // Snoozed rows sleep in Sleeping, after its own rows: their line says until when. Each is a card of its
-  // own, a subagent snoozed with its parent too: the rail nests only rows that are not set aside (subsByParent).
+  // Snoozed rows sleep in Sleeping, after its own rows: their line says until when. A row snoozed with
+  // its card rides that card (placeInboxRows nests it in subsByParent), drawn as the subagent rows setting says.
   const filteredSnoozed = useMemo(() => filterByChip(snoozedList), [filterByChip, snoozedList]);
   const statusSleeping = useMemo(() => byPriority([...filteredDormant, ...filteredSnoozed]), [byPriority, filteredDormant, filteredSnoozed]);
   const dormantSplit = useRailDormantSplit(statusSleeping, coarseNow, scheduleBarRowsFor);
   const railWorking = useMemo(() => (dormantSplit.working.length ? byPriority([...filteredWorking, ...dormantSplit.working]) : statusWorking), [dormantSplit.working, byPriority, filteredWorking, statusWorking]);
   const movedWeight = (rows: InboxSession[]) => movedWeightOf(rows, showSubagents ? (sub) => sub._id === activeSessionId || keptSubIds.has(sub._id) : null, globalSubByParent, placed.nestedSectionOf);
   const plus = (base: number | undefined, n: number) => (base === undefined ? undefined : base + n);
+  // Snoozed cards weigh in Sleeping's number with, as Full rows, the rows drawn under them that no other section counts.
+  const snoozedWeight = filteredSnoozed.reduce((n, r) => n + 1 + (!showSubagents ? 0 : (globalSubByParent.get(r._id) ?? []).filter((sub) => !placed.nestedSectionOf.has(sub._id) && (sub._id === activeSessionId || keptSubIds.has(sub._id))).length), 0);
   const filteredDismissed = useMemo(() => {
     // Only surface dismissed sessions ACTIVE within the window — keyed on last
     // activity (updated_at), NOT when they were dismissed. A bulk cleanup dismisses
@@ -3669,7 +3671,7 @@ function SessionListPanelImpl({
         </div>
         <div className="inbox-compact" data-dormant-section>
           <div data-sv-rail>
-            {renderSection("Sleeping", dormantSplit.sleeping, "text-sol-text-dim", undefined, undefined, { key: "dormant", floor: true, count: plus(countOf(statusDormant, dormant, "dormant"), filteredSnoozed.length - movedWeight([...dormantSplit.working, ...dormantSplit.shipping])), onDropSession: dropSessionOnRest.dormant })}
+            {renderSection("Sleeping", dormantSplit.sleeping, "text-sol-text-dim", undefined, undefined, { key: "dormant", floor: true, count: plus(countOf(statusDormant, dormant, "dormant"), snoozedWeight - movedWeight([...dormantSplit.working, ...dormantSplit.shipping])), onDropSession: dropSessionOnRest.dormant })}
           </div>
         </div>
         </>

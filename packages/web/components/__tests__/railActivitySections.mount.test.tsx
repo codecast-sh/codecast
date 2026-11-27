@@ -310,12 +310,16 @@ test("a subagent snoozed with its parent rides the parent's card in Sleeping, as
   const card = shown.host.querySelector(`[data-session-id="${SNOOZED}"]`)!.closest(".relative.border-b")!;
   expect(card.querySelector(`[data-session-id="${CHILD}"]`)).not.toBeNull();
   expect(sectionIds(shown.host, "dormant").filter((sid) => sid === CHILD)).toHaveLength(1);
+  // The header counts the rows drawn, the helper included.
+  const count = (host: HTMLElement) => Number(host.querySelector('[data-inbox-section="dormant"]')!.getAttribute("data-inbox-section-count"));
+  expect(count(shown.host)).toBe(sectionIds(shown.host, "dormant").length);
   await shown.unmount();
   // Folded rows with the default filter hide an idle helper, as under any card.
   seed({ rows: [helper] });
   const folded = await mountInbox();
   expect(sectionIds(folded.host, "dormant")).toContain(SNOOZED);
   expect(sectionIds(folded.host, "dormant")).not.toContain(CHILD);
+  expect(count(folded.host)).toBe(sectionIds(folded.host, "dormant").length);
   await folded.unmount();
 });
 
