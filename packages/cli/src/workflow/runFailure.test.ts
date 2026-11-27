@@ -4,7 +4,7 @@
 import { describe, expect, test } from "bun:test";
 import { evalCondition } from "./condition";
 import { parseWorkflowSource } from "./parser";
-import { outputSummary, taskStopCard } from "./runFailure";
+import { handedBack, outputSummary, taskStopCard } from "./runFailure";
 import { SEGMENTED_FLOW } from "./segmentedFlow.testkit";
 import type { WorkflowRunState } from "./types";
 
@@ -63,5 +63,26 @@ describe("taskStopCard", () => {
     const err = "This run's change came from no session, so nobody can work on what the run found.";
     const state = { failReason: err, context: { last_error: err }, currentNodeId: "x", completed: [], visitCounts: {} } as unknown as WorkflowRunState;
     expect(taskStopCard(graph, state, "ct-1").body).toBe("");
+  });
+
+  // ct-102217: the task read in_review + blocked from the run before's stop, so the run read handoff=blocked, and its
+  // own refreeze error went out as "Fix findings handed the problem back".
+  const brief = parseWorkflowSource(`digraph g { start [shape=Mdiamond] brief [label="Fix findings"] start -> brief }`);
+  const err = "Could not freeze session jx7be5w's change again: git could not tell whether e04b9a619c is in 1a2b3c4d5e's history";
+  const at = (ctx: Record<string, string>) => ({ failReason: err, context: { last_error: err, handoff: "blocked", ...ctx }, currentNodeId: "brief", completed: [], visitCounts: {} }) as unknown as WorkflowRunState;
+
+  test("a run its station's own error stopped says that error, never that the session handed the problem back", () => {
+    const state = at({ stopped_on_error: "brief" });
+    expect(handedBack(state)).toBeNull();
+    const card = taskStopCard(brief, state, "ct-102217");
+    expect(card.summary).not.toContain("handed the problem back");
+    expect(card.summary).toContain("git could not tell whether");
+  });
+
+  test("a hand that handed off blocked, with no error of the run's own, still reads as handed back", () => {
+    expect(handedBack(at({}))).toBe("blocked");
+    expect(taskStopCard(brief, at({}), "ct-1").summary).toBe("Fix findings handed the problem back: it is blocked. The problem waits in review.");
+    // An error at an earlier station is not this stop's.
+    expect(handedBack(at({ stopped_on_error: "review" }))).toBe("blocked");
   });
 });

@@ -22,7 +22,7 @@ import { spawnSync } from "../proc.js";
 import { argvOnLaunchAccount } from "../ccAccounts.js";
 import { deviceId } from "../remote/device.js";
 import { LineProfileError, lineProfileVars, loadLineProfile } from "../lineProfile.js";
-import { deadEndReason, profileFailure, quotedTitle, taskStopCard } from "./runFailure.js";
+import { deadEndReason, handedBack, profileFailure, quotedTitle, taskStopCard } from "./runFailure.js";
 import { claimRun, clearVisits, fanoutOf, readCheckpoint, resumePoint, runnerStamp, withOptionWords, writeCheckpoint, type ResumePoint, type ResumeRow } from "./runResume.js";
 import { buildNodePrompt, expandAgentPrompt, expandPromptVars, presentsDecision, resolveModel, stationBrief } from "./nodePrompt";
 import * as fs from "fs";
@@ -1927,8 +1927,7 @@ async function returnTaskOnFailure(options: RunOptions, graph: WorkflowGraph, st
   if (closed && (closed.status === "done" || closed.status === "dropped")) return;
   // A station's visit limit, or a way back to the session that ran out (subjectStation.sentBackWords).
   const exhausted = /max_visits|sent the change back \d+ times/.test(state.failReason || "");
-  const handoff = state.context["handoff"];
-  const parkedByHand = handoff === "blocked" || handoff === "needs_context";
+  const parkedByHand = !!handedBack(state);
   // The card names the station's session, which a nested worker no longer
   // puts in the inbox on its own, so the blocker leads straight there.
   const card = taskStopCard(graph, state, options.taskId);
@@ -2841,6 +2840,9 @@ async function runNodeLoop(
       // takes names the fields its edges route on.
       const saysWhy = stationDead || faninFailed || (current.type === "parallel_fanout" && outcome === "failure");
       state.failReason = saysWhy && state.context["last_error"] ? state.context["last_error"] : deadEndReason(graph, current.id, outcome, state.context);
+      // The station's own error stopped the run, whatever handoff the task reads (runFailure handedBack).
+      if (saysWhy && state.context["last_error"]) state.context["stopped_on_error"] = current.id;
+      else delete state.context["stopped_on_error"];
       break;
     }
 

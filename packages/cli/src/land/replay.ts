@@ -9,7 +9,7 @@
  * branch refs; merge-tree's --merge-base is stable since git 2.40.
  */
 
-import { git, gitTry } from "../wipSnapshot.js";
+import { git } from "../wipSnapshot.js";
 import { spawnSync } from "../proc.js";
 
 export type ReplayResult =
@@ -74,7 +74,19 @@ async function recommit(cwd: string, original: string, tree: string, parent: str
   return git(cwd, ["commit-tree", tree, "-p", parent, "-F", "-"], env, message);
 }
 
-/** True when `ancestor` is reachable from `descendant`. */
+/**
+ * True when `ancestor` is reachable from `descendant`; a commit is its own ancestor. Git's exit 1 is the answer no;
+ * any other failure (an object `cwd` lacks, a repository git refuses to read) throws with git's own words, never
+ * read as no: a worktree "reset or rebased" off a commit was once a commit missing from the checkout.
+ */
 export async function isAncestor(cwd: string, ancestor: string, descendant: string): Promise<boolean> {
-  return (await gitTry(cwd, ["merge-base", "--is-ancestor", ancestor, descendant])) !== null;
+  if (ancestor === descendant) return true;
+  try {
+    await git(cwd, ["merge-base", "--is-ancestor", ancestor, descendant]);
+    return true;
+  } catch (err) {
+    if ((err as { code?: unknown }).code === 1) return false;
+    const said = String((err as { stderr?: unknown }).stderr ?? "").trim() || (err instanceof Error ? err.message : String(err));
+    throw new Error(`git could not tell whether ${ancestor.slice(0, 10)} is in ${descendant.slice(0, 10)}'s history in ${cwd}: ${said.split("\n").filter(Boolean).pop()}`);
+  }
 }

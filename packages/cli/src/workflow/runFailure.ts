@@ -85,6 +85,17 @@ export function stationFailureMarkdown(context: Record<string, string>, nodeId: 
 }
 
 /**
+ * The hand's handoff that stopped the run (blocked, needs_context), or null. The run reads `handoff` off the task, whose
+ * execution status an earlier run's failure also sets, so a run whose own step failed (`stopped_on_error`) stopped on
+ * that error whatever the task says: the session handed nothing back.
+ */
+export function handedBack(state: Pick<WorkflowRunState, "context" | "currentNodeId">): "blocked" | "needs_context" | null {
+  const handoff = state.context["handoff"];
+  if (handoff !== "blocked" && handoff !== "needs_context") return null;
+  return state.context["stopped_on_error"] === state.currentNodeId ? null : handoff;
+}
+
+/**
  * The failure path's card (the-line.md L4): a question that says what
  * stopped the run and a body that shows why, from the station that sent the
  * last round back. The blocker comment is `summary` over the same body.
@@ -93,11 +104,11 @@ export function taskStopCard(graph: WorkflowGraph, state: WorkflowRunState, task
   const reason = state.failReason || "workflow failed";
   const label = (id: string) => graph.nodes.get(id)?.label || id;
   const title = quotedTitle(state.context, taskId);
-  const handoff = state.context["handoff"];
+  const handoff = handedBack(state);
   const at = state.currentNodeId;
   const hand = at ? state.context[`${at}.session_id`] : undefined;
   const footer = hand ? `\n\n${label(at)} session: ${hand}` : "";
-  if (handoff === "blocked" || handoff === "needs_context") {
+  if (handoff) {
     const said = state.context["last_error"] ? fenced(state.context["last_error"].slice(0, 1500)) : "";
     return {
       question: `${label(at)} handed off ${handoff} on ${title}. What next?`,
