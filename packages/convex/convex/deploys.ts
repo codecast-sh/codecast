@@ -224,6 +224,9 @@ export async function recordDeployMarker(ctx: any, m: DeployMarker): Promise<str
     && (!d.action || d.action === "deploy" || !d.sha || (m.sha && sameSha(d.sha, m.sha)))
     // A run's marker finishes an open deploy only when it ships that deploy's sha, or the deploy names none yet.
     && (!m.workflow_run || !d.sha || (m.sha && sameSha(d.sha, m.sha)))
+    // A deploy a source opened for one sha (Railway's pending status) is that sha's: the same source's report of
+    // another sha (an older push finishing after a newer one started) is a deploy of its own.
+    && (d.source !== m.source || !d.sha || !m.sha || sameSha(d.sha, m.sha))
     // A deploy codecast sends through GitHub (DP18) is finished only by its own sha: a queued one has sent nothing yet.
     && (!d.dispatch || !!(m.sha && sameSha(d.sha, m.sha))),
   ));
