@@ -19,7 +19,7 @@ afterAll(() => {
 afterEach(() => _resetDictationForTests());
 
 /** `at` gives text offsets into the first paragraph (position 1 is its start),
- *  or "end" for the end of the document. */
+ *  or "end" for the end of the document; the editor is focused there. */
 function setup(html: string, at: ((doc: string) => [number, number]) | "end") {
   const el = w.document.createElement("div");
   w.document.body.appendChild(el);
@@ -27,6 +27,9 @@ function setup(html: string, at: ((doc: string) => [number, number]) | "end") {
   const end = editor.state.doc.content.size - 1;
   const [from, to] = at === "end" ? [end, end] : at(editor.state.doc.textContent).map((n) => n + 1);
   editor.view.dispatch(editor.state.tr.setSelection(TextSelection.create(editor.state.doc, from, to)));
+  // A cursor the person placed: they clicked, so the editor has focus.
+  editor.view.focus();
+  if (!editor.isFocused) throw new Error("editor did not take focus");
   const field = editorField(() => editor as any);
   let events: DictationPipeEvents | null = null;
   let endFinish: (() => void) | null = null;

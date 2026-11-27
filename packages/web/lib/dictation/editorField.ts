@@ -6,7 +6,7 @@
 // follows every change to the document, and a change inside the paragraph
 // reads to the controller as the person editing under it.
 import type { Editor } from "@tiptap/react";
-import { TextSelection } from "@tiptap/pm/state";
+import { Selection, TextSelection } from "@tiptap/pm/state";
 import type { Slice } from "@tiptap/pm/model";
 import type { DictationFieldAdapter } from "./useDictation";
 
@@ -33,7 +33,10 @@ export function editorField(getEditor: () => Editor | null): DictationFieldAdapt
     begin() {
       const ed = getEditor();
       if (!ed) return;
-      const { from, to } = ed.state.selection;
+      // An unfocused editor has no cursor the person placed (its selection is
+      // wherever it was last left, often the start): words go at the end, as
+      // in a textarea.
+      const { from, to } = ed.isFocused ? ed.state.selection : Selection.atEnd(ed.state.doc);
       range = { from, to };
       const p = parts(ed);
       original = { value: p.before + p.mid + p.after, slice: ed.state.doc.slice(from, to) };
@@ -86,7 +89,7 @@ export function editorField(getEditor: () => Editor | null): DictationFieldAdapt
     },
     focus() {
       const ed = getEditor();
-      if (ed && !ed.isFocused) ed.commands.focus();
+      if (ed && !ed.isFocused) ed.commands.focus(range?.to);
     },
   };
 }
