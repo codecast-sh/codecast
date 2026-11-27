@@ -330,11 +330,12 @@ test("the milestone's whole left gutter toggles Done, a 44px target on a phone",
   } finally {
     await page.unmount();
   }
-  // Daylight (wide, coarse pointer) does the same under the coarse pointer; a fine pointer keeps the one-line row centred.
+  // A wide line starts its parts at the top on every pointer, so a title that wraps grows downward with the box by its first line;
+  // Daylight (wide, coarse pointer) also draws the tall press area.
   const wide = await mount(<Live />);
   try {
     const title = line("pri-2", "s1").querySelector("[data-line-title]")!;
-    expect(title.className).toContain("items-center [@media(pointer:coarse)]:items-start");
+    expect(title.className.split(" ")).toContain("items-start");
     expect(title.querySelector("[data-milestone-toggle]")!.className).toContain("[@media(pointer:coarse)]:-mt-2 [@media(pointer:coarse)]:-mb-4 [@media(pointer:coarse)]:h-[52px]");
   } finally {
     await wide.unmount();
@@ -530,11 +531,14 @@ test("on the desktop grid each ⋯ keeps its 24px look and a coarse pointer pres
   try {
     for (const b of [priorityMenu("pri-1"), line("pri-1", "s1").querySelector('[data-milestone-menu="s1"]')!]) {
       expect(b.className).toContain("size-6");
-      expect(b.className).toContain("[@media(pointer:coarse)]:after:-inset-2.5");
+      // 44px each way under a coarse pointer, grown only leftward: each ⋯ sits in the page's right gutter, so the page never scrolls sideways.
+      expect(b.className).toContain("[@media(pointer:coarse)]:after:-inset-y-2.5 [@media(pointer:coarse)]:after:-left-5 [@media(pointer:coarse)]:after:right-0");
       // Always shown where a finger points, as where nothing hovers.
       if (b.hasAttribute("data-milestone-menu")) {
         expect(b.className).toContain("[@media(hover:none)]:opacity-100");
         expect(b.className).toContain("[@media(pointer:coarse)]:opacity-100");
+        // Centred on the line's 48px first row under a coarse pointer (12px down), so the line's clip keeps all 44px of the press area.
+        expect(b.closest('[class*="left-full"]')!.className.split(" ")).toContain("[@media(pointer:coarse)]:top-3");
       }
     }
     expect(line("pri-1", "s1").querySelector('[role="button"]')!.className).toContain("[@media(pointer:coarse)]:min-h-11");
