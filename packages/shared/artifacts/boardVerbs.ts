@@ -48,6 +48,7 @@ import {
   collapseFrameOps,
   expandFrameOps,
   frameCollapsed,
+  growToHoldOps,
   hiddenKeys,
   moveFrameOps,
   organizeOps,
@@ -172,6 +173,21 @@ function insetPad(view: ArtifactView, els: readonly ArtifactElement[], pad: numb
   return Math.max(0, Math.min(pad, gap - 8));
 }
 
+/**
+ * New elements put at `at` (an add-type verb's --at): when that point is inside
+ * an open frame, the frame grows in the same batch to hold them, so they are
+ * its children and a reflow lays them out. An agent's growth may not push a
+ * person's element (the frame itself may grow).
+ */
+function intoFrame(view: ArtifactView, ops: ArtifactOp[], keys: readonly string[], at: Pt | null, ctx?: VerbContext): { ops: ArtifactOp[]; note: string | null } {
+  if (!at) return { ops, note: null };
+  const placed = artifactView(view.type, view.title, [...view.elements, ...ops.flatMap((o) => ("put" in o ? [{ ...o.put, key: o.k, rev: 0 } as ArtifactElement] : []))]);
+  const grow = growToHoldOps(placed, keys, at);
+  if (!grow.frame || !grow.ops.length) return { ops, note: null };
+  refuseForPeople(placed, grow.ops, [grow.frame, ...keys], ctx);
+  return { ops: foldInto(ops, grow.ops), note: `grew ${frameName(view, grow.frame)} to hold it` };
+}
+
 /** The frame's box after `ops`, from its put or its old box with the set fields. */
 function boxAfter(view: ArtifactView, key: string, ops: readonly ArtifactOp[]): Box {
   const op = ops.find((o) => o.k === key);
@@ -183,7 +199,7 @@ const place: ArtifactVerb = {
   summary: "Place a list of items (one per stdin line) in a grid, row or column",
   usage: "place <doc> grid|row|column [--at x,y] [--cols n] [--gap 40] [--w n] [--h n] [--frame \"Title\"] [--frame-ref pri-N|in-N|pl-N|ct-N] [--frame-color c] < item lines (`[kind[:color][:shape][:w240][:h120]] [:art:] text | more`)",
   stdin: true,
-  run(view, args, stdin) {
+  run(view, args, stdin, ctx) {
     const { pos, flags } = parseVerbArgs(args);
     const mode = pos[0] ?? "grid";
     if (!["grid", "row", "column"].includes(mode)) throw new Error("layout is grid, row or column");
@@ -195,7 +211,8 @@ const place: ArtifactVerb = {
     const ref = frameRefArg(flags["frame-ref"], "--frame-ref");
     const frameTitle = str(flags.frame) ?? ref;
     const pad = frameTitle ? 40 : 0;
-    const spot = point(flags.at, "--at") ?? freeSpot(view);
+    const anchor = point(flags.at, "--at");
+    const spot = anchor ?? freeSpot(view);
     const at = { x: spot.x + pad, y: spot.y + (frameTitle ? pad + 24 : 0) };
     const cols = mode === "row" ? items.length : mode === "column" ? 1 : count(flags.cols, "--cols", squareCols(items.length, 5));
     const positions = gridPositions(items, { cols, gap, at });
@@ -208,21 +225,25 @@ const place: ArtifactVerb = {
       if (f && "put" in f && ref) f.put.ref = ref;
       if (f) { ops.unshift(f); keys.unshift(f.k); }
     }
-    return done(ops, keys, `placed ${items.length} item${items.length === 1 ? "" : "s"} in a ${mode}`, view, boxes);
+    // Without --frame, items placed inside a frame become its children (a new frame is a section of its own).
+    const into = frameTitle ? { ops, note: null } : intoFrame(view, ops, keys, anchor, ctx);
+    return done(into.ops, keys, [`placed ${items.length} item${items.length === 1 ? "" : "s"} in a ${mode}`, into.note].filter(Boolean).join("\n"), view, boxes);
   },
 };
 
 const add: ArtifactVerb = {
   summary: "Add one element: an item line as arguments",
   usage: "add <doc> [kind[:color][:shape][:w240][:h120]] [:art:] <text | more lines> [--at x,y] [--w n] [--h n]   e.g. add <doc> sticky:green :rocket: Launch | Out to everyone",
-  run(view, args) {
+  run(view, args, _stdin, ctx) {
     const { pos, flags } = parseVerbArgs(args);
     let item = parseItem(pos.join(" "));
     if (!item) throw new Error("say what to add, e.g. `cast board add <doc> sticky:pink Launch party`");
     if (flags.w !== undefined || flags.h !== undefined) item = resizeItem(item, flags.w !== undefined ? count(flags.w, "--w", item.w) : undefined, flags.h !== undefined ? count(flags.h, "--h", item.h) : undefined);
-    const at = point(flags.at, "--at") ?? freeSpot(view);
+    const anchor = point(flags.at, "--at");
+    const at = anchor ?? freeSpot(view);
     const { ops, keys } = placeItems([item], [at], item.kind === "frame" ? bottomZ(view) : nextZ(view));
-    return done(ops, keys, `added ${item.kind}`, view, boxesOf(ops));
+    const into = intoFrame(view, ops, keys, anchor, ctx);
+    return done(into.ops, keys, [`added ${item.kind}`, into.note].filter(Boolean).join("\n"), view, boxesOf(ops));
   },
 };
 
@@ -494,8 +515,8 @@ const group: ArtifactVerb = {
 
 const card: ArtifactVerb = {
   summary: "Place a live codecast object (task, plan, session, PR, doc) as a card, or turn an element into one",
-  usage: "card <doc> <ref> [--at x,y] [--replace <key>]   ref: ct-123, pl-9, jx7abcd, doc:<id>, #42",
-  run(view, args) {
+  usage: "card <doc> <ref> [--at x,y] [--replace <key>]   ref: ct-123, pl-9, jx7abcd, doc:<id>, #42   (--at inside a frame: the frame grows to hold it)",
+  run(view, args, _stdin, ctx) {
     const { pos, flags } = parseVerbArgs(args);
     const ref = pos[0];
     if (!ref) throw new Error("name the object, e.g. ct-4102");
@@ -507,10 +528,12 @@ const card: ArtifactVerb = {
       const op: ArtifactOp = { k: el.key, put: { kind: "card", ref, x: Math.round(b.x), y: Math.round(b.y), w: 320, h: 168, z: typeof el.z === "number" ? el.z : 0, ...(el.group ? { group: el.group } : {}) } };
       return done([op], [el.key], `${el.key} is now ${ref}`, view, [b]);
     }
-    const at = point(flags.at, "--at") ?? freeSpot(view);
+    const anchor = point(flags.at, "--at");
+    const at = anchor ?? freeSpot(view);
     const k = newElementKey("el");
     const op: ArtifactOp = { k, put: { kind: "card", ref, x: at.x, y: at.y, w: 320, h: 168, z: nextZ(view) } };
-    return done([op], [k], `placed ${ref}`, view, boxesOf([op]));
+    const into = intoFrame(view, [op], [k], anchor, ctx);
+    return done(into.ops, [k], [`placed ${ref}`, into.note].filter(Boolean).join("\n"), view, boxesOf([op]));
   },
 };
 
@@ -533,7 +556,7 @@ export function besideSpot(view: Pick<ArtifactView, "elements">, key: ArtifactEl
 const page: ArtifactVerb = {
   summary: "Place a published page (`cast publish`) live on the board, or turn an element into one",
   usage: "page <doc> <url|slug> [--at x,y | --near <key>] [--w 640 --h 480] [--caption \"...\"] [--replace <key>]",
-  run(view, args) {
+  run(view, args, _stdin, ctx) {
     const { pos, flags } = parseVerbArgs(args);
     const slug = pageSlugOf(pos[0] ?? "");
     if (!slug) throw new Error("name a published page: its https://codecast.sh/a/<slug> address or the slug");
@@ -551,10 +574,12 @@ const page: ArtifactVerb = {
       return done([op], [el.key], `${el.key} is now page ${slug}`, view, [box]);
     }
     const near = str(flags.near);
-    const at = point(flags.at, "--at") ?? (near ? besideSpot(view, requireKeys(view, [near])[0], size) : freeSpot(view));
+    const anchor = point(flags.at, "--at");
+    const at = anchor ?? (near ? besideSpot(view, requireKeys(view, [near])[0], size) : freeSpot(view));
     const k = newElementKey("el");
     const op: ArtifactOp = { k, put: { ...fields, x: at.x, y: at.y, ...size, z: nextZ(view) } as any };
-    return done([op], [k], `placed page ${slug}`, view, boxesOf([op]));
+    const into = intoFrame(view, [op], [k], anchor, ctx);
+    return done(into.ops, [k], [`placed page ${slug}`, into.note].filter(Boolean).join("\n"), view, boxesOf([op]));
   },
 };
 

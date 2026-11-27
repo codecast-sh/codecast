@@ -25,6 +25,7 @@
 //   collapseFrameOps(view, key, o)   fold into a title pill; the enclosing frames reflow, up to o.levels of them
 //   expandFrameOps(view, key)        unfold; the enclosing frame reflows, or at the top level what it now covers moves down
 //   enclosingFrameKeys(view, key)    the open frames around a visible element, innermost first
+//   growToHoldOps(view, keys, at)    new elements placed at a point inside a frame: that frame grows to hold them, pushing what it covers
 //   personTouched(view, ops, exempt) the people's elements a batch moves, resizes or newly encloses (agent courtesy)
 //   agentCollapseOps(view, key)      an agent's fold: reflows upward only as far as no person's element is touched
 //   reflowFrameOps(view, key)        lay out a frame's children and size it to fit (a resolved frame, one holding a folded
@@ -294,10 +295,13 @@ class FrameLayout {
     const before = { ...n.box };
     const ordered = readingSort(n.kids);
     const texts = ordered.filter((k) => k.el.kind === "text");
-    const rest = ordered.filter((k) => k.el.kind !== "text");
+    let rest = ordered.filter((k) => k.el.kind !== "text");
     const left = n.box.x + FRAME_PAD;
     // A resolved theme (folded notes and a deliverable: a folded frame and a card) is only as wide as its widest card or pill; its text wraps to that.
-    const resolved = rest.some((k) => k.el.kind === "frame" && this.collapsedOf(k.key)) && rest.some((k) => k.el.kind === "card");
+    const folded = (k: Node) => k.el.kind === "frame" && !!this.collapsedOf(k.key);
+    const resolved = rest.some(folded) && rest.some((k) => k.el.kind === "card");
+    // It reads summary, deliverables, then the folded notes last.
+    if (resolved) rest = [...rest.filter((k) => !folded(k)), ...rest.filter(folded)];
     const innerW = resolved ? Math.max(...rest.map((k) => k.box.w)) : Math.max(n.box.w - FRAME_PAD * 2, ...ordered.map((k) => k.box.w));
     let y = n.box.y + FRAME_PAD + FRAME_TITLE_BAND;
     for (const t of texts) {
@@ -357,6 +361,21 @@ class FrameLayout {
         queue.push({ n: s, before: sb });
       }
     }
+  }
+
+  /** Make `keys` children of frame `f` and grow it right and down to hold them with padding; then settle its level. */
+  adoptAndGrow(f: Node, keys: readonly string[]) {
+    const adopted = keys.map((k) => this.nodes.get(k)).filter((n): n is Node => !!n && n !== f);
+    for (const n of adopted) {
+      if (n.parent) n.parent.kids = n.parent.kids.filter((k) => k !== n);
+      n.parent = f;
+      f.kids.push(n);
+    }
+    if (!adopted.length) return;
+    const before = { ...f.box };
+    const right = Math.max(...adopted.map((n) => n.box.x + n.box.w)) + FRAME_PAD, bottom = Math.max(...adopted.map((n) => n.box.y + n.box.h)) + FRAME_PAD;
+    this.resize(f, Math.max(f.box.w, right - f.box.x), Math.max(f.box.h, bottom - f.box.y));
+    this.settle(f, before);
   }
 
   collapse(n: Node) {
@@ -634,4 +653,22 @@ export function agentCollapseOps(view: View, key: string): { ops: ArtifactOp[]; 
     ops = next;
   }
   return { ops, leftAsItWas: null };
+}
+
+/**
+ * New elements (already in `view`) placed at `at`: the innermost open frame
+ * holding that point grows right and down to hold them, FRAME_PAD clear, in
+ * the same batch, and whatever the growth newly covers moves down as usual.
+ * So a card put "inside the frame" is its child, and a reflow lays it out.
+ * Empty when `at` is in no open frame or the frame already holds them.
+ */
+export function growToHoldOps(view: View, keys: readonly string[], at: Pt): { ops: ArtifactOp[]; frame: string | null } {
+  const l = new FrameLayout(view);
+  const skip = new Set(keys);
+  const f = [...l.nodes.values()]
+    .filter((n) => n.el.kind === "frame" && !skip.has(n.key) && !l.collapsedOf(n.key) && inBox(at, n.box))
+    .sort((a, b) => area(a.box) - area(b.box) || (a.key < b.key ? -1 : 1))[0];
+  if (!f) return { ops: [], frame: null };
+  l.adoptAndGrow(f, keys);
+  return { ops: l.ops(), frame: f.key };
 }
