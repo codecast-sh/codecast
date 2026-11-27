@@ -91,8 +91,8 @@ export function SettleMock() {
 export function StatesLegend() {
   const rows: [string, string][] = [
     ["needs you", "A person has to unblock it: a question, a permission prompt, a dead process with output."],
-    ["working", "The agent is producing right now."],
-    ["dormant", "Parked on a wake the system will deliver: a trigger, a background task, its workers."],
+    ["working", "The agent, or a subagent working for it, is producing right now."],
+    ["dormant", "Parked on a wake the system will deliver: a trigger, a background task."],
     ["done", "The agent delivered. Read it when you like."],
   ];
   return (

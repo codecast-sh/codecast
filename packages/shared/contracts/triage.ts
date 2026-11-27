@@ -66,8 +66,8 @@ export const TRIAGE_REASONS = {
   running: { lane: "agent", ask: null, word: "Running" },
   compacting: { lane: "agent", ask: null, word: "Compacting" },
   sending: { lane: "agent", ask: null, word: "Sending" },
+  worker: { lane: "agent", ask: null, word: "Worker running" },
   // parked: a machine owns the next move, and the reason names it.
-  worker: { lane: "parked", ask: null, word: "Worker running" },
   loop: { lane: "parked", ask: null, word: "Loop" },
   trigger: { lane: "parked", ask: null, word: "Trigger" },
   follow_up: { lane: "parked", ask: null, word: "Follow-up" },
@@ -216,7 +216,6 @@ function doneReason(f: TriageFacts, unread: boolean): TriageReason {
 
 function parkedReason(f: TriageFacts): TriageReason {
   if (f.userRest === "dormant") return "parked_by_you";
-  if (f.childProducing) return "worker";
   if (f.loopArmed) return "loop";
   if (f.triggerKind === "standing") return "trigger";
   if (f.parkedWakeKind === "blocker") return "blocker";
@@ -233,7 +232,9 @@ function workingReason(f: TriageFacts): TriageReason {
   if (ACTIVE_STARTING.has(s)) return "starting";
   if (s === "compacting") return "compacting";
   if (s === "working" || s === "thinking") return "running";
-  return f.hasPending ? "sending" : "running";
+  if (f.hasPending) return "sending";
+  // Settled itself, but its subagents are producing the work it coordinates.
+  return f.childProducing ? "worker" : "running";
 }
 
 function reasonOf(input: TriageInput, shelf: TriageShelf | null): TriageReason {

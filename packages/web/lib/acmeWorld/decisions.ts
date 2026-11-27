@@ -288,7 +288,7 @@ function installScenes(s: any) {
       st().syncRecord("sessions", S.retries._id, live);
       st().syncRecord("conversations", S.retries._id, live);
     },
-    /** Webhook retries parked on its workers (dormant), the question not yet asked. */
+    /** Webhook retries declared dormant while it waits on its workers, the question not yet asked. */
     nest() {
       const now = Date.now();
       const row = DECISIONS(now)[0];

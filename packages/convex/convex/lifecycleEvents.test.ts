@@ -32,6 +32,18 @@ test("a dismiss records the change and the cause the mutation named", async () =
   });
 });
 
+test("the cause reaches the recorder through the wrappers stacked over it", async () => {
+  // functions.ts wraps this db in others that copy it with a spread
+  // (makeAdoptionReleaseDb, makeWellFormedDb), and the cause is named on the outermost.
+  const { db, inserted } = fakeDb({ "conversations:c1": { status: "active" } });
+  const inner = makeLifecycleEventDb(db, db);
+  const ctx = { db: { ...{ ...inner, patch: (...a: any[]) => inner.patch(...a) } } };
+  noteWriteCause(ctx, "web:stashSession");
+  await ctx.db.patch("conversations:c1", { inbox_stashed_at: 5 });
+  expect(inserted[0]).toMatchObject({ cause: "web:stashSession" });
+  expect(inserted[0].stack).toBeUndefined();
+});
+
 test("re-asserting a value that is already set records nothing", async () => {
   const { db, inserted } = fakeDb({ "conversations:c1": { status: "completed" } });
   const ctx = { db: makeLifecycleEventDb(db, db) };

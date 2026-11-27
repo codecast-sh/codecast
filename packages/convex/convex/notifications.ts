@@ -635,8 +635,8 @@ export async function deriveConversationVerdict(
     isIdle = true;
   }
 
-  // An idle parent whose subagent child is still producing is parked on it
-  // (classifyWorkState's childProducing) — don't push mid-orchestration.
+  // An idle parent whose subagent child is still producing is working on its
+  // behalf (classifyWorkState's childProducing): don't push mid-orchestration.
   const childProducing = isIdle && !awaitingInput && (await childProducingNow(ctx, conv, now));
 
   const armedHomes = await loadArmedTriggerHomes(ctx, conv.user_id);
