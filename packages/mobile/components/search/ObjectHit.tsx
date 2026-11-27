@@ -2,7 +2,8 @@
 // role, person or published page): the mark and the state its own list draws
 // (TaskItem, PlanItem, DocItem), so a task reads the same in a search and on
 // its board. One line, a full-width touch target.
-import { memo } from 'react';
+import { memo, type ReactNode } from 'react';
+import { EntityKindIcon, PlanStatusMark, TaskStatusMark } from '@/components/marks';
 import { Pressable, StyleSheet, View as RNView } from 'react-native';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import type { ObjectHit as Hit } from '@codecast/web/hooks/useObjectSearch';
@@ -19,7 +20,8 @@ import { CHROME_FONT_CAP, themedStyles, useTheme } from '@/constants/Theme';
 import { HighlightText } from './highlight';
 
 type IconName = React.ComponentProps<typeof FontAwesome>['name'];
-type Look = { icon: IconName; color: string; state?: string; stateColor?: string };
+/** `mark`: web's glyph for the hit's state or kind, drawn in place of `icon`. */
+type Look = { icon: IconName; mark?: ReactNode; color: string; state?: string; stateColor?: string };
 
 /** A long title shows the stretch around its hit, so the words found are
  *  never past the row's ellipsis. A phone row holds under thirty characters
@@ -32,21 +34,23 @@ function lookOf(hit: Hit, Theme: ReturnType<typeof useTheme>): Look {
     case 'task': {
       const s = STATUS_CONFIG[e.status as keyof typeof STATUS_CONFIG] ?? STATUS_CONFIG.open;
       const p = e.priority === 'urgent' || e.priority === 'high' ? PRIORITY_CONFIG[e.priority as 'urgent' | 'high'] : null;
-      return { icon: s.icon, color: s.color, state: p ? p.label : s.label, stateColor: p ? p.color : s.color };
+      return { icon: 'circle-o', mark: <TaskStatusMark status={e.status} size={16} />, color: s.color, state: p ? p.label : s.label, stateColor: p ? p.color : s.color };
     }
     case 'plan': {
       const s = PLAN_STATUS_CONFIG[e.status as keyof typeof PLAN_STATUS_CONFIG] ?? PLAN_STATUS_CONFIG.draft;
-      return { icon: s.icon, color: s.color, state: s.label, stateColor: s.color };
+      return { icon: 'circle-o', mark: <PlanStatusMark status={e.status} size={16} />, color: s.color, state: s.label, stateColor: s.color };
     }
     case 'doc': {
       const d = DOC_TYPE_CONFIG[e.doc_type] ?? { icon: 'file-text-o' as IconName, color: Theme.green, label: 'Note' };
       return { icon: d.icon, color: d.color, state: d.label, stateColor: Theme.textMuted0 };
     }
-    case 'trigger':
-      return { icon: 'bolt', color: e.status === 'paused' ? Theme.accent : Theme.orange, state: describeTaskCadence(e), stateColor: Theme.textMuted0 };
-    case 'project': return { icon: 'folder-o', color: Theme.blue };
-    case 'initiative': return { icon: 'flag-o', color: Theme.magenta };
-    case 'role': return { icon: 'cube', color: Theme.violet, state: e.handle ? `@${e.handle}` : undefined, stateColor: Theme.textMuted0 };
+    case 'trigger': {
+      const color = e.status === 'paused' ? Theme.accent : Theme.orange;
+      return { icon: 'bolt', mark: <EntityKindIcon type="trigger" size={16} color={color} />, color, state: describeTaskCadence(e), stateColor: Theme.textMuted0 };
+    }
+    case 'project': return { icon: 'folder-o', mark: <EntityKindIcon type="project" size={16} />, color: Theme.textMuted };
+    case 'initiative': return { icon: 'flag-o', mark: <EntityKindIcon type="initiative" size={16} />, color: Theme.magenta };
+    case 'role': return { icon: 'cube', mark: <EntityKindIcon type="role" size={16} />, color: Theme.violet, state: e.handle ? `@${e.handle}` : undefined, stateColor: Theme.textMuted0 };
     case 'page': return { icon: 'globe', color: Theme.cyan };
     default: return { icon: 'circle-o', color: Theme.textMuted0 };
   }
@@ -69,7 +73,7 @@ export const ObjectHit = memo(function ObjectHit({ hit, highlight, onPress }: { 
       <RNView style={styles.mark}>
         {hit.kind === 'person'
           ? <ChatAvatar author={{ id: hit.key, name: hit.title, avatarUrl: memberAvatarUrl(hit.entity) }} size={20} />
-          : <FontAwesome name={look.icon} size={15} color={look.color} />}
+          : look.mark ?? <FontAwesome name={look.icon} size={15} color={look.color} />}
       </RNView>
       <RNView style={styles.words}>
         <HighlightText text={title} query={highlight} style={[styles.title, done && styles.titleDone]} numberOfLines={1} />

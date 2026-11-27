@@ -1,9 +1,10 @@
 import { describe, expect, mock, test } from "bun:test";
 
-// The PR page's Production band and its "ships to" list link each target into
-// /deploys, and so does the header chip. Every link names the PR: a merged one
-// lands on its queue commit or the deploy that took it, an open one on its row
-// in On its way.
+// The PR page's Production band and its "goes to" list link each target into
+// /deploys, and so does the header chip; the band ends with Open on Deploys.
+// Every link names the PR: a merged one lands on its queue commit or the
+// deploy that took it, an open one on its card in Shipping (PRShipStrip,
+// PRShipStrip.mount.test.tsx).
 
 mock.module("next/link", () => ({
   default: ({ href, children, ...props }: any) => <a href={href} {...props}>{children}</a>,
@@ -30,6 +31,8 @@ describe("the PR page's links into Deploys", () => {
       "/deploys?deploy=dp-12",
       "/deploys?team=T1&repo=acme%2Fapp&target=web&pr=101",
       "/deploys?team=T1&repo=acme%2Fapp&target=cli&pr=101",
+      // Open on Deploys, under the rows: the target that needs the reader first.
+      "/deploys?team=T1&repo=acme%2Fapp&target=web&pr=101",
     ]);
   });
 

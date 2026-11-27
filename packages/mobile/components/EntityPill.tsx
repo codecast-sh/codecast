@@ -8,9 +8,12 @@ import { findEntityInStore, entityTypeInStore } from '@codecast/web/lib/liveEnti
 import { useSyncOrgProposal } from '@codecast/web/hooks/useSyncOrgProposals';
 import { usePriorityDetail, useSyncPriorityDetail } from '@codecast/web/hooks/usePriorityDetail';
 import { useRouter } from 'expo-router';
-import Feather from '@expo/vector-icons/Feather';
-import Octicons from '@expo/vector-icons/Octicons';
 import { Theme, useTheme, type Palette } from '@/constants/Theme';
+import { mixColor, webColor } from '@/lib/solColor';
+import { EntityKindIcon, TaskStatusMark, WebIcon } from '@/components/marks';
+import { ACCENT, DECISION_STATE, TYPE_ICON } from '@codecast/web/lib/entityCardAccent';
+import { PR_STATE_GLYPH } from '@codecast/web/lib/prStateGlyph';
+import { deployLook } from '@codecast/web/lib/deploys/deployLook';
 import { isConvexId, isEntityId, entityTypeFromId, entityReferenceLabel, parseCallRef, callRefLabelSuffix, parseProposalChangeRef, proposalChangeLabelSuffix, parseReplayRef, replayRefLabelSuffix, type EntityType } from '@codecast/shared/entities';
 import { mobileEntityRoute } from '@/lib/linkRoutes';
 import { openLink } from '@/lib/links';
@@ -21,12 +24,11 @@ import { MobileIdentityFace } from '@/components/identity';
 import { useMessageLongPress } from '@/components/MessageLongPress';
 import { deployTitle } from '@codecast/web/lib/line/deployWords';
 import { repoObjectTitle } from '@codecast/web/lib/repoObjects';
-import { deployPillElapsed, deployPillState, deployPillSuffix, deployTone, isRollback, runRefKey, type DeployPillState, type DeployTone } from '@codecast/web/lib/deploys/deployPill';
+import { deployPillElapsed, deployPillState, deployPillSuffix, deployTone, runRefKey, type DeployTone } from '@codecast/web/lib/deploys/deployPill';
 import { usePrPillLook, useRefLifecycle } from '@codecast/web/hooks/useRefLifecycle';
 import type { PrGlyph } from '@codecast/web/lib/changes/prPill';
 import { ChangeWords } from '@/components/ChangeText';
 import { useNowWhen } from '@codecast/web/hooks/useCoarseNow';
-import type { ReachState } from '@codecast/shared/contracts/deployReach';
 
 
 // Detection comes from the shared mention vocabulary, the same tables web reads
@@ -60,91 +62,12 @@ const TYPE_LABEL: Record<EntityType, string> = {
   priority: 'Priority',
 };
 
-// Web pill palette: session=blue, plan=cyan, task=violet, doc=green,
-// project=neutral, trigger=orange. (Magenta is reserved for chat.)
-const TYPE_COLOR: Record<EntityType, string> = {
-  session: Theme.blue,
-  plan: Theme.cyan,
-  task: Theme.violet,
-  doc: Theme.green,
-  project: Theme.textMuted,
-  initiative: Theme.textMuted,
-  proposal: Theme.violet,
-  trigger: Theme.orange,
-  decision: Theme.yellow,
-  pr: Theme.green,
-  commit: Theme.yellow,
-  call: Theme.red,
-  source: Theme.orange,
-  replay: Theme.magenta,
-  issue: Theme.red,
-  metric: Theme.violet,
-  deploy: Theme.green,
-  role: Theme.violet,
-  person: Theme.green,
-  secret: Theme.yellow,
-  flow: Theme.cyan,
-  priority: Theme.orange,
-};
+// The pill's glyph is web's (components/marks): a kind's glyph and accent
+// (lib/entityCardAccent), a task's status disc, a decision's state, a pull
+// request's state (lib/prStateGlyph) and a deploy's (lib/deploys/deployLook).
+const PILL_GLYPH = 11;
+const prGlyphIcon = (glyph: PrGlyph) => PR_STATE_GLYPH[glyph]?.pr ?? TYPE_ICON.pr;
 
-const TYPE_ICON: Record<EntityType, React.ComponentProps<typeof Feather>['name']> = {
-  session: 'message-square',
-  plan: 'map',
-  task: 'circle',
-  doc: 'file-text',
-  project: 'folder',
-  initiative: 'flag',
-  proposal: 'share-2',
-  trigger: 'zap',
-  decision: 'help-circle',
-  pr: 'git-pull-request',
-  commit: 'git-commit',
-  call: 'phone',
-  source: 'radio',
-  replay: 'film',
-  issue: 'alert-triangle',
-  metric: 'activity',
-  deploy: 'upload-cloud',
-  role: 'hexagon',
-  person: 'user',
-  secret: 'key',
-  flow: 'git-merge',
-  priority: 'target',
-};
-
-// Mobile stand-in for web's StatusCircle glyphs: the circle "fills in" as the
-// task progresses (disc = started, check/x = finished), tinted with the same
-// status colors the web board uses.
-const TASK_STATUS_ICON: Record<string, { icon: React.ComponentProps<typeof Feather>['name']; color: string }> = {
-  backlog: { icon: 'circle', color: Theme.textDim },
-  open: { icon: 'circle', color: Theme.blue },
-  in_progress: { icon: 'disc', color: Theme.accent },
-  in_review: { icon: 'disc', color: Theme.violet },
-  done: { icon: 'check-circle', color: Theme.green },
-  dropped: { icon: 'x-circle', color: Theme.textDim },
-};
-
-export type FeatherName = React.ComponentProps<typeof Feather>['name'];
-
-// The web pill's deploy and reach glyphs (components/deploys/deployRefLook), in Feather.
-const DEPLOY_ICON: Record<DeployPillState, FeatherName> = {
-  waiting: 'clock',
-  going_out: 'upload-cloud',
-  live: 'check-circle',
-  replaced: 'check-circle',
-  failed: 'x-circle',
-  cancelled: 'minus-circle',
-};
-const PR_GLYPH_ICON: Record<PrGlyph, React.ComponentProps<typeof Octicons>['name']> = { open: 'git-pull-request', draft: 'git-pull-request-draft', merged: 'git-merge', closed: 'git-pull-request-closed' };
-
-export const REACH_ICON: Record<ReachState, FeatherName> = {
-  live: 'check-circle',
-  going_out: 'upload-cloud',
-  queued: 'clock',
-  failed: 'x-circle',
-  rolled_back: 'rotate-ccw',
-  waiting: 'circle',
-};
 // A failure must be seen before it is read: about twice the tint every other pill wears.
 const FAILED_TINT = '33';
 export const toneColor = (t: Palette, tone: DeployTone) =>
@@ -259,7 +182,7 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback, to }
   // A GitHub Actions run is a deploy only once codecast says so; until then, and for every CI run, it stays its link.
   if (type === 'deploy' && !entity && runRefKey(rawId)) return <>{fallback}</>;
 
-  const color = deployState ? toneColor(Theme, deployTone(entity, Date.now())) : TYPE_COLOR[type];
+  const color = deployState ? toneColor(Theme, deployTone(entity, Date.now())) : webColor(ACCENT[type].text, Theme);
 
   // One label rule for every type, shared with web: the pill reads as the
   // object's NAME.
@@ -302,16 +225,19 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback, to }
       suppressHighlighting
     >
       {type === 'task' ? (
-        (() => {
-          const s = TASK_STATUS_ICON[entity?.status || 'open'] ?? TASK_STATUS_ICON.open;
-          return <Feather name={s.icon} size={10} color={s.color} />;
-        })()
+        <TaskStatusMark status={entity?.status} size={PILL_GLYPH} />
+      ) : type === 'decision' ? (
+        <WebIcon icon={(DECISION_STATE[entity?.status ?? 'pending'] ?? DECISION_STATE.pending).icon} color={color} size={PILL_GLYPH} />
       ) : prLook ? (
-        <Octicons name={PR_GLYPH_ICON[prLook.glyph]} size={10} color={color} />
+        <WebIcon icon={prGlyphIcon(prLook.glyph)} color={color} size={PILL_GLYPH} />
       ) : deployState ? (
-        <Feather name={isRollback(entity) ? 'rotate-ccw' : DEPLOY_ICON[deployState]} size={10} color={color} style={deployState === 'replaced' ? { opacity: 0.5 } : undefined} />
+        (() => {
+          const look = deployLook(entity, Date.now());
+          // A failure wears web's heavier stroke; a replaced deploy fades.
+          return <WebIcon icon={look.Icon} color={deployState === 'replaced' ? mixColor(color, 50, Theme.bg) : color} size={PILL_GLYPH} strokeWidth={deployState === 'failed' ? 3 : undefined} />;
+        })()
       ) : (
-        <MobileIdentityFace row={identityRow} size={12} fallback={<Feather name={TYPE_ICON[type]} size={10} color={color} />} />
+        <MobileIdentityFace row={identityRow} size={12} fallback={<EntityKindIcon type={type} size={PILL_GLYPH} color={color} />} />
       )}
       {isSession && entity?.status === 'active' && <RNText style={{ color: Theme.greenBright, fontSize: 8 }}>{' '}●</RNText>}
       {/* NBSP so the icon never strands on the previous line when the pill wraps */}
