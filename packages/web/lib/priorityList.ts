@@ -116,6 +116,17 @@ export type SessionLine = PriorityLinkedSession & { target: string; href: string
 /** The mark a session's row draws (both apps): its inbox's mark (Done's check, the stash tray, an error), else its own state's. */
 export const sessionRowMark = (s: Pick<SessionLine, "mark" | "state">): SessionStatus => s.mark ?? s.state;
 
+/**
+ * The mark a session's row draws on a milestone: its own (sessionRowMark),
+ * except that a settled one (Done or Closed) whose work reached main (the
+ * server's `shipped`) draws done, so shipped work never reads as merely closed.
+ */
+export function sessionRowStatus(s: Pick<SessionLine, "mark" | "state" | "shipped">): { mark: SessionStatus; shipped: boolean } {
+  const mark = sessionRowMark(s);
+  const shipped = !!s.shipped && (mark === "done" || mark === "killed");
+  return { mark: shipped ? "done" : mark, shipped };
+}
+
 export type MilestoneModel = {
   key: string;
   tier: PriorityStep["tier"];

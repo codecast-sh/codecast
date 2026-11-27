@@ -477,11 +477,16 @@ test("the page: a milestone's ⋯ writes as on the list, and the header's ⋯ ho
     await page.waitFor(() => !!page.container.querySelector("[data-milestones]"));
     await choose(page.container.querySelector('[data-milestones] [data-milestone-menu="s1"]')!, '[data-act="step-done"]');
     expect(stored("pri-2").steps[0].done).toBe(true);
-    expect(page.container.querySelector('[data-milestones] [data-section="done"]')!.textContent).toBe("Done 1");
+    // No sections on the page: the done milestone stays in the one list, last, still open.
+    expect(page.container.querySelector("[data-milestones] [data-section]")).toBeNull();
+    const s1 = () => page.container.querySelector('[data-milestones] li[data-milestone="s1"]')!;
+    expect(s1().getAttribute("data-state")).toBe("done");
+    expect(page.container.querySelector("[data-milestones] li[data-milestone]:last-child")).toBe(s1());
     expect(await dispatched("setPriorityStepDone")).toEqual([["pri-2", "s1", true]]);
-    await press(page.container.querySelector('[data-milestones] [data-section="polish"]')!);
+    // A polish milestone is in the list as it is, marked Polish beside its title, and its ⋯ makes it critical.
+    expect(page.container.querySelector('[data-milestones] [data-milestone="p1"] [data-polish]')).not.toBeNull();
     await choose(page.container.querySelector('[data-milestones] [data-milestone-menu="p1"]')!, '[data-act="tier"]');
-    expect(page.container.querySelector('[data-section="polish"]')).toBeNull();
+    expect(page.container.querySelector('[data-milestones] [data-milestone="p1"] [data-polish]')).toBeNull();
     expect(await dispatched("setPriorityStepTier")).toEqual([["pri-2", "p1", "critical"]]);
     await key(page.container.querySelector('[data-priority-menu="pri-2"]')!, "Enter");
     expect([...document.querySelectorAll('[role="menuitem"]')].map((n) => n.getAttribute("data-act"))).toEqual(["rename", "move-up", "move-down", "move-to", "mark-done", "set-aside", "merge", "correct", "copy-link"]);

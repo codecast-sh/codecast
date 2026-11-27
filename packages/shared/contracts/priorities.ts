@@ -197,6 +197,8 @@ export type PriorityLinkedSession = {
   why: PriorityLinkWhy[];
   /** Its last activity, to the 10 minutes (a heartbeat leaves the list's answer as it was). */
   last_active_at: number;
+  /** Set only on a closed (done or killed) session one of whose commits reached its repository's default branch: its work shipped. */
+  shipped?: true;
 };
 
 export type PriorityPlanRef = { short_id: string; title: string; done: number; total: number; size: number };

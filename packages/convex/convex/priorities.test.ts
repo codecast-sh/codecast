@@ -259,6 +259,29 @@ describe("reads", () => {
     expect(states.jx7agan).toBe("idle");
   });
 
+  test("a closed session one of whose commits reached main is shipped; a closed one whose commits never did, and a live one, are not", async () => {
+    const { t, as, ada, acme, ws, p1 } = await world();
+    await t.run(async (ctx) => {
+      const conv = (short_id: string, fields: Record<string, unknown>) => ctx.db.insert("conversations", {
+        user_id: ada, team_id: acme, agent_type: "claude_code", session_id: short_id, short_id, title: `Session ${short_id}`,
+        started_at: NOW, updated_at: NOW, message_count: 3, is_private: false, team_visibility: "full", status: "active",
+        priority_id: p1, priority_step_key: "s2", ...fields,
+      } as any);
+      const commit = (conversation_id: Id<"conversations">, sha: string, main_at?: number) => ctx.db.insert("commits", {
+        conversation_id, sha, message: "m", author_name: "Ada", author_email: "a@x", timestamp: NOW, files_changed: 1, insertions: 1, deletions: 0, repository: "o/r",
+        ...(main_at ? { main_at } : {}),
+      } as any);
+      const shipped = await conv("jx7ship", { inbox_killed_at: NOW });
+      await commit(shipped, "aaa1", NOW - DAY);
+      await commit(shipped, "aaa2");
+      await commit(await conv("jx7kept", { inbox_killed_at: NOW }), "bbb1");
+      await commit(await conv("jx7live", {}), "ccc1", NOW - DAY);
+    });
+    const [row] = await rowsOf(as(ada), { workspace: ws });
+    const shipped = Object.fromEntries(row.links.find((l: any) => l.key === "s2").sessions.map((s: any) => [s.short_id, s.shipped ?? false]));
+    expect(shipped).toMatchObject({ jx7ship: true, jx7kept: false, jx7live: false });
+  });
+
   test("history names today's sessions no priority holds, for the No priority share", async () => {
     const { as, ada, ws } = await world();
     const res = await as(ada).query(pri.history, { days: 10, workspace: ws });
