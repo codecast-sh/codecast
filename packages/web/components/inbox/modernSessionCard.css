@@ -61,3 +61,14 @@
 .modern-style .inbox-compact [data-sv-rail] [data-mc] [data-mc-compact-rank] {
   display: inline-flex;
 }
+
+/* The section header's mark and label line up with the cards' icon column and
+   title edge: the floating cards sit 6px in behind a 1px border with 12px of
+   padding, the compact list's rows 1px in. */
+:root.modern-style .simple-view [data-mc-sec] {
+  padding-left: 18.5px;
+}
+:root.modern-style .simple-view.inbox-compact [data-mc-sec],
+:root.modern-style .simple-view .inbox-compact [data-mc-sec] {
+  padding-left: 12.5px;
+}

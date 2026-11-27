@@ -7,7 +7,9 @@ import { SessionStatusMark } from "./SessionStatusMark";
 // The rail's section header in the Modern style: one quiet look for every
 // section (All, Needs you, Working, Done, Dormant, a label, a plan, a role):
 // the state's mark when the section is a state, an 11px capital label, the
-// count, then a hairline to the edge. Sticky and opaque, 32px tall (the rows'
+// count, then a hairline to the edge. The mark sits in the cards' 20px icon
+// column and the label on their title edge (modernSessionCard.css sets the
+// inset each list density needs). Sticky and opaque, 32px tall (the rows'
 // scroll margin assumes it), with the data attributes SectionHeader carries.
 
 // What a role group's tallies count (SectionHeader's HEADER_STATES), in the
@@ -52,7 +54,7 @@ export function ModernSectionHeader({
   const chevron = <ChevronDown aria-hidden className={`h-3.5 w-3.5 shrink-0 text-sol-text-dim transition-transform ${collapsed ? "-rotate-90" : ""}`} />;
   const caption = (
     <>
-      <span className="flex shrink-0 items-center">{lead}</span>
+      <span data-mc-sec-lead className="flex w-5 shrink-0 items-center justify-center">{lead}</span>
       <span className={nameLabel ? "min-w-0 truncate text-sm font-medium text-sol-text" : monoLabel ? "min-w-0 truncate font-mono text-meta font-medium text-sol-text-muted" : "min-w-0 truncate text-mark font-semibold uppercase tracking-[0.08em] text-sol-text-muted"}>
         {label}
       </span>

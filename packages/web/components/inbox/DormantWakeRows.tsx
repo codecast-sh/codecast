@@ -45,7 +45,7 @@ export function DormantWakeRow({ session, rows, isActive, onOpen, onOpenSchedule
         onClick={() => (wake.kind === "trigger" ? onOpenSchedule(wake.row) : onOpen(session))}
         title={warn ?? "Open"}
       >
-        <SchedChildArrow label="What wakes this session" className="text-sol-text-dim/70" />
+        <SchedChildArrow slot label="What wakes this session" className="text-sol-text-dim/70" />
         <span className={`text-meta truncate min-w-0 ${warn ? "text-sol-yellow/90" : "text-sol-text-dim"}`}>{what}</span>
         <span className={`ml-auto shrink-0 whitespace-nowrap text-meta tabular-nums ${warn ? "text-sol-yellow/90" : "text-sol-text-dim"}`}><WakeWhen when={when} /></span>
       </button>
@@ -118,13 +118,7 @@ function WakeReasonRowShell({ isActive, family, title, detail, badge, badgeClass
         title="Open the session"
       >
         <div className="flex items-center gap-1.5 min-w-0">
-          <span className="flex items-center shrink-0 text-sol-blue/70" role="img" aria-label={ariaLabel}>
-            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-              <title>{ariaLabel}</title>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 4v12h12" />
-              <path strokeLinecap="round" strokeLinejoin="round" d="M14 12l4 4-4 4" />
-            </svg>
-          </span>
+          <SchedChildArrow slot label={ariaLabel} className="text-sol-blue/70" />
           {/* One line, in the folded strip's type: family, what it waits on,
               where that came from, and the wake's state when it has one. */}
           <div className="min-w-0 flex-1 flex items-center gap-1.5">
