@@ -387,8 +387,9 @@ function returnFocus(host: HTMLElement | null) {
  * the person left on purpose (a press outside the box, or Tab), which keeps
  * it. A browser extension can swallow Escape and just blur the box, and a
  * window switch blurs it too: neither may save an edit the person was
- * abandoning. Uncontrolled, so typing commits nothing. Ended by Enter or
- * Escape, focus goes back to the title (returnFocus), never to the page.
+ * abandoning. Uncontrolled, so typing commits nothing. Ended by Enter,
+ * Escape or a bare blur, focus goes back to the title (returnFocus), never to
+ * the page.
  */
 export function MilestoneTitleInput({ title, onDone, className, label = "Milestone title" }: { title: string; onDone: (title: string | null) => void; className?: string; label?: string }) {
   const done = useRef(false);
@@ -425,7 +426,13 @@ export function MilestoneTitleInput({ title, onDone, className, label = "Milesto
         finish(e.key === "Enter" ? e.currentTarget.value : null);
         returnFocus(host);
       }}
-      onBlur={(e) => finish(leaving.current ? e.currentTarget.value : null)}
+      onBlur={(e) => {
+        if (leaving.current) return finish(e.currentTarget.value);
+        // A bare blur is a cancel (an Escape an extension ate): focus goes back to the title, as Escape's does, never to the page.
+        const host = e.currentTarget.parentElement;
+        finish(null);
+        returnFocus(host);
+      }}
       className={cn("min-w-0 flex-1 rounded-control border border-sol-border bg-sol-bg px-1.5 py-0.5 text-[16px] text-sol-text focus:border-sol-text-dim focus:outline-none sm:text-ui", className)}
     />
   );
