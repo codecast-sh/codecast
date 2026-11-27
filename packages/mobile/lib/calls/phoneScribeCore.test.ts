@@ -319,4 +319,23 @@ describe("phone scribe", () => {
     expect(h.log).toContain("flush");
     expect(h.engine.getStatus().active).toBe(false);
   });
+
+  test("an offline hang-up gives up on the flush after a few seconds, and the next call scribes", async () => {
+    const h = await scribing({ flush: () => new Promise<void>(() => {}) });
+    h.call.phase = "idle";
+    h.call.roomKey = null;
+    let left = false;
+    const leaving = h.scribe.finishForLeave().then(() => (left = true));
+    await settle();
+    expect(left).toBe(false);
+    h.advance(3_000);
+    await leaving;
+    h.log.length = 0;
+    h.call.phase = "connected";
+    h.call.roomKey = "session:c2";
+    h.scribe.reconcile();
+    h.live(null);
+    await settle();
+    expect(h.log).toContain("start");
+  });
 });

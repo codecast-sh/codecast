@@ -54,6 +54,9 @@ export const PIPE_RETRY_MAX_MS = 60_000;
 // Silence fed after a mute so the turn being spoken closes, before the mic is
 // closed: a muted huddle opens no mic (no indicator, no frames, no billing).
 export const MUTE_TAIL_MS = 1_000;
+// How long a hang-up or hand-over waits on the flush: offline, it never
+// answers, and the next call must not wait behind it.
+export const FLUSH_WAIT_MS = 3_000;
 
 /** The room this phone sits in: connected, or reconnecting to the same room. */
 function seatedRoom(call: PhoneCallView): string | null {
@@ -110,7 +113,9 @@ export function createPhoneScribe(d: PhoneScribeDeps) {
   async function retire(o: { graceful: boolean; keepLive: boolean; releaseRoom?: string }): Promise<void> {
     const id = engine.getStatus().transcriptId;
     await engine.stop({ keepLive: o.keepLive, graceful: o.graceful });
-    if (o.graceful && id) await d.flush(id).catch(() => {});
+    if (o.graceful && id) {
+      await Promise.race([d.flush(id).catch(() => {}), new Promise<void>((r) => d.later(r, FLUSH_WAIT_MS))]);
+    }
     if (o.releaseRoom) await d.release(o.releaseRoom).catch(() => {});
     tap?.close();
     tap = null;
