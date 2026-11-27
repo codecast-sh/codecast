@@ -88,6 +88,30 @@ describe("landedCommit", () => {
     git(other, "push", "-q", "origin", "HEAD:main");
     expect(await landedCommit(work, "replay", "main")).toEqual({ sha: git(other, "rev-parse", "HEAD"), files: ["api/b.ts"] });
   });
+
+  // A run directory whose worktree lost its .git file reads as a subdirectory of the checkout around it, and git takes
+  // a path after `--` from where it stands: two Union runs waited at Deploy from Nov 22 for squashes main held
+  // (ct-98870, ct-99025).
+  test("a change reads as landed from a subdirectory of the checkout too", async () => {
+    git(other, "pull", "-q", "--rebase", "origin", "main");
+    git(work, "fetch", "-q", "origin", "main");
+    git(work, "checkout", "-q", "-b", "sub", "origin/main");
+    const start = git(work, "rev-parse", "HEAD");
+    write(work, "api/d.ts", "d1\n");
+    git(work, "add", "-A");
+    git(work, "commit", "-qm", "sub change");
+    write(other, "web/w.ts", "w4\n");
+    git(other, "commit", "-qam", "main moves elsewhere");
+    git(other, "push", "-q", "origin", "HEAD:main");
+    write(other, "api/d.ts", "d1\n");
+    git(other, "add", "-A");
+    git(other, "commit", "-qm", "squashed sub change");
+    git(other, "push", "-q", "origin", "HEAD:main");
+    const squashed = { sha: git(other, "rev-parse", "HEAD"), files: ["api/d.ts"] };
+    const inside = path.join(work, "web");
+    expect(await landedCommit(inside, "sub", "main")).toEqual(squashed);
+    expect(await landedCommit(inside, "sub", "main", { since: start, known: ["api/d.ts"] })).toEqual(squashed);
+  });
 });
 
 // A false "landed" sends a change that never merged on to Deploy, which then ends Live. Each case below is a change

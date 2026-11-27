@@ -13,6 +13,9 @@ import { defaultExec } from "../lineMerge.js";
 import { git, gitTry } from "../wipSnapshot.js";
 import { mergeTree } from "./gitMergeTree.js";
 
+/** A repository path as git reads it from anywhere in the checkout, never from the directory the station stands in. */
+const fromTop = (file: string) => `:(top,literal)${file}`;
+
 /**
  * The commit on `base` that carries the change on `branch`: the branch itself once main holds it (a fast-forward or
  * a merge), else the commit whose every file reads as the branch left it (a squash), else the first commit that
@@ -29,7 +32,7 @@ export async function landedCommit(cwd: string, branch: string, base: string, op
   const upstream = `origin/${base}`;
   const tip = (await git(cwd, ["rev-parse", branch])).trim();
   if (opts.since) {
-    const diff = await git(cwd, ["diff", "--name-only", "--no-renames", opts.since, tip, ...(opts.known?.length ? ["--", ...opts.known] : [])]).catch(() => "");
+    const diff = await git(cwd, ["diff", "--name-only", "--no-renames", opts.since, tip, ...(opts.known?.length ? ["--", ...opts.known.map(fromTop)] : [])]).catch(() => "");
     if (!diff.trim()) return null;
   }
   // The branch's own commits along its first parent: a merge of main into the branch brings main's files, not the change's.
@@ -44,7 +47,7 @@ export async function landedCommit(cwd: string, branch: string, base: string, op
   if (!files.length) return null;
   const blob = (rev: string, f: string) => gitTry(cwd, ["rev-parse", "-q", "--verify", `${rev}:${f}`]).then((s) => s?.trim() ?? "");
   const want = await Promise.all(files.map((f) => blob(tip, f)));
-  const candidates = (await git(cwd, ["log", "--reverse", "--format=%H", `${fork}..${upstream}`, "--", ...files])).split("\n").filter(Boolean);
+  const candidates = (await git(cwd, ["log", "--reverse", "--format=%H", `${fork}..${upstream}`, "--", ...files.map(fromTop)])).split("\n").filter(Boolean);
   // Main holds all of the branch at `c` when merging the branch into it changes nothing. That is the proof: a match of
   // the change's files alone misses what lies outside them (a branch merged into this one, files the run did not
   // list, a mode change the blobs do not show).
