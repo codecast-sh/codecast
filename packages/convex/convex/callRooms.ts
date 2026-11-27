@@ -317,23 +317,30 @@ export async function sessionIsOwnerOnly(ctx: any, conversation: Doc<"conversati
 }
 
 // A team every one of `users` belongs to, walking the first user's
-// memberships. A people room bills its rows to that team; a set with no
-// common team has no room.
+// memberships. A people room bills its rows to that team: the first common
+// one that can hold calls (callTeamsOf), else the first common one, so
+// authorizeRoom's feature gate says why calls are off. A set with no common
+// team has no room.
 async function sharedTeam(
   ctx: any,
   users: Id<"users">[],
 ): Promise<Id<"teams"> | null> {
   const [first, ...rest] = users;
+  const sharedByAll = async (teamId: Id<"teams">) => {
+    for (const other of rest) {
+      if (!(await isTeamMember(ctx, other, teamId))) return false;
+    }
+    return true;
+  };
+  for (const teamId of (await callTeamsOf(ctx, first)).teams) {
+    if (await sharedByAll(teamId)) return teamId;
+  }
   const memberships = await ctx.db
     .query("team_memberships")
     .withIndex("by_user_id", (q: any) => q.eq("user_id", first))
     .collect();
   for (const m of memberships) {
-    let all = true;
-    for (const other of rest) {
-      if (!(await isTeamMember(ctx, other, m.team_id))) { all = false; break; }
-    }
-    if (all) return m.team_id;
+    if (await sharedByAll(m.team_id)) return m.team_id;
   }
   return null;
 }
