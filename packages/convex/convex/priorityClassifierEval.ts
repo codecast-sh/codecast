@@ -7,12 +7,12 @@
 // each what live would have done, as live would have seen it then:
 //   - a fork, spawn worker or handoff whose parent the replay placed takes
 //     its parent's placement, with no call (lib/priorityLinks inheritLink);
-//   - else the classifier is asked at the session's first title (taken as its
-//     first typed message) or first pin, whichever came first, and once more
-//     at its first pin when the title's ask said "new"
-//     (lib/priorityClassifierHook asksNow), each through sessionFor `asOf`
-//     that moment: only the typed messages and task links made by then, the
-//     pin only for a pin's ask, and no `serves` hint.
+//   - else the classifier is asked at each of the person's typed messages and
+//     each pin in the window, in order, until an answer files the session
+//     (lib/priorityClassifierHook asksNow), at most ASKS_PER_SESSION, each
+//     through sessionFor `asOf` that moment: only what the person typed and
+//     the task links made by then, the pin as it stood, its first generated
+//     title (live reads the title it has then), and no `serves` hint.
 // Only sessions live would ask about (classifierReads) are asked. A placement
 // joins its milestone in memory, so later sessions see it as an example, as
 // they would live. Calls go on codecast's own key. Internal, so staff run it
@@ -23,13 +23,16 @@ import { internalAction, internalQuery } from "./functions";
 import { internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
 import { classifierPriorities, type ClassifierChoice, type ClassifierSession, type ClassifierTask } from "./lib/priorityClassifier";
-import { classifierReads } from "./lib/priorityClassifierHook";
+import { ASKS_PER_SESSION, classifierReads } from "./lib/priorityClassifierHook";
 import type { PassPriority } from "./lib/priorityPass";
 import { LATE_MARGIN_MS, MINUTE, type PassInputs } from "./priorityPassInputs";
 import { classifierTasks, classifyOnce, sessionFor } from "./priorityClassifier";
 
 // Codegen catches up on the next push.
 const fns = internal as any;
+
+/** Sessions one evalFacts query reads. */
+const FACTS_PER_QUERY = 6;
 
 /** The most asks `every_message` makes of one session, and the typed messages it reads to pick them. */
 const EVERY_MESSAGE_ASKS = 30;
@@ -107,35 +110,40 @@ export const evalFacts = internalQuery({
         if (parent) sessions.push({ id: String(conv._id), title: conv.title ?? "", last_active: first_at, parent, asks: [] });
         continue;
       }
+      // What the person typed in the window (the per-send log the live classifier reads), a picked card option aside.
+      const until = args.until ?? Number.MAX_SAFE_INTEGER;
+      const sends: Doc<"user_sends">[] = (await ctx.db
+        .query("user_sends")
+        .withIndex("by_conversation_timestamp", (q) => q.eq("conversation_id", conv._id).gte("timestamp", first_at).lte("timestamp", until))
+        .take(TYPED_SCAN))
+        .filter((m: Doc<"user_sends">) => !m.decision?.picked);
+      const truncated = sends.length === TYPED_SCAN ? { truncated: true } : {};
+      const read = (trigger: EvalAsk["trigger"], at: number, chars?: number): Promise<EvalAsk> =>
+        sessionFor(ctx, conv, args.workspace, { at, pin: trigger !== "title" }).then((session) => ({ trigger, at, session, ...(chars === undefined ? {} : { chars }) }));
+      const asks: EvalAsk[] = [];
       if (args.every_message) {
-        const typed: Doc<"messages">[] = await ctx.db
-          .query("messages")
-          .withIndex("by_conversation_nav_prompt", (q) => q.eq("conversation_id", conv._id).eq("nav_prompt", true).gte("timestamp", first_at).lte("timestamp", args.until ?? Number.MAX_SAFE_INTEGER))
-          .take(TYPED_SCAN);
-        const step = Math.max(1, Math.ceil(typed.length / EVERY_MESSAGE_ASKS));
-        const asks: EvalAsk[] = [];
+        const step = Math.max(1, Math.ceil(sends.length / EVERY_MESSAGE_ASKS));
         let chars = 0;
-        for (const [i, m] of typed.entries()) {
-          chars += m.content?.length ?? 0;
+        for (const [i, m] of sends.entries()) {
+          chars += m.text.length;
           if (i % step) continue;
-          asks.push({ trigger: "message", at: m.timestamp, chars, session: await sessionFor(ctx, conv, args.workspace, { at: m.timestamp, pin: true }) });
+          asks.push(await read("message", m.timestamp, chars));
           chars = 0;
         }
-        // A session with more typed messages in the window than TYPED_SCAN is read over its first TYPED_SCAN, and says so.
-        // One with none typed there (only pins moved it) is asked as live asks: at its title and first pin.
-        if (asks.length) {
-          sessions.push({ id: String(conv._id), title: conv.title ?? "", last_active: first_at, parent, asks, ...(typed.length === TYPED_SCAN ? { truncated: true } : {}) });
-          continue;
-        }
+      } else {
+        // Live's moments (lib/priorityClassifierHook): each typed message and each pin, in order; the replay reads them until the first filing.
+        const pins: Doc<"thread_state_events">[] = await ctx.db
+          .query("thread_state_events")
+          .withIndex("by_conversation_at", (q) => q.eq("conversation_id", conv._id).gte("at", first_at).lte("at", until))
+          .take(ASKS_PER_SESSION);
+        const moments = [...sends.map((m) => ({ trigger: "message" as const, at: m.timestamp })), ...pins.map((p) => ({ trigger: "pin" as const, at: p.at }))]
+          .sort((a, b) => a.at - b.at)
+          .slice(0, ASKS_PER_SESSION);
+        for (const m of moments) asks.push(await read(m.trigger, m.at));
       }
-      const firstTyped = await ctx.db.query("messages").withIndex("by_conversation_nav_prompt", (q) => q.eq("conversation_id", conv._id).eq("nav_prompt", true)).first();
-      const firstPin = await ctx.db.query("thread_state_events").withIndex("by_conversation_at", (q) => q.eq("conversation_id", conv._id)).first();
-      const titleAt = firstTyped?.timestamp ?? first_at;
-      const ask = async (trigger: "title" | "pin", at: number): Promise<EvalAsk> => ({ trigger, at, session: await sessionFor(ctx, conv, args.workspace, { at, pin: trigger === "pin" }) });
-      const asks = firstPin && firstPin.at <= titleAt
-        ? [await ask("pin", firstPin.at)]
-        : [await ask("title", titleAt), ...(firstPin ? [await ask("pin", firstPin.at)] : [])];
-      sessions.push({ id: String(conv._id), title: conv.title ?? "", last_active: first_at, parent, asks });
+      // Nothing typed or pinned in the window: asked once at its first activity, under the title it has.
+      if (!asks.length) asks.push(await read("title", first_at));
+      sessions.push({ id: String(conv._id), title: conv.title ?? "", last_active: first_at, parent, asks, ...truncated });
     }
     return { sessions, tasks: [...(await classifierTasks(ctx, args.tasks, args.workspace)).values()] };
   },
@@ -159,11 +167,19 @@ export const evalClassify = internalAction({
       if (result.sessions_read.length && Date.now() - started > EVAL_CHUNKS_START_WITHIN_MS) return { ...result, priorities: state.priorities, resume: state };
       const read: PassInputs = await ctx.runQuery(fns.priorityPassInputs.passInputs, { user_id: args.user_id, workspace: args.workspace, now, window_start: state.cursor_at });
       const firstAt = (s: PassInputs["input"]["sessions"][number]) => Math.min(...[...s.typed, ...s.pin_events].map((r) => r.at), s.last_active);
-      const facts: { sessions: EvalSession[]; tasks: ClassifierTask[] } = await ctx.runQuery(fns.priorityClassifierEval.evalFacts, {
-        workspace: args.workspace,
-        sessions: read.input.sessions.filter((s) => s.kind !== "role").map((s) => ({ conversation_id: read.conversations[s.id]!, first_at: firstAt(s) })),
-        tasks: tasks ? [] : taskIds,
-      });
+      // A few sessions a query: each may carry up to ASKS_PER_SESSION reads, and a query has a read limit.
+      const wanted = read.input.sessions.filter((s) => s.kind !== "role").map((s) => ({ conversation_id: read.conversations[s.id]!, first_at: firstAt(s) }));
+      const facts: { sessions: EvalSession[]; tasks: ClassifierTask[] } = { sessions: [], tasks: [] };
+      for (let i = 0; i < Math.max(wanted.length, 1); i += FACTS_PER_QUERY) {
+        const part: { sessions: EvalSession[]; tasks: ClassifierTask[] } = await ctx.runQuery(fns.priorityClassifierEval.evalFacts, {
+          workspace: args.workspace,
+          sessions: wanted.slice(i, i + FACTS_PER_QUERY),
+          tasks: tasks || facts.tasks.length ? [] : taskIds,
+          until: now,
+        });
+        facts.sessions.push(...part.sessions);
+        if (!facts.tasks.length) facts.tasks = part.tasks;
+      }
       tasks ??= new Map(facts.tasks.map((t) => [t.short_id, t]));
       result.sessions_read.push(...read.input.sessions.map((s) => ({ id: String(read.conversations[s.id] ?? s.id), title: s.title })));
       // One at a time, as live: each session sees the ones placed before it.

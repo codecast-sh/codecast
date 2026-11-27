@@ -617,15 +617,16 @@ function readClassifierFacts(user_id: string, workspace: string, window_start: n
     facts.person = read.input.person;
     const firstAt = (s: (typeof read.input.sessions)[number]) => Math.min(...[...s.typed, ...s.pin_events].map((r) => r.at), s.last_active);
     const wanted = read.input.sessions.filter((s) => s.kind !== 'role').map((s) => ({ conversation_id: read.conversations[s.id], first_at: firstAt(s) }));
-    // An ask per message reads far more per session: a few sessions a call keeps each query inside Convex's read limit.
-    const per = everyMessage ? 6 : wanted.length || 1;
+    // A session carries up to a dozen reads (thirty with an ask a message): a few sessions a call keeps each query inside Convex's read limit.
+    const per = 6;
     const chunk: { sessions: EvalSession[] } = { sessions: [] };
     for (let i = 0; i < Math.max(wanted.length, 1); i += per) {
       const part = convexRun<{ sessions: EvalSession[]; tasks: ClassifierTask[] }>('priorityClassifierEval:evalFacts', {
         workspace,
         sessions: wanted.slice(i, i + per),
         tasks: facts.tasks.length ? [] : taskIds,
-        ...(everyMessage ? { every_message: true, until: window_end } : {}),
+        until: window_end,
+        ...(everyMessage ? { every_message: true } : {}),
       });
       if (!facts.tasks.length) facts.tasks = part.tasks;
       chunk.sessions.push(...part.sessions);

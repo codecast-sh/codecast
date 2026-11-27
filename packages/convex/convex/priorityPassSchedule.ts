@@ -7,7 +7,7 @@ import { v } from "convex/values";
 import { internalMutation } from "./functions";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { PASS_DEBOUNCE_MS, PASS_MIN_GAP_MS, nextPassDue, passOn, pending, scheduleRow } from "./lib/priorityPassSchedule";
+import { PASS_DEBOUNCE_MS, PASS_SOON_MS, nextPassDue, passOn, pending, scheduleRow } from "./lib/priorityPassSchedule";
 import { DAY, MINUTE, RESERVATION_TTL_MS } from "./priorityPassInputs";
 import { PRIORITY_PASS_DAILY_USD, isPaidRun, runsOfDay } from "./priorityPassRun";
 
@@ -33,9 +33,10 @@ const median = (xs: number[]) => {
 
 /**
  * When the pair's next automatic pass may start, from its runs of the last
- * day (newest first): PASS_MIN_GAP_MS after the last run that asked the model
- * or still holds the pair, and once a token bucket of dollars holds one
- * expected pass (the median of the day's passes, a chain counted as one).
+ * day (newest first): once a token bucket of dollars holds one expected pass
+ * (the median of the day's passes, a chain counted as one). No fixed gap
+ * between passes (Jason, Nov 26): spend paces them, and a pass already
+ * running coalesces the next ask into itself (runPass).
  *
  * The bucket refills at PASS_PACE_SHARE of PRIORITY_PASS_DAILY_USD a day and
  * holds PASS_BUCKET_PASSES expected passes, but never more than the ceiling
@@ -68,7 +69,7 @@ export function passAllowedAt(day: Doc<"priority_pass_runs">[], now: number, cei
   }
   level = Math.min(capacity, level + (now - at) * perMs);
   const ready = level >= expected ? now : now + (expected - level) / perMs;
-  return Math.max(last.started_at + PASS_MIN_GAP_MS, ready);
+  return ready;
 }
 
 /** When the pair's next pass may start by its spend (passAllowedAt). */
@@ -88,9 +89,17 @@ export async function scheduledPassAt(ctx: { db: any }, userId: Id<"users">, wor
  * needs the feature on where it would write. Returns when it is due, or null
  * when nothing changed.
  */
-async function requestPass(ctx: { db: any; scheduler: any }, userId: Id<"users">, workspace: string, delayMs: number): Promise<number | null> {
+async function requestPass(ctx: { db: any; scheduler: any }, userId: Id<"users">, workspace: string, delayMs: number, soon = false): Promise<number | null> {
   const now = Date.now();
   const row = await scheduleRow(ctx, userId, workspace);
+  // A "soon" ask moves a pass pending later to now + delayMs: a new job and token, so the later job stands down when it fires.
+  if (soon && pending(row, now) && now + delayMs < row.due_at) {
+    const token = now;
+    const due_at = now + delayMs;
+    await ctx.scheduler.runAt(due_at, self.fire, { user_id: userId, workspace, token });
+    await ctx.db.patch(row._id, { due_at, token });
+    return due_at;
+  }
   const next = nextPassDue(row, now, delayMs);
   if (!next) return null;
   if (pending(row, now)) {
@@ -106,10 +115,11 @@ async function requestPass(ctx: { db: any; scheduler: any }, userId: Id<"users">
   return next.due_at;
 }
 
-/** What a hook asks for (lib/priorityPassSchedule passActivity): a pass PASS_DEBOUNCE_MS after this activity. */
+/** What a hook asks for: a pass PASS_DEBOUNCE_MS after this activity (passActivity), or PASS_SOON_MS and earlier than one pending (passSoon). */
 export const request = internalMutation({
-  args: pair,
-  handler: async (ctx, args): Promise<number | null> => requestPass(ctx, args.user_id, args.workspace, PASS_DEBOUNCE_MS),
+  args: { ...pair, soon: v.optional(v.boolean()) },
+  handler: async (ctx, args): Promise<number | null> =>
+    requestPass(ctx, args.user_id, args.workspace, args.soon ? PASS_SOON_MS : PASS_DEBOUNCE_MS, !!args.soon),
 });
 
 /** The pair's job: stands down when another job owns the row, waits while the pass is not due or the gap holds it, else starts the pass. */

@@ -85,7 +85,7 @@ export type PassSession = {
   /** What the person typed in it, oldest first. */
   typed: Array<{ at: number; text: string }>;
   /** The person put it on this priority (and step), or a known link or the classifier did (`by`): it stays there. */
-  placed?: { priority: string; step_key: string | null; by?: "link" | "classifier" };
+  placed?: { priority: string; step_key: string | null; by?: "link" };
   /** Priorities the person said it is not part of. */
   not_for?: string[];
   /** What its agent last said it serves (`cast state --serves`, "pri-N" or "pri-N/sK"): a hint, never a link. */
@@ -106,8 +106,8 @@ export type PassPriority = {
   serves: string | null;
   steps: PriorityStep[];
   last_active_at: number;
-  /** Sessions mapped to it now, with the step each serves and when it last moved; `by_person` when the person put it there, `linked_by` when a known link or the classifier did (it stays, too). */
-  sessions: Array<{ id: string; title: string; step_key: string | null; last_active: number; by_person?: boolean; linked_by?: "link" | "classifier" }>;
+  /** Sessions mapped to it now, with the step each serves and when it last moved; `by_person` when the person put it there, `linked_by` when a known link did (it stays, too). */
+  sessions: Array<{ id: string; title: string; step_key: string | null; last_active: number; by_person?: boolean; linked_by?: "link" }>;
   /** It lost a session that left the workspace or was deleted: the reply must write its title and summary again from what is shown. */
   needs_rewrite?: boolean;
   /** The highest milestone key number it ever held: new keys come after it (prioritiesSchema step_key_max). */
@@ -167,7 +167,7 @@ The person's own settings are fixed facts; anything you return that changes one 
 - A step whose title, tier or done state is marked "set by the person" keeps it: return it as shown.
 - A step the person dropped is gone for good: never propose it again, under its own name or a similar one.
 - A priority marked done by the person stays done, and is never merged.
-- A session placed by the person stays where they put it, and so does a session linked by what started it or by the classifier. A session "not part of" a priority never goes to that priority.
+- A session placed by the person stays where they put it, and so does a session linked by what started it. A session "not part of" a priority never goes to that priority.
 - Corrections are the person telling you what the list gets wrong, in their words. Follow every one, even when the sessions seem to say otherwise.
 
 Writing:
@@ -256,8 +256,7 @@ function newestWithin<T extends { text: string }>(items: T[], each: number, tota
 }
 
 /** Who fixed a session where it is, as the prompt says it. */
-const placedBy = (by: "link" | "classifier" | undefined) =>
-  by === "link" ? "Linked by what started it" : by === "classifier" ? "Placed by the classifier" : "Placed by the person";
+const placedBy = (by: "link" | undefined) => (by === "link" ? "Linked by what started it" : "Placed by the person");
 
 function sessionBlock(s: PassSession): string {
   const c = PRIORITY_PASS_CAPS;
@@ -559,7 +558,7 @@ export function mergePriorities(input: PriorityPassInput, output: PriorityPassOu
   }
 
   // Sessions: every explicit list first, then sessions named in step refs, then the reply's unassigned, then sessions carried over from merges.
-  // A session the person placed (or a known link or the classifier did) stays put; one they said is not part of a priority never goes there.
+  // A session the person placed (or a known link did) stays put; one they said is not part of a priority never goes there.
   const placed = new Set<string>();
   const notFor = new Map<string, Set<string>>();
   for (const s of input.sessions) {

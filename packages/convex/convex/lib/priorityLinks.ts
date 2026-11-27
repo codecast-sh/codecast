@@ -311,7 +311,8 @@ export async function mappedMilestone(ctx: Ctx, conv: Conv): Promise<string | nu
 // ── Links ───────────────────────────────────────────────────────────────────
 
 /** Who linked a session, weakest first: the pass (unmarked), the classifier, a known link, the person. */
-const STRENGTH = { pass: 0, classifier: 1, link: 2, person: 3 } as const;
+// A classifier's filing is a first guess at the pass's strength: the pass may move it; a filed session the classifier leaves alone.
+const STRENGTH = { pass: 0, classifier: 0, link: 2, person: 3 } as const;
 type LinkedBy = "link" | "classifier" | "pass";
 const strengthOf = (by: Conv["priority_set_by"]) => STRENGTH[by ?? "pass"];
 

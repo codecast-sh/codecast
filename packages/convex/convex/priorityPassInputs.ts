@@ -245,12 +245,12 @@ function shortIds(ctx: { db: any }) {
   };
 }
 
-/** Where the person (or a known link or the classifier) put a session and which priorities they said it is not part of, as the pass shows them. */
+/** Where the person (or a known link) put a session and which priorities they said it is not part of, as the pass shows them. A classifier's filing is a first guess the pass may revise, so it shows as the pass's own. */
 async function personLinks(conv: Doc<"conversations">, shortId: (id: Id<"priorities">) => Promise<string | null>): Promise<Pick<PassSession, "placed" | "not_for">> {
   const out: Pick<PassSession, "placed" | "not_for"> = {};
   const by = conv.priority_set_by;
-  const placedOn = by && by !== "pass" && conv.priority_id ? await shortId(conv.priority_id) : null;
-  if (placedOn) out.placed = { priority: placedOn, step_key: conv.priority_step_key ?? null, ...(by === "link" || by === "classifier" ? { by } : {}) };
+  const placedOn = (by === "person" || by === "link") && conv.priority_id ? await shortId(conv.priority_id) : null;
+  if (placedOn) out.placed = { priority: placedOn, step_key: conv.priority_step_key ?? null, ...(by === "link" ? { by } : {}) };
   const not: string[] = [];
   for (const id of conv.priority_not ?? []) {
     const short = await shortId(id);
@@ -527,7 +527,7 @@ export const passInputs = internalQuery({
       for (const c of readable) {
         sessionsOf.push({
           id: await names.name(c), title: c.title ?? "", step_key: c.priority_step_key ?? null, last_active: c.thread_state_at ?? c.updated_at,
-          ...(c.priority_set_by === "person" ? { by_person: true } : c.priority_set_by === "link" || c.priority_set_by === "classifier" ? { linked_by: c.priority_set_by } : {}),
+          ...(c.priority_set_by === "person" ? { by_person: true } : c.priority_set_by === "link" ? { linked_by: c.priority_set_by } : {}),
         });
       }
       priorities.push({

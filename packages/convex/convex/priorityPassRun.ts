@@ -492,8 +492,9 @@ export const applyPlan = internalMutation({
     const { move, recount } = sessionMover(ctx);
 
     // The person's placement, a known link and the classifier's stand, and a priority they said a session is not part of never gets it.
+    // The pass may revise a classifier's filing (a first guess from a session's opening); never the person's or a known link's.
     const refused = (conv: Doc<"conversations">, to?: Id<"priorities">) =>
-      (!!conv.priority_set_by && conv.priority_set_by !== "pass") || (!!to && (conv.priority_not ?? []).some((id) => String(id) === String(to)));
+      conv.priority_set_by === "person" || conv.priority_set_by === "link" || (!!to && (conv.priority_not ?? []).some((id) => String(id) === String(to)));
     for (const s of plan.sessions) {
       const conv = await conversationOf(s.session);
       const priority = await resolve(s.priority);

@@ -7,8 +7,9 @@
 //
 // The pass runs PASS_DEBOUNCE_MS after the last ask of a burst, and no later
 // than PASS_MAX_WAIT_MS after its first, so steady activity cannot hold it off
-// for good. Automatic passes of one pair start at least PASS_MIN_GAP_MS apart,
-// and only when a token bucket of dollars, refilled at 80% of the daily
+// for good; a classifier's "new" asks with PASS_SOON_MS instead, so a new
+// priority shows while its session runs. Automatic passes of one pair start
+// only when a token bucket of dollars, refilled at 80% of the daily
 // ceiling a day, holds one more (priorityPassSchedule.ts passAllowedAt;
 // priorityPassRun PRIORITY_PASS_DAILY_USD, $5 a pair): dear passes spread
 // through the day instead of spending it by noon. Measured on
@@ -35,8 +36,12 @@ import { isTeamMember } from "../privacy";
 
 const MINUTE = 60_000;
 export const PASS_DEBOUNCE_MS = 10 * MINUTE;
+/**
+ * A classifier's "new" (a session none of the person's priorities holds) asks for a pass this soon: just past the
+ * pass's LATE_MARGIN_MS (priorityPassInputs), which reads only activity that old, so the pass sees the session that asked.
+ */
+export const PASS_SOON_MS = 6 * MINUTE;
 export const PASS_MAX_WAIT_MS = 30 * MINUTE;
-export const PASS_MIN_GAP_MS = 60 * MINUTE;
 /** A pending pass moved by less than this stays as it is: a burst of pins writes the row about once a minute. */
 export const PASS_DUE_SLACK_MS = MINUTE;
 /** A pending pass this far past its time lost its job (a fire that failed): the next ask schedules a new one. */
@@ -89,6 +94,16 @@ export async function passActivity(ctx: { db: any; scheduler?: any }, userId: Id
   // A pair with a row had the feature on when it was written; one without is checked here, so the feature off costs reads and no job.
   if (!row && !(await passOn(ctx, userId, workspace))) return;
   await ctx.scheduler.runAfter(0, (internal as any).priorityPassSchedule.request, { user_id: userId, workspace } satisfies Pair);
+}
+
+/**
+ * A classifier read a session none of the pair's priorities holds: their pass
+ * runs PASS_SOON_MS from now, earlier than any pass pending later, so the new
+ * priority shows while the session runs (priorityPassSchedule.request `soon`).
+ */
+export async function passSoon(ctx: { db: any; scheduler?: any }, userId: Id<"users">, workspace: string): Promise<void> {
+  if (!ctx.scheduler || !(await prioritiesOn(ctx, workspace)) || (await isBot(ctx, userId))) return;
+  await ctx.scheduler.runAfter(0, (internal as any).priorityPassSchedule.request, { user_id: userId, workspace, soon: true });
 }
 
 /** Activity in a session: its owner's pass in the workspace it counts in. A workflow's run log is never pass input. */

@@ -4837,6 +4837,8 @@ export default defineSchema({
     // One person's sends across every team and their personal workspace,
     // newest first: the Messages feed (userSends.mine).
     .index("by_user_timestamp", ["user_id", "timestamp"])
+    // One session's sends in order: what the person typed there, which the priorities classifier reads.
+    .index("by_conversation_timestamp", ["conversation_id", "timestamp"])
     .searchIndex("search_text", { searchField: "text", filterFields: ["user_id"] }),
 
   // Per-day token and spend counters (the "Tokens" and "Spend" chart

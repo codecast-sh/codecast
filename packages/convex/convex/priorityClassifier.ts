@@ -15,6 +15,7 @@ import { sessionTasks } from "./priorityPassInputs";
 import { linkSession } from "./lib/priorityLinks";
 import { sessionVisibility } from "./lib/prioritySessionVisibility";
 import { classifierOn, classifierReads, rerunUnassigned } from "./lib/priorityClassifierHook";
+import { passSoon } from "./lib/priorityPassSchedule";
 import {
   CLASSIFIER_CAPS,
   classifierPriorities,
@@ -83,12 +84,14 @@ async function candidatesFor(ctx: { db: any }, userId: Id<"users">, workspace: s
  * names priorities the replay does not hold.
  */
 export async function sessionFor(ctx: { db: any }, conv: Doc<"conversations">, workspace: string, asOf?: { at: number; pin: boolean }): Promise<ClassifierSession> {
-  const prompts: Doc<"messages">[] = await ctx.db
-    .query("messages")
-    .withIndex("by_conversation_nav_prompt", (q: any) => (asOf ? q.eq("conversation_id", conv._id).eq("nav_prompt", true).lte("timestamp", asOf.at) : q.eq("conversation_id", conv._id).eq("nav_prompt", true)))
+  // What the person typed (the per-send log), not every prompt-shaped message: in a person's sessions most of those are
+  // other agents' messages and reports posted under their name (Study 1, ct-102386: 5,423 of them against 641 typed).
+  const sends: Doc<"user_sends">[] = await ctx.db
+    .query("user_sends")
+    .withIndex("by_conversation_timestamp", (q: any) => (asOf ? q.eq("conversation_id", conv._id).lte("timestamp", asOf.at) : q.eq("conversation_id", conv._id)))
     .order("desc")
     .take(TYPED_READ);
-  const typed = prompts.reverse().flatMap((m) => (m.content?.trim() ? [m.content] : []));
+  const typed = sends.reverse().flatMap((s) => (s.text.trim() && !s.decision?.picked ? [s.text] : []));
   const tasks = await sessionTasks(ctx, conv, workspace, asOf?.at);
   if (asOf) {
     const pin: Doc<"thread_state_events"> | null = asOf.pin
@@ -155,7 +158,11 @@ export const settle = internalMutation({
     };
     if (args.skip) return done("skipped", { error: args.skip });
     if (args.error || !args.choice) return done("error", { error: args.error ?? "no choice" });
-    if (args.choice === "new") return done("new");
+    if (args.choice === "new") {
+      // None of the person's priorities holds it: their pass runs soon, so a new priority shows while the session runs.
+      await passSoon(ctx, row.user_id, row.workspace);
+      return done("new");
+    }
     const { priority: shortId, step } = args.choice;
     const p = await ctx.db.query("priorities").withIndex("by_short_id", (q) => q.eq("short_id", shortId)).first();
     const conv = await ctx.db.get(row.conversation_id);
