@@ -260,6 +260,50 @@ describe("flag on: the header's owners segment and menu", () => {
   });
 });
 
+describe("flag on: where it came from", () => {
+  const LEAD = "p".repeat(32);
+  const evals = { role_id: ROLE, short_id: "or-1", handle: "evals", name: "Eval Suite lead" };
+  beforeEach(() => seed(true, { released_parent: { conversation_id: LEAD, short_id: "jxlead1", title: "Lead session" }, released_role: evals }));
+
+  test("a taken-over session offers its parent and its role first, and Put back sends restore_parent", async () => {
+    await render(<OwnersSegment conversationId={S} />);
+    await click($("[data-owners-seg]"));
+    const menu = $("[data-owners-menu]")!;
+    const text = menu.textContent!;
+    expect(text.indexOf("Where it came from")).toBeGreaterThan(-1);
+    expect(text.indexOf("Where it came from")).toBeLessThan(text.indexOf("Teammates"));
+    expect($$("[data-owner-candidate]").slice(0, 2).map((c) => c.dataset.ownerCandidate)).toEqual([`s:${LEAD}`, `r:${ROLE}`]);
+    expect($(`[data-owner-candidate="s:${LEAD}"]`)!.textContent).toContain("Worked for it before");
+    expect($(`[data-owner-candidate="r:${ROLE}"]`)!.textContent).toContain("Owned it before");
+    await click($(`[data-owner-candidate="s:${LEAD}"] .own-plus`));
+    expect($$("[data-owner-row]").map(rowText)).toEqual(["YouOwner", "Lead sessionSession it works for · new"]);
+    expect($$("[data-chip-label]").map((c) => c.textContent)).toEqual(["+ Lead session"]);
+    expect($(`[data-owner-candidate="s:${LEAD}"]`)).toBeNull();
+    await click($("[data-owners-save]"));
+    await settle();
+    expect(ownersSent()).toEqual([{ restore_parent: true }]);
+    expect((useInboxStore.getState() as any).sessionOwners[S].parent_session?.conversation_id).toBe(LEAD);
+  });
+});
+
+describe("flag on: a session not created yet", () => {
+  const STUB = "stubsession01";
+  test("draws the owners segment with you as the owner, read-only until it starts", async () => {
+    seed(false);
+    useInboxStore.setState((s: any) => ({
+      teams: [{ _id: "fixture-team", name: "Team", features: { session_owners: true } }],
+      sessions: { ...s.sessions, [STUB]: { _id: STUB, session_id: STUB, title: "New session", updated_at: 1 } },
+    }));
+    await render(<OwnersSegment conversationId={STUB} />);
+    expect($("[data-owners-seg]")!.title).toBe("Owners: You");
+    await click($("[data-owners-seg]"));
+    expect($$("[data-owner-row]").map(rowText)).toEqual(["YouOwner"]);
+    expect($("[data-owners-pending]")!.textContent).toBe("Owners can change once it starts");
+    expect($("[data-owner-candidates]")).toBeNull();
+    expect($("[data-owners-add-me]")).toBeNull();
+  });
+});
+
 describe("a narrow header: Owners in the session menu opens the owners sheet", () => {
   const menu = (open: () => void) => <DropdownMenu open><DropdownMenuContent><OwnersMenuItem conversationId={S} onOpen={open} /></DropdownMenuContent></DropdownMenu>;
 
