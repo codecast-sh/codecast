@@ -18,8 +18,7 @@ import { getProjectName, isFork, showsBlockedBadge, railRowPlacement } from "../
 import { useSessionCardDrag } from "../../hooks/useSessionCardDrag";
 import { ImageLightbox } from "../ImageGallery";
 import { ViewerFaces } from "../presence/ViewerFaces";
-import { deviceDisplayName } from "../DeviceBadge";
-import { Mark } from "../Mark";
+import { DeviceIcon, deviceDisplayName } from "../DeviceBadge";
 import { cleanUserMessage } from "../sessionMessage";
 import { AgentTypeIcon, formatAgentType } from "../AgentTypeIcon";
 import { AnchorScopePill, HeadOfPeopleFace } from "../anchor/AnchorIdentity";
@@ -224,7 +223,7 @@ export function ModernSessionCardView({
 
   // Line 3, left to right: what gives way first to what stays.
   const device = chrome.showDeviceIcon !== false && placeDevice
-    ? { d: placeDevice, name: deviceDisplayName(placeDevice), title: placeDevice.is_remote ? `Runs in the cloud on ${deviceDisplayName(placeDevice)}` : `Runs on ${deviceDisplayName(placeDevice)}, not this machine` }
+    ? { icon: <DeviceIcon d={placeDevice} className="w-3 h-3 shrink-0" />, name: deviceDisplayName(placeDevice), title: placeDevice.is_remote ? `Runs in the cloud on ${deviceDisplayName(placeDevice)}` : `Runs on ${deviceDisplayName(placeDevice)}, not this machine` }
     : null;
   const shipLink = ship ? shipHref(ship) : null;
   const chips: React.ReactNode[] = [];
@@ -247,8 +246,8 @@ export function ModernSessionCardView({
   if (session.flow_run_id) chips.push(<ModernFlowChip key="flow" runId={session.flow_run_id} name={session.flow_name} className="shrink-[200]" />);
   if (ship) {
     chips.push(shipLink
-      ? <Link key="ship" href={shipLink} data-mc-chip="ship" onClick={(e) => e.stopPropagation()} className={`${chipClass} shrink-[100] hover:text-sol-text`}><Mark id="inbox.ship"><Rocket aria-hidden className="w-3 h-3 shrink-0" /></Mark><span className="truncate" title={ship.words}>{ship.words}</span></Link>
-      : <ModernFactChip key="ship" kind="ship" className="shrink-[100]"><Mark id="inbox.ship"><Rocket aria-hidden className="w-3 h-3 shrink-0" /></Mark><span className="truncate" title={ship.words}>{ship.words}</span></ModernFactChip>);
+      ? <Link key="ship" href={shipLink} data-mc-chip="ship" title={ship.words} onClick={(e) => e.stopPropagation()} className={`${chipClass} shrink-[100] hover:text-sol-text`}><Rocket aria-hidden className="w-3 h-3 shrink-0" /><span className="truncate">{ship.words}</span></Link>
+      : <ModernFactChip key="ship" kind="ship" title={ship.words} className="shrink-[100]"><Rocket aria-hidden className="w-3 h-3 shrink-0" /><span className="truncate">{ship.words}</span></ModernFactChip>);
   } else {
     chips.push(<ModernBranchChip key="branch" session={session} showBranch={chrome.showBranchPill} className="shrink-[100] min-w-[3rem]" />);
   }
@@ -282,11 +281,10 @@ export function ModernSessionCardView({
   chips.push(<ModernCommentsChip key="comments" session={session} viewerId={viewerId} onOpenComments={onOpenComments} />);
 
   const lead = nested ? (
-    <Mark id={subRow === "trigger" ? "inbox.trigger_run" : roleAbove ? "inbox.reports_to" : "inbox.spawned"} hint={roleAbove ? `@${roleAbove.handle}` : undefined}>
-      <svg className={`w-3.5 h-3.5 ${subRow === "trigger" ? "text-sol-amber" : "text-sol-violet"}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.4} role="img" aria-label={subRow === "trigger" ? "Trigger session" : roleAbove ? `Reports to @${roleAbove.handle}` : subRow === "worker" ? "Worker" : "Subagent"}>
-        {SUB_ARROW}
-      </svg>
-    </Mark>
+    <svg className={`w-3.5 h-3.5 ${subRow === "trigger" ? "text-sol-amber" : "text-sol-violet"}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.4} role="img" aria-label={subRow === "trigger" ? "Trigger session" : roleAbove ? `Reports to @${roleAbove.handle}` : subRow === "worker" ? "Worker" : "Subagent"}>
+      <title>{subRow === "trigger" ? "Session driven by the trigger above" : roleAbove ? `Reports to @${roleAbove.handle}` : subRow === "worker" ? `Worker spawned by the session above · ${agentWord}` : `Subagent · ${agentWord}`}</title>
+      {SUB_ARROW}
+    </svg>
   ) : isPersonified ? (
     <IdentityFace
       prefs={chrome.prefs}
@@ -336,7 +334,7 @@ export function ModernSessionCardView({
         <div data-mc-line1 className="flex min-w-0 items-center gap-2">
           <span data-mc-lead className="flex h-5 w-5 shrink-0 items-center justify-center">
             <span data-mc-agent className="flex items-center">{lead}</span>
-            <span data-mc-lead-status className="hidden"><SessionStatusMark status={status} /></span>
+            <span data-mc-lead-status title={meta.word} className="hidden"><SessionStatusMark status={status} /></span>
           </span>
           <SessionIdentityLine
             prefs={chrome.prefs}
@@ -352,24 +350,24 @@ export function ModernSessionCardView({
             {priorityRank && <span data-mc-compact-rank className="hidden"><PriorityRankChip rank={priorityRank} /></span>}
             <BrowserPaneOfferGlyph offer={session.browser_pane_offer} />
             {isFavorite && (
-              <button type="button" data-mc-fav aria-label="Unfavorite" onClick={(e) => { e.stopPropagation(); onToggleFavorite?.(session._id); }} className="flex items-center text-sol-yellow hover:opacity-70">
-                <Mark id="inbox.favorite"><Star className="w-3 h-3" fill="currentColor" /></Mark>
+              <button type="button" data-mc-fav aria-label="Unfavorite" title="Favorite; press to remove" onClick={(e) => { e.stopPropagation(); onToggleFavorite?.(session._id); }} className="flex items-center text-sol-yellow hover:opacity-70">
+                <Star className="w-3 h-3" fill="currentColor" />
               </button>
             )}
-            {mine && <span data-mc-mine className="flex items-center text-sol-text-dim"><Mark id="inbox.mine"><Lock className="w-3 h-3" /></Mark></span>}
+            {mine && <span data-mc-mine title="Mine: kept from the team" className="flex items-center text-sol-text-dim"><Lock className="w-3 h-3" /></span>}
             {teamSession && (
-              <span data-mc-team className="flex items-center gap-1 text-sol-violet">
-                <Mark id="inbox.team"><Users className="w-3 h-3" /></Mark>
+              <span data-mc-team title="Team session: everyone on the team has it" className="flex items-center gap-1 text-sol-violet">
+                <Users className="w-3 h-3" />
                 {answeredBy && status !== "needs_you" && <span className="text-meta whitespace-nowrap">{answeredBy} answered</span>}
               </span>
             )}
-            {session.is_pinned && <span data-mc-pin className="flex items-center text-sol-magenta"><Mark id="inbox.pinned"><ModernPinGlyph filled className="w-3 h-3" /></Mark></span>}
+            {session.is_pinned && <span data-mc-pin title="Pinned" className="flex items-center text-sol-magenta"><ModernPinGlyph filled className="w-3 h-3" /></span>}
             <CoOwnerFaces owners={coOwners} />
             {time && <span data-mc-time title={details} className="whitespace-nowrap text-meta tabular-nums text-sol-text-dim">{time}</span>}
           </span>
         </div>
         <div data-mc-line2 className={`mt-0.5 flex min-w-0 items-start gap-2 ${hasThumb ? "pr-11" : ""}`}>
-          <span className="flex h-[18px] w-5 shrink-0 items-center justify-center"><SessionStatusMark status={status} labeled={statusWordShown} /></span>
+          <span title={`${meta.word}: ${meta.meaning}`} className="flex h-[18px] w-5 shrink-0 items-center justify-center"><SessionStatusMark status={status} /></span>
           <p title={lineTitle} className={`min-w-0 flex-1 ${nested ? "text-meta" : "text-ui"} ${expanded ? "line-clamp-2" : "truncate"}`}>
             {statusWordShown && <SessionStatusWord status={status} word={withOwner} title={withOwner ? "" : meta.meaning} className="font-medium" />}
             {line.reason && <span className={meta.text}>{statusWordShown && <span aria-hidden className="text-sol-text-dim"> · </span>}{line.reason}</span>}

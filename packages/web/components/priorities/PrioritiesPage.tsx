@@ -26,7 +26,6 @@ import { SwitchReview, type SwitchLedger } from "../consequential/ConsequentialS
 import { EmptyState } from "../ui/empty-state";
 import { SkeletonRows } from "../ui/skeleton";
 import { PageFrame, PageHeader } from "../ui/page-header";
-import { LegendButton, Mark } from "../Mark";
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { behindLabel, nextPassLabel, ownerGroups, passDue, type OwnerGroup, type PriorityRow } from "../../lib/priorities";
 import {
@@ -101,7 +100,7 @@ export default function PrioritiesPage() {
 
   return (
     <PageFrame
-      header={<PageHeader legacy={legacy} title="Priorities" glyph={<Mark id="entity.priority" labeled><Target className="size-4 shrink-0 text-sol-text-muted" aria-hidden /></Mark>} count={rows.length ? listed : null} status={behindChip} actions={<LegendButton lead="Priorities" />} />}
+      header={<PageHeader legacy={legacy} title="Priorities" icon={Target} count={rows.length ? listed : null} status={behindChip} />}
       // The side padding is the gutter a wide list's ⋯ menus sit in (PriorityBlock C_MENU), 32px: from 544px a list can be wide (520px).
       // Classic's shell pads 24px at sm and 32px from lg.
       legacyColumn="mx-auto w-full max-w-[1280px] min-[544px]:px-4 min-[640px]:px-2 min-[1024px]:px-0"

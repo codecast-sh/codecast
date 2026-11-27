@@ -588,7 +588,7 @@ export function CardSubagentsLine({ rows, onOpen }: {
   if (rows.length === 0) return null;
   return (
     <div data-card-bar data-sv-subagents-line={rows.length} className="flex w-full items-center gap-1.5 pl-2 pr-3 py-[3px] text-meta leading-tight tabular-nums text-sol-text-muted">
-      <SchedChildArrow slot label="Subagents" markId="inbox.subagents" className="text-sol-violet/70" />
+      <SchedChildArrow slot label="Subagents" className="text-sol-violet/70" />
       <span className="flex items-center gap-2.5">
       {subagentStateGroups(rows).map((g) => {
         const words = `${g.count} ${g.count === 1 ? "subagent" : "subagents"} ${SESSION_STATUS[g.status].word.toLowerCase()}`;
@@ -622,7 +622,7 @@ export function CardSubagentRows({ rows, activeSessionId, onOpen }: {
         const meta = SESSION_STATUS[status];
         const active = String(session._id) === activeSessionId;
         return (
-          <button key={session._id} type="button" data-sv-subagent-row={session._id} data-active={active || undefined}
+          <button key={session._id} type="button" data-sv-subagent-row={session._id} data-active={active || undefined} title={`${meta.word}: ${meta.meaning}`}
             {...KEEP_DRAG_OFF_CARD}
             onClick={(e) => { e.stopPropagation(); onOpen(session, e); }}
             aria-label={`${cleanTitle(sessionCardTitle(session))}, ${meta.word}`}

@@ -37,13 +37,13 @@ test("names what holds the row, and clears when the blocker closes", async () =>
   await act(async () => { root.render(<TaskBlockedMark task={task} />); });
 
   const mark = container.querySelector("[role=img]")!;
-  expect(mark.getAttribute("aria-label")).toBe("Waiting on ct-7 Blocker · Waiting on PR #42");
+  expect(mark.getAttribute("title")).toBe("Waiting on ct-7 Blocker · Waiting on PR #42");
   expect(mark.textContent).toBe("2");
   expect(mark.className).toContain("text-sol-orange");
 
   // The blocker closing elsewhere repaints the row: only the wait is left.
   await act(async () => { useInboxStore.setState({ tasks: { b1: blocker("done") } } as any); });
-  expect(container.querySelector("[role=img]")!.getAttribute("aria-label")).toBe("Waiting on PR #42");
+  expect(container.querySelector("[role=img]")!.getAttribute("title")).toBe("Waiting on PR #42");
   expect(container.querySelector("[role=img]")!.textContent).toBe("");
 
   root.unmount();
@@ -66,7 +66,7 @@ test("a failed wait draws a red no-entry sign, not urgent priority's triangle; n
 
   // Nothing answers for ct-7: it holds the row as unknown.
   await act(async () => { root.render(<TaskBlockedMark task={{ status: "open", blocked_by: ["ct-7"] }} />); });
-  expect(container.querySelector("[role=img]")!.getAttribute("aria-label")).toBe("Waiting on ct-7 (status unknown)");
+  expect(container.querySelector("[role=img]")!.getAttribute("title")).toBe("Waiting on ct-7 (status unknown)");
 
   // A done task that still lists an open wait is held by nothing.
   await act(async () => { root.render(<TaskBlockedMark task={{ ...task, status: "done" }} />); });

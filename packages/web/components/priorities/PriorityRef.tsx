@@ -20,7 +20,6 @@ import { priorityHref, rankProvenance } from "../../lib/priorities";
 import { cn } from "../../lib/utils";
 import { TOUCH_AREA } from "../../lib/priorityList";
 import { ActionButton, MilestoneMark } from "./parts";
-import { Mark } from "../Mark";
 import { MilestoneToggle } from "./controls";
 
 /** The critical path as pips and n/m. `size="inline"` scales with the prose it sits in. */
@@ -29,13 +28,11 @@ export function CriticalMeter({ done, total, size = "card" }: { done: number; to
   const inline = size === "inline";
   return (
     <span data-critical-meter className="inline-flex shrink-0 items-center gap-[0.3em]" aria-label={`${done} of ${total} critical milestones done`}>
-      <Mark id="priority.critical">
-        <span aria-hidden className={cn("inline-flex", inline ? "gap-px" : "gap-[2px]")}>
-          {Array.from({ length: total }, (_, i) => (
-            <i key={i} className={cn("block rounded-[1px]", inline ? "h-[0.5em] w-[0.32em]" : "h-[7px] w-[7px] rounded-[1.5px]", i < done ? "bg-sol-green" : "bg-sol-text/20")} />
-          ))}
-        </span>
-      </Mark>
+      <span aria-hidden className={cn("inline-flex", inline ? "gap-px" : "gap-[2px]")}>
+        {Array.from({ length: total }, (_, i) => (
+          <i key={i} className={cn("block rounded-[1px]", inline ? "h-[0.5em] w-[0.32em]" : "h-[7px] w-[7px] rounded-[1.5px]", i < done ? "bg-sol-green" : "bg-sol-text/20")} />
+        ))}
+      </span>
       <span className={cn("tabular-nums", inline ? "" : "text-meta text-sol-text-muted")}>{done}/{total}</span>
     </span>
   );

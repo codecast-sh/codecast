@@ -70,7 +70,7 @@ export function AccountMachinesControl({ deviceId, email }: { deviceId: string; 
             onSelect={(e) => e.preventDefault()}
             onCheckedChange={() => toggle(d.device_id)}
           >
-            <DeviceIcon d={d} className="mr-1.5 size-3 modern:size-3.5 shrink-0 text-sol-text-muted" />
+            <DeviceIcon d={d} className="mr-1.5 h-3 w-3 shrink-0 text-sol-text-muted" />
             <span className="truncate">{deviceDisplayName(d)}</span>
             {sameName(d) && <span className="ml-1.5 truncate text-meta text-sol-text-dim">{d.hostname ?? d.device_id.slice(0, 8)}</span>}
           </DropdownMenuCheckboxItem>
