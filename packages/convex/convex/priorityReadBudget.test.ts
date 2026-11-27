@@ -1,5 +1,5 @@
 // A list of every workspace stays under Convex's per-query read cap (4,096
-// db calls) at its worst: two team workspaces at the teammate cap, each
+// db calls, and 4,096 documents on this backend) at its worst: two team workspaces at the teammate cap, each
 // priority's milestones naming tasks with sessions, and the viewer's own
 // with links (priorityRead.ts listFor, TEAMMATE_LINKED); and with `all`,
 // whose bigger cap holds across every workspace together; and many team
@@ -16,17 +16,25 @@ setDefaultTimeout(180_000);
 const NOW = Date.now();
 const OWN = 30;
 
-/** ctx with a db that counts each get and each query it runs (first, take, collect, unique, paginate). */
-function counting(ctx: any): { ctx: any; calls: () => number } {
+/**
+ * ctx with a db that counts each get and each query it runs (first, take,
+ * collect, unique, paginate), and every document they return: Convex caps a
+ * query's reads in documents scanned as well as calls.
+ */
+function counting(ctx: any): { ctx: any; calls: () => number; docs: () => number } {
   let calls = 0;
+  let docs = 0;
   const TERMINAL = new Set(["first", "take", "collect", "unique", "paginate"]);
+  const tally = (r: any) => { docs += Array.isArray(r) ? r.length : Array.isArray(r?.page) ? r.page.length : r ? 1 : 0; return r; };
   const wrapQuery = (q: any): any => new Proxy(q, {
     get(target, prop) {
       const v = target[prop];
       if (typeof v !== "function") return v;
       return (...args: any[]) => {
-        if (TERMINAL.has(String(prop))) calls++;
+        const terminal = TERMINAL.has(String(prop));
+        if (terminal) calls++;
         const out = v.apply(target, args);
+        if (terminal) return Promise.resolve(out).then(tally);
         return out && typeof out === "object" && typeof out.then !== "function" ? wrapQuery(out) : out;
       };
     },
@@ -34,13 +42,24 @@ function counting(ctx: any): { ctx: any; calls: () => number } {
   const db = new Proxy(ctx.db, {
     get(target, prop) {
       const v = target[prop];
-      if (prop === "get") return (...args: any[]) => (calls++, v.apply(target, args));
+      if (prop === "get") return (...args: any[]) => (calls++, Promise.resolve(v.apply(target, args)).then(tally));
       if (prop === "query") return (...args: any[]) => wrapQuery(v.apply(target, args));
       return typeof v === "function" ? v.bind(target) : v;
     },
   });
-  return { ctx: { ...ctx, db }, calls: () => calls };
+  return { ctx: { ...ctx, db }, calls: () => calls, docs: () => docs };
 }
+
+/**
+ * Documents a list may read: this backend refuses a query past 4,096
+ * (convex org.ts F2), and the list keeps well clear of it where its caps
+ * allow (DOCS_BUDGET). Two shapes sit between the two: sixteen teammates each
+ * with sixty active priorities per workspace, whose groups a rank must read
+ * whole to number (positionsFor), and five team workspaces at the full
+ * teammate budget, whose per-row reads (sessions, tasks, group) add up.
+ */
+const DOCS_BUDGET = 2_500;
+const DOCS_CAP = 4_096;
 
 /**
  * Ada and Bea share `teamNames` (Acme first). Ada has `perTeam` active
@@ -108,21 +127,22 @@ async function world(perTeam: number, teamNames = ["Acme", "Beta"], mates = 0) {
     await conv(ada, teams[0], { priority_id: late, priority_step_key: "s3", thread_state_status: "blocked", thread_state_at: NOW, last_turn_at: NOW - 1000, updated_at: NOW + 1 });
     return { bea, late };
   });
-  /** Bea's list of every workspace, and the db calls it made. */
+  /** Bea's list of every workspace, and the db calls it made and documents they returned. */
   const listed = (args: { all?: boolean } = {}) => t.run(async (ctx: any) => {
     const counted = counting(ctx);
     const list = await listFor(counted.ctx, ids.bea, args);
-    return { list, calls: counted.calls() };
+    return { list, calls: counted.calls(), docs: counted.docs() };
   });
   return { ...ids, listed };
 }
 
 test("a list of every workspace at the teammate cap stays well under the read cap, and a teammate's priority past the link budget still reports its mapped sessions", async () => {
   const { late, listed } = await world(TEAMMATE_PRIORITIES_CAP);
-  const { list, calls } = await listed();
-  console.log(`priority list worst case: ${calls} db calls for ${list.priorities.length} rows`);
+  const { list, calls, docs } = await listed();
+  console.log(`priority list worst case: ${calls} db calls, ${docs} documents for ${list.priorities.length} rows`);
   expect(list.priorities.filter((r: any) => r.mine)).toHaveLength(OWN);
   expect(calls).toBeLessThan(3_000);
+  expect(docs).toBeLessThan(DOCS_BUDGET);
   // Full `links` on the viewer's own and TEAMMATE_LINKED teammates'; the rest only `mapped_links`, never taken for full ones.
   const teammates = list.priorities.filter((r: any) => !r.mine);
   expect(teammates.filter((r: any) => r.links)).toHaveLength(TEAMMATE_LINKED);
@@ -146,8 +166,9 @@ test("a list of every workspace at the teammate cap stays well under the read ca
 test("with all, teammates' priorities are capped across every workspace together, so the bigger cap stays under the read cap", async () => {
   // Each of three workspaces holds the cap: a cap per workspace would list three times as many, past 3,000 reads.
   const { listed } = await world(TEAMMATE_ALL_CAP, ["Acme", "Beta", "Gamma"]);
-  const { list, calls } = await listed({ all: true });
-  console.log(`priority list with all: ${calls} db calls for ${list.priorities.length} rows`);
+  const { list, calls, docs } = await listed({ all: true });
+  console.log(`priority list with all: ${calls} db calls, ${docs} documents for ${list.priorities.length} rows`);
+  expect(docs).toBeLessThan(DOCS_BUDGET);
   const teammates = list.priorities.filter((r: any) => !r.mine);
   expect(list.teammates_truncated).toBe(true);
   expect(teammates).toHaveLength(TEAMMATE_ALL_CAP);
@@ -157,9 +178,10 @@ test("with all, teammates' priorities are capped across every workspace together
 test("many teammates, each with a big active group, stay under the read cap: numbering stops at each one's last listed row", async () => {
   const { listed } = await world(TEAMMATE_PRIORITIES_CAP, ["Acme", "Beta"], 15);
   for (const args of [{}, { all: true }]) {
-    const { list, calls } = await listed(args);
-    console.log(`priority list with 16 teammates ${JSON.stringify(args)}: ${calls} db calls for ${list.priorities.length} rows`);
+    const { list, calls, docs } = await listed(args);
+    console.log(`priority list with 16 teammates ${JSON.stringify(args)}: ${calls} db calls, ${docs} documents for ${list.priorities.length} rows`);
     expect(calls).toBeLessThan(3_000);
+    expect(docs).toBeLessThan(DOCS_CAP);
     // Every teammate is on the page in both workspaces.
     expect(new Set(list.priorities.filter((r: any) => !r.mine).map((r: any) => `${r.user_id} ${r.workspace}`)).size).toBe(32);
   }
@@ -168,9 +190,10 @@ test("many teammates, each with a big active group, stay under the read cap: num
 test("many team workspaces share one teammate budget, each keeping its share, so the read cap holds as workspaces grow", async () => {
   const teams = ["Acme", "Beta", "Gamma", "Delta", "Epsilon"];
   const { listed } = await world(TEAMMATE_PRIORITIES_CAP, teams);
-  const { list, calls } = await listed();
-  console.log(`priority list of ${teams.length} team workspaces: ${calls} db calls for ${list.priorities.length} rows`);
+  const { list, calls, docs } = await listed();
+  console.log(`priority list of ${teams.length} team workspaces: ${calls} db calls, ${docs} documents for ${list.priorities.length} rows`);
   expect(calls).toBeLessThan(3_000);
+  expect(docs).toBeLessThan(DOCS_CAP);
   const teammates = list.priorities.filter((r: any) => !r.mine);
   expect(list.teammates_truncated).toBe(true);
   expect(teammates).toHaveLength(TEAMMATE_TOTAL_CAP);

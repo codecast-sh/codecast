@@ -26,9 +26,11 @@ export const TEAMMATE_SESSIONS = 4;
  * The newest sessions mapped to a priority its access reads to find the
  * owner's newest TEAMMATE_SESSIONS among them: teammates' sessions started on
  * it (lib/priorityLinks linkFromStart) never count, so this many leaves room
- * for them; past it, hidden (failing closed).
+ * for them; past it, hidden (failing closed). The same as a list's links read
+ * (priorityRead LINK_MAPPED_READ), so one scan serves both: a smaller window
+ * would make the links read the same sessions again.
  */
-export const ACCESS_SESSIONS_READ = 20;
+export const ACCESS_SESSIONS_READ = 10;
 
 type Ctx = { db: any };
 type Priority = Doc<"priorities">;

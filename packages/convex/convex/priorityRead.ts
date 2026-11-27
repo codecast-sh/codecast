@@ -40,7 +40,8 @@ export const TEAMMATE_PRIORITIES_CAP = 60;
  * team workspaces and took the query past Convex's 4,096-read cap at about six.
  */
 export const TEAMMATE_TOTAL_CAP = 150;
-export const TEAMMATE_ALL_CAP = 200;
+/** With `all` or a status, across every workspace together: each row's reads add up to about 20 documents, and this backend refuses a query past 4,096 (2,386 at 80 in priorityReadBudget's worst case). */
+export const TEAMMATE_ALL_CAP = 80;
 /** The most of one person's priorities of one status in one workspace any read takes (the active ones a rank orders, a list's own). */
 const OWN_PRIORITIES_READ = 200;
 /** The most of the viewer's own priorities a list reads in one workspace, newest first, before splitting them by status. */
