@@ -15,14 +15,17 @@ export async function originTip(root: string, branch: string): Promise<string> {
 /**
  * Whether origin's `remote` tip of `branch` is a newer copy of `sha`, so taking it drops nothing only this checkout
  * has: `sha` is under it, or origin once held `sha` (a tip this checkout fetched or pushed, in its remote-tracking
- * reflog) and was rewritten past it since, by the change's author rebasing and pushing from elsewhere. A commit the
- * checkout lacks, or a reflog git cannot read, says no.
+ * reflog) and was rewritten past it since, by the change's author rebasing and pushing from elsewhere. Never when the
+ * branch here once stood on origin's tip or past it: then `sha` is the branch rewound on purpose (a reset dropping a
+ * commit already pushed), and origin's copy would bring back what was dropped. A commit the checkout lacks, or a
+ * reflog git cannot read, says no.
  */
 export async function originSupersedes(root: string, branch: string, sha: string, remote: string): Promise<boolean> {
   const under = (a: string, b: string) => isAncestor(root, a, b).catch(() => false);
+  const reflog = async (ref: string) => new Set(((await gitTry(root, ["reflog", "show", "-n", "50", "--format=%H", ref])) ?? "").split("\n").filter(Boolean));
+  for (const was of await reflog(`refs/heads/${branch}`)) if (was !== sha && (await under(remote, was))) return false;
   if (await under(sha, remote)) return true;
-  const held = ((await gitTry(root, ["reflog", "show", "-n", "50", "--format=%H", `refs/remotes/origin/${branch}`])) ?? "").split("\n").filter(Boolean);
-  for (const h of new Set(held)) if (await under(sha, h)) return true;
+  for (const h of await reflog(`refs/remotes/origin/${branch}`)) if (await under(sha, h)) return true;
   return false;
 }
 

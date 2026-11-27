@@ -96,6 +96,18 @@ describe("branchHead", () => {
     expect(await branchHead(here, "ashot/feature", tree)).toEqual({ head: rebased, remote_tip: rebased });
   });
 
+  // PR #303 review: a branch rewound on purpose here (not yet force-pushed) keeps its head; fast-forwarding it to
+  // origin would bring back the commit it dropped.
+  test("a local branch rewound off origin's tip keeps its head", async () => {
+    const { here, tip } = world();
+    git(here, "fetch", "-q", "origin", "+refs/heads/ashot/feature:refs/remotes/origin/ashot/feature");
+    git(here, "checkout", "-q", "-b", "ashot/feature", tip);
+    git(here, "reset", "-q", "--hard", "HEAD~1");
+    const rewound = git(here, "rev-parse", "HEAD");
+    git(here, "checkout", "-q", "--detach");
+    expect(await branchHead(here, "ashot/feature")).toEqual({ head: rewound, remote_tip: tip });
+  });
+
   test("a local commit origin never held keeps the local branch when origin was rewritten too", async () => {
     const { other, here, tip } = world();
     git(here, "fetch", "-q", "origin", "+refs/heads/ashot/feature:refs/remotes/origin/ashot/feature");

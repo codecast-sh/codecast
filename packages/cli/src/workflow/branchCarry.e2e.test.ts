@@ -482,6 +482,24 @@ describe("a branch's carry", () => {
     expect(git(origin, "rev-parse", "feat")).toBe(second);
   }, 180_000);
 
+  // PR #303 review: a session that drops a commit already pushed (reset --hard HEAD~1) means it; origin's copy, which
+  // still holds the dropped commit, must not bring it back.
+  test("a worktree rewound off a commit origin holds stays rewound (ct-102179)", async () => {
+    const { origin, here, worktree, runDir } = originWorld("rewound");
+    const base = git(worktree, "rev-parse", "HEAD");
+    write(worktree, "a.txt", "dropped later\n");
+    git(worktree, "commit", "--quiet", "-am", "a commit the session drops");
+    git(worktree, "push", "--quiet", "origin", "feat");
+    const pushed = git(worktree, "rev-parse", "HEAD");
+    writeFrozenChange(runDir, { source: "task", session: "jx7aaaa", base: pushed, tip: pushed, remote_tip: pushed, branch: "feat", worktree: "run-wt-rewound", paths: ["a.txt"], shared: [], held: [] } as any);
+    git(worktree, "reset", "--quiet", "--hard", "HEAD~1");
+    await snapshotRunTree(worktree, runDir);
+    const { change } = await refreezeSessionChange(here, runDir, worktree);
+    expect(change.tip).toBe(base);
+    expect(git(worktree, "rev-parse", "HEAD")).toBe(base);
+    expect(git(origin, "rev-parse", "feat")).toBe(pushed);
+  }, 180_000);
+
   test("a worktree rewritten here, which origin never held, stays the change though origin moved (ct-102179)", async () => {
     const { here, worktree, runDir, start, push } = originWorld("rewritten-here");
     start();
