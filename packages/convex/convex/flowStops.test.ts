@@ -167,6 +167,21 @@ describe("a pipeline stop shared by two changes is one incident", () => {
     expect(((await get(incident._id)) as any).cause.signal_count).toBe(2);
   });
 
+  test("the incident is titled for the exit it stopped at, not the station it resumes at, with the stop text cut short", async () => {
+    const { ids, redMain, get, signals, cause } = await world();
+    const log = `main CI stayed red on 4f2a9c1:\n${"FAIL web/inbox.test.tsx > renders the sidebar\n".repeat(40)}`;
+    await redMain(ids.runs[0], log);
+    await redMain(ids.runs[1], log);
+    const incident = await cause(ids.runs[1]);
+    expect(incident.title).toStartWith("Not merged: main stayed red: main CI stayed red on 4f2a9c1: FAIL web/inbox.test.tsx");
+    expect(incident.title).not.toContain("Waiting for green main");
+    expect(incident.title.length).toBeLessThanOrEqual("Not merged: main stayed red: ".length + 200);
+    expect(incident.title).toEndWith("…");
+    // The whole stop text stays on the signal.
+    const run: any = await get(ids.runs[0]);
+    expect((await signals(run.stop_fingerprint))[0].detail_md).toBe(log.trim());
+  });
+
   test("a stop about the change itself is never an incident, however alike the words read across changes", async () => {
     const { t, ids, stopAt, get } = await world();
     for (const r of ids.runs.slice(0, 2)) await stopAt(r, "rejected", ["land__review"], "The reviewer rejected the change: it does what the task asked, badly.");

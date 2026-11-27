@@ -122,6 +122,24 @@ describe("the finish", () => {
     expect(s.calls.some((c) => c.path === "/cli/team-cli-floor/tell-other-teams")).toBe(false);
   });
 
+  test("staff running an older release's finish never lower the global floor a newer release set", async () => {
+    const s = server({});
+    const global: string[] = [];
+    const setGlobal = async (v: string) => { global.push(v); return true; };
+    const note = await finishCliRelease({ root: "/x", deploy: "dp-9", version: "1.1.306", waitMs: 0, post: s.post, buildIdAt: ids(true), log: () => {}, setGlobal, globalFloor: async () => "1.1.310" });
+    expect(global).toEqual([]);
+    expect(note).toContain("Global floor already at 1.1.310.");
+    expect(note).not.toContain("Forced everywhere");
+    expect(s.calls.some((c) => c.path === "/cli/team-cli-floor/tell-other-teams")).toBe(false);
+    // Below the release, it is raised; unreadable, it is left alone.
+    const raised = await finishCliRelease({ root: "/x", deploy: "dp-9", version: "1.1.306", waitMs: 0, post: server({}).post, buildIdAt: ids(true), log: () => {}, setGlobal, globalFloor: async () => "1.1.300" });
+    expect(global).toEqual(["1.1.306"]);
+    expect(raised).toContain("Forced everywhere: the global floor is now 1.1.306.");
+    const unread = await finishCliRelease({ root: "/x", deploy: "dp-9", version: "1.1.307", waitMs: 0, post: server({}).post, buildIdAt: ids(true), log: () => {}, setGlobal, globalFloor: async () => { throw new Error("offline"); } });
+    expect(global).toEqual(["1.1.306"]);
+    expect(unread).toContain("Could not read the global floor, so it is not raised: offline");
+  });
+
   test("a non-staff finish forces only its own team and has the server tell other teams' Release Captains; an unchanged daemon asks for neither", async () => {
     const asked: string[] = [];
     const setGlobal = async (v: string) => { asked.push(v); return false; };

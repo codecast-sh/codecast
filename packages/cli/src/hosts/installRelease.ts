@@ -2,6 +2,7 @@ import { execFileSync } from "../proc.js";
 import { MANIFEST_SIGNED_SH, RELEASE_MANIFEST_SIGNING, manifestSignedByPinnedKey } from "../releaseTrust.js";
 import { SHARED_HOST_MARKER } from "../remote/sharedHostGuard.js";
 import { sshBase, sshDestination, type RemoteHost } from "../remote/session-move.js";
+import { CLI_RELEASE_REPOSITORY } from "@codecast/shared/contracts/deploys";
 
 /**
  * What a host runs: the published release (the default), which updates itself
@@ -83,7 +84,7 @@ export function releaseFor(version: string, fetch: (url: string) => string = fet
   if (latest?.version === version) return latest;
   const digests: Record<string, string> = {};
   try {
-    const assets = github(`https://api.github.com/repos/codecast-sh/codecast/releases/tags/v${version}`)?.assets;
+    const assets = github(`https://api.github.com/repos/${CLI_RELEASE_REPOSITORY}/releases/tags/v${version}`)?.assets;
     for (const a of Array.isArray(assets) ? assets : []) {
       const m = typeof a?.digest === "string" ? /^sha256:([0-9a-f]{64})$/.exec(a.digest) : null;
       if (typeof a?.name === "string" && m) digests[a.name] = m[1]!;
@@ -92,7 +93,7 @@ export function releaseFor(version: string, fetch: (url: string) => string = fet
   if (!Object.keys(digests).length) throw new Error(`could not read the asset digests of GitHub release v${version}, which confirm cast ${version}'s binaries`);
   let commits: string[] = [];
   try {
-    const listed = github(`https://api.github.com/repos/codecast-sh/codecast/commits?sha=v${version}&per_page=${RELEASE_COMMIT_SEARCH}`);
+    const listed = github(`https://api.github.com/repos/${CLI_RELEASE_REPOSITORY}/commits?sha=v${version}&per_page=${RELEASE_COMMIT_SEARCH}`);
     commits = Array.isArray(listed) ? listed.map((c: any) => c?.sha).filter((sha: unknown): sha is string => typeof sha === "string" && /^[0-9a-f]{40}$/.test(sha)) : [];
   } catch { /* named below */ }
   if (!commits.length) throw new Error(`could not read the history of GitHub tag v${version}, which locates cast ${version}'s release objects`);

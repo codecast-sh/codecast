@@ -184,11 +184,22 @@ describe("a deploy going live asks the daemon of each session whose own change i
     expect(repoPathOf(`${ROOT}-other/web/a.tsx`, ROOT)).toBeNull();
   });
 
-  test("a file it wrote outside its checkout is no part of the change", async () => {
+  test("a scratch file in a temporary directory is no part of the change", async () => {
     const w = await world();
     await w.commit(1, ["web/a.tsx"]);
     await w.edit("/tmp/notes.md", NOW - 70_000);
+    await w.edit("/private/var/folders/xy/T/scratch.json", NOW - 70_000);
     expect(await w.retireOn(await w.deploy("web", 1))).toEqual([{ asked: true }]);
+  });
+
+  test("an edit outside its checkout keeps it: the daemon checks only the checkout, so nothing confirms that work landed", async () => {
+    // A second repository, and a worktree beside the checkout rather than under it.
+    const w = await world();
+    await w.commit(1, ["web/a.tsx"]);
+    await w.edit("/work/other-repo/src/x.ts", NOW - 70_000);
+    await w.edit(`${ROOT}-fix/web/a.tsx`, NOW - 70_000);
+    expect(await w.retireOn(await w.deploy("web", 1))).toEqual([{ asked: false, reason: `it wrote outside its checkout: /work/other-repo/src/x.ts, ${ROOT}-fix/web/a.tsx` }]);
+    expect(await w.asks()).toEqual([]);
   });
 
   test("a session whose owner has no access to the deploy's workspace is no part of its pass", async () => {
