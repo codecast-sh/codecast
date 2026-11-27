@@ -1342,6 +1342,9 @@ export function computeFold(
 
 // ── Row placement from replicated fields (design C3/C5) ─────────────────────
 
+/** What a dormant session waits on: a person, another session, a task or a pull request, and since when. */
+export type WaitingOn = { kind: "person" | "session" | "task" | "pr"; ref: string; at?: number };
+
 // Everything projectInbox needs on a row: the conversation's own semantic
 // fields plus the overlay-owned facts. All optional except updated_at — a
 // classifier must read an absent fact as unknown and fall back honestly.
@@ -1366,6 +1369,8 @@ export interface ProjectableInboxRow extends WorkingSetRow, Omit<OwnersModelRow,
   thread_state_at?: number | null;
   /** conversations.agent_type: a hosted conversation's routine never parks it. */
   agent_type?: string | null;
+  /** conversations.waiting_on: what a dormant session says it waits on (`cast state --status dormant --on`). Presentation only: sessionActivity reads it, no bucket rule does. */
+  waiting_on?: WaitingOn | null;
   // The pull request this session shepherds (prShepherd.refreshConversationPrStatus).
   // Presentation only: no bucket or work-state rule reads it.
   pr_status?: {

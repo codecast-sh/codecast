@@ -38,6 +38,8 @@
     "./contracts/commitDiffs": "./contracts/commitDiffs.ts",
     "./contracts/orgProposal": "./contracts/orgProposal.ts",
     "./contracts/inboxPlacement": "./contracts/inboxPlacement.ts",
+    "./contracts/dormantWake": "./contracts/dormantWake.ts",
+    "./contracts/sessionActivity": "./contracts/sessionActivity.ts",
     "./contracts/subagentProducing": "./contracts/subagentProducing.ts",
     "./contracts/triage": "./contracts/triage.ts",
     "./contracts/closeKind": "./contracts/closeKind.ts",
