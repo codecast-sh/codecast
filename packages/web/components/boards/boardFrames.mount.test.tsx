@@ -84,7 +84,7 @@ async function draw(els: BoardEl[], opts: { readOnly?: boolean; docId?: string }
     readOnly: !!opts.readOnly,
     reflow: (k: string) => calls.reflow.push(k),
     toggleFold: (k: string) => calls.toggleFold.push(k),
-    kindOf: (k: string) => all.get(k)?.kind,
+    get: (k: string) => all.get(k),
   };
   await act(() => root.render(
     <BoardFrameContext.Provider value={actions}>
@@ -158,7 +158,7 @@ describe("hover follows the pointer through the frame's box", () => {
     const hover = useFrameHover(els);
     renders++;
     const all = new Map(els.map((e) => [e.key, e]));
-    const actions = { docId: null, readOnly: false, reflow: NOOP, toggleFold: NOOP, kindOf: (k: string) => all.get(k)?.kind };
+    const actions = { docId: null, readOnly: false, reflow: NOOP, toggleFold: NOOP, get: (k: string) => all.get(k) };
     return (
       <div data-root onPointerMove={(e) => hover.move({ x: e.clientX, y: e.clientY }, 1)} onPointerLeave={hover.leave}>
         <BoardFrameContext.Provider value={actions}>

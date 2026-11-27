@@ -8,7 +8,7 @@ import { boardArtFor } from "./boardArt";
 import { BOARD_VERBS } from "./boardVerbs";
 import { BOARD_ART } from "./boardArt";
 import { pageShareUrl } from "../entities";
-import { frameCollapsed, frameRef, frameStatus, hiddenKeys } from "./boardFrames";
+import { foldedCount, frameCollapsed, frameRef, frameStatus, hiddenKeys } from "./boardFrames";
 
 export * from "./boardGeometry";
 export * from "./boardLayout";
@@ -68,7 +68,7 @@ export function describeElement(el: ArtifactElement, view: Pick<ArtifactView, "g
       if (ref) parts.push(`ref ${ref}`);
       if (status) parts.push(`status ${status}`);
       if (folded) {
-        parts.push(`collapsed (${folded.holds.filter((k) => view.get(k)).length})`);
+        parts.push(`collapsed (${foldedCount(el, (k) => view.get(k))})`);
         break;
       }
       const holds = view.elements.filter((o) => o.key !== el.key && o.kind !== "frame" && o.kind !== "connector" && !hidden.has(o.key) && contains(b, elementBox(o))).map((o) => o.key);

@@ -26,7 +26,7 @@ export default function SharedBoard({ elements }: LiveSharedViewProps) {
   const ordered = useMemo(() => drawOrder(folds.shown), [folds]);
   const box = useMemo(() => fitBox(folds.shown, byKey), [folds, byKey]);
   const obstacles = useMemo(() => elbowObstacles(folds.shown), [folds]);
-  const frameInfo = useMemo(() => ({ docId: null, readOnly: true, reflow: () => {}, toggleFold: () => {}, kindOf: (k: string) => byKey.get(k)?.kind }), [byKey]);
+  const frameInfo = useMemo(() => ({ docId: null, readOnly: true, reflow: () => {}, toggleFold: () => {}, get: (k: string) => byKey.get(k) }), [byKey]);
   const ref = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
   useLayoutEffect(() => {
