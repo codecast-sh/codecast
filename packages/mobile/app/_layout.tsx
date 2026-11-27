@@ -336,6 +336,8 @@ function RootLayoutNav() {
                       name="call"
                       options={{ presentation: 'fullScreenModal', headerShown: false, animation: 'slide_from_bottom' }}
                     />
+                    {/* The call's board, over the call screen (components/calls/CallBoardButton). */}
+                    <Stack.Screen name="call-board" options={{ presentation: 'fullScreenModal', headerShown: false }} />
                   </Stack>
                   <ComposeHost />
                   <UndoBarHost />
