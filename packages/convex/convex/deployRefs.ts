@@ -10,6 +10,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { canAccessConversation, canAccessTask, workspaceGrantsAccess } from "./lib/access";
 import { commitBySha, commitFacts, pushSummary } from "./deployTargetsState";
 import { sessionPriorityReader } from "./lib/sessionPriority";
+import type { SessionPriorityRef } from "@codecast/shared/contracts/priorities";
 
 export const whereIs = query({
   args: { ref: v.string() },
@@ -39,7 +40,7 @@ export const recentForTeam = query({
     const rows: Doc<"deploys">[] = await ctx.db.query("deploys").withIndex("by_workspace_created", (q) => q.eq("workspace", workspace)).order("desc").take(RECENT);
     // A session the viewer may read, with its owner and the priority it serves.
     const priorityOf = await sessionPriorityReader(ctx, userId, args.team_id);
-    const convs = new Map<string, { title: string | null; user_id: string; priority: { id: string; title: string | null } | null } | null>();
+    const convs = new Map<string, { title: string | null; user_id: string; priority: SessionPriorityRef | null } | null>();
     const tasks = new Map<string, { short_id: string | null; title: string | null } | null>();
     const convOf = async (id: Id<"conversations">) => {
       const k = String(id);
