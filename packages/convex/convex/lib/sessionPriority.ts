@@ -6,7 +6,7 @@
 import type { Doc, Id } from "../_generated/dataModel";
 import { FEATURE, featureCheck, readerFor, type Reader } from "./priorityAccess";
 import { teamHasFeature } from "./teamFeatureGuard";
-import { groupMemo, positionOf } from "./priorityGroup";
+import { positionOf, rankMemo } from "./priorityGroup";
 import type { SessionPriorityRef } from "@codecast/shared/contracts/priorities";
 
 type Ctx = { db: any };
@@ -18,8 +18,8 @@ export async function sessionPriorityReader(ctx: Ctx, viewer: Id<"users">, teamI
   const featureOn = featureCheck(ctx);
   let reader: Promise<Reader> | null = null;
   const seen = new Map<string, Promise<SessionPriority | null>>();
-  // One read of each owner's active group per workspace, however many of their priorities the sessions serve.
-  const readGroup = groupMemo();
+  // One read of each owner's active group per workspace, and one walk of it, however many of their priorities the sessions serve.
+  const ranks = rankMemo();
   return (conv) => {
     const id = conv?.priority_id;
     if (!id) return Promise.resolve(null);
@@ -30,7 +30,7 @@ export async function sessionPriorityReader(ctx: Ctx, viewer: Id<"users">, teamI
         if (!p || !(await featureOn(p.workspace))) return null;
         reader ??= readerFor(ctx, viewer);
         if (!(await (await reader).canRead(p))) return null;
-        return { id: p.short_id, title: p.title ?? null, rank: await positionOf(ctx, await reader, p, readGroup), user_id: String(p.user_id) };
+        return { id: p.short_id, title: p.title ?? null, rank: await positionOf(ctx, await reader, p, ranks), user_id: String(p.user_id) };
       })());
     }
     return seen.get(key)!;

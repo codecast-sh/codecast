@@ -7,7 +7,7 @@ import { accessStampFor, authorizedFor } from "./lib/accessKeys";
 import { teamFeatureOffMessage } from "./lib/teamFeatureGuard";
 import { rankSourceOf } from "@codecast/shared/contracts/priorities";
 import { FEATURE, TEAMMATE_SESSIONS, featureCheck, readerFor, type Reader } from "./lib/priorityAccess";
-import { positionOf, positionsFor } from "./lib/priorityGroup";
+import { activeGroup, positionOf, positionsOf } from "./lib/priorityGroup";
 import { passTiming } from "./priorityPassSweep";
 import { isSessionOwner } from "./sessionOwners";
 import { mayBeTeamOwned } from "./lib/viewerTriage";
@@ -35,9 +35,9 @@ export const TEAMMATE_LINKED = 25;
 export const TEAMMATE_PRIORITIES_CAP = 60;
 /**
  * The most teammates' priorities a list of every workspace judges in all of
- * them together. Each judged row reads its sessions (canRead) and its owner's
- * group (positionsFor), so a cap per workspace alone grew with the number of
- * team workspaces and took the query past Convex's 4,096-read cap at about six.
+ * them together. Each judged row reads its sessions (canRead), so a cap per
+ * workspace alone grew with the number of team workspaces and took the query
+ * past Convex's 4,096-read cap at about six.
  */
 export const TEAMMATE_TOTAL_CAP = 150;
 /** With `all` or a status, across every workspace together: each row's reads add up to about 20 documents, and this backend refuses a query past 4,096 (2,386 at 80 in priorityReadBudget's worst case). */
@@ -164,7 +164,7 @@ async function correctionPending(ctx: Ctx, viewer: Id<"users">, p: Priority): Pr
 
 /**
  * `position` is where it shows among the owner's active priorities as the
- * viewer reads them (positionsFor; null when not active); `steps` are the
+ * viewer reads them (positionOf, or listFor's numbering; null when not active); `steps` are the
  * ones the viewer may see (Reader.stepsFor); the row lists at most `limit`
  * sessions. The critical-path counts are the priority's own, over every step.
  */
@@ -477,16 +477,12 @@ export async function listFor(ctx: Ctx, viewer: Id<"users">, args: { workspace?:
   const r = await readerFor(ctx, viewer);
   const { rows, own_truncated, teammates_truncated } = await visiblePriorities(ctx, r, args.workspace, args.status, !!args.all);
   const people = await owners(ctx, rows);
-  // Positions come from each owner's whole group, as positionOf, the pin line and a move read them.
+  // The viewer's own positions come from their whole group, as positionOf, the pin line and a move read them. A teammate's are numbered 1..n in the owner's order over the rows this list judged readable for that owner and workspace, so numbering reads nothing more (positionOf says when a page's number differs).
   const positions = new Map<string, number>();
-  const groups = new Map<string, { p: Priority; wanted: Set<string> }>();
-  for (const p of rows) {
-    if (p.status !== "active") continue;
-    const key = `${p.user_id} ${p.workspace}`;
-    if (!groups.has(key)) groups.set(key, { p, wanted: new Set() });
-    groups.get(key)!.wanted.add(String(p._id));
+  for (const ws of new Set(rows.filter((p) => p.status === "active" && isOwner(viewer, p)).map((p) => p.workspace))) {
+    for (const [id, at] of positionsOf(await activeGroup(ctx, viewer, ws))) positions.set(id, at);
   }
-  for (const { p, wanted } of groups.values()) for (const [id, at] of await positionsFor(ctx, r, p.user_id, p.workspace, wanted)) positions.set(id, at);
+  for (const [id, at] of positionsOf(rows.filter((p) => !isOwner(viewer, p)))) positions.set(id, at);
   const at = (p: Priority) => positions.get(String(p._id)) ?? Infinity;
   const mine = (p: Priority) => (String(p.user_id) === String(viewer) ? 0 : 1);
   rows.sort((a, b) =>

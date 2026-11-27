@@ -77,8 +77,11 @@ export type Reader = {
    * from the owner's sessions), or, in a team, sees at least one of the
    * owner's own newest TEAMMATE_SESSIONS sessions on it listed to that team
    * (a teammate's session on it never counts). Judged once a call per priority.
+   * `narrow` reads TEAMMATE_SESSIONS + 1 sessions first instead of
+   * ACCESS_SESSIONS_READ, for a rank judging a whole group (lib/priorityGroup
+   * positionOf) whose sessions nothing else reads; the verdict is the same.
    */
-  canRead: (p: Priority) => Promise<boolean>;
+  canRead: (p: Priority, narrow?: boolean) => Promise<boolean>;
   /** The priority's steps as the viewer may see them (stepsFor). */
   stepsFor: (p: Priority) => Promise<PriorityStep[]>;
 };
@@ -101,7 +104,7 @@ export async function readerFor(ctx: Ctx, viewer: Id<"users">): Promise<Reader> 
     return isSessionOwner(ctx, c._id, viewer, c);
   };
   const judged = new Map<string, Promise<boolean>>();
-  const judge = async (p: Priority) => {
+  const judge = async (p: Priority, first: number) => {
     if (String(p.user_id) === String(viewer)) return true;
     if (p.needs_rewrite || !authorizedFor(accessStampFromDoc("priorities", p), String(viewer), held)) return false;
     if (p.from_call && p.pass_at === 0) {
@@ -110,19 +113,19 @@ export async function readerFor(ctx: Ctx, viewer: Id<"users">): Promise<Reader> 
     }
     const ws = parseWorkspaceKey(p.workspace);
     if (ws?.type !== "team") return false;
-    let window = await sessionsOf(p, ACCESS_SESSIONS_READ);
+    let window = await sessionsOf(p, first);
     let owners = window.filter((c) => String(c.user_id) === String(p.user_id));
     // Teammates' Starts crowd the newest: when they leave fewer than TEAMMATE_SESSIONS of the owner's, look further back once.
-    if (owners.length < TEAMMATE_SESSIONS && window.length === ACCESS_SESSIONS_READ) {
+    if (owners.length < TEAMMATE_SESSIONS && window.length === first) {
       window = await sessionsOf(p, ACCESS_SESSIONS_WIDE);
       owners = window.filter((c) => String(c.user_id) === String(p.user_id));
     }
     for (const c of owners.slice(0, TEAMMATE_SESSIONS)) if (await vis.listedTo(c, ws.teamId)) return true;
     return false;
   };
-  const canRead = (p: Priority) => {
+  const canRead = (p: Priority, narrow = false) => {
     const key = String(p._id);
-    if (!judged.has(key)) judged.set(key, judge(p));
+    if (!judged.has(key)) judged.set(key, judge(p, narrow ? TEAMMATE_SESSIONS + 1 : ACCESS_SESSIONS_READ));
     return judged.get(key)!;
   };
 

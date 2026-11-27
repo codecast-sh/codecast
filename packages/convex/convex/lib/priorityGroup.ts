@@ -22,44 +22,16 @@ export function activeGroup(ctx: { db: any }, userId: Id<"users">, workspace: st
 
 /**
  * Each active priority's position among its owner's active ones in its
- * workspace (shared/contracts/priorities effectivePriorityOrder). `rows` must
- * hold every active priority of each owner and workspace it covers.
+ * workspace (shared/contracts/priorities effectivePriorityOrder), numbered
+ * over `rows`: every active one of each owner and workspace it covers for the
+ * real order, or the ones a teammate can read for theirs (priorityRead listFor).
  */
 export const positionsOf = (rows: Doc<"priorities">[]): Map<string, number> => priorityPositions(rows, (r) => String(r._id));
 
-/** Who a rank is read for: the viewer, and which of a teammate's priorities they can read (lib/priorityAccess Reader). */
-export type RankReader = { viewer: Id<"users"> | string; canRead: (p: Doc<"priorities">) => Promise<boolean> };
+/** Who a rank is read for: the viewer, and which of a teammate's priorities they can read (lib/priorityAccess Reader; `narrow` starts the judgment on fewer sessions). */
+export type RankReader = { viewer: Id<"users"> | string; canRead: (p: Doc<"priorities">, narrow?: boolean) => Promise<boolean> };
 
-/**
- * One owner's active priorities in one workspace, each with its position as
- * the reader sees it. The owner reads their real order. A teammate reads that
- * order over the ones they can read, numbered 1..n, so one hidden from them
- * (one that needs a rewrite, one whose sessions are not listed to them) leaves
- * no gap. A teammate's numbering stops once every id in `wanted` has its
- * number: each priority it judges costs a read, and those ranked below go
- * unread.
- */
-export async function positionsFor(ctx: { db: any }, r: RankReader, owner: Id<"users">, workspace: string, wanted: ReadonlySet<string>, readGroup: GroupRead = activeGroup): Promise<Map<string, number>> {
-  const group = await readGroup(ctx, owner, workspace);
-  if (String(owner) === String(r.viewer)) return positionsOf(group);
-  const out = new Map<string, number>();
-  let left = group.filter((p) => wanted.has(String(p._id))).length;
-  for (const p of effectivePriorityOrder(group)) {
-    if (!left) break;
-    if (!(await r.canRead(p))) continue;
-    out.set(String(p._id), out.size + 1);
-    if (wanted.has(String(p._id))) left--;
-  }
-  return out;
-}
-
-/** One priority's position as the reader sees it (positionsFor; null when not active): the same in a list, on the page, on the pin line and on a session's priority pill. */
-export async function positionOf(ctx: { db: any }, r: RankReader, p: Doc<"priorities">, readGroup: GroupRead = activeGroup): Promise<number | null> {
-  if (p.status !== "active") return null;
-  return (await positionsFor(ctx, r, p.user_id, p.workspace, new Set([String(p._id)]), readGroup)).get(String(p._id)) ?? null;
-}
-
-/** How a rank reads an owner's active group: activeGroup, or a memo of it for a caller ranking many priorities (lib/sessionPriority). */
+/** How a rank reads an owner's active group: activeGroup, or a memo of it (groupMemo). */
 export type GroupRead = (ctx: { db: any }, userId: Id<"users">, workspace: string) => Promise<Doc<"priorities">[]>;
 
 /** activeGroup read once per owner and workspace for as long as the memo lives. */
@@ -70,6 +42,47 @@ export function groupMemo(): GroupRead {
     if (!seen.has(k)) seen.set(k, activeGroup(ctx, userId, workspace));
     return seen.get(k)!;
   };
+}
+
+/** A teammate's group in the owner's order, numbered over what the reader can read as far as a call has walked it: null for one they cannot read. */
+type Walk = { order: Doc<"priorities">[]; next: number; numbered: number; at: Map<string, number | null>; busy: Promise<unknown> };
+
+/** What one call's ranks share: each owner's group read once, and each teammate's group walked once however many of its priorities the call ranks. */
+export type RankMemo = { readGroup: GroupRead; walks: Map<string, Walk> };
+export const rankMemo = (): RankMemo => ({ readGroup: groupMemo(), walks: new Map() });
+
+/**
+ * One priority's position as the reader sees it (null when not active), on
+ * the page, the pin line and a session's priority pill. The owner reads their
+ * real order. A teammate reads that order over the ones they can read,
+ * numbered 1..n, so one hidden from them (one that needs a rewrite, one whose
+ * sessions are not listed to them) leaves no gap. The walk judges the group
+ * top down and stops at `p`, numbered or found unreadable, so those ranked
+ * below it go unread, and each judgment starts narrow (Reader.canRead).
+ *
+ * A list numbers a teammate over the rows it judged instead (priorityRead
+ * listFor), which reads nothing more: this number exceeds the list's only
+ * when the list's teammate cap cut readable rows of that teammate.
+ */
+export async function positionOf(ctx: { db: any }, r: RankReader, p: Doc<"priorities">, memo: RankMemo = rankMemo()): Promise<number | null> {
+  if (p.status !== "active") return null;
+  const id = String(p._id);
+  const group = await memo.readGroup(ctx, p.user_id, p.workspace);
+  if (String(p.user_id) === String(r.viewer)) return positionsOf(group).get(id) ?? null;
+  const k = `${p.user_id} ${p.workspace}`;
+  let w = memo.walks.get(k);
+  if (!w) memo.walks.set(k, (w = { order: effectivePriorityOrder(group), next: 0, numbered: 0, at: new Map(), busy: Promise.resolve() }));
+  const walk = w;
+  // One walk at a time per group: two pills awaiting the same walk would otherwise number out of order.
+  const done = walk.busy.then(async () => {
+    while (!walk.at.has(id) && walk.next < walk.order.length) {
+      const q = walk.order[walk.next++];
+      walk.at.set(String(q._id), (await r.canRead(q, true)) ? ++walk.numbered : null);
+    }
+    return walk.at.get(id) ?? null;
+  });
+  walk.busy = done;
+  return done;
 }
 
 /** The most sessions any one transaction reads off one priority; the rest is paged by scheduled runs (priorityPassRun SESSION_PAGE). */

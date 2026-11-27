@@ -8,7 +8,8 @@ import { expect, setDefaultTimeout, test } from "bun:test";
 import { convexTest } from "convex-test";
 import schema from "./schema";
 import { allModules } from "./testModules.testkit";
-import { TEAMMATE_ALL_CAP, TEAMMATE_LINKED, TEAMMATE_PRIORITIES_CAP, TEAMMATE_TOTAL_CAP, listFor } from "./priorityRead";
+import { TEAMMATE_ALL_CAP, TEAMMATE_LINKED, TEAMMATE_PRIORITIES_CAP, TEAMMATE_TOTAL_CAP, listFor, showFor } from "./priorityRead";
+import { sessionPriorityReader } from "./lib/sessionPriority";
 import type { Id } from "./_generated/dataModel";
 
 setDefaultTimeout(180_000);
@@ -54,12 +55,14 @@ function counting(ctx: any): { ctx: any; calls: () => number; docs: () => number
  * Documents a list may read: this backend refuses a query past 4,096
  * (convex org.ts F2), and the list keeps well clear of it where its caps
  * allow (DOCS_BUDGET). Two shapes sit between the two: sixteen teammates each
- * with sixty active priorities per workspace, whose groups a rank must read
- * whole to number (positionsFor), and five team workspaces at the full
- * teammate budget, whose per-row reads (sessions, tasks, group) add up.
+ * with sixty active priorities per workspace, and five team workspaces at the
+ * full teammate budget, whose per-row reads (sessions, tasks) add up. Dense
+ * shapes, many teammates each with many sessions on every priority, stay
+ * under DENSE_BUDGET.
  */
 const DOCS_BUDGET = 2_500;
 const DOCS_CAP = 4_096;
+const DENSE_BUDGET = 3_500;
 
 /**
  * Ada and Bea share `teamNames` (Acme first). Ada has `perTeam` active
@@ -128,16 +131,20 @@ async function world(perTeam: number, teamNames = ["Acme", "Beta"], mates = 0) {
     return { bea, late };
   });
   /** Bea's list of every workspace, and the db calls it made and documents they returned. */
+  const shown = (id: Id<"priorities">) => t.run(async (ctx: any) => {
+    const p = await ctx.db.get(id);
+    return await showFor(ctx, ids.bea, p.short_id);
+  });
   const listed = (args: { all?: boolean } = {}) => t.run(async (ctx: any) => {
     const counted = counting(ctx);
     const list = await listFor(counted.ctx, ids.bea, args);
     return { list, calls: counted.calls(), docs: counted.docs() };
   });
-  return { ...ids, listed };
+  return { ...ids, listed, shown };
 }
 
 test("a list of every workspace at the teammate cap stays well under the read cap, and a teammate's priority past the link budget still reports its mapped sessions", async () => {
-  const { late, listed } = await world(TEAMMATE_PRIORITIES_CAP);
+  const { late, listed, shown } = await world(TEAMMATE_PRIORITIES_CAP);
   const { list, calls, docs } = await listed();
   console.log(`priority list worst case: ${calls} db calls, ${docs} documents for ${list.priorities.length} rows`);
   expect(list.priorities.filter((r: any) => r.mine)).toHaveLength(OWN);
@@ -156,8 +163,10 @@ test("a list of every workspace at the teammate cap stays well under the read ca
   expect(list.priorities.filter((r: any) => r.mine).every(viaTask)).toBe(true);
 
   // Past the budget: linked from its mapped sessions alone, the asking one on its milestone.
+  // The list numbers Ada over the rows it judged: the cap left out her oldest (#60), so her last reads #60 here and #61 on its page.
   const row = list.priorities.find((r: any) => String(r._id) === String(late));
-  expect(row.rank).toBe(TEAMMATE_PRIORITIES_CAP + 1);
+  expect(row.rank).toBe(TEAMMATE_PRIORITIES_CAP);
+  expect(((await shown(late)) as any).rank).toBe(TEAMMATE_PRIORITIES_CAP + 1);
   expect([row.links, row.plan]).toEqual([undefined, undefined]);
   const s3 = row.mapped_links.find((l: any) => l.key === "s3");
   expect(s3.sessions[0]).toMatchObject({ state: "needs_you", mine: false, why: ["mapped"] });
@@ -175,7 +184,7 @@ test("with all, teammates' priorities are capped across every workspace together
   expect(calls).toBeLessThan(3_000);
 });
 
-test("many teammates, each with a big active group, stay under the read cap: numbering stops at each one's last listed row", async () => {
+test("many teammates, each with a big active group, stay under the read cap: numbering reads nothing past the rows it lists", async () => {
   const { listed } = await world(TEAMMATE_PRIORITIES_CAP, ["Acme", "Beta"], 15);
   for (const args of [{}, { all: true }]) {
     const { list, calls, docs } = await listed(args);
@@ -202,4 +211,84 @@ test("many team workspaces share one teammate budget, each keeping its share, so
   expect(perWorkspace.size).toBe(teams.length);
   for (const n of perWorkspace.values()) expect(n).toBeGreaterThanOrEqual(Math.floor(TEAMMATE_TOTAL_CAP / teams.length));
   expect(list.priorities.filter((r: any) => r.mine)).toHaveLength(OWN);
+});
+
+/**
+ * Bea and `mates` teammates share `teams`; each teammate has `per` active
+ * priorities in each, as recently active as a seeded shuffle says, each with
+ * `sessions` sessions listed to the team. Every priority judges readable, so
+ * the list holds every teammate cap allows.
+ */
+async function dense(mates: number, per: number, sessions: number, teamNames = ["Acme", "Beta"]) {
+  const t = convexTest(schema, allModules);
+  const { bea, convs } = await t.run(async (ctx: any) => {
+    const bea = await ctx.db.insert("users", { name: "Bea" });
+    const teams: Id<"teams">[] = [];
+    for (const name of teamNames) {
+      const team = await ctx.db.insert("teams", { name, created_at: NOW, features: { priorities: true } });
+      await ctx.db.insert("team_memberships", { user_id: bea, team_id: team, role: "member", joined_at: 1 });
+      teams.push(team);
+    }
+    let n = 0;
+    let seed = 7;
+    const rnd = () => (seed = (seed * 48271) % 2147483647) / 2147483647;
+    const convs: Id<"conversations">[] = [];
+    for (let m = 0; m < mates; m++) {
+      const mate = await ctx.db.insert("users", { name: `Mate ${m}` });
+      for (const team of teams) {
+        await ctx.db.insert("team_memberships", { user_id: mate, team_id: team, role: "member", joined_at: 1 });
+        for (let rank = 1; rank <= per; rank++) {
+          const p = await ctx.db.insert("priorities", {
+            user_id: mate, workspace: `team:${team}`, short_id: `pri-${n++}`, title: "p", summary: "", status: "active", ai_rank: rank, steps: [],
+            first_seen_at: NOW, last_active_at: NOW - Math.floor(rnd() * 1e6), pass_at: NOW, created_at: NOW, updated_at: NOW,
+          });
+          for (let s = 0; s < sessions; s++) {
+            const sid = `jx7c${n++}`;
+            const c = await ctx.db.insert("conversations", {
+              user_id: mate, team_id: team, agent_type: "claude_code", session_id: sid, short_id: sid, title: sid,
+              started_at: NOW, updated_at: NOW, message_count: 1, is_private: false, team_visibility: "full", status: "active", priority_id: p,
+            });
+            if (s === 0) convs.push(c);
+          }
+        }
+      }
+    }
+    return { bea, convs };
+  });
+  return { t, bea, convs };
+}
+
+for (const [mates, per, sessions, teams] of [[8, 30, 10, 2], [4, 60, 10, 2], [16, 20, 6, 2], [6, 30, 10, 3]] as const) {
+  test(`a dense list of every workspace (${mates} teammates x ${per} priorities x ${sessions} sessions, ${teams} workspaces) numbers its teammates with no extra reads`, async () => {
+    const { t, bea } = await dense(mates, per, sessions, ["Acme", "Beta", "Gamma"].slice(0, teams));
+    const { list, calls, docs } = await t.run(async (ctx: any) => {
+      const counted = counting(ctx);
+      const list = await listFor(counted.ctx, bea, {});
+      return { list, calls: counted.calls(), docs: counted.docs() };
+    });
+    console.log(`dense priority list ${mates}x${per}x${sessions}, ${teams} workspaces: ${calls} db calls, ${docs} documents for ${list.priorities.length} rows`);
+    expect(docs).toBeLessThan(DENSE_BUDGET);
+    // Each teammate's listed rows are numbered 1..n in a workspace, no gap.
+    const ranks = new Map<string, number[]>();
+    for (const r of list.priorities as any[]) ranks.set(`${r.user_id} ${r.workspace}`, [...(ranks.get(`${r.user_id} ${r.workspace}`) ?? []), r.rank]);
+    for (const got of ranks.values()) expect([...got].sort((a, b) => a - b)).toEqual(got.map((_, i) => i + 1));
+  });
+}
+
+test("a dense Deploys board numbers each session's priority by walking its group only down to it", async () => {
+  const { t, bea, convs } = await dense(8, 30, 10);
+  const { docs, ranks } = await t.run(async (ctx: any) => {
+    const counted = counting(ctx);
+    const team = (await ctx.db.get(convs[0])).team_id;
+    const priorityOf = await sessionPriorityReader(counted.ctx, bea, team);
+    const ranks: Array<number | null> = [];
+    for (const id of convs) {
+      const c = await ctx.db.get(id);
+      if (String(c.team_id) === String(team)) ranks.push((await priorityOf(c))?.rank ?? null);
+    }
+    return { docs: counted.docs(), ranks };
+  });
+  console.log(`dense deploys board: ${docs} documents for ${ranks.length} sessions`);
+  expect(docs).toBeLessThan(DENSE_BUDGET);
+  expect(ranks.every((r) => r != null)).toBe(true);
 });
