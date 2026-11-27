@@ -8795,8 +8795,16 @@ export default defineSchema({
         // Session routes: when the last context lane chunk went out; the next
         // waits CONTEXT_MIN_GAP_MS unless a line names the agent.
         context_at: v.optional(v.number()),
+        // Session routes: "scribe" marks the call's Scribe, the silent agent
+        // keeping its board (transcripts.inviteScribe). At most one per call.
+        role: v.optional(v.literal("scribe")),
       }),
     ),
+    // A claim on the call's one Scribe slot while its inviter starts the
+    // agent (transcripts.inviteScribe). Cleared when the agent's route lands
+    // (addRoute with role "scribe") or Scribe is removed; a claim older than
+    // SCRIBE_CLAIM_TTL_MS no longer holds the slot, judged when read.
+    scribe_claim: v.optional(v.object({ by: v.id("users"), at: v.number() })),
     // Monotonic per-transcript segment counter (writer-owned; the scribe is
     // the only appender, so no contention).
     last_seq: v.number(),

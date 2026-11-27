@@ -79,6 +79,7 @@ export * from "./recordingAudio";
 export * from "./transcribeLanguage";
 export * from "./callPush";
 export * from "./transcriptChunk";
+export * from "./scribePrompt";
 // Who said each line of a voice note: the one resolver every surface names a
 // diarized line through, and the words-to-lines rule of the batch pass.
 export * from "./speakers";
