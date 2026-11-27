@@ -112,6 +112,39 @@ describe("checker = \"bun\"", () => {
     expect(readWatchState(dir)).toBeNull();
   });
 
+  test("a run's state is visible before it reads the tree, however slow that is", async () => {
+    fs.writeFileSync(path.join(tree, "tsconfig.json"), "{}");
+    const bin = fakeBun(`echo "✓ No type errors in 1 files [1ms]"\nexit 0`);
+    const dir = watchDir(tree, "web");
+    let seenAtSignature: unknown = null;
+    const signature = () => {
+      seenAtSignature = readWatchState(dir)?.runId;
+      return "sig";
+    };
+    await runBunCheck(tree, "web", "tsconfig.json", bin, "run-early", signature);
+    expect(seenAtSignature).toBe("run-early");
+    expect(readBunResult(dir, "run-early")).toMatchObject({ errors: 0 });
+  });
+
+  test("an ignored directory counts as one entry, and still changes the signature when its contents are replaced", () => {
+    const git = (...args: string[]) => spawnSync("git", ["-C", tree, "-c", "user.email=x@x", "-c", "user.name=x", ...args], { encoding: "utf-8" });
+    git("init", "-q");
+    fs.writeFileSync(path.join(tree, ".gitignore"), "deps/\n");
+    fs.writeFileSync(path.join(tree, "a.ts"), "export {};\n");
+    git("add", "-A");
+    git("commit", "-qm", "init");
+    fs.mkdirSync(path.join(tree, "deps/pkg"), { recursive: true });
+    for (let i = 0; i < 200; i++) fs.writeFileSync(path.join(tree, `deps/pkg/f${i}.d.ts`), "export {};\n");
+    const listed = spawnSync("git", ["-C", tree, "ls-files", "--others", "--ignored", "--exclude-standard", "--directory"], { encoding: "utf-8" }).stdout.trim().split("\n");
+    expect(listed).toEqual(["deps/"]);
+    const before = treeSignature(tree);
+    expect(before).not.toBeNull();
+    // An install adds or removes entries at the top of the ignored directory.
+    fs.mkdirSync(path.join(tree, "deps/other"));
+    fs.utimesSync(path.join(tree, "deps"), new Date(), new Date(Date.now() + 5_000));
+    expect(treeSignature(tree)).not.toBe(before);
+  });
+
   test("a run that fails without a diagnostic leaves a failure, and the ask exits 70", async () => {
     fs.writeFileSync(path.join(tree, "tsconfig.json"), "{}");
     const bin = fakeBun(`echo 'error: Unknown flag "--threads"'\nexit 1`);
