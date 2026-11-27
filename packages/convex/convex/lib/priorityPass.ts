@@ -41,6 +41,8 @@ export const PRIORITY_PASS_CAPS = {
   idle_summary_chars: 600,
   /** The priorities block and the touched sessions together (sessions newest first): about 90k input tokens. */
   prompt_chars: 360_000,
+  /** The most sessions one call reads: the reply restates every priority they touch, and about 60 ran past max_tokens. */
+  sessions_per_call: 30,
   /** The newest sessions listed under one existing priority. */
   sessions_per_priority: 8,
   /** A priority done or quiet for longer than this is left out of the prompt. */

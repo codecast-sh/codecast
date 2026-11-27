@@ -29,7 +29,7 @@ import { passOn } from "./lib/priorityPassSchedule";
 import { askRerun } from "./lib/priorityClassifierHook";
 import { recomputeStepDone } from "./lib/priorityLinks";
 import { stepKeyMark } from "./lib/priorityGroup";
-import { PRIORITY_PASS_MODEL, mergePriorities, priorityPassRequest, type MergePlan, type PriorityPassInput, type PriorityWrite } from "./lib/priorityPass";
+import { PRIORITY_PASS_CAPS, PRIORITY_PASS_MODEL, mergePriorities, priorityPassRequest, type MergePlan, type PriorityPassInput, type PriorityWrite } from "./lib/priorityPass";
 import { stepKeyMax, holdPersonSteps, isPersonHeld, withPersonFields } from "./lib/priorityPassSteps";
 import { SESSION_PAGE, clearDeadStepKeysNow, moveMergedSessionsNow, sessionMover } from "./priorityPassSessions";
 import { parsePriorityPassOutput } from "./lib/priorityPassParse";
@@ -593,10 +593,10 @@ export function callScope(workspace: string): CallScope {
   return ws?.type === "team" ? { workspace, team_id: ws.teamId } : { workspace };
 }
 
-/** How many of the sessions (oldest first) one prompt holds whole: at least one, so a chain always moves. */
+/** How many of the sessions (oldest first) one call reads: as many as its prompt holds whole, up to sessions_per_call, and at least one, so a chain always moves. */
 export function fittingPrefix(input: PriorityPassInput): number {
   const fits = (k: number) => priorityPassRequest({ ...input, sessions: input.sessions.slice(0, k) }).omitted.length === 0;
-  let lo = 0, hi = input.sessions.length;
+  let lo = 0, hi = Math.min(input.sessions.length, PRIORITY_PASS_CAPS.sessions_per_call);
   while (lo < hi) {
     const mid = Math.ceil((lo + hi) / 2);
     if (fits(mid)) lo = mid;
