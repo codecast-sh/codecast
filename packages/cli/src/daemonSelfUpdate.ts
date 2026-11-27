@@ -17,6 +17,17 @@ export function forcedUpdateWaits(current: string, latest: string | null): boole
   return latest !== null && !isBelowMinimum(current, latest);
 }
 
+/**
+ * What the watchdog reports for a force_update it ran before restarting a dead
+ * daemon. Another process installing this install (`cast update`, a command's
+ * update check) is a deferral, not a failure: that process does the install.
+ */
+export function watchdogUpdateReport(result: { success: boolean; error?: string }): { result?: string; error?: string } {
+  if (result.success) return { result: "Updated by watchdog" };
+  if (result.error === UPDATE_IN_PROGRESS) return { result: "Deferred by watchdog: another process is updating this install" };
+  return { error: `Watchdog update failed: ${result.error}` };
+}
+
 export const UPDATE_DEFER_RETRY_MS = 60_000;
 export const UPDATE_DEFER_RETRIES = 5;
 

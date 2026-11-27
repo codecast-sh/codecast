@@ -26,7 +26,12 @@ export type Sweep = {
   failed_runs: Array<{ task_short_id: string; flow: string; station: string | null; failed_at: number }>;
   laggards: Array<{ device: string; device_id: string | null; own: boolean; owner_id: string; cli_version: string | null; floor: string; floor_set_at: number | null }>;
   unretired: Array<{ short_id: string }>;
+  /** The kinds the server could not read this time, each listed empty (absent from an older server). */
+  failed_kinds?: SweepKind[];
 };
+
+const SWEEP_KINDS = ["incidents", "late_targets", "failed_runs", "laggards", "unretired"] as const;
+type SweepKind = (typeof SWEEP_KINDS)[number];
 
 /** The sweep's own fields and nothing else a server sent. */
 export function project(s: Sweep): Sweep {
@@ -36,6 +41,8 @@ export function project(s: Sweep): Sweep {
     failed_runs: s.failed_runs.map((r) => ({ task_short_id: r.task_short_id, flow: r.flow, station: r.station, failed_at: r.failed_at })),
     laggards: s.laggards.map((l) => ({ device: l.device, device_id: l.device_id, own: l.own, owner_id: l.owner_id, cli_version: l.cli_version, floor: l.floor, floor_set_at: l.floor_set_at })),
     unretired: s.unretired.map((u) => ({ short_id: u.short_id })),
+    // Only the kind names this CLI knows: anything else a server sent is dropped.
+    ...(Array.isArray(s.failed_kinds) && s.failed_kinds.length ? { failed_kinds: SWEEP_KINDS.filter((k) => s.failed_kinds!.includes(k)) } : {}),
   };
 }
 
@@ -48,7 +55,7 @@ export const sweepCount = (s: Sweep) => s.incidents.length + s.late_targets.leng
 
 /** A body the server answered with: every list there, or the read failed (an empty 200 is no quiet hour). */
 const isSweep = (s: unknown): s is Sweep =>
-  !!s && typeof s === "object" && (["incidents", "late_targets", "failed_runs", "laggards", "unretired"] as const).every((k) => Array.isArray((s as any)[k]));
+  !!s && typeof s === "object" && SWEEP_KINDS.every((k) => Array.isArray((s as any)[k]));
 
 /** One line per exception: what it is, then the command that acts on it. */
 export function formatSweep(s: Sweep, now: number): string[] {
@@ -150,6 +157,13 @@ export async function runSweep(o: { read: () => Promise<Sweep>; json?: boolean; 
     if (!o.quiet) o.error(`release sweep failed: ${err instanceof Error ? err.message : String(err)}`);
     return SWEEP_ERROR_EXIT;
   }
+  // A kind the server could not read is listed empty and named; only every kind failing is a failed read.
+  const failedKinds = s.failed_kinds ?? [];
+  if (failedKinds.length === SWEEP_KINDS.length) {
+    if (!o.quiet) o.error(`release sweep failed: no kind could be read (${failedKinds.join(", ")})`);
+    return SWEEP_ERROR_EXIT;
+  }
+  if (failedKinds.length && !o.quiet) o.error(`release sweep could not read ${failedKinds.join(", ")} this time; listed as empty`);
   if (o.newSince !== undefined) {
     o.log(JSON.stringify(sweepVerdict(s, previous, (o.now ?? Date.now)())));
     return SWEEP_FOUND_EXIT;

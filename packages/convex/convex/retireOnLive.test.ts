@@ -24,11 +24,11 @@ const file = (filename: string) => ({ filename, status: "modified", additions: 1
 /** How a commit is the session's: its own commit row records the sha, its trailer names it, or only a branch guess linked it. */
 type Own = "row" | "trailer" | "guess";
 
-async function world(subject: Record<string, unknown> = {}) {
+async function world(subject: Record<string, unknown> = {}, features: Record<string, boolean> = { retire_on_live: true }) {
   const t = convexTest(schema, allModules);
   const ids = await t.run(async (ctx) => {
     const user = await ctx.db.insert("users", { name: "Ana" } as any);
-    const team = await ctx.db.insert("teams", { name: "Acme", created_at: 1 } as any);
+    const team = await ctx.db.insert("teams", { name: "Acme", created_at: 1, features } as any);
     await ctx.db.insert("team_memberships", { team_id: team, user_id: user, role: "member", joined_at: 1 } as any);
     const workspace = `team:${team}`;
     for (const name of ["web", "api"]) {
@@ -90,6 +90,14 @@ describe("a deploy going live asks the daemon of each session whose own change i
     // A second pass while the ask is pending asks nothing more.
     expect(await w.retireOn(d)).toEqual([{ asked: true }]);
     expect(await w.asks()).toHaveLength(1);
+  });
+
+  test("a team without the retire_on_live flag: a live deploy asks no daemon to retire anything", async () => {
+    const w = await world({}, {});
+    await w.edit("web/a.tsx");
+    await w.commit(1, ["web/a.tsx"]);
+    expect(await w.retireOn(await w.deploy("web", 1))).toEqual([]);
+    expect(await w.asks()).toEqual([]);
   });
 
   test("the deploy's own live write schedules the pass", async () => {
@@ -179,9 +187,21 @@ describe("a deploy going live asks the daemon of each session whose own change i
     await w.edit("web/a.tsx");
     await w.commit(1, ["a.tsx"]);
     expect(await w.retireOn(await w.deploy("web", 1))).toEqual([{ asked: false, reason: "it has changes not on main: web/a.tsx" }]);
-    // An edit in a worktree under the checkout names the repository path below it.
-    expect(repoPathOf(`${ROOT}/.codecast/worktrees/fix/web/a.tsx`, ROOT)).toBe("web/a.tsx");
+    // A worktree under the checkout is not mapped onto the repository path below it.
+    expect(repoPathOf(`${ROOT}/.codecast/worktrees/fix/web/a.tsx`, ROOT)).toBe(".codecast/worktrees/fix/web/a.tsx");
     expect(repoPathOf(`${ROOT}-other/web/a.tsx`, ROOT)).toBeNull();
+  });
+
+  test("an edit in a worktree under the checkout keeps it, even when a later squash holds the same path: the daemon never sees that worktree", async () => {
+    const w = await world();
+    await w.edit("web/a.tsx", NOW - 70_000);
+    await w.commit(1, ["web/a.tsx"], { at: NOW - 65_000 });
+    // Worked on in a worktree after its commit, then a squash stamped later lands the same path.
+    await w.edit(`${ROOT}/.codecast/worktrees/fix/web/a.tsx`, NOW - 62_000);
+    await w.edit(`${ROOT}/.claude/worktrees/b/web/a.tsx`, NOW - 62_000);
+    await w.commit(2, ["web/a.tsx"], { at: NOW - 60_000 });
+    expect(await w.retireOn(await w.deploy("web", 2))).toEqual([{ asked: false, reason: `it edited in a worktree: ${ROOT}/.codecast/worktrees/fix/web/a.tsx, ${ROOT}/.claude/worktrees/b/web/a.tsx` }]);
+    expect(await w.asks()).toEqual([]);
   });
 
   test("a scratch file in a temporary directory is no part of the change", async () => {
@@ -260,8 +280,8 @@ const GRAPH = {
 
 describe("a run stopped at Deploy that a later deploy completes", () => {
   /** A run of the subject's change, stopped at Deploy; `heard` is the session its end message reached (the subject by default). */
-  async function stoppedRun(subject: Record<string, unknown> = {}, heardBy?: "lead") {
-    const w = await world(subject);
+  async function stoppedRun(subject: Record<string, unknown> = {}, heardBy?: "lead", features?: Record<string, boolean>) {
+    const w = await world(subject, features);
     await w.commit(1, ["web/a.tsx"]);
     const lead = heardBy ? await w.t.run(async (ctx) => ctx.db.insert("conversations", {
       user_id: w.ids.user, team_id: w.ids.team, agent_type: "claude_code", started_at: NOW - 100_000, updated_at: NOW - 50_000, status: "active", short_id: "jx7lead", session_id: "s-lead", owner_device_id: "dev-1", title: "Lead", message_count: 3, git_root: ROOT,
@@ -296,6 +316,14 @@ describe("a run stopped at Deploy that a later deploy completes", () => {
     // The daemon kept it: once the ask's time is up it hears the run is over, once.
     expect(await s.t.mutation(internal.retireOnLive.tellIfKept, later.args[0])).toEqual({ told: true });
     expect(await s.t.mutation(internal.retireOnLive.tellIfKept, later.args[0])).toEqual({ told: false });
+    expect(await s.told()).toBe(1);
+  });
+
+  test("a team without the retire_on_live flag: its subject is not asked to retire, and hears the run is over now, as before", async () => {
+    const s = await stoppedRun({}, undefined, {});
+    expect(await s.complete(await s.deploy("web", 1))).toEqual([s.run]);
+    expect(await s.asks()).toHaveLength(0);
+    expect(await s.tellLater()).toHaveLength(0);
     expect(await s.told()).toBe(1);
   });
 
