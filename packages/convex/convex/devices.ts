@@ -34,7 +34,7 @@ import { isTeamMachineFor, listTeamMachines, resolveSessionLaunchDevice, retainS
 import { notifySessionExecutionTaken } from "./sessionAssignmentNotifications";
 import { releasePreviousOwner } from "./sessionRelease";
 import { cloudPlacementNeeded, findSharedCheckoutOccupant, parkOnCloudHost, unparkForMove } from "./cloudPlacement";
-import { getSystemConfig } from "./systemConfig";
+import { effectiveMinCliVersion } from "./systemConfig";
 import { isBelowMinimum } from "@platform/flags";
 import { queueMoveContinueIfMidTurn } from "./moveContinue";
 import { followNewRunner } from "./lib/followNewRunner";
@@ -1191,7 +1191,7 @@ export const listDevices = query({
       .collect();
     // The fleet floor below which a daemon updates itself. A device below it
     // with automatic update off waits for its Update button (Settings > Daemon).
-    const minCliVersion = await getSystemConfig(ctx, "min_cli_version");
+    const minCliVersion = await effectiveMinCliVersion(ctx, userId);
     const shares = await ctx.db
       .query("device_shares")
       .withIndex("by_user_device", (q: any) => q.eq("user_id", userId))
@@ -1708,11 +1708,13 @@ export const requestDeviceUpdate = mutation({
   },
 });
 
-/** The store's requestDeviceUpdate side effect (convex/dispatch.ts). */
-export async function performRequestDeviceUpdate(ctx: any, userId: Id<"users">, deviceId: string) {
+/** The store's requestDeviceUpdate side effect (convex/dispatch.ts). `version`
+ *  is the release the page read from the manifest, named as `cast devices
+ *  update` names it; a tab opened before that sends none. */
+export async function performRequestDeviceUpdate(ctx: any, userId: Id<"users">, deviceId: string, version?: string) {
   const device = await ownDevice(ctx, userId, deviceId);
   if (!device) throw new Error("Unknown device");
-  return applyDeviceUpdateRequest(ctx, userId, device);
+  return applyDeviceUpdateRequest(ctx, userId, device, requestedRelease(version));
 }
 
 async function applyDeviceUpdateRequest(ctx: any, userId: Id<"users">, device: any, version?: string) {
