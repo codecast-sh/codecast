@@ -6,8 +6,9 @@ import { describe, expect, it } from 'bun:test';
 import { buildModels, lastDays, sessionRowMark } from '@codecast/web/lib/priorityList';
 import { milestoneStartHref, type PriorityWrites } from '@codecast/web/lib/priorities';
 import { parseComposeLink } from '@codecast/web/lib/composeLink';
+import { buildSections, pageControls } from '@codecast/web/lib/prioritySections';
 import {
-  age, connectedOf, dayBar, dayLabel, milestoneMark, workflowRef, milestoneMenu, milestoneSections, moveToItems, priorityMenu, sectionRuns, sessionLabel, sessionMenu, sessionTargets, startCompose,
+  age, connectedOf, dayBar, dayLabel, groupBySheet, itemRows, milestoneMark, sectionItems, toggleHidden, workflowRef, milestoneMenu, milestoneSections, moveToItems, priorityMenu, sectionRuns, sessionLabel, sessionMenu, sessionTargets, startCompose,
 } from './prioritiesList';
 import { linkedCreateArgs, openCompose, useCompose } from './compose';
 
@@ -279,11 +280,19 @@ describe('the menus press web\'s writes', () => {
 
   it("a session's ⋯ takes it off the milestone or the priority, or moves it", () => {
     const { calls, writes } = recorder();
-    const items = sessionMenu(row(), { short_id: 'b' }, 's3', writes, { moveTo: () => {} });
+    const items = sessionMenu(row(), { short_id: 'b', mine: true }, 's3', writes, { moveTo: () => {} })!;
     expect(items.map((i) => i.label)).toEqual(['Not this milestone', 'Not this priority', 'Move to…']);
     items[0].onPress();
     items[1].onPress();
     expect(calls).toEqual([['moveSession', 'b', 'pri-7', 'pri-7', null], ['sessionNotThis', 'b', 'pri-7']]);
+  });
+
+  it("either owner may unlink a session from a priority; only the owner of both moves it; nobody else gets a menu", () => {
+    const { writes } = recorder();
+    const noMove = { moveTo: () => {} };
+    expect(sessionMenu(row({ mine: false }), { short_id: 'b', mine: true }, 's3', writes, noMove)!.map((i) => i.label)).toEqual(['Not this priority']);
+    expect(sessionMenu(row(), { short_id: 'b', mine: false }, 's3', writes, noMove)!.map((i) => i.label)).toEqual(['Not this priority']);
+    expect(sessionMenu(row({ mine: false }), { short_id: 'b', mine: false }, 's3', writes, noMove)).toBeNull();
   });
 
   it("a session moves to this priority's other open milestones (critical first), then the owner's others", () => {
@@ -322,5 +331,93 @@ describe('New session', () => {
     openCompose('plain');
     expect(useCompose.getState().start).toBeNull();
     expect(useCompose.getState().task).toBeNull();
+  });
+});
+
+describe('the list across workspaces', () => {
+  // The viewer in Codecast (active) and Union, a teammate in both; one done priority of the viewer's in Codecast.
+  const p = (short_id: string, workspace: string, user: 'me' | 'ashot', rank: number | null, over: Record<string, unknown> = {}) =>
+    row({ _id: short_id, short_id, title: short_id, workspace, user_id: user, owner: user === 'me' ? 'Jason' : 'Ashot', mine: user === 'me', rank, person_pos: user === 'me' ? rank : null, ai_rank: rank, owner_image: user === 'ashot' ? 'https://x/ashot.png' : null, ...over });
+  const rows = [
+    p('u-me-1', 'team:union', 'me', 1),
+    p('c-me-1', 'team:codecast', 'me', 1),
+    p('c-me-2', 'team:codecast', 'me', 2),
+    p('c-me-done', 'team:codecast', 'me', null, { status: 'done', done_at: NOW }),
+    p('c-ash-1', 'team:codecast', 'ashot', 1),
+    p('c-ash-2', 'team:codecast', 'ashot', 2),
+    p('u-ash-1', 'team:union', 'ashot', 1),
+  ];
+  const workspaceNames = { 'team:codecast': 'Codecast', 'team:union': 'Union' };
+  const opts = { activeWorkspace: 'team:union', hidden: [] as string[], workspaceNames };
+  const layout = (groupBy: string, over: Partial<typeof opts> = {}, list = rows) => {
+    const o = { ...opts, ...over };
+    const controls = pageControls(list, o);
+    return sectionItems(buildSections(list, { ...o, groupBy }), { headings: controls.showSectionHeadings, people: controls.showGroupBy });
+  };
+  const said = (items: ReturnType<typeof sectionItems>) => items.map((i) =>
+    i.kind === 'heading' ? `${i.top ? '#' : '-'} ${i.name}${i.count != null ? ` ${i.count}` : ''}` : i.kind === 'fold' ? `fold ${i.rows.length}` : `${i.row.short_id}${i.face ? ' @' : ''}`);
+
+  it('by default: the active workspace first, each person labelled inside it, the fold last in its group', () => {
+    expect(said(layout('workspace_person'))).toEqual([
+      '# Union 2', '- You', 'u-me-1', '- Ashot', 'u-ash-1',
+      '# Codecast 4', '- You', 'c-me-1', 'c-me-2', 'fold 1', '- Ashot', 'c-ash-1', 'c-ash-2',
+    ]);
+  });
+
+  it("Workspace grouping interleaves by rank, the viewer first within one, each with its owner's face", () => {
+    expect(said(layout('workspace'))).toEqual([
+      '# Union 2', 'u-me-1 @', 'u-ash-1 @',
+      '# Codecast 4', 'c-me-1 @', 'c-ash-1 @', 'c-me-2 @', 'c-ash-2 @', 'fold 1',
+    ]);
+  });
+
+  it('Person then workspace: a heading per person with their face, a label per workspace', () => {
+    const items = layout('person_workspace');
+    expect(said(items)).toEqual([
+      '# You 3', '- Union', 'u-me-1', '- Codecast', 'c-me-1', 'c-me-2', 'fold 1',
+      '# Ashot 3', '- Union', 'u-ash-1', '- Codecast', 'c-ash-1', 'c-ash-2',
+    ]);
+    const ashot = items.find((i) => i.kind === 'heading' && i.name === 'Ashot');
+    expect(ashot).toMatchObject({ mark: { face: { owner_image: 'https://x/ashot.png' } } });
+  });
+
+  it('a hidden workspace leaves its section out; one workspace left draws no heading', () => {
+    expect(said(layout('workspace_person', { hidden: ['team:union'] }))).toEqual(['- You', 'c-me-1', 'c-me-2', 'fold 1', '- Ashot', 'c-ash-1', 'c-ash-2']);
+  });
+
+  it('the viewer alone in one workspace: no heading, no person label', () => {
+    expect(said(layout('workspace_person', {}, rows.filter((r) => r.mine && r.workspace === 'team:codecast')))).toEqual(['c-me-1', 'c-me-2', 'fold 1']);
+  });
+
+  it("a teammate's ranks read 1..n as the server numbered them", () => {
+    const items = layout('workspace_person', { hidden: ['team:union'] }).filter((i) => i.kind === 'priority' && !i.row.mine);
+    expect(items.map((i) => (i.kind === 'priority' ? i.row.rank : null))).toEqual([1, 2]);
+  });
+
+  it('every row the list draws, folded ones included, gets a model', () => {
+    expect(itemRows(layout('workspace')).map((r) => r.short_id).sort()).toEqual(rows.map((r) => r.short_id).sort());
+  });
+
+  it('a chip press turns its workspace off, and back on', () => {
+    expect(toggleHidden([], 'team:union')).toEqual(['team:union']);
+    expect(toggleHidden(['team:union', 'user:me'], 'team:union')).toEqual(['user:me']);
+  });
+
+  it('Group by offers what the page allows, the current one checked, and a press on it changes nothing', () => {
+    const chosen: string[] = [];
+    const items = groupBySheet(pageControls(rows, opts).groupByOptions, 'workspace', (g) => chosen.push(g));
+    expect(items.map((i) => `${i.label}${i.selected ? ' ✓' : ''}`)).toEqual(['Workspace, then person', 'Person, then workspace', 'Workspace ✓']);
+    items[2].onPress();
+    items[1].onPress();
+    expect(chosen).toEqual(['person_workspace']);
+  });
+
+  it("a teammate's milestone reads from mapped_links: its real state, and Start on an open one", () => {
+    const theirs = p('c-ash-9', 'team:codecast', 'ashot', 1, {
+      links: undefined,
+      mapped_links: [link('s1'), link('s2', [session('z', 'dormant', { mine: false })]), link('s3'), link('s4'), link('p1'), link('p2')],
+    });
+    expect(milestoneMark(ms(theirs, 's2'))).toEqual({ kind: 'quiet', status: 'dormant', label: 'Sleeping' });
+    expect(milestoneMark(ms(theirs, 's4')).kind).toBe('start');
   });
 });

@@ -1,9 +1,10 @@
 // What the phone's Priorities list (app/priorities.tsx) and a priority's
 // screen (app/priority/[id].tsx) both draw: the ten-day strip, a priority's
 // milestones (each with its state mark, then DONE n and POLISH x/y), and an
-// open milestone's connected list, grouped by kind. The words and choices
-// are lib/prioritiesList's; every press opens a native screen or runs web's
-// write (lib/priorityWrites).
+// open milestone's connected list, grouped by kind. A teammate's priority
+// draws the same marks and acts the same (Start, open a session). The words
+// and choices are lib/prioritiesList's; every press opens a native screen or
+// runs web's write (lib/priorityWrites).
 import { useState, type ReactNode } from 'react';
 import { StyleSheet, TouchableOpacity, View as RNView } from 'react-native';
 import { useRouter } from 'expo-router';
@@ -257,7 +258,8 @@ function MilestoneLine({ model, m, now, lookups, own, defaultOpen }: {
  * Everything an open milestone is connected to, grouped by kind under a
  * labelled count: Sessions (sorted the way the sidebar files them, closed
  * ones folded), Tasks, Pull requests, Branches, Plans, Deploys. Each row
- * opens its native screen; the owner fixes a session's link from its ⋯.
+ * opens its native screen; the session's owner or the priority's fixes
+ * its link from its ⋯.
  */
 function Connected({ model, m, now, lookups, own }: {
   model: PriorityModel;
@@ -276,7 +278,8 @@ function Connected({ model, m, now, lookups, own }: {
   const deploys = lookups.deploysOf(m, row.workspace);
   const nSessions = c.live.length + c.closed.length + c.more;
   const empty = nSessions + c.tasks.length + c.prs.length + branches.length + c.plans.length + deploys.length === 0;
-  const sessionActions = (s: SessionLine) => showActionSheet(sessionLabel(s), sessionMenu(row, s, m.key, writes, {
+  // The session's owner or the priority's may unlink it; moving it between milestones needs both to be the viewer's.
+  const sessionActions = (s: SessionLine) => sessionMenu(row, s, m.key, writes, {
     moveTo: () => {
       const targets = sessionTargets(row, own(row), m.key);
       if (targets.length === 0) return appAlert('No other milestone', 'None of your active priorities has another open milestone to move it to.');
@@ -286,10 +289,11 @@ function Connected({ model, m, now, lookups, own }: {
         onPress: () => writes.moveSession(s.short_id, row.short_id, priority.short_id, step.key),
       })));
     },
-  }));
-  const session = (s: SessionLine) => (
-    <SessionRow key={s.conversation_id} s={s} now={now} onPress={() => openSession(s)} menu={row.mine && s.mine ? () => sessionActions(s) : undefined} />
-  );
+  });
+  const session = (s: SessionLine) => {
+    const items = sessionActions(s);
+    return <SessionRow key={s.conversation_id} s={s} now={now} onPress={() => openSession(s)} menu={items ? () => showActionSheet(sessionLabel(s), items) : undefined} />;
+  };
   return (
     <RNView style={styles.connected} testID={`priorities-connected-${m.key}`}>
       <Group label="Sessions" n={nSessions} kind="sessions">
