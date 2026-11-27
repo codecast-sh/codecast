@@ -14,7 +14,8 @@ import { chainAssignees, roleAssigneeInfo, type AssigneeInfo } from "@codecast/s
 import { enqueueStartSession } from "./devices";
 import { resolveSpawnDefinition, resolveTaskSpawnDevice } from "./spawn";
 import { resolveDefinitionFor } from "./agentDefinitions";
-import { resolveCallRef } from "./transcripts";
+import { resolveFromCall } from "./transcripts";
+import { appendTaskStep, priorityForTaskStep } from "./priorityCreate";
 import { outcomeOfDeclaration, subagentEnded } from "./subagentFleet";
 import { formatTaskCommentMessage, fromConvexAgentType, inlineForeignText, toConvexAgentType } from "@codecast/shared/contracts";
 import { blockersHoldingBack, docRelatesToTask, isStaleTask, readinessOf, topologicalOrder } from "@codecast/shared/tasks";
@@ -1137,23 +1138,14 @@ async function defaultSessionOwner(
   return role && !roleAssigneeRefusal(role, boundary) ? String(role._id) : String(userId);
 }
 
-/** A `from_call` write: the call a task was pulled from, named as prose names
- *  it (`cl-42` or a full id) and readable by the writer. Undefined writes
- *  nothing; "" clears the link. */
-async function resolveFromCall(ctx: any, userId: Id<"users">, ref: string | undefined): Promise<Id<"transcripts"> | null | undefined> {
-  if (ref === undefined) return undefined;
-  if (!ref.trim()) return null;
-  const call = await resolveCallRef(ctx, userId, ref);
-  if (!call) notFound(`Call not found: ${ref}`);
-  return call._id;
-}
-
 export const create = mutation({
   args: {
     api_token: v.string(),
     title: v.string(),
     // `cast task create --from-call cl-42`: the call this task came out of.
     from_call: v.optional(v.string()),
+    // `cast task create --under pri-N`: the task becomes a critical milestone of that priority.
+    under_priority: v.optional(v.string()),
     client_key: v.optional(v.string()),
     // `cast task create --team <name>|personal`: an explicit workspace wins
     // over the session's team and the directory rule (writes are explicit).
@@ -1279,6 +1271,7 @@ export const create = mutation({
     if (!project_id) project_id = await projectFromPlan(ctx, plan_id);
 
     const from_call = (await resolveFromCall(ctx, auth.userId, args.from_call)) ?? undefined;
+    const underPriority = args.under_priority ? await priorityForTaskStep(ctx, auth.userId, args.under_priority, db.workspaceKey) : null;
     const found_during = await foundDuringForCreate(ctx, auth.userId, { explicit: args.found_during, conversation: originConv, workspace: db.workspace, parent_id, plan_id });
 
     // Creator enrollment is human only when a person decided the task: human
@@ -1358,6 +1351,7 @@ export const create = mutation({
     }
     if (found_during) await recordTaskChange(ctx, id, { user_id: auth.userId, actor_type: originConv ? "agent" : "user", conversation_id: created_from_conversation }, [["found_during", "", found_during]], now);
     const waits = await addWaitsAtCreate(ctx, auth.userId, short_id, args);
+    if (underPriority) await appendTaskStep(ctx, underPriority, { short_id, title: args.title });
 
     // Subtasks carry plan_id for context but never join plan.task_ids — the
     // parent is the plan's unit of progress, so a decomposition can't inflate
