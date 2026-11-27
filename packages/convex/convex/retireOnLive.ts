@@ -29,7 +29,6 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { DAEMON_COMMAND_TTL_MS } from "@codecast/shared/contracts";
 import { extractSessionTrailer } from "@codecast/shared/blame";
 import { commitBySha } from "./deployTargetsState";
-import { previousCut } from "./deployCarries";
 import { reachOf } from "./deployReach";
 import { workspaceGrantsAccess } from "./lib/access";
 import { classifyNamedWorkState, retireRefusal } from "./conversations";
@@ -40,10 +39,12 @@ import { workspaceKeyHasFeature } from "./lib/teamFeatureGuard";
 
 /** Sessions one live deploy reads: its range is normally a handful of commits. */
 const SESSIONS_MAX = 25;
-/** Range commits read for their sessions, newest first. */
-const RANGE_COMMITS_MAX = 500;
 /** A session's own commits read; one with more is a long-lived lead, left to a person. */
 const OWN_COMMITS_MAX = 100;
+/** Bytes of its own commit rows read (patches included); past this it is kept, well inside a transaction's 16 MiB read limit. */
+const OWN_COMMIT_BYTES_MAX = 4 * 1024 * 1024;
+/** Its own commit rows read at a time: one row can hold up to a MiB of patches, so the byte budget is checked every few. */
+const OWN_COMMITS_PAGE = 4;
 /** Subagents whose edits are read; past this it is kept rather than judged on part of them. */
 const SUBAGENTS_MAX = 50;
 /** A session's (and its subagents') file changes read; past this it is kept rather than judged on part of them. */
@@ -85,8 +86,8 @@ async function judge(ctx: any, conv: Doc<"conversations">, now: number, opts: { 
   if (await watched(ctx, conv, now)) return "a person has it open";
   const work = await ownWork(ctx, conv);
   if (typeof work === "string") return work;
-  const own: Doc<"commits">[] = await ctx.db.query("commits").withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conv._id)).take(OWN_COMMITS_MAX + 1);
-  if (own.length > OWN_COMMITS_MAX) return `it has more than ${OWN_COMMITS_MAX} commits`;
+  const own = await ownCommits(ctx, conv._id);
+  if (typeof own === "string") return own;
   // A commit only guessed onto it (a branch it sat on) proves nothing about what it made.
   const made = (c: Doc<"commits">) => extractSessionTrailer(c.message) === String(conv._id) || work.hashes.some((h) => c.sha.startsWith(h));
   const landed = own.filter((c) => c.main_at != null && c.repository && made(c)).sort((a, b) => b.main_at! - a.main_at!);
@@ -108,6 +109,23 @@ async function watched(ctx: any, conv: Doc<"conversations">, now: number): Promi
   if (viewers.some((p: any) => now - p.last_seen < PRESENCE_FRESH_MS)) return true;
   const stream = await ctx.db.query("reply_streams").withIndex("by_conversation", (q: any) => q.eq("conversation_id", conv._id)).first();
   return (stream?.watch_until ?? 0) > now;
+}
+
+/**
+ * The session's own commit rows, a few at a time, or why it is kept: more than it reads, or more bytes. Not paginate(),
+ * which a function may call once, and a mutation completing runs (deployCarries) judges several sessions.
+ */
+async function ownCommits(ctx: any, id: Id<"conversations">): Promise<Doc<"commits">[] | string> {
+  const rows: Doc<"commits">[] = [];
+  let bytes = 0;
+  for (let after = 0; ;) {
+    const page: Doc<"commits">[] = await ctx.db.query("commits").withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", id).gt("_creationTime", after)).take(OWN_COMMITS_PAGE);
+    for (const c of page) bytes += JSON.stringify(c).length;
+    rows.push(...page);
+    if (rows.length > OWN_COMMITS_MAX || bytes > OWN_COMMIT_BYTES_MAX) return "it has too many commits to read";
+    if (page.length < OWN_COMMITS_PAGE) return rows;
+    after = page[page.length - 1]._creationTime;
+  }
 }
 
 /** What the session and its subagents wrote: each file's last edit, the commits its own rows record, and when its work last moved. */
@@ -232,21 +250,15 @@ export async function askDaemonToRetire(ctx: any, conv: Doc<"conversations">, no
   return null;
 }
 
-/** The sessions owning a commit a live deploy carries: the one at its sha, and those in its range on main. */
+/**
+ * The sessions owning a commit a live deploy carries: the one at its sha, and those its range names. The range is the
+ * deploy's own `commits`, each with its session, which fillDeployRange writes before this pass is scheduled
+ * (deploys.ts onDeployStatus); reading the commit rows instead would read every one's patches.
+ */
 async function carriedSessions(ctx: any, d: Doc<"deploys">): Promise<Id<"conversations">[]> {
-  const commits: Doc<"commits">[] = [];
   const own = await commitBySha(ctx, d.repository!, d.sha!);
-  if (own) commits.push(own);
-  // Without the target's previous live cut the range is unbounded: the deploy's own commit is all that is read.
-  const from = d.cut_at != null ? await previousCut(ctx, d) : null;
-  if (from != null) {
-    commits.push(...(await ctx.db
-      .query("commits")
-      .withIndex("by_repository_main", (q: any) => q.eq("repository", d.repository).gt("main_at", from).lte("main_at", d.cut_at))
-      .order("desc")
-      .take(RANGE_COMMITS_MAX)));
-  }
-  return [...new Set(commits.flatMap((c) => (c.conversation_id ? [String(c.conversation_id)] : [])))].slice(0, SESSIONS_MAX) as Id<"conversations">[];
+  const ids = [own?.conversation_id, ...(d.commits ?? []).map((c) => c.conversation_id)];
+  return [...new Set(ids.flatMap((id) => (id ? [String(id)] : [])))].slice(0, SESSIONS_MAX) as Id<"conversations">[];
 }
 
 /** A deploy went live (deploys.ts onDeployStatus): each session owning a commit it carries is judged in its own transaction. */

@@ -11,7 +11,6 @@
 // are re-exported here for the same reason.
 
 import * as fs from "node:fs";
-import * as path from "node:path";
 import {
   createUpdater,
   type DownloadOptions,
@@ -166,6 +165,10 @@ export const MANAGED_UPDATE_NOTE = `cast was installed by your organization (${p
  *  is updating this install (updateRetry.ts exclusiveUpdate). */
 export const UPDATE_IN_PROGRESS = "update_in_progress";
 
+/** The update lock sits beside the binary it guards (the updater's `<binary>.new`): two config dirs (a CODECAST_DIR
+ *  override, another HOME) updating one install still meet at it. */
+export const updateLockPath = (execPath = process.execPath): string => `${execPath}.update.lock`;
+
 export async function performUpdate(): Promise<{ success: boolean; error?: string }> {
   // A root-owned binary (Codecast.pkg from an MDM) is not this user's to
   // replace; the organization ships the next version (managedInstall.ts).
@@ -176,7 +179,7 @@ export async function performUpdate(): Promise<{ success: boolean; error?: strin
   if (isDevMode()) return { success: false, error: "dev_mode" };
   // Loaded here, off the boot graph: only an update needs it.
   const { exclusiveUpdate, updateWithRetry } = await import("./updateRetry.js");
-  const result = await exclusiveUpdate(path.join(CONFIG_DIR, "update.lock"), () => updateWithRetry(() => updater.performUpdate()));
+  const result = await exclusiveUpdate(updateLockPath(), () => updateWithRetry(() => updater.performUpdate()));
   // Callers print their own "Update failed" line without the reason, so name it
   // here. Dev mode is a refusal, not a failure, and stays quiet; so is a round
   // skipped because another updater is installing.
