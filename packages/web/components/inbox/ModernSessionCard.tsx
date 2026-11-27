@@ -54,6 +54,7 @@ import { PriorityRankChip } from "./PriorityRankChip";
 /** The section the panel draws the card in, as its props say it. */
 function sectionOfProps(variant: SessionCardViewProps["variant"], sectionStatus: SessionCardViewProps["sectionStatus"]): StatusSection | null {
   if (variant === "working") return "working";
+  if (variant === "shipping") return "shipping";
   if (variant === "stashed") return "stashed";
   if (variant === "dismissed") return "dismissed";
   if (variant === "snoozed") return "snoozed";
@@ -223,7 +224,12 @@ export function ModernSessionCardView({
     : null;
   const shipLink = ship ? shipHref(ship) : null;
   const chips: React.ReactNode[] = [];
-  if (priorityRank) chips.push(<PriorityRankChip key="priority" rank={priorityRank} />);
+  // On a Shipping or Sleeping row nothing asks for the eye, so the rank is a
+  // neutral reference; a Shipping row drops its workspace's mark, which can be
+  // a rocket that would read as the section's own.
+  const quietRank = status === "shipping" || status === "dormant";
+  const rankChip = priorityRank ? <PriorityRankChip key="priority" rank={priorityRank} neutral={quietRank} workspaceMark={status !== "shipping"} /> : null;
+  if (rankChip) chips.push(rankChip);
   if (!nested) {
     chips.push(
       <ModernProjectChip
@@ -343,7 +349,7 @@ export function ModernSessionCardView({
           <span className="flex shrink-0 items-center gap-1.5">
             {line.reason && <span data-mc-compact-reason className={`hidden max-w-[9rem] truncate text-meta ${meta.text}`}>{line.reason}</span>}
             {/* The Priorities view's rank, on the one line a compact card keeps (its third line, where the chip sits otherwise, is hidden there). */}
-            {priorityRank && <span data-mc-compact-rank className="hidden"><PriorityRankChip rank={priorityRank} /></span>}
+            {rankChip && <span data-mc-compact-rank className="hidden">{rankChip}</span>}
             <BrowserPaneOfferGlyph offer={session.browser_pane_offer} />
             {isFavorite && (
               <button type="button" data-mc-fav aria-label="Unfavorite" title="Favorite; press to remove" onClick={(e) => { e.stopPropagation(); onToggleFavorite?.(session._id); }} className="flex items-center text-sol-yellow hover:opacity-70">

@@ -49,7 +49,10 @@ import { scrollRowIntoView } from "../lib/scrollRowIntoView";
 import { useTriggers, fetchTriggerRuns } from "../hooks/useSyncTriggers";
 import { TriggerRunList, useTriggerRuns, openRunInStore, type TriggerRun } from "./TriggerRunHistory";
 import { TriggerRowItem, TriggerHomeHeader, SchedChildArrow, SchedHealthDot, SchedFireBadge } from "./TriggerRow";
-import { DormantClaimRow, DormantWakeRow } from "./inbox/DormantWakeRows";
+import { DormantClaimRow } from "./inbox/DormantWakeRows";
+import { ActivityUnderLine, type RowActivity } from "./inbox/ActivityLine";
+import { activityFactsSig, rowActivity } from "../lib/railActivity";
+import { sessionShipMap } from "../hooks/useSessionShipState";
 import { WAKE_BADGE, RUNNING_BADGE_TONE } from "../lib/triggerBadges";
 import { schedAccent, type SchedAccent } from "../lib/triggerAccent";
 // Who is speaking on each row (docs/architecture/session-characters.md S3).
@@ -1260,26 +1263,28 @@ function RetryStoppedButton({ rows }: { rows: InboxSession[] }) {
   );
 }
 
-function CardBars({ session, mode, scheduleRows, activeSessionId, wake, onOpen, onOpenSchedule }: {
+function CardBars({ session, mode, scheduleRows, activeSessionId, wake, activity, now, onOpen, onOpenSchedule }: {
   session: InboxSession;
   mode: CardBarsMode;
   scheduleRows: TriggerRow[];
   activeSessionId?: string | null;
-  // "parked": the card sits in the Dormant bucket, so it wears one wake line
-  // (DormantWakeRow) in place of every other bar, in every mode.
   // "claim": the card sits in Needs You while its pinned state declares
   // dormant — the row renders the claimed wake as unverified so the
   // contradiction explains itself.
-  wake?: "parked" | "claim";
+  wake?: "claim";
+  // A card from the Dormant bucket (drawn under Working, Shipping or
+  // Sleeping) wears one line saying what it is really doing, in place of
+  // every other bar, in every mode (ActivityUnderLine).
+  activity?: RowActivity;
+  now: number;
   onOpen: (session: InboxSession) => void;
   onOpenSchedule: (row: TriggerRow) => void;
 }) {
   const isActive = session._id === activeSessionId;
-  const bound = scheduleRows.map((r) => ({ ...r, openId: session._id }));
-  // A parked card always says what wakes it, in one line, whatever the mode.
-  if (wake === "parked") {
-    return <DormantWakeRow session={session} rows={bound} isActive={isActive} onOpen={onOpen} onOpenSchedule={onOpenSchedule} />;
+  if (activity) {
+    return <ActivityUnderLine session={session} activity={activity} now={now} isActive={isActive} onOpen={onOpen} onOpenSchedule={onOpenSchedule} />;
   }
+  const bound = scheduleRows.map((r) => ({ ...r, openId: session._id }));
   if (mode === "hidden") return null;
   const dormantRow = wake === "claim" ? (
     <DormantClaimRow
@@ -1703,7 +1708,7 @@ function SessionBeacon({
 // The declared status a status section's header already says, so a card under
 // it does not repeat it as a chip.
 const SECTION_DECLARED_STATUS: Record<string, ThreadStateStatus | undefined> = {
-  needs_input: "blocked", done: "done", new_results: "done", dormant: "dormant",
+  needs_input: "blocked", done: "done", new_results: "done", dormant: "dormant", shipping: "dormant",
 };
 
 function SessionListPanelImpl({
@@ -1771,6 +1776,11 @@ function SessionListPanelImpl({
     s => resolveInboxViewMode(s),
     // Open browser tabs per session (the Browser view): changes only when a daemon reports.
     s => s.browserTabs,
+    // What splits Dormant into Working, Shipping and Sleeping (lib/railActivity):
+    // the row facts it reads, as a signature, and every session's ship state
+    // (one map ref, rebuilt only when runs, deploys or reach change).
+    s => activityFactsSig(s.sessions),
+    s => sessionShipMap(s as never),
   ]);
   const titlebarRef = useTitlebarHead<HTMLDivElement>();
   const router = useRouter();
@@ -2196,6 +2206,45 @@ function SessionListPanelImpl({
     }
     return out;
   }, []);
+  // The Dormant bucket, split for display by what each row is really doing
+  // (lib/railActivity over the shared sessionActivity): its own work running
+  // draws under Working, its change on the way to live under Shipping, and
+  // only a wait stays in Sleeping. Placement is untouched. The keyboard walk
+  // reads the same split (setDormantSplitNav, published below).
+  const activitySig = s.sessions ? activityFactsSig(s.sessions) : "";
+  const shipMapRef = sessionShipMap(s as never);
+  const dormantSplit = useMemo(() => {
+    const st = useInboxStore.getState();
+    const activity = new Map<string, RowActivity>();
+    const working: InboxSession[] = [];
+    const shipping: InboxSession[] = [];
+    const sleeping: InboxSession[] = [];
+    for (const row of statusDormant) {
+      const a = rowActivity(st as never, row, coarseNow, scheduleBarRowsFor(row));
+      activity.set(row._id, a);
+      (a.state === "working" ? working : a.state === "shipping" ? shipping : sleeping).push(row);
+    }
+    return { activity, working, shipping, sleeping };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the signatures are the deps
+  }, [statusDormant, coarseNow, schedulePartition, activitySig, shipMapRef, scheduleBarRowsFor]);
+  const railWorking = useMemo(
+    () => (dormantSplit.working.length ? byPriority([...filteredWorking, ...dormantSplit.working]) : statusWorking),
+    [dormantSplit.working, byPriority, filteredWorking, statusWorking],
+  );
+  const dormantNavSig = `${dormantSplit.working.map((r) => r._id).join(",")}|${dormantSplit.shipping.map((r) => r._id).join(",")}`;
+  useWatchEffect(() => {
+    useInboxStore.getState().setDormantSplitNav(dormantNavSig === "|" ? null : {
+      working: new Set(dormantSplit.working.map((r) => r._id)),
+      shipping: new Set(dormantSplit.shipping.map((r) => r._id)),
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the id signature is the dep
+  }, [dormantNavSig]);
+  // The header numbers once Dormant is split: a moved card takes the rows
+  // nested under it (and counted in Dormant) along, as countOf counts them.
+  const movedWeight = (rows: InboxSession[]) => showSubagents
+    ? rows.reduce((n, r) => n + 1 + (globalSubByParent.get(r._id) ?? []).filter((sub) => placed.nestedSectionOf.get(sub._id) === "dormant").length, 0)
+    : rows.length;
+  const plus = (base: number | undefined, n: number) => (base === undefined ? undefined : base + n);
   const filteredDismissed = useMemo(() => {
     // Only surface dismissed sessions ACTIVE within the window — keyed on last
     // activity (updated_at), NOT when they were dismissed. A bulk cleanup dismisses
@@ -2773,7 +2822,7 @@ function SessionListPanelImpl({
         : [
             [statusQuestions, "questions"],
             [statusPinned, "pinned"], [statusNew, "new"], [statusNeedsInput, "needs_input"],
-            [statusDone, "done"], [statusWorking, "working"], [statusDormant, "dormant"],
+            [statusDone, "done"], [railWorking, "working"], [dormantSplit.shipping, "shipping"], [dormantSplit.sleeping, "dormant"],
           ];
     for (const [items, key] of sections) {
       if (inList(items) && s.collapsedSections[key]) {
@@ -2907,6 +2956,7 @@ function SessionListPanelImpl({
                   mode={cardBars}
                   scheduleRows={scheduleBarRowsFor(session)}
                   activeSessionId={activeSessionId}
+                  now={coarseNow}
                   onOpen={handleSelect}
                   onOpenSchedule={openScheduleTarget}
                 />
@@ -2955,7 +3005,7 @@ function SessionListPanelImpl({
     label: string,
     items: InboxSession[],
     color: string,
-    sectionVariant?: "working",
+    sectionVariant?: "working" | "shipping",
     flat?: boolean,
     opts?: {
       // Label/project sections pass an id-based key so a label named e.g.
@@ -3188,7 +3238,9 @@ function SessionListPanelImpl({
                   mode={cardBars}
                   scheduleRows={viewMode !== "trigger" || key === "dormant" ? scheduleBarRowsFor(session) : []}
                   activeSessionId={activeSessionId}
-                  wake={key === "dormant" ? "parked" : key === "needs_input" ? "claim" : undefined}
+                  wake={key === "needs_input" ? "claim" : undefined}
+                  activity={key === "working" || key === "shipping" || key === "dormant" ? dormantSplit.activity.get(session._id) : undefined}
+                  now={coarseNow}
                   onOpen={handleSelect}
                   onOpenSchedule={openScheduleTarget}
                 />
@@ -3673,13 +3725,19 @@ function SessionListPanelImpl({
             Input, Done to review), the agent right now (Working), then a
             machine event (Dormant). Nothing below Dormant is anyone's move. */}
         {renderSection("Done", statusDone, "text-sol-cyan", undefined, undefined, { floor: true, count: countOf(statusDone, done, "done"), onDropSession: dropSessionOnRest.done })}
-        {renderSection("Working", statusWorking, "text-sol-green", "working", undefined, { floor: true, count: countOf(statusWorking, working, "working") })}
-        {/* Dormant is the section nobody needs to watch: one quiet line per
-            session (the compact list's layout, whatever the person's own
-            setting) plus the line saying what wakes it and when. */}
+        {renderSection("Working", railWorking, "text-sol-green", "working", undefined, { floor: true, count: plus(countOf(statusWorking, working, "working"), movedWeight(dormantSplit.working)) })}
+        {/* Shipping and Sleeping need nobody to watch them: one quiet line
+            per session (the compact list's layout, whatever the person's own
+            setting) plus the line saying where its change is, or what wakes
+            it and when. */}
         <div className="inbox-compact" data-dormant-section>
           <div data-sv-rail>
-            {renderSection("Sleeping", statusDormant, "text-sol-text-dim", undefined, undefined, { key: "dormant", floor: true, count: countOf(statusDormant, dormant, "dormant"), onDropSession: dropSessionOnRest.dormant })}
+            {renderSection("Shipping", dormantSplit.shipping, "text-sol-text-muted", "shipping", undefined, { key: "shipping", floor: true, count: movedWeight(dormantSplit.shipping) })}
+          </div>
+        </div>
+        <div className="inbox-compact" data-dormant-section>
+          <div data-sv-rail>
+            {renderSection("Sleeping", dormantSplit.sleeping, "text-sol-text-dim", undefined, undefined, { key: "dormant", floor: true, count: plus(countOf(statusDormant, dormant, "dormant"), -movedWeight([...dormantSplit.working, ...dormantSplit.shipping])), onDropSession: dropSessionOnRest.dormant })}
           </div>
         </div>
         </>

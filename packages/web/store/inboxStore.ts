@@ -988,6 +988,9 @@ export type InboxSession = {
   // so a card can show its state without reading pull_requests. `state` is the
   // shepherd state (review_pending, ci_red, behind, approved, merged, ...).
   pr_status?: PrStatus | null;
+  // What a dormant session says it waits on (`cast state --status dormant
+  // --on`): presentation only, the under-line lib/railActivity draws.
+  waiting_on?: { kind: "person" | "session" | "task" | "pr"; ref: string; at?: number } | null;
   // The subagent fleet (convex/subagentFleet.ts): a worker's slot ("running"
   // or "queued"), when it took it, the machine and limits it counts against,
   // and what became of its worktree's changes when it ended.
@@ -5162,6 +5165,9 @@ export function visualOrderSessions(
     // A conversation's loaded transcript, for the hosted stop rule's fallback
     // (lib/hostedNotice hostedStopOf).
     messagesOf?: (id: string) => readonly any[] | undefined;
+    // The rail's split of Dormant (DormantSplitNav): those rows walk where
+    // they draw, after Working's own rows and in a Shipping section.
+    dormantSplit?: DormantSplitNav | null;
   } = {},
 ): InboxSession[] {
   const collapsed = opts.collapsedSections;
@@ -5180,12 +5186,17 @@ export function visualOrderSessions(
   // hosted conversations that ended on a stop ("Couldn't finish").
   const needs = splitHostedStops(chipped(placed.needsInput), (id) => opts.messagesOf?.(id));
   // Same order the status view renders: questions, pinned, new, needs input,
-  // couldn't finish, done, working, dormant — the chokepoint's own sections,
-  // so the walk and the render can never disagree.
+  // couldn't finish, done, working, shipping, dormant — the chokepoint's own
+  // sections, Dormant split as the rail splits it, so the walk and the render
+  // can never disagree.
+  const split = opts.dormantSplit;
+  const dormant = chipped(placed.dormant);
   const sections: Array<[InboxSession[], string]> = [
     [chipped(placed.questions), "questions"], [chipped(placed.pinned), "pinned"], [chipped(placed.newSessions), "new"],
     [needs.asks, "needs_input"], [needs.stopped, "hosted_stopped"], [chipped(placed.done), "done"],
-    [chipped(placed.working), "working"], [chipped(placed.dormant), "dormant"],
+    [split ? [...chipped(placed.working), ...dormant.filter((s) => split.working.has(s._id))] : chipped(placed.working), "working"],
+    [split ? dormant.filter((s) => split.shipping.has(s._id)) : [], "shipping"],
+    [split ? dormant.filter((s) => !split.working.has(s._id) && !split.shipping.has(s._id)) : dormant, "dormant"],
   ];
   const result: InboxSession[] = [];
   for (const [rows, key] of sections) {
@@ -5823,6 +5834,14 @@ export type ScheduleNavSets = {
   triggerOrder?: Array<{ key: string; ids: string[] }>;
 };
 
+// The rail's split of the Dormant bucket (lib/railActivity), published by the
+// panel so the keyboard walk visits Working, Shipping and Sleeping in the
+// order they draw: the dormant rows drawn under Working, and under Shipping.
+export type DormantSplitNav = {
+  working: ReadonlySet<string>;
+  shipping: ReadonlySet<string>;
+};
+
 // The style on screen, the viewer's own pick. Every reader of the style goes
 // through here, so the shell, the layout defaults and the feed agree.
 export function resolveVisualStyle(ui: { visual_style?: "classic" | "minimal" } | undefined): "classic" | "minimal" {
@@ -6348,6 +6367,8 @@ function visualOrderOf(state: {
   // order (trigger data lives in a component Convex subscription, never the
   // store). Null until the panel has schedule data.
   scheduleNavSets?: ScheduleNavSets | null;
+  // The rail's split of Dormant (published by GlobalSessionPanel).
+  dormantSplitNav?: DormantSplitNav | null;
   // Pending `cast decide` rows — with the viewer's own sessions they define the
   // status view's QUESTIONS section (the questions bucket). Optional for callers
   // (tests) that model no questions.
@@ -6412,6 +6433,8 @@ function visualOrderOf(state: {
     projectOf: projectOfFromState(state),
     priorityPlaceOf: mode === "priorities" ? priorityPlaceReader(state) : undefined,
     messagesOf: (id) => state.messages?.[id],
+    // Grouped and Priorities draw Dormant split; the lenses regroup it all.
+    dormantSplit: mode === "grouped" || mode === "priorities" ? state.dormantSplitNav : null,
   });
   if (mode === "bucket") {
     const { labelGroups, projectGroups } = groupSessionsForLabelView(base, state.buckets, bucketByConv);
@@ -6590,6 +6613,8 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // by GlobalSessionPanel from its agentTasks.webList subscription. Ephemeral:
   // never persisted or synced.
   scheduleNavSets: ScheduleNavSets | null;
+  // The rail's split of Dormant for keyboard nav (DormantSplitNav). Ephemeral.
+  dormantSplitNav: DormantSplitNav | null;
   // The groupings the inbox panel offers as tabs, published by
   // GlobalSessionPanel so Ctrl+, cycles exactly the tabs on screen. Null
   // while no panel shows them. Ephemeral: never persisted or synced.
@@ -7176,6 +7201,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // schedule row) for keyboard nav. Ephemeral raw-set state — the schedule data
   // itself lives in the agentTasks.webList Convex subscription, never the store.
   setScheduleNavSets: (sets: ScheduleNavSets | null) => void;
+  setDormantSplitNav: (split: DormantSplitNav | null) => void;
   setInboxViewModesShown: (modes: readonly InboxViewMode[] | null) => void;
   setTriggerStripRequest: (req: TriggerStripRequest | null) => void;
   setComposerPrefill: (req: { convId: string; fill: string; add: string } | null) => void;
@@ -10565,6 +10591,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   lastFocusedConversationId: null,
   collapsedSections: {},
   scheduleNavSets: null,
+  dormantSplitNav: null,
   inboxViewModesShown: null,
   triggerStripRequest: null,
   composerPrefill: null,
@@ -14026,6 +14053,10 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // Raw set: ephemeral nav bookkeeping — no draft, no persistence, no dispatch.
   setScheduleNavSets: (sets: ScheduleNavSets | null) =>
     set({ scheduleNavSets: sets }),
+
+  // Raw set: ephemeral nav bookkeeping, like the schedule sets.
+  setDormantSplitNav: (split: DormantSplitNav | null) =>
+    set({ dormantSplitNav: split }),
 
   // Raw set: ephemeral, like the nav sets above.
   setInboxViewModesShown: (modes: readonly InboxViewMode[] | null) =>

@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
-import { railRowPlacement, type InboxSession } from "../../store/inboxStore";
+import { railRowPlacement, useInboxStore, type InboxSession } from "../../store/inboxStore";
+import { railActivityKind } from "../../lib/railActivity";
 import { sessionStatusOf, SESSION_STATUS, type SessionStatus } from "../../lib/sessionStatus";
 import { sessionCardLine } from "../../lib/sessionCardLine";
 import { SessionStatusMark, SessionStatusWord } from "../../components/inbox/SessionStatusMark";
@@ -84,8 +85,15 @@ export function ModernSessionsRow({ row, inbox, now, busy, expanded, parking, on
   /** The expanded metrics chart. */
   children?: ReactNode;
 }) {
+  const placement = inbox ? railRowPlacement(inbox, now) : null;
   const status: SessionStatus = row.killed ? "killed" : row.dismissed ? "stashed" : inbox
-    ? sessionStatusOf({ row: inbox, placement: railRowPlacement(inbox, now), now })
+    ? sessionStatusOf({
+      row: inbox,
+      placement,
+      // A Dormant row reads the rail's split (lib/railActivity), on the page's own clock.
+      activity: placement?.bucket === "dormant" ? railActivityKind(useInboxStore.getState() as never, inbox, now) : null,
+      now,
+    })
     // No inbox row (a tmux-only process): what its live status says.
     : sessionStatusOf({ row: { agent_status: row.agent_status, message_count: row.message_count ?? 1, updated_at: row.lastActiveAt, last_heartbeat: row.last_heartbeat }, now });
   const line = inbox ? sessionCardLine({ row: inbox, status, now }) : null;
