@@ -156,6 +156,69 @@ export function shippingRuns(
   };
 }
 
+/* ───────────── Open pull requests with no Ship run ───────────── */
+
+/** An open pull request as the left column reads it: a pullRequests list row, GitHub's state mirrored on it. */
+export type OpenPr = {
+  _id: string;
+  repository: string;
+  number: number;
+  title: string;
+  state: string;
+  draft?: boolean;
+  head_ref?: string;
+  author_github_username?: string;
+  updated_at: number;
+  /** "none" | "pending" | "success" | "failure" */
+  checks_state?: string;
+  /** "approved" | "changes_requested" | "review_required" | "none" */
+  review_decision?: string;
+  /** GitHub's mergeable_state: "clean", "behind", "dirty", "blocked", "unstable", "unknown", "draft". */
+  mergeable_state?: string;
+  behind_by?: number;
+};
+
+/**
+ * The left column's second half: this repository's open pull requests no Ship run carries (a run's card already
+ * stands for its PR) and whose commit is not on main yet; `keep` narrows them (Mine). Moving ones first, newest update
+ * first; those with no update for 7 days fold away with the quiet runs.
+ */
+export function openPrs(
+  prs: ReadonlyArray<OpenPr>,
+  o: { repository: string; runs: ReadonlyArray<Pick<ShippingRun, "pr">>; now: number; landedPrs?: ReadonlySet<number>; keep?: (pr: OpenPr) => boolean },
+): { moving: OpenPr[]; quiet: OpenPr[] } {
+  const repo = o.repository.toLowerCase();
+  const carried = new Set(o.runs.flatMap((r) => (r.pr && r.pr.repository.toLowerCase() === repo ? [r.pr.number] : [])));
+  const open = prs
+    .filter((p) => p.state === "open" && p.repository.toLowerCase() === repo && !carried.has(p.number) && !o.landedPrs?.has(p.number) && (!o.keep || o.keep(p)))
+    .sort((a, b) => b.updated_at - a.updated_at);
+  return {
+    moving: open.filter((p) => o.now - p.updated_at <= DROPPED_AFTER_MS),
+    quiet: open.filter((p) => o.now - p.updated_at > DROPPED_AFTER_MS),
+  };
+}
+
+/** PR · CI · Review · Merge for a pull request no run carries, read from what GitHub says of it. */
+export function prStepper(pr: Pick<OpenPr, "draft" | "checks_state" | "review_decision" | "mergeable_state">): StepState[] {
+  const ci: StepState = pr.checks_state === "success" ? "done" : pr.checks_state === "failure" ? "failed" : pr.checks_state === "pending" ? "active" : "idle";
+  const review: StepState = pr.review_decision === "approved" ? "done" : pr.review_decision === "changes_requested" ? "failed" : "idle";
+  const merge: StepState = pr.mergeable_state === "dirty" ? "failed" : "idle";
+  return [pr.draft ? "waiting" : "done", ci, review, merge];
+}
+
+/** What a pull request no run carries waits on, the first that applies, in the words its card and its page say. */
+export function prState(pr: Pick<OpenPr, "draft" | "checks_state" | "review_decision" | "mergeable_state" | "behind_by">): RunState {
+  if (pr.draft) return { word: "Draft", tone: "blue" };
+  if (pr.checks_state === "failure") return { word: "CI failing", tone: "red" };
+  if (pr.mergeable_state === "dirty") return { word: "Merge conflicts", tone: "red" };
+  if (pr.review_decision === "changes_requested") return { word: "Changes requested", tone: "red" };
+  if (pr.checks_state === "pending") return { word: "CI running", tone: "yellow" };
+  const behind = pr.mergeable_state === "behind" || (pr.behind_by ?? 0) > 0;
+  const detail = behind ? `behind main${pr.behind_by ? ` by ${pr.behind_by}` : ""}` : undefined;
+  const state: RunState = pr.review_decision === "approved" ? { word: "Ready to merge", tone: "blue" } : { word: "Waiting on review", tone: "blue" };
+  return detail ? { ...state, detail } : state;
+}
+
 /* ───────────── Crediting: the session that pressed Ship ───────────── */
 
 const sameSha = (a: string, b: string) => a.length >= 7 && b.length >= 7 && (a.startsWith(b) || b.startsWith(a));
