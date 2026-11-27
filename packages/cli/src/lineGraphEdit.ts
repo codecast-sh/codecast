@@ -21,6 +21,7 @@ import { spawnSync } from "./proc.js";
 import { graphExtends, graphHash, graphNodeHashes, parseWorkflowFile, validateWorkflow, type ReadFile } from "./workflow/parser.js";
 import type { WorkflowGraph } from "./workflow/types.js";
 import { findNodeStmt, nodeAttrRaw, setNodeAttr, upsertNodeAttrs } from "./repoLine.js";
+import { flowCopyRoot } from "./workflow/flowCopy.js";
 
 export class LineGraphError extends Error {}
 
@@ -92,11 +93,13 @@ const readDisk = (abs: string) => (fs.existsSync(abs) && fs.statSync(abs).isFile
 /**
  * What a push of the graph in `castFile` records about where it lives, or
  * null when the file is not in a git checkout (nothing could edit it later).
+ * A repo flow's default-branch copy lives in its copy's directory (flowCopy.ts),
+ * never in a git repo that happens to hold the flow cache.
  * `graph` is the graph as the push parsed it, so the hash is the one its runs record.
  */
 export function graphOrigin(castFile: string, graph: WorkflowGraph, deviceId: string): GraphOrigin | null {
   const abs = fs.realpathSync(path.resolve(castFile));
-  const root = gitRootOf(abs);
+  const root = flowCopyRoot(abs) ?? gitRootOf(abs);
   if (!root || !deviceId) return null;
   const files: GraphOrigin["files"] = [];
   // Each station's own file, wherever the graph or a base it extends names it.

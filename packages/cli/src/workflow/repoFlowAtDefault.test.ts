@@ -9,6 +9,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { flowAtDefaultWords, repoFlowAtDefault } from "./repoFlowAtDefault.js";
 import { parseWorkflowFile } from "./parser.js";
+import { daemonRunGraph } from "./daemonGraph.js";
+import { graphToPushPayload } from "./runner.js";
+import { graphOrigin } from "../lineGraphEdit.js";
 
 const tmp: string[] = [];
 const mkdtemp = () => { const d = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "flow-at-default-"))); tmp.push(d); return d; };
@@ -159,5 +162,46 @@ describe("a repo flow runs as the default branch has it", () => {
     const r = repoFlowAtDefault("change", clone, wrapperIn(clone), { cacheRoot: cache });
     expect(r.use).toBe("default");
     if (r.use === "default") expect(parseWorkflowFile(r.file).nodes.get("fix")!.prompt).toBe("Fix, as main now says.\n");
+  });
+
+  // ct-102787, ct-102790: started from a checkout behind main with no variant file, the run's push named the copy as a
+  // file of the git repo holding the flow cache (a home directory in git), the daemon took it for another repo's flow
+  // and ran the checkout's own `change`: the shipped one, with no Local CI, though the launch line named main's.
+  test("a run started from a behind checkout executes the default branch's variant, wherever the flow cache sits", () => {
+    const home = mkdtemp();
+    git(home, "init", "-q", "-b", "main");
+    const cache = path.join(home, ".codecast/flows");
+    const origin = mkdtemp();
+    git(origin, "init", "-q", "-b", "main");
+    put(origin, "app.ts", "export {}\n");
+    const old = commit(origin, "before the variant");
+    put(origin, ".codecast/flows/change.cast", `digraph change {\n  graph [extends="change"]\n  local_ci [before="pr", label="Local CI", shape=parallelogram, script="echo checked"]\n}\n`);
+    commit(origin, "the variant runs Local CI before the pull request");
+    const clone = path.join(home, "code", "repo");
+    spawnSync("git", ["clone", "-q", origin, clone]);
+    git(clone, "checkout", "-q", "-b", "behind", old);
+    expect(fs.existsSync(wrapperIn(clone))).toBe(false);
+
+    const r = repoFlowAtDefault("change", clone, null, { fetch: false, cacheRoot: cache });
+    expect(r.use).toBe("default");
+    if (r.use !== "default") return;
+    const graph = parseWorkflowFile(r.file);
+    expect(graph.nodes.has("local_ci")).toBe(true);
+    // What `cast workflow run <copy>` pushes, and the server hands the daemon back as the run's pinned graph.
+    const pushed = graphOrigin(r.file, graph, "dev-1")!;
+    expect(pushed.root).toBe(path.dirname(path.dirname(path.dirname(r.file))));
+    expect(pushed.file).toBe(".codecast/flows/change.cast");
+    const { nodes, edges } = graphToPushPayload(graph);
+    const wf = { name: graph.name, slug: "change", source: r.source, nodes, edges, origin: { device_id: pushed.device_id, root: pushed.root, file: pushed.file } };
+    const run = { workflow_name: "change", project_path: clone, task_short_id: "ct-1" };
+    const ran = daemonRunGraph(run, wf, clone, "dev-1").graph!;
+    expect(ran.nodes.has("local_ci")).toBe(true);
+    expect(ran.edges.some((e) => e.from === "local_ci" && e.to === "pr")).toBe(true);
+    // Resumed, it reads the same copy.
+    expect(daemonRunGraph({ ...run, current_node_id: "local_ci" }, wf, clone, "dev-1", true).graph!.nodes.has("local_ci")).toBe(true);
+    // Another repo's run on this machine never takes this repo's copy for its own.
+    const other = mkdtemp();
+    git(other, "init", "-q", "-b", "main");
+    expect(daemonRunGraph({ ...run, project_path: other }, wf, other, "dev-1").graph!.nodes.has("local_ci")).toBe(false);
   });
 });

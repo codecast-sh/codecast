@@ -8,6 +8,7 @@ import type { WorkflowGraph } from "./types.js";
 import { repoLineForRun } from "../repoLine.js";
 import { materializePushedFlow, repoFlowsDir } from "./flowPool.js";
 import { codecastPath } from "../codecastDir.js";
+import { flowCopyRepo } from "./flowCopy.js";
 
 // The graph `cast workflow run-daemon` executes for a run (the-line.md L9).
 //
@@ -203,9 +204,12 @@ function foreignOrigin(wf: DaemonRow, cwd: string, deviceId?: string): boolean {
   return !!theirs && !!ours && theirs !== ours;
 }
 
-/** A checkout's repo, as its shared git directory: every worktree of one repo names the same one. */
+/** A checkout's repo, as its shared git directory: every worktree of one repo names the same one. A repo flow's
+ *  default-branch copy (flowCopy.ts) is of the repo it was read from. */
 function repoOf(dir: string): string | null {
   if (!fs.existsSync(dir)) return null;
+  const copied = flowCopyRepo(dir);
+  if (copied) return copied;
   const r = spawnSync("git", ["-C", dir, "rev-parse", "--path-format=absolute", "--git-common-dir"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
   const common = r.status === 0 ? r.stdout.trim() : "";
   return common ? fs.realpathSync(common) : null;
