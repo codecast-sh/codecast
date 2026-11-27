@@ -15,6 +15,10 @@ setDefaultTimeout(60_000);
 
 const TOKEN = "takeover-token";
 const AGENT = "a8665f73ab2350b5e";
+// What the parent reads: a person named only when one took it over.
+const REACH = `It now continues as its own session jxkid01. If it is still running, stop it with TaskStop ${AGENT}. Do not SendMessage it again; reach it with \`cast send jxkid01\`.`;
+const BY_JASON = `Jason took over your subagent "bg wait test" (agent ${AGENT}). ${REACH}`;
+const HANDED = `Your subagent "bg wait test" (agent ${AGENT}) was handed a message and now continues as its own session jxkid01. If it is still running, stop it with TaskStop ${AGENT}. Do not SendMessage it again; reach it with \`cast send jxkid01\`.`;
 
 async function world(opts: { owners?: boolean; team?: boolean } = {}) {
   const t = convexTest(schema, allModules);
@@ -54,7 +58,7 @@ describe("a person's message to an in-process child", () => {
     expect((await w.row(w.ids.child)).parent_released_at).toBeNumber();
     const lines = await w.parentLines();
     expect(lines).toHaveLength(1);
-    expect(lines[0]).toContain(`Jason took over your subagent "bg wait test" (agent ${AGENT}). It now continues as its own session jxkid01. If it is still running, stop it with TaskStop ${AGENT}. Do not SendMessage it again; reach it with \`cast send jxkid01\`.`);
+    expect(lines[0]).toContain(BY_JASON);
     // The person's message itself waits for the child's promotion.
     const mine = await w.t.run(async (ctx) => (await ctx.db.query("pending_messages").collect()).filter((r: any) => String(r.conversation_id) === String(w.ids.child)));
     expect(mine.map((r: any) => r.content)).toEqual(["take it from here"]);
@@ -71,8 +75,9 @@ describe("a person's message to an in-process child", () => {
     expect((await w.row(w.ids.child)).owners_changed_at).toBeNumber();
     const owners = await w.t.run(async (ctx) => (await ctx.db.query("session_owners").collect()).filter((r: any) => String(r.conversation_id) === String(w.ids.child)));
     expect(owners.map((r: any) => String(r.user_id))).toEqual([String(w.ids.me)]);
-    const told = (await w.parentLines()).filter((l) => l.includes("took over your subagent"));
+    const told = (await w.parentLines()).filter((l) => l.includes('"bg wait test"'));
     expect(told).toHaveLength(1);
+    expect(told[0]).toContain(BY_JASON);
   });
 
   test("under session owners, a sender who may not edit its owners only releases it, through the owners write", async () => {
@@ -83,7 +88,11 @@ describe("a person's message to an in-process child", () => {
     expect(child.owners_changed_at).toBeNumber();
     const owners = await w.t.run(async (ctx) => (await ctx.db.query("session_owners").collect()).filter((r: any) => String(r.conversation_id) === String(w.ids.child)));
     expect(owners.map((r: any) => String(r.user_id))).not.toContain(String(w.ids.mate));
-    expect((await w.parentLines()).filter((l) => l.includes("took over your subagent"))).toHaveLength(1);
+    // Mira released it without owning it: the parent is not told she took it over.
+    const told = (await w.parentLines()).filter((l) => l.includes('"bg wait test"'));
+    expect(told).toHaveLength(1);
+    expect(told[0]).toContain(HANDED);
+    expect(told[0]).not.toContain("Mira");
   });
 
   test("Take it over without a message releases it and tells the parent the same way", async () => {
@@ -91,7 +100,9 @@ describe("a person's message to an in-process child", () => {
     await w.t.mutation(api.sessionOwnership.applyOwnersChange, { session_id: "jxkid01", take_over: true, api_token: TOKEN });
     expect((await w.row(w.ids.child)).parent_released_at).toBeNumber();
     await w.personSend(w.ids.child, "now the message");
-    expect((await w.parentLines()).filter((l) => l.includes("took over your subagent"))).toHaveLength(1);
+    const told = (await w.parentLines()).filter((l) => l.includes('"bg wait test"'));
+    expect(told).toHaveLength(1);
+    expect(told[0]).toContain(BY_JASON);
   });
 
   test("wakes a parent whose prompt cache went cold: a copy running inside it is what the message waits on", async () => {
@@ -195,7 +206,9 @@ describe("a message that is not a person's into an in-process child", () => {
       await finalizeAnswer(ctx as any, (await ctx.db.get(decision))!, { status: "answered", answer_index: 0 } as any, { kind: "role", id: "or-1", user_id: w.ids.me }, { deliver: true });
     });
     expect((await w.row(w.ids.child)).parent_released_at).toBeNumber();
-    expect((await w.parentLines()).filter((l) => l.includes("took over your subagent"))).toHaveLength(1);
+    const told = await w.parentLines();
+    expect(told).toHaveLength(1);
+    expect(told[0]).toContain(HANDED);
   });
 
   test("a machine's line takes it over; a held note waits", async () => {
@@ -206,6 +219,16 @@ describe("a message that is not a person's into an in-process child", () => {
     expect(await w.parentLines()).toEqual([]);
     await w.t.run(async (ctx) => { await enqueuePendingMessage(ctx, (await ctx.db.get(w.ids.child))!, w.ids.me, { content: "continue", origin: "scheduler" }); });
     expect((await child()).parent_released_at).toBeNumber();
-    expect(await w.parentLines()).toHaveLength(1);
+    const told = await w.parentLines();
+    expect(told).toHaveLength(1);
+    expect(told[0]).toContain(HANDED);
+    expect(told[0]).not.toContain("Jason");
+  });
+
+  test("a named agent handed a message is told by name, without a person", async () => {
+    const w = await world();
+    await w.t.run((ctx) => ctx.db.patch(w.ids.child, { session_id: "agent-areview-mobile-fe89e5471ddad254", subagent_description: "Review phone app" } as any));
+    await w.t.run(async (ctx) => { await enqueuePendingMessage(ctx, (await ctx.db.get(w.ids.child))!, w.ids.me, { content: "continue", origin: "scheduler" }); });
+    expect((await w.parentLines())[0]).toContain('Your agent review-mobile ("Review phone app", agent id areview-mobile-fe89e5471ddad254) was handed a message and now continues as its own session jxkid01. If it is still running, stop it with TaskStop areview-mobile-fe89e5471ddad254. Do not SendMessage review-mobile again; reach it with `cast send jxkid01`.');
   });
 });
