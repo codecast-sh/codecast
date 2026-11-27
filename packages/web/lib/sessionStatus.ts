@@ -27,8 +27,9 @@
 //   - Process liveness (/sessions' "active / idle 2h+ / dead / hibernated") is
 //     a different axis; it stays on that page as process facts, not a status.
 
-import { DEAD_AGENT_STATUSES, SUBAGENT_PRODUCING_GRACE_MS, deriveLiveAt, isExitAfterDone, personStateOf, type InboxBucket, type WorkState } from "@codecast/shared/contracts";
+import { DEAD_AGENT_STATUSES, deriveLiveAt, isExitAfterDone, personStateOf, type InboxBucket, type WorkState } from "@codecast/shared/contracts";
 import { rowPinPredatesTurn, rowWakeInputs } from "@codecast/shared/contracts/inboxPlacement";
+import { producingByOutput } from "@codecast/shared/contracts/subagentProducing";
 import type { PlanState } from "@codecast/shared/tasks";
 import { agentStatusAt, liveFactsOf } from "./liveness";
 import { apiErrorBadge } from "./apiErrorBadge";
@@ -126,6 +127,8 @@ export function bandOfStatus(status: SessionStatus): StatusBand | null {
 /** The row fields the mapping reads. Every inbox row carries them. */
 export type StatusRow = {
   message_count?: number | null;
+  last_message_role?: string | null;
+  activity?: { at: number } | null;
   agent_status?: string | null;
   is_subagent?: boolean | null;
   parent_conversation_id?: string | null;
@@ -286,8 +289,8 @@ export function sessionStatusOf({ row, section, placement, now, live = {}, hoste
   // continuation or a plan handoff carries one and is the person's own
   // session) runs inside its parent's turn and hands its result back there; it has
   // no live status of its own. It is producing while its last output is
-  // within the grace the server's parent park uses (SUBAGENT_PRODUCING_GRACE_MS,
-  // so a long tool call stays Working), and Done once it completed or fell
+  // within the server's producing test (shared subagentProducing: recent output,
+  // or one open tool call up to its cap), and Done once it completed or fell
   // quiet past it, whatever its placement says (a settled wait files Needs
   // you, or Working "With <owner>" when an agent owner answers it). An ask or
   // send of the person's, a failure, a set-aside row and a section above the
@@ -301,7 +304,7 @@ export function sessionStatusOf({ row, section, placement, now, live = {}, hoste
     && !row.inbox_killed_at && !row.inbox_dismissed_at && !row.inbox_stashed_at;
   if (inParentsTurn) {
     if (live.stopped || statusFailure(row, now, live)) return "error";
-    const finished = row.status === "completed" || now - (row.updated_at ?? 0) >= SUBAGENT_PRODUCING_GRACE_MS;
+    const finished = row.status === "completed" || !producingByOutput({ updated_at: row.updated_at ?? 0, last_message_role: row.last_message_role, activity: row.activity }, now);
     return finished ? "done" : "working";
   }
   switch (where) {

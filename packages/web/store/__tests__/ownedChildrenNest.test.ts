@@ -1,5 +1,5 @@
 import { describe, expect, it, setSystemTime } from "bun:test";
-import { SUBAGENT_PRODUCING_GRACE_MS } from "@codecast/shared/contracts";
+import { SUBAGENT_PRODUCING_GRACE_MS } from "@codecast/shared/contracts/subagentProducing";
 import { __resetInboxPlacementCacheForTests, computeVisualOrder, drawnUnderParentIds, flatHeaderCount, flatViewSessions, subagentKeepOf, type InboxSession, type SubagentFilter } from "../inboxStore";
 import { coarseNowOf, INBOX_CLOCK_MS, subscribeCoarseTick, tickCoarseClocks } from "../../hooks/useCoarseNow";
 import { placeSections } from "./placeTestHarness";

@@ -71,7 +71,9 @@ describe("an adopt hands a standing wait to the new parent", () => {
 
       const db = makeFakeDb(JSON.parse(JSON.stringify(tables)));
       const { sessions } = await computeInboxSessions({ db } as any, "u1" as any, { includeLiveness: false });
-      expect(sessions.map((s: any) => s._id)).not.toContain("conv1");
+      // It is in nobody's inbox now: at most it rides its new parent's card.
+      const row = sessions.find((s: any) => s._id === "conv1");
+      expect(row === undefined || (row.owned_by_me === false && row.owner_session_id === "lead" && !row.implicit_owner)).toBe(true);
     });
   }
 

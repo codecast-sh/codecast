@@ -312,6 +312,15 @@ describe("a nested subagent whose turn ended", () => {
     expect(status({ ...adopted, adopted_at: null } as any)).toBe("done");
   });
 
+  // The server's producing test (shared subagentProducing): one open tool call
+  // keeps it producing up to its 20-minute cap, so the card agrees with its
+  // parent's park.
+  test("a subagent inside one long tool call reads Working up to the call's cap", () => {
+    const inCall = (ms: number) => row({ is_subagent: true, parent_conversation_id: "jx7parent", status: "active", agent_status: undefined, is_idle: undefined, updated_at: NOW - ms, agent_status_updated_at: NOW - ms, last_message_role: "assistant", activity: { at: NOW - ms } } as Partial<InboxSession>);
+    expect(status(inCall(10 * 60_000))).toBe("working");
+    expect(status(inCall(25 * 60_000))).toBe("done");
+  });
+
   test("a subagent standing as its own card reads its placement", () => {
     const sub = row({ is_subagent: true, parent_conversation_id: "jx7parent" });
     expect(status(sub, undefined, false)).toBe("needs_you");
