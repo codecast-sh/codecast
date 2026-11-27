@@ -8,9 +8,11 @@
 // (orgLineMerge.clearForMerge). Then it asks whether the merge is authorized,
 // never merging with --admin.
 //
-// Holding the checkout's merge lock (mergeScratch.ts), and from its first
-// before-merge step the repository's lease across machines (land/repoLease.ts),
-// it rebases the head onto the default branch in a worktree of its own (a
+// Holding the repository's lease across machines (land/repoLease.ts), which
+// the server grants in the order stations asked, so merges land one at a time,
+// each rebased on the one before, and then the checkout's merge lock
+// (mergeScratch.ts), it rebases the head onto the default branch in a
+// worktree of its own (a
 // conflict only in files .codecast/generated.toml lists is resolved here: the
 // default branch's side, then their generators, generatedFiles.ts, and the
 // result goes back to CI as a recorded rebase), sends
@@ -202,21 +204,21 @@ async function mergeStation(args: MergeStationArgs): Promise<MergeStationResult>
   const tested = claimed && git(args.cwd, "merge-base", "--is-ancestor", claimed, first).status === 0 ? claimed : fork;
 
   const repo = mainCheckout(args.cwd);
-  const unlock = await takeMergeLock(args.cwd, log);
+  // The repository's lease across machines, from before the rebase through the landed sha: merges land one at a time
+  // in the order they asked, each rebased on the last, and no other station's or ship checkout's deploy lands between
+  // this one's deploy and its merge. Taken before the checkout's lock, so a station's place in line is its arrival.
+  if (!args.repository) return refuse("no GitHub repository is named for this checkout, so its merge cannot take its turn");
+  let lease: RepoLease;
+  try { lease = await holdRepoLease(args.post, { repository: args.repository, holder: leaseHolder(`the merge of PR #${pr} (run ${args.runId})`), runId: args.runId, log }); }
+  catch (err) { return refuse(`could not take the lease on ${args.repository}'s deploys: ${message(err)}`); }
+  // The checkout's lock still matters under the lease: a lease lost without its holder dying (a laptop asleep past it)
+  // goes to the next in line, and two stations of one checkout must still never share a scratch sweep or deploy at once.
+  let unlock: () => void;
+  try { unlock = await takeMergeLock(args.cwd, log); } catch (err) { await lease.release(); throw err; }
   // The steps that went out and the tree each deployed: a failure after one sends them again from main.
   const deployed = new Map<string, { step: ShipDeployStep; tip: string }>();
   let tree: ScratchTree | null = null;
-  // The repository's lease across machines, taken before the first before-merge step and held through the landed
-  // sha, so no other station's or ship checkout's deploy lands between this deploy and its merge.
-  let lease: RepoLease | null = null;
-  const takeLease = async (): Promise<string | null> => {
-    if (lease) return null;
-    if (!args.repository) return "no GitHub repository is named for this checkout, so its deploys cannot be leased";
-    try { lease = await holdRepoLease(args.post, { repository: args.repository, holder: leaseHolder(`the merge of PR #${pr} (run ${args.runId})`), runId: args.runId, log }); }
-    catch (err) { return `could not take the lease on ${args.repository}'s deploys: ${message(err)}`; }
-    return null;
-  };
-  const leaseHeld = async () => !lease || (await lease.assertHeld());
+  const leaseHeld = () => lease.assertHeld();
   const lostLease = (before: string) => `the lease on ${args.repository}'s deploys was lost before ${before}`;
   try {
     if (!args.scratch) await sweepScratchTrees(repo);
@@ -264,7 +266,7 @@ async function mergeStation(args: MergeStationArgs): Promise<MergeStationResult>
       // within ten minutes of its holder's last renewal), then send main, which holds whatever that holder merged.
       if (!(await leaseHeld())) {
         log(`the lease on ${args.repository}'s deploys was lost after a step went out; waiting for it to send ${into} again`);
-        if (!(await lease!.retake(args.leaseWaitMs ?? LEASE_WAIT_MS))) return { code, line: `${line}; ${where} but nothing merged, and the lease on ${args.repository}'s deploys could not be taken back, so it was not sent again from ${into}` };
+        if (!(await lease.retake(args.leaseWaitMs ?? LEASE_WAIT_MS))) return { code, line: `${line}; ${where} but nothing merged, and the lease on ${args.repository}'s deploys could not be taken back, so it was not sent again from ${into}` };
       }
       noteRestoring(`sending ${out.map((d) => d.step.name).join(", ")} again from ${into} after a failure that merged nothing`);
       const sent = await sendFromMain(out.map((d) => d.step), out[0].tip);
@@ -285,8 +287,6 @@ async function mergeStation(args: MergeStationArgs): Promise<MergeStationResult>
       if (main.refused) return refuse(`merged as ${short(already)}, but its before-merge deploys were not checked: ${main.refused}`);
       const steps = deploysFor(main.steps, files);
       if (steps.length) {
-        const refused = await takeLease();
-        if (refused) return refuse(`merged as ${short(already)}, but ${refused}`);
         const sent = await sendFromMain(steps, already);
         return await recordLanded(args, url, already, sent.outcomes);
       }
@@ -381,8 +381,6 @@ async function mergeStation(args: MergeStationArgs): Promise<MergeStationResult>
       if (main.refused) return await fail(2, main.refused);
       const steps = deploysFor(main.steps, files);
       if (steps.length) {
-        const refused = await takeLease();
-        if (refused) return await fail(2, refused);
         await work.setup();
         setUpFrom ||= tip;
       }
@@ -427,7 +425,7 @@ async function mergeStation(args: MergeStationArgs): Promise<MergeStationResult>
     }
     return await recordLanded(args, url, landed.sha, outcomes);
   } finally {
-    await (lease as RepoLease | null)?.release();
+    await lease.release();
     if (tree) await tree.release();
     unlock();
   }
