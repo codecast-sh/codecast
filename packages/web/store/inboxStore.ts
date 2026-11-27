@@ -3983,6 +3983,9 @@ function projectableRowOf(s: InboxSession, live: LiveFacts): ProjectableInboxRow
     ...base,
     inbox_rest: s.inbox_rest ?? s.user_rest ?? null,
     inbox_rest_at: s.inbox_rest_at ?? (s.user_rest ? (s.updated_at || 1) : null),
+    // The Close marker (shared isClosedRow): an open ask holds a close in view.
+    inbox_closed_at: s.inbox_closed_at ?? null,
+    inbox_stash_hidden: s.inbox_stash_hidden ?? null,
     owner_session_id: s.owner_session_id ?? null,
     wait_up_count: s.wait_up_count ?? null,
     wait_up_person: s.wait_up_person ?? null,
@@ -4679,6 +4682,9 @@ export function placeInboxRows(
   const listedDismissed = new Set(dismissed.map((s) => s._id));
   const listKilled = (s: InboxSession | undefined) => {
     if (!s || !(s.inbox_killed_at || isClosedSession(s)) || listedDismissed.has(s._id) || isOrphanOrSubagent(s)) return;
+    // A close an open ask holds in view (shared closeHeldByAsk) files where it is placed, not under Closed too.
+    const placed = placements.get(s._id);
+    if (!s.inbox_killed_at && placed && placed.bucket !== "dismissed") return;
     listedDismissed.add(s._id);
     dismissed.push(s);
   };
