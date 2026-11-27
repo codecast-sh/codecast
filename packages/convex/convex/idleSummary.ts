@@ -1,4 +1,5 @@
-import { isClosedSession } from "@codecast/shared/contracts";
+import { closeReturnsOnDone, isClosedSession, settleHideFields } from "@codecast/shared/contracts";
+import { resurfaceViewerClosesOnSettle } from "./lib/viewerTriage";
 import { internalMutation, internalAction, internalQuery } from "./functions";
 import { routeUpWaitingSession } from "./agentTasks";
 import { agentOwnerFor, escalateWait, routeWaitToAgentOwner } from "./lib/agentOwnerWaits";
@@ -116,6 +117,15 @@ export async function performSetIdleSummary(ctx: any, args: { conversation_id: a
     // declared blocks were routed at settle time (notifications).
     if (args.settle_verdict === "needs_input") {
       const conv = await ctx.db.get(args.conversation_id);
+      // The turn asked the person something: a closed session a machine woke
+      // comes back, a role's, anchor's or standing trigger's home included
+      // (settleHideFields; an ordinary one came back at the settle).
+      if (conv && !conv.inbox_killed_at) {
+        const settle = { returnsOnDone: closeReturnsOnDone(conv), asked: true };
+        const back = settleHideFields(conv, settle);
+        if (back) await ctx.db.patch(conv._id, back);
+        await resurfaceViewerClosesOnSettle(ctx, conv, settle);
+      }
       // Under the owners model the reader is its agent owner, a parent
       // session included (lib/agentOwnerWaits); one that cannot be told sends
       // the wait to its people.

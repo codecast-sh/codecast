@@ -1,4 +1,5 @@
-import { isClosedSession, waitReachedPeople } from "@codecast/shared/contracts";
+import { closeReturnsOnDone, isClosedSession, settleHideFields, waitReachedPeople } from "@codecast/shared/contracts";
+import { isTeamOwnedConversation, resurfaceViewerClosesOnSettle, resurfaceViewerTriageOnStall } from "./lib/viewerTriage";
 import { mutation, query, internalAction, internalMutation, internalQuery } from "./functions";
 import { deliverSessionNotification, deliverSessionNotificationToParties, idleDigestOn } from "./lib/sessionNotify";
 export { deliverSessionNotification, deliverSessionNotificationToParties, idleDigestOn };
@@ -800,14 +801,32 @@ export async function performNeedsInputCheck(
   // blocked declaration (conversations.setThreadState): one contract, three
   // doors. No push from here — the row surfacing in Needs You IS the signal,
   // and the machine-turn guard below would suppress the chime anyway.
+  //
+  // A finished turn nobody classified (no pin; the settle classifier has not
+  // spoken) files under Needs You, so it brings back a closed session a
+  // machine woke, by settleHideFields: an ordinary one now, a role's, anchor's
+  // or standing trigger's home only once the classifier says it asked
+  // (idleSummary.performSetIdleSummary).
+  const stallKind = needsInputKind({ awaitingInput, agentStatus, isUnresponsive: activity.isUnresponsive });
+  const stalled =
+    state === "needs_input" &&
+    (awaitingInput || stallKind === "permission_blocked" || stallKind === "stopped" || stallKind === "unresponsive");
+  const settle = { returnsOnDone: closeReturnsOnDone(conv), asked: false };
+  // A team session's hides are each person's own (lib/viewerTriage), and the
+  // same two rules reach them. Its row carries none, so it goes on below.
+  if (state === "needs_input" && (await isTeamOwnedConversation(ctx, conv._id, conv))) {
+    if (stalled) await resurfaceViewerTriageOnStall(ctx, conv);
+    else await resurfaceViewerClosesOnSettle(ctx, conv, settle);
+  }
   if (hidden) {
-    const stallKind = needsInputKind({ awaitingInput, agentStatus, isUnresponsive: activity.isUnresponsive });
-    const stalled =
-      state === "needs_input" &&
-      (awaitingInput || stallKind === "permission_blocked" || stallKind === "stopped" || stallKind === "unresponsive");
     if (stalled) {
       await restoreToInbox(ctx, conv);
       return { notified: false, reason: "unstashed_stall" };
+    }
+    const back = state === "needs_input" ? settleHideFields(conv, settle) : null;
+    if (back) {
+      await ctx.db.patch(conv._id, back);
+      return { notified: false, reason: "closed_settle" };
     }
     return { notified: false, reason: "hidden" };
   }

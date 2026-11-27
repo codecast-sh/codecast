@@ -23,6 +23,20 @@ export function isClosedHidden(row: ClosedFields & { inbox_stashed_at?: number |
   return !!row.inbox_stash_hidden && row.inbox_closed_at != null && row.inbox_closed_at === row.inbox_stashed_at && !row.inbox_killed_at;
 }
 
+/** Either kind of close: one that stopped the agent (isClosedSession) or one
+ *  it runs out of sight under (isClosedHidden). */
+export function isClosedRow(row: ClosedFields & { inbox_stashed_at?: number | null; inbox_stash_hidden?: boolean | null }): boolean {
+  return isClosedSession(row) || isClosedHidden(row);
+}
+
+/** A closed session stays in view while its agent waits on the person right
+ *  now: an open question or a permission prompt (the in-flight `awaiting`
+ *  fact). Close set it aside rather than stop it, and hiding the ask would
+ *  hide the one thing it needs. Once answered, the close holds again. */
+export function closeHeldByAsk(input: { awaitingInput: boolean; agentStatus?: string | null; messageCount: number }): boolean {
+  return input.messageCount > 0 && (input.awaitingInput || input.agentStatus === "permission_blocked");
+}
+
 /** Whether a closed session comes back when its woken turn pins done. Every
  *  closed session comes back when it pins blocked, a trigger run completes
  *  --needs-attention, or a person writes. An ordinary one also comes back on
@@ -59,6 +73,28 @@ export function pinHideFields(row: HideFields, status: string, returnsOnDone: bo
   if (status === "blocked" && (row.inbox_stashed_at || row.inbox_dismissed_at)) return { inbox_stashed_at: undefined, inbox_stash_hidden: undefined, inbox_dismissed_at: undefined };
   if (status === "done" && returnsOnDone && isClosedHidden(row)) return { inbox_stashed_at: undefined, inbox_stash_hidden: undefined };
   return null;
+}
+
+/** What a woken turn that ended with no pin writes over a closed session a
+ *  machine woke (isClosedHidden). Nobody classified that turn, and such a
+ *  turn files under Needs You, so it comes back: an ordinary session at the
+ *  settle (it returns on done as well, so whatever the classifier says next,
+ *  it is back), a role's, anchor's or standing trigger's home only once the
+ *  settle classifier says the turn asked the person something (`asked`).
+ *  Null when it stays out of sight. */
+export function settleHideFields(row: HideFields, opts: { returnsOnDone: boolean; asked: boolean }): { inbox_stashed_at: undefined; inbox_stash_hidden: undefined } | null {
+  if (!isClosedHidden(row) || !(opts.returnsOnDone || opts.asked)) return null;
+  return { inbox_stashed_at: undefined, inbox_stash_hidden: undefined };
+}
+
+/** What a stall (an open question, a permission prompt, a dead process)
+ *  writes over one person's own hide of a team session. A teammate's close
+ *  never stops the agent (only a kill ends it for everyone), so every hide
+ *  comes off, a close included: a hidden session may be quiet, never quietly
+ *  stuck. Null when nothing hides it. */
+export function viewerStallHideFields(row: HideFields): { inbox_dismissed_at: undefined; inbox_stashed_at: undefined; inbox_stash_hidden: undefined } | null {
+  if (row.inbox_killed_at || !(row.inbox_dismissed_at || row.inbox_stashed_at)) return null;
+  return { inbox_dismissed_at: undefined, inbox_stashed_at: undefined, inbox_stash_hidden: undefined };
 }
 
 /** A patch (or a row) that IS a close: the two stamps written together. */

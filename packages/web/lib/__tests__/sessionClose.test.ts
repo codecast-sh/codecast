@@ -20,13 +20,13 @@ describe("what Close does to a session", () => {
     }
   });
 
-  test("a session waiting on a permission prompt or poll is set aside, and its tooltip says it still waits on you", () => {
+  test("a session waiting on a permission prompt or poll is set aside, and its tooltip says it stays while it waits on you", () => {
     const f = facts({ inFlight: "awaiting", triggers: 2 });
     expect(closeKindOf(f)).toBe("awaiting");
     expect(closeSetsAside(f)).toBe(true);
-    expect(closeTooltip(f)).toBe("Close: hides it; it still waits on you");
+    expect(closeTooltip(f)).toBe("Close: stays while it waits on you, then hides it, back when it's done or needs you");
     const prompted = { message_count: 12, agent_status: "working", updated_at: NOW - 1000, last_heartbeat: NOW - 500, awaiting_input: true };
-    expect(closeTooltip(closeFactsOf(prompted as any, 0, NOW))).toBe("Close: hides it; it still waits on you");
+    expect(closeTooltip(closeFactsOf(prompted as any, 0, NOW))).toBe("Close: stays while it waits on you, then hides it, back when it's done or needs you");
   });
 
   test("a fresh /loop and a usage-limit park are set aside with their own words", () => {
@@ -149,7 +149,7 @@ describe("the facts of a row", () => {
       expect(closeSetsAside(f)).toBe(true);
     }
     // Its own question still reads as its own.
-    expect(closeTooltip(closeFactsOf({ ...settled, awaiting_input: true }, 0, NOW, false, "nested_awaiting"))).toBe("Close: hides it; it still waits on you");
+    expect(closeTooltip(closeFactsOf({ ...settled, awaiting_input: true }, 0, NOW, false, "nested_awaiting"))).toBe("Close: stays while it waits on you, then hides it, back when it's done or needs you");
   });
 
   test("a trigger counts only when it will fire, by the server's own predicate", () => {

@@ -10,7 +10,7 @@ import { isMachineDeliveredMessage, isSessionMessage } from "./machineMessages";
 import type { LoopState } from "./loopState";
 import { openTasksVouchForWaiting } from "./openTasks";
 import { isHostedAgentType } from "./agentClients";
-import { closeWakeFields, type ClosedFields } from "./closedSession";
+import { closeHeldByAsk, closeWakeFields, type ClosedFields } from "./closedSession";
 import type { WorkState } from "./workState";
 import { isNoiseTitle, type InboxRowIdentity, type RunLogIdentity, isRunLog, isNestedIdentity, isOrphanOrSubagent, type RollupRow, rollupParentIdOf, underOwnersModel, type OwnersModelRow, waitReachedPeople, agentAnswersRow } from "./inboxMembership";
 // Field ownership (design C1): which channel writes which row field.
@@ -418,6 +418,8 @@ export interface InboxPlacementInput extends WorkStateInput {
   stashed: boolean;
   /** inbox_pinned_at set. */
   pinned: boolean;
+  /** The hide is a Close (closedSession isClosedRow). */
+  closed?: boolean;
   /** The row is an anchor (a standing agent member); hidden unless hard blocked. */
   isAnchor: boolean;
   /** A person started the latest turn (conversations.last_turn_origin). */
@@ -498,9 +500,12 @@ export function isHardBlocked(input: Pick<WorkStateInput, "awaitingInput" | "pen
 // `pinned` and `live` tallies sit next to unchanged work figures.
 export function placeInboxRow(input: InboxPlacementInput): InboxPlacement {
   const work_state = classifyWorkState(input);
+  // A Close hides a session until it needs you, and one whose agent waits on
+  // a prompt needs you now: it files by its own facts while the ask stands.
+  const hides = !(input.closed && closeHeldByAsk(input));
   let bucket: InboxBucket;
-  if (input.dismissed) bucket = "dismissed";
-  else if (input.stashed) bucket = "stashed";
+  if (input.dismissed && hides) bucket = "dismissed";
+  else if (input.stashed && hides) bucket = "stashed";
   else if (input.snoozed) bucket = "snoozed";
   else if (input.snoozeDue && !input.killed) bucket = "needs_input";
   // A standing session is hidden while it runs its own machine-driven turns,
@@ -1348,6 +1353,9 @@ export function computeFold(
 export interface ProjectableInboxRow extends WorkingSetRow, Omit<OwnersModelRow, "updated_at"> {
   inbox_rest?: string | null;
   inbox_rest_at?: number | null;
+  /** The Close marker (closedSession isClosedRow). */
+  inbox_closed_at?: number | null;
+  inbox_stash_hidden?: boolean | null;
   /** Legacy dormant-only stamp; userRestOf still honors it. */
   inbox_dormant_at?: number | null;
   anchor_id?: unknown;

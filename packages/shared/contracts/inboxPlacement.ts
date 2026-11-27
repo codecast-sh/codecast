@@ -16,6 +16,7 @@ import { AGENT_IDLE_GRACE_MS, DORMANT_CLAIM_TTL_MS, HEARTBEAT_ALIVE_MS, STATUS_T
 import { isLoopFresh, LOOP_OVERDUE_GRACE_MS } from "./loopState";
 import { openTasksVouchForWaiting } from "./openTasks";
 import { isHostedAgentType } from "./agentClients";
+import { isClosedRow } from "./closedSession";
 import {
   agentAnswersRow,
   childProducingAt,
@@ -224,6 +225,7 @@ export function placeProjectableRow(
     dismissed: !!row.inbox_dismissed_at,
     stashed: !!row.inbox_stashed_at,
     pinned: !!row.inbox_pinned_at,
+    closed: isClosedRow(row),
     isAnchor: !!row.anchor_id,
     personTurn: row.last_turn_origin === "person",
     asking,
