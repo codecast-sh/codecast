@@ -234,6 +234,8 @@ import { killReviewOf } from "./consequential/killReview";
 import type { TaskRow } from "./triggerTasks";
 import { permanentDeleteLedger, regulatedTeam, SESSION_REACHES } from "./consequential/deletionLedgers";
 import { teamMembersOf } from "../lib/activeTeam";
+import { DictationPaletteItem } from "./dictation/DictationPaletteItem";
+import { dictatingIn } from "../lib/dictation/useDictation";
 
 /** A relation pick's leading glyph, as every other palette mode has one: the
  *  task's status, or the hourglass of a wait parsed from the query. */
@@ -2066,7 +2068,8 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   useWatchEffect(() => {
     if (standalone) return;
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && open) {
+      // Esc in a box that is recording cancels the recording, not the palette.
+      if (e.key === "Escape" && open && !dictatingIn(e.target)) {
         e.preventDefault();
         closePalette();
       }
@@ -2080,7 +2083,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   useWatchEffect(() => {
     if (!standalone) return;
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
+      if (e.key === "Escape" && !dictatingIn(e.target)) {
         e.preventDefault();
         setActionMode(null);
         if (isElectron()) {
@@ -3690,6 +3693,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
               <LayoutDashboard className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
               <span className="truncate flex-1">Switch to {visualStyle === "minimal" ? "Mono" : "Minimal"} style</span>
             </CommandPrimitive.Item>
+            <DictationPaletteItem key="cmd-dictation" className={itemClass} onDone={closePalette} />
           </CommandPrimitive.Group>
         )}
 

@@ -24,6 +24,8 @@ import { CollapsibleBody } from "@/components/CollapsibleBody";
 import { formatRelativeTime } from "@/components/SessionItem";
 import { taskGraphView, type BlockerRow, type PrKey } from "@/lib/taskGraphRows";
 import { showActionSheet } from "@/lib/popups";
+import { useDictation } from "@/lib/dictation";
+import { DictateControls } from "@/components/DictateControls";
 import {
   STATUS_CONFIG,
   STATUS_ORDER,
@@ -63,6 +65,8 @@ export default function TaskDetailScreen() {
   const [titleDraft, setTitleDraft] = useState("");
   const titleInputRef = useRef<RNTextInput>(null);
   const [commentText, setCommentText] = useState("");
+  const commentInputRef = useRef<RNTextInput>(null);
+  const dictation = useDictation({ value: commentText, onChangeText: setCommentText, inputRef: commentInputRef });
   const [subtaskTitle, setSubtaskTitle] = useState("");
   const [addingSubtask, setAddingSubtask] = useState(false);
   const [showFiles, setShowFiles] = useState(false);
@@ -161,6 +165,10 @@ export default function TaskDetailScreen() {
     addTaskComment(task.short_id, text, "note");
     setCommentText("");
   }, [task, commentText, addTaskComment]);
+  // A send mid-dictation waits for the last words, then posts what the box
+  // holds (the latest handler, whose closure has them).
+  const addCommentRef = useRef(handleAddComment);
+  addCommentRef.current = handleAddComment;
 
   // "Not found" only once both the list and the detail have answered; until
   // then a row we have never cached is genuinely cold.
@@ -400,16 +408,21 @@ export default function TaskDetailScreen() {
           )}
           <RNView style={styles.commentInputRow}>
             <TextInput
+              ref={commentInputRef}
               style={styles.commentInput}
               value={commentText}
               onChangeText={setCommentText}
-              placeholder="Add a comment..."
+              onSelectionChange={dictation.onSelectionChange}
+              placeholder={dictation.placeholder("Add a comment...")}
               placeholderTextColor={Theme.textMuted0}
               multiline
             />
+            <RNView style={styles.commentDictate}>
+              <DictateControls dictation={dictation} />
+            </RNView>
             <TouchableOpacity
               style={[styles.commentSend, !commentText.trim() && { opacity: 0.3 }]}
-              onPress={handleAddComment}
+              onPress={() => dictation.send(() => addCommentRef.current())}
               disabled={!commentText.trim()}
             >
               <FontAwesome name="arrow-up" size={14} color={Theme.accent} />
@@ -761,5 +774,10 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   commentSend: {
     paddingHorizontal: 10,
     paddingVertical: 10,
+  },
+  // Beside the box's last line, like send.
+  commentDictate: {
+    height: 40,
+    justifyContent: "center",
   },
 }));

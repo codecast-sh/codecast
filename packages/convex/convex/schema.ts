@@ -212,6 +212,8 @@ export default defineSchema({
     // with it off nothing about their voice is stored and they are never
     // suggested as a speaker. Written only by the person (setVoiceIdEnabled).
     voice_id_enabled: v.optional(v.boolean()),
+    // Whether this person may dictate into text boxes (dictation.ts). Absent is off.
+    dictation_enabled: v.optional(v.boolean()),
     // "anchor" is an anchor's synthetic identity. "slack" is the bridge identity
     // a Slack workspace speaks through when a Slack person has no codecast
     // account (slackSync): one per installation, named after the workspace, and

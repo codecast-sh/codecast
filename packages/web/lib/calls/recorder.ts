@@ -32,7 +32,7 @@
 // at a time on this machine, components read a small status snapshot through
 // subscribe/getSnapshot, and no audio machinery goes anywhere near React.
 import { api as _api } from "@codecast/convex/convex/_generated/api";
-import { CALL_HEARTBEAT_MS, recRoomKey } from "@codecast/shared/contracts";
+import { CALL_HEARTBEAT_MS, finishRunningDictation, recRoomKey } from "@codecast/shared/contracts";
 import { useInboxStore } from "../../store/inboxStore";
 import { uploadBlobToStorage } from "../uploadBlob";
 import { mutateOnUnload } from "../keepaliveMutation";
@@ -186,6 +186,8 @@ export async function startRecording(): Promise<string | null> {
     setPhase("idle", "Recording is not ready yet — reload the page.");
     return null;
   }
+  // The room recording takes the microphone: a recording in a text box keeps its words and stops.
+  void finishRunningDictation();
   setPhase("starting");
 
   try {

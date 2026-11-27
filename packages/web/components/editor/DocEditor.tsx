@@ -1,5 +1,6 @@
 import { useCallback, useRef } from "react";
-import { useEditor, EditorContent } from "@tiptap/react";
+import { useEditor, EditorContent, type Editor } from "@tiptap/react";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { BubbleToolbar } from "./BubbleToolbar";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { createBaseExtensions, createMentionExtension, type MentionQueryFn } from "./editorExtensions";
@@ -16,6 +17,8 @@ interface DocEditorProps {
   editable?: boolean;
   className?: string;
   placeholder?: string;
+  /** The editor once it exists, for a surface that writes into it (dictation). */
+  onEditor?: (editor: Editor | null) => void;
 }
 
 export function DocEditor({
@@ -27,6 +30,7 @@ export function DocEditor({
   editable = true,
   className = "",
   placeholder = "Start writing, use / for commands, @ to mention, [[ to link docs...",
+  onEditor,
 }: DocEditorProps) {
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSavedRef = useRef(content);
@@ -98,6 +102,12 @@ export function DocEditor({
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     };
   });
+
+  useWatchEffect(() => {
+    if (!onEditor) return;
+    onEditor(editor);
+    return () => onEditor(null);
+  }, [editor, onEditor]);
 
   if (!editor) return null;
 
