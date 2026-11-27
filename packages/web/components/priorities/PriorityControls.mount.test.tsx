@@ -504,6 +504,8 @@ test("on the desktop grid each ⋯ keeps its 24px look and a coarse pointer pres
       if (b.hasAttribute("data-milestone-menu")) {
         expect(b.className).toContain("[@media(hover:none)]:opacity-100");
         expect(b.className).toContain("[@media(pointer:coarse)]:opacity-100");
+        // Centred on the line's 48px first row under a coarse pointer (12px down), so the line's clip keeps all 44px of the press area.
+        expect(b.closest('[class*="left-full"]')!.className.split(" ")).toContain("[@media(pointer:coarse)]:top-3");
       }
     }
     expect(line("pri-1", "s1").querySelector('[role="button"]')!.className).toContain("[@media(pointer:coarse)]:min-h-11");

@@ -53,8 +53,9 @@ const C_META = "col-start-2 col-end-6 row-start-2 min-w-0";
 /** A wide row's ⋯: outside the grid, in the page's right gutter, level with the row's first line. It ends 32px past the grid,
  *  inside the narrowest gutter (Classic's 32px), and its touch press area grows only leftward (controls `gutter`). */
 const C_MENU = "absolute left-full top-0 ml-2 flex h-5 items-center";
-/** A milestone line's ⋯, at the same x: the line's own box already reaches 6px into the gutter. */
-const C_LINE_MENU = "absolute left-full top-1 ml-0.5 flex";
+/** A milestone line's ⋯, at the same x: the line's own box already reaches 6px into the gutter. Centred on the line's first row:
+ *  32px on a mouse, 48px under a coarse pointer, where the 44px press area then fits inside the line's clip. */
+const C_LINE_MENU = "absolute left-full top-1 ml-0.5 flex [@media(pointer:coarse)]:top-3";
 const C_MENU_PHONE = "col-start-5 row-start-1 justify-self-end";
 /** A wide row's title, one line on a mouse; under a coarse pointer it wraps onto a second, since nothing there hovers for the rest. */
 const COARSE_WRAP = "[@media(pointer:coarse)]:line-clamp-2 [@media(pointer:coarse)]:whitespace-normal";
