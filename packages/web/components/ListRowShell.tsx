@@ -16,7 +16,7 @@ export interface ItemRowState {
 /** One list row's frame: focus, selection and drop highlights, the select
  *  checkbox, then the row's own content. GenericListView owns the state and
  *  the drag wiring; this draws it, so any surface can lay out the same row. */
-export function ListRowShell({ state, isActive = false, dragging = false, combineTarget = false, inTargetGroup = false, gapEdge = null, dragProps, children }: {
+export function ListRowShell({ state, isActive = false, dragging = false, combineTarget = false, inTargetGroup = false, gapEdge = null, dragProps, selectable = true, children }: {
   state: ItemRowState;
   isActive?: boolean;
   /** This row is the one being dragged. */
@@ -28,6 +28,8 @@ export function ListRowShell({ state, isActive = false, dragging = false, combin
   /** A release here would insert on this edge. */
   gapEdge?: "before" | "after" | null;
   dragProps?: HTMLAttributes<HTMLDivElement> & { draggable?: boolean };
+  /** False: the row cannot join a selection, so it draws no checkbox (an empty slot keeps the columns aligned). */
+  selectable?: boolean;
   children: ReactNode;
 }) {
   const { isFocused, isSelected } = state;
@@ -68,7 +70,7 @@ export function ListRowShell({ state, isActive = false, dragging = false, combin
           }`}
         />
       )}
-      <button
+      {!selectable ? <span aria-hidden className="w-4 h-4 flex-shrink-0 cq-hide-compact" data-list-row-unselectable /> : <button
         onClick={(e) => { e.stopPropagation(); state.onSelect(); }}
         role="checkbox"
         aria-checked={isSelected}
@@ -82,7 +84,7 @@ export function ListRowShell({ state, isActive = false, dragging = false, combin
         }`}
       >
         {isSelected && <Check className="w-3 h-3 text-sol-bg" />}
-      </button>
+      </button>}
       {children}
     </div>
   );

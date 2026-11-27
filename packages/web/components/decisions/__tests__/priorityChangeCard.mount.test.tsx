@@ -97,6 +97,22 @@ test("a row is one click: it flips its tick and the first answer counts the tick
   unmount();
 });
 
+test("Suggested marks only the pass's own pick: the ticks the card opened with", async () => {
+  const some = card.suggested.filter((id) => id !== "c12" && id !== "c13" && id !== "c14");
+  const custom = await mount(some);
+  // Opened with fewer than the pass suggested: the count, but not the pass's pick.
+  expect(custom.first().textContent).toContain(`Accept ${some.length} of ${card.changes.length} changes`);
+  expect(custom.first().textContent).not.toContain("Suggested");
+  custom.unmount();
+  const { row, first, unmount } = await mount();
+  expect(first().textContent).toContain("Suggested");
+  await act(() => { row("c5").click(); });
+  expect(first().textContent).not.toContain("Suggested");
+  await act(() => { row("c5").click(); });
+  expect(first().textContent).toContain("Suggested");
+  unmount();
+});
+
 test("unticking a new priority unticks its milestones; ticking one of them ticks the priority back", async () => {
   const { row, checked, first, unmount } = await mount();
   const n = card.changes.length;

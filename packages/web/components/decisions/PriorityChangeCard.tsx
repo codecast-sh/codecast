@@ -223,8 +223,10 @@ function RunFacts({ run }: { run: PriorityCard["run"] }) {
   );
 }
 
+const sameIds = (a: readonly string[], b: readonly string[]) => a.length === b.length && b.every((id) => a.includes(id));
+
 /** The card's own answers, in the proposal's option rows; the third opens a box for the person's words. */
-function Answers({ total, ticked, onAnswer, keys }: { total: number; ticked: string[]; onAnswer: (a: PriorityCardAnswer) => void; keys: boolean }) {
+function Answers({ total, ticked, suggested, onAnswer, keys }: { total: number; ticked: string[]; suggested: string[]; onAnswer: (a: PriorityCardAnswer) => void; keys: boolean }) {
   const [writing, setWriting] = useState(false);
   // Uncontrolled: a keystroke here re-renders nothing.
   const box = useRef<HTMLTextAreaElement>(null);
@@ -232,7 +234,8 @@ function Answers({ total, ticked, onAnswer, keys }: { total: number; ticked: str
     // Nothing ticked: the first answer is held and says why, with no count and no suggestion.
     ticked.length === 0
       ? { label: "Accept" }
-      : { label: `${acceptLabel(ticked.length, total)} (Suggested)`, description: "They show on your priorities page now. Undo from there." },
+      // Suggested names the pass's own pick: only while the ticks are exactly the ones the card opened with.
+      : { label: `${acceptLabel(ticked.length, total)}${sameIds(ticked, suggested) ? " (Suggested)" : ""}`, description: "They show on your priorities page now. Undo from there." },
     { label: "Accept none", description: "Your priorities stay as they are." },
     { label: "Something else…", description: "Say what the pass got wrong." },
   ];
@@ -359,7 +362,7 @@ export function PriorityChangeCard({ card, ticked, onToggle, answered, onAnswer,
               </>
             )}
             {list}
-            {!answered && <Answers total={total} ticked={ticked} onAnswer={onAnswer} keys={keys} />}
+            {!answered && <Answers total={total} ticked={ticked} suggested={card.suggested} onAnswer={onAnswer} keys={keys} />}
           </div>
           {!answered && (
             <aside className="pcc-side">

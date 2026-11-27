@@ -18,6 +18,7 @@ import { KeyCap } from "./KeyboardShortcutsHelp";
 import { PreloadPublishedPage } from "./PublishedPageEmbed";
 
 import { useWatchEffect } from "../hooks/useWatchEffect";
+import { KEYS_ONLY, TOUCH_TARGET } from "../lib/narrowTouch";
 import { setDecisionQueueCursor } from "../lib/decisionQueueCursor";
 // One decision at a time, full width, keyboard driven: answer and it advances;
 // when the queue empties, say so and get out of the way. Ranking (which
@@ -158,18 +159,19 @@ function AnsweredDecision({ id, at, count, onStep, onExit }: { id: string; at: n
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [at, count, onStep]);
-  const btn = "inline-flex items-center gap-1.5 rounded px-1.5 py-0.5 text-sol-text-dim hover:text-sol-text hover:bg-sol-card disabled:opacity-30 disabled:hover:bg-transparent";
+  // Touch targets on a phone: each control at least 44px, and no key caps where there are no keys.
+  const btn = `inline-flex items-center justify-center gap-1.5 rounded px-1.5 py-0.5 text-sol-text-dim hover:text-sol-text hover:bg-sol-card disabled:opacity-30 disabled:hover:bg-transparent ${TOUCH_TARGET}`;
   const nav = (
     <div className="flex items-center gap-2 text-meta" data-decision-queue-back={`${at + 1}/${count}`}>
       <button type="button" className={btn} disabled={!prev} onClick={prev} aria-label="Earlier answered decision">
-        <ChevronLeft className="w-3.5 h-3.5" /><KeyCap size="xs">←</KeyCap>
+        <ChevronLeft className="w-3.5 h-3.5" /><span className={KEYS_ONLY}><KeyCap size="xs">←</KeyCap></span>
       </button>
       <span className="tabular-nums text-sol-text-dim">Answered {at + 1} of {count}</span>
       <button type="button" className={btn} onClick={next} aria-label={at + 1 < count ? "Later answered decision" : "Back to the queue"}>
-        <KeyCap size="xs">→</KeyCap><ChevronRight className="w-3.5 h-3.5" />
+        <span className={KEYS_ONLY}><KeyCap size="xs">→</KeyCap></span><ChevronRight className="w-3.5 h-3.5" />
       </button>
       <button type="button" className={`${btn} ml-auto`} onClick={() => onStep(null)} data-decision-queue-return>
-        <KeyCap size="xs">esc</KeyCap><span>Back to the queue</span>
+        <span className={KEYS_ONLY}><KeyCap size="xs">esc</KeyCap></span><span>Back to the queue</span>
       </button>
       {onExit && <button type="button" className={btn} onClick={onExit}>Leave</button>}
     </div>
@@ -200,8 +202,8 @@ function PriorityCardStep({ decision, stepper }: { decision: SessionDecisionItem
     return () => window.removeEventListener("keydown", onKey);
   }, [onPrev, onSkip, onExit]);
   // Touch targets on a phone: each control at least 44px, and no key caps where there are no keys.
-  const btn = "inline-flex items-center justify-center gap-1.5 rounded px-1.5 py-0.5 text-sol-text-dim hover:text-sol-text hover:bg-sol-card disabled:opacity-30 disabled:hover:bg-transparent max-[520px]:min-h-11 max-[520px]:min-w-11 [@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:min-w-11";
-  const cap = "max-[520px]:hidden [@media(pointer:coarse)]:hidden";
+  const btn = `inline-flex items-center justify-center gap-1.5 rounded px-1.5 py-0.5 text-sol-text-dim hover:text-sol-text hover:bg-sol-card disabled:opacity-30 disabled:hover:bg-transparent ${TOUCH_TARGET}`;
+  const cap = KEYS_ONLY;
   return (
     <div className="h-full overflow-y-auto bg-sol-bg" data-decision-queue-card={decision.short_id ?? decision._id}>
       <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 pb-16">

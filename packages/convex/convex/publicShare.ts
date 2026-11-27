@@ -32,6 +32,7 @@ import { publicName } from "./lib/displayNames";
 import { lineSpeakerNames } from "./lib/callSpeakers";
 import { publicWeekCard, weeklyCardAllowed, type WeekCardStats } from "@codecast/shared/contracts/weeklyCard";
 import { runWorkflowOf } from "./lib/runGraph";
+import { isPriorityCard } from "@codecast/shared/contracts/priorityCard";
 
 export { SHARE_TOKEN_SHAPE, type ShareTable };
 
@@ -97,7 +98,8 @@ const SHARE_KINDS = {
   },
   project: { table: "projects", canManage: (ctx: any, u: Id<"users">, row: any) => canAccessProject(ctx, u, row) },
   initiative: { table: "initiatives", canManage: (ctx: any, u: Id<"users">, row: any) => canAccessInitiative(ctx, u, row) },
-  decision: { table: "session_decisions", canManage: (ctx: any, u: Id<"users">, row: any) => userMayRead(ctx, u, row) },
+  // A priority card is its person's alone (isPriorityCard): it is never published.
+  decision: { table: "session_decisions", canManage: async (ctx: any, u: Id<"users">, row: any) => !isPriorityCard(row) && (await userMayRead(ctx, u, row)) },
   stack: { table: "decision_stacks", canManage: (ctx: any, u: Id<"users">, row: any) => canReadStack(ctx, u, row) },
   trigger: { table: "agent_tasks", canManage: (ctx: any, u: Id<"users">, row: any) => canViewTask(ctx, u, row) },
   run: { table: "workflow_runs", canManage: (ctx: any, u: Id<"users">, row: any) => canReadRun(ctx, u, row) },

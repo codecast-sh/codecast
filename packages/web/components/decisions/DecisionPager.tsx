@@ -7,9 +7,11 @@ import { useTabActive } from "../../hooks/usePagePresence";
 import { hasOpenModal } from "../../shortcuts";
 import { keyBelongsElsewhere } from "../../shortcuts/keyOwnership";
 import { KeyCap } from "../KeyCap";
+import { KEYS_ONLY, TOUCH_TARGET } from "../../lib/narrowTouch";
 
 // ‹ 2 of 5 › on a decision page, and the arrow keys; always drawn, so the way through the queue never goes missing.
-export function DecisionPager({ step }: { step: DecisionStep }) {
+// `touch`: a page built for the phone too (a priority card's): 44px controls on a narrow or touch screen, and no key caps there.
+export function DecisionPager({ step, touch = false }: { step: DecisionStep; touch?: boolean }) {
   const { pos, go } = step;
   const active = useTabActive();
   const { prev, next } = pos;
@@ -26,15 +28,16 @@ export function DecisionPager({ step }: { step: DecisionStep }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [active, prev, next]);
 
-  const btn = "inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-sol-text-dim hover:text-sol-text hover:bg-sol-card disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-sol-text-dim";
+  const btn = `inline-flex items-center justify-center gap-1 rounded px-1.5 py-0.5 text-sol-text-dim hover:text-sol-text hover:bg-sol-card disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-sol-text-dim${touch ? ` ${TOUCH_TARGET}` : ""}`;
+  const cap = touch ? KEYS_ONLY : undefined;
   return (
     <span className="inline-flex items-center gap-1 text-meta" data-decision-pager={`${pos.at + 1}/${step.total}`}>
       <button type="button" className={btn} disabled={!prev} onClick={() => go(prev)} aria-label="Previous decision" title="Previous decision">
-        <ChevronLeft className="w-3.5 h-3.5" /><KeyCap size="xs">←</KeyCap>
+        <ChevronLeft className="w-3.5 h-3.5" /><span className={cap}><KeyCap size="xs">←</KeyCap></span>
       </button>
       <span className="tabular-nums text-sol-text-dim">{pos.at >= 0 ? `${pos.at + 1} of ${step.total}` : step.total > 0 ? `${step.total} left` : "none left"}</span>
       <button type="button" className={btn} disabled={!next} onClick={() => go(next)} aria-label="Next decision" title="Next decision">
-        <KeyCap size="xs">→</KeyCap><ChevronRight className="w-3.5 h-3.5" />
+        <span className={cap}><KeyCap size="xs">→</KeyCap></span><ChevronRight className="w-3.5 h-3.5" />
       </button>
     </span>
   );

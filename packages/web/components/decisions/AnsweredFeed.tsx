@@ -42,7 +42,8 @@ export function AnsweredFeed({ rows }: { rows: ReadonlyArray<SessionDecisionItem
   const now = useCoarseNow(60_000);
   const { partyOf } = useDecisionParties();
   const answered = useMemo(
-    () => rows.filter((d) => d.status === "answered").sort((a, b) => answeredAt(b) - answeredAt(a)),
+    // A priority card's Accept none settles as a dismissal, and is still an answer: its record reads "Accepted none".
+    () => rows.filter((d) => d.status === "answered" || (d.status === "dismissed" && !!d.priority_card)).sort((a, b) => answeredAt(b) - answeredAt(a)),
     [rows],
   );
   const [shown, setShown] = useState(PAGE);

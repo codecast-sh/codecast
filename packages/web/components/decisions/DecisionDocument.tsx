@@ -26,6 +26,7 @@ import { useDecisionStep, type DecisionStep } from "../../hooks/useDecisionStep"
 import { useDecisionQueue } from "../../hooks/useDecisionQueue";
 import { HandoffNote } from "./DecisionParties";
 import { ChangeCardHeadline, ChangeCardVerdictBar, ChangeCardView } from "./ChangeCardView";
+import { TOUCH_HEIGHT } from "../../lib/narrowTouch";
 import { PriorityCardDecision } from "./PriorityCardDecision";
 import { ShareControl } from "../ShareControl";
 import { decisionWaitLabel, ladderRecommenders, waitsOnViewer } from "../../lib/decisionLinks";
@@ -97,10 +98,11 @@ function DocumentBody({ decision, detail, answerable, pager, nav }: { decision: 
       <div className={`${priorityCard ? "max-w-6xl" : "max-w-4xl"} mx-auto px-4 sm:px-6 lg:px-8 pt-6 pb-16`}>
         {nav ?? (pager && (
           <nav className="decision-nav flex items-center gap-3" data-decision-nav>
-            <Link href="/decisions" className="inline-flex items-center gap-1 text-meta text-sol-text-dim hover:text-sol-text transition-colors no-underline">
+            <Link href="/decisions" className={`inline-flex items-center gap-1 text-meta text-sol-text-dim hover:text-sol-text transition-colors no-underline${priorityCard ? ` ${TOUCH_HEIGHT}` : ""}`} data-decision-nav-all>
               <ArrowLeft className="w-3 h-3" /> All decisions
             </Link>
-            <span className="ml-auto"><DecisionPager step={step} /></span>
+            {/* A priority card's page is built for the phone too: 44px controls there, no key caps. */}
+            <span className="ml-auto"><DecisionPager step={step} touch={!!priorityCard} /></span>
           </nav>
         ))}
 
@@ -124,7 +126,8 @@ function DocumentBody({ decision, detail, answerable, pager, nav }: { decision: 
             {decision.workflow_run_id && decision.status === "answered" && <DeployedIn taskId={decision.task_id} />}
             {/* The id is for citing, so it trails the line. */}
             <span className="font-mono opacity-70">{decision.short_id ?? "decision"}</span>
-            <ShareControl label="decision" path={`/decisions/${decision.short_id ?? decision._id}`} publicShare={{ kind: "decision", id: decision._id, token: (decision as any).share_token }} className="ml-auto" />
+            {/* A priority card is its person's alone (isPriorityCard): nobody else can open it, so it has nothing to share. */}
+            {!priorityCard && <ShareControl label="decision" path={`/decisions/${decision.short_id ?? decision._id}`} publicShare={{ kind: "decision", id: decision._id, token: (decision as any).share_token }} className="ml-auto" />}
           </div>
           {/* A gate on a flow: the whole flow around the station that asks, every station one click away. */}
           {decision.workflow_run_id && <FlowContext runId={decision.workflow_run_id} focus={{ decisionId: decision._id, nodeId: decision.gate_node_id }} className="mt-3" />}

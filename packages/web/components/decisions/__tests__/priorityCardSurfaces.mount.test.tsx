@@ -39,6 +39,9 @@ const { AnsweredFeed } = await import("../AnsweredFeed");
 const { decisionScopeKey, groupDecisions, PRIORITIES_SCOPE } = await import("../../../lib/decisionGroups");
 const { answerDecisions, dismissDecisions, unassignDecisions, sharedAnswers } = await import("../../../lib/decisions/decisionBulk");
 const { questionCards } = await import("../../../lib/threadCards");
+const { ListRowShell } = await import("../../ListRowShell");
+const { DecisionPager } = await import("../DecisionPager");
+const { KEYS_ONLY } = await import("../../../lib/narrowTouch");
 afterAll(() => { closeDomWindow(dom); restoreGlobals(); });
 
 const CONV = "c-host-session";
@@ -69,8 +72,11 @@ test("the cards view files a card under Priorities, never its session", () => {
   expect(groups.map((g) => g.key).sort()).toEqual([`scope:${PRIORITIES_SCOPE}`, `scope:session:${CONV}`].sort());
 });
 
-test("the compact card names the pass, not the host session, with no link, thread or stack box", async () => {
+test("the compact card names the pass, not the host session, with no link, thread, stack box or blocking dot", async () => {
   const { container, unmount } = await mount(<DecisionCompactCard decision={row()} onToggleSelect={() => {}} />);
+  // A card parks no session, so it has no blocking dot; its way to the card is a 44px target on a phone.
+  expect(container.querySelector('[aria-label="blocking"]')).toBeNull();
+  expect(container.querySelector("[data-decision-open-card]")!.className).toContain("max-[520px]:min-h-11");
   expect(container.querySelector("[data-decision-card-source]")!.textContent).toBe("Priorities pass");
   expect(container.textContent).not.toContain("Host session title");
   expect(container.querySelector("[data-asking-session]")).toBeNull();
@@ -133,4 +139,29 @@ test("the Answered feed draws a card's record, not its options, and opens the ca
   expect(corrected.container.querySelector("[data-answered-feed-priority-card] h3")!.textContent).toBe("You sent a correction");
   expect(corrected.container.querySelector("[data-answered-feed-words]")!.textContent).toBe("Checkout stays at #9.");
   await corrected.unmount();
+});
+
+test("a list row that cannot join a selection draws no checkbox", async () => {
+  const state: any = { isFocused: false, isSelected: false, onSelect: () => {}, onClick: () => {}, onContextMenu: () => {} };
+  const off = await mount(<ListRowShell state={state} selectable={false}><span>row</span></ListRowShell>);
+  expect(off.container.querySelector('[role="checkbox"]')).toBeNull();
+  await off.unmount();
+  const on = await mount(<ListRowShell state={state}><span>row</span></ListRowShell>);
+  expect(on.container.querySelector('[role="checkbox"]')).not.toBeNull();
+  await on.unmount();
+});
+
+test("a card's page pager is a phone target: no key caps on a narrow or touch screen", async () => {
+  const step: any = { pos: { at: 0, prev: null, next: "sd-2" }, total: 2, go: () => {} };
+  const touch = await mount(<DecisionPager step={step} touch />);
+  expect([...touch.container.querySelectorAll("kbd")].every((k) => k.parentElement!.className === KEYS_ONLY)).toBe(true);
+  expect(touch.container.querySelector("button")!.className).toContain("max-[520px]:min-h-11");
+  await touch.unmount();
+});
+
+test("a card answered Accept none is in the Answered feed, reading Accepted none", async () => {
+  const { container, unmount } = await mount(<AnsweredFeed rows={[row({ status: "dismissed", resolved_at: 5 }), ask({ _id: "d-skip", status: "dismissed", resolved_at: 6 })]} />);
+  expect(container.querySelectorAll("[data-answered-feed-entry]").length).toBe(1);
+  expect(container.querySelector("[data-answered-feed-priority-card] h3")!.textContent).toBe("Accepted none");
+  await unmount();
 });

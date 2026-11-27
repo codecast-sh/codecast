@@ -24,6 +24,7 @@ import { approxMessageBytes, isNavigableUserMessage } from "./userMessagesFilter
 import { roleCharterOf } from "./lib/roleCharter";
 import { teamRooms } from "./chatAccess";
 import { roleReportsOf } from "./orgPeople";
+import { isPriorityCard } from "@codecast/shared/contracts/priorityCard";
 
 // org.health (docs/architecture/org-staffing.md S3): the flow signals the
 // capacity model needs, per role, per person and for the company, with the
@@ -397,11 +398,15 @@ export async function readHealthDecisions(ctx: Ctx, teamId: Id<"teams"> | undefi
   for (const uid of memberIds) {
     const inbox: any[] = await ctx.db.query("decision_inbox").withIndex("by_user_status", (q: any) => q.eq("user_id", uid).eq("status", "pending")).take(HEALTH_CAPS.inbox_per_person);
     let oldest: number | null = null;
+    let n = 0;
     for (const row of inbox) {
       const d = await ctx.db.get(row.decision_id);
+      // A priority card is its person's alone (isPriorityCard): it is not a wait others see.
+      if (d && isPriorityCard(d)) continue;
+      n++;
       if (d?.status === "pending") oldest = oldest === null ? d.created_at : Math.min(oldest, d.created_at);
     }
-    peopleWaiting[String(uid)] = { n: inbox.length, oldest_min: oldest === null ? null : Math.floor((now - oldest) / 60_000) };
+    peopleWaiting[String(uid)] = { n, oldest_min: oldest === null ? null : Math.floor((now - oldest) / 60_000) };
   }
   return { decisionsOf, decisionsByDay, latency, decisionsTruncated, peopleWaiting };
 }

@@ -120,7 +120,8 @@
 .pcc-bar { display: inline-block; width: 38px; height: 5px; margin-right: 6px; border-radius: 2px; background: color-mix(in srgb, var(--sol-border) 70%, transparent); vertical-align: middle; overflow: hidden; }
 .pcc-bar i { display: block; height: 100%; background: var(--cc-green-fill); }
 .pcc-bar i.is-none { background: var(--sol-text-dim); opacity: 0.5; }
-.pcc-words tr.is-warn td { color: var(--cc-yellow-ink); }
+/* A priority on the person's list that got none of their words: the caution ink (orange, not the olive of yellow ink). */
+.pcc-words tr.is-warn td { color: color-mix(in oklab, var(--sol-orange) 80%, var(--sol-text)); }
 .pcc-facts { margin: 0; display: grid; gap: 4px; padding: 0 14px; font-size: 12.5px; }
 .pcc-facts > div { display: flex; justify-content: space-between; gap: 12px; }
 .pcc-facts dt { color: var(--sol-text-dim); }
