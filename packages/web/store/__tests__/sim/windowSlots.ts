@@ -62,6 +62,9 @@ export const WINDOW_SLOTS: Record<string, SlotClass> = {
   "store/inboxStore.ts:_pendingSendSig": "window",
   "store/inboxStore.ts:_placementDeadlineMemo": "window",
   "store/inboxStore.ts:_placedMemo": "window",
+  "store/inboxStore.ts:_placedListeners": NO_REACT,
+  "store/inboxStore.ts:_placedVersion": { shared: "a change counter only mounted subscribers read (useSyncExternalStore); the sim mounts no React" },
+  "store/inboxStore.ts:_placedNotifyQueued": "transient",
   // The retired field locks' acknowledgement times: each window acknowledges its own writes.
   "store/inboxStore.ts:retiredAckTs": "window",
   "store/inboxStore.ts:earlySettles": "window",
