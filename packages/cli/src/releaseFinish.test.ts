@@ -58,6 +58,18 @@ describe("the daemon build id at a commit", () => {
     expect(decideForce("a".repeat(40), { sha: null, floor: "1.1.300" }, unread)).toEqual({ force: true, reason: expect.stringContaining("the floor names (1.1.300)") });
     expect(decideForce("a".repeat(40), { sha: "a".repeat(40), floor: "1.1.300" }, unread).force).toBe(false);
   });
+
+  test("forces, and says so, when the commit of the release the floor names cannot be read", () => {
+    const r = repo();
+    try {
+      const now = r.commit({ "packages/cli/src/daemon.ts": "export const d = 1;\n", "packages/cli/package.json": JSON.stringify({ version: "1.0.1", dependencies: {} }) });
+      // A sha this clone never had, and no origin to fetch it from: real git fails.
+      const gone = "f".repeat(40);
+      expect(decideForce(now, { sha: gone, floor: "1.0.0" }, (sha) => daemonBuildIdAt(r.root, sha))).toEqual({ force: true, reason: "could not read ffffffffff: forced" });
+    } finally {
+      r.cleanup();
+    }
+  }, 30_000);
 });
 
 const device = (label: string, cli_version: string, online = true) => ({ device_id: label, label, owner: "Bo", cli_version, online, error: null });
@@ -153,6 +165,15 @@ describe("the finish", () => {
     await finishCliRelease({ root: "/x", deploy: "dp-9", version: "1.1.307", waitMs: 0, post: unchanged.post, buildIdAt: ids(false), log: () => {}, setGlobal });
     expect(asked).toEqual(["1.1.306"]);
     expect(unchanged.calls.some((c) => c.path === "/cli/team-cli-floor/tell-other-teams")).toBe(false);
+  });
+
+  test("an earlier release's commit that cannot be read forces, and the finish still records it", async () => {
+    const s = server({});
+    const buildIdAt = (sha: string) => { if (sha.startsWith("a")) throw new Error("git archive aaaaaaaaaa failed"); return "new-build"; };
+    const note = await finishCliRelease({ root: "/x", deploy: "dp-9", version: "1.1.306", waitMs: 0, post: s.post, buildIdAt, log: () => {} });
+    expect(note).toContain("Release 1.1.306: could not read aaaaaaaaaa: forced");
+    expect(note).toContain("Forced: Acme's floor is now 1.1.306.");
+    expect(s.calls.at(-1)!.path).toBe("/cli/line/deploy/report");
   });
 
   test("an unchanged daemon forces nothing and says so on the deploy, after the note it had", async () => {

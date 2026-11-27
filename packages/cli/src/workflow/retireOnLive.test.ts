@@ -2,12 +2,15 @@
 // with an origin, fake transcripts in an isolated CODECAST_DIR and HOME, and a
 // fake server. It retires only a session whose checkout holds nothing of its
 // own beside what landed; anything else keeps it.
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { retireOnLive } from "./retireOnLive";
+
+// Each case builds a repo, an origin and pushes with real git: the 5s default times out under load.
+setDefaultTimeout(30_000);
 
 const ENV = { GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t", GIT_CONFIG_NOSYSTEM: "1" };
 const saved: Record<string, string | undefined> = {};

@@ -191,7 +191,9 @@ async function stopsOfTasks(ctx: any, rows: Doc<"signals">[], now: number, cause
     if (!id || runs.has(String(id))) continue;
     const run: Doc<"workflow_runs"> | null = await ctx.db.get(id);
     if (run?.status !== "failed" || run.stop_fingerprint !== row.fingerprint) continue;
-    const held = !!causeId && String(run.incident_task_id ?? "") === String(causeId);
+    // The fix shipped on the cause, stopping at the same exit, is the incident's own work: it cannot wait on itself.
+    if (causeId && String(run.task_id) === String(causeId)) continue;
+    const held =!!causeId && String(run.incident_task_id ?? "") === String(causeId);
     if (!held && now - run.updated_at > LIVE_STOP_MS) continue;
     if (await standsForTask(ctx, run, row.workspace)) runs.set(String(id), run);
   }
@@ -212,8 +214,8 @@ export async function openIncidentIfShared(ctx: any, causeId: Id<"tasks">, now: 
   const { runs, tasks } = await stopsOfTasks(ctx, rows, now, causeId);
   if (tasks.size < 2) return false;
   if (!cause.assignee) {
-    const ws = parseWorkspaceKey(cause.workspace);
-    const release = ws ? await liveRoleByHandle(ctx, ws.type === "team" ? { team_id: ws.teamId } : { scope_user_id: ws.userId }, RELEASE_HANDLE) : null;
+    // Routing, so the team the cause flows to (team_id), never its access key.
+    const release = await liveRoleByHandle(ctx, cause.team_id ? { team_id: cause.team_id } : { scope_user_id: cause.user_id }, RELEASE_HANDLE);
     if (release) await handTask(ctx, cause, String(release._id), runs[0].user_id, `The same stop on ${tasks.size} changes`, now);
   }
   for (const run of runs) {
