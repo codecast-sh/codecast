@@ -68,6 +68,7 @@ function row(short_id: string, over: Partial<PriorityRow> = {}): PriorityRow {
     workspace: "team:t1",
     user_id: "me" as any,
     owner: "Jason",
+    owner_image: null,
     mine: true,
     first_seen_at: 0,
     last_active_at: 0,
