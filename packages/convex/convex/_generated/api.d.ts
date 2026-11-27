@@ -797,6 +797,7 @@ import type * as repoSessions from "../repoSessions.js";
 import type * as repos from "../repos.js";
 import type * as resourceOffload from "../resourceOffload.js";
 import type * as resourceOffloadSchema from "../resourceOffloadSchema.js";
+import type * as retireOnLive from "../retireOnLive.js";
 import type * as reviewNotes from "../reviewNotes.js";
 import type * as reviews from "../reviews.js";
 import type * as roleCheckRepair from "../roleCheckRepair.js";
@@ -1735,6 +1736,7 @@ declare const fullApi: ApiFromModules<{
   repos: typeof repos;
   resourceOffload: typeof resourceOffload;
   resourceOffloadSchema: typeof resourceOffloadSchema;
+  retireOnLive: typeof retireOnLive;
   reviewNotes: typeof reviewNotes;
   reviews: typeof reviews;
   roleCheckRepair: typeof roleCheckRepair;
