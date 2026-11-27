@@ -98,8 +98,8 @@ export function cliSessionClassifier(ctx: any, now: number) {
         awaitingInput = true;
       }
     }
-    // A settled parent whose subagent child is still producing is parked on it,
-    // as in the inbox (producing_until) and the needs-input push.
+    // A settled parent whose subagent child is still producing is working on
+    // its behalf, as in the inbox (producing_until) and the needs-input push.
     const childProducing = activity.isIdle && !awaitingInput && (await childProducingNow(ctx, conv, now));
     const ws = classifyWorkState({
       agentStatus,

@@ -78,15 +78,15 @@ describe("live fields re-derive from facts at the replica's clock", () => {
     expect(replicaBucketAt(s, A, NOW + MIN)).toBe("needs_input");
   });
 
-  it("a producing child parks its settled parent until producing_until, then the parent settles", () => {
+  it("a producing child keeps its settled parent working until producing_until, then the parent settles", () => {
     const parent = row(A, {
       agent_status: "idle", agent_status_updated_at: NOW - 10 * MIN, updated_at: NOW - 10 * MIN,
       last_heartbeat: NOW - 5 * S, daemon_alive_until: NOW + 85 * S, last_role_is_user: false, producing_until: NOW + MIN,
     });
     const s = state({ [A]: parent });
-    expect(bucketAt(s, A, NOW)).toBe("dormant");
-    // Placement reads the minute epoch, so the park lifts at the first epoch past producing_until.
-    expect(bucketAt(s, A, NOW + MIN + S)).toBe("dormant");
+    expect(bucketAt(s, A, NOW)).toBe("working");
+    // Placement reads the minute epoch, so the parent settles at the first epoch past producing_until.
+    expect(bucketAt(s, A, NOW + MIN + S)).toBe("working");
     expect(bucketAt(s, A, EPOCH + 2 * MIN)).toBe("needs_input");
   });
 

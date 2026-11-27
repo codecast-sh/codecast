@@ -156,7 +156,7 @@ export const LAB_SCENARIOS: LabScenario[] = [
   { id: "pr-merged", title: "Its PR merged", facts: { declared: "done", pr: "merged" }, expect: "merged", expectSection: "settled" },
   { id: "turn-unread", title: "Turn ended, no verdict, unread", facts: {}, expect: "turn_ended", expectSection: "you" },
   { id: "turn-read", title: "Turn ended, no verdict, read", facts: { unread: false }, expect: "idle", expectSection: "settled" },
-  { id: "worker", title: "Waiting on its subagent", facts: { declared: "dormant", worker: true }, expect: "worker", expectSection: "parked" },
+  { id: "worker", title: "Its subagent is working", facts: { declared: "dormant", worker: true }, expect: "worker", expectSection: "agent" },
   { id: "loop", title: "Sleeping on a /loop wakeup", facts: { loop: true }, expect: "loop", expectSection: "parked" },
   { id: "trigger", title: "Home of a standing trigger", facts: { trigger: "standing" }, expect: "trigger", expectSection: "parked" },
   { id: "pr-checks", title: "Waiting on PR checks", facts: { declared: "dormant", parked: "wait", pr: "open" }, expect: "pr_checks", expectSection: "parked" },

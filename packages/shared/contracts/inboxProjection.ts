@@ -197,7 +197,7 @@ export interface WorkStateInput {
   armedTriggerHome?: boolean;
   /** The session sleeps on a live harness /loop wakeup (loop_state armed, not overdue — see dormancy.isArmedLoopHome). Same standing strength as armedTriggerHome: the machine owns the next move. */
   armedLoopHome?: boolean;
-  /** A subagent child of this session is still producing (producing_until ahead): a background workflow's workers, a background Agent. Their result is the next turn, so a settled session is parked on them. Same standing strength as armedLoopHome. */
+  /** A subagent child of this session is still producing (producing_until ahead): a background Agent, a Workflow's agents. A settled session coordinating them files as working. */
   childProducing?: boolean;
   /** The home of an armed ONCE inject trigger. Weaker than a standing loop: it only demotes a `done` rest to dormant, never needs_input (see dormancy.ArmedTriggerHomes). */
   armedOnceTriggerHome?: boolean;
@@ -225,7 +225,10 @@ export interface WorkStateInput {
 // inbox's many derived flags into the WORK_STATES buckets (see workState.ts
 // for the meaning of each):
 //   - "working":     the agent is actively producing, has deliverable queued
-//                    work, or the user just sent a message it hasn't picked up.
+//                    work, the user just sent a message it hasn't picked up,
+//                    or a subagent child (a background Agent, a Workflow's
+//                    agents) is producing on its behalf: a lead coordinating
+//                    them is in motion, not asleep.
 //   - "needs_input": the ball is in the user's court to UNBLOCK — an open
 //                    question / permission prompt, an unresolved API-error
 //                    banner, a dead session with output, or a settled turn
@@ -233,9 +236,8 @@ export interface WorkStateInput {
 //   - "done":        settled, and the agent (or the settle classifier) says the
 //                    task is delivered.
 //   - "dormant":     settled, and a machine wake owns the next move — the agent
-//                    declared it, an open background task implies it, a
-//                    subagent child is still producing, the home of an armed
-//                    inject trigger, a live workflow run, task blocker or wait
+//                    declared it, an open background task implies it, the
+//                    home of an armed inject trigger, a live workflow run, task blocker or wait
 //                    the server sees (parked_wake_kind), or the user parked it. A
 //                    bare declaration (no wake the system can verify) holds
 //                    for DORMANT_CLAIM_TTL_MS of quiet, then reads
@@ -332,7 +334,10 @@ export function classifyWorkState(input: WorkStateInput): WorkState {
     // keeps injecting into the session) overrides it. Cleared by the agent's
     // own next declaration, never by a model.
     if (declaredBlockHolds(input)) return "needs_input";
-    if (declaredDormant || input.armedTriggerHome || input.armedLoopHome || input.childProducing) return "dormant";
+    // Its workers are producing: the agent's own process is settled, and its
+    // pin may well say dormant, but the work it coordinates is happening now.
+    if (input.childProducing) return "working";
+    if (declaredDormant || input.armedTriggerHome || input.armedLoopHome) return "dormant";
     if (declaredDone) return doneRest();
     // The classifier only ever files DONE: dormancy needs a wake the system
     // can verify, and prose cannot supply one (see idleSummary.SETTLE_VERDICTS).

@@ -34,12 +34,12 @@ It reads what the agent's process is doing, what the transcript shows, what the 
 4. **Hard blocks** go to Needs You: an error banner ("Please run /login", a usage limit), an open question, a permission prompt.
 5. **Producing** goes to Working: the agent is thinking, compacting, starting or resuming, or there is queued work a live machine can deliver.
 6. **Dead or unresponsive with output** goes to Needs You: someone has to read it or restart it (unless it exited right after saying it was done, the ordinary end of a scheduled run).
-7. **Settled** (the turn ended) picks a resting place, in trust order: the agent said it is blocked, so Needs You; it named a wake, or a schedule or loop is armed into it, or one of its workers is still running, so Sleeping; it said done, so Done; a classifier read the turn and judged it delivered, so Done. Anything else falls through to Needs You.
+7. **Settled** (the turn ended) picks a resting place, in trust order: the agent said it is blocked, so Needs You; one of its subagents is still producing, so Working, since a lead coordinating them is busy; it named a wake, or a schedule or loop is armed into it, so Sleeping; it said done, so Done; a classifier read the turn and judged it delivered, so Done. Anything else falls through to Needs You.
 8. **Not settled, no status**: you just sent a message it has not picked up, so Working. No messages at all is Idle.
 
 > **Why it matters.** The fallthrough is deliberate: a finished turn that nobody classified lands in Needs You, not Done. The system never guesses that work is finished. Silence costs you a glance; a wrong "done" costs you a stalled agent you never look at again.
 
-Two trust limits keep agents honest. "I'm waiting on something" is a promise about a wake. If codecast can see the wake (an armed schedule, a running background task, a worker still producing) the session parks indefinitely. If not, the claim holds for two hours of quiet, and then the card moves back to Needs You marked as an unverified claim. And "done" or "dormant" covers only the turn that says it: after the next wake the agent has to say it again, or the session returns to Needs You.
+Two trust limits keep agents honest. "I'm waiting on something" is a promise about a wake. If codecast can see the wake (an armed schedule, a running background task) the session parks indefinitely. If not, the claim holds for two hours of quiet, and then the card moves back to Needs You marked as an unverified claim. And "done" or "dormant" covers only the turn that says it: after the next wake the agent has to say it again, or the session returns to Needs You.
 
 ## State lines: the agent's own answer to "where does this stand?"
 

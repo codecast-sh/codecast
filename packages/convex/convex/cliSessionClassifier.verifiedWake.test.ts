@@ -103,8 +103,8 @@ describe("cast sessions and the inbox agree on a verified wake", () => {
 });
 
 // `cast feed`, `cast search` and `cast context` count a producing subagent
-// child as the inbox and the push do: a settled parent is parked on it.
-describe("a producing subagent child parks its settled parent on every surface", () => {
+// child as the inbox and the push do: a settled parent is working through it.
+describe("a producing subagent child keeps its settled parent working on every surface", () => {
   test("pinned dormant, daemon dormant, quiet 3h, child produced 10s ago", async () => {
     const t = convexTest(schema, allModules);
     const now = Date.now();
@@ -126,7 +126,7 @@ describe("a producing subagent child parks its settled parent on every surface",
       const inbox = await classifyWorkStates(ctx, user, [row], new Map([[String(parent), kids]]), now);
       return { cli: cli.work_state, inbox: inbox.get(String(parent)) };
     });
-    expect(out).toEqual({ cli: "dormant", inbox: "dormant" });
+    expect(out).toEqual({ cli: "working", inbox: "working" });
   });
 });
 

@@ -680,8 +680,8 @@ describe("placeProjectableRow — the park facts", () => {
     const openTasks = { open_tasks: [{ id: "t1" }], open_tasks_at: EPOCH - 60_000 };
     expect(placeProjectableRow(claim(11 * HOUR, { ...openTasks, last_heartbeat: EPOCH - 1_000 }), false, EPOCH).bucket).toBe("dormant");
     expect(placeProjectableRow(claim(11 * HOUR, openTasks), false, EPOCH).bucket).toBe("needs_input");
-    // A worker still producing: its result will wake the parent. Once it stops, the claim is judged again.
-    expect(placeProjectableRow(claim(11 * HOUR, { producing_until: EPOCH + 60_000 }), false, EPOCH).bucket).toBe("dormant");
+    // A worker still producing: the lead is in motion. Once it stops, the claim is judged again.
+    expect(placeProjectableRow(claim(11 * HOUR, { producing_until: EPOCH + 60_000 }), false, EPOCH).bucket).toBe("working");
     expect(placeProjectableRow(claim(11 * HOUR, { producing_until: EPOCH - 60_000 }), false, EPOCH).bucket).toBe("needs_input");
     // Stale open-task report: the daemon has not vouched recently, so it is no wake.
     expect(placeProjectableRow(claim(11 * HOUR, { open_tasks: [{ id: "t1" }], open_tasks_at: EPOCH - 11 * HOUR }), false, EPOCH).bucket).toBe("needs_input");
@@ -706,10 +706,10 @@ describe("placeProjectableRow — the park facts", () => {
     expect(hosted({ agent_type: "claude_code", agent_status: "done" })).toBe("working");
   });
 
-  // A lead that ended its turn while its subagents (a background workflow's
-  // workers, a background Agent) still produce is parked on them: their result
-  // is its next turn. It used to read as working for the whole run (jx73a5s).
-  test("a settled lead with a producing subagent child is dormant, not working", () => {
+  // A lead that ended its turn while its subagents (a background Agent, a
+  // Workflow's agents) still produce is coordinating work happening now, so it
+  // reads as working, whatever its own pin says (jx7fk07).
+  test("a settled lead whose workers are producing is working, not dormant", () => {
     const lead = (extra: Record<string, any>) => {
       const facts = row("lead", {
         message_count: 40, updated_at: EPOCH - HOUR / 2, last_heartbeat: EPOCH - 10_000,
@@ -717,10 +717,17 @@ describe("placeProjectableRow — the park facts", () => {
       });
       return placeProjectableRow({ ...facts, ...deriveLiveAt(facts, EPOCH) }, false, EPOCH);
     };
-    const tasks = { open_tasks: [{ id: "w1", kind: "workflow" }], open_tasks_at: EPOCH - 60_000 };
-    expect(lead({ agent_status: "waiting", ...tasks }).work_state).toBe("dormant");
-    expect(lead({ agent_status: "idle" }).work_state).toBe("dormant");
+    const tasks = (kind: string) => ({ open_tasks: [{ id: "w1", kind }], open_tasks_at: EPOCH - 60_000 });
+    // A subagent child producing, whatever the lead's own settle says.
+    expect(lead({ agent_status: "idle" }).work_state).toBe("working");
+    expect(lead({ agent_status: "dormant", thread_state_status: "dormant" }).work_state).toBe("working");
     expect(lead({ agent_status: "idle", producing_until: EPOCH - 60_000 }).work_state).toBe("needs_input");
+    // An open task with no producing child is a wait, whatever its kind: the
+    // harness loses completion notices, and an Agent or Workflow that is really
+    // running has a child producing.
+    for (const kind of ["workflow", "agent", "background", "monitor"]) {
+      expect(lead({ agent_status: "waiting", producing_until: null, ...tasks(kind) }).work_state).toBe("dormant");
+    }
     expect(lead({ agent_status: "working" }).work_state).toBe("working");
     // A declared block still reaches the human while the workers run.
     expect(lead({ agent_status: "idle", thread_state_status: "blocked" }).work_state).toBe("needs_input");

@@ -118,8 +118,8 @@ describe("the replica's live derivation is the server's", () => {
     expect(checkedLive).toBeGreaterThanOrEqual(8);
     expect(checkedFlip).toBeGreaterThanOrEqual(5);
     expect(liveness.conversations_graced).toMatchObject({ agent_status_updated_at: EPOCH - 30_000, last_role_is_user: false, is_idle: false });
-    // Settled with a producing subagent: idle, and parked on the child.
-    expect(liveness.conversations_parent).toMatchObject({ is_idle: true, bucket: "dormant" });
+    // Settled with a producing subagent: idle, and working through the child.
+    expect(liveness.conversations_parent).toMatchObject({ is_idle: true, bucket: "working" });
     expect(liveness.conversations_parent.producing_until).toBeGreaterThan(EPOCH);
     expect(liveness.conversations_unanswered).toMatchObject({ last_role_is_user: true, agent_status: null });
     // Both ship the daemon's stale "working"; what they say is the verdict a

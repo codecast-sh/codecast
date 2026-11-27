@@ -27,9 +27,13 @@ const TERMINAL_PENDING = new Set(["cancelled", "failed", "undeliverable"]);
 const CAUSE = Symbol.for("codecast.writeCause");
 const MAX_VALUE = 160;
 
-/** Name who is writing, for every lifecycle event this mutation records from here on. */
+/** Name who is writing, for every lifecycle event this mutation records from here on.
+ *  The cause lives in a box the wrapper shares by reference: the db wrappers
+ *  stacked over this one copy it with a spread, so a plain value set on the
+ *  outermost copy never reached the recorder. */
 export function noteWriteCause(ctx: { db: any }, cause: string): void {
-  if (ctx?.db && typeof ctx.db === "object" && CAUSE in ctx.db) ctx.db[CAUSE] = cause;
+  const box = ctx?.db && typeof ctx.db === "object" ? ctx.db[CAUSE] : undefined;
+  if (box && typeof box === "object") box.value = cause;
 }
 
 function short(value: unknown): string | null {
@@ -57,7 +61,7 @@ export function makeLifecycleEventDb(db: any, rawDb: any): any {
     kind: string;
     changes: Record<string, [string | null, string | null]>;
   }) => {
-    const cause: string | undefined = wrapper[CAUSE];
+    const cause: string | undefined = wrapper[CAUSE].value;
     await rawDb.insert("conversation_events", {
       ...row,
       ts: Date.now(),
@@ -78,7 +82,7 @@ export function makeLifecycleEventDb(db: any, rawDb: any): any {
 
   const wrapper: any = {
     ...db,
-    [CAUSE]: undefined as string | undefined,
+    [CAUSE]: { value: undefined as string | undefined },
     get: (...args: any[]) => db.get(...args),
     query: (...args: any[]) => db.query(...args),
     normalizeId: (...args: any[]) => db.normalizeId(...args),

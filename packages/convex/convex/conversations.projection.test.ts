@@ -394,7 +394,7 @@ describe("overlay projection — the time flip", () => {
     expect(liveness.conversations_g.stale_bucket).toBe("needs_input");
   });
 
-  test("child term: a live producing subagent parks the settled parent until the child's own term lapses", async () => {
+  test("child term: a live producing subagent keeps the settled parent working until the child's own term lapses", async () => {
     // The child is quiet past its producing grace and kept alive only by its
     // live active status, so the parent's first flip is the child's heartbeat.
     const childAt = EPOCH - 10 * MIN;
@@ -409,7 +409,7 @@ describe("overlay projection — the time flip", () => {
       ],
     };
     const { liveness } = await computeSessionsLiveness({ db: db(tables) }, ME as any);
-    expect(liveness.conversations_p.bucket).toBe("dormant");
+    expect(liveness.conversations_p.bucket).toBe("working");
     expect(liveness.conversations_p.bucket_stale_at).toBe(childHeartbeat + HEARTBEAT_ALIVE_MS);
     expect(liveness.conversations_p.stale_bucket).toBe("needs_input");
   });

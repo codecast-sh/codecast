@@ -360,23 +360,40 @@ export function deriveSessionActivity(input: SessionActivityInput): SessionActiv
 
 // How recently a subagent must have produced output to count as producing on
 // the strength of recent activity alone. Wider than the AGENT_IDLE_GRACE so a
-// child mid-tool-call (quiet but live) doesn't release its parent's park
-// prematurely.
+// child between short tool calls (quiet but live) doesn't drop its parent out
+// of working.
 export const SUBAGENT_PRODUCING_GRACE_MS = 5 * 60 * 1000;
 
-// Whether a subagent child is still PRODUCING, and so parks its settled parent
-// as dormant: a background workflow's workers or a background Agent, whose
-// result is the parent's next turn (classifyWorkState's childProducing).
+// How long a subagent's open tool call keeps it producing with no output. A
+// verifier inside one long test run syncs nothing for minutes (p90 10 min,
+// the Bash timeout; p99 39 min, measured over 939 subagents on 2026-11-26),
+// and without this its parent flipped to dormant mid-call. Capped because a
+// child whose process died mid-call leaves the call open forever.
+export const SUBAGENT_TOOL_CALL_CAP_MS = 20 * 60 * 1000;
+
+// When the child's newest message is a tool call still waiting on its result:
+// the activity stamp comes from that call and nothing has synced since (a
+// result or any later message moves updated_at past it). Null otherwise.
+export function openToolCallAt(c: { last_message_role?: string | null; activity?: { at: number } | null; updated_at: number }): number | null {
+  return c.last_message_role === "assistant" && c.activity && c.activity.at >= c.updated_at ? c.activity.at : null;
+}
+
+// Whether a subagent child is still PRODUCING, and so files its settled parent
+// as working: a background Agent or a Workflow's agents, doing the work the
+// parent coordinates (classifyWorkState's childProducing).
 // The trap this guards against: "alive" is not "working". `convStatus` is the
 // conversation status — "active" for nearly every non-completed conversation,
 // never the agent status — and a managed session keeps heartbeating (so the
 // caller's `isLive` stays true) for hours after its agent has gone idle, e.g. a
 // forked subagent that finished but whose daemon is still up. Either signal
-// alone would pin a long-finished parent in "dormant" forever. So we accept two
-// independent proofs of real work:
+// alone would hold a long-finished parent in "working" forever. So a child with
+// a session that reported settling is never producing, and otherwise we accept
+// three proofs of real work:
 //   - recent output: the child synced something within the grace window. This
-//     stands alone and covers Task-tool subagents that have no managed session
+//     stands alone and covers Agent-tool subagents that have no managed session
 //     of their own (no agent_status to read), so liveness can't be checked.
+//   - an open tool call (openToolCallAt) younger than SUBAGENT_TOOL_CALL_CAP_MS:
+//     a child inside one long call syncs nothing until it returns.
 //   - a live session whose agent_status is genuinely active. The caller passes
 //     the child's agent_status already coerced for heartbeat staleness (so a
 //     re-asserted-stale "working" on a long-quiet child reads as not-active).
@@ -384,18 +401,30 @@ export function subagentIsProducing(input: {
   isSubagent: boolean;
   convStatus: string;
   updatedAt: number;
+  /** openToolCallAt of the child: a call it made that has no result yet. */
+  toolCallOpenAt?: number | null;
+  /** The status the child's daemon reported, before the trust decay. */
+  reportedStatus?: string;
   isLive: boolean;
   agentStatus: string | undefined;
   now: number;
 }): boolean {
   if (!input.isSubagent || input.convStatus !== "active") return false;
+  // A child with a session of its own that reported settling (idle, dormant,
+  // done) is not producing, whatever it synced a minute ago, and stays so when
+  // its heartbeat later lapses. Its reported word, not the trusted one: a
+  // quiet "working" decays to idle while a long tool call runs, and that child
+  // is still at work.
+  if (input.reportedStatus && !ACTIVE_AGENT_STATUSES.has(input.reportedStatus)) return false;
   if (input.now - input.updatedAt < SUBAGENT_PRODUCING_GRACE_MS) return true;
+  if (input.toolCallOpenAt != null && input.now - input.toolCallOpenAt < SUBAGENT_TOOL_CALL_CAP_MS) return true;
   return input.isLive && ACTIVE_AGENT_STATUSES.has(input.agentStatus ?? "");
 }
 
-// Whether a subagent child of `conv` is producing now: the cheap recent-output
-// arm first, the child's managed session only when that fails. A settled
-// parent is parked on such a child (classifyWorkState's childProducing). The
+// Whether a subagent child of `conv` is producing now, read with its managed
+// session (a live child's own settled report outranks its recent output). A
+// settled parent whose child produces files as working (classifyWorkState's
+// childProducing). The
 // needs-input push and the CLI surfaces read it here; the inbox carries it on
 // the row (producing_until).
 export async function childProducingNow(ctx: { db: any }, conv: { _id: any }, now: number): Promise<boolean> {
@@ -405,15 +434,15 @@ export async function childProducingNow(ctx: { db: any }, conv: { _id: any }, no
     .take(20);
   for (const c of children) {
     if (!c.is_subagent || c.status !== "active") continue;
-    if (subagentIsProducing({ isSubagent: true, convStatus: c.status, updatedAt: c.updated_at, isLive: false, agentStatus: undefined, now })) return true;
     const childSession = await ctx.db
       .query("managed_sessions")
       .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", c._id))
       .first();
     const childAlive = !!childSession?.last_heartbeat && now - childSession.last_heartbeat < HEARTBEAT_ALIVE_MS;
-    if (childAlive && subagentIsProducing({
-      isSubagent: true, convStatus: c.status, updatedAt: c.updated_at,
-      isLive: true, agentStatus: trustedAgentStatus(childSession?.agent_status, c.updated_at, now), now,
+    if (subagentIsProducing({
+      isSubagent: true, convStatus: c.status, updatedAt: c.updated_at, toolCallOpenAt: openToolCallAt(c),
+      isLive: childAlive, reportedStatus: childSession?.agent_status,
+      agentStatus: childAlive ? trustedAgentStatus(childSession?.agent_status, c.updated_at, now) : undefined, now,
     })) return true;
   }
   return false;
