@@ -223,7 +223,6 @@ function FaceSeat({
   );
 
   const presence = PRESENCE_OF[entry.state];
-  const canOpen = callsEnabled || !entry.me;
   const openDm = useOpenDm();
   // Red is messages: what they said that this window showed and you have
   // not opened, plus DM unread beyond it (lib/chat/faceChat).
@@ -263,14 +262,14 @@ function FaceSeat({
         className={`face ${presence ? presenceAvatarClass(presence) : ""}`.trim()}
         aria-label={stacked ? "Show the rest of the team" : entry.me ? `${entry.name} (you)` : entry.name}
         title={stacked ? "Show the rest of the team" : undefined}
-        aria-expanded={stacked ? false : canOpen ? cardOpen : undefined}
-        aria-haspopup={canOpen && !stacked ? "dialog" : undefined}
+        aria-expanded={stacked ? false : cardOpen}
+        aria-haspopup={!stacked ? "dialog" : undefined}
         onClick={(e) => {
           e.preventDefault();
           e.stopPropagation();
           if (stacked) return onExpand();
           if (unread > 0) markFaceRead(entry.id);
-          if (canOpen) onToggle(entry.id);
+          onToggle(entry.id);
         }}
         onPointerDown={onPress}
       >

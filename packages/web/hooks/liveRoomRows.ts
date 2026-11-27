@@ -41,12 +41,15 @@ export type LiveRoomRow = {
   /** The room is being recorded: whoever walks in will be filmed, so the
    *  row says so before they do. */
   recording: boolean;
+  /** Listed only to the people it admits (a private start, or a room only
+   *  its owner may enter): what keeps it on Personal's Live now. */
+  private: boolean;
 };
 
 function roomsSig(rooms: LiveRoom[]): string {
   let sig = "";
   for (const r of rooms) {
-    sig += `${r.room_key}|${r.can_join ? 1 : 0}|${r.redacted ? 1 : 0}|${r.title ?? ""}|`;
+    sig += `${r.room_key}|${r.can_join ? 1 : 0}|${r.redacted ? 1 : 0}|${r.private ? 1 : 0}|${r.title ?? ""}|`;
     for (const m of r.members) sig += `${m.user_id},`;
     sig += "\n";
   }
@@ -111,6 +114,7 @@ export function useLiveRoomRows(myRoom: string | null | undefined): LiveRoomRow[
         mine: myRoom === room.room_key,
         knocked: now - (knocked[room.room_key] ?? 0) < CALL_KNOCK_TTL_MS,
         recording: !!s.callRooms?.[room.room_key]?.recording,
+        private: !!room.private,
       };
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps

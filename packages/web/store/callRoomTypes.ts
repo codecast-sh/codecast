@@ -41,6 +41,9 @@ export type LiveRoom = {
   can_join: boolean;
   redacted: boolean;
   title?: string;
+  /** Started private, or a room only its owner may enter: listed only to
+   *  the people it admits. */
+  private?: boolean;
   members: { user_id: string; user_name?: string; user_image?: string; muted?: boolean }[];
   /** People from outside the team let in on a guest link (callGuests).
    *  Their own list, never mixed into `members`: a member is a users id every

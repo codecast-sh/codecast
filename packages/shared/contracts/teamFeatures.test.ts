@@ -41,7 +41,7 @@ describe("workspaceFeatureState", () => {
     expect(workspaceFeatureState([off, undecided], null, "org")).toBe("offer");
     expect(workspaceFeatureState([off], null, "org")).toBe("off");
     // A team-only feature is never offered in the personal workspace.
-    expect(workspaceFeatureState([undecided], null, "calls")).toBe("off");
+    expect(workspaceFeatureState([undecided], null, "chat")).toBe("off");
   });
 });
 

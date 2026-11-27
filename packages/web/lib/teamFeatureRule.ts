@@ -3,7 +3,7 @@
  * so the store's own slices can ask it; lib/teamFeatures builds the hooks on
  * top of it.
  */
-import { featureVendorBlock, TEAM_FEATURES, type TeamFeatureKey } from "@codecast/shared/contracts";
+import { featureVendorBlock, TEAM_FEATURES, workspaceFeatureEnabled, type TeamFeatureKey } from "@codecast/shared/contracts";
 import { defineFeatures, holderHasFeature } from "@platform/flags";
 
 /** codecast's catalog as a @platform/flags catalog. Shared with the off-feature
@@ -17,4 +17,12 @@ export function teamHasFeature(teams: any[], teamId: string | null | undefined, 
   if (!teamId) return false;
   const team = (teams || []).find((t: any) => String(t._id) === String(teamId));
   return holderHasFeature(TEAM_FEATURE_CATALOG, team, key) && !featureVendorBlock(team, key);
+}
+
+/** Is `key` on in a workspace, the vendor rule included: a team reads its own
+ *  flag (teamHasFeature); the personal workspace borrows a `personal` feature
+ *  from any team that has it on (workspaceFeatureEnabled). */
+export function workspaceHasFeatureIn(teams: any[], activeTeamId: string | null | undefined, key: TeamFeatureKey): boolean {
+  if (activeTeamId) return teamHasFeature(teams, activeTeamId, key);
+  return workspaceFeatureEnabled((teams || []).filter((t: any) => teamHasFeature(teams, t?._id, key)), null, key);
 }

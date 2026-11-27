@@ -18,7 +18,7 @@ import { createContext, useContext } from "react";
 import { useInboxStore } from "../store/inboxStore";
 import { activeTeamIdOf } from "./activeTeam";
 import { workspaceFeatureEnabled, workspaceFeatureState, type FeatureState, type TeamFeatureKey } from "@codecast/shared/contracts";
-import { TEAM_FEATURE_CATALOG, teamHasFeature } from "./teamFeatureRule";
+import { TEAM_FEATURE_CATALOG, teamHasFeature, workspaceHasFeatureIn } from "./teamFeatureRule";
 
 export { TEAM_FEATURE_CATALOG, teamHasFeature };
 
@@ -36,12 +36,23 @@ export function useTeamFeature(key: TeamFeatureKey): boolean {
 
 
 /** Calls affordances (huddle buttons, occupancy chips, palette entry): the
- *  deployment must be configured AND the active team must have calls on. The
- *  ring pipeline deliberately does not use this — a ring from a teammate in
- *  another team must still reach you (see useCallSync). */
+ *  deployment must be configured AND calls must be on in the active
+ *  workspace. Personal borrows: on when any of the viewer's teams has calls
+ *  on. The ring pipeline deliberately does not use this — a ring from a
+ *  teammate in another team must still reach you (see useCallSync). */
 export function useCallsAvailable(): boolean {
-  return useInboxStore((s) =>
-    !!s.callConfig?.enabled && teamHasFeature(s.teams, activeTeamIdOf(s), "calls"));
+  return useInboxStore(callsAvailableIn);
+}
+
+/** useCallsAvailable's answer, out of a store state. */
+export function callsAvailableIn(s: { callConfig?: { enabled?: boolean } | null; teams?: any; clientState?: any }): boolean {
+  return !!s.callConfig?.enabled && workspaceHasFeatureIn(s.teams, activeTeamIdOf(s), "calls");
+}
+
+/** The calls feature in the ACTIVE workspace, with no deployment check: the
+ *  Calls page's huddle surfaces. Personal borrows from the viewer's teams. */
+export function useWorkspaceCallsOn(): boolean {
+  return useInboxStore((s) => workspaceHasFeatureIn(s.teams, activeTeamIdOf(s), "calls"));
 }
 
 /** Is `key` on in the ACTIVE workspace, personal included: a team reads its

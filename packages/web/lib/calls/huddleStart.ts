@@ -96,9 +96,11 @@ export function runHuddleStart(req: HuddleStartRequest, opts: { private?: boolea
 }
 
 /** A channel's room is the channel's own space and keeps the channel's wall,
- *  so only other rooms offer a private start (calls.joinRoom ignores it). */
+ *  and a room of one is already yours alone, so only other rooms offer a
+ *  private start (calls.joinRoom ignores it). */
 export function canStartPrivate(req: HuddleStartRequest): boolean {
-  return parseRoomKey(req.roomKey)?.kind !== "channel";
+  const parsed = parseRoomKey(req.roomKey);
+  return parsed?.kind !== "channel" && !(parsed?.kind === "dm" && parsed.users.length === 1);
 }
 
 const subscribe = (fn: () => void) => {

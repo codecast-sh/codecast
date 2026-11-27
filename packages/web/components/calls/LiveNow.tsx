@@ -5,7 +5,7 @@ import { guestDisplayName } from "@codecast/shared/contracts";
 import { Facepile } from "./OccupancyChip";
 import { LiveRoomLabel } from "./LiveRoomLabel";
 import { joinCall, knockRoom } from "../../lib/calls/actions";
-import { useGuestsWaiting, useLiveRooms, type GuestsWaitingRow, type LiveRoomRow } from "../../hooks/useLiveRooms";
+import { useGuestsWaiting, useLiveNowRooms, type GuestsWaitingRow, type LiveRoomRow } from "../../hooks/useLiveRooms";
 import { modernButton } from "../ui/modernLook";
 
 export { LiveRoomLabel };
@@ -110,7 +110,7 @@ export function LiveNowRail({
   isNarrow: boolean;
   onNavigate?: () => void;
 }) {
-  const rooms = useLiveRooms();
+  const rooms = useLiveNowRooms();
   // A guest at the door of a room nobody is in, on a link I made. That room
   // is not live (an empty room does not exist), yet somebody is standing at
   // it waiting for me, which is exactly what this cluster is for: things

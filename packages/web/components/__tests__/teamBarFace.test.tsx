@@ -62,7 +62,14 @@ let fakeRow: FaceRowModel;
 mock.module("../../hooks/useFaceRow", () => ({ ...realFaceRowHooks, useFaceRow: () => fakeRow }));
 
 const realTeamFeatures = await import("../../lib/teamFeatures");
-mock.module("../../lib/teamFeatures", () => ({ ...realTeamFeatures, useCallsAvailable: () => true }));
+let callsAvailable = true;
+mock.module("../../lib/teamFeatures", () => ({ ...realTeamFeatures, useCallsAvailable: () => callsAvailable }));
+
+// A huddle start would open the device check and reach the server: the card's
+// Huddle is pinned by what it asks for.
+const realHuddleStart = await import("../../lib/calls/huddleStart");
+const huddleStarts: unknown[] = [];
+mock.module("../../lib/calls/huddleStart", () => ({ ...realHuddleStart, requestHuddleStart: (req: unknown) => huddleStarts.push(req) }));
 
 // The feeder would open a Convex subscription; the bar paints the store.
 const realSyncCollection = await import("../../hooks/useSyncCollection");
@@ -145,6 +152,7 @@ afterAll(() => {
   mock.module("../../lib/desktop", () => realDesktop);
   mock.module("../../hooks/useFaceRow", () => realFaceRowHooks);
   mock.module("../../hooks/useRoomThreadUnread", () => realThreadUnread);
+  mock.module("../../lib/calls/huddleStart", () => realHuddleStart);
   closeDomWindow(dom);
   restoreGlobals();
 });
@@ -190,6 +198,8 @@ let host: HTMLElement | null = null;
 
 beforeEach(() => {
   fakeRow = rowOf([entry(ANN, "Ann"), entry(BO, "Bo")]);
+  callsAvailable = true;
+  huddleStarts.length = 0;
   floating.available = true;
   floating.floating = false;
   floating.set = [];
@@ -323,6 +333,75 @@ describe("the header draws the model's row", () => {
 
   test("with nobody on the roster the bar is only its feeder", async () => {
     useInboxStore.setState({ teamMembers: [] } as any);
+    const h = await mount();
+    expect(h.q(".people-bar")).toBeNull();
+  });
+});
+
+// ── your own face ───────────────────────────────────────────────────────────
+
+describe("your own face", () => {
+  const openCard = async (h: Awaited<ReturnType<typeof mount>>, id: string) => {
+    await h.fire(h.face(id), "click");
+    return h.q("[data-member-card]")!;
+  };
+
+  test("leads the row with no call up, and its card is the status switch with Huddle beside it", async () => {
+    const h = await mount();
+    expect(h.all("[data-face-id]").map((el) => el.dataset.faceId)).toEqual([ME, ANN, BO]);
+    expect(h.face(ME).getAttribute("data-me")).toBe("1");
+    // An idle face of mine is not something happening on the row.
+    expect(h.q(".people-bar")?.getAttribute("data-live")).toBeNull();
+    const card = await openCard(h, ME);
+    expect(card.querySelector(".face-card-you")).not.toBeNull();
+    expect(Array.from(card.querySelectorAll(".face-card-status")).map((b) => b.textContent)).toEqual(["available", "busy", "away"]);
+    const self = card.querySelector(".face-card-self")!;
+    expect(self.querySelector("[data-switch]")).not.toBeNull();
+    expect(Array.from(self.querySelectorAll(".face-action-word")).map((w) => w.textContent)).toEqual(["Huddle"]);
+    // A huddle with yourself: the room of one, nobody rung.
+    await h.fire(self.querySelector(".face-action-ring")!, "click");
+    expect(huddleStarts).toEqual([{ roomKey: `dm:${ME}`, hint: "Only you" }]);
+  });
+
+  test("while your room of one is live, Huddle joins it", async () => {
+    useInboxStore.setState({
+      liveRooms: [{ room_key: `dm:${ME}`, team_id: TEAM, can_join: true, redacted: false, private: true, members: [{ user_id: ME, user_name: "Me" }] }],
+    } as any);
+    const h = await mount();
+    const card = await openCard(h, ME);
+    expect(Array.from(card.querySelectorAll(".face-card-self .face-action-word")).map((w) => w.textContent)).toEqual(["Join huddle"]);
+  });
+
+  test("with calls off the card keeps the status switch and has no Huddle", async () => {
+    callsAvailable = false;
+    const h = await mount();
+    const card = await openCard(h, ME);
+    expect(card.querySelectorAll(".face-card-status").length).toBe(3);
+    expect(card.querySelector(".face-action-ring")).toBeNull();
+  });
+
+  test("in Personal the row is you alone, your card read off your own user doc", async () => {
+    useInboxStore.setState({
+      currentUser: { _id: ME, name: "Me", status: "busy" },
+      teamMembers: [],
+      clientState: { ...useInboxStore.getState().clientState, ui: { ...useInboxStore.getState().clientState.ui, active_team_id: null } },
+    } as any);
+    fakeRow = rowOf([]);
+    const h = await mount();
+    expect(h.all("[data-face-id]").map((el) => el.dataset.faceId)).toEqual([ME]);
+    expect(h.q("[data-overflow]")).toBeNull();
+    const card = await openCard(h, ME);
+    expect(card.querySelector('.face-card-status[data-on="busy"]')).not.toBeNull();
+    expect(Array.from(card.querySelectorAll(".face-card-self .face-action-word")).map((w) => w.textContent)).toEqual(["Huddle"]);
+  });
+
+  test("in Personal with calls on in none of your teams, nothing is drawn", async () => {
+    callsAvailable = false;
+    useInboxStore.setState({
+      teamMembers: [],
+      clientState: { ...useInboxStore.getState().clientState, ui: { ...useInboxStore.getState().clientState.ui, active_team_id: null } },
+    } as any);
+    fakeRow = rowOf([]);
     const h = await mount();
     expect(h.q(".people-bar")).toBeNull();
   });

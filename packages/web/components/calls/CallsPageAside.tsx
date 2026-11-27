@@ -6,7 +6,7 @@ import { Facepile } from "./OccupancyChip";
 import { LiveRoomAction, LiveRoomLabel } from "./LiveNow";
 import { RecordButton } from "./RoomRecording";
 import { firstName } from "./speakers";
-import { useLiveRooms } from "../../hooks/useLiveRooms";
+import { useLiveNowRooms } from "../../hooks/useLiveRooms";
 import { useSeatedRoomKey } from "../../hooks/useRoomRecording";
 import { useRecorderStatus } from "../../hooks/useRecorder";
 import { getRecorderStatus, startRecording } from "../../lib/calls/recorder";
@@ -18,7 +18,7 @@ import { getRecorderStatus, startRecording } from "../../lib/calls/recorder";
 // is most of them. Locked rooms list too — seeing one is what makes knocking
 // possible — with Knock in place of Join for the people the lock shuts out.
 export function LiveNowSection({ transcribedRoomKeys }: { transcribedRoomKeys: Set<string> }) {
-  const rooms = useLiveRooms().filter((r) => !transcribedRoomKeys.has(r.roomKey));
+  const rooms = useLiveNowRooms().filter((r) => !transcribedRoomKeys.has(r.roomKey));
   if (rooms.length === 0) return null;
   return (
     <>

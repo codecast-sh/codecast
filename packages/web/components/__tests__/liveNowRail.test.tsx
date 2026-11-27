@@ -15,6 +15,7 @@ afterAll(() => {
 mock.module("../../hooks/useLiveRooms", () => ({
   ...realRooms,
   useLiveRooms: () => ROOMS,
+  useLiveNowRooms: () => ROOMS,
 }));
 mock.module("../../lib/calls/callManager", () => ({
   ...realCallManager,
@@ -48,6 +49,7 @@ function room(overrides: Partial<LiveRoomRow> = {}): LiveRoomRow {
     mine: false,
     knocked: false,
     recording: false,
+    private: false,
     ...overrides,
   };
 }

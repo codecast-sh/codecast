@@ -16,16 +16,26 @@ import { createTaskAndAdopt } from "../../lib/taskActions";
 import { useWorkspaceCollection } from "../../hooks/useWorkspaceCollection";
 import { useInboxStore } from "../../store/inboxStore";
 import type { WorkspaceKey } from "../../lib/workspaceScope";
+import { callIsPrivate, type CallPrivacyRow } from "../../lib/calls/personalCalls";
 
-type CallRef = { _id: string; team_id?: string };
+type CallRef = CallPrivacyRow & { _id: string; team_id?: string };
 type CallTask = { _id: string; short_id: string; title: string; status: string; from_call?: string; created_at?: number };
 
 const callTaskSig = (row: any) => `${row.from_call ?? ""}|${row.status}|${row.title}|${row.short_id}`;
 
+/** Where a call's tasks live: a private call's in the viewer's Personal
+ *  workspace (its team would show them to people the call is closed to),
+ *  any other call's in the team it routes to. */
+function callTaskWorkspace(call: CallRef, viewerId: string): WorkspaceKey | null {
+  if (viewerId && callIsPrivate(call, viewerId)) return `user:${viewerId}`;
+  return call.team_id ? `team:${call.team_id}` : null;
+}
+
 /** The live tasks pulled from this call, oldest first. Read in the call's own
  *  workspace, so the page shows them whichever team is active. */
 export function useCallTasks(call: CallRef | null | undefined): CallTask[] {
-  const workspace = (call?.team_id ? `team:${call.team_id}` : null) as WorkspaceKey | null;
+  const viewerId = useInboxStore((s) => (s.currentUser?._id ? String(s.currentUser._id) : ""));
+  const workspace = call ? callTaskWorkspace(call, viewerId) : null;
   const rows = useWorkspaceCollection<CallTask>("tasks", callTaskSig, workspace);
   return useMemo(
     () =>
@@ -36,14 +46,16 @@ export function useCallTasks(call: CallRef | null | undefined): CallTask[] {
   );
 }
 
-/** A new task on this call, filed in the call's team. */
+/** A new task on this call, filed where its tasks live (callTaskWorkspace). */
 export function makeCallTask(call: CallRef, title: string) {
   const t = title.trim();
   if (!t) return;
+  const viewerId = String(useInboxStore.getState().currentUser?._id ?? "");
+  const workspace = callTaskWorkspace(call, viewerId);
   void createTaskAndAdopt({
     title: t,
     from_call: call._id,
-    ...(call.team_id ? { team_id: call.team_id, workspace: "team" } : {}),
+    ...(workspace?.startsWith("user:") ? { workspace: "personal" } : call.team_id ? { team_id: call.team_id, workspace: "team" } : {}),
   });
 }
 

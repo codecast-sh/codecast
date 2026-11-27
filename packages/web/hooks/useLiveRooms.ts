@@ -5,6 +5,7 @@ import { useLiveRoomRows, type LiveRoomRow } from "./liveRoomRows";
 import { guestsStillWaiting } from "../lib/calls/knockToasts";
 import { useNowWhen } from "./useCoarseNow";
 import { useFaceRow } from "./useFaceRow";
+import { liveRoomOnlyMine, personalViewerOf } from "../lib/calls/personalCalls";
 
 // The live-rooms read layer lives in ./liveRoomRows (platform-neutral); this
 // file binds it to the face row, web's answer to "which room am I in".
@@ -12,6 +13,17 @@ export type { LiveRoomRow } from "./liveRoomRows";
 
 export function useLiveRooms(): LiveRoomRow[] {
   return useLiveRoomRows(useFaceRow().room);
+}
+
+/** The rooms a Live now list shows: every live room in a team workspace, and
+ *  in Personal only the viewer's own (liveRoomOnlyMine). */
+export function useLiveNowRooms(): LiveRoomRow[] {
+  const rows = useLiveRooms();
+  const personalViewer = useInboxStore(personalViewerOf);
+  return useMemo(
+    () => (personalViewer === null ? rows : rows.filter((r) => liveRoomOnlyMine(r, personalViewer))),
+    [rows, personalViewer],
+  );
 }
 
 /** A room nobody is in, with guests at its door on the viewer's own link. */

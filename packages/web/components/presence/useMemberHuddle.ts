@@ -31,6 +31,9 @@ export interface MemberHuddle {
  * all, so the live-rooms list is what finds it, and the control knocks: the
  * same gesture, one door further out. Otherwise, one click rings them.
  *
+ * On your own card it is a huddle with yourself: the room of one
+ * (`dm:<you>`), rung to nobody, joined when it is already live.
+ *
  * `room` is passed IN rather than subscribed to here, so a roster of twenty
  * rows shares the one live-rooms subscription its list already holds.
  */
@@ -50,10 +53,20 @@ export function useMemberHuddle(
   // Their own huddle wins: ringing someone out of the room they sit in is the
   // one wrong gesture, and "Join huddle" is already the way to them.
   const myCall = useFaceRowSelect(callRoomOf);
-  const addTo = myCall && !inRoomKey && !elsewhere ? myCall : null;
+  const self = !!memberId && memberId === viewerId;
+  const addTo = myCall && !inRoomKey && !elsewhere && !self ? myCall : null;
+  // Your own card: a huddle with yourself, in the people room of one. It is
+  // live when you sit in it anywhere (another window, the phone).
+  const ownRoom = self ? dmRoomKey(viewerId) : null;
+  const ownRoomLive = !!ownRoom && room?.roomKey === ownRoom;
 
   return useMemo(() => {
     if (elsewhere) return { label: "Open huddle", title: "Show the huddle window", waiting: false, go: () => { void showCallPanel(); } };
+    if (ownRoom) {
+      return ownRoomLive
+        ? { label: "Join huddle", title: "Join your huddle — you arrive muted", waiting: false, go: () => { void joinCall(ownRoom, { intent: "deliberate" }); } }
+        : { label: "Huddle", title: "Start a huddle with just you", waiting: false, go: () => requestHuddleStart({ roomKey: ownRoom, hint: "Only you" }) };
+    }
     if (addTo) return { label: "Add to call", title: `Ring ${displayName} into your call`, waiting: false, go: () => { void ringInto(addTo, [memberId]); } };
     const label = inRoomKey
       ? "Join huddle"
@@ -87,5 +100,5 @@ export function useMemberHuddle(
         });
     };
     return { label, title, waiting: knocked, go };
-  }, [inRoomKey, lockedRoomKey, knocked, displayName, viewerId, memberId, elsewhere, addTo]);
+  }, [inRoomKey, lockedRoomKey, knocked, displayName, viewerId, memberId, elsewhere, addTo, ownRoom, ownRoomLive]);
 }

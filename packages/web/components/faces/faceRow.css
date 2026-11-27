@@ -1421,6 +1421,18 @@
   margin-top: 16px;
   padding-top: 3px;
 }
+/* Your own card: the status switch, and Huddle beside it. */
+.face-card-self {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 16px;
+}
+.face-card-self .face-card-actions[data-switch] {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-top: 0;
+}
 .face-card-status {
   flex: 1 1 0;
   position: relative;
