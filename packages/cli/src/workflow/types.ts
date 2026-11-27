@@ -48,6 +48,10 @@ export interface WorkflowNode {
   // A station that parks may hold at most this many of the flow's runs: while it holds that many, the flow's live
   // admission starts nothing (convex liveFlows.queueFullWords). Union's onefix Queue says room=8.
   room?: number;
+  // Command nodes: a cap of this machine's (machineCaps.ts STATION_SLOTS) the station takes a place in before its script
+  // runs, waiting up to its timeout with its clock stopped; no place by then is the outcome `no_slot` (stationSlot.ts).
+  // Not `slot=`, which marks a backbone's segment for a variant to fill.
+  machine_slot?: string;
   // Command nodes that render the line's own text (Union's shared text from
   // _shared.md): re-made whenever the run resumes, so a resumed run reads the
   // text as it is now, never the copy in its checkpoint (line-versions.md LV4).

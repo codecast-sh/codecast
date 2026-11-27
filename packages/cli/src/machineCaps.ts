@@ -18,9 +18,15 @@ export const CHECK_WATCHERS_BACKSTOP = 16;
 export const MACHINE_CAPS = {
   check: { env: "CAST_CHECK_MAX_WATCHERS", fallback: CHECK_WATCHERS_BACKSTOP, what: "typecheck watchers" },
   interactive_jobs: { env: "CAST_INTERACTIVE_JOBS_MAX", fallback: 8, what: "commands run as Interactive jobs" },
+  // Named slots (machineSlot.ts), taken by a flow station's machine_slot= or `cast slot run --name`. Two Local CI
+  // runs side by side already fill a laptop.
+  local_ci: { env: "CAST_LOCAL_CI_MAX", fallback: 2, what: "Local CI runs", slot: true },
 } as const;
 
 export type MachineCapKey = keyof typeof MACHINE_CAPS;
+
+/** The caps that are named slots: a flow station's machine_slot= and `cast slot run --name` take a place in one. */
+export const MACHINE_SLOTS = (Object.keys(MACHINE_CAPS) as MachineCapKey[]).filter((k) => "slot" in MACHINE_CAPS[k]);
 
 const positive = (v: unknown): number | null => {
   const n = typeof v === "number" ? v : typeof v === "string" ? parseInt(v, 10) : NaN;
