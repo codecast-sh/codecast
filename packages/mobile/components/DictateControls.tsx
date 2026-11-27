@@ -12,6 +12,10 @@
 // 80pt wide in every state (blocked included) and ends in the gap before send, whose left slop
 // beside it is 0 (DICTATE_SEND_SLOP). Idle: mic [-8,36], chevron [36,80].
 // Recording: ✕ [-8,36], ✓ [36,80]. Send's own target then starts at 80.
+//
+// ✕ and ✓ never outweigh send: beside a filled send (the session and chat
+// composers) they are quiet circles like attach; beside a bare send glyph
+// (the task comment box) they are bare glyphs too (`look="bare"`).
 import { StyleSheet, TouchableOpacity, View as RNView, ActivityIndicator } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
 import { DICTATION_LANGUAGES } from '@codecast/shared/contracts/dictation';
@@ -30,7 +34,7 @@ const FINISH_SLOP = { top: 6, bottom: 6, left: 4, right: 8 };
 /** The send button's hitSlop beside these controls: nothing to the left. */
 export const DICTATE_SEND_SLOP = { top: 12, bottom: 12, left: 0, right: 12 };
 
-export function DictateControls({ dictation }: { dictation: PhoneDictation }) {
+export function DictateControls({ dictation, look = 'quiet' }: { dictation: PhoneDictation; look?: 'quiet' | 'bare' }) {
   const Theme = useTheme();
   const language = useDictationLanguage();
   const { shown, blocked, state } = dictation;
@@ -43,7 +47,7 @@ export function DictateControls({ dictation }: { dictation: PhoneDictation }) {
     return (
       <RNView style={[styles.row, styles.recording]}>
         <TouchableOpacity
-          style={[styles.quiet, styles.cancel]}
+          style={[look === 'bare' ? styles.bare : styles.quiet, styles.cancel]}
           onPress={dictation.cancel}
           activeOpacity={0.6}
           hitSlop={FIRST_SLOP}
@@ -53,7 +57,7 @@ export function DictateControls({ dictation }: { dictation: PhoneDictation }) {
           <Feather name="x" size={17} color={Theme.textMuted} />
         </TouchableOpacity>
         <TouchableOpacity
-          style={styles.quiet}
+          style={look === 'bare' ? styles.bare : styles.quiet}
           onPress={() => void dictation.finish()}
           activeOpacity={0.6}
           hitSlop={FINISH_SLOP}
@@ -77,7 +81,8 @@ export function DictateControls({ dictation }: { dictation: PhoneDictation }) {
   // accessibilityState.disabled as disabled) would swallow the tap that says why.
   // The reason is a sentence ("AI features are off for Acme: no BAA with
   // OpenAI yet."), longer than the one-line notice bar: a dialog shows it whole.
-  const explainBlocked = () => appAlert('Dictation is off', blocked!);
+  // Not "off": the person's own switch is on; the team is what stops it.
+  const explainBlocked = () => appAlert("Dictation isn't available", blocked!);
   const pressMic = () => {
     if (blocked) return explainBlocked();
     if (failed) return explainDictationFailure(state.error!, dictation.start);
@@ -159,6 +164,10 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     backgroundColor: Theme.bgAlt,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: Theme.borderLight,
+  },
+  // Beside a bare send glyph: the same 32pt box, no fill or ring.
+  bare: {
+    ...S.imageButton,
   },
   cancel: {
     marginRight: 8,
