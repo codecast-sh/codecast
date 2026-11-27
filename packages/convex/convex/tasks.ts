@@ -3106,6 +3106,9 @@ export const webList = query({
     team_id: v.optional(v.id("teams")),
     workspace: v.optional(v.union(v.literal("personal"), v.literal("team"), v.literal("all"))),
     project_path: v.optional(v.string()),
+    // The tasks pulled from one call (by_from_call), wherever each is filed:
+    // the call page feeds them whatever workspace is active.
+    from_call: v.optional(v.string()),
     // Delta cursor: when provided, only return tasks with updated_at > since.
     // First subscription omits it (full snapshot); subsequent subscriptions
     // pass the high-water-mark from the prior response. The web client merges
@@ -3155,7 +3158,15 @@ export const webList = query({
           q.eq("assignee", assignee)).order("desc").take(MAX_INITIAL);
 
     let tasks: any[];
-    if (args.project_id) {
+    const fromCall = args.from_call ? ctx.db.normalizeId("transcripts", args.from_call) : null;
+    if (args.from_call) {
+      const rows = fromCall
+        ? await ctx.db.query("tasks").withIndex("by_from_call", (q: any) => q.eq("from_call", fromCall)).take(200)
+        : [];
+      const readable: any[] = [];
+      for (const row of rows) if (await canAccessTask(ctx, userId, row)) readable.push(row);
+      tasks = isDelta ? readable.filter((t: any) => t.updated_at > since!) : readable;
+    } else if (args.project_id) {
       const projectId = ctx.db.normalizeId("projects", args.project_id);
       if (!projectId) notFound("Project not found");
       await requireAccessibleProject(ctx, userId, projectId);

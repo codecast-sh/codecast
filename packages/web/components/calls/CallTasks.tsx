@@ -14,6 +14,7 @@ import { openBeside } from "../../lib/stage";
 import { taskFacePath } from "../../lib/workUnit";
 import { createTaskAndAdopt } from "../../lib/taskActions";
 import { useWorkspaceCollection } from "../../hooks/useWorkspaceCollection";
+import { useSyncCallTasks } from "../../hooks/useSyncTasks";
 import { useInboxStore } from "../../store/inboxStore";
 import type { WorkspaceKey } from "../../lib/workspaceScope";
 import { callIsPrivate, type CallPrivacyRow } from "../../lib/calls/personalCalls";
@@ -31,19 +32,21 @@ function callTaskWorkspace(call: CallRef, viewerId: string): WorkspaceKey | null
   return call.team_id ? `team:${call.team_id}` : null;
 }
 
-/** The live tasks pulled from this call, oldest first. Read in the call's own
- *  workspace, so the page shows them whichever team is active. */
+/** The live tasks pulled from this call, oldest first, fed by the call and
+ *  read in both places they are filed (its team, and the viewer's Personal
+ *  for a private call), so the page shows them whichever workspace is active
+ *  and a recording's tasks stay when it is later shared. */
 export function useCallTasks(call: CallRef | null | undefined): CallTask[] {
   const viewerId = useInboxStore((s) => (s.currentUser?._id ? String(s.currentUser._id) : ""));
-  const workspace = call ? callTaskWorkspace(call, viewerId) : null;
-  const rows = useWorkspaceCollection<CallTask>("tasks", callTaskSig, workspace);
-  return useMemo(
-    () =>
-      rows
-        .filter((t) => !!call && t.from_call === call._id && t.status !== "dropped")
-        .sort((a, b) => (a.created_at ?? 0) - (b.created_at ?? 0)),
-    [rows, call?._id],
-  );
+  useSyncCallTasks(call?._id);
+  const teamRows = useWorkspaceCollection<CallTask>("tasks", callTaskSig, call?.team_id ? `team:${call.team_id}` : null);
+  const myRows = useWorkspaceCollection<CallTask>("tasks", callTaskSig, viewerId ? `user:${viewerId}` : null);
+  return useMemo(() => {
+    const seen = new Set<string>();
+    return [...teamRows, ...myRows]
+      .filter((t) => !!call && t.from_call === call._id && t.status !== "dropped" && !seen.has(t._id) && !!seen.add(t._id))
+      .sort((a, b) => (a.created_at ?? 0) - (b.created_at ?? 0));
+  }, [teamRows, myRows, call?._id]);
 }
 
 /** A new task on this call, filed where its tasks live (callTaskWorkspace). */

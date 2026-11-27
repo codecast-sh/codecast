@@ -83,3 +83,17 @@ test("the web create files a task on the call; someone who cannot read the call 
 
   await expect(as(String(cat)).mutation(api.tasks.webCreate, { title: "Snoop", from_call: "cl-7" })).rejects.toThrow(/Call not found/);
 });
+
+test("the call's tasks list by the call, each where its reader may see it, whatever workspace they are filed in", async () => {
+  const { team, call, ana, ben, as } = await seed();
+  const personal = await as(String(ana)).mutation(api.tasks.webCreate, { title: "Note to self", from_call: String(call), workspace: "personal" });
+  const shared = await as(String(ana)).mutation(api.tasks.webCreate, { title: "Ship the fix", from_call: String(call), workspace: "team", team_id: team });
+  await as(String(ana)).mutation(api.tasks.webCreate, { title: "Unrelated", workspace: "personal" });
+
+  const mine = await as(String(ana)).query(api.tasks.webList, { from_call: String(call) });
+  expect(mine.items.map((x: any) => x.short_id).sort()).toEqual([personal.short_id, shared.short_id].sort());
+  // Ben reads the team's task, never Ana's personal one.
+  const his = await as(String(ben)).query(api.tasks.webList, { from_call: String(call) });
+  expect(his.items.map((x: any) => x.short_id)).toEqual([shared.short_id]);
+  expect((await as(String(ana)).query(api.tasks.webList, { from_call: "not-an-id" })).items).toEqual([]);
+});
