@@ -3005,7 +3005,9 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                 </div>
               )}
               {branchMapNode}
-              {!bareComposer && <ReviewBar conversationId={conversationId} />}
+              {/* Hidden under the image preview: the preview fits the space above
+                  the composer, so a tray growing with each note shrank the image. */}
+              {!bareComposer && lightboxImageIndex === null && <ReviewBar conversationId={conversationId} />}
               {!bareComposer && queuedMessages.length > 0 && (
                 <div className="flex flex-col gap-1 pb-2 mb-2 border-b border-sol-border/50">
                   {queuedMessages.map((qMsg, idx) => (
