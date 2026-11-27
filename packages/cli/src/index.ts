@@ -5934,7 +5934,7 @@ registerSyncVerbs(syncCommand);
 // ones with their own setter below. The help and the unknown-key error both
 // read this list, so they cannot disagree.
 const CONFIG_SETTABLE_KEYS = ["auth_token", "web_url", "user_id", "convex_url", "team_id", "excluded_paths", "claude_args", "codex_args", "browser_capture", "cloud_mirror_enabled", "cloud_mirror_exclude", "cloud_mirror_include", "sync_always", "sync_never", "session_trailer", "tmux_server_per_session", "level_checkouts_enabled", "messaging_only"] as const;
-const CONFIG_ALL_KEYS: readonly string[] = [...CONFIG_SETTABLE_KEYS, "claude_backend", "subagents.per_session", "subagents.per_machine", "check.per_machine", "check.reserve_gb", "interactive_jobs.per_machine", "local_ci.per_machine", "flow.device", "agent"];
+const CONFIG_ALL_KEYS: readonly string[] = [...CONFIG_SETTABLE_KEYS, "claude_backend", "subagents.per_session", "subagents.per_machine", "check.per_machine", "check.reserve_gb", "interactive_jobs.per_machine", "local_ci.per_machine", "worktree.per_machine", "flow.device", "agent"];
 
 program
   .command("config")
@@ -5950,6 +5950,7 @@ program
     "  cast config set check.per_machine 8       # at most this many typecheck watchers (default 16; fewer when memory is short)\n" +
     "  cast config set interactive_jobs.per_machine 4  # commands run as Interactive jobs at once (default 8)\n" +
     "  cast config set local_ci.per_machine 1    # Local CI runs at once (cast slot ls; default 2)\n" +
+    "  cast config set worktree.per_machine 2    # worktrees at work at once (cast slot run --name worktree; default one per 16 GB)\n" +
     "  cast config set flow.device <machine>     # cast flow run places runs on this machine of yours (\"here\" keeps them local)\n" +
     "  cast config set flow.device.<owner>/<repo> <machine>  # the same for one repository"
   )
@@ -6125,7 +6126,7 @@ program
     // The queue limits: whole numbers, one shape for every queue (cast queue
     // shows them all). Workers are capped per session and per machine by the
     // server; typecheck watchers and Interactive jobs per machine by this CLI.
-    const capKey = /^(subagents)\.(per_session|per_machine)$|^(check|interactive_jobs|local_ci)\.(per_machine)$/.exec(key ?? "");
+    const capKey = /^(subagents)\.(per_session|per_machine)$|^(check|interactive_jobs|local_ci|worktree)\.(per_machine)$/.exec(key ?? "");
     if (capKey) {
       const group = (capKey[1] ?? capKey[3]) as "subagents" | MachineCapKey;
       const field = (capKey[2] ?? capKey[4]) as "per_session" | "per_machine";
@@ -13137,72 +13138,49 @@ program
 
 program
   .command("force-update")
-  .description("Set the minimum CLI version machines update to: every machine (platform staff) or a team's (its admins and its Release Captain)")
-  .argument("<version>", "Minimum version required (e.g., 1.0.12)")
-  .option("--team <team>", "Raise this team's floor (its admins and its Release Captain may); without it, platform staff set the global floor and anyone else their active team's")
-  .option("--deploy <deploy>", "A live CLI release's deploy (dp-N): raise its team's floor only when the daemon changed since the release before it, wait for the team's machines, and record both on the deploy")
+  .description("Set the minimum CLI version machines update to: every machine (platform staff) or a team's (its admins and its Release Captain raise it, its admins lower or clear it)")
+  .argument("[version]", "Minimum version required (e.g., 1.0.12)")
+  .option("--team <team>", "Move this team's floor; without it only platform staff may run this, and it sets every machine's floor")
+  .option("--deploy <deploy>", "A live CLI release's deploy (dp-N): raise its team's floor only when the daemon changed since the release the team was last forced onto, wait for the team's machines, and record both on the deploy")
   .option("--wait <minutes>", "With --deploy: how long to wait for the team's online machines to run it", "20")
-  .action(async (version: string, options: { team?: string; deploy?: string; wait: string }) => {
+  .option("--lower-to <version>", "With --team: lower the team's floor to this version (team admins)")
+  .option("--clear", "With --team: clear the team's floor (team admins)")
+  .action(async (version: string | undefined, options: { team?: string; deploy?: string; wait: string; lowerTo?: string; clear?: boolean }) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
       console.error("Not authenticated. Run: cast auth");
       process.exit(1);
     }
-
-    if (!/^\d+\.\d+\.\d+$/.test(version)) {
-      console.error("Invalid version format. Use semver (e.g., 1.0.12)");
+    const { convex_url: convexUrl, auth_token: authToken, user_id: userId } = config;
+    const setGlobal = async (v: string) => {
+      const sync = new SyncService({ convexUrl, authToken, userId });
+      try { await sync.getClient().mutation("systemConfig:setMinCliVersion" as any, { version: v, api_token: authToken }); return true; }
+      catch (err) { if (String(err instanceof Error ? err.message : err).includes("Admin access required")) return false; throw err; }
+    };
+    const [{ runForceUpdate }, { updater }] = await Promise.all([import("./forceUpdate.js"), import("./update.js")]);
+    try {
+      const code = await runForceUpdate(version, options, {
+        latest: async () => (await updater.fetchManifest())?.version ?? null,
+        setGlobal,
+        team: async (name) => { const ws = await writeWorkspace(name, { teamRequired: true }); return ws.kind === "team" ? { teamId: ws.teamId, name: ws.name ?? name } : null; },
+        activeTeam: async () => { const ws = resolveWorkspaceForRead(await workspaceRoster()); return ws.kind === "team" ? (ws.name ?? null) : null; },
+        post: (p, body) => cliPost(p, body, { throwOnError: true }),
+        finish: async (v) => {
+          const { finishCliRelease } = await import("./releaseFinish.js");
+          return finishCliRelease({
+            root: process.cwd(), deploy: options.deploy!, version: v, waitMs: (Number(options.wait) || 0) * 60_000,
+            post: (p, body) => cliPost(p, body, { throwOnError: true }), fromSession: callingSession(), setGlobal,
+          });
+        },
+        fromSession: callingSession(),
+        log: (l) => console.log(l),
+        error: (l) => console.error(l),
+      });
+      process.exit(code);
+    } catch (err) {
+      console.error(`${options.deploy ? "Release finish" : "force-update"} failed: ${err instanceof Error ? err.message : String(err)}`);
       process.exit(1);
     }
-
-    if (options.deploy) {
-      const { finishCliRelease } = await import("./releaseFinish.js");
-      try {
-        await finishCliRelease({
-          root: process.cwd(), deploy: options.deploy, version, waitMs: (Number(options.wait) || 0) * 60_000,
-          post: (p, body) => cliPost(p, body, { throwOnError: true }), fromSession: callingSession(),
-          setGlobal: async (v) => {
-            const sync = new SyncService({ convexUrl: config.convex_url, authToken: config.auth_token, userId: config.user_id });
-            try { await sync.getClient().mutation("systemConfig:setMinCliVersion" as any, { version: v, api_token: config.auth_token }); return true; }
-            catch (err) { if (String(err instanceof Error ? err.message : err).includes("Admin access required")) return false; throw err; }
-          },
-        });
-        process.exit(0);
-      } catch (err) {
-        console.error(`Release finish failed: ${err instanceof Error ? err.message : String(err)}`);
-        process.exit(1);
-      }
-    }
-
-    if (!options.team) {
-      const syncService = new SyncService({
-        convexUrl: config.convex_url,
-        authToken: config.auth_token,
-        userId: config.user_id,
-      });
-      try {
-        await syncService.getClient().mutation(
-          "systemConfig:setMinCliVersion" as any,
-          { version, api_token: config.auth_token }
-        );
-        console.log(`Minimum CLI version set to ${version}`);
-        console.log("Remote daemons will auto-update within 5 minutes");
-        process.exit(0);
-      } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        // Not platform staff: the floor this caller may raise is their team's.
-        if (!errMsg.includes("Admin access required")) {
-          console.error(`Failed to set min version: ${errMsg}`);
-          process.exit(1);
-        }
-      }
-    }
-
-    const ws = await writeWorkspace(options.team, { teamRequired: true });
-    if (ws.kind !== "team") process.exit(1);
-    const set = await cliPost("/cli/team-cli-floor/set", { team_id: ws.teamId, version, from_session: callingSession() });
-    console.log(set.changed ? `${set.team}'s minimum CLI version set to ${set.version}` : `${set.team}'s minimum CLI version already stands at ${set.version}`);
-    console.log(`${set.team}'s daemons below it auto-update within 5 minutes`);
-    process.exit(0);
   });
 
 program

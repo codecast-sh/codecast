@@ -2,7 +2,8 @@
 // target `finish`, ct-102483). Forcing every machine to update restarts every
 // daemon, which is worth it only when the daemon's code changed, so the
 // decision is computed, never judged: the daemon build id (daemonBuildIdCompute)
-// at the release's commit against the one at the release live before it.
+// at the release's commit against the one at the release the team's machines
+// were last forced onto (the one its floor names).
 // When they differ the deploy's team floor is raised to the release, and the
 // team's machines are watched until each online one runs it or the wait ends;
 // either way the decision and the fleet are recorded on the deploy's note.
@@ -40,15 +41,21 @@ export function daemonBuildIdAt(root: string, sha: string): string {
 
 export type ForceDecision = { force: boolean; reason: string };
 
-/** Force only when the daemon a machine would run changed between the two releases. */
-export function decideForce(sha: string, previousSha: string | null, buildIdAt: (sha: string) => string): ForceDecision {
-  if (!previousSha) return { force: true, reason: "no previous release is recorded on the deploy, so the daemon may have changed" };
-  if (previousSha === sha) return { force: false, reason: "no force: same commit as the release before it" };
+/**
+ * Force only when the daemon a machine would run changed since `forced`, the
+ * release the team's machines were last forced onto (teamCliFloor.forcedRelease):
+ * comparing against the release just before would let one skipped force never
+ * be made up. Unknown (no deploy of that release recorded): force.
+ */
+export function decideForce(sha: string, forced: { sha: string | null; floor: string | null } | null, buildIdAt: (sha: string) => string): ForceDecision {
+  if (!forced?.sha) return { force: true, reason: `no deploy of the release ${forced?.floor ? `the floor names (${forced.floor})` : "the team was last forced onto"} is recorded, so the daemon may have changed` };
+  const since = `${forced.floor ?? "the floor's release"} (${forced.sha.slice(0, 10)})`;
+  if (forced.sha === sha) return { force: false, reason: `no force: the floor already names this release, ${since}` };
   const now = buildIdAt(sha);
-  const before = buildIdAt(previousSha);
+  const before = buildIdAt(forced.sha);
   return now === before
-    ? { force: false, reason: `no force: daemon unchanged since ${previousSha.slice(0, 10)} (build ${now})` }
-    : { force: true, reason: `daemon changed since ${previousSha.slice(0, 10)} (build ${before} -> ${now})` };
+    ? { force: false, reason: `no force: daemon unchanged since ${since} (build ${now})` }
+    : { force: true, reason: `daemon changed since ${since} (build ${before} -> ${now})` };
 }
 
 export type FleetDevice = { device_id: string; label: string; owner: string; cli_version: string | null; online: boolean; error: string | null };
@@ -96,34 +103,56 @@ export type FinishDeps = {
 
 /**
  * The CLI target's finish. Returns the note it recorded on the deploy. A
- * deploy with no team (a personal workspace) has no fleet to force.
+ * deploy with no team (a personal workspace) has no fleet to force. What it
+ * could not do (a refused force, machines still lagging after the wait) goes
+ * to the team's Release Captain as well as onto the deploy.
  */
 export async function finishCliRelease(deps: FinishDeps): Promise<string> {
   const log = deps.log ?? ((l: string) => console.log(l));
   const d = await deps.post("/cli/deploys/get", { ref: deps.deploy }, { read: true });
   if (!d) throw new Error(`No deploy ${deps.deploy} you can read`);
   if (!d.sha) throw new Error(`${deps.deploy} names no commit`);
-  const decision = decideForce(d.sha, d.previous_sha ?? null, deps.buildIdAt ?? ((sha) => daemonBuildIdAt(deps.root, sha)));
+  const forced = await deps.post("/cli/team-cli-floor/forced", { deploy: deps.deploy }, { read: true }).catch(() => null);
+  const decision = decideForce(d.sha, forced, deps.buildIdAt ?? ((sha) => daemonBuildIdAt(deps.root, sha)));
   log(`Release ${deps.version}: ${decision.reason}`);
   const lines = [`Release ${deps.version}: ${decision.reason}`];
+  const say = (line: string) => { lines.push(line); log(line); };
+  const tellRelease = async (extra: Record<string, unknown>) => {
+    try {
+      const r = await deps.post("/cli/team-cli-floor/tell-release", { team_id: d.team_id, deploy: deps.deploy, version: deps.version, ...extra });
+      if (r?.told) say(`Told @${r.told}.`);
+    } catch (err) {
+      say(`Could not tell the Release Captain: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
   // A daemon change reaches every team's machines (Union's included) when staff
   // run the finish; anyone else forces only the deploy's own team, and other
   // teams' Release Captains raise theirs.
-  if (decision.force && deps.setGlobal && (await deps.setGlobal(deps.version))) {
-    lines.push(`Forced everywhere: the global floor is now ${deps.version}.`);
-    log(lines.at(-1)!);
-  }
+  if (decision.force && deps.setGlobal && (await deps.setGlobal(deps.version))) say(`Forced everywhere: the global floor is now ${deps.version}.`);
   if (decision.force && !d.team_id) lines.push("No team fleet to watch: the deploy belongs to no team.");
   if (decision.force && d.team_id) {
-    const set = await deps.post("/cli/team-cli-floor/set", { team_id: d.team_id, version: deps.version, ...(deps.fromSession ? { from_session: deps.fromSession } : {}) });
-    lines.push(set.changed ? `Forced: ${set.team}'s floor is now ${set.version}.` : `${set.team}'s floor already stands at ${set.version}.`);
-    log(lines.at(-1)!);
-    const read = () => deps.post("/cli/team-cli-floor/fleet", { team_id: d.team_id, version: deps.version, ...(deps.fromSession ? { from_session: deps.fromSession } : {}) }, { read: true }) as Promise<Fleet>;
-    const fleet = await waitForFleet(read, { waitMs: deps.waitMs, sleep: deps.sleep, now: deps.now });
-    lines.push(fleetNote(fleet));
-    log(lines.at(-1)!);
+    let set: any = null;
+    try {
+      set = await deps.post("/cli/team-cli-floor/set", { team_id: d.team_id, version: deps.version, ...(deps.fromSession ? { from_session: deps.fromSession } : {}) });
+    } catch (err) {
+      // Whoever ran the finish may not hold the team's floor: the release is
+      // live all the same, so record why it was not forced and hand it on.
+      const reason = err instanceof Error ? err.message : String(err);
+      say(`Not forced: ${reason}`);
+      await tellRelease({ not_forced: reason });
+    }
+    if (set) {
+      say(set.changed ? `Forced: ${set.team}'s floor is now ${set.version}.` : `${set.team}'s floor already stands at ${set.version}.`);
+      const read = () => deps.post("/cli/team-cli-floor/fleet", { team_id: d.team_id, version: deps.version, ...(deps.fromSession ? { from_session: deps.fromSession } : {}) }, { read: true }) as Promise<Fleet>;
+      const fleet = await waitForFleet(read, { waitMs: deps.waitMs, sleep: deps.sleep, now: deps.now });
+      say(fleetNote(fleet));
+      if (fleet.lagging.length) await tellRelease({});
+    }
   }
-  const note = [d.note, lines.join("\n")].filter(Boolean).join("\n\n");
+  // Read the note again: the wait can be twenty minutes, and a note written
+  // during it is kept, not overwritten with the one read at the start.
+  const fresh = await deps.post("/cli/deploys/get", { ref: deps.deploy }, { read: true }).catch(() => null);
+  const note = [fresh ? fresh.note : d.note, lines.join("\n")].filter(Boolean).join("\n\n");
   await deps.post("/cli/line/deploy/report", { deploy: deps.deploy, status: "live", note });
   return note;
 }

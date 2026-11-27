@@ -54,8 +54,10 @@ live = "github-status:codecast - web"
 # Cut in CI as soon as it is sent, building while CI runs on the same commit; the
 # finalize workflow publishes nothing until CI's verify job is green there. Live once
 # dl.codecast.sh/latest.json names the commit (CLAUDE.md, CLI releases). Then, only when
-# the daemon build id changed since the release before it, the team's machines are made
-# to update to it, and the deploy records which of them took it (releaseFinish.ts).
+# the daemon build id changed since the release the team's floor names, the team's machines
+# are made to update to it, and the deploy records which of them took it (releaseFinish.ts).
+# The `||` is for one release: an installed cast older than --deploy refuses the option
+# (exit 1) and sets the floor the old way. Remove it after the next CLI release.
 [[target]]
 name = "cli"
 when = ["packages/cli/**", "packages/shared/**", "platform/**"]
@@ -66,7 +68,8 @@ policy = "release"
 # A send can wait up to 80 min for a release in flight before it cuts (scripts/cut-cli-release.sh),
 # and finalize up to 90 min for CI on the source commit.
 deadline = "4h"
-finish = "cast force-update $version --deploy $deploy"
+# The fallback serves a runner whose installed cast predates --deploy; drop it after the next CLI release.
+finish = "if cast force-update --help 2>&1 | grep -q -- --deploy; then cast force-update $version --deploy $deploy; else cast force-update $version; fi"
 
 # An OTA update to every channel, after the backend it calls is live. The app bundles
 # shared and web code too, so those paths ship it.

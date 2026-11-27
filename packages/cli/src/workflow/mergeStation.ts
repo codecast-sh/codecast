@@ -30,22 +30,25 @@
 //           files and the default branch's commits
 //   exit 2  refused (or the station crashed): the last line says why, and what a step left deployed
 //   exit 3  retest: CI tested another head, or the default branch's changes interact with the change
+//   exit 4  still in line for the repository's lease after LEASE_LINE_MS: nothing was done, and the place in line is
+//           kept in $run_dir for the graph to run the station again
 
 import * as fs from "node:fs";
 import os from "node:os";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
+import type { EventEmitter } from "node:events";
 import { defaultExec, landedSha, mergePullRequest, sleepSync, undoneChanges, type Exec, type Wait } from "../lineMerge.js";
 import { deploysFor, runShell, shipKeyRefusal, shipSpec, type Log } from "../land/shipCheckout.js";
 import type { ShipDeployStep } from "../workspace/types.js";
 import { keepEnds } from "./keepEnds";
 import { CI_APPROVAL_FILE } from "./changeVerdicts";
-import { holdRepoLease, leaseHolder, type RepoLease } from "../land/repoLease.js";
+import { LEASE_LINE_MS, LeaseLineWait, holdRepoLease, leaseHolder, type RepoLease } from "../land/repoLease.js";
 import { acquiredTree, mainCheckout, noteLanded, noteRestoring, sweepScratchTrees, takeMergeLock, trackStep, type ScratchTree } from "./mergeScratch";
 import { chainBetween, recordRebase, verifyRebaseChain, type RebaseLink, type RegeneratedRebase } from "./rebaseRecord";
 import { GENERATED_FILE, generatorsFor, readGenerators, writtenBy, type Generator } from "./generatedFiles";
 
-export type MergeStationResult = { code: 0 | 1 | 2 | 3; line: string };
+export type MergeStationResult = { code: 0 | 1 | 2 | 3 | 4; line: string };
 
 export type MergeStationArgs = {
   /** The run's checkout: the repository the scratch tree is made from. */
@@ -65,10 +68,19 @@ export type MergeStationArgs = {
   wait?: Wait;
   /** How long a station that lost its lease after a deploy waits to take it back and restore main (default 15 min). */
   leaseWaitMs?: number;
+  /** How long it waits in line for the lease before exit 4 (default LEASE_LINE_MS). */
+  leaseLineMs?: number;
+  /** Where SIGINT/SIGTERM arrive (default the process), and how the station then exits (default process.exit). */
+  signals?: EventEmitter;
+  exit?: (code: number) => void;
   log?: Log;
 };
 
 const LEASE_WAIT_MS = 15 * 60_000;
+/** The token of a place in line a station gave up waiting in (exit 4), in $run_dir: the next visit asks with it. */
+const LINE_TOKEN_FILE = "merge-lease-token";
+/** How long a signalled station waits for its lease's release before it exits, inside the runner's kill grace. */
+const STOP_RELEASE_MS = 5000;
 
 type Outcome = { step: ShipDeployStep; ok: boolean; sha: string; output?: string };
 
@@ -205,13 +217,30 @@ async function mergeStation(args: MergeStationArgs): Promise<MergeStationResult>
   // in the order they asked, each rebased on the last, and no other station's or ship checkout's deploy lands between
   // this one's deploy and its merge. Taken before the checkout's lock, so a station's place in line is its arrival.
   if (!args.repository) return refuse("no GitHub repository is named for this checkout, so its merge cannot take its turn");
+  // The wait has a budget of its own (exit 4): a long line spent the station's timeout, and the runner killed a
+  // station granted the lease late in the middle of its deploy. The graph runs it again with the place this one kept.
+  // The change flow's Merge timeout is this budget plus the hour the merge itself had.
+  const tokenFile = path.join(runDir, LINE_TOKEN_FILE);
+  let kept = "";
+  try { kept = fs.readFileSync(tokenFile, "utf-8").trim(); } catch { /* no place kept: a first visit */ }
+  fs.rmSync(tokenFile, { force: true });
+  const stopping = new AbortController();
+  const holding = holdRepoLease(args.post, { repository: args.repository, holder: leaseHolder(`the merge of PR #${pr} (run ${args.runId})`), runId: args.runId, log, signal: stopping.signal, waitMs: args.leaseLineMs ?? LEASE_LINE_MS, keepPlace: true, ...(kept ? { token: kept } : {}) });
+  const offSignals = stopOnSignal(args, stopping, () => holding.then((l) => l.release(), () => {}));
   let lease: RepoLease;
-  try { lease = await holdRepoLease(args.post, { repository: args.repository, holder: leaseHolder(`the merge of PR #${pr} (run ${args.runId})`), runId: args.runId, log }); }
-  catch (err) { return refuse(`could not take the lease on ${args.repository}'s deploys: ${message(err)}`); }
+  try { lease = await holding; }
+  catch (err) {
+    offSignals();
+    if (err instanceof LeaseLineWait) {
+      fs.writeFileSync(tokenFile, err.token);
+      return { code: 4, line: `${err.message}; nothing was done, and the run asks again in the same place` };
+    }
+    return refuse(`could not take the lease on ${args.repository}'s deploys: ${message(err)}`);
+  }
   // The checkout's lock still matters under the lease: a lease lost without its holder dying (a laptop asleep past it)
   // goes to the next in line, and two stations of one checkout must still never share a scratch sweep or deploy at once.
   let unlock: () => void;
-  try { unlock = await takeMergeLock(args.cwd, log); } catch (err) { await lease.release(); throw err; }
+  try { unlock = await takeMergeLock(args.cwd, log); } catch (err) { await lease.release(); offSignals(); throw err; }
   // The steps that went out and the tree each deployed: a failure after one sends them again from main.
   const deployed = new Map<string, { step: ShipDeployStep; tip: string }>();
   let tree: ScratchTree | null = null;
@@ -423,9 +452,28 @@ async function mergeStation(args: MergeStationArgs): Promise<MergeStationResult>
     return await recordLanded(args, url, landed.sha, outcomes);
   } finally {
     await lease.release();
+    offSignals();
     if (tree) await tree.release();
     unlock();
   }
+}
+
+/**
+ * Until the returned off, SIGINT and SIGTERM end the station: its wait leaves the line, or its held lease is released,
+ * and then it exits 128 + the signal. A station the runner ended (its timeout, a cancelled run) kept the lease for the
+ * ten minutes it takes to lapse, and every merge behind it waited. The listeners stay on until the exit: a signal that
+ * another handler raises again (lockFile.ts) must not take the default exit before the release has gone out.
+ */
+function stopOnSignal(args: MergeStationArgs, stopping: AbortController, release: () => Promise<unknown>): () => void {
+  const signals: EventEmitter = args.signals ?? process;
+  const exit = args.exit ?? ((code: number) => process.exit(code));
+  const handlers = ([["SIGINT", 2], ["SIGTERM", 15]] as const).map(([sig, n]) => [sig, () => {
+    if (stopping.signal.aborted) return;
+    stopping.abort();
+    void Promise.race([release(), new Promise((r) => setTimeout(r, STOP_RELEASE_MS))]).finally(() => exit(128 + n));
+  }] as const);
+  for (const [sig, h] of handlers) signals.on(sig, h);
+  return () => { for (const [sig, h] of handlers) signals.off(sig, h); };
 }
 
 /** Rebase the tree's HEAD onto `onto`. A stop whose conflicts are all files `generators` write takes `onto`'s side of

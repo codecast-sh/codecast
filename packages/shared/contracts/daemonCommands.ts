@@ -181,6 +181,13 @@ export const DAEMON_COMMANDS = [
   // command" (the session just stays live). There is no wake_session: waking is
   // a resume, so `cast wake` sends resume_session.
   "hibernate_session",
+  // A deploy took the session's own commits live everywhere they go
+  // (convex/retireOnLive.ts): the owning daemon checks the real checkout the
+  // way a run's end retire does (cli workflow/retireOnLive.ts) and retires it
+  // through cliRetireSession, or keeps it. args: { conversation_id,
+  // session_id, root, since, commits: [{ sha, main_at }] newest first }.
+  // Old daemons: "Unknown command" (the session stays).
+  "retire_on_live",
   // Bulk local<->cloud migration (sessionMigrations.ts). Targeted at the
   // batch's EXECUTOR daemon — an online local machine: the source for a move
   // to the cloud, the destination for a move back. The daemon starts a

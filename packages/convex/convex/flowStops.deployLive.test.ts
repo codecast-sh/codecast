@@ -25,7 +25,7 @@ const GRAPH = {
   nodes: [
     node("merge", "command"), node("deploy", "conditional"),
     node("deploy__wait", "command", { script: "cast flow await-deploy --merge \"$run_dir/merge.json\"" }),
-    node("deploy__live", "command"), node("deploy__failed", "exit"), node("exit", "exit", { label: "Live" }),
+    node("deploy__live", "command"), node("deploy__failed", "exit", { shared: true }), node("exit", "exit", { label: "Live" }),
   ],
   edges: [
     { from: "merge", to: "deploy" }, { from: "deploy", to: "deploy__wait" },

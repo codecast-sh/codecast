@@ -5,6 +5,7 @@ import { internalMutation, mutation, query, type MutationCtx, type QueryCtx } fr
 import { verifyApiToken } from "./apiTokens";
 import { patchTask } from "./lib/taskWrite";
 import { projectFromPlan } from "./lib/planFiling";
+import { escalateCardsOnTask } from "./lib/cardWaiters";
 import { resolveActor, roleOfConversation } from "./lib/actor";
 import { allRolesInBoundary, liveRoleByHandle, roleByHandleForRead } from "./lib/orgAccess";
 import { taskWork } from "./lib/orgOwnership";
@@ -2785,6 +2786,9 @@ export async function addDepCore(ctx: MutationCtx, userId: Id<"users">, args: De
   if (args.blocks) await addEdge(args.blocks, "blocks");
   // A finished blocker holds nothing, which the CLI says rather than "blocked".
   const blocker = args.blocked_by ? await addEdge(args.blocked_by, "blocked_by") : null;
+  // The task that gained a dependent: a card on it may now hold up enough to escalate.
+  if (args.blocks) await escalateCardsOnTask(ctx, task._id);
+  if (blocker) await escalateCardsOnTask(ctx, blocker._id);
   return { success: true, ...(blocker ? { blocker_status: blocker.status } : {}) };
 }
 

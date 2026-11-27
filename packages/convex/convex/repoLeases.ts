@@ -105,6 +105,9 @@ async function leaseWorkspace(ctx: any, userId: Id<"users">, repository: string,
     return { workspace: run.workspace, ...(run.team_id ? { teamId: run.team_id } : {}) };
   }
   const teamId = await teamFor(ctx, userId, repository, args.team_id);
+  // A named team is checked as a run's workspace is: membership alone would let anyone hold any repository's lease
+  // (stalling every merge in it) and read its holders. A resolved team already works on it.
+  if (args.team_id && !(await workspaceWorksOn(ctx, repository, teamKey(teamId)))) throw new Error(`Team ${args.team_id} cannot lease ${repository}: it does not work on it.`);
   return { workspace: teamKey(teamId), teamId };
 }
 
@@ -117,13 +120,18 @@ async function worksOn(ctx: any, userId: Id<"users">, repository: string, run: {
   // findDeployTeam throws only when more than one of the caller's teams works on it: that is access too.
   if (await findDeployTeam(ctx, userId, repository).then(Boolean, () => true)) return true;
   // The run's team is its workspace (access), never its team_id (routing).
-  const ws = parseWorkspaceKey(run.workspace);
+  return await workspaceWorksOn(ctx, repository, run.workspace);
+}
+
+/** Whether a workspace works on the repository: its team connected it (the GitHub App or a published checkout), or it published deploy targets for it. */
+async function workspaceWorksOn(ctx: any, repository: string, workspace: string): Promise<boolean> {
+  const ws = parseWorkspaceKey(workspace);
   if (ws?.type === "team") {
     if ((await resolveTeamForRepository(ctx, repository)) === ws.teamId) return true;
     const sources = await ctx.db.query("repo_sources").withIndex("by_repository", (q: any) => q.eq("repository", repository)).take(100);
     if (sources.some((r: any) => r.team_id === ws.teamId)) return true;
   }
-  const declared = await ctx.db.query("deploy_targets").withIndex("by_workspace_repository", (q: any) => q.eq("workspace", run.workspace).eq("repository", repository)).first();
+  const declared = await ctx.db.query("deploy_targets").withIndex("by_workspace_repository", (q: any) => q.eq("workspace", workspace).eq("repository", repository)).first();
   return !!declared;
 }
 
