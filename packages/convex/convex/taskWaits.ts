@@ -55,6 +55,7 @@ import {
 } from "./lib/waitSetters";
 import { emitNotification } from "./notificationRouter";
 import { insertTaskComment } from "./tasks";
+import { resumeIncidentRuns } from "./flowStops";
 import { answerLabel, userMayRead, verdictOfRow, type Verdict } from "./sessionDecisions";
 import {
   isTerminalTaskStatus,
@@ -731,6 +732,8 @@ export async function releaseDependents(
   { closingLater: later, closing, ...by }: Omit<UnblockBy, "key"> & { closingLater?: Task; closing?: ReadonlySet<string> } = {},
 ): Promise<void> {
   if (!next || !isTerminalTaskStatus(next) || isTerminalTaskStatus(task.status)) return;
+  // An incident closing: the runs it stopped resume where they stopped.
+  await resumeIncidentRuns(ctx, task);
   await tellSettersClosed(ctx, task, next, by.conversationId);
   const self = new Set([task.short_id, String(task._id)]);
   const known = new Map<string, { short_id?: string; status: string }>([...self].map((r) => [r, { short_id: task.short_id, status: next }]));

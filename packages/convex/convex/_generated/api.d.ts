@@ -209,6 +209,7 @@ import type * as findingRegroup from "../findingRegroup.js";
 import type * as flowLibrary from "../flowLibrary.js";
 import type * as flowMap from "../flowMap.js";
 import type * as flowMapSchema from "../flowMapSchema.js";
+import type * as flowStops from "../flowStops.js";
 import type * as flowVersions from "../flowVersions.js";
 import type * as folderSync from "../folderSync.js";
 import type * as follow from "../follow.js";
@@ -1142,6 +1143,7 @@ declare const fullApi: ApiFromModules<{
   flowLibrary: typeof flowLibrary;
   flowMap: typeof flowMap;
   flowMapSchema: typeof flowMapSchema;
+  flowStops: typeof flowStops;
   flowVersions: typeof flowVersions;
   folderSync: typeof folderSync;
   follow: typeof follow;
