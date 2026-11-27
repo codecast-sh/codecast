@@ -7,7 +7,8 @@ mock.module("next/link", () => ({
   default: ({ href, children, ...props }: any) => <a href={href} {...props}>{children}</a>,
 }));
 const targetsHook = { ...(await import("../../hooks/useSyncDeployTargets")) };
-mock.module("../../hooks/useSyncDeployTargets", () => ({ ...targetsHook, useDeployTargets: () => ({ targets: [], deploys: [], ready: true }) }));
+let deployState: { targets: any[]; deploys: any[] } = { targets: [], deploys: [] };
+mock.module("../../hooks/useSyncDeployTargets", () => ({ ...targetsHook, useDeployTargets: () => ({ ...deployState, productions: [], ready: true }) }));
 // A stop that says to resume the run draws its Resume press, which holds a mutation (Journey.resume.mount.test.tsx).
 const convex = await import("convex/react");
 mock.module("convex/react", () => ({ ...convex, useMutation: () => async () => ({}) }));
@@ -31,11 +32,11 @@ describe("the Ship panel's links into Deploys", () => {
     expect(links(html)).toEqual([`/deploys?team=T1&sha=${SHA}`, `/deploys?team=T1&target=web&sha=${SHA}`]);
   });
 
-  test("a now-bar line that names a deploy opens that deploy, on its target when the line names one", () => {
+  test("a now-bar line that names a deploy opens the run's change with that deploy open, on its target when the line names one", () => {
     const deploying: any = { stages: [], now: { kind: "deploying", line: "waiting for web (going out in dp-13)", targets: ["web"], waits: [] } };
-    expect(links(renderToStaticMarkup(<JourneyView journey={deploying} run={run({ status: "running" })} now_ms={0} />))[0]).toBe("/deploys?team=T1&deploy=dp-13");
+    expect(links(renderToStaticMarkup(<JourneyView journey={deploying} run={run({ status: "running" })} now_ms={0} />))[0]).toBe("/deploys?team=T1&session=conv1&deploy=dp-13");
     const live: any = { stages: [], now: { kind: "deploying", line: "live on web dp-12", targets: ["web"], waits: [] } };
-    expect(links(renderToStaticMarkup(<JourneyView journey={live} run={run({ status: "running" })} now_ms={0} />))[0]).toBe("/deploys?team=T1&target=web&deploy=dp-12");
+    expect(links(renderToStaticMarkup(<JourneyView journey={live} run={run({ status: "running" })} now_ms={0} />))[0]).toBe("/deploys?team=T1&target=web&session=conv1&deploy=dp-12");
   });
 
   test("a run whose Deploy deploys itself, with no deploy targets, offers no Deploys link", () => {
@@ -86,8 +87,47 @@ describe("the Ship panel's links into Deploys", () => {
     expect(renderToStaticMarkup(<JourneyView journey={journeyOf(flowBySlug(appPool(), "personal") as any, rejected as any)} run={rejected} now_ms={0} again={again} />)).toContain("data-ship-again");
   });
 
-  test("with no landed commit known, a target opens with the session highlighted", () => {
+  test("with no landed commit known, a target opens with the session highlighted and its deploy open", () => {
     const html = renderToStaticMarkup(<SessionTargets teamId="T1" conversationId="conv1" known={[{ name: "web", state: "live", deploy: "dp-12" }]} />);
-    expect(links(html)).toEqual(["/deploys?team=T1&target=web&session=conv1"]);
+    expect(links(html)).toEqual(["/deploys?team=T1&target=web&session=conv1&deploy=dp-12"]);
+  });
+});
+
+// Where the session's change is on each target, read from the store when the run has no deploy reach of its own.
+describe("the session's targets read from the store", () => {
+  const H = 3_600_000;
+  const T0 = 1_800_000_000_000;
+  const session = { conversation_id: "conv1", short_id: null, title: null };
+  const waitingOn = (head_ci: string) => ({
+    _id: "o/r#production", workspace: "team:T1", name: "production", repository: "o/r", runs: "here", policy: "press", can_deploy: true,
+    queue: { known: true, truncated: false, commits: 1, untouched: 0, head_sha: "c0ffee00", head_ci, head_ci_url: null, shown: 1,
+      groups: [{ key: "s:conv1", session, ci: head_ci, commits: [{ sha: "c0ffee00", subject: "x", at: T0, main_at: T0, author: null, session, tasks: [], ci: head_ci, ci_url: null }] }] },
+  });
+  const dep = (short_id: string, status: string, sha: string | null, created_at: number) => ({ _id: short_id, workspace: "team:T1", target: "production", repository: "o/r", short_id, status, action: "deploy", sha, sessions: [], created_at, live_at: null });
+  const draw = () => renderToStaticMarkup(<SessionTargets teamId="T1" conversationId="conv1" />);
+
+  test("a stale open deploy with no commit, or one asked for before the change landed, is not carrying it", () => {
+    deployState = { targets: [waitingOn("passed")], deploys: [dep("dp-1969", "requested", null, T0 - 5 * 24 * H)] };
+    expect(draw()).toContain("<span>waiting</span>");
+    deployState = { targets: [waitingOn("passed")], deploys: [dep("dp-2406", "running", "0dd0dd00", T0 - 4 * 24 * H)] };
+    expect(draw()).toContain("<span>waiting</span>");
+  });
+
+  test("an open deploy at the change's commit, or one after it on main, is taking it out", () => {
+    deployState = { targets: [waitingOn("passed")], deploys: [dep("dp-3388", "running", "c0ffee00", T0 + H)] };
+    expect(draw()).toContain("going out · dp-3388");
+  });
+
+  test("an open deploy at a commit nobody can place on main (a rollback, a redeploy, past the queue) is not carrying it", () => {
+    deployState = { targets: [waitingOn("passed")], deploys: [dep("dp-3389", "running", "a1e4faf5", T0 + H)] };
+    expect(draw()).toContain("<span>waiting</span>");
+  });
+
+  test("the Deploy press shows only where CI on what it would send is not red", () => {
+    deployState = { targets: [waitingOn("passed")], deploys: [] };
+    expect(draw()).toContain("data-session-deploy");
+    deployState = { targets: [waitingOn("failed")], deploys: [] };
+    expect(draw()).not.toContain("data-session-deploy");
+    deployState = { targets: [], deploys: [] };
   });
 });

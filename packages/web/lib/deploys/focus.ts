@@ -28,10 +28,12 @@ export const LINK_PARAMS = [...FOCUS_PARAMS, "show", "mine"] as const;
 
 type Params = { get(name: string): string | null };
 
-/** The one thing a link names, read from its address. A deploy wins, then a PR, a commit, a task, a session. */
+/**
+ * The one thing a link names, read from its address: a PR, a commit, a task, a session, a branch, else a deploy. A link
+ * from a run names its change and the deploy that took it or tried to: the change is what the page is about, and the
+ * deploy only opens its card (the page reads `deploy=` for that on its own).
+ */
 export function focusOf(p: Params): DeployFocus | null {
-  const deploy = p.get("deploy")?.trim();
-  if (deploy) return { kind: "deploy", id: deploy };
   const pr = Number(p.get("pr")?.replace(/^#/, ""));
   if (Number.isInteger(pr) && pr > 0) return { kind: "pr", pr };
   const sha = p.get("sha")?.trim().toLowerCase();
@@ -42,7 +44,8 @@ export function focusOf(p: Params): DeployFocus | null {
   if (session) return { kind: "session", id: session };
   const branch = p.get("branch")?.trim();
   if (branch) return { kind: "branch", name: branch };
-  return null;
+  const deploy = p.get("deploy")?.trim();
+  return deploy ? { kind: "deploy", id: deploy } : null;
 }
 
 /** The view each kind of link lists its thing in. */
@@ -91,13 +94,13 @@ export function commitMatches(c: Pick<QueueCommit, "sha" | "subject" | "tasks" |
   }
 }
 
-/** Whether a Ship run on its way is the thing the link names: its task, its pull request, the session that pressed Ship, or the branch it merged from. */
-export function runMatches(r: Pick<ShippingRun, "task_short_id" | "task_id" | "pr" | "spawner_conversation_id" | "merge">, f: DeployFocus | null): boolean {
+/** Whether a Ship run on its way is the thing the link names: its task, its pull request, the session that pressed Ship or the one it ran in, or the branch it merged from. */
+export function runMatches(r: Pick<ShippingRun, "task_short_id" | "task_id" | "pr" | "spawner_conversation_id" | "merge"> & { primary_conversation_id?: string | null }, f: DeployFocus | null): boolean {
   if (!f) return false;
   switch (f.kind) {
     case "task": return r.task_short_id === f.id || r.task_id === f.id;
     case "pr": return r.pr?.number === f.pr;
-    case "session": return sameSessionId(r.spawner_conversation_id, f.id);
+    case "session": return sameSessionId(r.spawner_conversation_id, f.id) || sameSessionId(r.primary_conversation_id, f.id);
     case "branch": return r.merge?.branch === f.name;
     default: return false;
   }
@@ -244,14 +247,16 @@ export function focusWord(f: DeployFocus): string {
   }
 }
 
-/** A link into /deploys at one thing, on a team and target when the caller knows them. */
-export function deploysFocusHref(o: { team?: string | null; repository?: string | null; target?: string | null; focus?: DeployFocus | null; show?: BoardView | null; mine?: boolean }): string {
+/** A link into /deploys at one thing, on a team and target when the caller knows them; `open` names a deploy whose card
+ *  opens beside the change the link focuses. */
+export function deploysFocusHref(o: { team?: string | null; repository?: string | null; target?: string | null; focus?: DeployFocus | null; open?: string | null; show?: BoardView | null; mine?: boolean }): string {
   const q = new URLSearchParams();
   if (o.team) q.set("team", o.team);
   if (o.repository) q.set("repo", o.repository);
   if (o.target) q.set("target", o.target);
   const f = o.focus;
   if (f) q.set(f.kind, f.kind === "pr" ? String(f.pr) : f.kind === "sha" ? f.sha : f.kind === "branch" ? f.name : f.id);
+  if (o.open && f?.kind !== "deploy") q.set("deploy", o.open);
   if (o.show && o.show !== "sessions") q.set("show", o.show);
   if (o.mine) q.set("mine", "1");
   const s = q.toString();
@@ -259,17 +264,14 @@ export function deploysFocusHref(o: { team?: string | null; repository?: string 
 }
 
 /**
- * The Deploys page for a run's team, at the thing the run sent: the deploy its words name ("web dp-12", on that
- * target), else the commit it landed, else its session. A per-target line ("backend: live in dp-12; cli: waiting on main
- * CI …") opens the target still waiting, never the first deploy it names, which is one already live.
+ * The Deploys page for a run's team, at the change the run sent (the commit it landed, else its session) on the target
+ * its words name, with the deploy they name opened beside it ("web dp-12"). A per-target line ("backend: live in dp-12;
+ * cli: waiting on main CI …") opens the target still waiting, never the first deploy it names, which is one already live.
  */
 export function deploysHref(run: any, words?: string | null): string {
   const team = runTeam(run);
   const waiting = [...(words ?? "").matchAll(/(?:^|;\s*)([a-z][a-z0-9-]{0,31}):\s*([^;]*)/g)].find((m) => !/^live\b/.test(m[2]));
-  if (waiting) {
-    const going = waiting[2].match(/\b(dp-\d+)\b/)?.[1];
-    return deploysFocusHref({ team, target: waiting[1], focus: going ? { kind: "deploy", id: going } : runFocus(run) });
-  }
+  if (waiting) return runDeploysHref(run, waiting[1], waiting[2].match(/\b(dp-\d+)\b/)?.[1]);
   // A stop's own words ("Deploy stuck: cli is not live with acbd8d2 … Live: backend dp-3302.") name the target it stopped
   // on before the ones already live.
   const stuck = words?.match(/\b([a-z][a-z0-9-]{0,31}) is not live\b/)?.[1];
@@ -277,7 +279,14 @@ export function deploysHref(run: any, words?: string | null): string {
   const named = words?.match(/(?:\b([a-z][a-z0-9-]{0,31}) )?\b(dp-\d+)/);
   // "going out in dp-13" names a deploy but not its target; the page finds that from the deploy.
   const target = named?.[1] && named[1] !== "in" ? named[1] : null;
-  return deploysFocusHref({ team, target, focus: named ? { kind: "deploy", id: named[2]! } : runFocus(run) });
+  return runDeploysHref(run, target, named?.[2]);
+}
+
+/** The Deploys page at a run's change on one target, with a deploy that took it (or tried to) opened beside it; a run
+ *  with no change to name focuses that deploy itself. */
+export function runDeploysHref(run: any, target: string | null, deploy?: string | null): string {
+  const change = runFocus(run);
+  return deploysFocusHref({ team: runTeam(run), target, focus: change ?? (deploy ? { kind: "deploy", id: deploy } : null), open: deploy });
 }
 
 /** The team a run belongs to (its workspace `team:<id>`), null for a personal one. */

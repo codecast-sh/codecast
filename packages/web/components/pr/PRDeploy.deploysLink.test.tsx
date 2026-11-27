@@ -33,6 +33,16 @@ describe("the PR page's links into Deploys", () => {
     ]);
   });
 
+  test("the band's press is never the primary one on red CI (the Deploys page reads it the same way)", () => {
+    const press = (head_ci: string) => ({ name: "production", queue: { head_ci } });
+    const band = (head_ci: string) => renderToStaticMarkup(<PRDeployBand model={{
+      ...base, merged: true, open: false, shipsTo: null, declares: true, dormant: [],
+      rows: [{ target: "production", state: "waiting", deploy: null, now: null, note: null, queue: null, press: press(head_ci), pressWords: "Deploy 3 commits", blocked: null }],
+    } as any} />);
+    expect(band("failed")).toMatch(/class="pr-deploy-go" data-ci="failed"/);
+    expect(band("passed")).not.toContain('data-ci="failed" data-pr-deploy-go');
+  });
+
   test("an open PR's targets open on the Deploys page with the PR highlighted on its way", () => {
     const model: any = {
       ...base, merged: false, open: true, declares: true, rows: [], dormant: [],

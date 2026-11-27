@@ -67,6 +67,9 @@ describe("prDeployRows", () => {
     const going = prDeployRows(reach([tr("production", "waiting")]), [target("production", {}, [SHA])], [dp("dp-9", "production", "running")], "o/r", NOW).rows[0];
     expect(going.press).toBeNull();
     expect(going.blocked).toBe("dp-9 is going out");
+    // A press asked for with no commit yet holds the press too, and says it is asked for, as the Deploys page does.
+    const asked = prDeployRows(reach([tr("production", "waiting")]), [target("production", {}, [SHA])], [dp("dp-10", "production", "requested", { sha: null })], "o/r", NOW).rows[0];
+    expect(asked.blocked).toBe("dp-10 is asked for");
     expect(prDeployRows(reach([tr("web", "waiting")]), [target("web", { runs: "push" })], [], "o/r", NOW).rows[0].blocked).toBe("Goes out when main moves");
     expect(prDeployRows(reach([tr("web", "waiting")]), [target("web", { can_deploy: false })], [], "o/r", NOW).rows[0].blocked).toBe("No machine publishes it");
   });

@@ -4,7 +4,7 @@
 // Pure: no store, no React.
 import type { QueueCommit, QueueGroup, ShippingRun, ShippingShipper } from "@codecast/shared/contracts/deployTargets";
 import type { CheckoutRow } from "@codecast/shared/contracts/checkouts";
-import { isOpen, prOfSubject, sessionsOf, type DeploySession, type TeamDeployRow } from "./targets";
+import { isOpen, prOfSubject, sessionsOf, supersededBy, type DeploySession, type TeamDeployRow } from "./targets";
 import { ageShort } from "../lineFlow";
 
 /* ───────────── What the page reads ───────────── */
@@ -399,7 +399,9 @@ export function yourSessions(next: Carried | null, cards: ReadonlyArray<DeployCa
  * deploy. With none going, or one at a sha no longer waiting, everything is next.
  */
 export function splitQueue(queue: ReadonlyArray<BoardQueueCommit>, deploys: ReadonlyArray<BoardDeploy>): { going: BoardDeploy | null; sending: BoardQueueCommit[]; next: BoardQueueCommit[] } {
-  const going = [...deploys].sort((a, b) => b.created_at - a.created_at).find((d) => isOpen(d) && d.sha) ?? null;
+  // One asked for before the live deploy never went out (targets openOf): it sends nothing, so everything waits for Next deploy.
+  const live = deploys.filter((d) => d.status === "live").sort((a, b) => (b.live_at ?? b.created_at) - (a.live_at ?? a.created_at))[0] ?? null;
+  const going = [...deploys].sort((a, b) => b.created_at - a.created_at).find((d) => isOpen(d) && d.sha && !supersededBy(d, live)) ?? null;
   if (!going) return { going, sending: [], next: [...queue] };
   return { going, sending: upTo(queue, going.sha!), next: after(queue, going.sha!) };
 }

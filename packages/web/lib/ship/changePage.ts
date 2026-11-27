@@ -9,7 +9,7 @@ import { entityRoute } from "@codecast/shared/entities";
 import { journeyStages, targetsFromLine, type Journey, type TargetState } from "./journey";
 import { gateWaitWords, holdWords, journeyWords, sentBackWords, stopTitle, type JourneyTone } from "./journeyWords";
 import { landedSha } from "./runRecord";
-import { deploysFocusHref, deploysHref as wordsHref, runFocus, runTeam } from "../deploys/focus";
+import { deploysFocusHref, deploysHref as wordsHref, runDeploysHref, runTeam } from "../deploys/focus";
 
 type Status = { node_id: string; status?: string; result_preview?: string | null; started_at?: number; session?: { _id: string; title?: string | null } | null };
 export type ChangeGraph = { nodes: ReadonlyArray<FlowNodeIn>; edges: ReadonlyArray<FlowEdgeIn>; kind?: string; takes?: ReadonlyArray<string> };
@@ -223,9 +223,7 @@ export function changeAction(j: Journey, run: ChangeRun, g: ChangeGraph, ctx: { 
   const n = j.now;
   const subject = run.spawner_conversation_id ?? null;
   const pending = ctx.targets?.find((t) => t.state !== "live");
-  const deploysHref = (words: string | null | undefined) => (pending
-    ? deploysFocusHref({ team: runTeam(run), target: pending.name, focus: pending.deploy ? { kind: "deploy", id: pending.deploy } : runFocus(run) })
-    : wordsHref(run, words));
+  const deploysHref = (words: string | null | undefined) => (pending ? runDeploysHref(run, pending.name, pending.deploy) : wordsHref(run, words));
   const openSession = (id: string | null | undefined): ChangeAction | null => (id ? { kind: "session", label: "Open session", href: `/conversation/${id}` } : null);
   switch (n.kind) {
     case "gate": return !n.mine && n.decisionId ? { kind: "card", label: "Open the card", href: `/decisions/${run.gate_decision_short_id ?? n.decisionId}` } : null;
@@ -319,11 +317,11 @@ export function changeLinks(run: ChangeRun, graph: ChangeGraph, targets: Readonl
   }
   const reach = targets.length ? targets : targetsFromLine(deployLine(run, stations));
   for (const t of reach) {
-    const route = t.deploy ? entityRoute("deploy", t.deploy) : null;
     out.push({
       kind: "deploy",
       label: t.deploy ? `${t.name} ${t.deploy}` : `${t.name} waiting`,
-      href: route ?? deploysFocusHref({ team, target: t.name, focus: runFocus(run) }),
+      // The Deploys page at the change on that target, its deploy open: where the change stands, not only the deploy.
+      href: runDeploysHref(run, t.name, t.deploy),
       external: false,
       tone: t.state === "live" ? "ok" : t.state === "failed" ? "bad" : t.state === "deploying" ? "wait" : "default",
       title: t.state === "live" ? `Live on ${t.name}` : t.state === "deploying" ? `Going out to ${t.name}` : t.state === "failed" ? `Failed on ${t.name}` : `Not on ${t.name} yet`,

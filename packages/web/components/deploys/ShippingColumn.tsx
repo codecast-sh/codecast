@@ -70,7 +70,7 @@ function RunCard({ r, repository, now, focus, earlier, dropped = false }: {
   const { word, tone, detail } = runState(r);
   const title = r.task_title ?? r.task_short_id ?? "A change";
   return (
-    <li className="dpp-run" data-tone={tone} data-dropped={dropped ? "" : undefined} data-focus={runMatches(r, focus) ? "" : undefined} data-deploy-run={r._id}>
+    <li className="dpp-run" id={`ship-${r._id}`} data-tone={tone} data-dropped={dropped ? "" : undefined} data-focus={runMatches(r, focus) ? "" : undefined} data-deploy-run={r._id}>
       <div className="dpp-run-top">
         {r.task_short_id ? <Link className="dpp-run-title" href={`/tasks/${r.task_short_id}`}>{title}</Link> : <span className="dpp-run-title">{title}</span>}
         <span className="dpp-age">{ago(now, r.updated_at)}</span>

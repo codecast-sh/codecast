@@ -5,7 +5,7 @@
 import { DORMANT_TARGET_MS, type DeployReach, type ReachDeployRef, type ReachState, type TargetReach } from "@codecast/shared/contracts/deployReach";
 import { commitTouchesTarget, type CommitCiState } from "@codecast/shared/contracts/deployTargets";
 import { REACH_LOOK, deployAgo } from "./deployPill";
-import { deploysOf, targetNow, type DeployTargetRow, type TeamDeployRow } from "./targets";
+import { deploysOf, openWords, targetNow, type DeployTargetRow, type TeamDeployRow } from "./targets";
 
 /** One target a merged pull request goes to: its reach, and what a reader can do about it there. */
 export type PrDeployRow = {
@@ -58,7 +58,7 @@ function pressOf(t: DeployTargetRow | undefined, deploys: ReadonlyArray<TeamDepl
   if (!t || t.record_only) return { press: null, pressWords: null, blocked: null };
   if (t.runs === "push") return { press: null, pressWords: null, blocked: "Goes out when main moves" };
   const open = targetNow(t, deploys).open;
-  if (open) return { press: null, pressWords: null, blocked: `${open.short_id || "A deploy"} is going out` };
+  if (open) return { press: null, pressWords: null, blocked: openWords(open) };
   if (!t.can_deploy) return { press: null, pressWords: null, blocked: "No machine publishes it" };
   const n = t.queue.commits;
   if (t.queue.known && n === 0) return { press: null, pressWords: null, blocked: "Nothing waiting" };
