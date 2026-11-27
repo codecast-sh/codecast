@@ -145,7 +145,8 @@ const ROUTE_ONLY = /^\s*\{\s*"exit"\s*:/;
  * A segment's stop exit the run went on from is the way it went (a card answered Revise sends the change back to its
  * session), never a failure: the runner writes it failed only so the flow that composes the segment routes on it
  * (cli workflow/parser.ts, `segment_exit: "stop"`). Read as one when the graph marks it or its only output names the
- * exit, and only when a step started after it, so a stop the run ended on stays red.
+ * exit, and only when a step other than an end started after it, so a stop the run ended on (alone, or through the
+ * exit it routes to) stays red.
  */
 function asRoutes(rows: RunNodeRow[], statuses: ReadonlyArray<{ node_id: string; started_at?: number }>, graph: ReadonlyMap<string, any>): RunNodeRow[] {
   return rows.map((r) => {
@@ -153,7 +154,9 @@ function asRoutes(rows: RunNodeRow[], statuses: ReadonlyArray<{ node_id: string;
     const n = graph.get(r.id);
     const exit = n?.segment_exit === "stop" || (r.id.includes("__") && ROUTE_ONLY.test(r.result_preview ?? ""));
     const since = r.completed_at ?? r.started_at;
-    const wentOn = since != null && statuses.some((x) => x.node_id !== r.id && (x.started_at ?? 0) >= since);
+    // The end it routed to is not going on: Union's land__rejected leads straight to its `stopped` exit.
+    const ending = (id: string) => (graph.get(id)?.type ?? (id === "exit" ? "exit" : null)) === "exit";
+    const wentOn = since != null && statuses.some((x) => x.node_id !== r.id && !ending(x.node_id) && (x.started_at ?? 0) >= since);
     return exit && wentOn ? { ...r, status: "completed" as const, route: true as const } : r;
   });
 }

@@ -112,6 +112,27 @@ describe("a decision card's answer is the way the run went (pl-1077 polish 3)", 
     expect(runNodeRows(ended, graph).find((r) => r.id === "decide__revise")).toMatchObject({ status: "failed" });
     expect(runNodeRows(ended, graph).find((r) => r.id === "decide__revise")?.route).toBeUndefined();
   });
+
+  test("a stop that routes straight to the run's end is where it stopped, still a failure (Union's Land rejected)", () => {
+    // ct-102575: land__rejected leads to the `stopped` exit, whose status is written after it.
+    const land = {
+      nodes: [
+        { id: "start", label: "start", type: "start" },
+        { id: "land", label: "Land", type: "conditional", segment: "land", segment_entry: true },
+        { id: "land__review", label: "Review", type: "agent", segment: "land" },
+        { id: "land__rejected", label: "Rejected", type: "command", segment: "land", segment_exit: "stop" },
+        { id: "stopped", label: "Not merged", type: "exit" },
+      ],
+    };
+    const r = { status: "failed", current_node_id: "stopped", fail_reason: "Stopped: The reviewer rejected the change", node_statuses: [
+      { node_id: "land", status: "completed", started_at: 1, completed_at: 1 },
+      { node_id: "land__review", status: "completed", started_at: 2, completed_at: 5 },
+      { node_id: "land__rejected", status: "failed", started_at: 6, completed_at: 6, result_preview: '{"exit": "rejected"}' },
+      { node_id: "stopped", status: "failed", started_at: 7, completed_at: 7 },
+    ] };
+    expect(runNodeRows(r, land).find((x) => x.id === "land__rejected")).toMatchObject({ status: "failed" });
+    expect(runNodeRows(r, land).find((x) => x.id === "land__rejected")?.route).toBeUndefined();
+  });
 });
 
 describe("runNodeGroups", () => {
