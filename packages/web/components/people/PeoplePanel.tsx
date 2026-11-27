@@ -742,7 +742,7 @@ function RosterRow({
           className="people-row-actions absolute inset-y-0 right-[30px] flex items-center gap-0.5"
           onClick={(e) => e.stopPropagation()}
         >
-          {callsEnabled && !compact && (
+          {callsEnabled && !compact && !huddle.hidden && (
             <button
               type="button"
               onClick={huddle.go}

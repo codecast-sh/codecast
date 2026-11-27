@@ -426,7 +426,7 @@ function PersonHuddleItem({ person, className, onDone }: { person: PalettePerson
   const member = useInboxStore((s) => teamMembersOf(s).find((m: any) => String(m?._id) === person._id) ?? person.member);
   const room = useLiveRoomOfMember(person._id);
   const huddle = useMemberHuddle(member, viewerId, room, person.name);
-  if (!callsOn || !person.online) return null;
+  if (!callsOn || !person.online || huddle.hidden) return null;
   return (
     <CommandPrimitive.Item
       data-palette-action="person_huddle"

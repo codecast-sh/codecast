@@ -67,9 +67,21 @@ mock.module("../../lib/teamFeatures", () => ({ ...realTeamFeatures, useCallsAvai
 
 // A huddle start would open the device check and reach the server: the card's
 // Huddle is pinned by what it asks for.
-const realHuddleStart = await import("../../lib/calls/huddleStart");
+const realHuddleStart = { ...(await import("../../lib/calls/huddleStart")) };
 const huddleStarts: unknown[] = [];
 mock.module("../../lib/calls/huddleStart", () => ({ ...realHuddleStart, requestHuddleStart: (req: unknown) => huddleStarts.push(req) }));
+
+// The call this window holds, for your own card's Huddle: the engine's own
+// state unless a test puts this window in a room.
+const realWalkie = { ...(await import("../../lib/calls/walkie")) };
+let callHere: string | null = null;
+mock.module("../../lib/calls/walkie", () => ({
+  ...realWalkie,
+  walkieCallState: () => {
+    const real = realWalkie.walkieCallState();
+    return callHere ? { ...real, phase: "connected", roomKey: callHere } : real;
+  },
+}));
 
 // The feeder would open a Convex subscription; the bar paints the store.
 const realSyncCollection = await import("../../hooks/useSyncCollection");
@@ -145,7 +157,7 @@ const { createRoot } = await import("react-dom/client");
 const { useInboxStore } = await import("../../store/inboxStore");
 const { TeamAvatarBar } = await import("../TeamAvatarBar");
 const { BAR_FACES } = await import("../../lib/faces/layout");
-const { idleSelfFaceSig } = await import("../../lib/faces/faceRow");
+const { idleSelfFaceSig, resetFaceRow } = await import("../../lib/faces/faceRow");
 const { getCallStageOpen, closeCallStage, takeCallThreadRequest } = await import("../../lib/calls/callStage");
 
 afterAll(() => {
@@ -154,6 +166,7 @@ afterAll(() => {
   mock.module("../../hooks/useFaceRow", () => realFaceRowHooks);
   mock.module("../../hooks/useRoomThreadUnread", () => realThreadUnread);
   mock.module("../../lib/calls/huddleStart", () => realHuddleStart);
+  mock.module("../../lib/calls/walkie", () => realWalkie);
   closeDomWindow(dom);
   restoreGlobals();
 });
@@ -200,6 +213,8 @@ let host: HTMLElement | null = null;
 beforeEach(() => {
   fakeRow = rowOf([entry(ANN, "Ann"), entry(BO, "Bo")]);
   callsAvailable = true;
+  callHere = null;
+  resetFaceRow();
   huddleStarts.length = 0;
   floating.available = true;
   floating.floating = false;
@@ -342,6 +357,11 @@ describe("the header draws the model's row", () => {
 // ── your own face ───────────────────────────────────────────────────────────
 
 describe("your own face", () => {
+  // The engine wakes the row on a call change; here the memo is dropped by hand.
+  const holdCall = (room: string) => {
+    callHere = room;
+    resetFaceRow();
+  };
   const openCard = async (h: Awaited<ReturnType<typeof mount>>, id: string) => {
     await h.fire(h.face(id), "click");
     return h.q("[data-member-card]")!;
@@ -371,6 +391,23 @@ describe("your own face", () => {
     const h = await mount();
     const card = await openCard(h, ME);
     expect(Array.from(card.querySelectorAll(".face-card-self .face-action-word")).map((w) => w.textContent)).toEqual(["Join huddle"]);
+  });
+
+  test("in your huddle in this window, Huddle says so and does nothing", async () => {
+    holdCall(`dm:${ME}`);
+    const h = await mount();
+    const card = await openCard(h, ME);
+    const button = card.querySelector(".face-card-self .face-action-ring") as HTMLButtonElement;
+    expect(button.textContent).toContain("In huddle");
+    expect(button.disabled).toBe(true);
+  });
+
+  test("on somebody else's call, your card offers no Huddle to pull you out of it", async () => {
+    holdCall(`dm:${ANN}:${ME}`);
+    const h = await mount();
+    const card = await openCard(h, ME);
+    expect(card.querySelectorAll(".face-card-status").length).toBe(3);
+    expect(card.querySelector(".face-action-ring")).toBeNull();
   });
 
   test("with calls off the card keeps the status switch and has no Huddle", async () => {

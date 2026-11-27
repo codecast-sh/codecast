@@ -265,7 +265,7 @@ function FaceCardBody({
               </button>
             ))}
           </div>
-          {callsEnabled && (
+          {callsEnabled && !huddle.hidden && (
             <FaceActions ptt={IDLE_PTT} blocked={null} roomKey="" ringIds={[]} huddle={huddle} show={["ring"]} size="sm" />
           )}
         </div>
