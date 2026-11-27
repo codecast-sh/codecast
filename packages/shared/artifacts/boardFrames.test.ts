@@ -49,7 +49,7 @@ const inside = (o: Box, i: Box) => i.x >= o.x && i.y >= o.y && i.x + i.w <= o.x 
 /** A theme frame with two stickies and an arrow between them, a sticky outside it with an arrow in, and a frame below. */
 function themeBoard() {
   return board([
-    frame("el_f", 0, 0, 600, 400, { ref: "pri-3", status: "open" }),
+    frame("el_f", 0, 0, 600, 400, { ref: "pri-3" }),
     sticky("el_a", 40, 64),
     sticky("el_b", 300, 64),
     el("el_ab", "connector", { from: "el_a", to: "el_b" }),
@@ -178,11 +178,12 @@ describe("collapse and expand", () => {
     ]);
     const v1 = apply(v0, collapseFrameOps(v0, "el_i"));
     expect([...hiddenKeys(v1)]).toEqual(["el_s1"]);
-    // The outer frame reflowed: pill then s2 in one row, and it shrank to fit.
+    // The outer frame reflowed and, holding a folded frame now, narrowed to the pill: s2 sits under it.
     const o1 = box(v1, "el_o"), i1 = box(v1, "el_i");
     expect(i1).toMatchObject({ x: FRAME_PAD, y: FRAME_PAD + FRAME_TITLE_BAND, h: FRAME_PILL_H });
-    expect(pos(v1, "el_s2")).toEqual({ x: FRAME_PAD + i1.w + FRAME_GAP, y: FRAME_PAD + FRAME_TITLE_BAND });
-    expect(o1.h).toBe(FRAME_PAD + FRAME_TITLE_BAND + 160 + FRAME_PAD);
+    expect(pos(v1, "el_s2")).toEqual({ x: FRAME_PAD, y: FRAME_PAD + FRAME_TITLE_BAND + FRAME_PILL_H + FRAME_GAP });
+    expect(o1.w).toBe(i1.w + 2 * FRAME_PAD);
+    expect(o1.h).toBe(FRAME_PAD + FRAME_TITLE_BAND + FRAME_PILL_H + FRAME_GAP + 160 + FRAME_PAD);
     // The hidden sticky moved with the pill.
     expect(pos(v1, "el_s1")).toEqual({ x: 80, y: 128 });
 
@@ -249,6 +250,37 @@ describe("reflow", () => {
     // The stamp rides its sticky.
     expect(pos(v1, "el_stamp")).toEqual({ x: 120 - 50 + FRAME_PAD, y: 360 - 300 + row });
     expect(box(v1, "el_f")).toEqual({ x: 0, y: 0, w: 600, h: row + 160 + FRAME_GAP + 160 + FRAME_PAD });
+  });
+
+  test("a resolved frame narrows to its card plus padding, and its summary wraps to the card's width", () => {
+    const summary = "**To summarize:** cap each team's monthly spend, alert at eighty percent, and review the caps every quarter";
+    const v0 = board([
+      frame("el_t", 0, 0, 1200, 900),
+      el("el_sum", "text", { x: 40, y: 64, text: summary, size: 16 }),
+      el("el_card", "card", { x: 40, y: 140, w: 320, h: 168, ref: "ct-7" }),
+      frame("el_n", 400, 140, 260, 48, { collapsed: { w: 500, h: 400, holds: ["el_s"] } }),
+      sticky("el_s", 440, 204),
+    ]);
+    const oneLine = box(v0, "el_sum").h;
+    const v1 = apply(v0, reflowFrameOps(v0, "el_t"));
+    expect(box(v1, "el_t").w).toBe(320 + 2 * FRAME_PAD);
+    const sum = box(v1, "el_sum");
+    expect(sum).toMatchObject({ x: FRAME_PAD, y: FRAME_PAD + FRAME_TITLE_BAND, w: 320 });
+    expect(sum.h).toBeGreaterThan(oneLine);
+    // No stored height: elementBox measures the taller one from the new width.
+    expect(v1.get("el_sum")!.h).toBeUndefined();
+    // The card, then the pill under it, each inside the narrow frame; the frame is as tall as they are.
+    const card = box(v1, "el_card"), pill = box(v1, "el_n");
+    expect(card).toMatchObject({ x: FRAME_PAD, y: sum.y + sum.h + FRAME_GAP });
+    expect(pill).toMatchObject({ x: FRAME_PAD, y: card.y + card.h + FRAME_GAP });
+    expect(box(v1, "el_t").h).toBe(pill.y + pill.h + FRAME_PAD);
+    // Reflowing again changes nothing.
+    expect(reflowFrameOps(v1, "el_t")).toEqual([]);
+  });
+
+  test("an open frame keeps today's width rule: never narrower than it was", () => {
+    const v0 = board([frame("el_t", 0, 0, 1200, 900), el("el_card", "card", { x: 40, y: 140, w: 320, h: 168, ref: "ct-7" })]);
+    expect(box(apply(v0, reflowFrameOps(v0, "el_t")), "el_t").w).toBe(1200);
   });
 
   test("a frame too narrow for a child widens to hold it", () => {
@@ -447,15 +479,15 @@ describe("organize", () => {
 });
 
 describe("describe", () => {
-  test("frame lines carry ref, status and collapsed; hidden elements list under their frame", () => {
+  test("frame lines carry ref and collapsed; hidden elements list under their frame", () => {
     const v0 = themeBoard();
     const open = describeBoard(v0);
-    expect(open).toContain(`el_f  frame  "el_f"  0,0 600x400  ref pri-3  status open  holds el_a el_b`);
+    expect(open).toContain(`el_f  frame  "el_f"  0,0 600x400  ref pri-3  holds el_a el_b`);
     const v1 = apply(v0, collapseFrameOps(v0, "el_f"));
     const lines = describeBoard(v1).split("\n");
     const at = lines.findIndex((l) => l.startsWith("el_f  frame"));
     // The count is the pill's: two stickies, the arrow between them aside.
-    expect(lines[at]).toMatch(/ref pri-3  status open  collapsed \(2\)$/);
+    expect(lines[at]).toMatch(/ref pri-3  collapsed \(2\)$/);
     const held = lines.slice(at + 1, at + 4);
     expect(held.every((l) => l.startsWith("  "))).toBe(true);
     expect(held.map((l) => l.trim().split(/\s+/)[0]).sort()).toEqual(["el_a", "el_ab", "el_b"]);

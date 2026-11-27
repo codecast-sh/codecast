@@ -51,7 +51,6 @@ import {
   organizeOps,
   personTouched,
   reflowFrameOps,
-  FRAME_STATUSES,
 } from "./boardFrames";
 import { boardArtFor } from "./boardArt";
 
@@ -234,7 +233,7 @@ const matrix: ArtifactVerb = {
 
 const edit: ArtifactVerb = {
   summary: "Change an element's words (and illustration or color) in place; its key and arrows stay",
-  usage: "edit <doc> <key> [text | more lines] [--icon name|emoji|none] [--color c]   frames also: [--status open|leaning|decided|parked|none] [--ref pri-N|in-N|pl-N|ct-N|none]",
+  usage: "edit <doc> <key> [text | more lines] [--icon name|emoji|none] [--color c]   frames also: [--ref pri-N|in-N|pl-N|ct-N|none]",
   run(view, args) {
     const { pos, flags } = parseVerbArgs(args);
     const [el] = requireKeys(view, pos.slice(0, 1));
@@ -252,22 +251,18 @@ const edit: ArtifactVerb = {
       if (!(BOARD_COLORS as readonly string[]).includes(color)) throw new Error(`colors: ${BOARD_COLORS.join(", ")}`);
       set.color = color;
     }
-    const status = str(flags.status);
     const refFlag = str(flags.ref);
-    if (status || refFlag) {
-      if (el.kind !== "frame") throw new Error("--status and --ref are a frame's");
-      if (status && status !== "none" && !(FRAME_STATUSES as readonly string[]).includes(status)) throw new Error(`--status is ${FRAME_STATUSES.join(", ")} or none`);
-      const nextStatus = status === "none" ? null : status;
-      const nextRef = refFlag === "none" ? null : refFlag ? frameRefArg(refFlag, "--ref")! : undefined;
+    if (refFlag) {
+      if (el.kind !== "frame") throw new Error("--ref is a frame's");
+      const nextRef = refFlag === "none" ? null : frameRefArg(refFlag, "--ref")!;
       // Only what changes; the title stays unless new words are given (a frame with none takes the id).
-      if (status && nextStatus !== (el.status ?? null)) set.status = nextStatus;
-      if (nextRef !== undefined && nextRef !== (el.ref ?? null)) {
+      if (nextRef !== (el.ref ?? null)) {
         set.ref = nextRef;
         if (nextRef && !words && !(typeof el.title === "string" && el.title.trim())) set.title = nextRef;
       }
-      if (!Object.keys(set).length) return { ops: [], status: `${el.key} already has that ${status ? "status" : "ref"}: nothing to write` };
+      if (!Object.keys(set).length) return { ops: [], status: `${el.key} already has that ref: nothing to write` };
     }
-    if (!Object.keys(set).length) throw new Error("say what to change: new words, --icon or --color (frames: --status, --ref)");
+    if (!Object.keys(set).length) throw new Error("say what to change: new words, --icon or --color (frames: --ref)");
     if (el.kind === "sticky") {
       const b = elementBox(el);
       const text = String(set.text ?? el.text ?? "");
@@ -425,7 +420,7 @@ const move: ArtifactVerb = {
 
 const frame: ArtifactVerb = {
   summary: "Wrap elements in a titled frame (a section), optionally about a codecast object and folded at once",
-  usage: "frame <doc> \"<title>\" <keys...> [--ref pri-N|in-N|pl-N|ct-N] [--status open|leaning|decided|parked] [--collapse] [--pad 40] [--color blue]   (or --title \"<title>\" <keys...>; with --ref the title may be left out and is the id)",
+  usage: "frame <doc> \"<title>\" <keys...> [--ref pri-N|in-N|pl-N|ct-N] [--collapse] [--pad 40] [--color blue]   (or --title \"<title>\" <keys...>; with --ref the title may be left out and is the id)",
   run(view, args, _stdin, ctx) {
     const { pos, flags } = parseVerbArgs(args, ["collapse"]);
     const ref = frameRefArg(flags.ref, "--ref");
@@ -433,14 +428,11 @@ const frame: ArtifactVerb = {
     if (ref && !str(flags.title) && pos[0] && !view.get(pos[0]) && /^[a-z]+_[a-z0-9]+$/.test(pos[0])) throw new Error(`no element ${pos[0]} on this board`);
     const [title, ...keys] = str(flags.title) ? [str(flags.title)!, ...pos] : ref && pos[0] && view.get(pos[0]) ? [ref, ...pos] : pos;
     if (!title) throw new Error("give the frame a title");
-    const status = str(flags.status);
-    if (status && !(FRAME_STATUSES as readonly string[]).includes(status)) throw new Error(`--status is ${FRAME_STATUSES.join(", ")}`);
     const els = requireKeys(view, keys);
     const op = frameAround(els.map(elementBox), title, bottomZ(view), count(flags.pad, "--pad", 40))!;
     if ("put" in op) {
       if (str(flags.color)) op.put.color = str(flags.color)!;
       if (ref) op.put.ref = ref;
-      if (status) op.put.status = status;
     }
     if (!flags.collapse) return done([op], [op.k], `framed ${els.length} as "${title}"`, view, els.map(elementBox));
     // Framed and folded in one batch: fold the new frame as if it were already there.
