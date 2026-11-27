@@ -285,6 +285,19 @@ describe("latestTurnStartTs", () => {
     expect(latestTurnStartTs([{ role: "assistant", timestamp: T }])).toBeNull();
     expect(latestTurnStartTs([])).toBeNull();
   });
+  test("an idle compaction's summary starts no turn, so the pin before it still speaks (ct-102518)", () => {
+    const sid = "idle-compaction-keeps-pin";
+    const now = Date.now();
+    markTurnStarted(sid, now - 600_000);
+    const pin = { at: now - 300_000, status: "dormant" as const };
+    // What an idle compaction syncs into a parked session: the summary (a user-role line nobody delivered) and its notice.
+    const batch = [
+      { role: "user", timestamp: now - 60_000, content: "This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\nSummary: …" },
+      { role: "system", timestamp: now - 58_000, content: "Compacted while idle, before the prompt cache expired" },
+    ];
+    expect(latestTurnStartTs(batch)).toBeNull();
+    expect(declaredSettleVerdict(sid, now, undefined, pin)).toBe("dormant");
+  });
 });
 
 describe("markTurnStarted + declaredSettleVerdict", () => {
@@ -578,6 +591,15 @@ describe("transcriptTailTurnStartTs", () => {
     const tail =
       line({ type: "user", sessionId: "s1", timestamp: T1, message: { role: "user", content: "go" } }) +
       line({ type: "user", sessionId: "s1", timestamp: T2, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "ok" }] } });
+    expect(transcriptTailTurnStartTs(tail, "s1")).toBe(Date.parse(T1));
+  });
+
+  test("a compaction's summary is no turn start: the turn before it is still the newest", () => {
+    const tail =
+      line({ type: "user", sessionId: "s1", timestamp: T1, message: { role: "user", content: "ship it" } }) +
+      line({ type: "system", subtype: "compact_boundary", sessionId: "s1", timestamp: T2, content: "Conversation compacted" }) +
+      line({ type: "user", isCompactSummary: true, sessionId: "s1", timestamp: T2, message: { role: "user", content: "This session is being continued from a previous conversation that ran out of context." } }) +
+      line({ type: "system", subtype: "informational", sessionId: "s1", timestamp: T2, content: "Compacted while idle, before the prompt cache expired" });
     expect(transcriptTailTurnStartTs(tail, "s1")).toBe(Date.parse(T1));
   });
 

@@ -40,8 +40,9 @@ describe("pull request repository case", () => {
     }));
     const newest = await (getPRsForTimeline as any)._handler(context({ pull_requests }), { limit: 3 });
     expect(newest.map((r: any) => r._id)).toEqual(["pr_7", "pr_6", "pr_5"]);
+    // One repository's answer keeps every open PR past the limit (the Deploys page lists each one).
     const inRepo = await (getPRsForTimeline as any)._handler(context({ pull_requests }), { repository: "codecast-sh/codecast", limit: 2 });
-    expect(inRepo.map((r: any) => r._id)).toEqual(["pr_6", "pr_4"]);
+    expect(inRepo.map((r: any) => r._id)).toEqual(["pr_6", "pr_4", "pr_2", "pr_0"]);
   });
 
   test("a repository reads only its own rows, not the team's other repositories", async () => {
