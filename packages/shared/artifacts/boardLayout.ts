@@ -199,13 +199,14 @@ export function tidyBoxes(boxes: ReadonlyMap<string, { x: number; y: number; w: 
   const entries = [...boxes.entries()];
   const out = new Map<string, Pt>();
   if (entries.length < 2) return out;
-  // Reading order: rows are boxes whose middles sit within half a box height of the row's first.
+  // Reading order: rows are boxes whose middles, or tops (a tidied row aligns tops), sit within half a box height of the row's first.
   const byY = entries.sort((a, b) => a[1].y + a[1].h / 2 - (b[1].y + b[1].h / 2));
   const rows: (typeof entries)[] = [];
   for (const e of byY) {
     const row = rows[rows.length - 1];
     const mid = e[1].y + e[1].h / 2;
-    if (row && Math.abs(mid - (row[0][1].y + row[0][1].h / 2)) < Math.min(row[0][1].h, e[1].h) / 2) row.push(e);
+    const tol = Math.min(row?.[0][1].h ?? 0, e[1].h) / 2;
+    if (row && (Math.abs(mid - (row[0][1].y + row[0][1].h / 2)) < tol || Math.abs(e[1].y - row[0][1].y) < tol)) row.push(e);
     else rows.push([e]);
   }
   for (const row of rows) row.sort((a, b) => a[1].x - b[1].x);
