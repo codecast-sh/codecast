@@ -26,7 +26,7 @@ async function world() {
   const ids = await t.run(async (ctx: any) => {
     const me = await ctx.db.insert("users", { name: "Ana", push_token: "ExponentPushToken[x]", notifications_enabled: true });
     await ctx.db.insert("api_tokens", { user_id: me, token_hash: await hashToken(TOKEN), name: "cli", created_at: T0, last_used_at: T0 });
-    const team = await ctx.db.insert("teams", { name: "Acme", created_at: T0 });
+    const team = await ctx.db.insert("teams", { name: "Acme", created_at: T0, features: { run_incidents: true } });
     await ctx.db.insert("team_memberships", { user_id: me, team_id: team, role: "member", joined_at: T0 });
     const conv = await ctx.db.insert("conversations", {
       user_id: me, team_id: team, session_id: "sess-fix", agent_type: "claude_code", status: "active", message_count: 1, started_at: T0, updated_at: T0, git_remote_url: "git@github.com:acme/app.git",

@@ -23,9 +23,10 @@ import { createDataContext, createWorkContext } from "./data";
 import { parseWorkspaceKey } from "./lib/accessKeys";
 import { isSameWorkspace } from "./lib/access";
 import { liveRoleByHandle } from "./lib/orgAccess";
+import { workspaceKeyHasFeature } from "./lib/teamFeatureGuard";
 import { siteUrl } from "./lib/siteUrl";
 import { runWorkflowOf } from "./lib/runGraph";
-import { taskByRef } from "./lib/taskGraph";
+import { openUpstream, taskByRef } from "./lib/taskGraph";
 import { commitSignal, heldSignals, normalizeSignal, openCauseOfHeld } from "./signals";
 import { addDepCore, handTask } from "./tasks";
 import { resumeFailedRunCore } from "./failedRunResume";
@@ -79,7 +80,11 @@ export function stopOf(rows: ReadonlyArray<StationRow>, endNodeId: string, graph
   const visited = rows.filter((n) => n.node_id !== endNodeId);
   // A station still running when the run ended is closed as failed with outcome "stopped" (lib/runEnd.ts): it did not fail.
   const failed = visited.filter((n) => n.status === "failed" && n.outcome !== "stopped");
-  const via = end?.type === "exit" ? byId.get(latest(failed.filter((n) => byId.get(n.node_id)?.segment_exit === "stop"))?.node_id ?? "") : undefined;
+  // A resume keeps the failed rows of the stop before it, so an exit step counts only when it is the last station the
+  // run reached before its end: an older one says nothing about a later stop through another station.
+  const exitStep = latest(failed.filter((n) => byId.get(n.node_id)?.segment_exit === "stop"));
+  const lastReached = latest(visited.filter((n) => n.outcome !== "stopped"));
+  const via = end?.type === "exit" && exitStep && exitStep === lastReached ? byId.get(exitStep.node_id) : undefined;
   const resumable = (n: StationRow) => {
     const g = byId.get(n.node_id);
     return !g || (!g.segment_exit && g.type !== "exit" && g.type !== "parallel_fanin" && !g.fold);
@@ -152,8 +157,13 @@ export async function recordRunStop(ctx: any, runId: Id<"workflow_runs">, now: n
   });
   // No judge: a stop joins only the cause holding its exact fingerprint, else it is held (flowstop opens no cause).
   const filed = await commitSignal(ctx, db, run.user_id, signal, null, now);
-  // Held: the stops held under its key open their cause once they come from two changes.
-  const causeId = filed.task_id ?? ((await stopsOfTasks(ctx, await heldSignals(ctx, db.workspaceKey, fingerprint), now)).tasks.size >= 2 ? await openCauseOfHeld(ctx, db, signal, now) : null);
+  // Incidents are behind the workspace's run_incidents flag (Union first): off, the stop stays recorded and its
+  // signal held, and no cause opens, nobody is handed one, no task is blocked.
+  if (!(await workspaceKeyHasFeature(ctx, run.workspace, "run_incidents"))) return null;
+  // Held: the stops held under its key open their cause once they come from two changes. The cause's title is
+  // computed: it reaches @release's session (tasks.announceAssignment), where stop text (station output) must not.
+  const changes = filed.task_id ? 0 : (await stopsOfTasks(ctx, await heldSignals(ctx, db.workspaceKey, fingerprint), now)).tasks.size;
+  const causeId = filed.task_id ?? (changes >= 2 ? await openCauseOfHeld(ctx, db, signal, now, `${exitLabel} on ${changes} changes (${sharedExit})`) : null);
   if (causeId) await openIncidentIfShared(ctx, causeId, now);
   return causeId;
 }
@@ -218,11 +228,17 @@ export async function openIncidentIfShared(ctx: any, causeId: Id<"tasks">, now: 
     const release = await liveRoleByHandle(ctx, cause.team_id ? { team_id: cause.team_id } : { scope_user_id: cause.user_id }, RELEASE_HANDLE);
     if (release) await handTask(ctx, cause, String(release._id), runs[0].user_id, `The same stop on ${tasks.size} changes`, now);
   }
+  // One run's edge never fails the stop (or the close) that got here. A task the cause already waits on (the fix
+  // @release set it blocked by, stopping at the same exit) is the incident's own work, like the cause itself: never
+  // marked, since its edge would close a loop. A graph too large to check marks the runs but adds no edge.
+  const ws = parseWorkspaceKey(cause.workspace);
+  const upstream = ws ? await openUpstream(ctx, cause, ws).catch(() => null) : null;
   for (const run of runs) {
     if (String(run.incident_task_id ?? "") === String(causeId)) continue;
-    await ctx.db.patch(run._id, { incident_task_id: causeId });
     const task: Doc<"tasks"> | null = await ctx.db.get(run.task_id!);
-    if (task && !isTerminalTaskStatus(task.status)) await addDepCore(ctx, run.user_id, { short_id: task.short_id, blocked_by: cause.short_id });
+    if (task && upstream?.has(task.short_id)) continue;
+    await ctx.db.patch(run._id, { incident_task_id: causeId });
+    if (task && upstream && !isTerminalTaskStatus(task.status)) await addDepCore(ctx, run.user_id, { short_id: task.short_id, blocked_by: cause.short_id });
   }
   return true;
 }

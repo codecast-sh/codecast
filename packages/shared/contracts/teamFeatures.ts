@@ -10,7 +10,7 @@
 // the snippet fan-out can never disagree about which features exist or which
 // snippet belongs to which. PURE isomorphic data — no Node or DOM APIs.
 
-export type TeamFeatureKey = "chat" | "calls" | "org" | "changes" | "agent_faces" | "agent_realtime" | "ship" | "line" | "member_spend" | "team_sessions" | "reply_streaming" | "priorities" | "session_owners" | "close_advice" | "priority_classifier" | "voice_speakers" | "composer_suggestions";
+export type TeamFeatureKey = "chat" | "calls" | "org" | "changes" | "agent_faces" | "agent_realtime" | "ship" | "line" | "member_spend" | "team_sessions" | "reply_streaming" | "priorities" | "session_owners" | "close_advice" | "priority_classifier" | "voice_speakers" | "composer_suggestions" | "retire_on_live" | "run_incidents";
 
 export interface TeamFeatureDescriptor {
   key: TeamFeatureKey;
@@ -190,6 +190,22 @@ export const TEAM_FEATURES: TeamFeatureDescriptor[] = [
     inDevelopment: true,
     snippets: [],
     personal: true,
+  },
+  {
+    key: "retire_on_live",
+    name: "Retire sessions once live",
+    desc: "When a deploy goes live, each finished session whose own change it carries everywhere is retired by its machine. In development.",
+    short: "Finished sessions retire once their change is live",
+    inDevelopment: true,
+    snippets: [],
+  },
+  {
+    key: "run_incidents",
+    name: "Shared run incidents",
+    desc: "Runs that stop at the same exit open one incident for @release, which blocks their tasks until it is fixed. In development.",
+    short: "Runs stopped by one cause share an incident",
+    inDevelopment: true,
+    snippets: [],
   },
 ];
 

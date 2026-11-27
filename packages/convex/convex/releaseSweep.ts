@@ -50,7 +50,7 @@ const FAILED_RUNS_READ = 100;
 /** Late commits counted per target, read LATE_PAGE to a query: a commit row is at most 1 MiB, so a page stays under 16. */
 export const LATE_COMMITS_READ = 200;
 export const LATE_PAGE = 10;
-/** Newest landed commits read per repository for their sessions. */
+/** Newest landed commits read per repository for their sessions, LATE_PAGE to a query. */
 export const RETIRE_COMMITS_READ = 40;
 /** Sessions judged for retirement in one sweep: each judgment reads its commits, edits and liveness. */
 const RETIRE_SESSIONS_MAX = 12;
@@ -66,7 +66,10 @@ export type LateTarget = { target: string; repository: string; commits: number; 
 export type FailedRun = { run_id: Id<"workflow_runs">; task_short_id: string; flow: string; station: string | null; failed_at: number };
 export type Laggard = { device: Id<"devices">; device_id: string | null; own: boolean; owner_id: Id<"users">; cli_version: string | null; floor: string; floor_set_at: number | null };
 export type Unretired = { conversation_id: Id<"conversations">; short_id: string };
-export type ReleaseSweep = { workspace: string; checked_at: number; incidents: SweepIncident[]; late_targets: LateTarget[]; failed_runs: FailedRun[]; laggards: Laggard[]; unretired: Unretired[] };
+export const SWEEP_KINDS = ["incidents", "late_targets", "failed_runs", "laggards", "unretired"] as const;
+export type SweepKind = (typeof SWEEP_KINDS)[number];
+/** `failed_kinds`: the kinds whose read failed this time, each listed empty, so one kind's failure never fails the rest. */
+export type ReleaseSweep = { workspace: string; checked_at: number; incidents: SweepIncident[]; late_targets: LateTarget[]; failed_runs: FailedRun[]; laggards: Laggard[]; unretired: Unretired[]; failed_kinds: SweepKind[] };
 
 /** A name a sweep may carry (a target, repository, flow, station, device id): identifier characters only, else null. */
 const safeName = (s: string | null | undefined): string | null => (s && /^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$/.test(s) ? s : null);
@@ -187,25 +190,44 @@ async function laggards(ctx: any, workspace: string, viewer: Id<"users">, now: n
   return [...byDevice.values()];
 }
 
-/** The sessions behind one repository's newest landed commits that the viewer may read and that are still in the inbox. */
+type RetirePage = { sessions: Id<"conversations">[]; read: number; cursor: string; done: boolean };
+
+/**
+ * One page of a repository's newest landed commits, newest first: the sessions behind them that the viewer may read
+ * and that are still in the inbox. Paged like lateCommitsPage, since a commit row carries its patches.
+ */
 export const retireCandidates = internalQuery({
-  args: { repository: v.string(), viewer: v.id("users"), now: v.number() },
-  handler: async (ctx, { repository, viewer, now }): Promise<Id<"conversations">[]> => {
-    const commits: Doc<"commits">[] = await ctx.db
+  args: { repository: v.string(), viewer: v.id("users"), now: v.number(), cursor: v.union(v.string(), v.null()) },
+  handler: async (ctx, { repository, viewer, now, cursor }): Promise<RetirePage> => {
+    const page = await ctx.db
       .query("commits")
       .withIndex("by_repository_main", (q) => q.eq("repository", repository).gt("main_at", now - RETIRE_WINDOW_MS))
       .order("desc")
-      .take(RETIRE_COMMITS_READ);
-    const out: Id<"conversations">[] = [];
-    for (const id of new Set(commits.flatMap((c) => (c.conversation_id ? [c.conversation_id] : [])))) {
+      .paginate({ cursor, numItems: LATE_PAGE });
+    const sessions: Id<"conversations">[] = [];
+    for (const id of new Set(page.page.flatMap((c) => (c.conversation_id ? [c.conversation_id] : [])))) {
       const conv: Doc<"conversations"> | null = await ctx.db.get(id);
       // Retired already: the common case, judged for nothing.
       if (!conv || conv.inbox_killed_at) continue;
-      if (await canAccessConversation(ctx, viewer, conv as any)) out.push(id);
+      if (await canAccessConversation(ctx, viewer, conv as any)) sessions.push(id);
     }
-    return out;
+    return { sessions, read: page.page.length, cursor: page.continueCursor, done: page.isDone };
   },
 });
+
+/** The sessions behind one repository's RETIRE_COMMITS_READ newest landed commits, a page per query. */
+async function retireCandidatesOf(ctx: ActionCtx, repository: string, viewer: Id<"users">, now: number): Promise<Id<"conversations">[]> {
+  const out: Id<"conversations">[] = [];
+  let cursor: string | null = null;
+  for (let read = 0; read < RETIRE_COMMITS_READ;) {
+    const page: RetirePage = await ctx.runQuery(internal.releaseSweep.retireCandidates, { repository, viewer, now, cursor });
+    out.push(...page.sessions);
+    read += page.read;
+    if (page.done) break;
+    cursor = page.cursor;
+  }
+  return out;
+}
 
 /** One session judged for retirement: listed when its change is live everywhere and nothing keeps it. */
 export const retireJudge = internalQuery({
@@ -218,7 +240,7 @@ export const retireJudge = internalQuery({
 });
 
 async function unretired(ctx: ActionCtx, scope: SweepScope, now: number): Promise<Unretired[]> {
-  const byRepo: Id<"conversations">[][] = await Promise.all(scope.repositories.map((repository) => ctx.runQuery(internal.releaseSweep.retireCandidates, { repository, viewer: scope.viewer, now })));
+  const byRepo: Id<"conversations">[][] = await Promise.all(scope.repositories.map((repository) => retireCandidatesOf(ctx, repository, scope.viewer, now)));
   const sessions = [...new Set(byRepo.flat())].slice(0, RETIRE_SESSIONS_MAX);
   const judged: Array<Unretired | null> = await Promise.all(sessions.map((conversation_id) => ctx.runQuery(internal.releaseSweep.retireJudge, { workspace: scope.workspace, conversation_id, now })));
   return judged.filter((u): u is Unretired => u !== null);
@@ -263,10 +285,24 @@ export const sweep = action({
   handler: async (ctx, args): Promise<ReleaseSweep> => {
     const now = Date.now();
     const s: SweepScope = await ctx.runQuery(internal.releaseSweep.scope, args);
-    const incidentsP: Promise<SweepIncident[]> = ctx.runQuery(internal.releaseSweep.incidents, { workspace: s.workspace });
-    const failedP: Promise<FailedRun[]> = ctx.runQuery(internal.releaseSweep.failedRunsOf, { workspace: s.workspace, now });
-    const laggardsP: Promise<Laggard[]> = ctx.runQuery(internal.releaseSweep.laggardsOf, { workspace: s.workspace, viewer: s.viewer, now });
-    const [incidents, late_targets, failed_runs, laggards, unretiredRows] = await Promise.all([incidentsP, lateTargets(ctx, s.workspace, now), failedP, laggardsP, unretired(ctx, s, now)]);
-    return { workspace: s.workspace, checked_at: now, incidents, late_targets, failed_runs, laggards, unretired: unretiredRows };
+    const failed = new Set<SweepKind>();
+    // Each kind on its own: one that fails (a read past a limit) is listed empty and named, the others still answer.
+    const kind = async <T>(name: SweepKind, read: () => Promise<T[]>): Promise<T[]> => {
+      try {
+        return await read();
+      } catch (e) {
+        console.error(`[releaseSweep.sweep] ${name} failed: ${e instanceof Error ? e.message : String(e)}`);
+        failed.add(name);
+        return [];
+      }
+    };
+    const [incidents, late_targets, failed_runs, laggards, unretiredRows] = await Promise.all([
+      kind("incidents", (): Promise<SweepIncident[]> => ctx.runQuery(internal.releaseSweep.incidents, { workspace: s.workspace })),
+      kind("late_targets", () => lateTargets(ctx, s.workspace, now)),
+      kind("failed_runs", (): Promise<FailedRun[]> => ctx.runQuery(internal.releaseSweep.failedRunsOf, { workspace: s.workspace, now })),
+      kind("laggards", (): Promise<Laggard[]> => ctx.runQuery(internal.releaseSweep.laggardsOf, { workspace: s.workspace, viewer: s.viewer, now })),
+      kind("unretired", () => unretired(ctx, s, now)),
+    ]);
+    return { workspace: s.workspace, checked_at: now, incidents, late_targets, failed_runs, laggards, unretired: unretiredRows, failed_kinds: SWEEP_KINDS.filter((k) => failed.has(k)) };
   },
 });

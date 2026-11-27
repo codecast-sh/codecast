@@ -18,6 +18,7 @@ import { patchTask } from "./lib/taskWrite";
 import { enqueuePendingMessage } from "./pendingMessages";
 import { settleRunTask } from "./workflow_runs";
 import { askDaemonToRetire } from "./retireOnLive";
+import { workspaceKeyHasFeature } from "./lib/teamFeatureGuard";
 
 /** How far back merges are read for the waiting set and a marker's carries. */
 const MERGE_WINDOW_MS = 90 * DAY;
@@ -368,7 +369,10 @@ async function tellStoppedSession(ctx: any, run: Doc<"workflow_runs">, task: Doc
   const tell = { content: formatSessionMessage("unknown", content, { name: "codecast" }), client_id: `run:${run._id}:live`, from_user_id: run.user_id };
   const told = await stopHeardBy(ctx, run, task);
   const subjectHeard = !!subject && !!told && String(told._id) === String(subject._id);
-  const retiring = subject && !subject.inbox_killed_at ? (await askDaemonToRetire(ctx, subject, now, { workspace, ...(subjectHeard ? { tell } : {}) })) === null : false;
+  // Retiring is behind the team's retire_on_live flag; off, the session that heard the stop is told, as before it.
+  const retiring = subject && !subject.inbox_killed_at && (await workspaceKeyHasFeature(ctx, workspace, "retire_on_live"))
+    ? (await askDaemonToRetire(ctx, subject, now, { workspace, ...(subjectHeard ? { tell } : {}) })) === null
+    : false;
   if (!told || (subjectHeard && retiring)) return;
   // A send refused (a hosted session the run's owner does not own) leaves the run completed all the same.
   await enqueuePendingMessage(ctx, told, run.user_id, { content: tell.content, client_id: tell.client_id }).catch(() => {});

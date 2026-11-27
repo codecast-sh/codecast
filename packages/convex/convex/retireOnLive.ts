@@ -36,6 +36,7 @@ import { classifyNamedWorkState, retireRefusal } from "./conversations";
 import { enqueuePendingMessage } from "./pendingMessages";
 import { extractDaemonCommandConversationId } from "./daemonCommandUtils";
 import { PRESENCE_FRESH_MS } from "./presencePolicy";
+import { workspaceKeyHasFeature } from "./lib/teamFeatureGuard";
 
 /** Sessions one live deploy reads: its range is normally a handful of commits. */
 const SESSIONS_MAX = 25;
@@ -51,8 +52,8 @@ const EDITS_MAX = 4_000;
 const REACH_READS_MAX = 12;
 /** A commit's time is git's, to the second; the edit it holds can be stamped up to a second later. */
 const COMMIT_CLOCK_SLACK_MS = 1_000;
-/** A worktree under the checkout: an edit there names the same repository path below it. */
-const WORKTREE_PREFIX = /^\.(?:codecast|claude)\/worktrees\/[^/]+\//;
+/** A worktree under the checkout: gitignored there, so the daemon's look at the checkout never sees its edits. */
+const WORKTREE_DIR = /^\.(?:codecast|claude)\/worktrees\//;
 /** The system's temporary directories: a scratch file there is nobody's change. */
 const SCRATCH_DIR = /^\/(?:private\/)?(?:tmp|var\/folders)\//;
 
@@ -132,7 +133,7 @@ async function ownWork(ctx: any, conv: Doc<"conversations">): Promise<string | {
 
 /**
  * The repository path an edit names, or null for a file outside the checkout (a scratch file, another repository). An
- * edit names the path it wrote: absolute, under the checkout or a worktree of it.
+ * edit names the path it wrote, usually absolute.
  */
 export function repoPathOf(path: string, gitRoot: string | undefined): string | null {
   let rel = path;
@@ -141,27 +142,34 @@ export function repoPathOf(path: string, gitRoot: string | undefined): string | 
     if (!root || !path.startsWith(root)) return null;
     rel = path.slice(root.length);
   }
-  return rel.replace(/^\.\//, "").replace(WORKTREE_PREFIX, "");
+  return rel.replace(/^\.\//, "");
 }
 
 /**
  * The files the session (or a subagent of its own) changed that no commit of its own on main holds since. An edit
- * outside its checkout (a second repository, a worktree elsewhere) keeps it outright: the daemon checks only the
- * checkout, so nothing would confirm that work landed. A scratch file in a temporary directory is no one's change.
+ * outside its checkout (a second repository, a worktree elsewhere) or in a worktree under it keeps it outright: the
+ * daemon checks only the checkout, where such a worktree is gitignored, so nothing would confirm that work landed. A
+ * scratch file in a temporary directory is no one's change.
  */
 function uncommittedEdits(conv: Doc<"conversations">, lastEdit: Map<string, number>, landed: Doc<"commits">[]): string | null {
   const left: string[] = [];
   const outside: string[] = [];
+  const inWorktree: string[] = [];
   for (const [path, at] of lastEdit) {
     const rel = repoPathOf(path, conv.git_root);
     if (rel == null) {
       if (!SCRATCH_DIR.test(path)) outside.push(path);
       continue;
     }
+    if (WORKTREE_DIR.test(rel)) {
+      inWorktree.push(path);
+      continue;
+    }
     const held = landed.some((c) => c.timestamp + COMMIT_CLOCK_SLACK_MS >= at && (c.files ?? []).some((f) => f.filename === rel));
     if (!held) left.push(rel);
   }
   if (outside.length) return `it wrote outside its checkout: ${outside.slice(0, 3).join(", ")}${outside.length > 3 ? ` and ${outside.length - 3} more` : ""}`;
+  if (inWorktree.length) return `it edited in a worktree: ${inWorktree.slice(0, 3).join(", ")}${inWorktree.length > 3 ? ` and ${inWorktree.length - 3} more` : ""}`;
   return left.length ? `it has changes not on main: ${left.slice(0, 5).join(", ")}${left.length > 5 ? ` and ${left.length - 5} more` : ""}` : null;
 }
 
@@ -247,6 +255,8 @@ export const retireSessionsOnLive = internalMutation({
   handler: async (ctx, args) => {
     const d = await ctx.db.get(args.deploy);
     if (!d || d.status !== "live" || !d.sha || !d.repository) return { sessions: [] };
+    // Behind the deploy's workspace's retire_on_live flag while it proves itself (Union first).
+    if (!(await workspaceKeyHasFeature(ctx, d.workspace, "retire_on_live"))) return { sessions: [] };
     const sessions = await carriedSessions(ctx, d);
     for (const conversation of sessions) await ctx.scheduler.runAfter(0, internal.retireOnLive.retireSessionOnLive, { conversation, workspace: d.workspace });
     return { sessions: sessions.map(String) };

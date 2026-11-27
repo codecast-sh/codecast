@@ -528,10 +528,11 @@ async function openCauseWithHeld(ctx: any, db: WorkDb, seed: CauseSeed & { finge
 /**
  * A cause opened for the signals held under the seed's key, every one of them
  * joining it: flowStops.ts, once the held stops come from two changes. The
- * seed's own signal is one of the held rows already.
+ * seed's own signal is one of the held rows already. `title` names the cause
+ * instead of the seed's title.
  */
-export async function openCauseOfHeld(ctx: any, db: WorkDb, seed: SignalInput, now: number): Promise<Id<"tasks">> {
-  return (await openCauseWithHeld(ctx, db, seed, filedPlacement(null), { now, issueKey: null, split: null, newCause: {}, extra: 0 })).taskId;
+export async function openCauseOfHeld(ctx: any, db: WorkDb, seed: SignalInput, now: number, title?: string): Promise<Id<"tasks">> {
+  return (await openCauseWithHeld(ctx, db, seed, filedPlacement(null), { now, issueKey: null, split: null, newCause: title ? { title } : {}, extra: 0 })).taskId;
 }
 
 /**

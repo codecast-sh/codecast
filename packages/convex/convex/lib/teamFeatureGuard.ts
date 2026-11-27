@@ -60,6 +60,16 @@ export async function workspaceHasFeature(
   return workspaceFeatureEnabled(await userTeams(ctx, scope.user_id), null, key);
 }
 
+/**
+ * Is `key` on in the workspace a row's access key names (`team:<id>` or `user:<id>`)? An unknown key: off. Parsed
+ * here rather than through lib/accessKeys, which reaches modules that import this leaf.
+ */
+export async function workspaceKeyHasFeature(ctx: DbCtx, workspace: string | null | undefined, key: TeamFeatureKey): Promise<boolean> {
+  if (workspace?.startsWith("team:")) return workspaceHasFeature(ctx, { team_id: workspace.slice(5) as Id<"teams"> }, key);
+  if (workspace?.startsWith("user:")) return workspaceHasFeature(ctx, { user_id: workspace.slice(5) as Id<"users"> }, key);
+  return false;
+}
+
 /** Every team the user belongs to (null where a membership outlived its
  *  team). Load once and derive each per-user feature answer from it. */
 export async function userTeams(ctx: DbCtx, userId: Id<"users">): Promise<Array<Doc<"teams"> | null>> {
