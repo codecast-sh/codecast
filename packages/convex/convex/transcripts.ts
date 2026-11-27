@@ -625,7 +625,7 @@ export const addRoute = mutation({
     // Only the claim's holder seats Scribe, and only while the claim is
     // still the call's: an expired claim somebody else re-claimed is lost.
     const scribe = args.role === "scribe";
-    if (scribe && (!t.scribe_claim || String(t.scribe_claim.by) !== String(userId) || t.scribe_claim.at !== args.claim)) {
+    if (scribe && (!t.scribe_claim || t.scribe_claim.removed || String(t.scribe_claim.by) !== String(userId) || t.scribe_claim.at !== args.claim)) {
       throw new Error("This Scribe invite no longer holds: it was withdrawn, or someone else invited Scribe");
     }
     if (t.routes.some((r) => r.kind === args.kind && r.target === args.target)) return;
@@ -685,13 +685,16 @@ export const setAgentFace = mutation({
  *  A claim whose agent never lands stops holding the slot after
  *  SCRIBE_CLAIM_TTL_MS (scribeStatus), so a crashed spawn blocks nobody. */
 export const inviteScribe = mutation({
-  args: { room_key: v.string() },
+  // `auto`: the person's "Invite Scribe to every huddle", not a press. It is
+  // refused once somebody removed Scribe from this call; a person's own
+  // invite brings Scribe back and clears the removal.
+  args: { room_key: v.string(), auto: v.optional(v.boolean()) },
   handler: async (
     ctx,
     args,
   ): Promise<
     | { claimed: true; claim_id: number; transcript_id: Id<"transcripts"> }
-    | { claimed: false; existing: "joining" | "listening" }
+    | { claimed: false; existing: "joining" | "listening" | "removed" }
   > => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
@@ -700,14 +703,17 @@ export const inviteScribe = mutation({
     const now = Date.now();
     const existing = scribeStatus(t, now);
     if (existing !== "absent") return { claimed: false, existing };
+    if (args.auto && t.scribe_claim?.removed) return { claimed: false, existing: "removed" };
     await ctx.db.patch(t._id, { scribe_claim: { by: userId, at: now } });
     return { claimed: true, claim_id: now, transcript_id: t._id };
   },
 });
 
-/** Anyone in the call shows Scribe out: its route and any claim go. With
- *  `claim`, the inviter is only giving back a claim whose agent failed to
- *  start, which leaves alone a Scribe somebody else has since invited. */
+/** Anyone in the call shows Scribe out: its route goes, and the claim
+ *  records the removal, so automatic invites stay out for the rest of the
+ *  call. With `claim`, the inviter is only giving back a claim whose agent
+ *  failed to start, which leaves alone a Scribe somebody else has since
+ *  invited. */
 export const removeScribe = mutation({
   args: { room_key: v.string(), claim: v.optional(v.number()) },
   handler: async (ctx, args) => {
@@ -716,12 +722,12 @@ export const removeScribe = mutation({
     const t = await liveScribeTranscript(ctx, userId, args.room_key);
     if (!t) return;
     if (args.claim !== undefined) {
-      if (t.scribe_claim?.at === args.claim && String(t.scribe_claim.by) === String(userId)) {
+      if (!t.scribe_claim?.removed && t.scribe_claim?.at === args.claim && String(t.scribe_claim.by) === String(userId)) {
         await ctx.db.patch(t._id, { scribe_claim: undefined });
       }
       return;
     }
-    await ctx.db.patch(t._id, { routes: t.routes.filter((r) => r.role !== "scribe"), scribe_claim: undefined });
+    await ctx.db.patch(t._id, { routes: t.routes.filter((r) => r.role !== "scribe"), scribe_claim: { by: userId, at: Date.now(), removed: true } });
     await syncAgentFeeds(ctx, (await ctx.db.get(t._id))!);
   },
 });
@@ -2037,7 +2043,7 @@ export const getLive = query({
       short_id: t.short_id ?? null,
       // Scribe on its way (inviteScribe): who claimed the slot and when.
       // Whether it still holds is judged by the reader's clock (scribeStatus).
-      scribe_claim: t.scribe_claim ? { by: String(t.scribe_claim.by), at: t.scribe_claim.at } : null,
+      scribe_claim: t.scribe_claim ? { by: String(t.scribe_claim.by), at: t.scribe_claim.at, ...(t.scribe_claim.removed ? { removed: true } : {}) } : null,
       tail: segs.reverse().map((s: Doc<"transcript_segments">) => ({
         seq: s.seq,
         speaker_name: s.speaker_name,

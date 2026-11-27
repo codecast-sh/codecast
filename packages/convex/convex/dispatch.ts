@@ -3450,6 +3450,9 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   pinCallBoard: async (ctx, _userId, [roomKey]: [string]) => {
     return await ctx.runMutation!(api.callStage.pinCallBoard, { room_key: roomKey });
   },
+  openCallBoard: async (ctx, _userId, [roomKey]: [string]) => {
+    return await ctx.runMutation!(api.callStage.openCallBoard, { room_key: roomKey });
+  },
   setRoomTranscribeOff: async (ctx, _userId, [roomKey, off]: [string, boolean]) => {
     return await ctx.runMutation!(api.calls.setRoomTranscribeOff, { room_key: roomKey, off: !!off });
   },

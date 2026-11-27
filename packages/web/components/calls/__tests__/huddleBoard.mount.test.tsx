@@ -58,6 +58,9 @@ async function mount(node: React.ReactNode) {
   return { container, root, render: (n: React.ReactNode) => act(() => root.render(n)) };
 }
 const ui = () => useInboxStore.getState().clientState.ui as any;
+const review = () => document.querySelector("[data-switch-review]") as HTMLElement | null;
+const reviewButton = (text: string) => [...review()!.querySelectorAll("button")].find((b) => b.textContent?.trim().startsWith(text)) as HTMLButtonElement;
+const confirmReview = () => act(() => reviewButton("Invite to every huddle").click());
 const button = (c: Element, text: string) => [...c.querySelectorAll("button")].find((b) => b.textContent?.trim() === text) as HTMLButtonElement | undefined;
 
 test("which banner shows: invite while absent, Next time after this person invited, none once both are on", () => {
@@ -85,10 +88,36 @@ test("absent → Invite → Next time → Save writes both settings for that wor
     ["Open huddles on the board", true],
     ["Invite Scribe", true],
   ]);
+  // "Invite Scribe" on starts an agent in every huddle: Save opens the review, and nothing is written until it is confirmed.
   await act(() => button(m.container, "Save")!.click());
+  expect(review()?.getAttribute("data-switch-review")).toBe("Invite Scribe to every huddle");
+  expect(review()!.textContent).toContain("Every huddle in Codecast");
+  expect(review()!.textContent).toContain("Settings › Calls › Huddles");
+  expect(ui().huddleAutoScribe).toBeUndefined();
+  await confirmReview();
+  expect(review()).toBeNull();
   expect(ui().huddleBoardView).toEqual({ [WS]: true });
   expect(ui().huddleAutoScribe).toEqual({ [WS]: true });
   expect(m.container.querySelector("[data-banner]")).toBeNull();
+  await act(() => m.root.unmount());
+});
+
+test("Next time with Invite Scribe unchecked saves on the press; backing out of the review saves nothing", async () => {
+  const m = await mount(<BoardBanner callKey="call-6" workspace={WS} workspaceName="Codecast" scribe={scribeOf("absent")} />);
+  await act(() => button(m.container, "Invite Scribe")!.click());
+  await m.render(<BoardBanner callKey="call-6" workspace={WS} workspaceName="Codecast" scribe={scribeOf("joining")} />);
+  await act(() => button(m.container, "Save")!.click());
+  await act(() => reviewButton("Keep off").click());
+  expect(review()).toBeNull();
+  expect(ui().huddleAutoScribe).toBeUndefined();
+  expect(m.container.querySelector("[data-banner=next]")).not.toBeNull();
+  const boxes = [...m.container.querySelectorAll("[data-banner=next] input[type=checkbox]")] as HTMLInputElement[];
+  await act(() => boxes[1].click());
+  await act(() => button(m.container, "Save")!.click());
+  expect(review()).toBeNull();
+  expect(ui().huddleBoardView).toEqual({ [WS]: true });
+  // Off was already off (absent): nothing to write.
+  expect(ui().huddleAutoScribe).toBeUndefined();
   await act(() => m.root.unmount());
 });
 
@@ -113,10 +142,12 @@ test("the Next time banner is not offered while both settings are already on", a
   await act(() => m.root.unmount());
 });
 
-test("board view puts the call's board on the stage, made through pinCallBoard once per call", async () => {
+test("board view shows the call's board, got once per call, and pins nothing", async () => {
+  const openCallBoard = mock(async () => ({ doc_id: "d1" }));
   const pinCallBoard = mock(async () => ({ doc_id: "d1" }));
-  const real = useInboxStore.getState().pinCallBoard;
-  useInboxStore.setState({ pinCallBoard } as any);
+  const pinToStage = mock(() => {});
+  const real = useInboxStore.getState();
+  useInboxStore.setState({ openCallBoard, pinCallBoard, pinToStage } as any);
   const PinTile = ({ share }: { share: any }) => <div data-test-pin={share.pin.ref}>{share.pin.doc_type}</div>;
   const stage = (
     <StageHostProvider value={{ getRoom: () => null, PinTile }}>
@@ -129,12 +160,14 @@ test("board view puts the call's board on the stage, made through pinCallBoard o
   expect(m.container.querySelector("[data-test-pin]")?.textContent).toBe("board");
   expect(m.container.querySelector("[data-test-banner]")).not.toBeNull();
   await act(() => m.root.unmount());
-  // Back to board view in the same call: the board is known, nothing is pinned again.
+  // Back to board view in the same call: the board is known, nothing is asked again.
   const again = await mount(stage);
   expect(again.container.querySelector("[data-test-pin]")?.getAttribute("data-test-pin")).toBe("doc:d1");
-  expect(pinCallBoard).toHaveBeenCalledTimes(1);
+  expect(openCallBoard).toHaveBeenCalledTimes(1);
+  expect(pinCallBoard).not.toHaveBeenCalled();
+  expect(pinToStage).not.toHaveBeenCalled();
   await act(() => again.root.unmount());
-  useInboxStore.setState({ pinCallBoard: real } as any);
+  useInboxStore.setState({ openCallBoard: real.openCallBoard, pinCallBoard: real.pinCallBoard, pinToStage: real.pinToStage } as any);
 });
 
 test("the header chip: nothing while absent; joining, listening; its menu removes Scribe", async () => {
@@ -169,8 +202,15 @@ test("Settings → Calls writes each workspace's huddle settings under its own k
     select.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
   });
   expect(switchOf("Open huddles on the board").getAttribute("aria-checked")).toBe("false");
+  // On goes through the review; off is one press.
   await act(() => switchOf("Invite Scribe to every huddle").click());
+  expect(ui().huddleAutoScribe).toBeUndefined();
+  expect(review()!.textContent).toContain("Every huddle in Union");
+  await confirmReview();
   expect(ui().huddleAutoScribe).toEqual({ "team:t2": true });
+  await act(() => switchOf("Invite Scribe to every huddle").click());
+  expect(review()).toBeNull();
+  expect(ui().huddleAutoScribe).toEqual({ "team:t2": false });
   expect(ui().huddleBoardView).toEqual({ [WS]: true });
   await act(() => m.root.unmount());
 });

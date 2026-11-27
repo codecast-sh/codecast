@@ -24,6 +24,8 @@ import { WalkieCuesBlock } from "../settings/WalkieCuesBlock";
 import { DeviceRows } from "./DeviceRows";
 import { SelectBox } from "../ui/select-box";
 import { huddleWorkspaceKey, setHuddleSettings, useHuddleSetting } from "../../lib/calls/huddleSettings";
+import { ConsequentialSwitch } from "../consequential/ConsequentialSwitch";
+import { autoScribeLedger } from "../consequential/ledgers";
 
 export function CallSettings({ compact = false }: { compact?: boolean }) {
   // Read straight off the store so a toggle made mid-call (setCamera/setMuted
@@ -174,7 +176,14 @@ export function HuddlesSection({ pad }: { pad?: string }) {
         <Switch checked={boardView} onCheckedChange={(v) => setHuddleSettings(workspace, { huddleBoardView: v })} aria-label="Open huddles on the board" />
       </SettingsRow>
       <SettingsRow label="Invite Scribe to every huddle" description="One Scribe per call." className={pad}>
-        <Switch checked={autoScribe} onCheckedChange={(v) => setHuddleSettings(workspace, { huddleAutoScribe: v })} aria-label="Invite Scribe to every huddle" />
+        {/* An agent on the person's account in every huddle: on goes through the review, off is one press. */}
+        <ConsequentialSwitch
+          on={autoScribe}
+          ledger={autoScribeLedger({ workspace: teams.find((t) => t._id === teamId)?.name ?? "this workspace" })}
+          onTurnOn={() => setHuddleSettings(workspace, { huddleAutoScribe: true })}
+          onTurnOff={() => setHuddleSettings(workspace, { huddleAutoScribe: false })}
+          trigger={({ on, press }) => <Switch checked={on} onCheckedChange={press} aria-label="Invite Scribe to every huddle" />}
+        />
       </SettingsRow>
     </SettingsSection>
   );
