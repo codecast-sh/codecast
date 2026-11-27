@@ -201,7 +201,7 @@ const ShapeView = memo(function ShapeView({ el, editing, onEditInput, onEditDone
   );
 });
 
-const FrameView = memo(function FrameView({ el, editing, onEditInput, onEditDone }: ViewProps) {
+const FrameView = memo(function FrameView({ el, editing, onEditInput, onEditDone, hovered }: ViewProps & { hovered?: boolean }) {
   const title = typeof el.title === "string" ? el.title : "";
   const folded = frameCollapsed(el);
   const actions = useContext(BoardFrameContext);
@@ -225,7 +225,7 @@ const FrameView = memo(function FrameView({ el, editing, onEditInput, onEditDone
     );
   }
   return (
-    <div data-key={el.key} data-frame className="board-el board-frame" style={boxStyle(el, { background: tint(el.color ?? "gray", 7), borderColor: tint(el.color ?? "gray", 34) })}>
+    <div data-key={el.key} data-frame className={`board-el board-frame${hovered ? " is-hovered" : ""}`} style={boxStyle(el, { background: tint(el.color ?? "gray", 7), borderColor: tint(el.color ?? "gray", 34) })}>
       <div className="board-frame-title" data-part="frame-title" style={{ color }}>{label}</div>
       {!editing && <FrameTools el={el} />}
     </div>
@@ -383,7 +383,7 @@ const PageView = memo(function PageView({ el, pageLive, onPageLive }: { el: Boar
 });
 
 /** One element, dispatched by kind. Connectors are drawn by ConnectorView with their ends. */
-export const BoardElementView = memo(function BoardElementView(props: ViewProps & PageLiveProps & { interactive?: boolean }) {
+export const BoardElementView = memo(function BoardElementView(props: ViewProps & PageLiveProps & { interactive?: boolean; /** A frame the pointer is over: its controls show. */ hovered?: boolean }) {
   switch (props.el.kind) {
     case "sticky": return <StickyView {...props} />;
     case "text": return <TextView {...props} />;
