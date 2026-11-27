@@ -34,7 +34,6 @@ export const inboxMarks: MarkDef[] = inbox([
 
   { id: "inbox.blocked", name: "Blocked", meaning: "Sessions stuck on a limit, sign-in or error" },
   { id: "inbox.blocked_workers", name: "Workers blocked", meaning: "Subagent workers are stuck" },
-  { id: "inbox.snoozed", name: "Snoozed", meaning: "Hidden until a time you chose" },
 
   { id: "inbox.spawned", name: "Spawned session", meaning: "A subagent or worker the session above started" },
   { id: "inbox.reports_to", name: "Reports to", meaning: "Its role answers to the one above" },

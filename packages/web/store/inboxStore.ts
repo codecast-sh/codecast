@@ -5192,6 +5192,7 @@ export function visualOrderSessions(
     // (lib/hostedNotice hostedStopOf).
     messagesOf?: (id: string) => readonly any[] | undefined;
     dormantSplit?: DormantSplitNav | null; // The rail's split of Dormant: those rows walk where they draw.
+    focusedId?: string | null; // The open row: a snoozed one walks in Sleeping even under a snoozed parent, as it draws.
   } = {},
 ): InboxSession[] {
   const collapsed = opts.collapsedSections;
@@ -5212,7 +5213,7 @@ export function visualOrderSessions(
   const needs = splitHostedStops(chipped(placed.needsInput), (id) => opts.messagesOf?.(id));
   // The status view's order (questions … working, shipping, dormant split as the rail
   // draws it): the chokepoint's own sections, so the walk and the render agree.
-  const [working, shipping, sleeping] = splitDormantWalk(chipped(placed.working), [...chipped(placed.dormant), ...chipped(snoozedSleepingRows(placed.snoozed))], opts.dormantSplit);
+  const [working, shipping, sleeping] = splitDormantWalk(chipped(placed.working), [...chipped(placed.dormant), ...chipped(snoozedSleepingRows(placed.snoozed, opts.focusedId))], opts.dormantSplit);
   const sections: Array<[InboxSession[], string]> = [
     [chipped(placed.questions), "questions"], [chipped(placed.pinned), "pinned"], [chipped(placed.newSessions), "new"],
     [needs.asks, "needs_input"], [needs.stopped, "hosted_stopped"], [chipped(placed.done), "done"],
@@ -6450,6 +6451,7 @@ function visualOrderOf(state: {
     priorityPlaceOf: mode === "priorities" ? priorityPlaceReader(state) : undefined,
     messagesOf: (id) => state.messages?.[id],
     dormantSplit: mode === "grouped" || mode === "priorities" ? state.dormantSplitNav : null, // the lenses regroup Dormant whole
+    focusedId,
   });
   if (mode === "bucket") {
     const { labelGroups, projectGroups } = groupSessionsForLabelView(base, state.buckets, bucketByConv);

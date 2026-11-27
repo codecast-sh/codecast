@@ -129,7 +129,6 @@ const CASES: Array<[string, Partial<InboxSession>, Props?]> = [
   ["trigger sub row", { _id: "c-trig" }, { subRow: "trigger" }],
   ["stashed", { _id: "c-stashed" }, { variant: "stashed", onRestore: noop, onKill: noop, onClose: undefined, onPin: undefined }],
   ["dismissed", { _id: "c-dismissed" }, { variant: "dismissed", onRestore: noop, onKill: noop, onClose: undefined, onPin: undefined }],
-  ["snoozed", { _id: "c-snoozed", inbox_snoozed_until: Date.UTC(2031, 0, 2, 15, 0) } as Partial<InboxSession>, { variant: "snoozed", onRestore: noop }],
   ["cloud worktree", { _id: "c-cloud", worktree_name: "cloud-d03aaa", worktree_branch: "codecast/cloud-d03aaa", owner_device_id: "cloud-linux", agent_type: "gemini" } as Partial<InboxSession>],
   ["draft", { _id: "c-draft", _hasDraft: true, message_count: 0, last_user_message: undefined }],
   ["pending send", { _id: "c-pending", has_pending: true }],
