@@ -44,16 +44,19 @@ describe("the daemon build id at a commit", () => {
       const at = (sha: string) => daemonBuildIdAt(r.root, sha);
       expect(at(cliOnly)).toBe(at(base));
       expect(at(daemon)).not.toBe(at(base));
-      expect(decideForce(cliOnly, base, at)).toMatchObject({ force: false, reason: expect.stringMatching(/^no force: daemon unchanged/) });
-      expect(decideForce(daemon, cliOnly, at)).toMatchObject({ force: true, reason: expect.stringMatching(/^daemon changed/) });
+      expect(decideForce(cliOnly, { sha: base, floor: "1.0.0" }, at)).toMatchObject({ force: false, reason: expect.stringMatching(/^no force: daemon unchanged/) });
+      expect(decideForce(daemon, { sha: cliOnly, floor: "1.0.1" }, at)).toMatchObject({ force: true, reason: expect.stringMatching(/^daemon changed/) });
     } finally {
       r.cleanup();
     }
     // Real git and tar, five archives: slow on a loaded machine.
   }, 60_000);
 
-  test("forces when the deploy records no release before it", () => {
-    expect(decideForce("a".repeat(40), null, () => { throw new Error("not read"); }).force).toBe(true);
+  test("forces when no deploy of the release the floor names is recorded", () => {
+    const unread = () => { throw new Error("not read"); };
+    expect(decideForce("a".repeat(40), null, unread).force).toBe(true);
+    expect(decideForce("a".repeat(40), { sha: null, floor: "1.1.300" }, unread)).toEqual({ force: true, reason: expect.stringContaining("the floor names (1.1.300)") });
+    expect(decideForce("a".repeat(40), { sha: "a".repeat(40), floor: "1.1.300" }, unread).force).toBe(false);
   });
 });
 
@@ -80,13 +83,16 @@ describe("waiting for the fleet", () => {
 });
 
 describe("the finish", () => {
-  function server(deploy: Record<string, unknown>) {
+  function server(deploy: Record<string, unknown>, o: { forced?: unknown; set?: () => unknown; fleet?: Fleet; laterNote?: string } = {}) {
     const calls: Array<{ path: string; body: any }> = [];
+    let gets = 0;
     const post = async (path: string, body: Record<string, unknown>) => {
       calls.push({ path, body: structuredClone(body) });
-      if (path === "/cli/deploys/get") return { short_id: "dp-9", sha: "b".repeat(40), previous_sha: "a".repeat(40), team_id: "team_1", note: null, ...deploy };
-      if (path === "/cli/team-cli-floor/set") return { team: "Acme", version: body.version, changed: true };
-      if (path === "/cli/team-cli-floor/fleet") return fleet([]);
+      if (path === "/cli/deploys/get") return { short_id: "dp-9", sha: "b".repeat(40), previous_sha: "a".repeat(40), team_id: "team_1", note: null, ...deploy, ...(gets++ && o.laterNote !== undefined ? { note: o.laterNote } : {}) };
+      if (path === "/cli/team-cli-floor/forced") return o.forced !== undefined ? o.forced : { floor: "1.1.305", sha: "a".repeat(40), deploy: "dp-8" };
+      if (path === "/cli/team-cli-floor/set") return o.set ? o.set() : { team: "Acme", version: body.version, changed: true };
+      if (path === "/cli/team-cli-floor/fleet") return o.fleet ?? fleet([]);
+      if (path === "/cli/team-cli-floor/tell-release") return { told: "release" };
       return { short_id: "dp-9", status: "live" };
     };
     return { calls, post };
@@ -96,12 +102,12 @@ describe("the finish", () => {
   test("a daemon change raises the deploy's team floor, waits for the fleet and records both", async () => {
     const s = server({});
     const note = await finishCliRelease({ root: "/x", deploy: "dp-9", version: "1.1.306", waitMs: 0, post: s.post, buildIdAt: ids(true), log: () => {} });
-    expect(s.calls.map((c) => c.path)).toEqual(["/cli/deploys/get", "/cli/team-cli-floor/set", "/cli/team-cli-floor/fleet", "/cli/line/deploy/report"]);
-    expect(s.calls[1]!.body).toEqual({ team_id: "team_1", version: "1.1.306" });
-    expect(note).toContain("daemon changed since aaaaaaaaaa (build old-build -> new-build)");
+    expect(s.calls.map((c) => c.path)).toEqual(["/cli/deploys/get", "/cli/team-cli-floor/forced", "/cli/team-cli-floor/set", "/cli/team-cli-floor/fleet", "/cli/deploys/get", "/cli/line/deploy/report"]);
+    expect(s.calls[2]!.body).toEqual({ team_id: "team_1", version: "1.1.306" });
+    expect(note).toContain("daemon changed since 1.1.305 (aaaaaaaaaa) (build old-build -> new-build)");
     expect(note).toContain("Forced: Acme's floor is now 1.1.306.");
     expect(note).toContain("Fleet on 1.1.306 (Acme): 1 took it, 0 lagging");
-    expect(s.calls[3]!.body).toEqual({ deploy: "dp-9", status: "live", note });
+    expect(s.calls[5]!.body).toEqual({ deploy: "dp-9", status: "live", note });
   });
 
   test("staff running it raise the global floor too, so other teams' machines take a daemon change", async () => {
@@ -126,7 +132,36 @@ describe("the finish", () => {
   test("an unchanged daemon forces nothing and says so on the deploy, after the note it had", async () => {
     const s = server({ note: "Sent by Ana" });
     const note = await finishCliRelease({ root: "/x", deploy: "dp-9", version: "1.1.306", waitMs: 0, post: s.post, buildIdAt: ids(false), log: () => {} });
-    expect(s.calls.map((c) => c.path)).toEqual(["/cli/deploys/get", "/cli/line/deploy/report"]);
-    expect(note).toBe("Sent by Ana\n\nRelease 1.1.306: no force: daemon unchanged since aaaaaaaaaa (build old-build)");
+    expect(s.calls.map((c) => c.path)).toEqual(["/cli/deploys/get", "/cli/team-cli-floor/forced", "/cli/deploys/get", "/cli/line/deploy/report"]);
+    expect(note).toBe("Sent by Ana\n\nRelease 1.1.306: no force: daemon unchanged since 1.1.305 (aaaaaaaaaa) (build old-build)");
+  });
+
+  test("a release that skipped its force is made up: the daemon is compared with the release the floor names, not the one before", async () => {
+    // 1.1.305 (a) is the floor; 1.1.306 (b) changed the daemon but was not forced; 1.1.307 (c) leaves it as 1.1.306 had it.
+    const s = server({ sha: "c".repeat(40), previous_sha: "b".repeat(40) });
+    const id = (sha: string) => (sha.startsWith("a") ? "old-build" : "new-build");
+    const note = await finishCliRelease({ root: "/x", deploy: "dp-9", version: "1.1.307", waitMs: 0, post: s.post, buildIdAt: id, log: () => {} });
+    expect(note).toContain("daemon changed since 1.1.305 (aaaaaaaaaa) (build old-build -> new-build)");
+    expect(s.calls.some((c) => c.path === "/cli/team-cli-floor/set")).toBe(true);
+  });
+
+  test("a finish whose runner cannot raise the floor records why, tells @release, and still reports the deploy", async () => {
+    const refusal = "Forcing a team's machines onto a release is held by the team's admins and its Release Captain";
+    const s = server({}, { set: () => { throw new Error(refusal); } });
+    const note = await finishCliRelease({ root: "/x", deploy: "dp-9", version: "1.1.306", waitMs: 0, post: s.post, buildIdAt: ids(true), log: () => {} });
+    expect(note).toContain(`Not forced: ${refusal}`);
+    expect(note).toContain("Told @release.");
+    expect(s.calls.find((c) => c.path === "/cli/team-cli-floor/tell-release")!.body).toEqual({ team_id: "team_1", deploy: "dp-9", version: "1.1.306", not_forced: refusal });
+    expect(s.calls.some((c) => c.path === "/cli/team-cli-floor/fleet")).toBe(false);
+    expect(s.calls.at(-1)!.path).toBe("/cli/line/deploy/report");
+  });
+
+  test("machines still lagging after the wait reach @release once; a note written during the wait is kept", async () => {
+    const s = server({ note: "Sent by Ana" }, { fleet: fleet([device("bo-mac", "1.1.305")]), laterNote: "Sent by Ana\n\nPaused by Bo" });
+    const note = await finishCliRelease({ root: "/x", deploy: "dp-9", version: "1.1.306", waitMs: 0, post: s.post, buildIdAt: ids(true), log: () => {} });
+    const tells = s.calls.filter((c) => c.path === "/cli/team-cli-floor/tell-release");
+    expect(tells.map((c) => c.body)).toEqual([{ team_id: "team_1", deploy: "dp-9", version: "1.1.306" }]);
+    expect(note.startsWith("Sent by Ana\n\nPaused by Bo\n\nRelease 1.1.306:")).toBe(true);
+    expect(note).toContain("Lagging: bo-mac (Bo, 1.1.305)");
   });
 });

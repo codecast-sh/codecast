@@ -36,6 +36,12 @@ export const workflowNodeValidator = v.object({
   card: v.optional(v.string()),
   asker: v.optional(v.string()),
   answerer: v.optional(v.string()),
+  // A run's stop (flowStops.ts): an exit that says the shared pipeline broke, and the segment exit steps and
+  // bookkeeping stations a stop is never resumed at.
+  shared: v.optional(v.boolean()),
+  segment: v.optional(v.string()),
+  segment_exit: v.optional(v.union(v.literal("done"), v.literal("stop"))),
+  fold: v.optional(v.boolean()),
 });
 
 export const workflowEdgeValidator = v.object({

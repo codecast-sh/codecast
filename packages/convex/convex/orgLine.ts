@@ -32,6 +32,7 @@ import { getAuthenticatedUserId } from "./pendingMessages";
 import { accessJudgeFor, canAccessTask } from "./lib/access";
 import { trialProjectOf } from "./lineTrial";
 import { workspaceHasFeature } from "./lib/teamFeatureGuard";
+import { holdsFlowStop } from "@codecast/shared/contracts/signalFingerprint";
 
 // The line (docs/architecture/the-line.md L2, L9). A scope owns one workflow,
 // named by `org_roles.line_workflow_slug`; the sweep below starts that
@@ -80,7 +81,8 @@ export async function rankedCandidates(ctx: Ctx, role: any, limit = Infinity): P
   for (const task of await linePool(ctx, role, assignees)) {
     if (seen.has(String(task._id))) continue;
     seen.add(String(task._id));
-    if (task.status !== "open" || task.workflow_run_id || task.ephemeral) continue;
+    // A run-stop incident handed to the role is @release's to clear, never a hand's fix work (flowStops.ts).
+    if (task.status !== "open" || task.workflow_run_id || task.ephemeral || holdsFlowStop(task.cause?.fingerprints)) continue;
     if (!assignees.has(task.assignee) && !(isReadyCause(task) && !task.assignee)) continue;
     ranked.push({ task, priority: startValue(task) });
   }
@@ -559,10 +561,15 @@ async function planQueuedResumes(ctx: Ctx, now: number, roles: any[], loads: Lin
     if (out.length >= MAX_STARTS_PER_SWEEP) break;
     if (!run.runner_device) continue;
     const role = run.org_role_id ? roles.find((r) => String(r._id) === String(run.org_role_id)) : null;
+    // No line would ever carry out its queue: it resumes now, on its own machine, as `cast workflow resume` would, and
+    // never stands in the queue ahead of runs a line carries out.
+    if (!(await lineCarries(ctx, run, role, featureOn))) {
+      out.push({ run_id: String(run._id), device: run.runner_device });
+      continue;
+    }
     if (run.org_role_id && role?.status !== "active") continue;
     const flow = flowsByTeam.get(String((role ?? run).team_id ?? ""));
     if (flow && !flow.on) continue;
-    if (!(await linesRunIn(ctx, role ?? { team_id: run.team_id, scope_user_id: run.team_id ? undefined : run.user_id }, featureOn))) continue;
     if (!role) {
       if (!out.some((o) => o.device === run.runner_device) && (await slotStillFree(ctx, null, queuedPlace(run)))) out.push({ run_id: String(run._id), device: run.runner_device });
       continue;
@@ -576,14 +583,26 @@ async function planQueuedResumes(ctx: Ctx, now: number, roles: any[], loads: Lin
   return out;
 }
 
+/** Where a queued run's lines would run: its role's workspace, else its own. */
+const queuedScope = (run: any, role: any) => role ?? { team_id: run.team_id, scope_user_id: run.team_id ? undefined : run.user_id };
+
+/** Whether a line carries out a run's queued resume: lines run where the run is, and its role still exists or, for a
+ *  run no role started, its machine offers a line slot for its checkout. */
+async function lineCarries(ctx: Ctx, run: any, role: any, featureOn: Map<string, boolean>): Promise<boolean> {
+  if (!(await linesRunIn(ctx, queuedScope(run, role), featureOn))) return false;
+  return run.org_role_id ? !!role : !!(await lineSlotOf(ctx, null, queuedPlace(run)));
+}
+
 /** A queued run's own machine and checkout; with no role to seat it, counted for the run's owner. */
 const queuedPlace = (run: any): RunPlace => ({ device: run.runner_device, ...(run.org_role_id ? {} : { user: String(run.user_id) }), project_path: run.project_path ?? "" });
 
-/** One planned resume, checked again: still queued, and its machine's slot still free (slotStillFree). */
+/** One planned resume, checked again: still queued, and its machine's slot still free (slotStillFree) where a line
+ *  carries it out; where none would, no slot is counted (planQueuedResumes). */
 export async function resumePlanned(ctx: Ctx, runId: string, now = Date.now()): Promise<string | null> {
   const run = await ctx.db.get(runId);
   const role = run?.org_role_id ? await ctx.db.get(run.org_role_id) : null;
-  if (!run?.resume_queued || !run.runner_device || (run.org_role_id && !role)) return null;
+  if (!run?.resume_queued || !run.runner_device) return null;
+  if (!(await lineCarries(ctx, run, role, new Map()))) return resumeQueuedRun(ctx, run._id, now);
   if (!(await slotStillFree(ctx, role, queuedPlace(run)))) return null;
   return resumeQueuedRun(ctx, run._id, now);
 }
@@ -612,13 +631,19 @@ export async function startPlanned(ctx: Ctx, p: { role_id: string; task_id: stri
   return runId;
 }
 
-// The planned machine's slot, counted from the runs on that machine alone.
-async function slotStillFree(ctx: Ctx, role: any, place: RunPlace): Promise<boolean> {
+// The line slot the planned machine offers for the place's checkout, if it offers one.
+async function lineSlotOf(ctx: Ctx, role: any, place: RunPlace): Promise<{ user: any; device: any; slot: any } | null> {
   const user = place.user ?? (await seatOf(ctx, role)).runner;
   const device = await ctx.db.query("devices").withIndex("by_user_device", (q: any) => q.eq("user_id", user).eq("device_id", place.device)).first();
   const slot = (device?.line_slots ?? []).find((s: any) => place.project_path === s.root || place.project_path.startsWith(`${s.root.replace(/\/+$/, "")}/`));
-  if (!slot) return false;
-  return (await deviceWorking(ctx, place.device, await runsWaitingOnAPerson(ctx, user))) < slotRuns(device, slot);
+  return slot ? { user, device, slot } : null;
+}
+
+// The planned machine's slot, counted from the runs on that machine alone.
+async function slotStillFree(ctx: Ctx, role: any, place: RunPlace): Promise<boolean> {
+  const at = await lineSlotOf(ctx, role, place);
+  if (!at) return false;
+  return (await deviceWorking(ctx, place.device, await runsWaitingOnAPerson(ctx, at.user))) < slotRuns(at.device, at.slot);
 }
 
 /** The pass in one transaction, as the tests drive it; `dry` plans only (orgLine.explain). */

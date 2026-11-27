@@ -23,6 +23,7 @@ import { insertTaskComment } from "./tasks";
 import { causeBrief } from "./goals";
 export { causeBrief };
 import { isPlaced } from "./lib/signalPlacement";
+import { holdsFlowStop } from "@codecast/shared/contracts/signalFingerprint";
 import {
   briefGoalRefs,
   briefReadTargets,
@@ -54,9 +55,9 @@ export function groundRequest(cause: GroundCauseInput, brief: GoalsBrief, now: n
   return { model: STRONG_MODEL, system, prompt, max_tokens: GROUND_MAX_TOKENS, output_schema: groundOutputSchema(groundPlacingProjects(cause, brief), [...briefGoalRefs(brief)]) };
 }
 
-/** An open cause no one has grounded and no run holds. */
+/** An open cause no one has grounded and no run holds. A run-stop incident is @release's, never grounded (flowStops.ts). */
 export function isUngroundedCause(task: Doc<"tasks"> | null): task is Doc<"tasks"> {
-  return !!task && task.source === "signal" && task.status === "open" && !task.readiness && !task.workflow_run_id;
+  return !!task && task.source === "signal" && task.status === "open" && !task.readiness && !task.workflow_run_id && !holdsFlowStop(task.cause?.fingerprints);
 }
 
 /** How far past `limit` a pass reads for causes it can pay for. */

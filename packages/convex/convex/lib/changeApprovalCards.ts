@@ -26,6 +26,7 @@ import { findConversationByAnyRef } from "../conversationSessionLookup";
 import { isCam } from "./changeApprovalRows";
 import { withdrawCore } from "../sessionDecisions";
 import { emitNotification } from "../notificationRouter";
+import { escalateIfWaitedOn } from "./cardWaiters";
 
 export type CardReason = "judged" | "mechanism" | "review" | "unreadable" | "held";
 /** `also`: others asked the same card beside the holder (a workspace's admins, when no one person owns the area). */
@@ -298,6 +299,8 @@ export async function postApprovalCard(ctx: { db: any }, a: {
     project_path: conversation.project_path,
   });
   await syncDecisionInbox(ctx as any, card_id, asked, a.now);
+  // A fix other changes wait on (an incident's cause) is escalated to its people as it is asked.
+  if (a.run?.task_id) await escalateIfWaitedOn(ctx, card_id, a.now);
   return { card_key, card_id };
 }
 

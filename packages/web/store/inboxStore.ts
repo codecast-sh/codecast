@@ -1652,8 +1652,9 @@ export type SessionDecisionItem = {
   holder_key?: string;
   /** A person handed it to a teammate or a role (convex decisionHandoff), with their note; null when nobody did. */
   passed_to?: { by?: string; id: string; kind: "user" | "role"; note?: string } | null;
-  /** Sent up to the owner's manager, else the admins (convex escalateCore): who, why, when, to whom. */
-  escalated?: { at: number; by: string; note: string; to: string[] } | null;
+  /** Sent up to the owner's manager, else the admins (convex escalateCore): who, why, when, to whom. No `by`: codecast
+   *  escalated it because `waiting` changes wait on it (convex lib/cardWaiters.ts). */
+  escalated?: { at: number; by?: string; note: string; to: string[]; waiting?: number } | null;
   /** Whether it sits in the viewer's own queue (convex decisionRowsForViewer). A row the team's line decisions
    *  brought in that is not the viewer's says false; the queue surfaces read inViewerQueue. */
   in_queue?: boolean;

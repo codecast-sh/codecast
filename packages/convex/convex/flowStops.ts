@@ -1,12 +1,16 @@
 // Run-stop incidents. A run its flow stopped (a stop exit, `fail_reason`
-// "Stopped: ...") records the station that failed it and a fingerprint of the
-// stop, and files a flowstop signal through the signal door, so the same stop
-// on many changes reaches one cause task in the workspace. Once that cause
-// holds stops of two runs on two different tasks, it is an incident: it goes
-// to the workspace's @release, every run it holds is marked with it, and each
-// run's task waits on it. When the cause closes, each of those runs that is
-// still stopped is queued to resume at its station (failedRunResume's queue,
-// which the line's sweep carries out).
+// "Stopped: ...") records the station to resume it at. A stop at an exit the
+// flow marks `shared` (the pipeline every change goes through: main red, CI
+// that never reports, a deploy that failed) also records a fingerprint and
+// files a flowstop signal, held while it is the only change stopped that way.
+// Once held or attached stops come from two runs on two different tasks, their
+// cause is an incident: it goes to the workspace's @release, every run it holds
+// is marked with it, and each run's task waits on it. Ground and the line leave
+// it alone (holdsFlowStop). When it closes, each of those runs still stopped by
+// it resumes at its station: queued where a line carries out the queue, else at
+// once on its machine. A stop that says something about the change itself
+// (a rejection, findings, a conflict) is never an incident, however alike its
+// words read across changes.
 import { ConvexError, v } from "convex/values";
 import { internalMutation, query } from "./functions";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -15,7 +19,10 @@ import { createDataContext, createWorkContext } from "./data";
 import { parseWorkspaceKey } from "./lib/accessKeys";
 import { liveRoleByHandle } from "./lib/orgAccess";
 import { siteUrl } from "./lib/siteUrl";
-import { commitSignal, normalizeSignal } from "./signals";
+import { runWorkflowOf } from "./lib/runGraph";
+import { taskByRef } from "./lib/taskGraph";
+import { workspaceHasFeature } from "./lib/teamFeatureGuard";
+import { commitSignal, heldSignals, normalizeSignal, openCauseOfHeld } from "./signals";
 import { addDepCore, handTask } from "./tasks";
 import { resumeFailedRunCore } from "./failedRunResume";
 import { isTerminalTaskStatus } from "@codecast/shared/tasks";
@@ -32,20 +39,40 @@ const WORKSPACE_STOPS_READ = 500;
 /** A run that ended at a stop exit of its graph (runner.ts), not one cancelled or crashed. */
 export const isFlowStop = (failReason: string | undefined): boolean => !!failReason?.startsWith(STOP_PREFIX);
 
+type StationRow = { node_id: string; status: string; outcome?: string; completed_at?: number };
+/** What a stop reads of the run's graph (cli graphPayload.ts); a graph pushed before these were sent has none. */
+type StopNode = { id: string; type?: string; shared?: boolean; segment?: string; segment_exit?: string; fold?: boolean };
+
+const latest = <N extends StationRow>(rows: N[]): N | undefined =>
+  rows.reduce<N | undefined>((best, n) => (!best || (n.completed_at ?? 0) >= (best.completed_at ?? 0) ? n : best), undefined);
+
 /**
- * The station a stop came from: the station that failed last, other than the
- * node the run ended on (the stop exit itself, or the station that ran out of
- * visits), else that node. A flow that routes every failure to one generic
- * exit (Union's `stopped`) still names the station that failed.
+ * Where a run stopped, read against its graph. `shared`: the exit it ended at
+ * is marked shared, or (a flow that routes every segment stop to one generic
+ * exit, as Union's `stopped`) the segment exit step it left by is. `station`:
+ * where a resume starts, the station that failed last, never the end, a
+ * segment's exit step (it only echoes the exit and fails again), an exit, a
+ * fan-in or a bookkeeping station, nor one the run's end closed; else the
+ * segment the stop came out of, from its entry; else the station it reached
+ * last; else the end itself.
  */
-export function stopStationOf(nodes: ReadonlyArray<{ node_id: string; status: string; completed_at?: number }>, endNodeId: string): string {
-  let best: { node_id: string; completed_at?: number } | null = null;
-  for (const n of nodes) {
-    if (n.status !== "failed" || n.node_id === endNodeId) continue;
-    if (!best || (n.completed_at ?? 0) >= (best.completed_at ?? 0)) best = n;
-  }
-  return best?.node_id ?? endNodeId;
+export function stopOf(rows: ReadonlyArray<StationRow>, endNodeId: string, graph: ReadonlyArray<StopNode> = []): { station: string; shared: boolean } {
+  const byId = new Map(graph.map((n) => [n.id, n]));
+  const end = byId.get(endNodeId);
+  const visited = rows.filter((n) => n.node_id !== endNodeId);
+  // A station still running when the run ended is closed as failed with outcome "stopped" (lib/runEnd.ts): it did not fail.
+  const failed = visited.filter((n) => n.status === "failed" && n.outcome !== "stopped");
+  const via = end?.type === "exit" ? byId.get(latest(failed.filter((n) => byId.get(n.node_id)?.segment_exit === "stop"))?.node_id ?? "") : undefined;
+  const resumable = (n: StationRow) => {
+    const g = byId.get(n.node_id);
+    return !g || (!g.segment_exit && g.type !== "exit" && g.type !== "parallel_fanin" && !g.fold);
+  };
+  const station = latest(failed.filter(resumable))?.node_id ?? via?.segment ?? end?.segment ?? latest(visited.filter(resumable))?.node_id ?? endNodeId;
+  return { station, shared: !!end?.shared || !!via?.shared };
 }
+
+/** The station a stop resumes at (stopOf); `cast release sweep` names it for a run that recorded none. */
+export const stopStationOf = (rows: ReadonlyArray<StationRow>, endNodeId: string, graph: ReadonlyArray<StopNode> = []): string => stopOf(rows, endNodeId, graph).station;
 
 const runPath = (runId: Id<"workflow_runs">) => `/workflows/runs/${runId}`;
 
@@ -79,38 +106,39 @@ export async function recordRunStop(ctx: any, runId: Id<"workflow_runs">, now: n
   if (!run || run.status !== "failed" || !isFlowStop(run.fail_reason)) return null;
   const ws = parseWorkspaceKey(run.workspace);
   if (!ws) return null;
-  const station = stopStationOf(run.node_statuses, run.current_node_id ?? "");
-  const wf: Doc<"workflows"> | null = run.workflow_id ? await ctx.db.get(run.workflow_id) : null;
+  const wf: Doc<"workflows"> | null = await runWorkflowOf(ctx, run);
+  const nodes = (wf?.nodes ?? []) as Array<StopNode & { label?: string }>;
+  const { station, shared } = stopOf(run.node_statuses, run.current_node_id ?? "", nodes);
   const flow = wf?.name ?? run.workflow_name ?? "flow";
   const reason = run.fail_reason!.slice(STOP_PREFIX.length).trim();
-  const fingerprint = flowStopFingerprint((await repositoryOfRun(ctx, run)) ?? "", flow, station, reason);
+  // Only a stop of the shared pipeline is keyed: a stop about this change keeps no key a later stop could match.
+  const fingerprint = shared ? flowStopFingerprint((await repositoryOfRun(ctx, run)) ?? "", flow, station, reason) : undefined;
   await ctx.db.patch(run._id, { stop_station: station, stop_fingerprint: fingerprint });
+  if (!fingerprint) return null;
 
   const db = await createDataContext(ctx, ws.type === "team" ? { userId: run.user_id, workspace: "team", team_id: ws.teamId } : { userId: run.user_id, workspace: "personal" });
   if (db.workspaceKey !== run.workspace) return null;
-  const stationLabel = (wf?.nodes as Array<{ id: string; label?: string }> | undefined)?.find((n) => n.id === station)?.label ?? station;
-  const link = `${siteUrl()}${runPath(run._id)}`;
-  // No judge: a stop joins only the cause holding its exact fingerprint, else opens one.
-  const filed = await commitSignal(ctx, db, run.user_id, normalizeSignal({
+  const stationLabel = nodes.find((n) => n.id === station)?.label ?? station;
+  const signal = normalizeSignal({
     source: FLOW_STOP_SOURCE,
     kind: "flowstop",
     fingerprint,
     title: `${wf?.label || flow} stopped at ${stationLabel}: ${reason}`,
     detail_md: reason,
-    evidence_url: link,
+    evidence_url: `${siteUrl()}${runPath(run._id)}`,
     subject: station,
     observed_at: now,
-  }), null, now);
-  if (filed.task_id) await openIncidentIfShared(ctx, filed.task_id, now);
-  return filed.task_id ?? null;
+  });
+  // No judge: a stop joins only the cause holding its exact fingerprint, else it is held (flowstop opens no cause).
+  const filed = await commitSignal(ctx, db, run.user_id, signal, null, now);
+  // Held: the stops held under its key open their cause once they come from two changes.
+  const causeId = filed.task_id ?? ((await stopsOfTasks(ctx, await heldSignals(ctx, db.workspaceKey, fingerprint))).tasks.size >= 2 ? await openCauseOfHeld(ctx, db, signal, now) : null);
+  if (causeId) await openIncidentIfShared(ctx, causeId, now);
+  return causeId;
 }
 
-/**
- * The runs a cause holds that are still stopped by it: each signal's run,
- * failed, whose last stop is the one that signal filed.
- */
-async function stoppedRunsOf(ctx: any, cause: Doc<"tasks">): Promise<Doc<"workflow_runs">[]> {
-  const rows: Doc<"signals">[] = await ctx.db.query("signals").withIndex("by_task", (q: any) => q.eq("task_id", cause._id)).order("desc").take(CAUSE_SIGNALS_READ);
+/** The runs some flowstop signals are about that are still stopped by them (failed, last stop under that signal's key), and their tasks. */
+async function stopsOfTasks(ctx: any, rows: Doc<"signals">[]): Promise<{ runs: Doc<"workflow_runs">[]; tasks: Set<string> }> {
   const runs = new Map<string, Doc<"workflow_runs">>();
   for (const row of rows) {
     if (row.source !== FLOW_STOP_SOURCE) continue;
@@ -119,7 +147,7 @@ async function stoppedRunsOf(ctx: any, cause: Doc<"tasks">): Promise<Doc<"workfl
     const run: Doc<"workflow_runs"> | null = await ctx.db.get(id);
     if (run?.status === "failed" && run.task_id && run.stop_fingerprint === row.fingerprint) runs.set(String(id), run);
   }
-  return [...runs.values()];
+  return { runs: [...runs.values()], tasks: new Set([...runs.values()].map((r) => String(r.task_id))) };
 }
 
 /**
@@ -132,8 +160,8 @@ async function stoppedRunsOf(ctx: any, cause: Doc<"tasks">): Promise<Doc<"workfl
 export async function openIncidentIfShared(ctx: any, causeId: Id<"tasks">, now: number): Promise<boolean> {
   const cause: Doc<"tasks"> | null = await ctx.db.get(causeId);
   if (!cause || isTerminalTaskStatus(cause.status)) return false;
-  const runs = await stoppedRunsOf(ctx, cause);
-  const tasks = new Set(runs.map((r) => String(r.task_id)));
+  const rows: Doc<"signals">[] = await ctx.db.query("signals").withIndex("by_task", (q: any) => q.eq("task_id", cause._id)).order("desc").take(CAUSE_SIGNALS_READ);
+  const { runs, tasks } = await stopsOfTasks(ctx, rows);
   if (tasks.size < 2) return false;
   if (!cause.assignee) {
     const ws = parseWorkspaceKey(cause.workspace);
@@ -149,27 +177,51 @@ export async function openIncidentIfShared(ctx: any, causeId: Id<"tasks">, now: 
   return true;
 }
 
+/** Whether a run marked with an incident is still stopped by it: failed at a stop under one of the cause's keys. */
+const stoppedBy = (run: Doc<"workflow_runs">, cause: Pick<Doc<"tasks">, "cause">) =>
+  run.status === "failed" && isFlowStop(run.fail_reason) && !!run.stop_fingerprint && (cause.cause?.fingerprints ?? []).includes(run.stop_fingerprint);
+
+/** Whether a line carries out the run's queued resume (orgLine.planQueuedResumes): a role's run, where lines run. */
+async function lineResumes(ctx: any, run: Doc<"workflow_runs">): Promise<boolean> {
+  const role: Doc<"org_roles"> | null = run.org_role_id ? await ctx.db.get(run.org_role_id) : null;
+  if (!role) return false;
+  const ws = { team_id: role.team_id ?? null, user_id: role.team_id ? null : (role.scope_user_id ?? null) };
+  return (await workspaceHasFeature(ctx, ws, "line")) && (await workspaceHasFeature(ctx, ws, "org"));
+}
+
 /**
- * A cause closed (taskWaits.releaseDependents): each run it held that is
- * still stopped is queued to resume at the station that stopped it. A run
- * resumed, completed (a later deploy took its change live) or queued since is
- * left as it is, as is one that cannot be resumed from here (no machine, a
- * trial's, its task closed).
+ * A cause closed (taskWaits.releaseDependents; `cause` is its row before the
+ * move). Dropped as another's duplicate, it is not fixed: its runs move to the
+ * cause it duplicates, whose blockers their tasks already took
+ * (taskLinks.dropDuplicate). Else each run it holds that it still stops
+ * resumes at its station: queued for a line's run where a line carries out the
+ * queue, else at once on its machine, as `cast workflow resume --at` does. A
+ * run resumed, completed (a later deploy took its change live), queued since,
+ * or stopped since by something else is left as it is, as is one that cannot
+ * be resumed from here (no machine, a trial's, its task closed).
  */
-export async function resumeIncidentRuns(ctx: any, cause: Pick<Doc<"tasks">, "_id">, now = Date.now()): Promise<Id<"workflow_runs">[]> {
+export async function settleIncidentRuns(ctx: any, cause: Doc<"tasks">, now = Date.now()): Promise<Id<"workflow_runs">[]> {
   const runs: Doc<"workflow_runs">[] = await ctx.db.query("workflow_runs").withIndex("by_incident_status", (q: any) => q.eq("incident_task_id", cause._id).eq("status", "failed")).collect();
-  const queued: Id<"workflow_runs">[] = [];
+  if (!runs.length) return [];
+  const closed: Doc<"tasks"> | null = await ctx.db.get(cause._id);
+  const survivor = closed?.status === "dropped" && closed.duplicate_of ? await taskByRef(ctx, closed.duplicate_of) : null;
+  if (survivor && survivor._id !== cause._id && !isTerminalTaskStatus(survivor.status)) {
+    for (const run of runs) await ctx.db.patch(run._id, { incident_task_id: survivor._id });
+    await openIncidentIfShared(ctx, survivor._id, now);
+    return [];
+  }
+  const resumed: Id<"workflow_runs">[] = [];
   for (const run of runs) {
-    if (run.resume_queued || !run.stop_station || !isFlowStop(run.fail_reason)) continue;
+    if (run.resume_queued || !run.stop_station || !stoppedBy(run, cause)) continue;
     try {
-      await resumeFailedRunCore(ctx, run.user_id, run._id, run.stop_station, { queue: true }, now);
-      queued.push(run._id);
+      await resumeFailedRunCore(ctx, run.user_id, run._id, run.stop_station, { queue: await lineResumes(ctx, run) }, now);
+      resumed.push(run._id);
     } catch (e) {
       // Its refusals come before any write, so the close goes on without it.
       if (!(e instanceof ConvexError)) throw e;
     }
   }
-  return queued;
+  return resumed;
 }
 
 export type FlowStopIncident = {
@@ -183,7 +235,7 @@ export type FlowStopIncident = {
 
 /**
  * The workspace's open incidents: open causes its flowstop signals reached
- * that still hold stopped runs. What `cast release sweep` lists.
+ * that still stop runs marked with them. What `cast release sweep` lists.
  */
 export async function openFlowStopIncidents(ctx: any, workspace: string): Promise<FlowStopIncident[]> {
   const rows: Doc<"signals">[] = await ctx.db
@@ -198,7 +250,8 @@ export async function openFlowStopIncidents(ctx: any, workspace: string): Promis
     seen.add(String(row.task_id));
     const cause: Doc<"tasks"> | null = await ctx.db.get(row.task_id);
     if (!cause || isTerminalTaskStatus(cause.status)) continue;
-    const runs: Doc<"workflow_runs">[] = await ctx.db.query("workflow_runs").withIndex("by_incident_status", (q: any) => q.eq("incident_task_id", cause._id).eq("status", "failed")).collect();
+    const marked: Doc<"workflow_runs">[] = await ctx.db.query("workflow_runs").withIndex("by_incident_status", (q: any) => q.eq("incident_task_id", cause._id).eq("status", "failed")).collect();
+    const runs = marked.filter((r) => stoppedBy(r, cause));
     if (!runs.length) continue;
     out.push({
       task_id: cause._id,

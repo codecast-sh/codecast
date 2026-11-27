@@ -61,6 +61,7 @@ import { invalidImpact } from "@codecast/shared/contracts/decisionImpact";
 import { reopenTaskWaits, scheduleDecisionSettle } from "./taskWaits";
 import { currentDecisions, decisionSuperseded, newLineMemo, type LineMemo } from "./lib/superseded";
 import { endRunFields } from "./lib/runEnd";
+import { escalateIfWaitedOn } from "./lib/cardWaiters";
 import { CARD_GATE_NODE_ID, validateChangeCard, type ChangeCard } from "@codecast/shared/contracts/changeCard";
 import { approvalCardRefusal, approvalStampFor, settleCardApproval } from "./lib/changeApprovalRows";
 import { pinsAskForPass, prioritiesOn, sessionActivity } from "./lib/priorityPassSchedule";
@@ -1306,6 +1307,7 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
     await syncDecisionInbox(ctx, existing._id, given ?? people, now, !!given || (!hears && routed.trial !== "owner"));
     const updated = await ctx.db.get(existing._id);
     if (updated) await refreshHolder(ctx, updated, now);
+    await escalateIfWaitedOn(ctx, existing._id, now);
     return {
       id: existing._id,
       short_id: existing.short_id,
@@ -1375,6 +1377,8 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
   if (areaOwner && woken.length === 0) await noticeAreaOwner(ctx, areaOwner, { question: args.question, short_id, conversation_id: conversation._id }, conversation.user_id);
   if (stack) await joinStack(ctx, stack, { _id: id, stack_id: stack._id, scope_keys: scopeKeys }, now);
   if (!args.workflow_run_id) await followStationCard(ctx, conversation, id, now);
+  // A card on a task others already wait on is escalated as it is asked.
+  if (task) await escalateIfWaitedOn(ctx, id, now);
 
   return {
     id,

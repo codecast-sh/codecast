@@ -18,6 +18,7 @@ function world() {
       { _id: "m1", user_id: ME, team_id: TEAM, role: "admin", joined_at: 1 },
       { _id: "m2", user_id: YOU, team_id: TEAM, role: "member", joined_at: 1 },
     ],
+    repo_sources: [{ _id: "rs1", repository: "codecast-sh/codecast", team_id: TEAM }],
     repo_leases: [],
   };
   const ctx: any = { db: makeFakeDb(tables, { indexes: schemaIndexes(schema as any), strictPatch: true }) };
@@ -173,6 +174,34 @@ describe("repo leases", () => {
     }
     expect(tables.repo_leases).toHaveLength(1);
     expect(tables.repo_leases[0]).toMatchObject({ token: "mine", holder_user_id: ME });
+  });
+
+  test("a named team must work on the repository: a team of one's own is no pass to another's lease, and the refusal names no holder", async () => {
+    const MINE = "teams_mine" as any;
+    const tables: Record<string, any[]> = {
+      team_memberships: [
+        { _id: "m1", user_id: ME, team_id: TEAM, role: "admin", joined_at: 1 },
+        { _id: "m2", user_id: YOU, team_id: MINE, role: "admin", joined_at: 1 },
+      ],
+      repo_sources: [{ _id: "rs1", repository: "codecast-sh/codecast", team_id: TEAM }],
+      // MINE published deploy targets for its own repository only.
+      deploy_targets: [{ _id: "dt1", workspace: `team:${MINE}`, repository: "you/yours", name: "web" }],
+      repo_leases: [],
+    };
+    const ctx: any = { db: makeFakeDb(tables, { indexes: schemaIndexes(schema as any) }) };
+    const call = (user: string, repository: string, op: "take" | "renew", token: string, team_id: any) =>
+      leaseCore(ctx, user as any, { repository, op, token, team_id, holder: user }, NOW);
+    expect(await call(ME, "codecast-sh/codecast", "take", "mine", TEAM)).toMatchObject({ held: true });
+    for (const op of ["take", "renew"] as const) {
+      const refused = await call(YOU, "codecast-sh/codecast", op, "theirs", MINE).then((a) => JSON.stringify(a), (e: Error) => e.message);
+      expect(refused).toBe(`Team ${MINE} cannot lease codecast-sh/codecast: it does not work on it.`);
+    }
+    // A team that is not one's own is refused as before.
+    await expect(call(YOU, "codecast-sh/codecast", "take", "theirs", TEAM)).rejects.toThrow();
+    expect(tables.repo_leases).toHaveLength(1);
+    expect(tables.repo_leases[0]).toMatchObject({ token: "mine", holder_user_id: ME });
+    // The team's own repository (its deploy targets) it leases.
+    expect(await call(YOU, "you/yours", "take", "theirs", MINE)).toMatchObject({ held: true });
   });
 
   test("a run's team_id (routing) grants nothing: only its workspace's team counts", async () => {

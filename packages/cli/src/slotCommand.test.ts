@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { acquireFileSlot } from "./lockFile.js";
 import { listMachineSlots, machineSlotDir } from "./machineSlot.js";
-import { renderSlots } from "./slotCommand.js";
+import { CHILD_GRACE_MS, renderSlots } from "./slotCommand.js";
 import { isolateCodecastDirEachTest } from "./test-helpers/codecastDir.js";
 import { pollUntil } from "./test-helpers/pollUntil.js";
 
@@ -43,6 +43,39 @@ test("the place is held while the command runs and given back when cast takes a 
   // The command heard the signal too, and cast exits as it did (128 + SIGTERM).
   expect(code).toBe(143);
   expect(holders()).toEqual([]);
+}, 90_000);
+
+// The lock's own handler gave the place back on the signal, so a second holder could start while the command was still
+// winding down.
+test("on a signal the place is held until the command has ended", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "slot-wind-"));
+  const ready = path.join(dir, "ready");
+  const ended = path.join(dir, "ended");
+  const p = slotRun("--name", "local_ci", "--", "sh", "-c", `trap 'sleep 1; echo 1 > ${ended}; exit 0' TERM; echo 1 > ${ready}; while :; do sleep 0.1; done`);
+  await pollUntil(() => fs.existsSync(ready), "the command to start", { ms: 40_000 });
+  p.kill("SIGTERM");
+  // The command takes a second to wind down, and holds its place through it.
+  await Bun.sleep(400);
+  expect(fs.existsSync(ended)).toBe(false);
+  expect(listMachineSlots().find((s) => s.name === "local_ci")!.running).toHaveLength(1);
+  expect(await p.exited).toBe(0);
+  // cast ended only after the command did.
+  expect(fs.existsSync(ended)).toBe(true);
+  expect(listMachineSlots().find((s) => s.name === "local_ci")!.running).toEqual([]);
+  fs.rmSync(dir, { recursive: true, force: true });
+}, 90_000);
+
+test("a command that ignores the signal is killed after the grace, and the place freed", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "slot-grace-"));
+  const ready = path.join(dir, "ready");
+  const p = slotRun("--name", "local_ci", "--", "sh", "-c", `trap '' TERM; echo 1 > ${ready}; while :; do sleep 0.1; done`);
+  await pollUntil(() => fs.existsSync(ready), "the command to start", { ms: 40_000 });
+  const at = Date.now();
+  p.kill("SIGTERM");
+  expect(await p.exited).toBe(128 + 9);
+  expect(Date.now() - at).toBeGreaterThanOrEqual(CHILD_GRACE_MS - 500);
+  expect(listMachineSlots().find((s) => s.name === "local_ci")!.running).toEqual([]);
+  fs.rmSync(dir, { recursive: true, force: true });
 }, 90_000);
 
 test("ls shows each slot's load against its cap, its holders and its waiters", () => {

@@ -74,6 +74,12 @@ export function normalizeStopText(text: string): string {
 export const FLOW_STOP_SOURCE = "flow";
 
 /**
+ * A cause holding a stop of the shared pipeline: an incident the workspace's
+ * @release owns, never fix work for Ground or a line (convex flowStops.ts).
+ */
+export const holdsFlowStop = (fingerprints: ReadonlyArray<string> | undefined): boolean => !!fingerprints?.some((f) => f.startsWith("flowstop:"));
+
+/**
  * A run stopped at a station of its flow (workflow_runs.stop_fingerprint): one
  * key per repository, flow, station and stop words, so the same stop on many
  * changes reaches one cause.

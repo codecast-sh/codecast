@@ -39,8 +39,8 @@ async function setGlobal(t: any, version: string) {
   await t.run(async (ctx: any) => ctx.db.insert("system_config", { key: "min_cli_version", value: version, updated_at: 1 }));
 }
 
-/** A role session of `user` in `team`, holding a deploy grant unless `grant` is false. */
-async function roleSession(t: any, user: Id<"users">, team: Id<"teams">, grant = true) {
+/** A role session of `user` in `team`, holding a deploy grant unless `grant` is false; the role's standing session unless `standing` is false (then a session merely filed under the role). */
+async function roleSession(t: any, user: Id<"users">, team: Id<"teams">, grant = true, standing = true) {
   return await t.run(async (ctx: any) => {
     const role = await ctx.db.insert("org_roles", {
       short_id: `or-${Math.random().toString(36).slice(2, 6)}`, scope_type: "team", team_id: team, host_user_id: user, name: "Release Captain", handle: "release",
@@ -52,7 +52,7 @@ async function roleSession(t: any, user: Id<"users">, team: Id<"teams">, grant =
     const session_id = crypto.randomUUID();
     await ctx.db.insert("conversations", {
       user_id: user, agent_type: "claude_code", session_id, short_id: `jx7${Math.random().toString(36).slice(2, 6)}`, started_at: 1, updated_at: 1,
-      message_count: 0, is_private: false, team_id: team, team_visibility: "full", status: "active", standing_role_id: role,
+      message_count: 0, is_private: false, team_id: team, team_visibility: "full", status: "active", ...(standing ? { standing_role_id: role } : { org_role_id: role }),
     } as any);
     return session_id;
   });
@@ -67,6 +67,8 @@ describe("setting a team's floor", () => {
     // The global floor stays platform staff's alone.
     await expect(t.mutation(api.systemConfig.setMinCliVersion, { api_token: tokens.ana, version: "1.1.306" })).rejects.toThrow("Admin access required");
     expect(await t.run(async (ctx: any) => (await ctx.db.get(team)).min_cli_version)).toBe("1.1.305");
+    // Its time, which the release sweep measures a laggard from.
+    expect(await t.run(async (ctx: any) => (await ctx.db.get(team)).min_cli_version_at)).toBeGreaterThan(0);
   });
 
   test("the team's Release Captain sets it from its session; a role without the deploy grant, or another team's, does not", async () => {
@@ -77,6 +79,27 @@ describe("setting a team's floor", () => {
     await expect(t.mutation(api.teamCliFloor.set, { api_token: tokens.bo, team_id: team, version: "1.1.306", from_session: ungranted })).rejects.toThrow(/held by/);
     const elsewhere = await roleSession(t, bo, other);
     await expect(t.mutation(api.teamCliFloor.set, { api_token: tokens.bo, team_id: team, version: "1.1.306", from_session: elsewhere })).rejects.toThrow(/held by/);
+  });
+
+  test("a member's own session filed under the Release Captain is not the Captain: only its standing session speaks for it", async () => {
+    const { t, team, bo, tokens } = await setup();
+    const filed = await roleSession(t, bo, team, true, false);
+    await expect(t.mutation(api.teamCliFloor.set, { api_token: tokens.bo, team_id: team, version: "1.1.305", from_session: filed })).rejects.toThrow(/held by/);
+    await expect(t.query(api.teamCliFloor.fleet, { api_token: tokens.bo, team_id: team, version: "1.1.305", from_session: filed })).rejects.toThrow(/held by/);
+  });
+
+  test("a team admin lowers or clears it; the Release Captain and members cannot", async () => {
+    const { t, team, bo, tokens } = await setup();
+    await t.mutation(api.teamCliFloor.set, { api_token: tokens.ana, team_id: team, version: "1.1.399" });
+    const captain = await roleSession(t, bo, team);
+    await expect(t.mutation(api.teamCliFloor.lower, { api_token: tokens.bo, team_id: team, version: "1.1.305" })).rejects.toThrow(/held by the team's admins/);
+    await expect(t.mutation(api.teamCliFloor.lower, { api_token: tokens.bo, team_id: team, version: "1.1.305", from_session: captain } as any)).rejects.toThrow();
+    expect(await t.mutation(api.teamCliFloor.lower, { api_token: tokens.ana, team_id: team, version: "1.1.305" })).toEqual({ team: "Acme", version: "1.1.305", changed: true });
+    // Lowering never raises: a version above the standing floor changes nothing.
+    expect(await t.mutation(api.teamCliFloor.lower, { api_token: tokens.ana, team_id: team, version: "1.1.400" })).toEqual({ team: "Acme", version: "1.1.305", changed: false });
+    expect(await t.mutation(api.teamCliFloor.lower, { api_token: tokens.ana, team_id: team })).toEqual({ team: "Acme", version: null, changed: true });
+    expect(await t.run(async (ctx: any) => (await ctx.db.get(team)).min_cli_version ?? null)).toBeNull();
+    expect(await t.query(api.systemConfig.getMinCliVersion, { api_token: tokens.bo })).toBeNull();
   });
 
   test("never lowers: an older release's finish keeps the newer floor", async () => {
@@ -133,5 +156,88 @@ describe("the team's fleet on a release", () => {
     expect(f.offline.map((d: any) => d.label)).toEqual(["bo-laptop"]);
     expect(f.cannot_update.map((d: any) => d.label)).toEqual(["ana-src"]);
     await expect(t.query(api.teamCliFloor.fleet, { api_token: tokens.bo, team_id: team, version: "1.1.305" })).rejects.toThrow(/held by/);
+  });
+
+  test("a machine with automatic update off cannot update itself; it is not lagging", async () => {
+    const { t, team, bo, tokens } = await setup();
+    await t.run(async (ctx: any) => ctx.db.insert("devices", { user_id: bo, device_id: "bo-manual", label: "bo-manual", platform: "darwin", last_seen: Date.now(), cli_version: "1.1.301", settings: { auto_update: false } }));
+    const f: any = await t.query(api.teamCliFloor.fleet, { api_token: tokens.ana, team_id: team, version: "1.1.305" });
+    expect(f.lagging).toEqual([]);
+    expect(f.cannot_update.map((d: any) => d.label)).toEqual(["bo-manual"]);
+  });
+});
+
+/** A cli deploy in the team's workspace, live as `version` at `sha`. */
+async function cliDeploy(t: any, team: Id<"teams">, n: number, version: string, sha: string, status = "live") {
+  return await t.run(async (ctx: any) => {
+    await ctx.db.insert("deploys", { short_id: `dp-${n}`, workspace: `team:${team}`, team_id: team, target: "cli", status, trigger: "outside", source: "cli", event_ids: [], sha, version, created_at: n, ...(status === "live" ? { live_at: n } : {}) } as any);
+    return `dp-${n}`;
+  });
+}
+
+describe("the release a team was last forced onto", () => {
+  test("names the live deploy of the team's effective floor, so a skipped force is compared from there", async () => {
+    const { t, team, tokens } = await setup();
+    await setGlobal(t, "1.1.300");
+    await cliDeploy(t, team, 1, "1.1.300", "a".repeat(40));
+    await cliDeploy(t, team, 2, "1.1.305", "b".repeat(40));
+    await cliDeploy(t, team, 3, "1.1.306", "c".repeat(40));
+    const now = await cliDeploy(t, team, 4, "1.1.307", "d".repeat(40));
+    await t.mutation(api.teamCliFloor.set, { api_token: tokens.ana, team_id: team, version: "1.1.305" });
+    // 1.1.306 skipped its force: the floor still names 1.1.305.
+    expect(await t.query(api.teamCliFloor.forcedRelease, { api_token: tokens.bo, deploy: now })).toEqual({ floor: "1.1.305", sha: "b".repeat(40), deploy: "dp-2" });
+  });
+
+  test("falls back to the global floor's deploy, and names no sha when none is recorded", async () => {
+    const { t, team, tokens } = await setup();
+    await setGlobal(t, "1.1.300");
+    await cliDeploy(t, team, 1, "1.1.300", "a".repeat(40));
+    await t.mutation(api.teamCliFloor.set, { api_token: tokens.ana, team_id: team, version: "1.1.305" });
+    const now = await cliDeploy(t, team, 2, "1.1.306", "c".repeat(40));
+    expect(await t.query(api.teamCliFloor.forcedRelease, { api_token: tokens.bo, deploy: now })).toEqual({ floor: "1.1.300", sha: "a".repeat(40), deploy: "dp-1" });
+    await setGlobal(t, "1.1.200");
+    await t.run(async (ctx: any) => { for (const c of await ctx.db.query("system_config").collect()) if (c.value === "1.1.300") await ctx.db.delete(c._id); });
+    expect(await t.query(api.teamCliFloor.forcedRelease, { api_token: tokens.bo, deploy: now })).toEqual({ floor: "1.1.305", sha: null, deploy: null });
+    expect(await t.query(api.teamCliFloor.forcedRelease, { api_token: tokens.out, deploy: now })).toBeNull();
+  });
+});
+
+describe("telling the team's Release Captain what a finish left undone", () => {
+  /** @release with a reachable standing session (an anchor seated on it, the org feature on). */
+  async function seatRelease(t: any, host: Id<"users">, team: Id<"teams">) {
+    const session_id = await roleSession(t, host, team);
+    return await t.run(async (ctx: any) => {
+      await ctx.db.patch(team, { features: { org: true } } as any);
+      const conv = await ctx.db.query("conversations").withIndex("by_session_id", (q: any) => q.eq("session_id", session_id)).first();
+      const bot = await ctx.db.insert("users", { name: "Release bot", is_bot: true } as any);
+      const anchor = await ctx.db.insert("anchors", { scope_type: "team", team_id: team, host_user_id: host, bot_user_id: bot, status: "active", org_role_id: conv.standing_role_id, conversation_id: conv._id, created_at: 1 } as any);
+      await ctx.db.patch(conv.standing_role_id, { anchor_id: anchor } as any);
+      return conv._id as Id<"conversations">;
+    });
+  }
+  const lines = (t: any, conv: Id<"conversations">) => t.run(async (ctx: any) => (await ctx.db.query("pending_messages").collect()).filter((m: any) => m.conversation_id === conv).map((m: any) => m.content as string));
+
+  test("a refused force reaches @release with the version and why, once", async () => {
+    const { t, team, ana, bo, tokens } = await setup();
+    const seat = await seatRelease(t, ana, team);
+    const args = { api_token: tokens.bo, team_id: team, deploy: "dp-9", version: "1.1.306", not_forced: "Forcing a team's machines onto a release is held by the team's admins" };
+    expect(await t.mutation(api.teamCliFloor.tellRelease, args)).toEqual({ told: "release" });
+    await t.mutation(api.teamCliFloor.tellRelease, args);
+    const told = await lines(t, seat);
+    expect(told).toHaveLength(1);
+    expect(told[0]).toContain("dp-9: release 1.1.306 changed the daemon, but Acme's machines were not forced onto it: Forcing a team's machines");
+    expect(told[0]).toContain("cast force-update 1.1.306 --team Acme");
+    void bo;
+  });
+
+  test("the laggards after the wait reach @release by name and version; none, nothing is said", async () => {
+    const { t, team, ana, bo, out, tokens } = await setup();
+    const seat = await seatRelease(t, ana, team);
+    expect(await t.mutation(api.teamCliFloor.tellRelease, { api_token: tokens.ana, team_id: team, deploy: "dp-9", version: "1.1.306" })).toEqual({ told: null });
+    await t.run(async (ctx: any) => ctx.db.insert("devices", { user_id: bo, device_id: "bo-mac", label: "bo-mac", platform: "darwin", last_seen: Date.now(), cli_version: "1.1.305" }));
+    expect(await t.mutation(api.teamCliFloor.tellRelease, { api_token: tokens.ana, team_id: team, deploy: "dp-9", version: "1.1.306" })).toEqual({ told: "release" });
+    expect((await lines(t, seat)).join("\n")).toContain("dp-9: 1 of Acme's machines are online and still below 1.1.306 after the release's wait: bo-mac (Bo, 1.1.305)");
+    await expect(t.mutation(api.teamCliFloor.tellRelease, { api_token: tokens.out, team_id: team, deploy: "dp-9", version: "1.1.306" })).rejects.toThrow(/member/);
+    void out;
   });
 });
