@@ -39,7 +39,7 @@ const GRAPH_WALK_TIMEOUT = 60_000;
 // arriving sideways cannot hide in the headroom.
 type Ceiling = { ceiling: number; step: number };
 const INDEX_FILES: Ceiling = { ceiling: 400, step: 50 };
-const INDEX_KB: Ceiling = { ceiling: 5000, step: 250 };
+const INDEX_KB: Ceiling = { ceiling: 5250, step: 250 }; // 2026-11-27: main sat at 4999.x; `cast sessions` splitting Dormant (formatter) added ~2 KB
 const DAEMON_FILES: Ceiling = { ceiling: 700, step: 100 };
 
 function expectUnderCeiling(measured: number, what: string, { ceiling, step }: Ceiling) {

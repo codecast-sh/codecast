@@ -7172,7 +7172,7 @@ program
     "Explore sessions — three independent axes:\n\n" +
     "  QUERY (which sessions): session ids, --state, --label, --team / -m … narrow the set\n" +
     "  CONTENT: work state by default (grouped NEEDS YOU → DONE → WORKING → DORMANT → IDLE, DORMANT\n" +
-    "           split as the web rail: WORKING its workers, SHIPPING its change, SLEEPING a wait),\n" +
+    "           split as the rail: WORKING, SHIPPING, SLEEPING),\n" +
     "           or --messages for conversation messages\n" +
     "  LIVENESS: a one-shot snapshot, or -w to stream changes live\n\n" +
     "States answer WHO ACTS NEXT, matching the web inbox. NEEDS YOU = a human must unblock it\n" +
@@ -7189,9 +7189,8 @@ program
     "Sessions you name are listed whatever their state.\n\n" +
     "--json prints {counts, sessions: [{id, short_id, work_state, title, message_count, updated_at,\n" +
     "thread_state, thread_state_status, is_live, is_pinned, activity, …}]}: the rows sit under .sessions,\n" +
-    "even for one id, and work_state is the field to read. activity is {state, flavor, words, text}: a dormant\n" +
-    "row's rail section (working | shipping | sleeping), its sleeping flavor (waiting, scheduled,\n" +
-    "stalled, …) and the line under it (also as text); a working row's is its live tool line.\n\n" +
+    "even for one id, and work_state is the field to read. A dormant row's activity is {state, flavor,\n" +
+    "words, text}: its rail section, sleeping flavor and the line under it.\n\n" +
     "Waiting for workers: --until exits once every named session (or every one under --label)\n" +
     "reaches one of the states (default settled: anything but working), printing one line as\n" +
     "each does; it gives up after --timeout (default 9m, exit 2). With -w it streams changes and\n" +

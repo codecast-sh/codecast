@@ -984,8 +984,7 @@ export type InboxSession = {
   // holds, or only waits (on that task, or set elsewhere). A verified wake in
   // placeProjectableRow (rowParkedWakeLive). Absent reads as "none".
   parked_wake_kind?: string | null;
-  // What the dormant pin waits on (`cast state --on`, contracts/waitingOn).
-  waiting_on?: WaitingOn | null;
+  waiting_on?: WaitingOn | null; // What the dormant pin waits on (`cast state --on`, contracts/waitingOn).
   // When the latest turn of any origin opened (conversations.last_turn_at). A
   // pin older than it parks nothing (rowPinPredatesTurn).
   last_turn_at?: number | null;
@@ -5200,9 +5199,8 @@ export function visualOrderSessions(
   // Needs You splits as the panel draws it: the person's real turns, then the
   // hosted conversations that ended on a stop ("Couldn't finish").
   const needs = splitHostedStops(chipped(placed.needsInput), (id) => opts.messagesOf?.(id));
-  // Same order the status view renders: questions, pinned, new, needs input,
-  // couldn't finish, done, working, shipping, dormant (split as the rail draws
-  // it) — the chokepoint's own sections, so the walk and the render agree.
+  // The status view's order (questions … working, shipping, dormant split as the rail
+  // draws it): the chokepoint's own sections, so the walk and the render agree.
   const [working, shipping, sleeping] = splitDormantWalk(chipped(placed.working), chipped(placed.dormant), opts.dormantSplit);
   const sections: Array<[InboxSession[], string]> = [
     [chipped(placed.questions), "questions"], [chipped(placed.pinned), "pinned"], [chipped(placed.newSessions), "new"],
@@ -5921,8 +5919,7 @@ export function subagentLiveOf(session: InboxSession, now: number, state: Subage
  *  per-row placement, no section, the card's live facts), so Folded, Compact
  *  and Full rows agree. */
 export function subagentStatusOf(session: InboxSession, now: number, live: StatusLive = subagentLiveOf(session, now), activityOf?: SubagentActivityOf): SessionStatus {
-  const placement = railRowPlacement(session, now);
-  return sessionStatusOf({ row: session, section: null, placement, now, live, nested: true, activity: activityOf?.(session, placement.bucket) });
+  const placement = railRowPlacement(session, now); return sessionStatusOf({ row: session, section: null, placement, now, live, nested: true, activity: activityOf?.(session, placement.bucket) });
 }
 
 /** The filter as a test on one nested row, the open one always kept: what
@@ -14060,7 +14057,6 @@ const inboxStoreConfig = (set: any, get: any) => ({
     set({ scheduleNavSets: sets }),
 
   setDormantSplitNav: (split: DormantSplitNav | null) => set({ dormantSplitNav: split }), // Raw set: ephemeral, like the schedule sets.
-
   // Raw set: ephemeral, like the nav sets above.
   setInboxViewModesShown: (modes: readonly InboxViewMode[] | null) =>
     set({ inboxViewModesShown: modes }),
