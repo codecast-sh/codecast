@@ -97,9 +97,15 @@ test("release verification preserves explicit module extensions", () => {
   const { execFileSync } = require("node:child_process");
   const script = readFileSync(join(HERE, "scripts/release.sh"), "utf8");
   const normalize = script.match(/case "\$mod" in .*? esac/)[0];
-  for (const mod of ["notificationRouter", "notificationRouter.js", "appWindows.mjs", "native/notifications.node"]) {
-    const actual = execFileSync("bash", ["-c", `${normalize}; printf '%s' "$f"`], { env: { ...process.env, mod }, encoding: "utf8" });
-    assert.equal(actual, `/${localRequires("main.js").find(f => f === mod || f === `${mod}.js`) ?? mod}`);
+  for (const [mod, expected] of [
+    ["./notificationRouter", "./notificationRouter.js"],
+    ["./notificationRouter.js", "./notificationRouter.js"],
+    ["./appWindows.mjs", "./appWindows.mjs"],
+    ["./native/notifications.node", "./native/notifications.node"],
+    ["../package.json", "../package.json"],
+  ]) {
+    const actual = execFileSync("bash", ["-c", `${normalize}; printf '%s' "$mod"`], { env: { ...process.env, mod }, encoding: "utf8" });
+    assert.equal(actual, expected);
   }
 });
 
