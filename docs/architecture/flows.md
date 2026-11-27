@@ -647,8 +647,10 @@ Only such a stop records a fingerprint and files a held `flowstop` signal
 (convex `flowStops.ts`). Once the same stop holds runs of two different tasks,
 it opens one cause: the workspace's @release holds it, Ground and the line
 leave it alone, and each stopped run's task waits on it. When it closes, each
-run it still stops resumes at the station that failed (never a segment's exit
-step): queued where a line's sweep carries out the queue, else at once on its
+run it still stops resumes at the station its exit names in `resume=` (the
+change flow's pipeline stops name PR: a resume is a new attempt, and Merge
+clears only on that attempt's CI and review), else at the station that failed
+(never a segment's exit step): queued where a line's sweep carries out the queue, else at once on its
 machine. Dropped as another problem's duplicate, its runs wait on that one. A
 stop about the change itself (a rejection, findings, a conflict) is never an
 incident, however alike its words read across changes.

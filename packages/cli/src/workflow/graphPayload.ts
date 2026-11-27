@@ -33,6 +33,7 @@ export function graphNodesPayload(graph: WorkflowGraph) {
     // What the server reads of a stop (convex flowStops.ts): which exits say the shared pipeline broke, and which
     // stations are a segment's exit step or bookkeeping, never the station a run resumes at.
     ...(n.shared ? { shared: true } : {}),
+    ...(n.resume ? { resume: n.resume } : {}),
     ...(n.segment ? { segment: n.segment } : {}),
     ...(n.segment_exit ? { segment_exit: n.segment_exit } : {}),
     ...(n.fold ? { fold: true } : {}),
