@@ -284,7 +284,15 @@ describe("cast line deploy show", () => {
     const text = formatDeploy(base);
     expect(text).not.toContain("pushed");
     expect(text).not.toContain("added");
-    expect(text).toContain("carried 0");
+    // It carried none of the line's fixes, which is no fact worth a line.
+    expect(text).not.toContain("carried");
+  });
+
+  // dp-3559 read "desktop dc7dd63884 … carried 0 / commits 1 929c5d8": its one commit is the range's only one touching desktop.
+  test("its commits say which range they came from and that they touch its target", () => {
+    const text = formatDeploy({ ...base, target: "desktop", sha: "dc7dd638840ff3a1", previous_sha: "e0c6aad7a", commits: [{ sha: "929c5d8d44806d1b", subject: "fix red Desktop CI" }] });
+    expect(text).toContain("1 commit in e0c6aad..dc7dd63 touches desktop\n  929c5d8  fix red Desktop CI");
+    expect(formatDeploy({ ...base, carries: [{ task_short_id: "ct-1", how: "fixed", task_title: "x" }] })).toContain("carried 1\n  ct-1  fixed  x");
   });
 
   test("a long list is cut at twenty", () => {

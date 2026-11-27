@@ -4,6 +4,7 @@
 // a change takes when every station passes. The CLI's pool (`cast flow ls`,
 // `cast flow show`) and the web's (the Flows view, the flow widgets) read
 // flows through this one function. Pure.
+import { LIBRARY_FLOW_GRAPHS } from "./libraryFlowGraphs.generated";
 
 /** The id prefix a segment's stations take inside the graph that uses it (parser.ts SEGMENT_SEP). */
 export const SEGMENT_SEP = "__";
@@ -87,6 +88,22 @@ export function flowGraphAttr(source: string | null | undefined, key: string): s
   return m ? (m[1] ?? m[2] ?? null) : null;
 }
 
+/**
+ * One graph attribute as the flow runs with it, for a reader holding no parser: the source's own, else, for a variant
+ * that leaves it unset, the library flow its `extends` names (cli parser.ts inherit: a variant's graph attributes
+ * override its base's one by one). Codecast's own Change is only `graph [extends="change"]` plus its stations, and it
+ * takes a branch and is a line because the library's Change is. Only a bare name reads the library (the parser reads a
+ * name with `.cast` or a path as a file beside the variant), and a repository file of that name beside it, or a flow
+ * only the team's pool holds, is not known here: then the source's own attributes are all that reads. `extends` and
+ * `serves` are a file's own.
+ */
+export function flowRunAttr(source: string | null | undefined, key: string): string | null {
+  const own = flowGraphAttr(source, key);
+  if (own !== null || key === "extends" || key === "serves") return own;
+  const base = flowGraphAttr(source, "extends");
+  return base && /^[\w-]+$/.test(base) && Object.prototype.hasOwnProperty.call(LIBRARY_FLOW_GRAPHS, base) ? LIBRARY_FLOW_GRAPHS[base][key] ?? null : null;
+}
+
 /** The flows a DOT source composes as segments (`flow="<slug>"` on a node), by slug, each once, for a reader holding no parser. */
 export function flowSegmentSlugs(source: string | null | undefined): string[] {
   const out = new Set<string>();
@@ -100,8 +117,8 @@ export function flowSegmentSlugs(source: string | null | undefined): string[] {
  * for its own change does.
  */
 export function sourceTakesSessionChange(source: string | null | undefined): boolean {
-  if (!/\bbranch\b/.test(flowGraphAttr(source, "takes") ?? "")) return false;
-  return flowGraphAttr(source, "kind") === "line" || /\bflow\s*=\s*"?ship(?:"|[\s,;\]])/.test(source ?? "");
+  if (!/\bbranch\b/.test(flowRunAttr(source, "takes") ?? "")) return false;
+  return flowRunAttr(source, "kind") === "line" || /\bflow\s*=\s*"?ship(?:"|[\s,;\]])/.test(source ?? "");
 }
 
 /** The nodes a source fills with steps it writes in place (`subgraph <node> { ... }`), for a reader holding no parser. */

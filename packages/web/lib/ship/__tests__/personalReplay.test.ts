@@ -372,6 +372,13 @@ describe("the personal run report, as its reports arrive", () => {
     expect(left.href).toBe(`/tasks/${done.task_short_id}`);
   });
 
+  // Pinned after runNodeRows began giving an end its graph type (exit): the report must keep the end the run reached.
+  test("the report keeps the end the run reached: Landed, Rejected", () => {
+    const labels = (r: any) => runPath(end(r) as any, personal)[0].steps.map((s) => s.label);
+    expect(labels(UNVERIFIED).some((l) => l === "Landed" || l === "Deployed, unverified")).toBe(true);
+    expect(labels(REJECTED)).toContain("Rejected");
+  });
+
   test("a red Check reads failed with its note", () => {
     const check = runPath(at(RED, { node: "brief", status: "running" }) as any, personal)[0].steps.find((s) => s.id === "check")!;
     expect(check.state).toBe("failed");

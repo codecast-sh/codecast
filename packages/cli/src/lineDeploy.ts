@@ -113,8 +113,9 @@ export function formatDeploy(d: any): string {
     out.push("", `${label} ${names.length}`, ...names.slice(0, 20).map((n: string) => `  ${n}`));
     if (names.length > 20) out.push(`  … and ${names.length - 20} more`);
   }
-  out.push("", `carried ${d.carries.length}`);
-  for (const c of d.carries) {
+  // The line's fixes it carried, when it carried any: a deploy from outside the line carries none, which says nothing.
+  if (d.carries?.length) out.push("", `carried ${d.carries.length}`);
+  for (const c of d.carries ?? []) {
     const p = d.after?.problems?.find((x: any) => x.task_id === c.task_id);
     out.push(`  ${c.task_short_id ?? c.task_id}  ${c.how}${c.decision_short_id ? ` · ${c.decision_short_id}` : ""}${p ? ` · ${p.findings} after${p.reopened ? ", reopened" : ""}` : ""}  ${c.task_title ?? ""}`);
   }
@@ -122,7 +123,10 @@ export function formatDeploy(d: any): string {
     out.push("", `errors in its window ${d.after.errors.length}`);
     for (const e of d.after.errors) out.push(`  ${e.kind === "new" ? "new " : "back"}  ${e.short_id}  ${e.title}`);
   }
-  if (d.commits?.length) out.push("", `commits ${d.commits.length}`, ...d.commits.slice(0, 20).map((c: any) => `  ${String(c.sha).slice(0, 7)}  ${c.subject}`));
+  // Its commits are the ones after the deploy before it that touch the target (convex deployTargets.ts), so the sha it
+  // sent (main's head) need not be one of them: the line names the range they came from.
+  const range = d.previous_sha && d.sha ? ` in ${String(d.previous_sha).slice(0, 7)}..${String(d.sha).slice(0, 7)}` : "";
+  if (d.commits?.length) out.push("", `${d.commits.length} commit${d.commits.length === 1 ? "" : "s"}${range} touch${d.commits.length === 1 ? "es" : ""} ${d.target}`, ...d.commits.slice(0, 20).map((c: any) => `  ${String(c.sha).slice(0, 7)}  ${c.subject}`));
   return out.join("\n");
 }
 

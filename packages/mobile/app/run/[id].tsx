@@ -168,7 +168,7 @@ export default function RunScreen() {
   const reach = useDeployReach(mergedSha && changePrRef ? `${changePrRef.repository}@${mergedSha}` : null);
   const targets = useMemo<TargetState[]>(() => reachTargets(reach), [reach]);
   const journey = useMemo(() => (run && changeFlow ? journeyOf(changeFlow, run as any, targets, viewer) : null), [run, changeFlow, targets, viewer]);
-  const head = journey && run && changeFlow ? changeHeadline(journey, run as any, changeFlow, { pr: prMerge }) : null;
+  const head = journey && run && changeFlow ? changeHeadline(journey, run as any, changeFlow, { pr: prMerge, targets }) : null;
   const links = journey && run && changeFlow ? changeLinks(run as any, changeFlow, targets, prMerge) : [];
   const newer = run ? [...others].filter((r) => r.created_at > run.created_at).sort((a, b) => b.created_at - a.created_at)[0]?._id ?? null : null;
   // The role whose line started the run holds its merge switch: its page, read only when merge was off.
@@ -464,7 +464,7 @@ function StepRow({ step: s, onOpen, dim }: { step: ReportStep; onOpen: (href: st
     <>
       <FontAwesome name={mark.icon} size={11} color={color} style={styles.stepIcon} />
       <RNView style={{ flex: 1, minWidth: 0 }}>
-        <RNText style={styles.stepLabel} numberOfLines={1}>{s.label}</RNText>
+        <RNText style={styles.stepLabel} numberOfLines={1}>{s.visits ? `${s.label} · ${s.visits} visits` : s.label}</RNText>
         <RNText style={[styles.stepResult, { color: resultColor }]} numberOfLines={3}>{s.result}</RNText>
         {s.note ? <RNText style={styles.stepNote} numberOfLines={2}>{s.note}</RNText> : null}
       </RNView>

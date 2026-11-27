@@ -503,7 +503,8 @@ export type StepState = "done" | "failed" | "live" | "waiting" | "noted" | "noth
 /** Every step is named by its station; `note` says why when the result
  *  needs it (a merge left to a person); `href` is where the result leads:
  *  the session that did the step, or the task when a person finished it. */
-export type ReportStep = { id: string; label: string; state: StepState; result: string; note?: string; href?: string; hrefTitle?: string; at?: number };
+/** `visits`: how many times the run entered the station, when more than once. */
+export type ReportStep = { id: string; label: string; state: StepState; result: string; note?: string; href?: string; hrefTitle?: string; at?: number; visits?: number };
 
 /** `answeredBy` names who answered the run's last gate ("Ashot Petrosian"). */
 export type PathOpts = { answeredBy?: string | null };
@@ -611,7 +612,8 @@ export { scriptLine };
  *  assembled something (the card), folded with `folded`, the stations not reached. */
 export type ReportPhase = { key: LinePhaseKey | "steps"; label: string; steps: ReportStep[]; routine: ReportStep[]; folded: Array<{ id: string; label: string }>; state: StepState | "skipped" };
 
-const isHidden = (r: RunNodeRow) => r.id === "start" || r.id === "exit" || r.type === "start" || r.type === "exit";
+// The end a run reached is a step (Landed, Rejected, Deploy failed): runNodeRows gives it the graph's type, exit.
+const isHidden = (r: RunNodeRow) => r.id === "start" || r.id === "exit" || r.type === "start";
 const reached = (r: RunNodeRow) => r.status !== "pending" || r.current;
 
 /**
@@ -626,7 +628,8 @@ export function runPath(run: ReportRun, workflow?: { nodes?: Array<{ id: string;
   const rows = runNodeRows(run, workflow ?? (line ? SHIPPED_LINE : null)).filter((r) => !isHidden(r));
   if (!line) {
     const own = personalPath(workflow as RunGraph | null, run);
-    const steps = foldLanding(rows.filter((r) => reached(r) || !!own?.shows(r)).map((r) => (own ? own.step(stepOf(r, run, task, opts), r) : stepOf(r, run, task, opts))), labelOf(run, "ship"));
+    const visited = (r: RunNodeRow, s: ReportStep): ReportStep => ((r.visits ?? 0) > 1 ? { ...s, visits: r.visits } : s);
+    const steps = foldLanding(rows.filter((r) => reached(r) || !!own?.shows(r)).map((r) => visited(r, own ? own.step(stepOf(r, run, task, opts), r) : stepOf(r, run, task, opts))), labelOf(run, "ship"));
     return [{ key: "steps", label: "Steps", steps, routine: [], folded: rows.filter((r) => !reached(r)).map((r) => ({ id: r.id, label: r.label })), state: phaseState(steps) }];
   }
   const byPhase = new Map<string, RunNodeRow[]>();

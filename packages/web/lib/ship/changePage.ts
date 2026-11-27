@@ -6,6 +6,7 @@
 // the bar under the track. Pure, with relative imports only: the phone's run page reads a run here too.
 import { SEGMENT_SEP, takesSessionChange, type FlowEdgeIn, type FlowNodeIn } from "@codecast/shared/contracts/flowPool";
 import { entityRoute } from "@codecast/shared/entities";
+import { verdictOnHead } from "@codecast/shared/contracts/deployTargets";
 import { journeyStages, targetsFromLine, withRunDeploys, type Journey, type TargetState } from "./journey";
 import { gateWaitWords, holdWords, journeyWords, sentBackWords, stopTitle, type JourneyTone } from "./journeyWords";
 import { landedSha } from "./runRecord";
@@ -22,6 +23,8 @@ export type ChangeRun = {
   pr?: { number: number; repository: string; head_sha?: string | null } | null;
   ci_verdict?: { green: boolean; ci_changed?: boolean; head_sha?: string | null } | null;
   review_verdict?: { verdict: string; head_sha?: string | null } | null;
+  /** Heads Merge only rebased onto main: a review on `from` holds on `to` (verdictOnHead). */
+  station_rebases?: ReadonlyArray<{ from: string; to: string }> | null;
   merge?: { sha?: string | null; pr_url?: string | null } | null;
   current_node_id?: string | null;
   waiting_on_session?: { node_id: string; conversation_id?: string | null } | null;
@@ -82,10 +85,11 @@ export function currentHead(run: ChangeRun): string | null {
   return null;
 }
 
-/** A verdict only while it is about the head the run is on: one read on an earlier head says nothing about this one. */
-function current<T extends { head_sha?: string | null }>(v: T | null | undefined, head: string | null): T | null {
+/** A verdict only while it is about the head the run is on: one read on an earlier head says nothing about this one.
+ *  A review also holds on a head Merge only rebased it onto (`rebases`, verdictOnHead); CI does not, as it reruns there. */
+function current<T extends { head_sha?: string | null }>(v: T | null | undefined, head: string | null, rebases?: ChangeRun["station_rebases"]): T | null {
   if (!v) return null;
-  return !v.head_sha || !head || v.head_sha === head ? v : null;
+  return !v.head_sha || !head || verdictOnHead(v.head_sha, head, rebases ?? []) ? v : null;
 }
 
 /** The Deploy stage's line that names targets ("Live: 31ccbb8 on web dp-12, cli dp-13."), newest first. */
@@ -111,7 +115,7 @@ const lower = (s: string) => (/^[A-Z][a-z]/.test(s) ? s.charAt(0).toLowerCase() 
 function foundWords(run: ChangeRun, graph: ChangeGraph): string | null {
   const head = currentHead(run);
   const ci = current(run.ci_verdict, head);
-  const review = current(run.review_verdict, head)?.verdict;
+  const review = current(run.review_verdict, head, run.station_rebases)?.verdict;
   const said = [ci && !ci.green ? "CI red" : null, review === "changes" ? "review asked for changes" : review === "rejected" ? "review rejected it" : null].filter(Boolean) as string[];
   if (said.length) return sentence(said.join(", "));
   const route = [...(run.node_statuses ?? [])].filter((n) => n.status === "failed" && ROUTE_ONLY.test(n.result_preview ?? "")).sort(byNewest)[0];
@@ -155,8 +159,38 @@ function stopDetail(run: ChangeRun, graph: ChangeGraph, title: string, landed: b
   return parts.length ? parts.map((p, i) => (i ? lower(p) : p)).join(" · ") : null;
 }
 
+/** The deploys a Deploy stop names as failed (awaitDeploy.ts: "The deploy that carried 929c5d8 failed: desktop dp-3559
+ *  (Stopped at Send.), web dp-12."), by target, each once. */
+function failedDeploys(reason: string | null | undefined): Array<{ target: string; deploy: string }> {
+  const list = reason?.match(/deploy that carried \S+ failed:\s*([\s\S]*)$/)?.[1].replace(/\([^)]*\)/g, "") ?? "";
+  const out = new Map<string, string>();
+  for (const m of list.matchAll(/\b([a-z][a-z0-9-]{0,31}) (dp-\d+)\b/g)) if (!out.has(m[1])) out.set(m[1], m[2]);
+  return [...out].map(([target, deploy]) => ({ target, deploy }));
+}
+
+/**
+ * A change on main whose deploy failed: it is landed, and for each target that deploy failed on, where the change
+ * stands there now from the deploy records (`targets`, deploy reach): live in a later deploy, going out in one, else
+ * that deploy failed and the target's next deploy takes it live (it is on main, so any later deploy of the target
+ * carries it). Without reach, the failed deploys the reason names.
+ */
+function deployFailedWords(run: ChangeRun, targets: ReadonlyArray<TargetState>): string | null {
+  const failed = failedDeploys(run.fail_reason);
+  if (!failed.length) return null;
+  const now = failed.map((f) => ({ ...f, at: targets.find((t) => t.name === f.target) }));
+  const live = now.filter((f) => f.at?.state === "live");
+  const going = now.filter((f) => f.at?.state === "deploying");
+  const waiting = now.filter((f) => f.at?.state !== "live" && f.at?.state !== "deploying");
+  const parts = [
+    ...live.map((f) => `live on ${f.target}${f.at!.deploy ? ` ${f.at!.deploy}` : ""}`),
+    ...going.map((f) => `going out to ${f.target}${f.at!.deploy ? ` in ${f.at!.deploy}` : ""}`),
+    ...(waiting.length ? [`${waiting.map((f) => `${f.target} ${f.deploy}`).join(", ")} failed`, `goes live with the next ${listWords(waiting.map((f) => f.target))} deploy${waiting.length > 1 ? "s" : ""}`] : []),
+  ];
+  return ["Landed", ...parts].join(" · ");
+}
+
 /** The page's headline for a change run: where the change stands now, and what it waits on. */
-export function changeHeadline(j: Journey, run: ChangeRun, graph: ChangeGraph, ctx: { pr?: PrState } = {}): ChangeHeadline {
+export function changeHeadline(j: Journey, run: ChangeRun, graph: ChangeGraph, ctx: { pr?: PrState; targets?: ReadonlyArray<TargetState> } = {}): ChangeHeadline {
   const n = j.now;
   const { tone } = journeyWords(j);
   const head = (words: string, waits: string | null = null, t: JourneyTone = tone): ChangeHeadline => ({ words, waits, tone: t });
@@ -201,7 +235,12 @@ export function changeHeadline(j: Journey, run: ChangeRun, graph: ChangeGraph, c
     case "stopped":
     case "failed": {
       const title = stopTitle(n);
-      return head(title, ctx.pr?.merged && !onMainByRun(run, j) ? "PR merged on GitHub" : stopDetail(run, graph, title, onMainByRun(run, j)));
+      const onMain = onMainByRun(run, j);
+      if (n.fix === "deploy" && onMain) {
+        const words = deployFailedWords(run, ctx.targets ?? []);
+        if (words) return head(title, words);
+      }
+      return head(title, ctx.pr?.merged && !onMain ? "PR merged on GitHub" : stopDetail(run, graph, title, onMain));
     }
   }
 }
@@ -294,9 +333,7 @@ export function reviewOnHead(
   const v = run?.review_verdict;
   const words = v ? REVIEW_WORDS[v.verdict] : undefined;
   if (!v?.head_sha || !head || !words) return null;
-  let at = v.head_sha;
-  for (const r of run?.station_rebases ?? []) if (r.from === at) at = r.to;
-  return at === head || v.head_sha === head ? words : null;
+  return verdictOnHead(v.head_sha, head, run?.station_rebases) ? words : null;
 }
 
 /**
@@ -321,7 +358,7 @@ export function changeLinks(run: ChangeRun, graph: ChangeGraph, targets: Readonl
   if (ciWords && prGithub) out.push({ kind: "ci", label: ciWords.label, tone: ciWords.tone, href: `${prGithub}/checks`, external: true, title: ("title" in ciWords && ciWords.title) || "The checks on the pull request, on GitHub" });
   const review = newestIn(run, stations.review);
   if (review?.session?._id) {
-    const verdict = current(run.review_verdict, head)?.verdict ?? "";
+    const verdict = current(run.review_verdict, head, run.station_rebases)?.verdict ?? "";
     const words = live && review.status === "running" ? { label: "In review", tone: "wait" as const } : REVIEW_WORDS[verdict] ?? { label: "Review", tone: "default" as const };
     out.push({ kind: "review", ...words, href: `/conversation/${review.session._id}`, external: false, title: review.session.title ?? "The reviewer's session" });
   }

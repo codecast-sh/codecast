@@ -15,6 +15,8 @@ import type { CheckoutRow } from "@codecast/shared/contracts/checkouts";
 import { CHANGE_STEPS, ago, byUrgency, openPrs, prState, prStepper, repositoryOfRun, runOwner, runState, shippingRuns, stepper, stepsFor, type CardId, type OpenPr } from "../../lib/deploys/board";
 import { prMatches, runMatches, type DeployFocus } from "../../lib/deploys/focus";
 import { EntityIdPill } from "../EntityIdPill";
+import { usePullRequestRun } from "../../hooks/useSyncWorkflows";
+import { reviewOnHead } from "../../lib/ship/changePage";
 import { RepoTag } from "./RepoFace";
 import { ShipTrack } from "./ShipTrack";
 
@@ -148,9 +150,12 @@ export function DecisionWord({ id, word }: { id: string; word: string }) {
   return <Link href={`/decisions/${id}`} className="dpp-decide" data-deploy-decision={id}>{word}</Link>;
 }
 
-/** An open pull request no run carries: its title opens its page; the stepper reads what GitHub says of it. */
+/** An open pull request no run carries: its title opens its page; the stepper reads what GitHub says of it, and the
+ *  review a codecast run's reviewer gave on its head, as the PR's page does (PRShipStrip). */
 function PrCard({ pr, tagIn, now, focus }: { pr: OpenPr; tagIn: string | null; now: number; focus: DeployFocus | null }) {
-  const state = prState(pr);
+  const run = usePullRequestRun(pr.repository, pr.number);
+  const runVerdict = pr.head_sha && reviewOnHead(run, pr.head_sha) ? run?.review_verdict?.verdict ?? null : null;
+  const state = prState(pr, runVerdict);
   return (
     <li className="dpp-run" id={`pr-${pr.number}`} data-tone={state.tone} data-focus={prMatches(pr, focus) ? "" : undefined} data-deploy-pr={pr.number}>
       <div className="dpp-run-top">
@@ -158,7 +163,7 @@ function PrCard({ pr, tagIn, now, focus }: { pr: OpenPr; tagIn: string | null; n
         <Link className="dpp-run-title" href={`/pr/${pr.repository}/${pr.number}`}>{pr.title}</Link>
         <span className="dpp-age" title={new Date(pr.created_at).toLocaleString()}>opened {ago(now, pr.created_at)}</span>
       </div>
-      <ShipTrack track={CHANGE_STEPS} steps={prStepper(pr)} state={state} />
+      <ShipTrack track={CHANGE_STEPS} steps={prStepper(pr, runVerdict)} state={state} />
       <div className="dpp-refs">
         <EntityIdPill type="pr" id={`${pr.repository}#${pr.number}`} idLabel={`#${pr.number}`} certain compact bare />
         {pr.author_github_username ? <span className="dpp-flowname">by {pr.author_github_username}</span> : null}

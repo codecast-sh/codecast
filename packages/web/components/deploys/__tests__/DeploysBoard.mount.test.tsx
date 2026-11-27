@@ -414,3 +414,24 @@ test("Priorities: one pill per priority with its sessions, yours by rank, then t
   expect(row("none").textContent).toContain("No priority · 1 session");
   unmount();
 });
+
+test("an open PR's card counts the review a run's reviewer gave on its head, as the PR's page does", async () => {
+  const { useInboxStore } = await import("../../../store/inboxStore");
+  const pr = { ...OPEN_PR, checks_state: "success", review_decision: "review_required", head_sha: "h900" };
+  const runOn = (judged: string) => ({ _id: "wr-900", status: "failed", created_at: 1, updated_at: 1, pr: { repository: target.repository, number: 900, head_sha: "h900" }, review_verdict: { verdict: "ship", head_sha: judged }, node_statuses: [] });
+  const stepsWith = (run: any) => {
+    useInboxStore.setState({ workflowRuns: run ? { [run._id]: run } : {} } as any);
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    act(() => root.render(<Board list={[]} prs={[pr]} />));
+    const out = [...host.querySelectorAll('[data-deploy-pr="900"] .dpp-step')].map((s) => `${s.textContent}:${s.getAttribute("data-state")}`);
+    act(() => root.unmount());
+    return out;
+  };
+  expect(stepsWith(null)).toEqual(["PR:done", "CI:done", "Review:idle", "Merge:idle"]);
+  expect(stepsWith(runOn("h900"))).toEqual(["PR:done", "CI:done", "Review:done", "Merge:idle"]);
+  // A verdict on an older head says nothing of this one.
+  expect(stepsWith(runOn("old"))).toEqual(["PR:done", "CI:done", "Review:idle", "Merge:idle"]);
+  useInboxStore.setState({ workflowRuns: {} } as any);
+});

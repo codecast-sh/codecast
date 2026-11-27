@@ -90,6 +90,15 @@ describe("the PR · CI · Review · Merge stepper", () => {
     expect(stepper(run("m", { ci_verdict: { green: true }, review_verdict: { verdict: "ship" }, merge: { sha: "abc1234" } }))).toEqual(["done", "done", "done", "done"]);
     expect(stepper(run("r", { status: "failed", ci_verdict: { green: true }, review_verdict: { verdict: "rejected" } }))).toEqual(["done", "done", "failed", "idle"]);
   });
+  // Ship on head A, then a fix round pushed B: the verdict binds to A, and the header says nobody reviewed B.
+  test("a review verdict on an earlier head says nothing of the PR's head, unless Merge only rebased it there", () => {
+    const pr = { repository: "o/r", number: 1, head_sha: "bbbbbbb" };
+    const node_statuses = ns(["pr", "completed"], ["ci", "completed"], ["review", "completed"]);
+    expect(stepper(run("h", { pr, node_statuses, ci_verdict: { green: true }, review_verdict: { verdict: "ship", head_sha: "aaaaaaa" } }))).toEqual(["done", "done", "idle", "idle"]);
+    expect(stepper(run("h", { pr, node_statuses: ns(["pr", "completed"], ["review", "running"]), review_verdict: { verdict: "ship", head_sha: "aaaaaaa" } }))[2]).toBe("active");
+    expect(stepper(run("h", { pr, node_statuses, review_verdict: { verdict: "ship", head_sha: "aaaaaaa" }, station_rebases: [{ from: "aaaaaaa", to: "bbbbbbb" }] }))[2]).toBe("done");
+    expect(stepper(run("h", { pr, node_statuses, review_verdict: { verdict: "ship", head_sha: "bbbbbbb" } }))[2]).toBe("done");
+  });
   test("without a verdict a completed CI station counts as done, in either flow's naming", () => {
     expect(stepper(run("c", { pr: undefined, node_statuses: ns(["pr", "completed"], ["checks", "completed"], ["ci", "completed"], ["review", "running"]) }))).toEqual(["done", "done", "active", "idle"]);
     expect(stepper(run("u", { node_statuses: ns(["land__ci_alone", "completed"], ["land__retest", "skipped"], ["land__changes", "running"]) }))).toEqual(["done", "done", "active", "idle"]);

@@ -4,7 +4,6 @@
 // conversation card. Pure, so the ordering and the counts have one home.
 
 import { stripMarkdown } from "./notificationText";
-import { roundsOnOwnResults } from "./ship/ownRound";
 
 export type RunNodeStatus = "pending" | "running" | "completed" | "failed";
 
@@ -48,6 +47,8 @@ export type RunNodeRow = {
   activity?: string;
   result_preview?: string;
   phase?: string;
+  /** How many times the run entered the station; its times are the last visit's. */
+  visits?: number;
 };
 
 export type RunNodeGroup = { title?: string; detail?: string; rows: RunNodeRow[] };
@@ -119,26 +120,39 @@ export function runNodeRows(run: any, workflow?: any | null): RunNodeRow[] {
       activity: ns?.activity,
       result_preview: ns?.result_preview,
       phase: ns?.phase,
+      ...(ns?.visits ? { visits: ns.visits } : {}),
     });
   };
   for (const n of graph) push(n.id, n.label, n.type);
-  // An own-results round's ends (the personal Ship's Live, Landed, Not landed) are named by their labels, never their ids.
-  const endLabel = workflow && roundsOnOwnResults(workflow) ? new Map<string, string>((workflow.nodes ?? []).map((n: any) => [n.id, n.label])) : null;
-  for (const ns of statuses) push(ns.node_id, ns.label ?? endLabel?.get(ns.node_id), undefined);
-  return inRunOrder(rows);
+  // A status of a node the graph lists out of the steps (its start, its ends) reads by the graph's name and kind: the
+  // end the run reached is a step (the change flow's Deploy failed, the personal Ship's Landed), its start is not, and
+  // neither is the plain `exit` a finished run reaches (the change flow's names it Live, as its last step already says).
+  const known = new Map<string, any>((workflow?.nodes ?? []).map((n: any) => [n.id, n]));
+  for (const ns of statuses) {
+    const n = known.get(ns.node_id);
+    if (n?.type !== "start" && !(n?.type === "exit" && ns.node_id === "exit")) push(ns.node_id, ns.label ?? n?.label ?? nodeWords(ns.node_id), n?.type);
+  }
+  return inRunOrder(rows, statuses);
 }
+
+/** A node id as words, for a status no graph names: `deploy__failed` reads "Deploy failed". Never shown as the id. */
+export const nodeWords = (id: string) => { const w = id.replace(/_+/g, " ").trim(); return w ? `${w[0].toUpperCase()}${w.slice(1)}` : id; };
 
 /** A row the run reached: it has a status of its own, or the run is at it. */
 export const rowReached = (r: RunNodeRow) => r.status !== "pending" || r.current || r.started_at != null;
 
 /**
- * The stations the run reached in the order it reached them (each one's latest start; a row with no start keeps its
- * place after the row before it), then the ones it has not reached, in the graph's order. The graph lists side routes
- * (a retest, a branch that moved) beside the main path, so its order interleaves stations that never ran with ones that did.
+ * The stations the run reached in the order it first reached them, then the ones it has not reached, in the graph's
+ * order. The server adds a station's status when the run first enters it and rewrites it in place on every later visit
+ * (convex workflow_runs.ts updateProgress), so the statuses' order is first entry; each one's start is only its last visit, and
+ * a fix round would read before the pull request it fixed. A row with no status (the station the run is at) comes
+ * last. The graph lists side routes (a retest, a branch that moved) beside the main path, so its order would
+ * interleave stations that never ran with ones that did.
  */
-function inRunOrder(rows: RunNodeRow[]): RunNodeRow[] {
-  let last = -Infinity;
-  const reached = rows.filter(rowReached).map((r, i) => ({ r, i, at: (last = r.started_at ?? last) }));
+function inRunOrder(rows: RunNodeRow[], statuses: ReadonlyArray<{ node_id: string }>): RunNodeRow[] {
+  const first = new Map<string, number>();
+  statuses.forEach((s, i) => { if (!first.has(s.node_id)) first.set(s.node_id, i); });
+  const reached = rows.filter(rowReached).map((r, i) => ({ r, i, at: first.get(r.id) ?? Infinity }));
   reached.sort((a, b) => a.at - b.at || a.i - b.i);
   return [...reached.map((x) => x.r), ...rows.filter((r) => !rowReached(r))];
 }

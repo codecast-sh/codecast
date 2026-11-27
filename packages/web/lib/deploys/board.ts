@@ -2,7 +2,7 @@
 // main; on the right, Next deploy and each deploy card, with what each carried listed by session, PR, SHA, task,
 // branch or priority. Every commit is credited to the session that pressed Ship, the same on both columns.
 // Pure: no store, no React.
-import type { QueueCommit, QueueGroup, ShippingRun, ShippingShipper } from "@codecast/shared/contracts/deployTargets";
+import { verdictOnHead, type QueueCommit, type QueueGroup, type ShippingRun, type ShippingShipper } from "@codecast/shared/contracts/deployTargets";
 import type { CheckoutRow } from "@codecast/shared/contracts/checkouts";
 import type { SessionPriorityRef } from "@codecast/shared/contracts/priorities";
 import { entityRoute } from "@codecast/shared/entities";
@@ -132,7 +132,7 @@ export function stepOfStation(id: string | null | undefined, steps: readonly Ste
   return leaf ? steps.findIndex((s) => s.stations.includes(leaf)) : -1;
 }
 
-type RunFacts = Pick<ShippingRun, "node_statuses" | "current_node_id" | "pr" | "ci_verdict" | "check_verdict" | "review_verdict" | "merge" | "track">;
+type RunFacts = Pick<ShippingRun, "node_statuses" | "current_node_id" | "pr" | "ci_verdict" | "check_verdict" | "review_verdict" | "station_rebases" | "merge" | "track">;
 
 /** What each step's facts say, else its stations: done, in trouble (red verdict, failed station), running, or not reached. */
 type Read = "done" | "trouble" | "active" | "idle";
@@ -148,13 +148,19 @@ function readSteps(run: RunFacts, steps: readonly Step[] = stepsFor(run)): Read[
       if (status === "completed" && s.passes?.includes(leafOf(id))) passed[j] = true;
     });
   }
-  const review: Read | null = run.review_verdict ? (run.review_verdict.verdict === "ship" ? "done" : "trouble") : null;
+  // A review binds to the head it read: once a fix round pushed another, the verdict (and the review station's earlier
+  // pass) says nothing of the head the PR is on, as the PR's header says (changePage reviewOnHead).
+  const v = run.review_verdict;
+  const staleReview = !!(v?.head_sha && run.pr?.head_sha && !verdictOnHead(v.head_sha, run.pr.head_sha, run.station_rebases));
+  const reviewAt = steps.findIndex((s) => s.word === "Review");
+  const review: Read | null = v && !staleReview ? (v.verdict === "ship" ? "done" : "trouble") : null;
   const facts: Array<Read | null> = steps === CHANGE_STEPS
     ? [run.pr ? "done" : null, run.ci_verdict ? (run.ci_verdict.green ? "done" : "trouble") : null, review, run.merge ? "done" : null]
     : [run.check_verdict ? (run.check_verdict.green ? "done" : "trouble") : null, review, isMerged(run) ? "done" : null];
   // A station's status says it ran, not what it found: a completed CI station without a verdict counts as done.
   return facts.map((fact, i) => {
     if (fact) return fact;
+    if (i === reviewAt && staleReview) return byStep[i].includes("running") ? "active" : "idle";
     const st = passed[i] ? byStep[i].filter((x) => x !== "failed") : byStep[i];
     if (st.includes("failed")) return "trouble";
     if (st.includes("running") || forked[i]) return "active";
@@ -177,7 +183,7 @@ export function isMerged(run: Pick<ShippingRun, "node_statuses" | "current_node_
  * runs (active); a paused run is blue on the step it waits at; a stopped run is red on exactly one step, the one where
  * it stopped, with everything after it not reached.
  */
-export function stepper(run: Pick<ShippingRun, "status" | "node_statuses" | "current_node_id" | "gate_node_id" | "pr" | "ci_verdict" | "check_verdict" | "review_verdict" | "merge" | "track">): StepState[] {
+export function stepper(run: Pick<ShippingRun, "status" | "node_statuses" | "current_node_id" | "gate_node_id" | "pr" | "ci_verdict" | "check_verdict" | "review_verdict" | "station_rebases" | "merge" | "track">): StepState[] {
   const steps = stepsFor(run);
   const at = (id: string | null | undefined) => stepOfStation(id, steps);
   const read = readSteps(run, steps);
@@ -204,7 +210,7 @@ export function stepper(run: Pick<ShippingRun, "status" | "node_statuses" | "cur
 export type RunState = { word: string; tone: "yellow" | "blue" | "red"; detail?: string };
 
 /** What the run is doing now, in words a person reads at a glance. */
-export function runState(run: Pick<ShippingRun, "status" | "fail_reason" | "gate_prompt" | "gate_decision_short_id" | "current_node_label" | "current_node_id" | "node_statuses" | "pr" | "ci_verdict" | "check_verdict" | "review_verdict" | "merge" | "track">): RunState {
+export function runState(run: Pick<ShippingRun, "status" | "fail_reason" | "gate_prompt" | "gate_decision_short_id" | "current_node_label" | "current_node_id" | "node_statuses" | "pr" | "ci_verdict" | "check_verdict" | "review_verdict" | "station_rebases" | "merge" | "track">): RunState {
   if (run.status === "failed") {
     const detail = run.fail_reason?.replace(/^Stopped:\s*/i, "").trim();
     return detail ? { word: "Stopped", tone: "red", detail } : { word: "Stopped", tone: "red" };
@@ -262,6 +268,8 @@ export type OpenPr = {
   state: string;
   draft?: boolean;
   head_ref?: string;
+  /** The commit the PR is on: a run reviewer's verdict counts for it only on this head (reviewOnHead). */
+  head_sha?: string;
   author_github_username?: string;
   /** When it was opened. Its updated_at is no measure of movement: a push to main restamps every open PR at once. */
   created_at: number;
@@ -295,24 +303,34 @@ export function openPrs(
     .sort((a, b) => b.created_at - a.created_at);
 }
 
+/** The review a pull request has, from GitHub's decision and the verdict a codecast run's reviewer gave on its head
+ *  (changePage reviewOnHead), which never reaches GitHub. Changes asked by either wins: GitHub blocks the merge on a
+ *  person's, and the run sends its reviewer's back to the session. */
+const reviewOf = (pr: Pick<OpenPr, "review_decision">, runVerdict?: string | null) =>
+  pr.review_decision === "changes_requested" || runVerdict === "changes" || runVerdict === "rejected" ? "changes_requested"
+    : pr.review_decision === "approved" || runVerdict === "ship" ? "approved"
+    : pr.review_decision;
+
 /** PR · CI · Review · Merge for a pull request no run carries, read from what GitHub says of it. */
-export function prStepper(pr: Pick<OpenPr, "draft" | "checks_state" | "review_decision" | "mergeable_state">): StepState[] {
+export function prStepper(pr: Pick<OpenPr, "draft" | "checks_state" | "review_decision" | "mergeable_state">, runVerdict?: string | null): StepState[] {
   const ci: StepState = pr.checks_state === "success" ? "done" : pr.checks_state === "failure" ? "failed" : pr.checks_state === "pending" ? "active" : "idle";
-  const review: StepState = pr.review_decision === "approved" ? "done" : pr.review_decision === "changes_requested" ? "failed" : "idle";
+  const decision = reviewOf(pr, runVerdict);
+  const review: StepState = decision === "approved" ? "done" : decision === "changes_requested" ? "failed" : "idle";
   const merge: StepState = pr.mergeable_state === "dirty" ? "failed" : "idle";
   return [pr.draft ? "waiting" : "done", ci, review, merge];
 }
 
 /** What a pull request no run carries waits on, the first that applies, in the words its card and its page say. */
-export function prState(pr: Pick<OpenPr, "draft" | "checks_state" | "review_decision" | "mergeable_state" | "behind_by">): RunState {
+export function prState(pr: Pick<OpenPr, "draft" | "checks_state" | "review_decision" | "mergeable_state" | "behind_by">, runVerdict?: string | null): RunState {
+  const decision = reviewOf(pr, runVerdict);
   if (pr.draft) return { word: "Draft", tone: "blue" };
   if (pr.checks_state === "failure") return { word: "CI failing", tone: "red" };
   if (pr.mergeable_state === "dirty") return { word: "Merge conflicts", tone: "red" };
-  if (pr.review_decision === "changes_requested") return { word: "Changes requested", tone: "red" };
+  if (decision === "changes_requested") return { word: "Changes requested", tone: "red" };
   if (pr.checks_state === "pending") return { word: "CI running", tone: "yellow" };
   const behind = pr.mergeable_state === "behind" || (pr.behind_by ?? 0) > 0;
   const detail = behind ? `behind main${pr.behind_by ? ` by ${pr.behind_by}` : ""}` : undefined;
-  const state: RunState = pr.review_decision === "approved" ? { word: "Ready to merge", tone: "blue" } : { word: "Waiting on review", tone: "blue" };
+  const state: RunState = decision === "approved" ? { word: "Ready to merge", tone: "blue" } : { word: "Waiting on review", tone: "blue" };
   return detail ? { ...state, detail } : state;
 }
 

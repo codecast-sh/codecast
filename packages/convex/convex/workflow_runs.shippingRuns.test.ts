@@ -126,11 +126,14 @@ describe("workflow_runs.shippingRuns", () => {
     const { run, read, ids } = await setup();
     await run({ extra: { ci_verdict: { node_id: "ci", green: true, head_sha: "h1", at: 5, attempt: 1 }, review_verdict: { node_id: "review", verdict: "approve", head_sha: "h1", at: 6, attempt: 1 } } });
     const [row] = await read(ids.ana);
-    expect(row).toMatchObject({ ci_verdict: { green: true, head_sha: "h1", at: 5 }, review_verdict: { verdict: "approve", at: 6 }, merge: null, gate_node_id: null });
+    expect(row).toMatchObject({ ci_verdict: { green: true, head_sha: "h1", at: 5 }, review_verdict: { verdict: "approve", at: 6, head_sha: "h1" }, merge: null, gate_node_id: null });
     await run({ status: "paused", extra: { gate_node_id: "land" }, at: NOW });
     expect((await read(ids.ana))[0].gate_node_id).toBe("land");
     await run({ extra: { spawner_stand_in: true }, at: NOW + 1 });
     expect((await read(ids.ana))[0].stand_in).toBe(true);
+    // The rail reads a verdict on the PR's head only (shared deployTargets verdictOnHead): the heads Merge only rebased ride along.
+    await run({ extra: { review_verdict: { node_id: "review", verdict: "ship", head_sha: "h1", at: 7, attempt: 1 }, station_rebases: [{ from: "h1", to: "h2", at: 8, attempt: 1 }] }, at: NOW + 2 });
+    expect((await read(ids.ana))[0].station_rebases).toEqual([{ from: "h1", to: "h2" }]);
   });
 });
 
