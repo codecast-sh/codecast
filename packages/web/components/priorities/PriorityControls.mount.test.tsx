@@ -76,6 +76,8 @@ const rows = () => [
 let calls: Array<[string, unknown[]]> = [];
 beforeEach(() => {
   calls = [];
+  // The stub dispatch never settles a write's locks (lib/dispatchBinding does), so each test starts with none.
+  useInboxStore.setState({ pending: {} } as any);
   const st = useInboxStore.getState() as any;
   st._setDispatch(async (action: string, args: unknown[]) => { calls.push([action, args]); return null; });
   st.syncTable("priorities", rows());
@@ -404,7 +406,9 @@ test("a session's ⋯: Not this milestone, Move to… and Not this priority pain
     expect(stored("pri-1").sessions[0].step_key).toBeNull();
     expect((await dispatched("movePrioritySession")).at(-1)).toEqual([FEED.short_id, "pri-1", "pri-1", null]);
 
-    // Back on a milestone, then off the priority.
+    // Back on a milestone, then off the priority. The server's answer lands once
+    // the moves are acknowledged, which the stub dispatch never says.
+    useInboxStore.setState({ pending: {} } as any);
     useInboxStore.getState().syncTable("priorities", rows() as any);
     await page.waitFor(() => stored("pri-1").links[0].sessions.length === 1 && !!line("pri-1", "s1"));
     if (!line("pri-1", "s1").querySelector("[data-connected]")) await open();
@@ -565,7 +569,8 @@ test("a refused write takes back only what it painted, keeps a server push that 
     useInboxStore.getState().syncTable("priorities", [{ ...stored("pri-2"), title: "One ship flow, renamed by the pass" }] as any, { isDelta: true });
     await tick();
     await act(async () => { refuse(new Error("[CONVEX M(dispatch:dispatch)] [Request ID: x] Server Error\nUncaught Error: pri-3 is Sam's priority; only they can change it")); });
-    await page.waitFor(() => stored("pri-3").steps[0].done === false && !!line("pri-3", "s1") && toasts.length > 0);
+    // The receipt's toast is up already: wait for the refusal's.
+    await page.waitFor(() => stored("pri-3").steps[0].done === false && !!line("pri-3", "s1") && toasts.length > 1);
     expect(stored("pri-3").steps[0].done).toBe(false);
     expect(block("pri-3").querySelector('[data-section="done"]')).toBeNull();
     expect(stored("pri-2").title).toBe("One ship flow, renamed by the pass");
@@ -599,7 +604,8 @@ test("Looks done? is the owner's button: it marks the milestone done through set
     expect(block("pri-3").querySelector("[data-connected]")).toBeNull();
     expect(await dispatched("setPriorityStepDone")).toEqual([["pri-3", "s1", true]]);
     await act(async () => { refuse(new Error("[CONVEX M(dispatch:dispatch)] [Request ID: x] Server Error\nUncaught Error: pri-3 changed under you")); });
-    await page.waitFor(() => stored("pri-3").steps[0].done === false && toasts.length > 0);
+    // The receipt's toast is up already: wait for the refusal's.
+    await page.waitFor(() => stored("pri-3").steps[0].done === false && toasts.length > 1);
     expect(toasts).toEqual(["Marked “Deploy drops the eval job” done", "pri-3 changed under you"]);
     // Its Undo finds it open already and sends nothing.
     await act(async () => undoButtons.get("Marked “Deploy drops the eval job” done")!());

@@ -431,11 +431,15 @@ export const CLIENT_SYNC_REGISTRY = {
   // Each person's priorities in every workspace the viewer holds (convex
   // priorities.list with no workspace, shared/contracts/priorities
   // PriorityRow). A snapshot: list returns the complete visible set across
-  // them, one subscription for /priorities and the inbox. Not localFirst: a rank paints new
-  // positions on the owner's other rows, which the server's own ordering may
-  // place differently, so a field lock could never retire; the server's push
-  // settles the paint, and a refused write is put back by its caller
-  // (store/prioritiesSlice). Every object the row joins is a deep field
+  // them, one subscription for /priorities and the inbox. localFirst: each
+  // field a priority control writes whole on a row (its place, status and
+  // stamps, and the joined objects, which prioritiesSlice heldWhole writes
+  // whole after an edit inside them) holds over pushes the server computed
+  // before it had the write, so a drag no longer snaps back and a milestone
+  // never disagrees with its count. The write's acknowledgement settles those
+  // locks on whatever the server answers next (store/ackSettledLocks), so a
+  // place the server computed differently, over rows this window does not
+  // hold, lands instead of freezing. Every object the row joins is a deep field
   // (PRIORITY_OBJECT_FIELDS): a push that changes only one of them must
   // still land (store/__tests__/prioritiesSync.test.ts).
   priorities: {
@@ -443,6 +447,7 @@ export const CLIENT_SYNC_REGISTRY = {
     indexes: "_id, workspace",
     hydration: { phase: "deferred" },
     sync: { deepFields: Object.keys(PRIORITY_OBJECT_FIELDS) },
+    localFirst: true,
     feeds: ["priorities.list"],
   },
   // The rank, id and title of each of the viewer's active priorities in
