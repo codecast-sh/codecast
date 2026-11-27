@@ -369,7 +369,7 @@ npm run build
 APPLE_ID=you@example.com APPLE_PASSWORD=xxxx-xxxx-xxxx-xxxx APPLE_TEAM_ID=XXXXXXXXXX npx electron-builder -m
 ```
 
-The hosted app releases through `packages/electron/scripts/release.sh`, which builds, notarizes and publishes in one step.
+The hosted app releases from CI: `.github/workflows/cut-desktop-release.yml` builds, signs, notarizes and publishes on a macOS runner, dispatched by the `desktop` deploy target (`scripts/cut-desktop-release.sh`).
 
 Output: `packages/electron/dist/Codecast-{version}-arm64.dmg`
 

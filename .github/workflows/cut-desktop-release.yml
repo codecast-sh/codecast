@@ -1,0 +1,299 @@
+name: Cut signed desktop release
+
+# The CI path for macOS desktop releases, doing what packages/electron/scripts/
+# release.sh does on a laptop: bump the patch version, build the app with
+# electron-builder, sign it with the Developer ID Application identity,
+# notarize and staple it (notarize.js, the afterSign hook), check the asar,
+# upload the artifacts and latest-mac.yml to R2, then commit the version bump
+# and the web download pointer to main. Nobody needs the certificate or a
+# notarytool profile in a personal keychain. The desktop deploy target
+# (.codecast/deploy.toml) dispatches it through scripts/cut-desktop-release.sh.
+#
+# Secrets: MACOS_SIGN_CERT_P12 and MACOS_SIGN_CERT_PASSPHRASE (the Developer ID
+# Application .p12, as cut-cli-release.yml uses them), ASC_API_KEY_P8 (base64 of
+# the App Store Connect "Agent" key AuthKey_KR5Y6LS448.p8, as build-mdm-pkg.yml
+# uses it), and the R2_* upload credentials.
+#
+# Beyond release.sh it publishes desktop/release.json ({version, sourceCommit}),
+# which the desktop target reads to tell what is live. It never raises the
+# fleet floor (the target sends with --no-floor) and builds no Windows installer.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Build, sign, notarize and verify only. Upload nothing, commit nothing.
+        required: false
+        default: false
+        type: boolean
+      source_commit:
+        description: The main commit to build; the dispatched ref's head when empty
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: desktop-release
+  cancel-in-progress: false
+
+env:
+  R2_BUCKET: codecast
+  SIGN_IDENTITY: "Developer ID Application: Ashot Petrosian (WRG9THCK9Q)"
+  SIGN_TEAM_ID: WRG9THCK9Q
+  ASC_KEY_ID: KR5Y6LS448
+
+jobs:
+  release:
+    # Only a dry run may build another branch, so a branch never publishes.
+    if: github.ref == 'refs/heads/main' || inputs.dry_run
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      # The commit named when the cut was dispatched, not main when a runner frees up.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.source_commit || github.sha }}
+          fetch-depth: 0
+
+      - uses: ./.github/actions/setup-bun
+        with:
+          deps: none
+
+      - name: Resolve the release version
+        shell: bash
+        env:
+          REQUESTED_SOURCE: ${{ inputs.source_commit }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$REQUESTED_SOURCE" ]]; then
+            if [[ ! "$REQUESTED_SOURCE" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::source_commit must be a full lowercase 40-character SHA"
+              exit 1
+            fi
+            git fetch -q origin main
+            if [[ "$(git rev-parse HEAD)" != "$REQUESTED_SOURCE" ]] ||
+              ! git merge-base --is-ancestor "$REQUESTED_SOURCE" origin/main; then
+              echo "::error::source_commit $REQUESTED_SOURCE is not a commit of main"
+              exit 1
+            fi
+          fi
+          previous=$(jq -r '.version' packages/electron/package.json)
+          if [[ ! "$previous" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::packages/electron/package.json version is not a canonical semver: $previous"
+            exit 1
+          fi
+          IFS=. read -r major minor patch <<<"$previous"
+          version="$major.$minor.$((patch + 1))"
+          # release.sh's gate (ct-49566): never publish a version that is not ahead of the live feed.
+          curl -fsSL --retry 3 -H 'Cache-Control: no-cache' https://dl.codecast.sh/desktop/latest-mac.yml \
+            -o "$RUNNER_TEMP/published-latest-mac.yml"
+          published=$(awk '/^version:/ {print $2; exit}' "$RUNNER_TEMP/published-latest-mac.yml")
+          bun scripts/ci/release-version-gate.ts --channel Desktop --published "$published" --next "$version"
+          {
+            echo "PREVIOUS_VERSION=$previous"
+            echo "RELEASE_VERSION=$version"
+            echo "SOURCE_COMMIT=$(git rev-parse HEAD)"
+          } >> "$GITHUB_ENV"
+          echo "Building desktop $version (after $previous, live $published) from $(git rev-parse HEAD)"
+
+      - name: Install dependencies
+        shell: bash
+        run: bun install --frozen-lockfile
+
+      - name: Import the signing identity and notarization key
+        env:
+          CERT_P12_BASE64: ${{ secrets.MACOS_SIGN_CERT_P12 }}
+          CERT_PASSPHRASE: ${{ secrets.MACOS_SIGN_CERT_PASSPHRASE }}
+          ASC_KEY_BASE64: ${{ secrets.ASC_API_KEY_P8 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$CERT_P12_BASE64" || -z "$CERT_PASSPHRASE" || -z "$ASC_KEY_BASE64" ]]; then
+            echo "::error::MACOS_SIGN_CERT_P12, MACOS_SIGN_CERT_PASSPHRASE and ASC_API_KEY_P8 must all be set"
+            exit 1
+          fi
+          keychain="$RUNNER_TEMP/codecast-sign.keychain-db"
+          keychain_password=$(openssl rand -hex 24)
+          cert="$RUNNER_TEMP/codecast-sign.p12"
+          printf '%s' "$CERT_P12_BASE64" | base64 --decode > "$cert"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 5400 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$cert" -k "$keychain" -P "$CERT_PASSPHRASE" \
+            -T /usr/bin/codesign -T /usr/bin/security
+          rm -f "$cert"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s \
+            -k "$keychain_password" "$keychain" >/dev/null
+          existing=$(security list-keychains -d user | tr -d '"')
+          security list-keychains -d user -s "$keychain" $existing
+          {
+            echo "SIGN_KEYCHAIN=$keychain"
+            # electron-builder looks the configured mac.identity up in this keychain.
+            echo "CSC_KEYCHAIN=$keychain"
+          } >> "$GITHUB_ENV"
+          if ! security find-identity -v -p codesigning "$keychain" | grep -qF "$SIGN_IDENTITY"; then
+            echo "::error::imported keychain does not contain: $SIGN_IDENTITY"
+            security find-identity -v -p codesigning "$keychain" || true
+            exit 1
+          fi
+          # notarize.js notarizes with this key when the file exists (and keeps it
+          # out of electron-builder's own env, so notarization runs once).
+          mkdir -p "$HOME/.app-store-connect"
+          printf '%s' "$ASC_KEY_BASE64" | base64 --decode > "$HOME/.app-store-connect/AuthKey_$ASC_KEY_ID.p8"
+
+      - name: Build, sign and notarize
+        shell: bash
+        working-directory: packages/electron
+        run: |
+          set -euo pipefail
+          jq --arg v "$RELEASE_VERSION" '.version = $v' package.json > package.json.tmp
+          mv package.json.tmp package.json
+          source ../../scripts/dmg-build-env.sh
+          PATH="$DMG_BUILD_PATH" npm run build -- --publish never
+
+      - name: Remove the signing keychain and key
+        if: always()
+        shell: bash
+        run: |
+          if [[ -n "${SIGN_KEYCHAIN:-}" && -f "$SIGN_KEYCHAIN" ]]; then security delete-keychain "$SIGN_KEYCHAIN"; fi
+          rm -f "$HOME/.app-store-connect/AuthKey_$ASC_KEY_ID.p8"
+
+      - name: Verify the asar holds every local require
+        shell: bash
+        run: packages/electron/scripts/verify-asar.sh
+
+      - name: Verify signature, notarization and artifacts
+        shell: bash
+        working-directory: packages/electron
+        run: |
+          set -euo pipefail
+          app=dist/mac-arm64/Codecast.app
+          codesign --verify --deep --strict --verbose=2 "$app"
+          info=$(codesign -dvv "$app" 2>&1)
+          grep -q "^TeamIdentifier=$SIGN_TEAM_ID$" <<<"$info"
+          grep -q "^Authority=$SIGN_IDENTITY$" <<<"$info"
+          xcrun stapler validate "$app"
+          spctl -a -vv -t exec "$app"
+          actual=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")
+          [[ "$actual" == "$RELEASE_VERSION" ]] || { echo "::error::app is $actual, expected $RELEASE_VERSION"; exit 1; }
+          [[ "$(head -1 dist/latest-mac.yml)" == "version: $RELEASE_VERSION" ]] || {
+            echo "::error::dist/latest-mac.yml does not name $RELEASE_VERSION"; head -3 dist/latest-mac.yml; exit 1; }
+          for f in \
+            "Codecast-$RELEASE_VERSION-arm64-mac.zip" \
+            "Codecast-$RELEASE_VERSION-arm64.dmg" \
+            "Codecast-$RELEASE_VERSION-arm64-mac.zip.blockmap" \
+            "Codecast-$RELEASE_VERSION-arm64.dmg.blockmap" \
+            latest-mac.yml; do
+            [[ -f "dist/$f" ]] || { echo "::error::dist/$f not built"; exit 1; }
+          done
+          jq -c -n --arg version "$RELEASE_VERSION" --arg source "$SOURCE_COMMIT" \
+            '{version: $version, sourceCommit: $source}' > dist/release.json
+          {
+            echo "### Desktop $RELEASE_VERSION"
+            echo
+            echo "- Source: \`$SOURCE_COMMIT\`"
+            echo "- Signed by $SIGN_IDENTITY, notarized and stapled"
+            echo "- dmg sha256: \`$(shasum -a 256 "dist/Codecast-$RELEASE_VERSION-arm64.dmg" | awk '{print $1}')\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the dry-run build for inspection
+        if: inputs.dry_run
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: desktop-${{ env.RELEASE_VERSION }}-dry-run
+          retention-days: 3
+          if-no-files-found: error
+          path: |
+            packages/electron/dist/Codecast-${{ env.RELEASE_VERSION }}-arm64.dmg
+            packages/electron/dist/latest-mac.yml
+            packages/electron/dist/release.json
+
+      - name: Upload to R2
+        if: ${{ !inputs.dry_run }}
+        working-directory: packages/electron
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v aws >/dev/null 2>&1 || brew install awscli
+          immutable="public, max-age=31536000, immutable"
+          # The feed goes after the installers it names, and release.json (what the
+          # desktop target reads as live) last.
+          for f in \
+            "Codecast-$RELEASE_VERSION-arm64-mac.zip" \
+            "Codecast-$RELEASE_VERSION-arm64.dmg" \
+            "Codecast-$RELEASE_VERSION-arm64-mac.zip.blockmap" \
+            "Codecast-$RELEASE_VERSION-arm64.dmg.blockmap" \
+            latest-mac.yml \
+            release.json; do
+            case "$f" in
+              *.dmg) ct=application/x-apple-diskimage; cc="$immutable" ;;
+              *.zip) ct=application/zip; cc="$immutable" ;;
+              *.blockmap) ct=application/octet-stream; cc="$immutable" ;;
+              *.yml) ct=text/yaml; cc=no-cache ;;
+              *.json) ct=application/json; cc=no-cache ;;
+            esac
+            echo "  $f"
+            aws s3 cp "dist/$f" "s3://$R2_BUCKET/desktop/$f" --endpoint-url "$R2_ENDPOINT" \
+              --content-type "$ct" --cache-control "$cc" --no-progress
+          done
+          remote=$(curl -fsSL -H 'Cache-Control: no-cache' https://dl.codecast.sh/desktop/latest-mac.yml | head -1)
+          [[ "$remote" == "version: $RELEASE_VERSION" ]] || { echo "::error::remote latest-mac.yml reads: $remote"; exit 1; }
+          # Prewarm the CDN so updaters don't stream from a cold origin. Best effort.
+          for f in "Codecast-$RELEASE_VERSION-arm64-mac.zip" "Codecast-$RELEASE_VERSION-arm64.dmg"; do
+            curl -so /dev/null --max-time 300 -w "  prewarm $f: %{speed_download} B/s\n" \
+              "https://dl.codecast.sh/desktop/$f" || echo "  prewarm $f failed (non-fatal)"
+          done
+          echo "- Published https://dl.codecast.sh/desktop/Codecast-$RELEASE_VERSION-arm64.dmg" >> "$GITHUB_STEP_SUMMARY"
+
+      # release.sh's step 4: the version bump and the web download pointer, on
+      # main's head (which may carry commits the release does not).
+      - name: Commit the version bump to main
+        if: ${{ !inputs.dry_run }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          tree="$RUNNER_TEMP/bump"
+          for attempt in 1 2 3 4 5; do
+            git fetch -q origin main
+            rm -rf "$tree"; git worktree prune
+            git worktree add -q --detach "$tree" origin/main
+            on_main=$(jq -r '.version' "$tree/packages/electron/package.json")
+            if [[ "$on_main" != "$PREVIOUS_VERSION" ]]; then
+              echo "::error::main's desktop version is $on_main, not $PREVIOUS_VERSION: commit the $RELEASE_VERSION bump by hand"
+              exit 1
+            fi
+            # errexit is off for a subshell on the left of && or inside if, so run it
+            # as its own statement and read its status.
+            set +e
+            (
+              set -euo pipefail
+              cd "$tree"
+              jq --arg v "$RELEASE_VERSION" '.version = $v' packages/electron/package.json > /tmp/electron-package.json
+              mv /tmp/electron-package.json packages/electron/package.json
+              perl -pi -e "s/Codecast-\d+\.\d+\.\d+-arm64\.dmg/Codecast-$RELEASE_VERSION-arm64.dmg/g; s/MAC_DMG_VERSION = \"\d+\.\d+\.\d+\"/MAC_DMG_VERSION = \"$RELEASE_VERSION\"/g" \
+                packages/web/server/index.ts
+              git add packages/electron/package.json packages/web/server/index.ts
+              git commit -q -m "chore(electron): bump desktop to v$RELEASE_VERSION"
+              git push -q origin HEAD:main
+            )
+            status=$?
+            set -e
+            if [[ $status -eq 0 ]]; then
+              echo "- Bumped main to $RELEASE_VERSION" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "push attempt $attempt lost a race with main; retrying"
+            sleep $((attempt * 5))
+          done
+          echo "::error::could not push the $RELEASE_VERSION bump to main"
+          exit 1

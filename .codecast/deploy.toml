@@ -79,12 +79,18 @@ run = "packages/mobile/scripts/ota.sh $sha"
 policy = "release"
 after = ["backend"]
 
-# A person sends it, and a change's run waits for that: release.sh signs on the machine that
-# runs it, with a Developer ID certificate the publishing machine may not hold, builds that
-# checkout's working tree rather than the merged commit, and pushes its version bump to main.
+# A person sends it, and a change's run waits for that. The send cuts the release in CI
+# (scripts/cut-desktop-release.sh dispatches cut-desktop-release.yml), which builds, signs and
+# notarizes main's head on a macOS runner and commits the version bump, so any machine can
+# send it. Live once dl.codecast.sh/desktop/release.json names the commit. release.sh stays
+# the laptop fallback for a machine holding the Developer ID identity.
 [[target]]
 name = "desktop"
 unless = ["**/*.test.ts", "**/*.test.tsx", "**/*.test.js", "**/*.test.cjs", "**/*.test.mjs", "**/__tests__/**", "**/__fixtures__/**", "**/*.testkit.ts", "**/Tests/**"]
 when = ["packages/electron/**"]
-run = "packages/electron/scripts/release.sh patch --no-floor"
+run = "scripts/cut-desktop-release.sh"
+live = "json:https://dl.codecast.sh/desktop/release.json#sourceCommit,version"
 policy = "press"
+# A send can wait up to 90 min for a cut in flight (scripts/cut-desktop-release.sh), then
+# builds and notarizes for 10 to 30 min.
+deadline = "3h"
