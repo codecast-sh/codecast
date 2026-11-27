@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Command } from "commander";
-import { artifactView, specForCli } from "@codecast/shared/artifacts";
+import { artifactView, board, specForCli } from "@codecast/shared/artifacts";
 import { lifecycleGuide, parseDocRef, parseOpsInput, readNotes, registerBoardCommand, registerDataCommand, registerSheetCommand, resolveRmKeys } from "./liveArtifactCommand";
 
 const ID = "k17abcdefghijklmnopqrstuvwxyz012";
@@ -206,6 +206,31 @@ describe("cast board frame verbs (pl-1145)", () => {
     const org = verbs.reflow.run(artifactView("board", "B", [frameEl("el_f", 0, 0, 400, 300), frameEl("el_g", 2000, 900, 400, 300)]), []);
     expect(org.status).toMatch(/^organized the board/);
     expect(() => verbs.reflow.run(v0, ["el_a"])).toThrow(/not a frame/);
+  });
+
+  test("Scribe's fold: notes framed around all of a theme's stickies sit strictly inside it, and the fold holds only the stickies", () => {
+    // place --frame-ref draws the theme around 3 stickies.
+    const placed = verbs.place.run(artifactView("board", "B", []), ["grid", "--frame-ref", "ct-5"], "Budget caps\nAlert at 80%\nQuarterly review");
+    const v1 = apply(artifactView("board", "B", []), placed.ops);
+    const theme = placed.ops.find((o: any) => o.put?.kind === "frame")!.k;
+    const stickies = placed.ops.filter((o: any) => o.put?.kind === "sticky").map((o) => o.k);
+    // Working notes around all three, folded at once.
+    const framed = verbs.frame.run(v1, ["Working notes", ...stickies, "--collapse"], undefined, AGENT);
+    const notes = framed.ops.find((o: any) => o.put?.kind === "frame")!.k;
+    const inner = put(framed, notes), outer = v1.get(theme)!;
+    expect(inner.collapsed.w * inner.collapsed.h).toBeLessThan(Number(outer.w) * Number(outer.h));
+    const v2 = apply(v1, framed.ops);
+    expect(inner.collapsed.holds.sort()).toEqual([...stickies].sort());
+    expect([...board.hiddenKeys(v2)].sort()).toEqual([...stickies].sort());
+    expect(board.enclosingFrameKeys(v2, notes)).toEqual([theme]);
+    // A card filed into the theme makes it resolved: it narrows to the card and the pill stacks under it.
+    const tb = board.elementBox(v2.get(theme)!);
+    const v3 = apply(v2, [{ k: theme, set: { h: tb.h + 400 } }, { k: "el_card", put: { kind: "card", ref: "ct-5", x: tb.x + 40, y: tb.y + 140, w: 320, h: 168, z: 5 } }]);
+    const v4 = apply(v3, verbs.reflow.run(v3, [theme], undefined, AGENT).ops);
+    const pill = board.elementBox(v4.get(notes)!), card = board.elementBox(v4.get("el_card")!), t4 = board.elementBox(v4.get(theme)!);
+    expect(t4.w).toBe(Math.max(320, pill.w) + 2 * board.FRAME_PAD);
+    expect([card.x, pill.x]).toEqual([t4.x + board.FRAME_PAD, t4.x + board.FRAME_PAD]);
+    expect(board.hiddenKeys(v4).has(theme)).toBe(false);
   });
 
   test("move on a frame carries what it holds; on a folded pill, its hidden holds travel too", () => {
