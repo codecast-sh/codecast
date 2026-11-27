@@ -1430,8 +1430,7 @@ async function executeFanout(
       if (k.startsWith(`${branch.id}.`)) state.context[k] = v;
     }
     // The branch's own report ends its node, which stops its hand (workflow_runs.stopStationHands).
-    // Its words are what its node shows, as a station's outside a fan-out (a Check that was Skipped says why). A
-    // branch that waited out its machine slot never ran: failed, as the fan-in counts it, with its words saying why.
+    // Its words are what its node shows, as a station's outside a fan-out; a branch that waited out its slot failed.
     if (options.runId) {
       const result_preview = stationPreview(branch, ctx);
       await reportProgress(options, { current_node_id: node.id, node_id: branch.id, node_status: outcome === "failure" || outcome === NO_SLOT ? "failed" : "completed", outcome, session_id: ctx[`${branch.id}.session_id`], ...(result_preview ? { result_preview } : {}) });
@@ -1775,7 +1774,6 @@ function stationEnv(options: RunOptions): Record<string, string> {
   return options.runSession ? { [RUN_CONVERSATION_ENV]: options.runSession } : {};
 }
 
-/** Who holds a station's machine slot, as `cast queue` lists it. */
 const slotHolder = (node: WorkflowNode, options: RunOptions): string => `${node.label} of ${options.taskId ?? options.runId ?? "a local run"}`;
 
 /**
@@ -2865,8 +2863,7 @@ async function runNodeLoop(
     delete state.context["station_dead"];
     const landedExit = outcome === "success" ? landedExitOf(graph, current, state.context) : null;
     if (landedExit) console.log(`  ${c.green}✓${c.reset} the change is already on upstream at ${state.context["change_landed"].slice(0, 10)}: the run ends done`);
-    // A station that waited out its timeout for a machine slot goes where its no_slot= says, never down its edges,
-    // which route on what its script did; without one the run stops there (stationSlot.ts).
+    // A station that waited out its machine slot goes where its no_slot= says, or stops the run (stationSlot.ts).
     const noSlot = outcome === NO_SLOT;
     const next = noSlot ? (current.no_slot ? graph.nodes.get(current.no_slot) ?? null : null) : landedExit ? landedExit : stationBlocked
       ? resolveNextNode({ ...graph, edges: graph.edges.filter((e) => e.from !== current.id || /\bhandoff\b/.test(e.condition ?? "")) }, current, state.context)
