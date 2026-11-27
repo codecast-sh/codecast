@@ -155,6 +155,22 @@ function stopDetail(run: ChangeRun, graph: ChangeGraph, title: string, landed: b
   return parts.length ? parts.map((p, i) => (i ? lower(p) : p)).join(" · ") : null;
 }
 
+/** The deploys a Deploy stop names as failed (awaitDeploy.ts: "The deploy that carried 929c5d8 failed: desktop dp-3559
+ *  (Stopped at Send.), web dp-12."), by target, each once. */
+function failedDeploys(reason: string | null | undefined): Array<{ target: string; deploy: string }> {
+  const list = reason?.match(/deploy that carried \S+ failed:\s*(.*)$/s)?.[1].replace(/\([^)]*\)/g, "") ?? "";
+  const out = new Map<string, string>();
+  for (const m of list.matchAll(/\b([a-z][a-z0-9-]{0,31}) (dp-\d+)\b/g)) if (!out.has(m[1])) out.set(m[1], m[2]);
+  return [...out].map(([target, deploy]) => ({ target, deploy }));
+}
+
+/** A change on main whose deploy failed: it is landed, which deploy failed, and that the target's next deploy takes it live. */
+function deployFailedWords(run: ChangeRun): string | null {
+  const failed = failedDeploys(run.fail_reason);
+  if (!failed.length) return null;
+  return `Landed · ${failed.map((f) => `${f.target} ${f.deploy}`).join(", ")} failed · goes live with the next ${listWords(failed.map((f) => f.target))} deploy${failed.length > 1 ? "s" : ""}`;
+}
+
 /** The page's headline for a change run: where the change stands now, and what it waits on. */
 export function changeHeadline(j: Journey, run: ChangeRun, graph: ChangeGraph, ctx: { pr?: PrState } = {}): ChangeHeadline {
   const n = j.now;
@@ -201,7 +217,12 @@ export function changeHeadline(j: Journey, run: ChangeRun, graph: ChangeGraph, c
     case "stopped":
     case "failed": {
       const title = stopTitle(n);
-      return head(title, ctx.pr?.merged && !onMainByRun(run, j) ? "PR merged on GitHub" : stopDetail(run, graph, title, onMainByRun(run, j)));
+      const onMain = onMainByRun(run, j);
+      if (n.fix === "deploy" && onMain) {
+        const words = deployFailedWords(run);
+        if (words) return head(title, words);
+      }
+      return head(title, ctx.pr?.merged && !onMain ? "PR merged on GitHub" : stopDetail(run, graph, title, onMain));
     }
   }
 }

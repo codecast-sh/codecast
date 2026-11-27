@@ -47,6 +47,10 @@ describe("A: which runs are the change's", () => {
     // A repo's own Change (Union's, Land and Deploy segments), and an older flow composed of segments, are.
     expect(shipsChange(union)).toBe(true);
     expect(shipsChange(pushedFlow({ _id: "wf_b", ...BRANCHING_FLOW } as any) as any)).toBe(true);
+    // Codecast's own Change only extends the library's: the run it pinned is a change run, its takes the library's.
+    const variant = pushedFlow({ _id: "wf_cc", slug: "change", name: "change", nodes: change.nodes, edges: change.edges, source: 'digraph change {\n  graph [extends="change"]\n  local_ci [before="pr", label="Local CI", shape=parallelogram, script="bun run ci"]\n}' } as any) as any;
+    expect(variant.takes).toEqual(["task", "branch"]);
+    expect(shipsChange(variant)).toBe(true);
   });
 });
 
@@ -289,6 +293,15 @@ describe("D: a stop always has one way on, and never one that cannot help", () =
     expect(act(r, shipNow)?.kind).toBe("deploys");
     // F1: the track says Land landed too, never "went another way".
     expect(j.stages.find((s) => s.role === "land")!.state).toBe("done");
+  });
+
+  // ct-102256: landed, then the desktop deploy carrying it failed; the head said "Landed · go live · deploy failed".
+  test("a change on main whose deploy failed says which, and that the target's next deploy takes it live", () => {
+    const r = run({ status: "failed", current_node_id: "deploy__failed", merge: { sha: "929c5d8d44", pr_url: "https://github.com/acme/app/pull/270" }, fail_reason: "Stopped: The deploy that carried 929c5d8 failed: desktop dp-3559 (Stopped at Send.).", node_statuses: [...MERGED, st("deploy__wait", "failed", 16, { result_preview: "The deploy that carried 929c5d8 failed: desktop dp-3559 (Stopped at Send.)." }), st("deploy__failed", "failed", 17)] });
+    expect(head(r)).toEqual({ words: "Stopped at Deploy", waits: "Landed · desktop dp-3559 failed · goes live with the next desktop deploy", tone: expect.any(String) });
+    expect(act(r)?.kind).toBe("deploys");
+    const two = run({ ...r, fail_reason: "Stopped: The deploy that carried 929c5d8 failed: desktop dp-3559 (Stopped at Send.), web dp-12. A later deploy that takes it live ends this run at Live." });
+    expect(head(two).waits).toBe("Landed · desktop dp-3559, web dp-12 failed · goes live with the next desktop and web deploys");
   });
 
   test("F2: a flow's own top-level unmerged that loops back to landing is not Deploy finding the change off main", () => {

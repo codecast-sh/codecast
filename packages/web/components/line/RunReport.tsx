@@ -133,6 +133,7 @@ function StepRow({ step: s }: { step: ReportStep }) {
         <span className={cn("min-w-0 truncate", tone)}>{s.result}</span>
       )}
       {s.note && <span className="min-w-0 truncate text-meta text-sol-text-dim" data-step-note>{s.note}</span>}
+      {s.visits && <span className="shrink-0 tabular-nums text-meta text-sol-text-dim" title="Times the run entered this step; the result is the last one's" data-step-visits={s.visits}>{s.visits} visits</span>}
     </li>
   );
 }

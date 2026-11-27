@@ -462,7 +462,7 @@ function StepRow({ step: s, onOpen, dim }: { step: ReportStep; onOpen: (href: st
     <>
       <FontAwesome name={mark.icon} size={11} color={color} style={styles.stepIcon} />
       <RNView style={{ flex: 1, minWidth: 0 }}>
-        <RNText style={styles.stepLabel} numberOfLines={1}>{s.label}</RNText>
+        <RNText style={styles.stepLabel} numberOfLines={1}>{s.visits ? `${s.label} · ${s.visits} visits` : s.label}</RNText>
         <RNText style={[styles.stepResult, { color: resultColor }]} numberOfLines={3}>{s.result}</RNText>
         {s.note ? <RNText style={styles.stepNote} numberOfLines={2}>{s.note}</RNText> : null}
       </RNView>

@@ -10,7 +10,7 @@
 // step row in the same gutter.
 
 import Link from "next/link";
-import { Bot, CheckCircle2, ChevronRight, Circle, GitFork, Loader2, Merge, MessageSquare, Terminal, User, XCircle, Zap } from "lucide-react";
+import { Bot, CheckCircle2, ChevronRight, Circle, Flag, GitFork, Loader2, Merge, MessageSquare, Terminal, User, XCircle, Zap } from "lucide-react";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { useOpenLinkedSession } from "../hooks/useOpenLinkedSession";
 import { formatRunDuration, rowReached, runNodeGroups, runNodeLine, scriptLine, wfFmtTokens, type RunNodeRow } from "../lib/workflowRun";
@@ -27,6 +27,8 @@ const TYPE_ICONS: Record<string, React.ComponentType<{ className?: string }>> = 
   conditional: GitFork,
   parallel_fanout: GitFork,
   parallel_fanin: Merge,
+  // The end the run reached (Live, Deploy failed).
+  exit: Flag,
 };
 
 function StepMark({ row }: { row: RunNodeRow }) {
@@ -56,9 +58,11 @@ function StepMeta({ row, now }: { row: RunNodeRow; now: number }) {
   const duration = row.started_at ? formatRunDuration(row.started_at, row.completed_at, now) : null;
   const outcome = outcomeText(row);
   const tokens = wfFmtTokens(row.tokens);
-  if (!duration && !outcome && !tokens) return null;
+  const visits = (row.visits ?? 0) > 1 ? row.visits : null;
+  if (!duration && !outcome && !tokens && !visits) return null;
   return (
     <>
+      {visits && <span className="tabular-nums flex-shrink-0" title="Times the run entered this step; its time is the last one's" data-step-visits={visits}>{visits} visits</span>}
       {duration && <span className="tabular-nums flex-shrink-0">{duration}</span>}
       {tokens && <span className="tabular-nums flex-shrink-0">{tokens} tok</span>}
       {outcome && <span className={`truncate ${row.status === "failed" ? "text-sol-red/80" : ""}`}>{outcome}</span>}
