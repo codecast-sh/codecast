@@ -7792,6 +7792,7 @@ export default defineSchema({
       v.literal("ux"),
       v.literal("cohesion"),
       v.literal("request"),
+      v.literal("flowstop"),
     ),
     fingerprint: v.string(),
     title: v.string(),
@@ -9388,6 +9389,12 @@ export default defineSchema({
     // (cast workflow resume --queue): the line's sweep resumes it there, ahead
     // of new starts (orgLine.planSweep), onto the current flow when asked.
     resume_queued: v.optional(v.object({ at: v.string(), current_flow: v.optional(v.boolean()), by: v.id("users"), since: v.number() })),
+    // The run's last stop at a stop exit (flowStops.ts): the station that failed it and the key its stop files a
+    // flowstop signal under. `incident_task_id`: the cause the same stop on other changes made an incident of; the
+    // run's task waits on it, and the run is queued to resume at stop_station when it closes.
+    stop_station: v.optional(v.string()),
+    stop_fingerprint: v.optional(v.string()),
+    incident_task_id: v.optional(v.id("tasks")),
     // When a re-pin moved the live run onto newer flow versions (flowVersions.repinLiveRuns). Its runner holds the
     // graph it loaded at start, so the run's machine restarts the runner once the run waits at a gate (daemon
     // resumeOrphanedWorkflowRuns); the new runner's first report clears it.
@@ -9433,6 +9440,8 @@ export default defineSchema({
     .index("by_workspace_graph", ["workspace", "graph_hash", "updated_at"])
     // Sparse in effect: only runs queued to resume carry resume_queued, read oldest first by the sweep.
     .index("by_resume_queued", ["resume_queued.since"])
+    // Sparse in effect: the runs an incident holds, resumed when it closes (flowStops.resumeIncidentRuns).
+    .index("by_incident_status", ["incident_task_id", "status"])
     // The run behind a pull request (changeApprovals.ts).
     .index("by_pr", ["pr.repository", "pr.number"]),
 
