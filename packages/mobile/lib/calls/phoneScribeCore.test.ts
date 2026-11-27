@@ -194,4 +194,23 @@ describe("phone scribe", () => {
     await settle();
     expect(h.log).toEqual(["start", "release"]);
   });
+
+  test("a recognizer that fails is opened again on the same mic, waiting longer each time", async () => {
+    const h = await scribing();
+    h.sessions[0].events.onFailed("refused");
+    await settle();
+    expect(h.engine.getStatus().trackCount).toBe(0);
+    h.advance(1_000);
+    await settle();
+    expect(h.sessions).toHaveLength(2);
+    expect(h.taps).toHaveLength(1);
+    h.sessions[1].events.onFailed("refused");
+    await settle();
+    h.advance(1_000);
+    await settle();
+    expect(h.sessions).toHaveLength(2);
+    h.advance(1_000);
+    await settle();
+    expect(h.sessions).toHaveLength(3);
+  });
 });
