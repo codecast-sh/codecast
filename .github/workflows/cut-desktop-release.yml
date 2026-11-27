@@ -272,6 +272,9 @@ jobs:
               echo "::error::main's desktop version is $on_main, not $PREVIOUS_VERSION: commit the $RELEASE_VERSION bump by hand"
               exit 1
             fi
+            # errexit is off for a subshell on the left of && or inside if, so run it
+            # as its own statement and read its status.
+            set +e
             (
               set -euo pipefail
               cd "$tree"
@@ -282,7 +285,13 @@ jobs:
               git add packages/electron/package.json packages/web/server/index.ts
               git commit -q -m "chore(electron): bump desktop to v$RELEASE_VERSION"
               git push -q origin HEAD:main
-            ) && { echo "- Bumped main to $RELEASE_VERSION" >> "$GITHUB_STEP_SUMMARY"; exit 0; }
+            )
+            status=$?
+            set -e
+            if [[ $status -eq 0 ]]; then
+              echo "- Bumped main to $RELEASE_VERSION" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
             echo "push attempt $attempt lost a race with main; retrying"
             sleep $((attempt * 5))
           done

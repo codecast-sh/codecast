@@ -99,7 +99,8 @@ ARTIFACTS=(
 # The feed goes last so no updater sees it before the installer it names.
 if [ "$WINDOWS" = "1" ]; then ARTIFACTS+=("dist/$WIN_INSTALLER" "dist/latest.yml"); fi
 # Last: what the desktop deploy target reads as live (.codecast/deploy.toml), naming the commit built.
-jq -c -n --arg version "$NEW_VERSION" --arg source "$(git -C "$REPO_ROOT" rev-parse HEAD)" \
+SOURCE_SHA=$(git -C "$REPO_ROOT" rev-parse HEAD)
+jq -c -n --arg version "$NEW_VERSION" --arg source "$SOURCE_SHA" \
   '{version: $version, sourceCommit: $source}' > dist/release.json
 ARTIFACTS+=("dist/release.json")
 # Versioned binaries are immutable, but latest-mac.yml is polled for new releases.
@@ -188,7 +189,7 @@ fi
 # finishing the deploy codecast asked for when it ran this. Non-fatal. With
 # --no-git the caller commits, so it marks (scripts/deploy-all.sh).
 if [ "$NO_GIT" != "1" ]; then
-  cast ship mark --surface desktop --sha "$(git rev-parse HEAD)" --version "$NEW_VERSION" ${CAST_DEPLOY_ID:+--deploy "$CAST_DEPLOY_ID"} \
+  cast ship mark --surface desktop --sha "$SOURCE_SHA" --version "$NEW_VERSION" ${CAST_DEPLOY_ID:+--deploy "$CAST_DEPLOY_ID"} \
     || echo "  desktop deploy not recorded in codecast (non-fatal)"
 fi
 

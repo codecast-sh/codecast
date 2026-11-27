@@ -91,3 +91,6 @@ when = ["packages/electron/**"]
 run = "scripts/cut-desktop-release.sh"
 live = "json:https://dl.codecast.sh/desktop/release.json#sourceCommit,version"
 policy = "press"
+# A send can wait up to 90 min for a cut in flight (scripts/cut-desktop-release.sh), then
+# builds and notarizes for 10 to 30 min.
+deadline = "3h"
