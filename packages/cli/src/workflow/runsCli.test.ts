@@ -79,6 +79,17 @@ test("the detail names each station with its label, time, outcome and session, a
   expect(formatRunDetail({ ...run, status: "failed", fail_reason: "verify exited 1" }, new Map(), now)).toContain("failed: verify exited 1");
 });
 
+// Polish round 5: ct-102514 read "brief running, 11.7h so far" while its session had asked a person; the run page said so.
+test("a station waiting on its session says what it waits on: a person's question, else the session", () => {
+  const run: RunListRow = { _id: "r1", status: "running", current_node_id: "brief", created_at: 0, updated_at: 1, node_statuses: [{ node_id: "brief", status: "running", started_at: 0 }],
+    waiting_on_session: { node_id: "brief", conversation_id: "jx77vd1wvg6zyaahyvkp7bez4s8k09rm", note: "PR #311 rebased and mergeable; merging waits on your call in sd-5054", blocked: true, since: 0 } };
+  expect(formatRunDetail(run, new Map(), 60_000)).toMatch(/brief\s+running, 1m so far <\n\s+.*waiting for a person:.* merging waits on your call in sd-5054 \(asked by session jx77vd1\)$/);
+  const fixing = formatRunDetail({ ...run, waiting_on_session: { node_id: "brief", conversation_id: "jx74bpdghknx", note: "## Review asked for changes\n\nShould it sign in?" } }, new Map(), 60_000);
+  expect(fixing).toContain("waiting on session jx74bpd: Should it sign in?");
+  expect(fixing).not.toContain("a person");
+  expect(formatRunDetail({ ...run, waiting_on_session: null }, new Map(), 60_000)).not.toContain("waiting");
+});
+
 // Polish round 3: a gate's outcome read "outcome s", the key a person picked; it reads as the option they chose.
 test("a gate's outcome reads as the option the person picked", () => {
   const run: RunListRow = { _id: "r1", status: "completed", created_at: 0, updated_at: 1, node_statuses: [{ node_id: "decide__decide", status: "completed", outcome: "s", started_at: 0, completed_at: 60_000 }, { node_id: "merge", status: "completed", outcome: "success", started_at: 0, completed_at: 1 }] };
