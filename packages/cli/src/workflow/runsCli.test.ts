@@ -90,12 +90,16 @@ test("a failed run's restart is the one its stop names in the graph's words, els
   expect(restartHint({ task_short_id: "ct-9", workflow_slug: "line" }, null)).toBe("try it again: cast workflow resume ct-9 --at <station>");
 });
 
-// A repo's own flow that shares the library's slug names the library's restart only when its graph is the library's.
-test("a run on a repo's own flow named change names no library restart", async () => {
+// A flow named change names the library's restart for a stop node it keeps as the library's (same id and label),
+// whatever stations it adds (codecast's own variant adds local_ci); a node of its own at that id names none.
+test("a variant of change keeps the library's restart at the library's stop nodes; a repo's own node names none", async () => {
   const { BUILTIN_WORKFLOW_TEMPLATES } = await import("./templates.js");
   const { parseWorkflowSource } = await import("./parser.js");
-  const shipped = [...parseWorkflowSource(BUILTIN_WORKFLOW_TEMPLATES.change).nodes.keys()].map((id) => ({ id }));
-  expect(await stopWords({ workflow_slug: "change", current_node_id: "noci" }, shipped)).toContain("--at pr");
-  expect(await stopWords({ workflow_slug: "change", current_node_id: "noci" }, [...shipped, { id: "lint" }])).toBeNull();
-  expect(await stopWords({ workflow_slug: "change", current_node_id: "noci" }, [{ id: "noci", stop: "Own words: `cast workflow resume x --at ci`" }])).toContain("--at ci");
+  const shipped = [...parseWorkflowSource(BUILTIN_WORKFLOW_TEMPLATES.change).nodes.values()].map((n) => ({ id: n.id, label: n.label }));
+  const noci = { workflow_slug: "change", current_node_id: "noci" };
+  expect(await stopWords(noci, shipped)).toContain("--at pr");
+  expect(await stopWords(noci, [...shipped, { id: "local_ci", label: "Local CI" }])).toContain("--at pr");
+  expect(await stopWords(noci, shipped.map((n) => (n.id === "noci" ? { ...n, label: "Our own stop" } : n)))).toBeNull();
+  expect(await stopWords(noci, shipped.filter((n) => n.id !== "noci"))).toBeNull();
+  expect(await stopWords(noci, [{ id: "noci", stop: "Own words: `cast workflow resume x --at ci`" }])).toContain("--at ci");
 });

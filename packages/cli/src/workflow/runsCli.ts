@@ -155,23 +155,22 @@ export function restartHint(run: { task_short_id?: string | null; workflow_slug?
 
 /**
  * The graph's own words for the stop a failed run ended at: the run's own node when its graph keeps a stop, else the
- * shipped template's, but only when the run's graph is that template as shipped (the same stations). A repo's own or
- * edited flow that shares the slug names no restart rather than the library's (a stored row keeps no stop).
+ * shipped template's stop node, judged per node: only when the run's graph has that node with the template's label
+ * (a variant that extends the template keeps its stop nodes, whatever stations it adds). A repo's own node at that id
+ * (another label, or a node the template lacks) names no restart rather than the library's (a stored row keeps no
+ * stop). Without the run's nodes (the server could not say), the template's stop stands.
  */
-export async function stopWords(run: { workflow_slug?: string | null; current_node_id?: string | null }, nodes?: Array<{ id: string; stop?: string | null }> | null): Promise<string | null> {
+export async function stopWords(run: { workflow_slug?: string | null; current_node_id?: string | null }, nodes?: Array<{ id: string; label?: string | null; stop?: string | null }> | null): Promise<string | null> {
   if (!run.current_node_id) return null;
   const own = nodes?.find((n) => n.id === run.current_node_id);
+  if (nodes && !own) return null;
   if (own?.stop) return own.stop;
   const { BUILTIN_WORKFLOW_TEMPLATES } = await import("./templates.js");
   const src = run.workflow_slug ? (BUILTIN_WORKFLOW_TEMPLATES as Record<string, string>)[run.workflow_slug] : undefined;
   if (!src) return null;
   try {
-    const shipped = (await import("./parser.js")).parseWorkflowSource(src);
-    if (nodes) {
-      const ids = new Set(nodes.map((n) => n.id));
-      if (ids.size !== shipped.nodes.size || [...shipped.nodes.keys()].some((id) => !ids.has(id))) return null;
-    }
-    return shipped.nodes.get(run.current_node_id)?.stop ?? null;
+    const shipped = (await import("./parser.js")).parseWorkflowSource(src).nodes.get(run.current_node_id);
+    return shipped && (!own || (shipped.label ?? shipped.id) === (own.label ?? own.id)) ? shipped.stop ?? null : null;
   } catch {
     return null;
   }

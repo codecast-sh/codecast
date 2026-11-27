@@ -661,7 +661,7 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
     const landUnknown = own && plan.some((b) => b.role === "land" && view!.station(b.id).state === "unknown");
     // Any flow's stop that names its own resume (a personal Ship's Landing unknown; a change run's CI never reported):
     // that is the way on, the same one the session heard and `cast workflow show` prints.
-    const resume = resumeOf(run, graph.nodes);
+    const resume = resumeOf(run, graph.nodes, graph.slug);
     const fix: StopFix = landedAlready && stage?.role !== "deploy" ? (subject ? "session" : "run")
       : stage?.role === "deploy" && deploysItself ? (deliberate || landedAlready ? "run" : "again")
       : stage?.role === "deploy" ? "deploy"

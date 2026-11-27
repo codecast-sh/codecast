@@ -136,6 +136,12 @@ describe("B: the head is structure, never a station's free text", () => {
     const noci = run({ status: "failed", current_node_id: "noci", fail_reason: "Stopped: CI never reported on the pushed head, also after running it again. The change is not at fault: resume this run at PR (`cast workflow resume ct-1 --at pr`) to run CI and a fresh review on the same change once GitHub runs CI on pull requests again. What CI said: x", node_statuses: [...ROUND, verdicts("no_ci", "timed_out", "ship"), st("noci", "failed", 20)] });
     expect(journeyOf(change, noci, [], null).now).toMatchObject({ kind: "stopped", resume: { at: "pr", label: "PR" } });
     expect(act(noci)).toEqual({ kind: "session", label: "Open session", href: "/conversation/subj" });
+    // A variant that extends the library flow (codecast's own adds local_ci) keeps the library's stop nodes, whose
+    // words its pushed source does not carry: it names the same resume. Its own node at that id names none.
+    const variant = (relabel: boolean) => pushedFlow({ _id: "wf_cc", ...change, slug: "change", name: "change", source: 'digraph change {\n  graph [extends="change"]\n  local_ci [after="pr", label="Local CI", shape=parallelogram, script="bun run ci"]\n}',
+      nodes: [...change.nodes.map(({ stop: _s, ...n }: any) => (relabel && n.id === "noci" ? { ...n, label: "Our CI gave up" } : n)), { id: "local_ci", label: "Local CI", type: "command", shape: "parallelogram" }] } as any) as any;
+    expect((journeyOf(variant(false), noci, [], null).now as any).resume).toEqual({ at: "pr", label: "PR" });
+    expect((journeyOf(variant(true), noci, [], null).now as any).resume).toBeUndefined();
     // A runner that crashed at a station whose words name no resume runs again.
     expect(act({ ...noci, current_node_id: "checks", fail_reason: "runner crashed", node_statuses: [st("pr", "completed", 1), st("checks", "failed", 2)] })).toMatchObject({ kind: "again" });
   });
