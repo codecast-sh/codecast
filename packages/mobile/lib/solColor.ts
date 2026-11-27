@@ -36,6 +36,24 @@ export function solColor(value: string | undefined | null, t: Palette, fallback:
   return /^(#|rgb)/.test(value) ? value : fallback;
 }
 
+/** The hex behind a colour as web's vocabulary tables write it: a CSS value
+ *  (solColor's forms, a `--sol-class-*` token, `color-mix(in srgb, a p%, b)`)
+ *  or a Tailwind text class (`text-sol-yellow`, `text-[color:…]`). */
+export function webColor(value: string | undefined | null, t: Palette, fallback: string = t.textMuted): string {
+  if (!value) return fallback;
+  const v = value.trim();
+  const named = /(?:^|\s)text-sol-([a-z-]+)(?:\s|$)/.exec(v);
+  if (named) return solColor(`var(--sol-${named[1]})`, t, fallback);
+  const arbitrary = /(?:^|\s)text-\[color:(.+?)\](?:\s|$)/.exec(v);
+  const css = (arbitrary ? arbitrary[1].replace(/_/g, ' ') : v).replace(/--sol-class-/g, '--sol-');
+  const mix = /^color-mix\(in srgb,\s*(.+?)\s+(\d+(?:\.\d+)?)%,\s*(.+)\)$/.exec(css);
+  if (mix) {
+    const b = mix[3].trim();
+    return mixColor(solColor(mix[1], t, fallback), Number(mix[2]), b === 'transparent' ? b : solColor(b, t, fallback));
+  }
+  return solColor(css, t, fallback);
+}
+
 function rgbOf(hex: string): [number, number, number] | null {
   const m = /^#([\da-f]{2})([\da-f]{2})([\da-f]{2})$/i.exec(hex.trim()) ?? /^#([\da-f])([\da-f])([\da-f])$/i.exec(hex.trim());
   if (!m) return null;
