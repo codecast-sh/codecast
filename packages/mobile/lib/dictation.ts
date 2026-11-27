@@ -10,14 +10,15 @@
 // the controller would take its own words for the person editing.
 
 import { useCallback, useContext, useEffect, useRef, useState, type RefObject } from 'react';
-import { AppState, type NativeSyntheticEvent, type TextInput, type TextInputSelectionChangeEventData } from 'react-native';
+import { AppState, Linking, type NativeSyntheticEvent, type TextInput, type TextInputSelectionChangeEventData } from 'react-native';
 import { NavigationContext } from '@react-navigation/native';
 import { useConvex } from 'convex/react';
 import { teamVendorBlock } from '@codecast/shared/contracts';
 import { DICTATION_IDLE, createDictation, dictationLanguages, dictationStopLine, type Dictation, type DictationField, type DictationHost, type DictationState } from '@codecast/shared/contracts/dictation';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
-import { phoneDictationHost } from './dictationHost';
+import { DICTATION_NEEDS_MIC, phoneDictationHost } from './dictationHost';
 import { getDictationLanguage } from './dictationLanguage';
+import { appAlert, type AlertButton } from './popups';
 import { showNotice } from './undoBar';
 
 export type DictationTarget = {
@@ -53,6 +54,17 @@ function vendorBlockOf(s: any): string | null {
   return null;
 }
 
+/** Why a start failed, as a dialog: what the struck mic says when tapped
+ *  (`retry` adds Try again), and what a refused microphone says at once.
+ *  A refused microphone is fixed only in the phone's Settings, so it offers
+ *  the way there. */
+export function explainDictationFailure(error: string, retry?: () => void) {
+  const buttons: AlertButton[] = [{ text: retry ? 'OK' : 'Not now', style: 'cancel' }];
+  if (retry) buttons.push({ text: 'Try again', onPress: retry });
+  if (error === DICTATION_NEEDS_MIC) buttons.push({ text: 'Open Settings', onPress: () => void Linking.openSettings() });
+  appAlert("Dictation didn't start", error, buttons);
+}
+
 export type PhoneDictation = {
   /** The person turned dictation on (Settings › Voice). */
   shown: boolean;
@@ -67,6 +79,9 @@ export type PhoneDictation = {
   /** Send through `fn` once the last words are in the box (now, when idle);
    *  nothing when cancelled meanwhile, once when pressed twice. */
   send(fn: () => void): void;
+  /** A send was pressed mid-recording and waits on the last words: Send
+   *  shows the wait, not ✓. */
+  sendWaiting: boolean;
   onSelectionChange(e: NativeSyntheticEvent<TextInputSelectionChangeEventData>): void;
   /** The placeholder the box shows: "Listening…" while recording into an empty box. */
   placeholder(base: string): string;
@@ -132,12 +147,27 @@ export function useDictation(target: DictationTarget): PhoneDictation {
     setQueuedSend(null);
     queuedSend.fn();
   }, [queuedSend]);
+  // From the press until that send runs; Cancel (or any end) clears it.
+  const [sendPressed, setSendPressed] = useState(false);
+  useEffect(() => {
+    if (state.phase === 'idle') setSendPressed(false);
+  }, [state.phase]);
 
   // A recording that ended by itself says why, once.
   useEffect(() => {
     const line = dictationStopLine(state.stopped);
     if (line) showNotice(line);
   }, [state.stopped]);
+
+  // A start that failed says why at once; the struck mic says it again on a
+  // tap. Each failure is a new state object (a start clears the error first).
+  const explained = useRef<DictationState | null>(null);
+  useEffect(() => {
+    if (!state.error || explained.current === state) return;
+    explained.current = state;
+    if (state.error === DICTATION_NEEDS_MIC) explainDictationFailure(state.error);
+    else showNotice(state.error);
+  }, [state]);
 
   // The app going to the background (home, the phone locking) keeps what was
   // said and stops: the audio background mode would otherwise keep the
@@ -169,6 +199,7 @@ export function useDictation(target: DictationTarget): PhoneDictation {
   const send = useCallback((fn: () => void) => {
     const d = ctl.current;
     if (!d?.active) return fn();
+    setSendPressed(true);
     d.finishThen(() => setQueuedSend({ fn }));
   }, []);
   const onSelectionChange = useCallback((e: NativeSyntheticEvent<TextInputSelectionChangeEventData>) => {
@@ -182,5 +213,7 @@ export function useDictation(target: DictationTarget): PhoneDictation {
     [active, state.phase, target.value],
   );
 
-  return { shown, blocked, state, active, start, finish, cancel, send, onSelectionChange, placeholder };
+  const sendWaiting = (sendPressed && active) || queuedSend !== null;
+
+  return { shown, blocked, state, active, start, finish, cancel, send, sendWaiting, onSelectionChange, placeholder };
 }
