@@ -12,6 +12,7 @@ import type { ReparentSessionTarget } from "../sessionOwnership";
 import { findConversationByAnyRefWhere } from "../conversationSessionLookup";
 import { checkConversationAccess } from "../privacy";
 import { isClosedSession } from "@codecast/shared/contracts";
+import { runsInParentProcess } from "@codecast/shared/contracts/runsInParent";
 
 // Picker roster cap. The live listOwners subscription must NEVER walk the
 // team — that collect + N user-doc reads is what blew the syscall budget
@@ -183,9 +184,10 @@ export async function ownersChangeFor(
 /** A session nested under its parent by how it was started, not by who owns
  *  it, never moves between parents: a Claude Code subagent or a
  *  `cast spawn --subagent` worker (is_subagent), a workflow station, a plan
- *  handoff. An adopt or a detach of one is refused. */
+ *  handoff, or anything running inside its parent's process. An adopt or a
+ *  detach of one is refused. */
 export function assertMovableWorker(conversation: any): {} {
-  if (conversation.is_subagent || conversation.is_workflow_sub || conversation.parent_message_uuid) throw new Error("It is nested under its session by how it was started; it can't be moved");
+  if (conversation.is_subagent || conversation.is_workflow_sub || conversation.parent_message_uuid || runsInParentProcess(conversation)) throw new Error("It is nested under its session by how it was started; it can't be moved");
   return {};
 }
 
@@ -328,9 +330,10 @@ export async function writeOwnersChange(
   if (change.adoptParent) {
     // A worker of another session now: the parent owns it (released only
     // when an undo puts a released parent back).
+    // It keeps its own process (assertMovableWorker refused any that runs in
+    // its parent's), so its runs_in_parent stays false. adopted_at marks the
+    // drag for its placement in the inbox, never for a process gate.
     patch.parent_conversation_id = change.adoptParent;
-    // It still runs its own process (assertMovableWorker refused any nested
-    // by how it runs), so a revive treats it as itself (isSubagentConversation).
     if (conversation.adopted_at == null) patch.adopted_at = now;
     if ((conversation.parent_released_at ?? null) !== (next.parent_released_at ?? null)) patch.parent_released_at = next.parent_released_at ?? undefined;
   } else if (change.detachParent) {

@@ -57,8 +57,10 @@ describe("processSessionFile feeds the subagent finish tracker", () => {
       await subagentFinish.check(filePath);
       expect(status).toEqual(["active:convChild", "completed:convChild"]);
 
-      // The parent resumes it: new lines well after the stale meta.
+      // The parent resumes it: Claude Code rewrites the meta without
+      // `finished` (2.1.332) and new lines land.
       const later = new Date(Date.now() + 120_000);
+      fs.writeFileSync(metaPath, JSON.stringify({ agentType: "general-purpose", description: "Do it" }));
       fs.appendFileSync(filePath, line(agentSessionId, projDir, "f3", "user", "One more thing.") + "\n");
       fs.utimesSync(filePath, later, later);
       await run();

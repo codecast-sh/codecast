@@ -24,10 +24,25 @@ const modules = {
 
 const REPO = "acme/app";
 const realFetch = globalThis.fetch;
-afterEach(() => { globalThis.fetch = realFetch; });
+// Every test leaves refresh jobs scheduled (the push sweep's run 45s out, a
+// batch's retry 15s out) on convex-test's real timers. Left pending, they fire
+// minutes later inside whatever file runs then and call its fetch mock (84
+// GitHub reads landed in replayPlayer.test.ts's storeReplayDom).
+const worlds: Array<ReturnType<typeof convexTest>> = [];
+afterEach(async () => {
+  for (const t of worlds.splice(0)) {
+    await t.run(async (ctx) => {
+      for (const job of await ctx.db.system.query("_scheduled_functions").collect()) {
+        if (job.state.kind === "pending") await ctx.scheduler.cancel(job._id);
+      }
+    });
+  }
+  globalThis.fetch = realFetch;
+});
 
 async function setup(openOnMain: number) {
   const t = convexTest(schema, modules);
+  worlds.push(t);
   const ids = await t.run(async (ctx) => {
     const team = await ctx.db.insert("teams", { name: "Acme", created_at: 0, invite_code: "acme" } as any);
     const ana = await ctx.db.insert("users", { name: "Ana", team_id: team, github_access_token: "tok" } as any);

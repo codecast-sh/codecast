@@ -1,6 +1,7 @@
 import type { QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import { isDaemonManagedRow, listLiveManagedSessions } from "./lib/liveSessions";
+import { runsInParentProcess } from "@codecast/shared/contracts/runsInParent";
 
 // The row set behind the /sessions page, which managedSessions.listActiveSessions
 // serves. Split from the query wrapper (like performRegisterManagedSession) so
@@ -25,6 +26,7 @@ export async function performListActiveSessions(ctx: { db: QueryCtx["db"] }, use
     let worktreeName: string | undefined;
     let headline: string | undefined;
     let isSubagent: boolean | undefined;
+    let runsInParent: boolean | undefined;
     let conversationUpdatedAt: number | undefined;
     let lastMessagePreview: string | undefined;
     let lastMessageRole: string | undefined;
@@ -52,6 +54,7 @@ export async function performListActiveSessions(ctx: { db: QueryCtx["db"] }, use
         gitBranch = conv.git_branch;
         worktreeName = conv.worktree_name;
         isSubagent = conv.is_subagent;
+        runsInParent = runsInParentProcess(conv);
         // updated_at moves on real conversation activity (messages, status) but
         // NOT on idle heartbeats or metrics writes — the honest "last active"
         // signal. The preview/role give every row something identifiable even
@@ -119,6 +122,8 @@ export async function performListActiveSessions(ctx: { db: QueryCtx["db"] }, use
       worktree_name: worktreeName,
       headline,
       is_subagent: isSubagent,
+      // What the page's hibernation gate reads (shared runsInParentProcess).
+      runs_in_parent: runsInParent,
       conversation_updated_at: conversationUpdatedAt,
       last_message_preview: lastMessagePreview,
       last_message_role: lastMessageRole,

@@ -25,7 +25,7 @@ import { canAccessConversation, canAccessDoc, canAccessPlan, canAccessTask } fro
 import { checkConversationAccess, teamReadLevel } from "./privacy";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { ENTITY_TYPE, NOTIFICATION_TYPE } from "./lib/notificationTypes";
-import { isAgentSpawnedConversation, isSubagentConversation } from "./ccAccountsShared";
+import { answersToParent, isAgentSpawnedConversation } from "./ccAccountsShared";
 import {
   trustedAgentStatus,
   deriveSessionActivity,
@@ -847,11 +847,13 @@ export async function performNeedsInputCheck(
   const escalated = !!model && (unheard || waitReachedPeople(conv));
   // The sound skips pinned (isSessionWaitingForInput's !is_pinned arms).
   if (conv.inbox_pinned_at && !escalated) return { notified: false, reason: "pinned" };
-  // Mirror of the web's isSub guard (inboxStore): the SAME two shared
-  // predicates, in the same order — isSubagentConversation here (reason
-  // "subagent": is_subagent / parent link; a workflow sub keeps this reason
-  // too, though isAgentSpawnedConversation would also catch it) and the
-  // isAgentSpawnedConversation gate just below (reason "agent_spawned"). The
+  // Mirror of the web's isSub guard (inboxStore), exactly and in the same
+  // order: a released child (parent_released_at: a person took it over) skips
+  // both stand-downs and is heard like any session they own; otherwise a
+  // child that answers to its parent stands down here (reason "subagent": the
+  // shared answersToParent; a workflow sub keeps this reason too, though
+  // isAgentSpawnedConversation would also catch it) and an agent-spawned row
+  // at the gate just below (reason "agent_spawned"). The
   // idle sound skips these, so the push does too. A worktree (local
   // --isolated, path-stamped, or a cloud host's) is a LOCATION, not a parent,
   // so a human-started worktree session pushes. Agent fan-out in worktrees
@@ -864,14 +866,15 @@ export async function performNeedsInputCheck(
   // Under the owners model who owns it decides who hears, so these two
   // stand-downs are the model's own: a child its parent session owns never
   // reaches here unless the wait went up to its people.
-  if (!model && (isSubagentConversation(conv) || conv.is_workflow_sub)) {
+  const takenOver = conv.parent_released_at != null;
+  if (!model && !takenOver && (answersToParent(conv) || conv.is_workflow_sub)) {
     return { notified: false, reason: "subagent" };
   }
   // The bar is "a session the USER was driving is waiting on THEM". Machine-
   // initiated sessions never clear it: agent fan-out (cast spawn, agent-team
   // fleets — the same classification that gates the "started coding" team
   // notification) and schedule runs park idle after every turn by design.
-  if (!model && isAgentSpawnedConversation(conv)) {
+  if (!model && !takenOver && isAgentSpawnedConversation(conv)) {
     return { notified: false, reason: "agent_spawned" };
   }
   if (conv.agent_task_id && !escalated) {

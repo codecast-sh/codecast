@@ -2,6 +2,8 @@ import { isClosedSession } from "@codecast/shared/contracts";
 import { UNCONFIRMED_DELIVERY_REASON, isReservedDevice } from "@codecast/shared/contracts";
 import { noteScreenRecordingSent } from "./lib/screenRecordingSent";
 import { steeringOwnerFor, suggestFromTeammate } from "./teamSuggestions";
+import { runsInParentProcess } from "@codecast/shared/contracts/runsInParent";
+import { takeOverInProcessChild } from "./lib/inProcessTakeover";
 import { unreachableTerminalOf } from "@codecast/shared/contracts/deliveryHold";
 import { isWorkflowRunLog } from "./lib/runLog";
 import { clientRunAnswerRefusal } from "./lib/commandRuns";
@@ -550,6 +552,13 @@ export async function enqueuePendingMessage(
     }
   }
 
+  // Any message that will reach a session inside its parent's process takes
+  // it over: delivering it resumes the child as its own process once the
+  // parent's copy has stopped (lib/inProcessTakeover). A held note waits.
+  if (!(fields.hold || (fields.defer && !conversation.standing_role_id))) {
+    await takeOverInProcessChild(ctx, fromUserId, conversation, { person: fields.human === true });
+  }
+
   // A screen recording rides this send: from now on it is sent, and kept.
   await noteScreenRecordingSent(ctx, conversation._id, fromUserId, fields.content);
 
@@ -1038,6 +1047,16 @@ export async function performSessionSend(
   }
   if (target.ended_at) {
     throw new Error(`Session ${target.short_id ?? target._id.toString().slice(0, 7)} has ended; the message was not sent`);
+  }
+  // Only the parent's own tools reach a session inside its process; a line
+  // from another session would land in the parent's pane, or start a second
+  // copy of it. A person's message takes it over instead (lib/inProcessTakeover).
+  // Once released, the daemon holds any line until that copy stops, so the
+  // `cast send` the parent's notice names goes through.
+  if (fromRef && !args.direct && runsInParentProcess(target) && target.parent_released_at == null) {
+    const parent = target.parent_conversation_id ? await ctx.db.get(target.parent_conversation_id) : null;
+    const parentShort = parent ? (parent.short_id ?? String(parent._id).slice(0, 7)) : "its parent";
+    throw new Error(`${target.short_id ?? target._id.toString().slice(0, 7)} runs inside ${parentShort}'s process; message its parent instead.`);
   }
 
   const isCrossUser = target.user_id.toString() !== authUserId.toString();

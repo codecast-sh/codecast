@@ -3,7 +3,7 @@
 // phone bundle reaches this file: relative imports only, and only types from
 // the store, which imports this module.
 import { isUnderRole, roleLeadIdsOf, underOwnersModel } from "@codecast/shared/contracts";
-import { isAgentTeamWorker, isSubagentConversation, nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
+import { isAgentTeamWorker, nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
 import type { InboxSession } from "./inboxStore";
 
 // Subagent/teammate rows never float at their own slot in a flat list — they
@@ -66,7 +66,7 @@ export function dropOrphanSubagents(list: InboxSession[], focusedId?: string | n
     // Under the owners model nothing nests: a listed row is one the viewer owns.
     if (underOwnersModel(s)) return true;
     // A role's session is a subagent of the role's card.
-    if (!isSubagentConversation(s) && !isAgentTeamWorker(s) && !isUnderRole(s)) return true;
+    if (!(s.is_subagent || s.parent_conversation_id) && !isAgentTeamWorker(s) && !isUnderRole(s)) return true;
     const p = nestParentOf(s);
     return !!p && p !== s._id && present.has(p);
   });

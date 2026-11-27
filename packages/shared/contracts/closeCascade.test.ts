@@ -22,8 +22,8 @@ describe("goesDownWithLead", () => {
     // A client row never carries cli_flags: the server's verdict rides as headless_launch.
     expect(goesDownWithLead({ session_id: "019a0000-codex-thread", agent_type: "codex", parent_conversation_id: "lead", headless_launch: true })).toBe(true);
     expect(goesDownWithLead({ session_id: "019a0000-codex-station", agent_type: "codex", parent_conversation_id: "lead", headless_launch: false })).toBe(false);
-    // A named workflow agent id is not a Claude subagent transcript id.
-    expect(goesDownWithLead({ session_id: "agent-averify-bugs-7-9-06a0cd0a0f0da259" })).toBe(false);
+    // A named in-process agent (agent-<name>-<hex>) runs inside the lead too.
+    expect(goesDownWithLead({ session_id: "agent-averify-bugs-7-9-06a0cd0a0f0da259" })).toBe(true);
     expect(goesDownWithLead(spawned)).toBe(false);
     expect(goesDownWithLead({ ...teammate, agent_name: "team-lead" })).toBe(false);
     // A cast-spawned codex worker (spawn stamps spawned_by) has its own process.
@@ -31,6 +31,13 @@ describe("goesDownWithLead", () => {
     // A codex session with no parent is nobody's child.
     expect(goesDownWithLead({ session_id: "019a0000-codex-top", agent_type: "codex" })).toBe(false);
     expect(goesDownWithLead({})).toBe(false);
+  });
+  // The stored fact decides over the session id: a child promoted to its own
+  // process outlives its lead, and a teammate still goes down with it.
+  test("runs_in_parent decides when the row holds it", () => {
+    expect(goesDownWithLead({ ...taskSub, runs_in_parent: false })).toBe(false);
+    expect(goesDownWithLead({ ...spawned, runs_in_parent: true })).toBe(true);
+    expect(goesDownWithLead({ ...teammate, runs_in_parent: false })).toBe(true);
   });
 });
 

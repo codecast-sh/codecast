@@ -339,6 +339,10 @@ export interface CreateConversationParams {
   // conversation isn't resolvable yet, so the server never treats the row as
   // a human-started session (teammate start notifications).
   isSubagent?: boolean;
+  // The transcript runs inside its parent's process (a subagents/ transcript,
+  // a codex child running in its lead). Left out, the server stamps it from
+  // the session id (conversations.createConversation).
+  runsInParent?: boolean;
   // The trigger this transcript is a spawned run of (taskScheduler.triggerRunTaskId).
   agentTaskId?: string;
   // Agent-team stamps from a teammate's JSONL (see parser.extractTeamInfo).
@@ -1242,6 +1246,7 @@ export class SyncService {
           worktree_status: gitInfo?.worktreeName ? "active" : undefined,
           subagent_description: params.subagentDescription,
           is_subagent: params.isSubagent || undefined,
+          runs_in_parent: params.runsInParent,
           agent_task_id: params.agentTaskId,
           agent_team_name: params.agentTeamName,
           agent_name: params.agentName,

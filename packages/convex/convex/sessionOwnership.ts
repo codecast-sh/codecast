@@ -39,8 +39,8 @@ import { movedFields } from "@codecast/shared/contracts/orgChange";
 import { findOwnableConversation, personName, roleMayHoldSession, tellSession } from "./lib/sessionTell";
 import { reportsToKey, reportsToLine, reportsToOf, type ReportsTo } from "./lib/reportsTo";
 import { notPriorityCard } from "./lib/priorityCardAccess";
-export { reportsToLine, type ReportsTo };
-export { personName, roleMayHoldSession };
+import { tellParentIfReleased } from "./lib/inProcessTakeover";
+export { reportsToLine, type ReportsTo, personName, roleMayHoldSession };
 import { labelsOf, noteOrgChange, rememberOrgRecord, roleSubject, sessionParent, sessionSubject, whereOfRole, whereOfSession, withOrgChange } from "./lib/orgChangeLog";
 
 // Session OWNERS — the humans whose inboxes a session appears in and who may
@@ -348,6 +348,7 @@ async function reparentSessionCore(
     added.push(...res.added);
     removed.push(...res.removed);
     roleId = res.roleId;
+    await tellParentIfReleased(ctx, authUserId, conversation, change);
     if (added.length > 0) await unhide(ctx, conversation);
     owners = await listOwnerInfos(ctx, conversation._id);
   } else if (args.target.kind === "user") {

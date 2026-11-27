@@ -14,6 +14,7 @@
     "./contracts": "./contracts/index.ts",
     "./contracts/agentAccess": "./contracts/agentAccess.ts",
     "./contracts/closeCascade": "./contracts/closeCascade.ts",
+    "./contracts/runsInParent": "./contracts/runsInParent.ts",
     "./contracts/claudeSubagentSession": "./contracts/claudeSubagentSession.ts",
     "./contracts/resourceOffloadIntent": "./contracts/resourceOffloadIntent.ts",
     "./contracts/moveRehearsal": "./contracts/moveRehearsal.ts",

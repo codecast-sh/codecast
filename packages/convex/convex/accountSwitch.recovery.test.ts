@@ -120,7 +120,7 @@ describe("auth recovery through the backend handler", () => {
     expect(await f.run()).toEqual({ acted: "auth_restart", conversations: 1 });
   });
 
-  test("respects opt-out, dismissed work, subagents, and other backends", async () => {
+  test("respects opt-out, dismissed work, in-process subagents, and other backends", async () => {
     const f = fixture();
     f.device.cc_auto_continue = false;
     f.tables.conversations.push(f.conversation("conversations_auth"));
@@ -128,7 +128,7 @@ describe("auth recovery through the backend handler", () => {
     f.device.cc_auto_continue = true;
     f.tables.conversations.splice(0, 1,
       f.conversation("conversations_dismissed", "auth", { inbox_dismissed_at: f.now }),
-      f.conversation("conversations_sub", "auth", { is_subagent: true }),
+      f.conversation("conversations_sub", "auth", { is_subagent: true, runs_in_parent: true }),
       f.conversation("conversations_codex", "auth", { agent_type: "codex" }));
     expect(await f.run()).toEqual({ acted: "nothing_blocked", dismissed: 1 });
     expect(f.tables.daemon_commands).toHaveLength(0);

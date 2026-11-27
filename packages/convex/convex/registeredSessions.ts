@@ -80,6 +80,7 @@ export const registerSession = mutation({
     }
     const now = Date.now();
     const id = await ctx.db.insert("conversations", {
+      runs_in_parent: false,
       user_id: userId,
       agent_type: "claude_code",
       session_id: args.session_id,

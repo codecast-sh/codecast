@@ -406,7 +406,17 @@ function repoSetting(cwd: string): string | null {
 
 /** `cast _session-trailer`: the hook's stdin in, its JSON answer out. */
 export async function runSessionTrailerHook(): Promise<void> {
-  const [{ readAuthConfig, defaultConfigDir }, { readLocalConversationMap, readSessionLinkCache, writeSessionLinkCache }] = await Promise.all([
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
+  const input = Buffer.concat(chunks).toString("utf-8");
+  // A SendMessage to a subagent promoted to its own session (subagentPromotion.ts).
+  const [{ defaultConfigDir }, { readPromotedAgents, sendMessageGuardOutput }] = await Promise.all([
+    import("./config/configDir.js"),
+    import("./subagentPromotion.js"),
+  ]);
+  const denied = sendMessageGuardOutput(input, (parent) => readPromotedAgents(defaultConfigDir())[parent]);
+  if (denied) return void process.stdout.write(`${denied}\n`);
+  const [{ readAuthConfig }, { readLocalConversationMap, readSessionLinkCache, writeSessionLinkCache }] = await Promise.all([
     import("./config/readAuthConfig.js"),
     import("./localConversationMap.js"),
   ]);
@@ -416,9 +426,7 @@ export async function runSessionTrailerHook(): Promise<void> {
   } catch {
     // An unreadable config only costs the server lookup.
   }
-  const chunks: Buffer[] = [];
-  for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
-  const out = await sessionTrailerHookOutput(Buffer.concat(chunks).toString("utf-8"), {
+  const out = await sessionTrailerHookOutput(input, {
     env: process.env,
     configEnabled: () => {
       const v = (config as Record<string, unknown> | null)?.session_trailer;

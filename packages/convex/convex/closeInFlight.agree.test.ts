@@ -6,7 +6,8 @@
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { convexTest } from "convex-test";
 import { closeInFlightReason, IN_FLIGHT_FACT_KEYS } from "@codecast/shared/contracts";
-import { closeLeavesStanding, launchedHeadless, standsApartFromLead, stillHolds } from "@codecast/shared/contracts/closeCascade";
+import { closeLeavesStanding, standsApartFromLead, stillHolds } from "@codecast/shared/contracts/closeCascade";
+import { launchedHeadless } from "@codecast/shared/contracts/runsInParent";
 import schema from "./schema";
 import { allModules } from "./testModules.testkit";
 import { cascadeTakesDown, closeSetsAsideOnServer, holdFactsOnServer, inFlightFactsOnServer, nestedGroupOf } from "./lib/closeAside";
@@ -43,6 +44,8 @@ const SCENARIOS: Record<string, Scenario> = {
   "fleet queued": { conv: { subagent_slot: "queued", subagent_slot_at: NOW - 60_000, parent_conversation_id: undefined } },
   "usage limit": { conv: { pending_api_error: true, pending_api_error_kind: "limit", pending_api_error_at: NOW - 60_000 } },
   "old usage limit": { conv: { pending_api_error: true, pending_api_error_kind: "limit", pending_api_error_at: NOW - 30 * 24 * 3_600_000 } },
+  // killSession stamps inbox_killed_at without inbox_dismissed_at; a killed row is never revived.
+  "killed with a usage limit": { conv: { pending_api_error: true, pending_api_error_kind: "limit", pending_api_error_at: NOW - 60_000, inbox_killed_at: NOW - 30_000 } },
   "armed trigger, no process": { conv: { armed_trigger_kind: "once" } },
 };
 

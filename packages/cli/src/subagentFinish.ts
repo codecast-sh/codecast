@@ -1,29 +1,40 @@
-// A Claude Code Task subagent that has finished is marked `completed`, softly:
-// a parent can resume a finished subagent with SendMessage, so new transcript
+// A Claude Code Task subagent that has stopped is marked `completed`, softly:
+// a parent can resume a stopped subagent with SendMessage, so new transcript
 // lines put it back to `active`.
 //
-// Claude Code says a Task subagent is done by adding `"finished": true` to the
-// `agent-<id>.meta.json` beside its transcript. Nothing watches that file, and
-// in about 6% of runs it is written after the transcript's last line, so the
-// check runs on a quiet timer after each transcript pass rather than on the
-// pass itself. `finished` is not cleared when the parent resumes the agent, so
-// it counts only when the meta was written around the transcript's end.
-// Teammates (meta carries `teamName`) never finish this way and are left alone.
+// Whether the in-process copy still runs is subagentRunState, read from the
+// agent's own two files and its parent's liveness (pl-1134 spike, Claude Code
+// 2.1.332). The same answer gates promoting a taken-over child to its own
+// process (subagentPromotion.ts), so the row's Working and the promotion agree.
+// Nothing watches the meta, so the check runs on a quiet timer after each
+// transcript pass rather than on the pass itself. Teammates (meta carries
+// `teamName`) are left alone here: they idle inside their lead.
 
 import { promises as fsp } from "node:fs";
 import * as path from "node:path";
+import { scanOpenBackgroundTasks } from "./backgroundTaskScan.js";
+import { claudeSessionProcessAlive } from "./claudeSessionAlive.js";
 
-/** How far the transcript may run past the meta write and still count as the
- *  run the meta describes. A resumed run appends well after a stale meta. */
-export const FINISH_META_SLACK_MS = 30_000;
-/** How long a subagent transcript must be quiet before its meta is read. */
+/** How long a subagent transcript must be quiet before its state is read. */
 export const FINISH_QUIET_MS = 15_000;
 
-export interface SubagentFileState {
-  /** Parsed meta.json, or null when it is missing or unreadable. */
+export type SubagentRunState = "running" | "stopped";
+
+export interface SubagentRunFacts {
+  /** Parsed agent-<id>.meta.json, or null when it is missing or unreadable. */
   meta: unknown;
-  metaMtimeMs: number;
-  jsonlMtimeMs: number;
+  /** The agent's own transcript. */
+  agentJsonl: string;
+  /** A live claude process holds the parent session (claudeSessionProcessAlive). */
+  parentAlive: boolean;
+  /** The parent's latest task-notification for this agent (parentTaskNotice). */
+  parentNotice?: ParentTaskNotice | null;
+}
+
+export interface ParentTaskNotice {
+  status: string;
+  /** The notification line's timestamp (ms). */
+  at: number;
 }
 
 export interface SubagentStatusSink {
@@ -37,25 +48,160 @@ function taskSubagentMeta(meta: unknown): { finished?: unknown } | null {
   return meta as { finished?: unknown };
 }
 
-/** True when the meta says the Task subagent finished and was written around
- *  the end of the transcript, not before a later resumed run. */
-export function subagentLooksFinished(state: SubagentFileState): boolean {
-  const meta = taskSubagentMeta(state.meta);
-  return meta?.finished === true && state.metaMtimeMs >= state.jsonlMtimeMs - FINISH_META_SLACK_MS;
+// The newest user or assistant line. Transcripts also carry api-request*,
+// attachment and data-flow-records lines, which say nothing about the run.
+function lastMessageLine(jsonl: string): { type: string; message?: { content?: unknown } } | null {
+  const lines = jsonl.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    try {
+      const d = JSON.parse(line);
+      if (d?.type === "user" || d?.type === "assistant") return d;
+    } catch {
+      // a torn tail
+    }
+  }
+  return null;
+}
+
+// When the agent last wrote anything: its newest timestamped line of any kind.
+function lastLineAt(jsonl: string): number {
+  const lines = jsonl.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    try {
+      const at = Date.parse(JSON.parse(line)?.timestamp);
+      if (Number.isFinite(at)) return at;
+    } catch {
+      // a torn tail
+    }
+  }
+  return 0;
+}
+
+function firstText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  const block = content.find((b) => b && typeof b === "object" && (b as { type?: unknown }).type === "text");
+  return typeof block?.text === "string" ? block.text : "";
+}
+
+/**
+ * Whether the in-process copy of a subagent can still take a step. `finished`
+ * alone is unsafe: it is written while the agent's own background work still
+ * runs (it wakes when that work reports), cleared on every resume and
+ * self-wake, and never written by a TaskStop, which leaves an interrupt line
+ * instead. A dead parent stops it whatever the files say (orphaned tool
+ * subprocesses can still write). A teammate (a named Agent call) never gets
+ * `finished`: it stops when its parent's latest notification for it says
+ * killed or stopped (TaskStop, or a resumed parent's sweep) and nothing was
+ * written after it; any agent counts as stopped by that notice.
+ */
+export function subagentRunState(f: SubagentRunFacts): SubagentRunState {
+  if (!f.parentAlive) return "stopped";
+  if (f.parentNotice && (f.parentNotice.status === "killed" || f.parentNotice.status === "stopped") && f.parentNotice.at >= lastLineAt(f.agentJsonl)) return "stopped";
+  const meta = f.meta && typeof f.meta === "object" ? (f.meta as { teamName?: unknown; finished?: unknown }) : null;
+  if (meta?.teamName !== undefined) return "running";
+  const last = lastMessageLine(f.agentJsonl);
+  const interrupted = last?.type === "user" && firstText(last.message?.content).startsWith("[Request interrupted by user");
+  if (meta?.finished !== true && !interrupted) return "running";
+  if (scanOpenBackgroundTasks(f.agentJsonl).size > 0) return "running";
+  return "stopped";
 }
 
 export function isSubagentTranscriptPath(filePath: string): boolean {
   return filePath.endsWith(".jsonl") && filePath.split(path.sep).includes("subagents");
 }
 
-async function readSubagentFileState(filePath: string): Promise<SubagentFileState | null> {
-  const metaPath = filePath.replace(/\.jsonl$/, ".meta.json");
+/** Whether the session a subagent transcript runs under has a live claude
+ *  process: <config dir>/projects/<project>/<parent>/subagents/agent-<id>.jsonl,
+ *  checked against <config dir>/sessions. */
+export function subagentParentAlive(filePath: string): boolean {
+  const parts = filePath.split(path.sep);
+  const idx = parts.lastIndexOf("subagents");
+  if (idx < 4 || parts[idx - 3] !== "projects") return true; // unknown layout: never call it dead
+  return claudeSessionProcessAlive(path.join(parts.slice(0, idx - 3).join(path.sep) || path.sep, "sessions"), parts[idx - 1]);
+}
+
+/** How much of the parent's transcript is read for its latest notification:
+ *  a parent transcript runs to tens of megabytes, and the notice that matters
+ *  is recent. */
+export const PARENT_NOTICE_TAIL_BYTES = 2 * 1024 * 1024;
+
+/**
+ * The parent's latest task-notification naming `taskId`, from its transcript
+ * (or its tail): as a delivered user line, a queued operation or an
+ * attachment. A notification can name several tasks under one status.
+ */
+export function parentTaskNotice(parentJsonl: string, taskId: string): ParentTaskNotice | null {
+  const tag = `<task-id>${taskId}</task-id>`;
+  const lines = parentJsonl.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (!lines[i].includes(tag)) continue;
+    let at: number;
+    try {
+      at = Date.parse(JSON.parse(lines[i])?.timestamp);
+    } catch {
+      continue;
+    }
+    // The status of the notification block that holds this id.
+    const line = lines[i];
+    const tagAt = line.indexOf(tag);
+    const start = line.lastIndexOf("<task-notification>", tagAt);
+    const end = line.indexOf("</task-notification>", tagAt);
+    const status = /<status>([^<]+)<\/status>/.exec(line.slice(Math.max(0, start), end < 0 ? undefined : end))?.[1];
+    if (status && Number.isFinite(at)) return { status, at };
+  }
+  return null;
+}
+
+async function readTail(filePath: string, bytes: number): Promise<string> {
+  const fh = await fsp.open(filePath, "r");
   try {
-    const [metaStat, jsonlStat, raw] = await Promise.all([fsp.stat(metaPath), fsp.stat(filePath), fsp.readFile(metaPath, "utf8")]);
-    return { meta: JSON.parse(raw), metaMtimeMs: metaStat.mtimeMs, jsonlMtimeMs: jsonlStat.mtimeMs };
+    const { size } = await fh.stat();
+    const start = Math.max(0, size - bytes);
+    const buf = Buffer.alloc(size - start);
+    await fh.read(buf, 0, buf.length, start);
+    return buf.toString("utf8");
+  } finally {
+    await fh.close();
+  }
+}
+
+/** <project>/<parent>/subagents/agent-<id>.jsonl -> <project>/<parent>.jsonl */
+function parentTranscriptPath(filePath: string): string | null {
+  const parts = filePath.split(path.sep);
+  const idx = parts.lastIndexOf("subagents");
+  if (idx < 2) return null;
+  return path.join(parts.slice(0, idx - 1).join(path.sep) || path.sep, `${parts[idx - 1]}.jsonl`);
+}
+
+export async function readSubagentRunFacts(filePath: string): Promise<SubagentRunFacts | null> {
+  let agentJsonl: string;
+  try {
+    agentJsonl = await fsp.readFile(filePath, "utf8");
   } catch {
     return null;
   }
+  let meta: unknown = null;
+  try {
+    meta = JSON.parse(await fsp.readFile(filePath.replace(/\.jsonl$/, ".meta.json"), "utf8"));
+  } catch {
+    // no meta yet
+  }
+  let parentNotice: ParentTaskNotice | null = null;
+  const parentPath = parentTranscriptPath(filePath);
+  const taskId = path.basename(filePath, ".jsonl").replace(/^agent-/, "");
+  if (parentPath) {
+    try {
+      parentNotice = parentTaskNotice(await readTail(parentPath, PARENT_NOTICE_TAIL_BYTES), taskId);
+    } catch {
+      // no parent transcript: liveness alone decides
+    }
+  }
+  return { meta, agentJsonl, parentAlive: subagentParentAlive(filePath), parentNotice };
 }
 
 interface Entry {
@@ -73,7 +219,7 @@ interface Entry {
 }
 
 export interface SubagentFinishDeps {
-  readState?: (filePath: string) => Promise<SubagentFileState | null>;
+  readState?: (filePath: string) => Promise<SubagentRunFacts | null>;
   setTimer?: (fn: () => void, ms: number) => unknown;
   clearTimer?: (handle: unknown) => void;
   quietMs?: number;
@@ -81,14 +227,14 @@ export interface SubagentFinishDeps {
 
 export class SubagentFinishTracker {
   private readonly entries = new Map<string, Entry>();
-  private readonly readState: (filePath: string) => Promise<SubagentFileState | null>;
+  private readonly readState: (filePath: string) => Promise<SubagentRunFacts | null>;
   private readonly setTimer: (fn: () => void, ms: number) => unknown;
   private readonly clearTimer: (handle: unknown) => void;
   private readonly quietMs: number;
   private stopped = false;
 
   constructor(deps: SubagentFinishDeps = {}) {
-    this.readState = deps.readState ?? readSubagentFileState;
+    this.readState = deps.readState ?? readSubagentRunFacts;
     this.setTimer = deps.setTimer ?? ((fn, ms) => {
       const t = setTimeout(fn, ms);
       t.unref?.();
@@ -151,16 +297,18 @@ export class SubagentFinishTracker {
     }
   }
 
-  /** The quiet-timer body: mark the row completed if the meta says finished. */
+  /** The quiet-timer body: the row follows subagentRunState. */
   async check(filePath: string): Promise<void> {
     const e = this.entries.get(filePath);
-    if (this.stopped || !e?.conversationId || e.completed) return;
+    if (this.stopped || !e?.conversationId) return;
     const generation = e.generation;
     const state = await this.readState(filePath);
-    if (this.stopped || e.generation !== generation || e.completed) return;
-    if (!state || !subagentLooksFinished(state)) return;
-    e.completed = true;
-    await this.send(e, (s, id) => s.markSessionCompleted(id));
+    if (this.stopped || e.generation !== generation) return;
+    if (!state || !taskSubagentMeta(state.meta)) return;
+    const stopped = subagentRunState(state) === "stopped";
+    if (stopped === e.completed) return;
+    e.completed = stopped;
+    await this.send(e, (s, id) => (stopped ? s.markSessionCompleted(id) : s.markSessionActive(id)));
   }
 
   stop(): void {

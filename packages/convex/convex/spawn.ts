@@ -144,9 +144,10 @@ export async function resolveSpawnParent(
   if (!parent) {
     throw new Error(`Parent session "${parentRef}" not found among your sessions`);
   }
-  // Presence of parent_conversation_id alone marks a row a subagent for the
-  // client (isSubagentConversation); is_subagent makes the row self-identify
-  // even before links resolve, same as the daemon's transcript-asserted flag.
+  // parent_conversation_id nests the row under its parent; is_subagent makes
+  // it self-identify even before links resolve, same as the daemon's
+  // transcript-asserted flag. It still runs its own process (runs_in_parent
+  // false, written by spawnSessionCore).
   return { parent_conversation_id: parent._id, is_subagent: true };
 }
 
@@ -227,6 +228,7 @@ export async function spawnSessionCore(
   }
 
   const conversationId = await ctx.db.insert("conversations", {
+    runs_in_parent: false,
     user_id: runnerUserId,
     ...(runnerUserId !== userId ? { author_user_id: userId } : {}),
     agent_type: agentType,

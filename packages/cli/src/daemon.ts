@@ -343,6 +343,7 @@ import {
   repairDiscrepancies,
 } from "./reconciliation.js";
 import { SubagentFinishTracker } from "./subagentFinish.js";
+import { holdForInProcessSubagent } from "./subagentPromotionGate.js";
 import { TEST_SCRATCH_DIRNAME, isTestArtifactPath, isProjectAllowedToSync, launchScopeRefusal, markLaunched, transcriptScopeRefusal, wasLaunched, watchDirFilter, watchFilter } from "./syncScope.js";
 import { folderOnThisMachine } from "@codecast/shared/team/folderLists";
 import { parseOrphanProcessIdentity } from "./orphanProcessIdentity.js";
@@ -353,7 +354,7 @@ import { hasSessionServer, listEveryServer, sessionServerSockets, sessionSocketN
 import { ghosttyPane } from "./ghostty.js";
 import type { PaneTransport } from "./paneTransport.js";
 import { HERD_SESSION, findHerdrPaneForTty, herdrRequest, herdrSocketPath, herdrSocketPaths, openHerdrTab } from "./herdr.js";
-import { BlankStartHoldError, RunLimitHoldError, TerminalHoldError } from "./terminalHold.js";
+import { BlankStartHoldError, PromotionHoldError, RunLimitHoldError, TerminalHoldError } from "./terminalHold.js";
 import { ForeignWriterHoldError, foreignSessionWriter, foreignWriterScreen, parsePsRows, PS_ROWS_ARGS, type PsRow } from "./foreignSessionWriter.js";
 import { HERD_TAKE_PATH, SwapHeldError, abortableWait, closeHerdrPane, pollUntilUp, serveHerdTake, swapHeld, takeBusy, type HerdTakeDeps } from "./herdTake.js";
 import { herdViewerAlive } from "./herdViewer.js";
@@ -12911,6 +12912,9 @@ async function processSessionFilePass(
             forkOrHandoff: !!parentMessageUuid || isPlanHandoff,
             teammate: !!teamInfo,
           }) || undefined,
+          // A subagent transcript runs inside its parent's process; a headless
+          // `claude -p` child runs its own.
+          runsInParent: subagentTranscript,
           agentTaskId,
           agentTeamName: teamInfo?.teamName,
           agentName: teamInfo?.agentName,
@@ -13042,6 +13046,7 @@ async function processSessionFilePass(
         startedAt: firstMsgTimestamp,
         gitInfo,
         isSubagent: subagentTranscript || undefined,
+        runsInParent: subagentTranscript,
       }, errMsg);
 
       return;
@@ -13218,6 +13223,7 @@ async function processSessionFilePass(
         gitInfo,
         parentConversationId: recreateParent,
         isSubagent: subagentTranscript || undefined,
+        runsInParent: subagentTranscript,
       });
       conversationId = finishCreate(conversationId);
       conversationCache[sessionId] = conversationId;
@@ -13980,6 +13986,10 @@ async function processCodexSessionPass(
             // still no inbox card (headlessRuns.ts); a later pass can link it.
             isSubagent: !!nativeParentSessionId || !!parentConversationId
               || headlessRunStaysOutOfInbox({ headless: isCodexProgramLaunch(codexMetadata), triggerRun: !!agentTaskId }) || undefined,
+            // A program-launched child of a lead (a thread_spawn thread inside
+            // its process, or a `codex exec` it ran) runs in the lead; a codex
+            // started through /cli/spawn is a server-created row, never here.
+            runsInParent: isCodexProgramLaunch(codexMetadata) && (!!nativeParentSessionId || !!parentConversationId),
             // The mark the claude path stamps for `claude -p`.
             cliFlags: codexLaunchFlags(codexMetadata),
             // Same stamp as the claude path: without it every codex session
@@ -28620,6 +28630,8 @@ async function deliverMessageIntoSession(
   if (agentTypeHint) detectedType = agentTypeHint;
 
   logDelivery(`Delivering to session=${sessionId.slice(0, 12)} conv=${conversationId.slice(0, 12)} type=${detectedType}`);
+  // Before any lookup: a subagent's process lookup can only find its parent's.
+  if (detectedType === "claude") await holdForInProcessSubagent(findSessionFile(sessionId), conversationId, CONFIG_DIR);
   // The agent has to redraw the paste for the Enter gate to see it: out of background priority first.
   await holdForDelivery(sessionId);
 
@@ -34749,7 +34761,7 @@ async function main(): Promise<void> {
             logDelivery(`HELD: msg=${msg._id.slice(0, 8)} ${hold.holdReason} in conv=${msg.conversation_id.slice(0, 12)}; retrying when the screen changes`);
             holdConversationForPrompt(msg.conversation_id);
             rependAfterAttempt(syncService, msg._id, hold).catch(logConvexFailure);
-          } else if (err instanceof CloudAgentHoldError || err instanceof SwapHeldError || err instanceof RunLimitHoldError || err instanceof ForeignWriterHoldError || err instanceof BlankStartHoldError || err instanceof TerminalHoldError || err instanceof BackendSwitchHoldError) {
+          } else if (err instanceof CloudAgentHoldError || err instanceof SwapHeldError || err instanceof RunLimitHoldError || err instanceof ForeignWriterHoldError || err instanceof BlankStartHoldError || err instanceof PromotionHoldError || err instanceof TerminalHoldError || err instanceof BackendSwitchHoldError) {
             // A cloud agent that cannot take the message yet (its setup is
             // missing, or a turn is still running): held with its reason,
             // never spending the retry budget, and tried again at the error's

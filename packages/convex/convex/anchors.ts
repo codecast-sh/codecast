@@ -337,6 +337,7 @@ export async function provisionStandingAgent(
 
     const agentType = args.agent_type ?? "claude_code";
     const conversationId = await ctx.db.insert("conversations", {
+      runs_in_parent: false,
       user_id: hostUserId,
       acting_user_id: botUserId,
       anchor_id: anchorId,

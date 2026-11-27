@@ -33,11 +33,19 @@ async function seed(opts: { mainSession?: boolean } = {}) {
 const pendingIn = (t: any, conversation: any) =>
   t.run(async (ctx: any) => (await ctx.db.query("pending_messages").collect()).filter((m: any) => String(m.conversation_id) === String(conversation)));
 
-// A line, and the trigger match it schedules (runAfter 0).
+// A line, and the trigger match it schedules (runAfter 0). That job runs on
+// convex-test's real timers, and on a loaded machine it had not started 5 ms
+// later, so the line's run was missing when the test looked: wait until no
+// job scheduled to run at once is still waiting.
 async function say(as: any, channel: any, content: string, extra: Record<string, unknown> = {}) {
   await as.mutation(api.chat.sendMessage, { channel_id: channel, content, ...extra });
-  await new Promise((r) => setTimeout(r, 5));
-  await as.finishInProgressScheduledFunctions();
+  for (let i = 0; i < 1000; i++) {
+    await new Promise((r) => setTimeout(r, 5));
+    await as.finishInProgressScheduledFunctions();
+    const waiting = await as.run(async (ctx: any) => (await ctx.db.system.query("_scheduled_functions").collect())
+      .some((j: any) => j.state.kind === "pending" && j.scheduledTime - j._creationTime < 1000));
+    if (!waiting) return;
+  }
 }
 
 /** Past the coalescing window, the firing the first line scheduled. */

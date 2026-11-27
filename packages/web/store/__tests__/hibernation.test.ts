@@ -38,6 +38,13 @@ test("fleet filter and candidate selection exclude active stale stamp, foreign, 
   const row = { _id: 'a', user_id: 'me', session_id: 'a', conversation_id: 'conv', owner_device_id: 'dev', agent_status: 'idle', awake_idle_ms: 3 * 3600_000, last_heartbeat: 100 };
   expect(hibernationCandidate(row, 'me', 101)).toBe(true);
   for (const patch of [{ user_id: 'other' }, { owner_device_id: undefined }, { has_pending: true }, { awaiting_input: true }, { agent_status: 'working' }, { is_killed: true }]) expect(hibernationCandidate({ ...row, ...patch }, 'me', 101)).toBe(false);
+  // A `cast spawn --subagent` worker runs its own process and parks like any
+  // session; a child inside its parent's process has nothing to park.
+  expect(hibernationCandidate({ ...row, is_subagent: true, runs_in_parent: false }, 'me', 101)).toBe(true);
+  expect(hibernationCandidate({ ...row, runs_in_parent: true }, 'me', 101)).toBe(false);
+  // A legacy row (no field) answers by its session id.
+  expect(hibernationCandidate({ ...row, is_subagent: true }, 'me', 101)).toBe(true);
+  expect(hibernationCandidate({ ...row, session_id: 'agent-a1b2c3d4e5' }, 'me', 101)).toBe(false);
   expect(fleetBucket({ ...row, agent_status: 'hibernated' }, 30 * 86400_000)).toBe('hibernated');
   expect(fleetBucket({ ...row, agent_status: 'working', hibernated_at: 10, awake_idle_ms: 0 }, 101)).toBe('active');
 });

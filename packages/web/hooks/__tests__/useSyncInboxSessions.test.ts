@@ -139,11 +139,27 @@ describe("shouldPlayWaitingSound", () => {
     expect(result.play).toBe(true);
   });
 
-  it("chimes for a fork / plan handoff (parent link WITH a parent message)", () => {
-    // isSubagentConversation still catches the parent link, so a handoff row
-    // stays silent — the same verdict the push reaches (reason "subagent").
+  it("stays silent for a fork / plan handoff while it answers to its parent", () => {
+    // The parent link still holds it, so a handoff row stays silent — the same
+    // verdict the push reaches (reason "subagent").
     const result = episode({ parent_conversation_id: "p", parent_message_uuid: "plan-handoff" });
     expect(result.play).toBe(false);
+  });
+
+  // A person took it over from its parent (parent_released_at): the wait is
+  // theirs now, as the push decides, with the owners model or without.
+  it("chimes for a child once a person released it from its parent", () => {
+    expect(episode({ parent_conversation_id: "p", parent_message_uuid: "plan-handoff", parent_released_at: 5 }).play).toBe(true);
+    expect(episode({ is_subagent: true, parent_conversation_id: "p", parent_released_at: 5 }).play).toBe(true);
+    expect(episode({ is_subagent: true, parent_conversation_id: "p", spawned_by_conversation_id: "p", parent_released_at: 5 }).play).toBe(true);
+  });
+
+  // One rule under the owners model too: a released child is heard, and an
+  // unreleased child or spawned peer stays silent, as before.
+  it("under the owners model, a released child chimes and an unreleased child or spawned peer stays silent", () => {
+    expect(episode({ owners_model: true, is_subagent: true, parent_conversation_id: "p" }).play).toBe(false);
+    expect(episode({ owners_model: true, spawned_by_conversation_id: "lead" }).play).toBe(false);
+    expect(episode({ owners_model: true, is_subagent: true, parent_conversation_id: "p", parent_released_at: 5 }).play).toBe(true);
   });
 
   it("does not chime on the sync right after a killed-and-waiting session is revived", () => {

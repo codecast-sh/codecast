@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { createSessionFromCli } from "./spawn";
-import { nestParentIdOf, isSubagentConversation, isAgentTeamWorker } from "./ccAccountsShared";
+import { nestParentIdOf, isAgentTeamWorker } from "./ccAccountsShared";
+import { runsInParentProcess } from "@codecast/shared/contracts/runsInParent";
 import { rollupParentIdOf } from "@codecast/shared/contracts";
 
 const OWNER = "spawn-owner";
@@ -23,7 +24,7 @@ describe("plain spawn origin", () => {
   test.each([PARENT.session_id, PARENT.short_id, PARENT._id, "codex-uuid"])("persists caller %s without nesting", async (spawner_session) => {
     const { row, result, db } = await spawn({ spawner_session });
     expect(row.spawned_by_conversation_id).toBe(PARENT._id);
-    expect(isSubagentConversation(row)).toBe(false);
+    expect(row.runs_in_parent).toBe(false);
     expect(nestParentIdOf(row)).toBeNull();
     expect(rollupParentIdOf(row)).toBeNull();
     expect(result.parent_short_id).toBeUndefined();
@@ -39,7 +40,10 @@ describe("plain spawn origin", () => {
   test("explicit subagent parent still owns nesting", async () => {
     const { row } = await spawn({ spawner_session: "codex-uuid", parent_session: PARENT.session_id });
     expect(row.spawned_by_conversation_id).toBe(PARENT._id);
-    expect(isSubagentConversation(row)).toBe(true);
+    expect(row.is_subagent).toBe(true);
+    // A `cast spawn --subagent` worker nests under its parent but runs its own process.
+    expect(row.runs_in_parent).toBe(false);
+    expect(runsInParentProcess(row)).toBe(false);
     expect(nestParentIdOf(row)).toBe(PARENT._id);
     expect(rollupParentIdOf(row)).toBe(PARENT._id);
   });

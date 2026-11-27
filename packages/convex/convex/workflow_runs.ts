@@ -591,6 +591,7 @@ export const create = mutation({
     if (!primaryConvId) {
       const privacy = await resolveCreationPrivacy(ctx, userId, args.project_path);
       primaryConvId = await ctx.db.insert("conversations", {
+        runs_in_parent: false,
         user_id: userId,
         agent_type: "claude_code",
         session_id: `wf-${runId}`,
@@ -784,6 +785,7 @@ export async function createRunCore(
   }
 
   const primaryConvId: Id<"conversations"> = await ctx.db.insert("conversations", {
+    runs_in_parent: false,
     user_id: userId,
     agent_type: "claude_code",
     session_id: `wf-${runId}`,

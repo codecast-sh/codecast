@@ -30,7 +30,7 @@ function fixture(opts: { fleetStore?: boolean } = {}) {
   };
   const worker = (id: string) => ({
     _id: id, user_id: "users_owner", session_id: `s-${id}`, agent_type: "claude_code", owner_device_id: "mac",
-    is_subagent: true, parent_conversation_id: parent._id, model: "claude-opus-5-5",
+    is_subagent: true, runs_in_parent: true, parent_conversation_id: parent._id, model: "claude-opus-5-5",
     pending_api_error: true, pending_api_error_kind: "limit", pending_api_error_at: now - 30_000, updated_at: now - 30_000,
   });
   const tables: Record<string, any[]> = {
@@ -76,6 +76,26 @@ describe("workers parked on a limit recover through their parent", () => {
     expect(await f.run()).toMatchObject({ acted: "nothing_blocked" });
     expect(f.tables.daemon_commands).toHaveLength(0);
   });
+
+  // A `cast spawn --subagent` worker is nested by its link but runs its own
+  // process: its parent cannot redo its work, so it restarts as itself.
+  test("a worker with its own process is revived as itself, never routed to its parent", async () => {
+    const f = fixture();
+    for (const id of ["conversations_w1", "conversations_w2"]) Object.assign(f.row(id), { runs_in_parent: false });
+    expect(await f.run()).toMatchObject({ acted: "switch", profile: "roomy", conversations: 2 });
+    expect([...JSON.parse(f.tables.daemon_commands[0].args).conversation_ids].sort()).toEqual(["conversations_w1", "conversations_w2"]);
+    expect(JSON.stringify(f.tables.daemon_commands)).not.toContain("conversations_parent");
+  });
+
+  // A row from before runs_in_parent answers by the legacy rule: an agent-<hex>
+  // transcript runs in its parent, a uuid session with a parent link does not.
+  test("legacy rows fall back to their session id", async () => {
+    const f = fixture();
+    Object.assign(f.row("conversations_w1"), { runs_in_parent: undefined, session_id: "agent-a1b2c3d4e5f6" });
+    Object.assign(f.row("conversations_w2"), { runs_in_parent: undefined, session_id: "0b6e2c1a-5d2f-4c1e-9a7b-3f2e1d0c9b8a" });
+    expect(await f.run()).toMatchObject({ acted: "switch", profile: "roomy" });
+    expect([...JSON.parse(f.tables.daemon_commands[0].args).conversation_ids].sort()).toEqual(["conversations_parent", "conversations_w2"]);
+  });
 });
 
 // A workflow run's stations nest under the run's log (parent_session), so a
@@ -85,6 +105,7 @@ describe("workers parked on a limit recover through their parent", () => {
 describe("a workflow run's log is never revived", () => {
   test("stations parked under a run log are continued as themselves, never the log", async () => {
     const f = fixture();
+    for (const id of ["conversations_w1", "conversations_w2"]) Object.assign(f.row(id), { runs_in_parent: false });
     Object.assign(f.row("conversations_parent"), { is_workflow_primary: true, workflow_run_id: "workflow_runs_1", session_id: "wf-workflow_runs_1" });
     expect(await f.run()).toMatchObject({ acted: "switch", profile: "roomy", conversations: 2 });
     const args = JSON.parse(f.tables.daemon_commands[0].args);
@@ -120,8 +141,11 @@ describe("a workflow run's log is never revived", () => {
 // read the hand stopped on its limit as one that finished. Eleven onefix correctness reviews on Codex passed on
 // nothing but Codex's limit reply, and their changes went to a person to approve (2026-11-14).
 describe("a parked workflow station keeps its park until it is revived as itself", () => {
-  const asRunLog = (f: ReturnType<typeof fixture>) =>
-    Object.assign(f.row("conversations_parent"), { is_workflow_primary: true, workflow_run_id: "workflow_runs_1", session_id: "wf-workflow_runs_1" });
+  // A station runs a process of its own under the run's log.
+  const asRunLog = (f: ReturnType<typeof fixture>) => {
+    for (const id of ["conversations_w1", "conversations_w2"]) Object.assign(f.row(id), { runs_in_parent: false });
+    return Object.assign(f.row("conversations_parent"), { is_workflow_primary: true, workflow_run_id: "workflow_runs_1", session_id: "wf-workflow_runs_1" });
+  };
 
   test("a Codex station parked on its limit stays parked for the Codex pass", async () => {
     const f = fixture();
@@ -138,7 +162,7 @@ describe("a parked workflow station keeps its park until it is revived as itself
     const f = fixture();
     asRunLog(f);
     const other = { _id: "conversations_lead", user_id: "users_owner", session_id: "s-lead", agent_type: "claude_code", owner_device_id: "mac", updated_at: f.now - 60_000 };
-    const worker = { ...f.row("conversations_w2"), _id: "conversations_plain", session_id: "s-plain", parent_conversation_id: other._id };
+    const worker = { ...f.row("conversations_w2"), _id: "conversations_plain", session_id: "s-plain", parent_conversation_id: other._id, runs_in_parent: true };
     f.tables.conversations.push(other, worker);
     const result = await (throttleContinueCheck as any)._handler({ db: f.db, scheduler: { async runAt() {}, async runAfter() {} } }, { user_id: "users_owner" });
     expect(result).toMatchObject({ dismissed: 1 });
@@ -155,12 +179,11 @@ describe("a parked workflow station keeps its park until it is revived as itself
     expect(f.row("conversations_w1").pending_api_error).toBe(true);
   });
 
-  test("a station killed with its run is dismissed, never revived", async () => {
+  test("a station killed with its run is never revived", async () => {
     const f = fixture();
     asRunLog(f);
     Object.assign(f.row("conversations_w1"), { inbox_killed_at: f.now - 10_000 });
     expect(await f.run()).toMatchObject({ acted: "switch", conversations: 1 });
     expect(JSON.parse(f.tables.daemon_commands[0].args).conversation_ids).toEqual(["conversations_w2"]);
-    expect(f.row("conversations_w1").pending_api_error).toBe(false);
   });
 });
