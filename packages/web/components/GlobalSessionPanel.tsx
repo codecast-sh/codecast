@@ -1081,7 +1081,7 @@ function WorkflowBar({ session, isActive }: { session: InboxSession; isActive: b
       >
         <div className="flex gap-1.5 min-w-0">
           <SchedChildArrow slot label={ariaLabel} className="text-sol-cyan/70" />
-          <div className="min-w-0 flex-1">
+          <div className="min-w-0 flex-1" title="Jump to where this workflow started in the conversation">
             <div className="flex items-center gap-1.5 min-w-0">
               <span className="text-mark font-semibold uppercase tracking-wider text-sol-cyan/70 shrink-0">Workflow</span>
               <span className="text-xs truncate min-w-0 text-sol-text-muted font-normal">{session.workflow_run_name || "workflow run"}</span>
@@ -1141,7 +1141,7 @@ export function MonitorBars({ session, isActive }: {
               {/* Same corner arrow the schedule/subagent child rows carry, in
                   monitor blue: this watch runs inside the card above. */}
               <SchedChildArrow slot label={ariaLabel} className="text-sol-blue/70" />
-              <div className="min-w-0 flex-1">
+              <div className="min-w-0 flex-1" title="Jump to this task in the conversation">
                 {/* Header line: identity eyebrow, what's being watched, and the
                     live badge with how long the watch has been standing. */}
                 <div className="flex items-center gap-1.5 min-w-0">

@@ -45,7 +45,7 @@ export function DormantWakeRow({ session, rows, isActive, onOpen, onOpenSchedule
         onClick={() => (wake.kind === "trigger" ? onOpenSchedule(wake.row) : onOpen(session))}
       >
         <SchedChildArrow slot label="What wakes this session" className="text-sol-text-dim/70" />
-        <span className={`text-meta truncate min-w-0 ${warn ? "text-sol-yellow/90" : "text-sol-text-dim"}`}>{what}</span>
+        <span title={warn ?? undefined} className={`text-meta truncate min-w-0 ${warn ? "text-sol-yellow/90" : "text-sol-text-dim"}`}>{what}</span>
         <span className={`ml-auto shrink-0 whitespace-nowrap text-meta tabular-nums ${warn ? "text-sol-yellow/90" : "text-sol-text-dim"}`}><WakeWhen when={when} /></span>
       </button>
     </div>
