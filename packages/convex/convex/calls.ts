@@ -1331,7 +1331,9 @@ export const putOutOfCall = action({
 });
 
 export const mintAccessToken = action({
-  args: { room_key: v.string() },
+  // `client: "phone"`: the seat transcribes only its own mic, so another phone
+  // in the room never hands its run to it (mobile phoneScribeRule).
+  args: { room_key: v.string(), client: v.optional(v.literal("phone")) },
   handler: async (ctx, args): Promise<{ url: string; token: string }> => {
     const livekit = livekitConfigFromEnv();
     if (!livekit) throw new Error("Calling is not configured");
@@ -1346,7 +1348,10 @@ export const mintAccessToken = action({
       identity: grant.user_id,
       name: grant.name,
       room: args.room_key,
-      metadata: grant.image ? JSON.stringify({ image: grant.image }) : undefined,
+      metadata:
+        grant.image || args.client
+          ? JSON.stringify({ ...(grant.image ? { image: grant.image } : {}), ...(args.client ? { client: args.client } : {}) })
+          : undefined,
       // Short-lived: the SFU trusts the JWT alone, so a long token would keep
       // working after team removal or the session going private. livekit-client
       // reconnects re-mint (callManager), so 15 minutes costs nothing.
