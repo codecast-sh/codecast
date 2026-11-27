@@ -4,6 +4,8 @@
 // the call reach it. Lives here, beside huddleVoiceInstructions, so every
 // client that invites Scribe sends the same words.
 
+import { HUDDLE_GUEST_NOTE, HUDDLE_PASS, type ChunkHeaderOpts, type ChunkLane } from "./transcriptChunk";
+
 /** How long a claim on a call's Scribe slot holds while its inviter spawns
  *  the agent. Judged at read time, by the server and by every client: a claim
  *  whose session never landed (a crashed tab, a create that failed) stops
@@ -131,4 +133,31 @@ export function scribeInstructions(opts: { solo: boolean; callShortId?: string; 
     SCRIBE_PROMPT_TAIL,
   ].filter(Boolean).join("\n\n");
   return opts.callShortId ? text.replaceAll("<call>", opts.callShortId) : text;
+}
+
+// The lead-in of each transcript chunk delivered to Scribe. Its instructions
+// are the session's first message, so a chunk carries only what changes: the
+// lane, the board and the call. None of the other feeds' work, reply and page
+// notes, which would pull Scribe into talking and publishing. A rebrief
+// (needsFullBrief) adds the one line that keeps it a scribe, and the guest
+// note, since a guest's words reach it like anyone's.
+
+/** Re-read on every rebrief so a long call never wears the role away. */
+export const SCRIBE_REMINDER = `You are Scribe: draw on the board, end with ${HUDDLE_PASS}.`;
+
+const SCRIBE_LANE: Record<ChunkLane, string> = {
+  ask: "Someone named you or asked the board for something: that comes first, with a visible change on the board within about a minute.",
+  context: `Nobody named you: update the board if the talk moved, otherwise end with ${HUDDLE_PASS}.`,
+};
+
+export function scribeChunkHeader(opts: ChunkHeaderOpts): string {
+  const where = [
+    opts.board ? `The board is doc:${opts.board}.` : null,
+    opts.call ? `The call is ${opts.call}.` : null,
+  ].filter(Boolean).join(" ");
+  return [
+    `Huddle transcript (live).${opts.held ? " These words waited while you worked and arrive together." : ""} ${SCRIBE_LANE[opts.lane]}${where ? ` ${where}` : ""}`,
+    opts.full ? SCRIBE_REMINDER : null,
+    opts.full ? HUDDLE_GUEST_NOTE : null,
+  ].filter(Boolean).join("\n\n");
 }
