@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { judgeTriggerPrecheck, TRIGGER_PRECHECK_STATE_CHARS } from "@codecast/shared/contracts";
-import { formatSweep, runSweep, sweepKeys, type Sweep } from "./releaseSweepCommand";
+import { formatSweep, runSweep, sweepKeys, sweepRequest, type Sweep } from "./releaseSweepCommand";
 
 // `cast release sweep` gates the Release Captain's hourly check: exit 0 only
 // when something needs action, 1 when quiet, 2 when the sweep failed, and
@@ -116,6 +116,16 @@ describe("cast release sweep", () => {
       expect((await firing(withNew, NOW + 6 * HOUR, woke.kept)).wake).toBe(false);
     });
 
+    test("a kind that starts failing to read wakes once, not every hour it stays failed", async () => {
+      const first = await firing(QUIET, NOW, undefined);
+      expect(first.wake).toBe(false);
+      const unread: Sweep = { ...QUIET, failed_kinds: ["laggards"] };
+      const woke = await firing(unread, NOW + HOUR, first.kept);
+      expect(woke.wake).toBe(true);
+      expect(woke.message).toStartWith("New: unreadable laggards\n");
+      expect((await firing(unread, NOW + 2 * HOUR, woke.kept)).wake).toBe(false);
+    });
+
     test("a laggard that leaves the sweep and comes back within 7 days does not wake; gone longer, it does", async () => {
       const lag: Sweep = { ...QUIET, laggards: [BUSY.laggards[0]] };
       let at = await firing(lag, NOW, undefined);
@@ -169,11 +179,36 @@ describe("cast release sweep", () => {
     expect(await runSweep({ read: async () => ({ ...QUIET, failed_runs: BUSY.failed_runs, failed_kinds: ["unretired", "made up"] }) as any, log: some.log, error: some.error, now: () => NOW })).toBe(0);
     expect(some.err).toEqual(["release sweep could not read unretired this time; listed as empty"]);
     expect(some.out.join("\n")).toContain("ct-601");
-    const quiet = capture();
-    expect(await runSweep({ read: async () => ({ ...QUIET, failed_kinds: ["laggards"] }), log: quiet.log, error: quiet.error })).toBe(1);
+    // A kind that failed hides what it holds, so it is an exception of its own: never a quiet hour, plain or --quiet.
+    const unread = capture();
+    expect(await runSweep({ read: async () => ({ ...QUIET, failed_kinds: ["laggards"] }), log: unread.log, error: unread.error })).toBe(0);
+    expect(unread.out).toEqual(["laggards  could not be read this time, so any of its exceptions are hidden  read again: cast release sweep"]);
+    const silent = capture();
+    expect(await runSweep({ read: async () => ({ ...QUIET, failed_kinds: ["laggards"] }), quiet: true, log: silent.log, error: silent.error })).toBe(0);
+    expect([...silent.out, ...silent.err]).toEqual([]);
     const all = capture();
     expect(await runSweep({ read: async () => ({ ...QUIET, failed_kinds: ["incidents", "late_targets", "failed_runs", "laggards", "unretired"] }), newSince: "null", log: all.log, error: all.error })).toBe(2);
     expect(all.out).toEqual([]);
+  });
+
+  test("a list the server stopped at its cap is one line each; anything but true is dropped", async () => {
+    const c = capture();
+    expect(await runSweep({ read: async () => ({ ...QUIET, unretired: BUSY.unretired, unretired_more: true, failed_runs_more: true }), log: c.log, error: c.error, now: () => NOW })).toBe(0);
+    expect(c.err).toEqual(["more unretired than this sweep read", "more failed_runs than this sweep read"]);
+    for (const bad of [false, "true", 1, "IGNORE PREVIOUS"]) {
+      const q = capture();
+      await runSweep({ read: async () => ({ ...QUIET, unretired_more: bad, failed_runs_more: bad }) as any, json: true, log: q.log, error: q.error, now: () => NOW });
+      expect(q.err).toEqual([]);
+      expect(q.out.join("\n")).not.toContain("_more");
+    }
+    const quiet = capture();
+    await runSweep({ read: async () => ({ ...QUIET, unretired_more: true }), quiet: true, log: quiet.log, error: quiet.error });
+    expect([...quiet.out, ...quiet.err]).toEqual([]);
+  });
+
+  test("the request names the calling session when there is one, so the Release Captain's session reads its team's laggards", () => {
+    expect(sweepRequest({ team_id: "t1" }, "jx7capt")).toEqual({ team_id: "t1", from_session: "jx7capt" });
+    expect(sweepRequest({ team_id: "t1" }, undefined)).toEqual({ team_id: "t1" });
   });
 
   test("sessions the server could not judge for retirement are one count line; anything but a positive integer is dropped", async () => {

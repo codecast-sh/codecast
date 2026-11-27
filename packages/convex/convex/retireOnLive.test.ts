@@ -193,6 +193,29 @@ describe("a deploy going live asks the daemon of each session whose own change i
     expect(await branch.retireOn(await branch.deploy("web", 1))).toEqual([{ asked: false, reason: "it has changes not on main: web/b.tsx" }]);
   });
 
+  test("a commit of its own on no main (an open pull request, a pushed branch) keeps it, though no edit of its own names the files; one a later squash on main holds does not", async () => {
+    for (const own of ["row", "trailer"] as const) {
+      const open = await world();
+      await open.edit("web/a.tsx");
+      await open.commit(1, ["web/a.tsx"]);
+      // Committed by a shell, so no edit row names web/b.tsx; pushed to its branch, never merged.
+      await open.commit(2, ["web/b.tsx"], { onMain: false, own, at: NOW - 55_000 });
+      expect([own, await open.retireOn(await open.deploy("web", 1))]).toEqual([own, [{ asked: false, reason: "it has commits not on main" }]]);
+    }
+    // Its branch commit, squashed onto main later: the squash holds the same file.
+    const squashed = await world();
+    await squashed.edit("web/a.tsx", NOW - 80_000);
+    await squashed.commit(2, ["web/a.tsx"], { onMain: false, at: NOW - 75_000 });
+    await squashed.commit(1, ["web/a.tsx"], { own: "trailer" });
+    expect(await squashed.retireOn(await squashed.deploy("web", 1))).toEqual([{ asked: true }]);
+    // A commit only guessed onto it is not its work, on main or not.
+    const guessed = await world();
+    await guessed.edit("web/a.tsx");
+    await guessed.commit(1, ["web/a.tsx"]);
+    await guessed.commit(2, ["web/b.tsx"], { onMain: false, own: "guess" });
+    expect(await guessed.retireOn(await guessed.deploy("web", 1))).toEqual([{ asked: true }]);
+  });
+
   test("paths match exactly from the repository root: a nested file is not the root file of the same name", async () => {
     const w = await world();
     await w.edit("web/a.tsx");

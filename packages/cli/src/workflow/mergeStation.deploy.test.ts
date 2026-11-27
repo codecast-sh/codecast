@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { runShell } from "../land/shipCheckout.js";
+import { pollUntil } from "../test-helpers/pollUntil";
 import { BRANCH, PR_URL, T, setup } from "./mergeStation.testkit";
 
 // The Merge station's before-merge deploy steps: from a tree that holds main,
@@ -292,6 +294,43 @@ describe("cast flow merge: before-merge steps", () => {
       await new Promise((res) => setTimeout(res, 20));
       expect(order).toEqual(["lease take", "lease release", "exit 143"]);
       expect(signals.listenerCount("SIGTERM")).toBe(0);
+    } finally { s.done(); }
+  }, T);
+
+  test("a SIGTERM while a step runs stops the step before the lease is released; a step that will not stop keeps the lease", async () => {
+    const s = setup();
+    try {
+      s.profile("deploy");
+      const head = s.branch("api/route.ts", "export {}\n");
+      s.ci(head);
+      const signals = new EventEmitter();
+      const order: string[] = [];
+      const exit = (code: number) => { order.push(`exit ${code}`); };
+      s.answers["/cli/repo-lease"] = (body) => { order.push(`lease ${body.op}`); return body.op === "release" ? { released: true } : { held: true, expires_at: Date.now() + 600_000 }; };
+      const ready = join(s.root, "ready");
+      let group = 0;
+      // A real step in its own process group: the signal arrives once it is running, as the runner's would.
+      const step = (script: string) => async (_cmd: string, cwd: string, log: (l: string) => void, env: Record<string, string> = {}, onChild?: (c: any) => void) => {
+        const ran = runShell(script, cwd, log, env, (child) => { group = child.pid!; onChild?.(child); });
+        await pollUntil(() => existsSync(ready), "the step to start");
+        signals.emit("SIGTERM");
+        const r = await ran;
+        order.push("step ended");
+        return r;
+      };
+      // A deploy that takes a moment to stop on TERM: it has ended before the lease goes.
+      await s.run({ signals, exit, runStep: step(`trap 'sleep 0.5; exit 143' TERM; touch ${ready}; sleep 20 & wait`) });
+      await pollUntil(() => order.includes("exit 143"), "the station to exit");
+      expect(order.slice(0, order.indexOf("exit 143") + 1).filter((o) => o !== "lease renew")).toEqual(["lease take", "step ended", "lease release", "exit 143"]);
+
+      // A deploy that ignores TERM: the station exits inside the runner's grace without handing the lease on.
+      order.length = 0;
+      rmSync(ready, { force: true });
+      const run = s.run({ signals, exit, runStep: step(`trap '' TERM; touch ${ready}; sleep 30`) });
+      await pollUntil(() => order.includes("exit 143"), "the station to exit", { ms: 15_000 });
+      expect(order.filter((o) => o !== "lease renew")).toEqual(["lease take", "exit 143"]);
+      process.kill(-group, "SIGKILL");
+      await run;
     } finally { s.done(); }
   }, T);
 
