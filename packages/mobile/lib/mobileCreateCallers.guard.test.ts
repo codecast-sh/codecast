@@ -54,7 +54,9 @@ describe("mobile result-dependent create callers", () => {
   // sent once the create has a real id, never awaited here.
   test("the sheet's words ride the stub as its first message", () => {
     const submit = sourceBetween("const handleSubmit", "\n  return (");
-    expect(submit).toContain("dispatchComposerSend(stubId, text || IMAGE_ONLY_CONTENT, firstImages, text)");
+    // The words carry a tag per attached file (withAttachments); `text` stays the typed words.
+    expect(submit).toContain("const content = images.withAttachments(text);");
+    expect(submit).toContain("dispatchComposerSend(stubId, content || IMAGE_ONLY_CONTENT, firstImages, text)");
     const composer = readFileSync(`${import.meta.dir}/../components/session/MessageComposer.tsx`, "utf8");
     const send = sourceBetween("export function dispatchComposerSend", "\n}\n", composer);
     expect(send).toContain("store.addOptimisticMessage(conversationId, content");

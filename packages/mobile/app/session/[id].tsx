@@ -2474,7 +2474,7 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
     return () => task.cancel();
   }, [autoFocus]);
   const [error, setError] = useState<string | null>(null);
-  const images = useComposerImages(setMessage, { recordingsTo: !hosted && isConvexId(String(conversationId)) ? String(conversationId) : undefined });
+  const images = useComposerImages(setMessage, { recordingsTo: !hosted && isConvexId(String(conversationId)) ? String(conversationId) : undefined, files: !hosted });
   const { selectedImages } = images;
   // The session row's live fields (synced with the inbox): is_connected is
   // the heartbeat verdict, agent_status what the agent is doing now.
@@ -2535,10 +2535,12 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
     const staged = (useInboxStore.getState().reviewComments[conversationId] ?? []).length > 0;
     if (!trimmedMessage && !images.attached && !staged) return;
     if (allowanceOut) return;
+    // A file still going up holds the send, as on web.
+    if (images.filesUploading) return void showNotice('A file is still uploading');
     setError(null);
 
     const sendImages = images.optimisticImages();
-    const content = images.withRecording(attachReviewToMessage(conversationId, trimmedMessage)) || IMAGE_ONLY_CONTENT;
+    const content = images.withAttachments(attachReviewToMessage(conversationId, trimmedMessage)) || IMAGE_ONLY_CONTENT;
 
     // The bubble lands on the next frame, in a commit of its own: written
     // inside the press, it shares the composer's commit, which Reanimated
