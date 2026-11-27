@@ -10628,6 +10628,7 @@ export const PLACEMENT_ROW_FIELDS = [
   "thread_state_status", "thread_state_at", "last_turn_at", "pin_predates_user_message", "parked_wake_kind", "armed_trigger_kind",
   "loop_state", "settle_verdict", "last_turn_origin", "pending_api_error", "session_error", "agent_type",
   "inbox_killed_at", "inbox_snoozed_until", "inbox_dismissed_at", "inbox_stashed_at", "inbox_pinned_at", "inbox_rest", "inbox_rest_at",
+  "inbox_closed_at", "inbox_stash_hidden",
 ] as const;
 
 // The daemon's status as placement trusts it at `now` (trustedStatusAt over

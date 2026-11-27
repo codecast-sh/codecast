@@ -124,7 +124,8 @@ export function closeEffect(f: CloseFacts): string {
   const back = closedBack(f.returnsOnDone);
   switch (closeKindOf(f)) {
     case "aside": return `hides it, ${back}`;
-    case "awaiting": return f.inFlight === "nested_awaiting" ? "hides it; one of its agents still waits on you" : "hides it; it still waits on you";
+    // Its own ask keeps it in view until answered (closedSession closeHeldByAsk).
+    case "awaiting": return f.inFlight === "nested_awaiting" ? "hides it; one of its agents still waits on you" : `stays while it waits on you, then hides it, ${back}`;
     case "keeps_background": return `hides it, keeps its background work, ${back}`;
     case "keeps_loop": return `hides it, keeps its loop, ${back}`;
     // Its resume (a "continue" send, when recovery is on) is an ordinary send

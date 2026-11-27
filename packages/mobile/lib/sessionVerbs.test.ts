@@ -27,8 +27,8 @@ describe("the line under the menu's Close", () => {
     expect(closeDetail(settled, { pendingMessages: { [ID]: [{ _id: "m1", content: "hi", timestamp: NOW - 1000 }] } }, NOW)).toBe("Hides it, back when it's done or needs you");
   });
 
-  test("a session waiting on a permission prompt says it still waits on you", () => {
-    expect(closeDetail({ ...settled, awaiting_input: true }, {}, NOW)).toBe("Hides it; it still waits on you");
+  test("a session waiting on a permission prompt says it stays while it waits on you", () => {
+    expect(closeDetail({ ...settled, awaiting_input: true }, {}, NOW)).toBe("Stays while it waits on you, then hides it, back when it's done or needs you");
   });
 
   test("a lead whose subagent is mid-turn is set aside, as the gesture does", () => {
