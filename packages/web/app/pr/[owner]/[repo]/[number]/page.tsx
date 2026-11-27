@@ -519,7 +519,6 @@ export function PRContent({
                 onWalk={() => jumpTo(openThreadStops[0].file, openThreadStops[0].key)}
               />
             )}
-            {isAuthenticated && pr.state === "open" && <ShipControl target={{ kind: "pull_request", id: String(pr._id) }} size="compact" />}
             {isAuthenticated && <MergeMenu pr={pr} />}
             <MoreMenu pr={pr} canWrite={isAuthenticated} onEditTitle={editTitle} />
           </>
