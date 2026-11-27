@@ -403,6 +403,33 @@ describe("a scribe handover in an owner-only session huddle", () => {
     expect(sends.map((f: any) => [String(f.args[0].as_user), f.args[0].to])).toEqual([[String(w.ids.ana), String(w.ids.routed)]]);
   });
 
+  test("the owner who handed the seat over and never spoke still reads the record", async () => {
+    const w = await world();
+    const { transcriptId } = await handover(w);
+    expect(await w.as(w.ids.ana).query(api.transcripts.webGetCall, { transcript_id: transcriptId })).not.toBeNull();
+    expect((await w.as(w.ids.ana).query(api.transcripts.webListCalls, {})).map((c: any) => c._id)).toContain(transcriptId);
+    // The team still cannot.
+    expect(await w.as(w.ids.ben).query(api.transcripts.webGetCall, { transcript_id: transcriptId })).toBeNull();
+  });
+
+  test("a guest who begins the record still feeds the owner's session as its owner", async () => {
+    const w = await world();
+    const { t, as, ids } = w;
+    const room = sessionRoomKey(ids.routed);
+    await as(ids.ana).mutation(api.calls.joinRoom, { room_key: room, deliberate: true });
+    await as(ids.ana).mutation(api.calls.invite, { room_key: room, to_user: ids.cy });
+    const invite = await t.run(async (ctx) => (await ctx.db.query("call_invites").collect()).find((i) => String(i.to_user) === String(ids.cy)));
+    await as(ids.cy).mutation(api.calls.respondInvite, { invite_id: invite!._id, accept: true });
+    await as(ids.cy).mutation(api.calls.joinRoom, { room_key: room, deliberate: true });
+    // Cy's desktop asks first and begins the record.
+    const { transcript_id } = await as(ids.cy).mutation(api.transcripts.start, { room_key: room, auto: true });
+    const record = await t.run(async (ctx) => ctx.db.get(transcript_id!));
+    expect(String(record?.started_by)).toBe(String(ids.cy));
+    // deliverRoutes sends a route's live words as its added_by.
+    const own = record?.routes.find((r) => r.kind === "session" && r.target === String(ids.routed));
+    expect(String(own?.added_by)).toBe(String(ids.ana));
+  });
+
   test("a stranger to the room learns nothing from releaseScribe", async () => {
     const w = await world();
     const { t, as, ids } = w;
@@ -413,4 +440,22 @@ describe("a scribe handover in an owner-only session huddle", () => {
     expect(await as(outsider).mutation(api.transcripts.releaseScribe, { room_key: dmRoomKey(outsider) })).toEqual({ released: false });
     expect((await t.run(async (ctx) => ctx.db.get(transcriptId)))?.scribe_open).toBeUndefined();
   });
+});
+
+test("a teammate's private huddle stays closed to a session owner who makes the session private afterwards", async () => {
+  // The finding-2 case, against the own-route door: Ben's private huddle on
+  // Ana's team-visible session withheld the session's own route.
+  const w = await world();
+  const { t, as, ids } = w;
+  const room = sessionRoomKey(ids.shared);
+  await as(ids.ben).mutation(api.calls.joinRoom, { room_key: room, deliberate: true, private: true });
+  const { transcript_id } = await as(ids.ben).mutation(api.transcripts.start, { room_key: room });
+  await t.run(async (ctx) => {
+    await ctx.db.insert("transcript_segments", { transcript_id: transcript_id!, seq: 1, speaker_id: String(ids.ben), speaker_name: "Ben", text: "mine", t0: 0, t1: 1000 });
+    await ctx.db.patch(transcript_id!, { last_seq: 1 });
+    await ctx.db.patch(ids.shared, { is_private: true, team_visibility: "private" } as any);
+  });
+  await endCall(w, transcript_id);
+  expect(await as(ids.ana).query(api.transcripts.webGetCall, { transcript_id: transcript_id! })).toBeNull();
+  expect((await as(ids.ana).query(api.transcripts.webListCalls, {})).map((c: any) => c._id)).not.toContain(transcript_id);
 });

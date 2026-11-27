@@ -7,7 +7,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { authorizeRoom, authorizeRoomNoGrant, canReadRoomlessCall } from "./callRooms";
 import { isTeamMember } from "./privacy";
 import { teamHasFeature } from "./teamFeatures";
-import { isRoomlessKey, parseRoomKey } from "@codecast/shared/contracts";
+import { isRoomlessKey, parseRoomKey, sessionRoomConversationId } from "@codecast/shared/contracts";
 import { canAccessConversation, canAccessDoc, canAccessTask } from "./lib/access";
 import { agentIdentity } from "./callChat";
 import { mayPublishCall } from "./lib/callRecordingRuns";
@@ -70,6 +70,24 @@ export async function canReadCall(
       (await isTeamMember(ctx, userId, t.team_id)) &&
       (await teamHasFeature(ctx, t.team_id, "calls"))
     );
+  }
+  // A huddle about your own session that feeds that session (its own route,
+  // carried or owed) is yours to read: its words are your session's, and a
+  // scribe handover (releaseScribe) can leave you neither speaker nor scribe.
+  // A private huddle a teammate chose on your session withheld that route,
+  // so it stays with the people in it. A route someone removed leaves no
+  // trace, and then this door stays shut.
+  const own = sessionRoomConversationId(t.room_key);
+  if (own && (t.own_route_owed || t.routes.some((r) => r.kind === "session" && r.target === own))) {
+    const conversation = await ctx.db.get(own as Id<"conversations">);
+    if (
+      conversation &&
+      String(conversation.user_id) === String(userId) &&
+      (await isTeamMember(ctx, userId, t.team_id)) &&
+      (await teamHasFeature(ctx, t.team_id, "calls"))
+    ) {
+      return true;
+    }
   }
   // A private huddle's record is the people in it. The room's membership
   // reaches the team (a team-visible session, a public channel) everywhere

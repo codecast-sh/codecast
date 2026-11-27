@@ -393,7 +393,7 @@ describe("authorizeRoom session", () => {
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.reason).toContain("no team to hold this huddle");
     const { canReadCall } = await import("./transcripts");
-    const call = { _id: "t1", team_id: TEAM, room_key: "session:cv1", status: "ended", participants: [] } as any;
+    const call = { _id: "t1", team_id: TEAM, room_key: "session:cv1", status: "ended", participants: [], routes: [] } as any;
     expect(await canReadCall(ctx, "owner" as any, call)).toBe(false);
     const member = fakeCtx({
       conversations: [conv()],

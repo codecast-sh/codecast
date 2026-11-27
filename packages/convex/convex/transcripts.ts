@@ -485,6 +485,18 @@ export const releaseScribe = mutation({
   },
 });
 
+/** Who a session room's own route speaks as (deliverRoutes sends a route's
+ *  words as its added_by). In a room that is the session owner's alone, the
+ *  owner: a guest rung in who begins the record cannot write to the owner's
+ *  private session, which would refuse every live chunk. Elsewhere, whoever
+ *  turned the words on, as before. */
+async function ownRouteAdder(ctx: any, roomKey: string, fallback: Id<"users">): Promise<Id<"users">> {
+  const own = ownRoomTarget(roomKey);
+  if (!own || !(await isOwnerOnlyRoom(ctx, roomKey))) return fallback;
+  const conversation = await ctx.db.get(own as Id<"conversations">);
+  return conversation?.user_id ?? fallback;
+}
+
 /** A room's call record begins: the one insert of a live transcripts row, for
  *  the scribe's `start` and for a press of Record in a huddle that is not
  *  transcribing (callRecordings.startRecording), so a call that is only
@@ -524,6 +536,7 @@ export async function beginCallRecord(
   const isPrivate = chosenPrivate || ownerOnly;
   const withholdOwn = chosenPrivate && !(ownerOnly && ownRoomTarget(args.roomKey));
   const ownRoute = args.ownRoute !== false && !withholdOwn;
+  const ownAdder = await ownRouteAdder(ctx, args.roomKey, args.userId);
   const id = await ctx.db.insert("transcripts", {
     room_key: args.roomKey,
     team_id: args.teamId,
@@ -533,7 +546,7 @@ export async function beginCallRecord(
     short_id: await nextShortId(ctx.db, "cl"),
     routes: (ownRoute ? withDefaultRoutes(args.roomKey, args.routes) : args.routes).map((r) => ({
       ...r,
-      added_by: args.userId,
+      added_by: r.kind === "session" && r.target === ownRoomTarget(args.roomKey) ? ownAdder : args.userId,
     })),
     last_seq: 0,
     ...(isPrivate ? { private: true } : {}),
@@ -569,7 +582,12 @@ export async function beginCallRecord(
  *  turned transcription on, the person it now speaks for. */
 export async function ensureOwnRoute(ctx: any, t: Doc<"transcripts">, userId: Id<"users">): Promise<void> {
   if (!t.own_route_owed || t.status !== "live") return;
-  const routes = withDefaultRoutes(t.room_key, t.routes).map((r) => ({ ...r, added_by: r.added_by ?? userId }));
+  const ownAdder = await ownRouteAdder(ctx, t.room_key, userId);
+  const own = ownRoomTarget(t.room_key);
+  const routes = withDefaultRoutes(t.room_key, t.routes).map((r) => ({
+    ...r,
+    added_by: r.added_by ?? (r.kind === "session" && r.target === own ? ownAdder : userId),
+  }));
   await ctx.db.patch(t._id, { routes, own_route_owed: undefined });
   await syncAgentFeeds(ctx, (await ctx.db.get(t._id))!);
 }
