@@ -500,7 +500,7 @@ export async function visiblePriorities(ctx: Ctx, r: Reader, workspace: string |
  * The viewer's own first, then each teammate's; within a person, active
  * before done, quiet and set aside, each in rank order.
  */
-export async function listFor(ctx: Ctx, viewer: Id<"users">, args: { workspace?: string; status?: PriorityStatus; all?: boolean; timing_for?: string }): Promise<PriorityList> {
+export async function listFor(ctx: Ctx, viewer: Id<"users">, args: { workspace?: string; status?: PriorityStatus; all?: boolean }): Promise<PriorityList> {
   const r = await readerFor(ctx, viewer);
   const { rows, own_truncated, teammates_truncated } = await visiblePriorities(ctx, r, args.workspace, args.status, !!args.all);
   const people = await owners(ctx, rows);
@@ -540,9 +540,7 @@ export async function listFor(ctx: Ctx, viewer: Id<"users">, args: { workspace?:
     const row = rowFor(viewer, p, ownerOf(people, p), positions.get(String(p._id)) ?? null, steps, await mappedSessions(r, p, listRead(viewer, p)), await correctionPending(ctx, viewer, p), LIST_SESSIONS);
     out.push(!linked ? row : full ? { ...row, ...linked } : { ...row, mapped_links: linked.links });
   }
-  // The pass's timing is one workspace's: the one listed, else the one named for it (a list of every workspace reads the active one's).
-  const timed = args.workspace ?? (args.timing_for && r.held.has(args.timing_for) ? args.timing_for : undefined);
-  return { priorities: out, own_truncated, teammates_truncated, ...(timed ? await passTiming(ctx, viewer, timed, Date.now()) : { behind_by_ms: null, next_pass_at: null }) };
+  return { priorities: out, own_truncated, teammates_truncated, ...(args.workspace ? await passTiming(ctx, viewer, args.workspace, Date.now()) : { behind_by_ms: null, next_pass_at: null }) };
 }
 
 async function byShortId(ctx: Ctx, shortId: string): Promise<Priority | null> {
