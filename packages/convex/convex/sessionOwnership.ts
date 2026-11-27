@@ -24,8 +24,9 @@ import {
   sessionOwnerFactsOf,
   type OwnerRowSnapshot,
 } from "./sessionOwners";
-import { mayEditOwners, ownersOf, releasedParentOf } from "@codecast/shared/contracts/sessionOwners";
-import { ADOPT_CHAIN_CAP, assertHumanOwner, assertRoleMayOwn, ownerCandidatesFor, ownersChangeFor, resolveOwnerRef, takeBackRefusal, writeOwnersChange, type OwnerCandidate } from "./lib/ownersChange";
+import { mayEditOwners, ownersOf } from "@codecast/shared/contracts/sessionOwners";
+import { assertHumanOwner, assertRoleMayOwn, ownerCandidatesFor, ownersChangeFor, resolveOwnerRef, writeOwnersChange, type OwnerCandidate } from "./lib/ownersChange";
+import { originRead } from "./lib/ownersOrigin";
 export { OWNER_CANDIDATE_CAP, type OwnerCandidate } from "./lib/ownersChange";
 import { teamFeatureOffMessage } from "./lib/teamFeatureGuard";
 import { notifySessionAssigned, notifySessionOwnershipChanged } from "./sessionAssignmentNotifications";
@@ -952,48 +953,6 @@ async function ownersModelRead(ctx: { db: any }, authUserId: Id<"users">, conver
     role_started: !!facts.role_started,
     can_edit: mayEditOwners(facts, String(authUserId)),
     owners_changed_at: conversation.owners_changed_at ?? null,
-  };
-}
-
-// Whether `c` works for `ancestorId` at any depth (adoptableParentId's loop
-// refusal): adopting it would make two sessions answer each other.
-async function nestedUnder(ctx: { db: any }, c: any, ancestorId: unknown): Promise<boolean> {
-  const seen = new Set<string>();
-  let link: unknown = c.parent_conversation_id;
-  while (link && !seen.has(String(link)) && seen.size < ADOPT_CHAIN_CAP) {
-    if (String(link) === String(ancestorId)) return true;
-    seen.add(String(link));
-    link = (await ctx.db.get(link as Id<"conversations">))?.parent_conversation_id;
-  }
-  return false;
-}
-
-// Where it came from, for the owners menu (OwnersModelRead): the parent a
-// person released it from, when the viewer may put it back; the role a change
-// took off it; the session that spawned it, adoptable by the same rules.
-async function originRead(
-  ctx: { db: any },
-  authUserId: Id<"users">,
-  conversation: any,
-  facts: Awaited<ReturnType<typeof sessionOwnerFactsOf>>,
-  role: string | null,
-  titleFor: (c: any) => Promise<string | null>,
-): Promise<Pick<OwnersModelRead, "released_parent" | "released_role" | "spawned_by">> {
-  const sessionRef = async (c: any) => ({ conversation_id: String(c._id), short_id: c.short_id ?? String(c._id).slice(0, 7), title: await titleFor(c) });
-  const releasedLink = conversation.parent_released_at != null ? releasedParentOf(facts) : null;
-  const releasedDoc = releasedLink ? await ctx.db.get(releasedLink) : null;
-  const roleDoc = conversation.released_role_id && String(conversation.released_role_id) !== role ? await ctx.db.get(conversation.released_role_id) : null;
-  // A spawned peer (no parent link, started as itself) its spawner may adopt.
-  const spawner = !conversation.parent_conversation_id && conversation.spawned_by_conversation_id ? await ctx.db.get(conversation.spawned_by_conversation_id) : null;
-  const movable = !conversation.is_subagent && !conversation.is_workflow_sub && !conversation.parent_message_uuid;
-  const adoptable = !!spawner && movable && String(spawner._id) !== String(conversation._id)
-    && !(await nestedUnder(ctx, spawner, conversation._id)) && !(await takeBackRefusal(ctx, authUserId, conversation, spawner));
-  return {
-    released_parent: releasedDoc && !(await takeBackRefusal(ctx, authUserId, conversation, releasedDoc)) ? await sessionRef(releasedDoc) : null,
-    released_role: roleDoc && roleDoc.status !== "retired"
-      ? { role_id: String(roleDoc._id), short_id: roleDoc.short_id ?? null, handle: roleDoc.handle, name: roleDoc.name }
-      : null,
-    spawned_by: spawner ? { ...(await sessionRef(spawner)), adoptable } : null,
   };
 }
 

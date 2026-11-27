@@ -74,7 +74,13 @@ export function OwnersSheetBody({ conversationId, view, onClose }: {
       <Text style={styles.sectionLabel}>Owners · whose inbox</Text>
       {m.rows.map(ownerRow)}
       {m.notice ? <Text style={styles.notice} accessibilityRole="alert">{m.notice}</Text> : null}
-      {view.pending ? <Text style={styles.rowHint} testID="owners-pending">Owners can change once it starts</Text> : null}
+      {/* Not created yet: the add field is there, off, until it is. */}
+      {view.pending ? (
+        <View style={[styles.search, { opacity: 0.6 }]}>
+          <FontAwesome name="search" size={12} color={Theme.textMuted} />
+          <TextInput editable={false} placeholder="Add owners once it starts" placeholderTextColor={Theme.textMuted0} style={styles.searchInput} accessibilityLabel="Add owners once it starts" testID="owners-pending" />
+        </View>
+      ) : null}
       {m.readOnly ? (
         !view.mine && m.meId ? (
           <TouchableOpacity style={styles.row} activeOpacity={0.6} onPress={addMe} accessibilityRole="button" testID="owners-add-me">

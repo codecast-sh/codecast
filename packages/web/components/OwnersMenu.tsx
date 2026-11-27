@@ -223,7 +223,14 @@ export function OwnersMenuBody({ conversationId, view, onClose, onDirty, touch =
       <div className={LABEL}>Owners · whose inbox</div>
       {rows.map(ownerRow)}
       {m.notice && <div className="px-2 py-1 text-meta text-sol-yellow" role="status" data-owners-notice>{m.notice}</div>}
-      {view.pending && <div className="px-2 py-1 text-meta text-sol-text-dim" data-owners-pending>Owners can change once it starts</div>}
+      {/* Not created yet: the add field is there, off, until it is. */}
+      {view.pending && <>
+        <div className={SEP} />
+        <label className="flex h-8 items-center gap-2 px-2 text-sol-text-dim opacity-60">
+          <Search className="w-3.5 h-3.5" />
+          <input disabled placeholder="Add owners once it starts" aria-label="Add owners once it starts" data-owners-pending className="min-w-0 flex-1 bg-transparent text-ui placeholder:text-sol-text-dim outline-none" />
+        </label>
+      </>}
       {m.readOnly ? (
         !view.mine && m.meId && (
           <>

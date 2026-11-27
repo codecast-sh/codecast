@@ -339,7 +339,9 @@ describe("flag on: a session not created yet", () => {
     expect($("[data-owners-seg]")!.title).toBe("Owners: You");
     await click($("[data-owners-seg]"));
     expect($$("[data-owner-row]").map(rowText)).toEqual(["YouOwner"]);
-    expect($("[data-owners-pending]")!.textContent).toBe("Owners can change once it starts");
+    const pending = $("[data-owners-pending]") as HTMLInputElement;
+    expect(pending.disabled).toBe(true);
+    expect(pending.placeholder).toBe("Add owners once it starts");
     expect($("[data-owner-candidates]")).toBeNull();
     expect($("[data-owners-add-me]")).toBeNull();
   });
