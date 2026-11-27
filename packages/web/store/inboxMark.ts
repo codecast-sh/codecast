@@ -46,14 +46,26 @@ function drawnParentOf(placed: PlacedInbox, id: string): string | null {
 }
 
 /**
- * The mark `inbox` draws for one session, or null when it does not draw it
- * (not in the store, outside the scope, or folded below the old-session
- * fold). It follows the inbox's status view (the sections Questions, Pinned,
- * New, Needs You, Couldn't finish, Done, Working, Sleeping, and Snoozed,
- * Stashed and Dismissed behind their headers); the other views (Recent, by
- * label, by plan…) group the same rows differently, and a view filter (a
- * project or label chip) narrows what is on screen, not what the inbox holds,
- * so neither is read.
+ * What `inbox` draws for one session: its card's `mark`; whether the inbox
+ * counts it as needing the viewer (`asks`: it sits in Questions or Needs
+ * You, flat or counted there nested under a lead, or on a pinned card
+ * waiting on the viewer); and `target`, the conversation that answer is in
+ * (the session itself, or the lead a role's session rides).
+ */
+export type DrawnMark = { mark: SessionStatus; asks: boolean; target: string };
+
+/** The sections the inbox counts as needing the viewer (its Needs You count and Questions). */
+const ASKING_SECTIONS: ReadonlySet<InboxSectionKey> = new Set(["questions", "needsInput"]);
+
+/**
+ * What `inbox` draws for one session, or null when it does not draw it (not
+ * in the store, outside the scope, or folded below the old-session fold). It
+ * follows the inbox's status view (the sections Questions, Pinned, New, Needs
+ * You, Couldn't finish, Done, Working, Sleeping, and Snoozed, Stashed and
+ * Dismissed behind their headers); the other views (Recent, by label, by
+ * plan…) group the same rows differently, and a view filter (a project or
+ * label chip) narrows what is on screen, not what the inbox holds, so neither
+ * is read.
  *
  * The rows are placed as the inbox places them (placeInboxRows: the viewer's
  * scope, `focusedId` held in place: the sidebar's activeSessionId ??
@@ -61,38 +73,50 @@ function drawnParentOf(placed: PlacedInbox, id: string): string | null {
  * drawn in (drawnSectionOf), nested rows under a drawn card. The mark is the
  * one its card computes there: sessionStatusOf over the section (cardSectionOf
  * for a declared one; Questions is an ask), with the card's live facts from
- * subagentLiveOf. A row nested under a drawn card wears its own nested state,
- * except a role's session riding its lead, which the role triages: it wears
- * the lead's mark. On the sidebar a hosted conversation that ended on a stop
- * is drawn under "Couldn't finish" (splitHostedStops); the phone keeps it
- * under Needs You and draws no stop.
+ * subagentLiveOf. Whether it asks is where it sits, not its glyph: an API
+ * error filed in Needs You draws the error mark and still asks; a nested row
+ * asks where the inbox counts it (nestedSectionOf), or when its own ask is
+ * what lifted its lead into Questions. A role's session riding
+ * its lead is the role's to triage: it wears the lead's mark, and the lead's
+ * conversation is where to answer. On the sidebar a hosted conversation that
+ * ended on a stop is drawn under "Couldn't finish" and asks nothing; the
+ * phone keeps it under Needs You as an ask.
  *
  * Placing here shares placeInboxRows' memo with the rail, so the rail's work
  * is reused rather than done twice. It keeps lastPlacedInbox current while no
  * rail is drawn too, so sidebarStatusOf reads this placement then; it is the
- * one the rail would draw, from the same inputs.
+ * one the rail would draw, from the same inputs. Callers place only when the
+ * inbox's wake signatures move (hooks/usePriorityModels usePriorityLiveStates).
  */
 export function inboxMarkOf(
   state: PlaceInboxState & SubagentLiveState,
   id: string,
   { inbox, now, focusedId }: { inbox: MarkInbox; now: number; focusedId: string | null },
-): SessionStatus | null {
+): DrawnMark | null {
   const row = state.sessions[id];
   if (!row) return null;
   const placed = placeInboxRows(state, { focusedId, now });
   const live = subagentLiveOf(row, now, state);
   // The phone files a hosted stop under Needs You and draws it there as an ask.
   if (inbox === "phone") live.stopped = false;
+  const stopped = inbox === "sidebar" && !!hostedStopOf(row as any, state.messages?.[id] as any);
   const hosted = isHostedAgentType(row.agent_type);
   const hidden = drawnHiddenOf(placed, id);
-  if (hidden) return sessionStatusOf({ row, section: cardSectionOf(hidden, undefined), now, live, hosted });
+  if (hidden) return { mark: sessionStatusOf({ row, section: cardSectionOf(hidden, undefined), now, live, hosted }), asks: false, target: id };
   const section = drawnSectionOf(placed, id);
   if (!section) {
     const parent = drawnParentOf(placed, id);
     if (!parent) return null;
-    return isUnderRole(row) ? inboxMarkOf(state, parent, { inbox, now, focusedId }) : subagentStatusOf(row, now, live);
+    if (isUnderRole(row)) return inboxMarkOf(state, parent, { inbox, now, focusedId });
+    // Counted where the inbox counts it nested, or the ask its lead was lifted into Questions for (askingChildParents).
+    const counted = placed.nestedSectionOf.get(id);
+    const asks = (!!counted && ASKING_SECTIONS.has(counted) && !stopped) || (drawnSectionOf(placed, parent) === "questions" && !!live.asking);
+    return { mark: subagentStatusOf(row, now, live), asks, target: id };
   }
-  const key = inbox === "sidebar" && section === "needsInput" && hostedStopOf(row as any, state.messages?.[id] as any) ? "hosted_stopped" : PANEL_KEY_OF_SECTION[section];
+  const key = section === "needsInput" && stopped ? "hosted_stopped" : PANEL_KEY_OF_SECTION[section];
   const cardSection = section === "questions" ? "questions" : cardSectionOf(section === "working" ? "working" : "default", INBOX_SECTION_DECLARED_STATUS[key]);
-  return sessionStatusOf({ row, section: cardSection, placement: cardSection ? null : railRowPlacement(row, now), now, live, hosted });
+  const mark = sessionStatusOf({ row, section: cardSection, placement: cardSection ? null : railRowPlacement(row, now), now, live, hosted });
+  // A pinned card keeps its own verdict: it waits on the viewer when that verdict is an ask or a failure to clear.
+  const asks = section === "pinned" ? mark === "needs_you" || mark === "error" : ASKING_SECTIONS.has(section) && key !== "hosted_stopped";
+  return { mark, asks, target: id };
 }

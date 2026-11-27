@@ -277,7 +277,7 @@ function Connected({ model, m, now, lookups, own, priorityPlan }: {
   const { row } = model;
   const c = connectedOf(m, priorityPlan);
   const branches = branchesOf(m, lookups);
-  const deploys = lookups.deploysOf(m);
+  const deploys = lookups.deploysOf(m, row.workspace);
   const nSessions = c.live.length + c.closed.length + c.more;
   const empty = nSessions + c.tasks.length + c.prs.length + branches.length + c.plans.length + deploys.length === 0;
   const sessionActions = (s: SessionLine) => showActionSheet(sessionLabel(s), sessionMenu(row, s, m.key, writes, {

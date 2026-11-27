@@ -203,3 +203,33 @@ test("Rename sits in the priority's ⋯ for a touch screen only, and opens the t
     await page.unmount();
   }
 }, 60_000);
+
+test("a rename ended by Escape or Enter gives focus back to the title (a milestone's: its row), never to the page", async () => {
+  const { act } = React as any;
+  useInboxStore.getState().syncTable("priorities", ROWS as any);
+  (useInboxStore.getState() as any)._setDispatch(async () => null);
+  const page = await mount(view({ rows: Object.values(useInboxStore.getState().priorities) }));
+  const key = (el: Element, k: string) => act(async () => {
+    el.dispatchEvent(new (window as any).KeyboardEvent("keydown", { key: k, bubbles: true }));
+    await wait(10);
+  });
+  const dbl = (el: Element) => act(async () => { el.dispatchEvent(new (window as any).MouseEvent("dblclick", { bubbles: true, cancelable: true, detail: 2 })); });
+  try {
+    for (const k of ["Escape", "Enter"]) {
+      await dbl(titleOf(page.container, "pri-3"));
+      expect(document.activeElement).toBe(titleInput(page.container, "pri-3"));
+      await key(titleInput(page.container, "pri-3")!, k);
+      expect(titleInput(page.container, "pri-3")).toBeNull();
+      expect(document.activeElement).toBe(titleOf(page.container, "pri-3"));
+    }
+    const milestone = () => block(page.container, "pri-3").querySelector('[data-milestone="s1"]')!;
+    await dbl(milestone().querySelector("[data-milestone-title]")!);
+    const input = milestone().querySelector("[data-rename-input]")!;
+    await key(input, "Escape");
+    expect(document.activeElement).toBe(milestone().querySelector("[role=button]"));
+  } finally {
+    await page.unmount();
+    (useInboxStore.getState() as any)._clearRuntimeBindings?.();
+    useInboxStore.getState().syncTable("priorities", ROWS as any);
+  }
+}, 60_000);

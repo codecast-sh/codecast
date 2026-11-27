@@ -289,6 +289,27 @@ describe("reads", () => {
     expect(s2.sessions_more).toBe(2);
   });
 
+  test("the cap never cuts a live session: six old sleeping ones and the newest idle one are all sent", async () => {
+    const { t, as, ada, acme, ws, p1 } = await world();
+    await t.run(async (ctx) => {
+      const conv = (short_id: string, fields: Record<string, unknown>) => ctx.db.insert("conversations", {
+        user_id: ada, team_id: acme, agent_type: "claude_code", session_id: short_id, short_id, title: `Session ${short_id}`,
+        started_at: NOW, message_count: 3, is_private: false, team_visibility: "full", status: "active",
+        priority_id: p1, priority_step_key: "s2", ...fields,
+      } as any);
+      for (let i = 0; i < 6; i++) await conv(`jx7sl${i}`, { thread_state_status: "dormant", thread_state_at: NOW - (3 + i) * DAY, last_turn_at: NOW - (3 + i) * DAY, updated_at: NOW - (3 + i) * DAY });
+      await conv("jx7new1", { updated_at: NOW });
+      await conv("jx7cls1", { inbox_killed_at: NOW, updated_at: NOW - 1000 });
+    });
+    const [row] = await rowsOf(as(ada), { workspace: ws });
+    const s2 = row.links.find((l: any) => l.key === "s2");
+    const shown = s2.sessions.map((s: any) => s.short_id);
+    for (const id of ["jx7new1", "jx7one1", ...Array.from({ length: 6 }, (_, i) => `jx7sl${i}`)]) expect(shown).toContain(id);
+    // Eight live sessions fill past the six: the closed one is the only cut, and the only one counted as more.
+    expect(shown).not.toContain("jx7cls1");
+    expect(s2.sessions_more).toBe(1);
+  });
+
   test("history names today's sessions no priority holds, for the No priority share", async () => {
     const { as, ada, ws } = await world();
     const res = await as(ada).query(pri.history, { days: 10, workspace: ws });

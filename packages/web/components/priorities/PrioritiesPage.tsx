@@ -180,7 +180,7 @@ export function PrioritiesView({ rows, history, now, layout }: {
   const models = useMemo(() => buildModels(shown, history, live, days), [shown, history, live, days]);
   const peak = useMemo(() => Math.max(1, ...models.flatMap((m) => m.counts)), [models]);
   const prs = useMemo(() => linkedPrRefs(shown), [shown]);
-  const lookups = usePriorityLookups(ids, prs);
+  const lookups = usePriorityLookups(ids, prs, useMemo(() => shown.map((r) => r.workspace), [shown]));
   const writes = usePriorityWrites();
   const [pastOpen, setPastOpen] = useState(false);
   // A drag of the viewer's rank on a desktop list: which row, and where it would land.

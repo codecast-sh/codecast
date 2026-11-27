@@ -95,7 +95,7 @@ function PrioritiesView({ rows, history, now }: { rows: PriorityRow[]; history: 
   const models = useMemo(() => buildModels(shown, history, live, days), [shown, history, live, days]);
   const peak = useMemo(() => Math.max(1, ...models.flatMap((m) => m.counts)), [models]);
   const prs = useMemo(() => linkedPrRefs(shown), [shown]);
-  const lookups = usePriorityLookups(ids, prs);
+  const lookups = usePriorityLookups(ids, prs, useMemo(() => shown.map((r) => r.workspace), [shown]));
   const [pastOpen, setPastOpen] = useState(false);
   const byId = new Map(models.map((m) => [m.row.short_id, m]));
   // The owner's active priorities per workspace, in order: where a move, a merge or a session can go.

@@ -42,7 +42,7 @@ const row = (over: Record<string, unknown> = {}) => ({
   ...over,
 }) as any;
 /** `asking`: the conversations the sidebar files under Needs You (the inbox's live verdict); the rest keep the server's state. */
-const model = (r: any, asking: string[] = []) => buildModels([r], undefined, (id) => (asking.includes(id) ? 'needs_you' : undefined), lastDays(10, NOW))[0];
+const model = (r: any, asking: string[] = []) => buildModels([r], undefined, (id) => (asking.includes(id) ? { mark: 'needs_you', asks: true, target: id } : undefined), lastDays(10, NOW))[0];
 const ms = (r: any, key: string, asking: string[] = []) => model(r, asking).milestones.find((x) => x.key === key)!;
 
 /** Every write a press makes, by name and arguments. */
@@ -120,12 +120,19 @@ describe('an open milestone', () => {
   it("a session's row draws the mark its inbox draws (Done's check, the stash tray, an error) while the milestone reads it as idle", () => {
     const r = row({ links: [link('s1'), link('s2', [session('f', 'idle'), session('t', 'idle'), session('e', 'idle')]), link('s3'), link('s4'), link('p1'), link('p2')] });
     const drawn: Record<string, any> = { 'conv-f': 'done', 'conv-t': 'stashed', 'conv-e': 'error' };
-    const m = buildModels([r], undefined, (id) => drawn[id], lastDays(10, NOW))[0].milestones.find((x) => x.key === 's2')!;
+    const m = buildModels([r], undefined, (id) => (drawn[id] ? { mark: drawn[id], asks: false, target: id } : undefined), lastDays(10, NOW))[0].milestones.find((x) => x.key === 's2')!;
     expect(m.state.kind).toBe('idle');
     const rows = Object.fromEntries(connectedOf(m, null).live.map((x) => [x.short_id, [x.state, sessionRowMark(x)]]));
     expect(rows).toEqual({ f: ['idle', 'done'], t: ['idle', 'stashed'], e: ['idle', 'error'] });
     // Not drawn: the row draws its own state.
     expect(sessionRowMark(ms(row(), 's3').sessions[0])).toBe('dormant');
+  });
+
+  it("an error the phone files under Needs You still needs you on the milestone, its row drawing the error", () => {
+    const r = row({ links: [link('s1'), link('s2', [session('e', 'idle')]), link('s3'), link('s4'), link('p1'), link('p2')] });
+    const m = buildModels([r], undefined, (id) => (id === 'conv-e' ? { mark: 'error' as const, asks: true, target: id } : undefined), lastDays(10, NOW))[0].milestones.find((x) => x.key === 's2')!;
+    expect(milestoneMark(m)).toMatchObject({ kind: 'needs_you', session: { short_id: 'e' } });
+    expect(sessionRowMark(m.sessions[0])).toBe('error');
   });
 
   it("names its own plan, else the priority's on the list; the priority's screen shows that once and passes none", () => {

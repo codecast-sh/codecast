@@ -79,7 +79,7 @@ function PriorityBody({ row }: { row: PriorityView }) {
   // The priority's plan shows once, above the milestones; a milestone lists only a plan of its own (Connected).
   const plan = model.plan;
   const linked = useMemo(() => ({ ids: linkedSessionIds([row]), prs: linkedPrRefs([row]) }), [row]);
-  const lookups = usePriorityLookups(linked.ids, linked.prs);
+  const lookups = usePriorityLookups(linked.ids, linked.prs, [row.workspace]);
   const corrections = row.corrections;
   const writes = usePriorityWrites();
   const [renaming, setRenaming] = useState(false);
@@ -97,6 +97,9 @@ function PriorityBody({ row }: { row: PriorityView }) {
             // The priority's own page shows its title whole; its owner double-clicks it to rename.
             <h1
               data-priority-title
+              // The owner's title takes focus back when a rename ends by key.
+              data-rename-return={row.mine || undefined}
+              tabIndex={row.mine ? -1 : undefined}
               onDoubleClick={row.mine ? () => setRenaming(true) : undefined}
               className="min-w-0 break-words text-[22px] font-semibold leading-tight text-sol-text"
             >
@@ -126,7 +129,8 @@ function PriorityBody({ row }: { row: PriorityView }) {
           className="mt-4 flex min-h-7 min-w-0 items-center gap-2 text-ui text-sol-text decoration-sol-text-dim/50 hover:underline [@media(pointer:coarse)]:min-h-11"
         >
           <MapIcon className="size-3.5 shrink-0 text-sol-text-dim" aria-hidden />
-          <span className="min-w-0 truncate">{plan.title}</span>
+          {/* One line on a wide page under a mouse; two on a phone or a touch screen, as other titles wrap. */}
+          <span data-priority-plan-title className="min-w-0 truncate [@container(max-width:40rem)]:line-clamp-2 [@container(max-width:40rem)]:whitespace-normal [@media(pointer:coarse)]:line-clamp-2 [@media(pointer:coarse)]:whitespace-normal">{plan.title}</span>
           <span className="shrink-0 whitespace-nowrap text-meta tabular-nums text-sol-text-dim">{plan.done}/{plan.total}</span>
         </Link>
       )}

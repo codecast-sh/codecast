@@ -169,6 +169,7 @@ function PriorityTitleLink({ row, onRename, className }: { row: PriorityRow; onR
     <Link
       href={priorityHref(row.short_id)}
       data-priority-title
+      data-rename-return
       title={row.title}
       onClick={row.mine ? (e) => {
         if (passing.current) { passing.current = false; return; }
