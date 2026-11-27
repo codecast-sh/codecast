@@ -47,6 +47,8 @@ import { claimPress, scheduleRunApprovalPost } from "./lib/changeApprovalRows";
 import { isPriorityCard } from "./lib/priorityCardAccess";
 import { workspaceOfArgs } from "./lib/workspaceArg";
 import { checkVerdictOf, shipTrackOf } from "./lib/shipTrack";
+import { internal } from "./_generated/api";
+import { isFlowStop } from "./flowStops";
 
 export { withAgentSessions };
 
@@ -1357,6 +1359,8 @@ export const updateProgress = mutation({
       const planId = (run as any).plan_id;
 
       if (taskId) await settleRunTask(ctx, { ...run, node_statuses: nodeStatuses }, args.run_status, args.fail_reason, now);
+      // A stop exit files the stop, which may make an incident of it (flowStops.ts), in its own transaction.
+      if (args.run_status === "failed" && isFlowStop(args.fail_reason)) await ctx.scheduler.runAfter(0, internal.flowStops.recordStop, { run_id: args.run_id });
 
       if (planId) {
         const planUpdates: Record<string, any> = { updated_at: now };
