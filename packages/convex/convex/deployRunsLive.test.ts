@@ -154,6 +154,17 @@ describe("a run stopped at Deploy reads Live once a later deploy carries its cha
     expect(told(t, "conv_subject").length).toBe(1);
   });
 
+  test("a run stopped days ago is found by its merge sha, past hundreds of newer failed runs", async () => {
+    const { t, mark, drain } = await world();
+    t.workflow_runs.push({ ...stoppedAtDeploy("run_old", 1, "Deploy stuck: cli is not live after 60m.", "task_c"), updated_at: NOW - 10 * 86_400_000 });
+    for (let i = 0; i < 320; i++) {
+      t.workflow_runs.push({ ...stoppedAtDeploy(`run_noise_${i}`, 9, "merge is off for this flow", "task_c"), merge: undefined, current_node_id: "merge", node_statuses: [{ node_id: "merge", status: "failed" }], updated_at: NOW - 86_400_000 + i });
+    }
+    await mark("cli", 2, "live");
+    expect((await drain()).sort()).toEqual(["run_a", "run_old"]);
+    expect(run(t, "run_old")).toMatchObject({ status: "completed", current_node_id: "exit" });
+  });
+
   test("a deploy that does not hold the change completes nothing", async () => {
     const { t, mark, drain } = await world();
     // A live deploy of the web commit holds web's change, not cli's: run A waits for cli, run B's web is now live.

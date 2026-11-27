@@ -229,8 +229,12 @@ export async function carriesForMarker(ctx: any, row: Doc<"deploys">, now: numbe
 
 /** How long after it stopped a run at Deploy is still completed by a deploy that carries its change. */
 const STOPPED_RUN_WINDOW_MS = 14 * DAY;
-/** Failed runs of a workspace read per live deploy. */
-const STOPPED_RUNS_SCAN = 300;
+/**
+ * Commits of a live deploy's range whose runs it reads, newest first. A range is the commits since the target's
+ * previous live deploy, normally a handful; a target's first placed deploy has no lower bound, and past this cap its
+ * oldest commits are left out. The commit at the deploy's own sha is always read.
+ */
+const STOPPED_RUN_COMMITS_MAX = 500;
 
 type StoppedRun = Pick<Doc<"workflow_runs">, "status" | "current_node_id" | "merge" | "node_statuses">;
 
@@ -287,13 +291,10 @@ export function liveRunPatch(run: StoppedRun, prefix: string, to: { live: string
 export async function completeLiveRuns(ctx: any, deployId: Id<"deploys">, now = Date.now()): Promise<Id<"workflow_runs">[]> {
   const d: Doc<"deploys"> | null = await ctx.db.get(deployId);
   if (!d || d.status !== "live" || !d.sha || !d.repository) return [];
-  const runs: Doc<"workflow_runs">[] = await ctx.db
-    .query("workflow_runs")
-    .withIndex("by_workspace_status_updated", (q: any) => q.eq("workspace", d.workspace).eq("status", "failed").gte("updated_at", now - STOPPED_RUN_WINDOW_MS))
-    .order("desc")
-    .take(STOPPED_RUNS_SCAN);
+  const runs = await runsMergedInto(ctx, d);
   const done: Id<"workflow_runs">[] = [];
   for (const run of runs) {
+    if (run.updated_at < now - STOPPED_RUN_WINDOW_MS) continue;
     const prefix = deployStopOf(run);
     // A run a person queued to resume is theirs to finish.
     if (!prefix || run.resume_queued) continue;
@@ -323,6 +324,33 @@ export async function completeLiveRuns(ctx: any, deployId: Id<"deploys">, now = 
     await tellStoppedSession(ctx, run, task, graph?.label || graph?.name || "change", line);
   }
   return done;
+}
+
+/**
+ * The failed runs of a live deploy's workspace that merged a commit it carries: the commit at its own sha, and when it
+ * is placed on main the commits after its target's previous live deploy and at or before its cut, found by merge sha.
+ */
+async function runsMergedInto(ctx: any, d: Doc<"deploys">): Promise<Doc<"workflow_runs">[]> {
+  // A run's merge.sha is the full sha its merge pushed; a deploy's own sha may be short, so each is read as a prefix.
+  const shas = new Set<string>([d.sha!.toLowerCase()]);
+  if (d.cut_at != null) {
+    const from = await previousCut(ctx, d);
+    const range: Doc<"commits">[] = await ctx.db
+      .query("commits")
+      .withIndex("by_repository_main", (q: any) => (from != null ? q.eq("repository", d.repository).gt("main_at", from) : q.eq("repository", d.repository)).lte("main_at", d.cut_at))
+      .order("desc")
+      .take(STOPPED_RUN_COMMITS_MAX);
+    for (const c of range) shas.add(c.sha.toLowerCase());
+  }
+  const runs = new Map<string, Doc<"workflow_runs">>();
+  for (const s of shas) {
+    const rows: Doc<"workflow_runs">[] = await ctx.db
+      .query("workflow_runs")
+      .withIndex("by_workspace_merge_sha", (q: any) => q.eq("workspace", d.workspace).gte("merge.sha", s).lt("merge.sha", `${s}~`))
+      .take(20);
+    for (const r of rows) if (r.status === "failed") runs.set(String(r._id), r);
+  }
+  return [...runs.values()];
 }
 
 /**
