@@ -91,7 +91,10 @@ export function useDictation(field: DictationFieldAdapter): DictationControls {
           // its tooltip. A cancel or a finish ends with neither. Top centre:
           // the app's toasts stack bottom-right, over the composer's Send.
           if (next.error) toast.error(next.error, { position: "top-center" });
-          else if (next.stopped) toast(dictationStopLine(next.stopped), { position: "top-center" });
+          else {
+            const line = dictationStopLine(next.stopped);
+            if (line) toast(line, { position: "top-center" });
+          }
         }
         setState(next);
       });
