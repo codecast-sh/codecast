@@ -146,13 +146,13 @@ export const tellRelease = mutation({
     let content: string;
     // The caller is named by from_user_id, never by a name in the text.
     if (args.not_forced !== undefined) {
-      content = `${d.short_id}: release ${version} changed the daemon, but ${team.name}'s machines were not forced onto it: the finish its sender ran could not raise the floor. Raise it with cast force-update ${version} --team ${teamArg(team.name)}.`;
+      content = `${d.short_id}: release ${version} changed the daemon, but your team's machines were not forced onto it: the finish its sender ran could not raise the floor. Raise it with cast force-update ${version} --team ${team._id}.`;
     } else {
       const lagging = (await teamFleet(ctx, team, version, Date.now())).lagging;
       if (!lagging.length) return { told: null };
       // Device rows' ids and checked versions only: labels, owners' names and update errors are what members' machines wrote.
       const ids = lagging.slice(0, 20).map((m) => `${m.id} (${shownVersion(m.cli_version)})`).join(", ");
-      content = `${d.short_id}: ${lagging.length} of ${team.name}'s machines are online and still below ${version} after the release's wait: ${ids}${lagging.length > 20 ? ", ..." : ""}. The deploy's note names them: cast line deploy show ${d.short_id}`;
+      content = `${d.short_id}: ${lagging.length} of your team's machines are online and still below ${version} after the release's wait: ${ids}${lagging.length > 20 ? ", ..." : ""}. The deploy's note names them: cast line deploy show ${d.short_id}`;
     }
     const sent = await tellRole(ctx, role._id, { content, from_user_id: userId, client_id: `team-cli-floor:${d.short_id}:${args.not_forced !== undefined ? "not-forced" : "lagging"}` });
     return { told: sent ? role.handle : null };
@@ -162,8 +162,6 @@ const RELEASE_HANDLE = "release";
 
 /** A version a message to a role may carry: x.y.z, else "unknown" (a heartbeat's cli_version is the machine's own string). */
 const shownVersion = (v: string | null | undefined) => (v && RELEASE_VERSION.test(v) ? v : "unknown");
-/** The team's name as a --team argument: quoted unless it is one plain word. */
-const teamArg = (name: string) => (/^[\w.-]+$/.test(name) ? name : JSON.stringify(name));
 
 /**
  * A release that changes the daemon, finished without raising the global
@@ -177,7 +175,7 @@ const teamArg = (name: string) => (/^[\w.-]+$/.test(name) ? name : JSON.stringif
  * (an install GitHub confirmed, where a deploy target's repository is only
  * what its publisher claimed), or any deploy when platform staff ask. The
  * message carries only the checked version, the deploy's id and the told
- * team's own name and numbers. Each team's fleet is read in a mutation of its
+ * team's own id and numbers (a team's name is admin-written free text). Each team's fleet is read in a mutation of its
  * own (tellOtherTeam), so no one transaction reads every team's machines; the
  * caller learns only how many teams are being checked (`asked`).
  */
@@ -227,7 +225,7 @@ export const tellOtherTeam = internalMutation({
     const f = await teamFleet(ctx, team, args.version, Date.now());
     const older = f.lagging.length + f.offline.length;
     if (!older) return;
-    const content = `CLI release ${args.version} (${args.deploy}) changes the running daemon. ${team.name}'s floor is ${floor ? shownVersion(floor) : "unset"}, and ${older} of its machines seen in the last day run older. Forcing them restarts each daemon and is your call: cast force-update ${args.version} --team ${teamArg(team.name)}`;
+    const content = `CLI release ${args.version} (${args.deploy}) changes the running daemon. Your team's floor is ${floor ? shownVersion(floor) : "unset"}, and ${older} of its machines seen in the last day run older. Forcing them restarts each daemon and is your call: cast force-update ${args.version} --team ${team._id}`;
     await tellRole(ctx, role._id, { content, client_id: `team-cli-floor:${args.deploy}:${team._id}` });
   },
 });
