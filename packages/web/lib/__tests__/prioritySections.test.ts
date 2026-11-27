@@ -6,8 +6,7 @@ import type { PriorityRow } from "../priorities";
 import { buildSections, effectiveGroupBy, pageControls, rankDraggable, visibleCount, type RankedRow } from "../prioritySections";
 
 const ME = "u-me";
-const NAMES: Record<string, string> = { "team:codecast": "Codecast", "team:union": "union", "team:alpha": "Alpha" };
-const workspaceName = (key: string) => NAMES[key] ?? key;
+const workspaceNames: Record<string, string> = { "team:codecast": "Codecast", "team:union": "union", "team:alpha": "Alpha" };
 
 let seq = 0;
 function row(over: Partial<PriorityRow> & { user_id?: string }): PriorityRow {
@@ -46,7 +45,7 @@ const opts = (over: { activeWorkspace?: string | null; hidden?: string[]; groupB
   activeWorkspace: over.activeWorkspace ?? "team:union",
   hidden: over.hidden ?? [],
   groupBy: over.groupBy ?? "workspace_person",
-  workspaceName,
+  workspaceNames,
 });
 
 const ids = (rows: readonly PriorityRow[]) => rows.map((r) => r.short_id);
@@ -149,8 +148,8 @@ describe("hidden workspaces", () => {
     expect(s.sections.flatMap((p) => p.workspaces.map((w) => w.key))).not.toContain("team:codecast");
   });
 
-  test("the count leaves them and merged rows out", () => {
-    expect(visibleCount(ROWS, [])).toBe(14);
+  test("the count is everyone's active priorities in the workspaces shown", () => {
+    expect(visibleCount(ROWS, [])).toBe(10);
     expect(visibleCount(ROWS, hidden)).toBe(3);
   });
 
@@ -159,7 +158,7 @@ describe("hidden workspaces", () => {
     expect(c.workspaces).toEqual([
       { key: "team:union", name: "union", count: 2 },
       { key: "team:alpha", name: "Alpha", count: 1 },
-      { key: "team:codecast", name: "Codecast", count: 10 },
+      { key: "team:codecast", name: "Codecast", count: 6 },
       { key: `user:${ME}`, name: "Personal", count: 1 },
     ]);
     expect(c.showChips).toBe(true);
@@ -190,6 +189,22 @@ describe("page controls", () => {
     });
   });
 
+  test("a lone workspace cannot be hidden into an empty page", () => {
+    const union = ROWS.filter((r) => r.workspace === "team:union");
+    const hidden = ["team:union"];
+    const s = buildSections(union, opts({ hidden }));
+    if (s.groupBy !== "workspace_person") throw new Error(s.groupBy);
+    expect(s.sections.map((x) => x.key)).toEqual(["team:union"]);
+    expect(visibleCount(union, hidden)).toBe(2);
+    expect(pageControls(union, opts({ hidden }))).toMatchObject({ showChips: false, showGroupBy: true, showSectionHeadings: false });
+  });
+
+  test("a workspace name missing from the map reads as its key", () => {
+    const s = buildSections([row({ workspace: "team:new" })], opts());
+    if (s.groupBy !== "workspace_person") throw new Error(s.groupBy);
+    expect(s.sections[0].name).toBe("team:new");
+  });
+
   test("a workspace holding only merged rows is not on the page", () => {
     const rows = [row({ short_id: "a" }), row({ short_id: "b", workspace: "team:union", status: "merged" })];
     expect(pageControls(rows, opts()).showChips).toBe(false);
@@ -208,16 +223,25 @@ describe("page controls", () => {
 
 describe("fallbacks", () => {
   test("an unknown or missing Group by reads as Workspace, then person", () => {
-    expect(effectiveGroupBy("person", 3)).toBe("workspace_person");
-    expect(effectiveGroupBy(undefined, 3)).toBe("workspace_person");
+    expect(effectiveGroupBy("person", { workspaces: 3, teammates: true })).toBe("workspace_person");
+    expect(effectiveGroupBy(undefined, { workspaces: 3, teammates: true })).toBe("workspace_person");
     expect(buildSections(ROWS, opts({ groupBy: "flat" })).groupBy).toBe("workspace_person");
   });
 
   test("Person then workspace with one workspace shown reads as the default", () => {
-    expect(effectiveGroupBy("person_workspace", 1)).toBe("workspace_person");
+    expect(effectiveGroupBy("person_workspace", { workspaces: 1, teammates: true })).toBe("workspace_person");
     expect(buildSections(ROWS.filter((r) => r.workspace === "team:codecast"), opts({ groupBy: "person_workspace" })).groupBy).toBe("workspace_person");
-    expect(effectiveGroupBy("person_workspace", 2)).toBe("person_workspace");
-    expect(effectiveGroupBy("workspace", 1)).toBe("workspace");
+    expect(effectiveGroupBy("person_workspace", { workspaces: 2, teammates: true })).toBe("person_workspace");
+    expect(effectiveGroupBy("workspace", { workspaces: 1, teammates: true })).toBe("workspace");
+  });
+
+  test("with no teammate shown, a stored grouping reads as the default, so drag to rank works", () => {
+    expect(effectiveGroupBy("workspace", { workspaces: 3, teammates: false })).toBe("workspace_person");
+    const mineOnly = ROWS.filter((r) => r.mine);
+    const s = buildSections(mineOnly, opts({ groupBy: "workspace" }));
+    expect(s.groupBy).toBe("workspace_person");
+    expect(rankDraggable(s.groupBy, mineOnly.find((r) => r.status === "active")!)).toBe(true);
+    expect(buildSections(ROWS, opts({ groupBy: "workspace", hidden: ["team:codecast", "team:union"] })).groupBy).toBe("workspace_person");
   });
 
   test("no rows: no sections", () => {

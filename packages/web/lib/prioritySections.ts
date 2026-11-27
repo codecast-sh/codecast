@@ -10,12 +10,12 @@ export const DEFAULT_GROUP_BY: GroupBy = "workspace_person";
 const GROUP_BYS: readonly GroupBy[] = ["workspace_person", "person_workspace", "workspace"];
 
 export type SectionOptions = {
-  /** The workspace key the viewer has open: its section comes first. */
+  /** The workspace key the viewer has open (`team:<id>`, or `user:<id>` for personal, never null for it): its section comes first. */
   activeWorkspace: string | null;
-  /** Workspace keys the viewer turned off. */
+  /** Workspace keys the viewer turned off; ignored while the page holds one workspace. */
   hidden: readonly string[];
-  /** A team workspace's name; the personal (`user:`) workspace is always "Personal". */
-  workspaceName: (key: string) => string;
+  /** Team workspaces' names by key; a missing key reads as the key, and `user:` is always "Personal". */
+  workspaceNames: Readonly<Record<string, string>>;
 };
 
 /** A row in Workspace grouping, with its place in its owner's list; its owner is `row.owner`. */
@@ -36,13 +36,21 @@ export type Sections =
   | { groupBy: "person_workspace"; sections: PersonWorkspaceSection[] }
   | { groupBy: "workspace"; sections: WorkspaceSection[] };
 
-export function workspaceLabel(key: string, workspaceName: (key: string) => string): string {
-  return key.startsWith("user:") ? "Personal" : workspaceName(key);
+export function workspaceLabel(key: string, workspaceNames: Readonly<Record<string, string>>): string {
+  return key.startsWith("user:") ? "Personal" : workspaceNames[key] ?? key;
+}
+
+const pageRows = (rows: readonly PriorityRow[]) => rows.filter((r) => r.status !== "merged");
+
+/** The workspaces turned off, except that a page holding one workspace never hides it into an empty page. */
+function effectiveHidden(rows: readonly PriorityRow[], hidden: readonly string[]): readonly string[] {
+  return new Set(pageRows(rows).map((r) => r.workspace)).size > 1 ? hidden : [];
 }
 
 /** The rows a page draws: merged ones never, hidden workspaces' never. */
 function shownRows(rows: readonly PriorityRow[], hidden: readonly string[]): PriorityRow[] {
-  return rows.filter((r) => r.status !== "merged" && !hidden.includes(r.workspace));
+  const off = effectiveHidden(rows, hidden);
+  return pageRows(rows).filter((r) => !off.includes(r.workspace));
 }
 
 /** Each workspace's rows, the active workspace first, then by name (case-insensitive). */
@@ -54,17 +62,22 @@ function byWorkspace(rows: readonly PriorityRow[], opts: Omit<SectionOptions, "h
     else groups.set(r.workspace, [r]);
   }
   return [...groups]
-    .map(([key, rows]) => ({ key, name: workspaceLabel(key, opts.workspaceName), rows }))
+    .map(([key, rows]) => ({ key, name: workspaceLabel(key, opts.workspaceNames), rows }))
     .sort((a, b) =>
       Number(b.key === opts.activeWorkspace) - Number(a.key === opts.activeWorkspace)
       || a.name.localeCompare(b.name, undefined, { sensitivity: "base" })
       || a.key.localeCompare(b.key));
 }
 
-/** A stored Group by as the page uses it: unknown values, and Person then workspace with one workspace shown, read as the default. */
-export function effectiveGroupBy(pref: unknown, visibleWorkspaces: number): GroupBy {
+/**
+ * A stored Group by as the page uses it. It reads as the default when it is
+ * unknown, when no teammate's priority is shown (Group by is not on the page
+ * to change it back), and for Person then workspace with one workspace shown.
+ */
+export function effectiveGroupBy(pref: unknown, shown: { workspaces: number; teammates: boolean }): GroupBy {
   const groupBy = GROUP_BYS.find((g) => g === pref) ?? DEFAULT_GROUP_BY;
-  return groupBy === "person_workspace" && visibleWorkspaces < 2 ? DEFAULT_GROUP_BY : groupBy;
+  if (!shown.teammates) return DEFAULT_GROUP_BY;
+  return groupBy === "person_workspace" && shown.workspaces < 2 ? DEFAULT_GROUP_BY : groupBy;
 }
 
 /** Every #1, then every #2, …; within a rank the order ownerGroups gives (the viewer first, then by owner name). */
@@ -78,8 +91,9 @@ function interleave(people: readonly OwnerGroup[]): RankedRow[] {
 }
 
 export function buildSections(rows: readonly PriorityRow[], opts: SectionOptions & { groupBy: unknown }): Sections {
-  const workspaces = byWorkspace(shownRows(rows, opts.hidden), opts);
-  const groupBy = effectiveGroupBy(opts.groupBy, workspaces.length);
+  const shown = shownRows(rows, opts.hidden);
+  const workspaces = byWorkspace(shown, opts);
+  const groupBy = effectiveGroupBy(opts.groupBy, { workspaces: workspaces.length, teammates: shown.some((r) => !r.mine) });
 
   if (groupBy === "workspace") {
     return {
@@ -110,7 +124,7 @@ export function buildSections(rows: readonly PriorityRow[], opts: SectionOptions
 }
 
 export type PageControls = {
-  /** Every workspace on the page, hidden or not, in section order, with its priority count. */
+  /** Every workspace on the page, hidden or not, in section order, with its active priorities' count. */
   workspaces: Array<{ key: string; name: string; count: number }>;
   /** More than one workspace on the page. */
   showChips: boolean;
@@ -123,9 +137,9 @@ export type PageControls = {
 };
 
 export function pageControls(rows: readonly PriorityRow[], opts: SectionOptions): PageControls {
-  const workspaces = byWorkspace(shownRows(rows, []), opts).map(({ key, name, rows }) => ({ key, name, count: rows.length }));
+  const workspaces = byWorkspace(pageRows(rows), opts).map(({ key, name, rows }) => ({ key, name, count: rows.filter((r) => r.status === "active").length }));
   const shown = shownRows(rows, opts.hidden);
-  const visible = workspaces.filter((w) => !opts.hidden.includes(w.key)).length;
+  const visible = new Set(shown.map((r) => r.workspace)).size;
   return {
     workspaces,
     showChips: workspaces.length > 1,
@@ -135,12 +149,12 @@ export function pageControls(rows: readonly PriorityRow[], opts: SectionOptions)
   };
 }
 
-/** The header count: priorities in the sections shown. */
+/** The header count: everyone's active priorities in the sections shown. */
 export function visibleCount(rows: readonly PriorityRow[], hidden: readonly string[]): number {
-  return shownRows(rows, hidden).length;
+  return shownRows(rows, hidden).filter((r) => r.status === "active").length;
 }
 
-/** Drag to rank: the viewer's own active priorities, in the two nested groupings only. */
+/** Drag to rank: the viewer's own active priorities, in the two nested groupings only. `groupBy` is the one buildSections used. */
 export function rankDraggable(groupBy: GroupBy, row: Pick<PriorityRow, "mine" | "status">): boolean {
   return groupBy !== "workspace" && row.mine && row.status === "active";
 }
