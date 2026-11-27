@@ -44,8 +44,11 @@ export const inviteScribe = mutation({
     const existing = scribeStatus(t, now);
     if (existing !== "absent") return { claimed: false, existing };
     if (args.auto && t.scribe_claim?.removed) return { claimed: false, existing: "removed" };
-    await ctx.db.patch(t._id, { scribe_claim: { by: userId, at: now } });
-    return { claimed: true, claim_id: now, transcript_id: t._id };
+    // The claim's `at` is its id, which a removal press names, so it must
+    // differ from the claim or removal it replaces even within a millisecond.
+    const at = Math.max(now, (t.scribe_claim?.at ?? 0) + 1);
+    await ctx.db.patch(t._id, { scribe_claim: { by: userId, at } });
+    return { claimed: true, claim_id: at, transcript_id: t._id };
   },
 });
 

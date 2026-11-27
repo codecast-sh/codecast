@@ -141,6 +141,8 @@ test("anyone in the call removes Scribe: its route and feed go, and the removal 
 
 test("a removal names the Scribe it saw: a replay after a new invite leaves the new Scribe alone", async () => {
   const { ana, ben, room, anaAgent, benAgent, as, seat, call } = await seed();
+  // Every press lands in the same millisecond: claims stay distinct anyway.
+  setSystemTime(Date.now());
   const first = await as(String(ana)).mutation(api.transcriptsScribe.inviteScribe, { room_key: room });
   await seat(String(ana), String(anaAgent), first.claim_id);
   const remove = (which: Record<string, unknown>) => as(String(ben)).mutation(api.transcriptsScribe.removeScribe, { room_key: room, ...which });
