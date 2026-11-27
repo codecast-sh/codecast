@@ -4,6 +4,7 @@
 // "user:<id>" for the person's own huddles). Absent means off.
 import { parseRoomKey } from "@codecast/shared/contracts";
 import { useInboxStore } from "../../store/inboxStore";
+import type { BannerMemo } from "../../store/huddleSlice";
 
 /** The invite banner's words, on web and the phone. */
 export const SCRIBE_INVITE_WORDS = "Scribe can diagram your huddles as you talk";
@@ -66,17 +67,46 @@ export function markNextTimeSeen(workspace: string): void {
   s.updateClientUI({ huddleNextTimeSeen: { ...seen, [workspace]: true } });
 }
 
-/** What one person did with the board's banners in one call: dismissed the
- *  invite, invited Scribe from it, was shown, closed or saved the "Next
- *  time" one. */
-export type BannerMemo = { dismissed?: true; invited?: true; nextShown?: true; nextClosed?: true };
-
-/** Which banner shows over the board, if any. */
-/** `nextSeen`: the person was shown "Next time" in this workspace before; it
- *  stays up through the call that first showed it, and never shows again. */
+/** Which banner shows over the board, if any. `memo`: what this person did
+ *  with the banners in this call. `nextSeen`: the person was shown "Next
+ *  time" in this workspace before; it stays up through the call that first
+ *  showed it, and never shows again. */
 export function boardBannerState(opts: { present: boolean; memo: BannerMemo; boardViewOn: boolean; autoScribeOn: boolean; nextSeen: boolean }): "invite" | "next" | null {
   const { present, memo } = opts;
   if (!present) return memo.dismissed ? null : "invite";
   if (memo.invited && !memo.nextClosed && (memo.nextShown || (!opts.nextSeen && !(opts.boardViewOn && opts.autoScribeOn)))) return "next";
   return null;
+}
+
+const EMPTY_MEMO: BannerMemo = {};
+
+/** The board's banners, one rule for web and the phone: which shows, and what
+ *  each press does. `callKey`: the live call's transcript id, so a new call
+ *  starts fresh; the memo is this window's (store huddleBanners). */
+export function useBoardBanner(callKey: string, workspace: string | null, scribe: { present: boolean; invite: () => Promise<boolean> }) {
+  const memo = useInboxStore((s) => s.huddleBanners[callKey] ?? EMPTY_MEMO);
+  const boardViewOn = useHuddleSetting("huddleBoardView", workspace);
+  const autoScribeOn = useHuddleSetting("huddleAutoScribe", workspace);
+  const nextSeen = useNextTimeSeen(workspace);
+  const note = (patch: BannerMemo) => useInboxStore.getState().noteHuddleBanner(callKey, patch);
+  return {
+    state: boardBannerState({ present: scribe.present, memo, boardViewOn, autoScribeOn, nextSeen }),
+    // "Next time" follows only an invite that seated Scribe.
+    invite: () => void scribe.invite().then((ok) => ok && note({ invited: true })),
+    dismiss: () => note({ dismissed: true }),
+    /** "Next time" is on screen: shown once is shown for good in this
+     *  workspace, and it stays up for the rest of this call until saved or closed. */
+    shown: () => {
+      if (useInboxStore.getState().huddleBanners[callKey]?.nextShown || !workspace) return;
+      note({ nextShown: true });
+      markNextTimeSeen(workspace);
+    },
+    close: () => note({ nextClosed: true }),
+    /** Turning "Invite Scribe" on starts an agent in every huddle: that save goes through the review first. */
+    needsReview: (autoScribe: boolean) => autoScribe && !autoScribeOn,
+    save: (values: { boardView: boolean; autoScribe: boolean }) => {
+      if (workspace) setHuddleSettings(workspace, { huddleBoardView: values.boardView, huddleAutoScribe: values.autoScribe });
+      note({ nextClosed: true });
+    },
+  };
 }

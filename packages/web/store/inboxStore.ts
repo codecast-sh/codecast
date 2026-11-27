@@ -382,7 +382,7 @@ import { createExpectationsSlice, type ExpectationsSliceActions } from "./expect
 import { createOpsSlice, type OpsSliceActions } from "./opsSlice";
 import { createLiveArtifactsSlice, type LiveArtifactsSliceActions } from "./liveArtifactsSlice";
 import { createMeetingBotsSlice, type MeetingBotsSliceActions } from "./meetingBotsSlice";
-import { createHuddleSlice, type HuddleSliceActions } from "./huddleSlice";
+import { createHuddleSlice, type HuddleClientUI, type HuddleSliceActions } from "./huddleSlice";
 import { createSessionOwnersSlice, type SessionOwnersSliceActions } from "./sessionOwnersSlice";
 import { createAgentConnectionsSlice, type AgentConnectionsSliceActions } from "./agentConnectionsSlice";
 import { createComposeSlice, composeDraftContent, type ComposeInstance, type ComposeSliceState, type SessionStart } from "./composeSlice";
@@ -1999,7 +1999,7 @@ import { showsModern } from "../lib/modernStyle";
 /** What the header slide-over shows (components/anchor/AnchorPanel). */
 export type AnchorPanelTarget = { kind: "anchor"; id: string } | { kind: "session"; id: string };
 
-export type ClientUI = {
+export type ClientUI = HuddleClientUI & {
   theme?: "light" | "dark";
   // Sessions whose canvas is on (lib/sessionCanvas): conversation id → the
   // page the person pinned, null for "the latest page". Absent is off.
@@ -2071,13 +2071,6 @@ export type ClientUI = {
   // id): the switcher's dot lights only for threads waiting on them that
   // moved after it (useSwitchWorkspace stamps it).
   workspace_seen_at?: Record<string, number>;
-  // How the person's huddles start in each workspace, by workspace key
-  // (lib/calls/huddleSettings): on the board, and with Scribe invited.
-  huddleBoardView?: Record<string, boolean>;
-  huddleAutoScribe?: Record<string, boolean>;
-  // The workspaces where the person has been shown the board's "Next time"
-  // banner: it shows once per person per workspace, ever.
-  huddleNextTimeSeen?: Record<string, true>;
   // When the person finished or skipped the setup flow (/start). Until it
   // is set, a first-run inbox with no team sends them there once.
   setup_done_at?: number;
@@ -17012,7 +17005,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // Meeting bot writes (store/meetingBotsSlice.ts): send to a pasted link, remove.
   ...createMeetingBotsSlice(),
   // A huddle's board view, Scribe and live feeds (store/huddleSlice.ts).
-  ...createHuddleSlice(),
+  ...createHuddleSlice(set, get),
   // Outside agents over MCP (store/agentConnectionsSlice.ts): disconnect from Settings.
   ...createAgentConnectionsSlice(),
   // Session owners under the session_owners model (store/sessionOwnersSlice.ts).

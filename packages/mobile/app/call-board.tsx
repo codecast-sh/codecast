@@ -3,7 +3,7 @@
 // toggle away), with the banners that bring Scribe in. Got, or made if the
 // call has none, through callStage.openCallBoard: looking at it pins nothing,
 // so nobody else's stage moves.
-import { useState, useSyncExternalStore } from 'react';
+import { useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, View as RNView } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -14,7 +14,7 @@ import { useQueryNoThrow } from '@codecast/web/hooks/useQueryNoThrow';
 import { useMountEffect } from '@codecast/web/hooks/useMountEffect';
 import { useWatchEffect } from '@codecast/web/hooks/useWatchEffect';
 import { useLiveArtifact } from '@codecast/web/components/live/useLiveArtifact';
-import { boardBannerState, huddleWorkspace, huddleWorkspaceName, markNextTimeSeen, SCRIBE_INVITE_WORDS, setHuddleSettings, useHuddleSetting, useNextTimeSeen, type BannerMemo } from '@codecast/web/lib/calls/huddleSettings';
+import { huddleWorkspace, huddleWorkspaceName, SCRIBE_INVITE_WORDS, useBoardBanner } from '@codecast/web/lib/calls/huddleSettings';
 import { useScribe, type ScribeLive } from '@codecast/web/components/calls/useScribe';
 import { autoScribeLedger } from '@codecast/web/components/consequential/ledgers';
 import { ledgerLines } from '@codecast/web/components/consequential/roleOnline';
@@ -31,7 +31,6 @@ export default function CallBoardScreen() {
   const { room } = useLocalSearchParams<{ room: string }>();
   const roomKey = room ?? null;
   const live = useQueryNoThrow(api.transcripts.getLive, roomKey ? { room_key: roomKey, tail: 1 } : 'skip').data as ScribeLive;
-  const key = `${roomKey}|${live?.transcript_id ?? ''}`;
   const [docId, setDocId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [canvas, setCanvas] = useState(false);
@@ -59,7 +58,7 @@ export default function CallBoardScreen() {
   const ws = huddleWorkspace(roomKey, live, useMyUserId());
   const workspace = ws?.key ?? null;
   const workspaceName = useInboxStore((s: any) => huddleWorkspaceName(ws, s.teams));
-  const banner = roomKey && live ? <BoardBanner callKey={key} workspace={workspace} workspaceName={workspaceName} scribe={scribe} /> : null;
+  const banner = roomKey && live ? <BoardBanner callKey={live.transcript_id} workspace={workspace} workspaceName={workspaceName} scribe={scribe} /> : null;
 
   return (
     <RNView style={[styles.root, { paddingTop: insets.top }]}>
@@ -134,70 +133,38 @@ function ScribeChip({ scribe }: { scribe: Scribe }) {
 
 // ── The banners ───────────────────────────────────────────────────────────
 
-const memos = new Map<string, BannerMemo>();
-const memoListeners = new Set<() => void>();
-const EMPTY: BannerMemo = {};
-function noteBanner(callKey: string, patch: BannerMemo) {
-  memos.set(callKey, { ...memos.get(callKey), ...patch });
-  memoListeners.forEach((fn) => fn());
-}
-const subscribeMemos = (fn: () => void) => {
-  memoListeners.add(fn);
-  return () => void memoListeners.delete(fn);
-};
-
+/** Web's rule and inputs (lib/calls/huddleSettings useBoardBanner), drawn natively. */
 function BoardBanner({ callKey, workspace, workspaceName, scribe }: { callKey: string; workspace: string | null; workspaceName: string; scribe: Scribe }) {
   const Theme = useTheme();
-  const memo = useSyncExternalStore(subscribeMemos, () => memos.get(callKey) ?? EMPTY, () => EMPTY);
-  const nextSeen = useNextTimeSeen(workspace);
-  const boardViewOn = useHuddleSetting('huddleBoardView', workspace);
-  const autoScribeOn = useHuddleSetting('huddleAutoScribe', workspace);
-  const state = boardBannerState({ present: scribe.present, memo, boardViewOn, autoScribeOn, nextSeen });
-  if (state === 'invite') {
+  const banner = useBoardBanner(callKey, workspace, scribe);
+  if (banner.state === 'invite') {
     return (
       <RNView style={styles.banner} accessibilityRole="summary">
         <Text style={styles.bannerText}>{SCRIBE_INVITE_WORDS}</Text>
         <RNView style={styles.bannerActions}>
-          <Pressable
-            // "Next time" follows only an invite that seated Scribe.
-            onPress={() => void scribe.invite().then((ok) => ok && noteBanner(callKey, { invited: true }))}
-            style={({ pressed }) => [styles.primary, pressed && styles.pressed]}
-            accessibilityRole="button"
-          >
+          <Pressable onPress={banner.invite} style={({ pressed }) => [styles.primary, pressed && styles.pressed]} accessibilityRole="button">
             <Text style={styles.primaryText}>Invite Scribe</Text>
           </Pressable>
-          <Pressable onPress={() => noteBanner(callKey, { dismissed: true })} style={({ pressed }) => [styles.close, pressed && styles.pressed]} accessibilityRole="button" accessibilityLabel="Dismiss for this call">
+          <Pressable onPress={banner.dismiss} style={({ pressed }) => [styles.close, pressed && styles.pressed]} accessibilityRole="button" accessibilityLabel="Dismiss for this call">
             <Ionicons name="close" size={18} color={Theme.textMuted} />
           </Pressable>
         </RNView>
       </RNView>
     );
   }
-  if (state === 'next' && workspace) {
-    return <NextTimeBanner callKey={callKey} workspace={workspace} workspaceName={workspaceName} onClose={() => noteBanner(callKey, { nextClosed: true })} />;
-  }
+  if (banner.state === 'next' && workspace) return <NextTimeBanner workspaceName={workspaceName} banner={banner} />;
   return null;
 }
 
-function NextTimeBanner({ callKey, workspace, workspaceName, onClose }: { callKey: string; workspace: string; workspaceName: string; onClose: () => void }) {
+function NextTimeBanner({ workspaceName, banner }: { workspaceName: string; banner: ReturnType<typeof useBoardBanner> }) {
   const Theme = useTheme();
-  const autoScribeOn = useHuddleSetting('huddleAutoScribe', workspace);
   const [boardView, setBoardView] = useState(true);
   const [autoScribe, setAutoScribe] = useState(true);
-  // Shown once per workspace, ever: marked seen as it first shows, and held
-  // up for the rest of this call by the memo.
-  useMountEffect(() => {
-    if (memos.get(callKey)?.nextShown) return;
-    noteBanner(callKey, { nextShown: true });
-    markNextTimeSeen(workspace);
-  });
-  const save = () => {
-    setHuddleSettings(workspace, { huddleBoardView: boardView, huddleAutoScribe: autoScribe });
-    onClose();
-  };
+  useMountEffect(banner.shown);
+  const save = () => banner.save({ boardView, autoScribe });
   const onSave = () => {
     // Turning "Invite Scribe" on starts an agent in every huddle: the same review web shows.
-    if (!autoScribe || autoScribeOn) return save();
+    if (!banner.needsReview(autoScribe)) return save();
     const l = autoScribeLedger({ workspace: workspaceName });
     appAlert(l.subject ? `${l.name}: ${l.subject}` : l.name, ledgerLines(l).join('\n'), [
       { text: l.keep ?? 'Not now', style: 'cancel' },
@@ -215,7 +182,7 @@ function NextTimeBanner({ callKey, workspace, workspaceName, onClose }: { callKe
         <Pressable onPress={onSave} style={({ pressed }) => [styles.primary, pressed && styles.pressed]} accessibilityRole="button">
           <Text style={styles.primaryText}>Save</Text>
         </Pressable>
-        <Pressable onPress={onClose} style={({ pressed }) => [styles.close, pressed && styles.pressed]} accessibilityRole="button" accessibilityLabel="Close">
+        <Pressable onPress={banner.close} style={({ pressed }) => [styles.close, pressed && styles.pressed]} accessibilityRole="button" accessibilityLabel="Close">
           <Ionicons name="close" size={18} color={Theme.textMuted} />
         </Pressable>
       </RNView>
@@ -269,7 +236,7 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   workspace: { fontWeight: '600' },
   bannerActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   primary: { minHeight: 44, paddingHorizontal: 16, borderRadius: 10, justifyContent: 'center', backgroundColor: Theme.violet },
-  primaryText: { fontSize: 14, fontWeight: '600', color: '#fdf6e3' },
+  primaryText: { fontSize: 14, fontWeight: '600', color: Theme.bg },
   close: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
   check: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 44 },
   checkText: { fontSize: 14, color: Theme.text },

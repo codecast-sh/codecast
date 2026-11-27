@@ -24,6 +24,21 @@ let live: any = null;
 const invite = mock((_opts?: { auto?: boolean }) => {});
 const realQuery = { ...(await import("../../../hooks/useQueryNoThrow")) };
 mock.module("../../../hooks/useQueryNoThrow", () => ({ ...realQuery, useQueryNoThrow: (_q: unknown, args: unknown) => ({ data: args === "skip" ? undefined : live }) }));
+// The walkie engine's status, as a test sets it: a listening seat or none.
+let walkieRoom: { key: string; mode: "burst" | "listen" | "call"; since: number } | null = null;
+const realWalkie = { ...(await import("../../../lib/calls/walkie")) };
+const walkieListeners = new Set<() => void>();
+let walkieStatus = { ...realWalkie.getWalkieStatus(), liveRoom: walkieRoom };
+mock.module("../../../lib/calls/walkie", () => ({
+  ...realWalkie,
+  getWalkieStatus: () => walkieStatus,
+  subscribeWalkie: (fn: () => void) => (walkieListeners.add(fn), () => void walkieListeners.delete(fn)),
+}));
+const setWalkie = (room: typeof walkieRoom) => {
+  walkieRoom = room;
+  walkieStatus = { ...walkieStatus, liveRoom: room };
+  walkieListeners.forEach((fn) => fn());
+};
 const realScribe = { ...(await import("../useScribe")) };
 mock.module("../useScribe", () => ({ ...realScribe, useScribe: () => ({ present: false, status: "absent", invite, remove: () => {} }) }));
 
@@ -102,5 +117,26 @@ test("invites once per call where the workspace asks for it, and not elsewhere",
   live = liveCall("call-guest");
   await render();
   expect(invite).toHaveBeenCalledTimes(4);
+  await act(() => root.unmount());
+});
+
+test("a walkie's listening seat never asks; stepping in for real does", async () => {
+  useInboxStore.setState((s: any) => ({ currentUser: { _id: "u1" }, clientState: { ...s.clientState, ui: { huddleAutoScribe: { "team:t1": true } } } }));
+  invite.mockClear();
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const render = () => act(() => root.render(<HuddleAutoScribe />));
+
+  // A teammate's burst is playing: the walkie took the seat, connected.
+  setWalkie({ key: "channel:w", mode: "listen", since: 1 });
+  seat("channel:w");
+  live = liveCall("call-walkie");
+  await render();
+  expect(invite).toHaveBeenCalledTimes(0);
+  // Join live: the same room is now a call this person joined.
+  await act(() => setWalkie({ key: "channel:w", mode: "call", since: 1 }));
+  expect(invite).toHaveBeenCalledTimes(1);
+  setWalkie(null);
   await act(() => root.unmount());
 });

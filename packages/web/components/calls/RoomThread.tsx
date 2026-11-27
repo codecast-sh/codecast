@@ -39,6 +39,8 @@ import { passageHits, useThreadFind } from "../../hooks/useThreadFind";
 import { usePaneShortcutAction } from "../../shortcuts/ShortcutProvider";
 import { ChatLine, EventLine, PassageBlock, RecapCard, type LocalRow, type RoomThreadSelection } from "./RoomThreadRows";
 import { useAddToCall, useAgentsInRoom, useRemoveLiveFeed } from "./useCallFeed";
+import { useScribe, type ScribeLive } from "./useScribe";
+import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { teamHasFeature } from "../../lib/teamFeatures";
 import {
   HEARS,
@@ -321,7 +323,11 @@ export const RoomThread = memo(function RoomThread({
 
   // The header's button and the empty card's open the call's one add list
   // (AddPeople.tsx): teammates, roles and agents.
-  const { open: openAddAgent, adding } = useAddToCall({ roomKey, liveTranscriptId, routes, teamId: call?.team_id });
+  // The list offers the call's Scribe first while it is absent, as the call
+  // controls' Add does (AddPeople): from a seat in the live huddle only.
+  const scribeLive = useQueryNoThrow(api.transcripts.getLive, seated && liveTranscriptId ? { room_key: roomKey, tail: 1 } : "skip").data as ScribeLive;
+  const scribe = useScribe(seated ? roomKey : null, scribeLive);
+  const { open: openAddAgent, adding } = useAddToCall({ roomKey, liveTranscriptId, routes, teamId: call?.team_id, scribe: seated && scribeLive ? scribe : undefined });
   const removeFeed = useRemoveLiveFeed(liveTranscriptId);
   const facesOn = useInboxStore((st) => teamHasFeature(st.teams, call?.team_id, "agent_faces"));
   // What an agent did is in the past once the call ended or nothing is live

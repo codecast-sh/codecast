@@ -2,12 +2,13 @@
 // banner over the board, the "Next time" banner that turns the invite into
 // the person's default for the workspace, and the header chip that stands
 // for Scribe while it is in the call.
-import { useState, useSyncExternalStore } from "react";
+import { useState } from "react";
 import { ChevronDown, PenLine, SquareKanban, SquareArrowOutUpRight, X } from "lucide-react";
 import { useInboxStore } from "../../store/inboxStore";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-import { boardBannerState, markNextTimeSeen, SCRIBE_INVITE_WORDS, setHuddleSettings, useHuddleSetting, useNextTimeSeen, type BannerMemo } from "../../lib/calls/huddleSettings";
+import { SCRIBE_INVITE_WORDS, useBoardBanner } from "../../lib/calls/huddleSettings";
+import { startTranscribing } from "../../lib/calls/callManager";
 import type { ParticipantTile } from "../../lib/calls/callMedia";
 import { pinShare } from "../../lib/calls/stagePins";
 import type { StagePinRow } from "../../hooks/useStagePins";
@@ -18,7 +19,7 @@ import { AutoStage } from "./StageViews";
 import { SwitchReview } from "../consequential/ConsequentialSwitch";
 import { autoScribeLedger } from "../consequential/ledgers";
 
-type Scribe = { present: boolean; status: "absent" | "joining" | "listening"; invite: (opts?: { auto?: boolean }) => void; remove: () => void };
+type Scribe = { present: boolean; status: "absent" | "joining" | "listening"; invite: (opts?: { auto?: boolean }) => Promise<boolean>; remove: () => void };
 
 // ── The board on the stage ────────────────────────────────────────────────
 
@@ -96,8 +97,14 @@ export function BoardStage({
       {docId ? (
         <AutoStage roster={roster} cameras={cameras} screens={[boardShare(roomKey, docId, pins)]} phase={phase} />
       ) : (
-        <div className="flex flex-1 items-center justify-center rounded-xl bg-sol-bg-alt text-meta text-sol-text-muted ring-1 ring-sol-text/[0.06]">
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 rounded-xl bg-sol-bg-alt text-meta text-sol-text-muted ring-1 ring-sol-text/[0.06]">
           {error ?? <AppLoader className="h-full" />}
+          {/* No call record, so no board: transcription gives it one, and the board asks again when it lands. */}
+          {error && !callKey && (
+            <Button variant="violet" size="xs" onClick={() => void startTranscribing(roomKey)} data-board-transcribe>
+              Turn on transcription
+            </Button>
+          )}
         </div>
       )}
       {docId && banner && (
@@ -111,21 +118,6 @@ export function BoardStage({
 
 // ── The banners ───────────────────────────────────────────────────────────
 
-// What this person did with the banners in one call: dismissed the invite,
-// invited Scribe from it, closed or saved the "Next time" one. Held for the
-// call (by its key), across switching views and back.
-const bannerMemos = new Map<string, BannerMemo>();
-const bannerListeners = new Set<() => void>();
-const EMPTY: BannerMemo = {};
-function noteBanner(callKey: string, patch: BannerMemo) {
-  bannerMemos.set(callKey, { ...bannerMemos.get(callKey), ...patch });
-  bannerListeners.forEach((fn) => fn());
-}
-function subscribeBanners(fn: () => void) {
-  bannerListeners.add(fn);
-  return () => void bannerListeners.delete(fn);
-}
-
 const BANNER = "flex items-center gap-2.5 rounded-xl bg-sol-bg px-3 py-1.5 text-[13px] text-sol-text shadow-lg ring-1 ring-sol-text/[0.08]";
 const CLOSE = "shrink-0 rounded-md p-1 text-sol-text-muted transition-colors hover:bg-sol-text/[0.06] hover:text-sol-text";
 
@@ -135,81 +127,38 @@ export function BoardBanner({
   workspaceName,
   scribe,
 }: {
+  /** The live call's transcript id: what this person did with the banners is held for the call. */
   callKey: string;
   /** The huddle's workspace key, where "Next time" saves. */
   workspace: string | null;
   workspaceName: string;
   scribe: Scribe;
 }) {
-  const memo = useSyncExternalStore(subscribeBanners, () => bannerMemos.get(callKey) ?? EMPTY, () => EMPTY);
-  const boardViewOn = useHuddleSetting("huddleBoardView", workspace);
-  const autoScribeOn = useHuddleSetting("huddleAutoScribe", workspace);
-  const nextSeen = useNextTimeSeen(workspace);
-  const state = boardBannerState({ present: scribe.present, memo, boardViewOn, autoScribeOn, nextSeen });
-  if (state === "invite") {
+  const banner = useBoardBanner(callKey, workspace, scribe);
+  if (banner.state === "invite") {
     return (
       <div className={BANNER} role="status" data-banner="invite">
         <PenLine className="h-3.5 w-3.5 shrink-0 text-sol-violet" />
         <span className="min-w-0 truncate">{SCRIBE_INVITE_WORDS}</span>
-        <Button
-          variant="violet"
-          size="xs"
-          onClick={() => {
-            noteBanner(callKey, { invited: true });
-            scribe.invite();
-          }}
-          className="shrink-0"
-        >
+        <Button variant="violet" size="xs" onClick={banner.invite} className="shrink-0">
           Invite Scribe
         </Button>
-        <button type="button" onClick={() => noteBanner(callKey, { dismissed: true })} className={CLOSE} aria-label="Dismiss for this call">
+        <button type="button" onClick={banner.dismiss} className={CLOSE} aria-label="Dismiss for this call">
           <X className="h-3.5 w-3.5" />
         </button>
       </div>
     );
   }
-  if (state === "next" && workspace) {
-    return (
-      <NextTimeBanner
-        workspace={workspace}
-        workspaceName={workspaceName}
-        autoScribeOn={autoScribeOn}
-        onShown={() => {
-          // Shown once is shown for good in this workspace; it stays up for
-          // the rest of this call (nextShown) until saved or closed.
-          noteBanner(callKey, { nextShown: true });
-          markNextTimeSeen(workspace);
-        }}
-        onClose={() => noteBanner(callKey, { nextClosed: true })}
-      />
-    );
-  }
+  if (banner.state === "next" && workspace) return <NextTimeBanner workspaceName={workspaceName} banner={banner} />;
   return null;
 }
 
-function NextTimeBanner({
-  workspace,
-  workspaceName,
-  autoScribeOn,
-  onShown,
-  onClose,
-}: {
-  workspace: string;
-  workspaceName: string;
-  autoScribeOn: boolean;
-  onShown: () => void;
-  onClose: () => void;
-}) {
-  useMountEffect(onShown);
+function NextTimeBanner({ workspaceName, banner }: { workspaceName: string; banner: ReturnType<typeof useBoardBanner> }) {
+  useMountEffect(banner.shown);
   const [boardView, setBoardView] = useState(true);
   const [autoScribe, setAutoScribe] = useState(true);
-  // Saving "Invite Scribe" on starts an agent in every huddle: that goes
-  // through the review first. Anything else saves on the press.
   const [reviewing, setReviewing] = useState(false);
-  const save = () => {
-    setHuddleSettings(workspace, { huddleBoardView: boardView, huddleAutoScribe: autoScribe });
-    onClose();
-  };
+  const save = () => banner.save({ boardView, autoScribe });
   return (
     <div className={BANNER} role="status" data-banner="next">
       <span className="shrink-0 font-medium">
@@ -225,12 +174,12 @@ function NextTimeBanner({
       </label>
       <button
         type="button"
-        onClick={() => (autoScribe && !autoScribeOn ? setReviewing(true) : save())}
+        onClick={() => (banner.needsReview(autoScribe) ? setReviewing(true) : save())}
         className="shrink-0 rounded-md bg-sol-text px-2.5 py-1 text-[12.5px] font-medium text-sol-bg transition-opacity hover:opacity-90"
       >
         Save
       </button>
-      <button type="button" onClick={onClose} className={CLOSE} aria-label="Close">
+      <button type="button" onClick={banner.close} className={CLOSE} aria-label="Close">
         <X className="h-3.5 w-3.5" />
       </button>
       {reviewing && (

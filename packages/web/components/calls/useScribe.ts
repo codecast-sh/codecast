@@ -1,9 +1,12 @@
-import { useCallback, useSyncExternalStore } from "react";
+import { useCallback } from "react";
 import { toast } from "sonner";
 import { humanizeConvexError } from "@codecast/shared/contracts";
 import { SCRIBE_CLAIM_TTL_MS, scribeStatus, type ScribeStatus } from "@codecast/shared/contracts/scribePrompt";
 import { SessionCreatePendingError, useInboxStore } from "../../store/inboxStore";
-import { withoutUndo } from "../../store/undoStack";
+// The engine, not web's undoStack: that module installs sonner as the undo
+// notifier when it loads, and the phone reaches this file (mobile bundleGraph guard).
+import { withoutUndo } from "@platform/engine";
+import type { ScribePress, ScribeRef } from "../../store/huddleSlice";
 import { useNowWhen } from "../../hooks/useCoarseNow";
 import { inviteScribeFlow, type ScribeInviteDeps } from "../../lib/calls/scribeInvite";
 import { characterForRoom, charactersInRoom, spawnSessionWithMessage } from "../../lib/calls/spawnFeedSession";
@@ -14,10 +17,10 @@ import { characterForRoom, charactersInRoom, spawnSessionWithMessage } from "../
 //
 // Whether Scribe is here is the live transcript's (getLive's scribe route and
 // claim, which the caller already subscribes to). What carries a press across
-// the round trip is the press itself, in flight, as a Record press does
-// (lib/calls/recordingPress): from the click until the server has answered,
-// so every surface of this window shows "joining" (or Scribe gone) in the
-// frame it was pressed. Once the claim lands the transcript says "joining"
+// the round trip is the press itself, in flight: this window's ephemeral
+// store state (huddleSlice scribePresses), from the click until the server
+// has answered, so every surface of this window shows "joining" (or Scribe
+// gone) in the frame it was pressed. Once the claim lands the transcript says "joining"
 // for everyone in the call, through the agent's spawn and until it is seated.
 
 /** The slice of transcripts.getLive this hook reads. */
@@ -31,23 +34,20 @@ export type ScribeLive = {
   scribe_claim?: { by: string; at: number; removed?: boolean } | null;
 } | null | undefined;
 
-type Press = "invite" | "remove";
-const presses = new Map<string, Press>();
-const listeners = new Set<() => void>();
-function notePress(roomKey: string, press: Press | null) {
-  if (press) presses.set(roomKey, press);
-  else presses.delete(roomKey);
-  listeners.forEach((fn) => fn());
-}
-function subscribe(fn: () => void) {
-  listeners.add(fn);
-  return () => void listeners.delete(fn);
+const pressOf = (roomKey: string) => useInboxStore.getState().scribePresses[roomKey] ?? null;
+const notePress = (roomKey: string, press: ScribePress | null) => useInboxStore.getState().noteScribePress(roomKey, press);
+
+/** The Scribe a removal names: the one seated, else the one joining on its claim. */
+export function scribeRefOf(live: ScribeLive): ScribeRef | null {
+  const seated = live?.routes.find((r) => r.role === "scribe");
+  if (seated) return { target: seated.target };
+  return live?.scribe_claim && !live.scribe_claim.removed ? { claim: live.scribe_claim.at } : null;
 }
 
 /** What a surface shows: the server's status, unless this window's press is
  *  still on its way. An invite shows Scribe joining unless it is already in;
  *  a removal shows it gone. */
-export function scribeShownStatus(server: ScribeStatus, press: Press | null): ScribeStatus {
+export function scribeShownStatus(server: ScribeStatus, press: ScribePress | null): ScribeStatus {
   if (press === "remove") return "absent";
   if (press === "invite" && server === "absent") return "joining";
   return server;
@@ -58,7 +58,7 @@ function scribeDeps(): ScribeInviteDeps {
   const st = () => useInboxStore.getState() as any;
   return {
     invite: (roomKey, auto) => (auto ? st().inviteScribe(roomKey, true) : st().inviteScribe(roomKey)),
-    giveBack: (roomKey, claim) => st().removeScribe(roomKey, claim),
+    giveBack: (roomKey, claim) => st().removeScribe(roomKey, { give_back: claim }),
     spawn: spawnSessionWithMessage,
     seat: ({ transcript_id, ...route }) => st().addLiveRoute(transcript_id, route),
     character: (seed, routes) => characterForRoom(seed, charactersInRoom(routes)),
@@ -79,11 +79,7 @@ export function useScribe(roomKey: string | null, live: ScribeLive, onError: (ti
   // alone: the one moment worth a re-render is that claim's expiry.
   const expiresAt = live?.scribe_claim ? live.scribe_claim.at + SCRIBE_CLAIM_TTL_MS : null;
   const now = useNowWhen((t) => (expiresAt === null ? "" : t < expiresAt ? "held" : "expired"), 15_000);
-  const press = useSyncExternalStore(
-    subscribe,
-    () => (roomKey ? (presses.get(roomKey) ?? null) : null),
-    () => null,
-  );
+  const press = useInboxStore((s) => (roomKey ? (s.scribePresses[roomKey] ?? null) : null));
   const status = scribeShownStatus(scribeStatus(live, now), press);
 
   // `auto`: the person's "Invite Scribe to every huddle", not a press: the
@@ -105,21 +101,24 @@ export function useScribe(roomKey: string | null, live: ScribeLive, onError: (ti
         return false;
       })
       .finally(() => {
-        if (presses.get(roomKey) === "invite") notePress(roomKey, null);
+        if (pressOf(roomKey) === "invite") notePress(roomKey, null);
       });
   }, [roomKey, live, status, onError]);
 
+  // Names the Scribe this window sees, so a replayed press never shows out
+  // one invited since (transcriptsScribe.removeScribe).
   const remove = useCallback(() => {
-    if (!roomKey || status === "absent") return;
+    const which = scribeRefOf(live);
+    if (!roomKey || status === "absent" || !which) return;
     notePress(roomKey, "remove");
     void useInboxStore
       .getState()
-      .removeScribe(roomKey)
+      .removeScribe(roomKey, which)
       .catch((err) => onError("Couldn't remove Scribe", humanizeConvexError(err, "Could not remove Scribe")))
       .finally(() => {
-        if (presses.get(roomKey) === "remove") notePress(roomKey, null);
+        if (pressOf(roomKey) === "remove") notePress(roomKey, null);
       });
-  }, [roomKey, status, onError]);
+  }, [roomKey, live, status, onError]);
 
   return { present: status !== "absent", status, invite, remove };
 }

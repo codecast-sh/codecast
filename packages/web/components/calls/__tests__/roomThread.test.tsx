@@ -32,6 +32,16 @@ mock.module("convex/react", () => ({
   useMutation: () => async (args: unknown) => void mutated.push(args),
   useConvex: () => ({ mutation: async () => {} }),
 }));
+// The live call the thread's Scribe row reads (transcripts.getLive, tail 1); every other read is the real hook.
+let scribeLive: any = undefined;
+const realNoThrow = { ...(await import("../../../hooks/useQueryNoThrow")) };
+mock.module("../../../hooks/useQueryNoThrow", () => ({
+  ...realNoThrow,
+  useQueryNoThrow: (q: any, args: any) => {
+    const real = realNoThrow.useQueryNoThrow(q, args);
+    return args !== "skip" && args?.tail === 1 && args?.room_key ? { ...real, data: scribeLive } : real;
+  },
+}));
 const { useInboxStore } = await import("../../../store/inboxStore");
 const { RoomThread } = await import("../RoomThread");
 
@@ -70,6 +80,7 @@ afterAll(() => {
   restoreGlobals();
   mock.module("../../../lib/calls/callManager", () => realCallManager);
   mock.module("convex/react", () => realConvexReact);
+  mock.module("../../../hooks/useQueryNoThrow", () => realNoThrow);
 });
 
 const roots = new WeakMap<HTMLElement, ReturnType<typeof createRoot>>();
@@ -590,6 +601,29 @@ test("the header's Add opens the call's one list: teammates, roles and agents, l
   pick.onPick({ kind: "person", id: "u-ann", label: "Ann" }, { query: "" });
   expect(rung).toEqual([[ROOM, ["u-ann"]]]);
   await r.unmount();
+});
+
+test("the header's Add offers the call's Scribe first while it is absent, from a seat in the call", async () => {
+  let pick: any = null;
+  useInboxStore.setState({ currentUser: { _id: "u-me" }, liveRooms: [], sessions: {}, callOccupancy: {}, myCalls: { incoming: [], outgoing: [] }, openPalette: (o: any) => void (pick = o.pick) } as any);
+  const extras = async (props: { seated: boolean }, live: any) => {
+    scribeLive = live;
+    pick = null;
+    const routes = [{ kind: "session", target: "conv_other", mode: "live", added_by: "u-me" }];
+    const r = await render(<RoomThread roomKey={ROOM} call={call({ routes })} rows={[]} liveTranscriptId="t1" surface="stage" seated={props.seated} />);
+    await act(() => r.container.querySelector<HTMLButtonElement>(".rt-add")!.click());
+    const keys = (pick.extras ?? []).map((x: any) => x.key);
+    await r.unmount();
+    return keys;
+  };
+  const absent = { transcript_id: "t1", team_id: "team1", routes: [], scribe_claim: null };
+  expect((await extras({ seated: true }, absent))[0]).toBe("scribe");
+  // Scribe already in the call: no row.
+  const seatedScribe = { ...absent, routes: [{ kind: "session", target: "conv_scribe", added_by: "u-me", role: "scribe" }] };
+  expect(await extras({ seated: true }, seatedScribe)).not.toContain("scribe");
+  // Reading the call from outside it: nothing to invite from here.
+  expect(await extras({ seated: false }, absent)).not.toContain("scribe");
+  scribeLive = undefined;
 });
 
 test("the pinned listening line stays while no words have arrived, whatever was typed earlier", async () => {

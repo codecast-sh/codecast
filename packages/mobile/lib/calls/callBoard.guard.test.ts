@@ -39,14 +39,22 @@ describe("the call board stays native", () => {
 // lib/calls/huddleSettings and useScribe, never a phone copy.
 describe("the phone board's banners and Scribe are web's", () => {
   const screen = readFileSync(`${import.meta.dir}/../../app/call-board.tsx`, "utf8");
-  test("banner state, once-per-workspace Next time and the invite words", () => {
-    expect(screen).toContain("boardBannerState({ present: scribe.present, memo, boardViewOn, autoScribeOn, nextSeen })");
-    expect(screen).toContain("useNextTimeSeen(workspace)");
-    expect(screen).toContain("markNextTimeSeen(workspace)");
+  test("the banners are web's hook, fed the same inputs as web's", () => {
+    const web = readFileSync(`${import.meta.dir}/../../../web/components/calls/HuddleBoard.tsx`, "utf8");
+    const stage = readFileSync(`${import.meta.dir}/../../../web/components/calls/CallStage.tsx`, "utf8");
+    for (const src of [screen, web]) {
+      expect(src).toContain("useBoardBanner(callKey, workspace, scribe)");
+      expect(src).toContain("useMountEffect(banner.shown)");
+      expect(src).toContain("banner.needsReview(autoScribe)");
+      // No memo of its own: what the person did with the banners is the store's.
+      expect(src).not.toMatch(/new Map<string, BannerMemo>|boardBannerState\(/);
+    }
+    expect(screen).toContain("<BoardBanner callKey={live.transcript_id} workspace={workspace}");
+    expect(stage).toContain("<BoardBanner callKey={live.transcript_id} workspace={workspace}");
     expect(screen).toContain("{SCRIBE_INVITE_WORDS}");
   });
-  test("Next time follows only an invite that seated Scribe", () => {
-    expect(screen).toContain("scribe.invite().then((ok) => ok && noteBanner(callKey, { invited: true }))");
+  test("colors come from the theme", () => {
+    expect(screen.match(/['"]#[0-9a-fA-F]{3,8}['"]/)?.[0] ?? null).toBeNull();
   });
   test("invite and remove are web's useScribe, auto-invite web's rule", () => {
     expect(screen).toContain("useScribe(roomKey, live, appAlert)");

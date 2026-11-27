@@ -296,7 +296,7 @@ export function CallStage({
   const workspaceName = useInboxStore((st: any) => huddleWorkspaceName(ws, st.teams));
   // A huddle opens on the board where the person asked for that, unless
   // they already picked a view.
-  useBoardViewDefault(workspace, () => setView((v) => (v === "auto" ? "board" : v)));
+  useBoardViewDefault(call.roomKey, workspace, () => setView((v) => (v === "auto" ? "board" : v)));
   const [threadOpen, setThreadOpen] = useState(takeCallThreadRequest);
   // The rail leaves with motion: it stays mounted through a 150ms exit and
   // goes on the animation's end. Exits are shorter than entrances (200ms in).

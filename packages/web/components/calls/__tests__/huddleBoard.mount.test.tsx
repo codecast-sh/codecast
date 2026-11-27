@@ -32,6 +32,9 @@ const restoreGlobals = replaceGlobals({
 });
 const { createRoot } = await import("react-dom/client");
 const { useInboxStore } = await import("../../../store/inboxStore");
+const startTranscribing = mock(async (_roomKey: string) => {});
+const realCallManager = { ...(await import("../../../lib/calls/callManager")) };
+mock.module("../../../lib/calls/callManager", () => ({ ...realCallManager, startTranscribing }));
 const { BoardBanner, BoardStage, ScribeChip } = await import("../HuddleBoard");
 const { boardBannerState } = await import("../../../lib/calls/huddleSettings");
 const { HuddlesSection } = await import("../CallSettings");
@@ -45,7 +48,7 @@ afterAll(() => {
 
 const WS = "team:t1";
 type Status = "absent" | "joining" | "listening";
-const scribeOf = (status: Status, invite = mock(() => {}), remove = mock(() => {})) => ({ present: status !== "absent", status, invite, remove });
+const scribeOf = (status: Status, invite = mock(async () => true), remove = mock(() => {})) => ({ present: status !== "absent", status, invite, remove });
 
 beforeEach(() => {
   useInboxStore.setState((s: any) => ({ currentUser: { _id: "me" }, clientStateInitialized: true, clientState: { ...s.clientState, ui: { active_team_id: "t1" } }, teams: [{ _id: "t1", name: "Codecast" }, { _id: "t2", name: "Union" }] }));
@@ -79,7 +82,7 @@ test("which banner shows: invite while absent, Next time after this person invit
 });
 
 test("absent → Invite → Next time → Save writes both settings for that workspace only", async () => {
-  const invite = mock(() => {});
+  const invite = mock(async () => true);
   const banner = (status: Status) => <BoardBanner callKey="call-1" workspace={WS} workspaceName="Codecast" scribe={scribeOf(status, invite)} />;
   const m = await mount(banner("absent"));
   expect(m.container.querySelector("[data-banner=invite]")?.textContent).toContain("Scribe can diagram your huddles as you talk");
@@ -103,6 +106,19 @@ test("absent → Invite → Next time → Save writes both settings for that wor
   expect(review()).toBeNull();
   expect(ui().huddleBoardView).toEqual({ [WS]: true });
   expect(ui().huddleAutoScribe).toEqual({ [WS]: true });
+  expect(m.container.querySelector("[data-banner]")).toBeNull();
+  await act(() => m.root.unmount());
+});
+
+test("an invite that did not seat Scribe brings no Next time, even when another Scribe arrives", async () => {
+  const failed = mock(async () => false);
+  const banner = (status: Status) => <BoardBanner callKey="call-7" workspace={WS} workspaceName="Codecast" scribe={scribeOf(status, failed)} />;
+  const m = await mount(banner("absent"));
+  await act(() => button(m.container, "Invite Scribe")!.click());
+  expect(failed).toHaveBeenCalledTimes(1);
+  await m.render(banner("absent"));
+  expect(m.container.querySelector("[data-banner=invite]")).not.toBeNull();
+  await m.render(banner("listening"));
   expect(m.container.querySelector("[data-banner]")).toBeNull();
   await act(() => m.root.unmount());
 });
@@ -216,20 +232,24 @@ test("board view opened before the call has a record asks again once it does", a
   const m = await mount(stage(null));
   await act(async () => {});
   expect(m.container.textContent).toContain("turn transcription on");
+  // The error is no dead end: the action it names is right there.
+  await act(() => (m.container.querySelector("[data-board-transcribe]") as HTMLButtonElement).click());
+  expect(startTranscribing).toHaveBeenCalledWith("channel:late");
   // Transcription starts: the record appears, and the board opens without leaving the view.
   useInboxStore.setState({ openCallBoard: mock(async () => ({ doc_id: "d9" })) } as any);
   await m.render(stage("call-late"));
   await act(async () => {});
   expect(m.container.querySelector("[data-test-pin]")?.getAttribute("data-test-pin")).toBe("doc:d9");
   expect(m.container.textContent).not.toContain("turn transcription on");
+  expect(m.container.querySelector("[data-board-transcribe]")).toBeNull();
   await act(() => m.root.unmount());
   useInboxStore.setState({ openCallBoard: real } as any);
 });
 
 test("Open huddles on the board waits for the settings to load before deciding", async () => {
   const toBoard = mock(() => {});
-  function Probe({ ws }: { ws: string | null }) {
-    useBoardViewDefault(ws, toBoard);
+  function Probe({ ws, call = "channel:a" }: { ws: string | null; call?: string | null }) {
+    useBoardViewDefault(call, ws, toBoard);
     return null;
   }
   // A cold reload into a live call: the workspace is known, the settings are not yet.
@@ -243,11 +263,15 @@ test("Open huddles on the board waits for the settings to load before deciding",
   // Decided once: later changes leave the person's own view alone.
   await m.render(<Probe ws="team:t2" />);
   expect(toBoard).toHaveBeenCalledTimes(1);
+  // The stage stays up into the next call: that call decides for itself.
+  await m.render(<Probe ws={WS} call={null} />);
+  await m.render(<Probe ws={WS} call="channel:b" />);
+  expect(toBoard).toHaveBeenCalledTimes(2);
   await act(() => m.root.unmount());
   // Settings say no: the view stays.
   const off = mock(() => {});
   function ProbeOff() {
-    useBoardViewDefault("team:t2", off);
+    useBoardViewDefault("channel:a", "team:t2", off);
     return null;
   }
   const n = await mount(<ProbeOff />);
