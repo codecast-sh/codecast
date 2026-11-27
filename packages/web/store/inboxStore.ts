@@ -5180,8 +5180,7 @@ export function visualOrderSessions(
     // A conversation's loaded transcript, for the hosted stop rule's fallback
     // (lib/hostedNotice hostedStopOf).
     messagesOf?: (id: string) => readonly any[] | undefined;
-    dormantSplit?: DormantSplitNav | null; // The rail's split of Dormant: those rows walk where they draw.
-    focusedId?: string | null; // The open row: a snoozed one walks in Sleeping even under a snoozed parent, as it draws.
+    dormantSplit?: DormantSplitNav | null; focusedId?: string | null; // The rail's split of Dormant and the open row: those rows walk where they draw.
   } = {},
 ): InboxSession[] {
   const collapsed = opts.collapsedSections;
@@ -6433,13 +6432,12 @@ function visualOrderOf(state: {
     bucketFilters: chipBucketFilters(state),
     bucketByConv,
     collapsedSections: mode === "grouped" || mode === "priorities" ? collapsed : undefined,
-    walk: opts.walk,
+    walk: opts.walk, focusedId,
     projectOf: projectOfFromState(state),
     priorityRankOf: priorityRankOfForFilters(state, chipProjectFilters(state)),
     priorityPlaceOf: mode === "priorities" ? priorityPlaceReader(state) : undefined,
     messagesOf: (id) => state.messages?.[id],
     dormantSplit: mode === "grouped" || mode === "priorities" ? state.dormantSplitNav : null, // the lenses regroup Dormant whole
-    focusedId,
   });
   if (mode === "bucket") {
     const { labelGroups, projectGroups } = groupSessionsForLabelView(base, state.buckets, bucketByConv);
