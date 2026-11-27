@@ -2,7 +2,7 @@
 // same recognizer pipe calls use (lib/calls/asrPipe), minted for dictation
 // rather than a room. The behaviour around it (where words go, when it stops)
 // is the shared controller's (@codecast/shared/contracts/dictation).
-import { dictationLanguages, type DictationHost, type DictationPipe, type DictationPipeEvents } from "@codecast/shared/contracts";
+import { dictationLanguages, type DictationHost, type DictationPipe, type DictationPipeEvents } from "@codecast/shared/contracts/dictation";
 
 type ConvexAction = { action: (fn: any, args: any) => Promise<any> };
 

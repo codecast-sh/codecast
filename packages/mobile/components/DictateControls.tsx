@@ -13,7 +13,7 @@
 // Recording: ✕ [-8,36], ✓ [36,80]. Send's own target then starts at 80.
 import { StyleSheet, TouchableOpacity, View as RNView, ActivityIndicator } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
-import { DICTATION_LANGUAGES } from '@codecast/shared/contracts';
+import { DICTATION_LANGUAGES } from '@codecast/shared/contracts/dictation';
 import { MOBILE_SESSION_STYLE as S } from '@codecast/shared/render/mobileSessionStyle';
 import { themedStyles, useTheme } from '@/constants/Theme';
 import { mixColor } from '@/lib/solColor';

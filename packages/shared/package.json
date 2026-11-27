@@ -20,6 +20,7 @@
     "./contracts/moveRehearsal": "./contracts/moveRehearsal.ts",
     "./contracts/managedPolicy": "./contracts/managedPolicy.ts",
     "./contracts/vendorCoverage": "./contracts/vendorCoverage.ts",
+    "./contracts/dictation": "./contracts/dictation.ts",
     "./contracts/flowMap": "./contracts/flowMap.ts",
     "./contracts/shipAnswer": "./contracts/shipAnswer.ts",
     "./contracts/lineFunnel": "./contracts/lineFunnel.ts",

@@ -8010,8 +8010,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
    *  (voiceprints.setVoiceIdEnabled). Off deletes every sample, so the
    *  myVoiceprint counts go to zero on the press too. */
   setVoiceIdEnabled: (enabled: boolean) => Promise<unknown>;
-  /** The viewer's dictation switch, `currentUser.dictation_enabled`
-   *  (dictation.setDictationEnabled): the composer mic shows only while it is on. */
+  /** `currentUser.dictation_enabled` (dictation.setDictationEnabled): the composer mic shows only while it is on. */
   setDictationEnabled: (enabled: boolean) => Promise<unknown>;
   /** Delete every sample of the viewer's voice (voiceprints.deleteMyVoiceprints). */
   deleteMyVoiceprints: () => Promise<unknown>;

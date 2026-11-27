@@ -65,7 +65,7 @@ import { isRecordingFile, useScreenRecordingAttach } from "../hooks/useScreenRec
 import { useFileAttach } from "../hooks/useFileAttach";
 import { ComposerAttachButton } from "./chat/ComposerAttachButton";
 import { DictateControls } from "./dictation/DictateControls";
-import { textareaField, useDictation } from "../lib/dictation/useDictation";
+import { replayKey, useComposerDictation } from "../lib/dictation/useDictation";
 import type { ComposeEditorHandle } from "./editor/ComposeEditor";
 import { useMentionQuery, useMentionServerSearch, sessionMentionTeamId, SERVER_MENTION_TYPES, matchScore, filterMentionItems, channelMentionItems } from "../hooks/useMentionQuery";
 import { mentionContextFor } from "../lib/mentionContext";
@@ -243,19 +243,6 @@ const ForkReplyInput = memo(function ForkReplyInput({ userName, userAvatar, onFo
 /** Write the composer's text to its stored draft. An empty box with no image
  *  rows is a final (server-tombstoned) clear, so the draft dies everywhere and
  *  a server copy cannot resurrect on the next boot; with images it keeps them. */
-/** The same key again, through the composer's current handler: an Enter held
- *  while dictation finished is sent as the Enter it was, with the text as it
- *  now stands. */
-function replayKey(e: React.KeyboardEvent<HTMLTextAreaElement>, handler: React.MutableRefObject<((e: React.KeyboardEvent<HTMLTextAreaElement>) => void) | null>) {
-  const { key, code, shiftKey, altKey, metaKey, ctrlKey, currentTarget, target } = e;
-  return () => handler.current?.({
-    key, code, shiftKey, altKey, metaKey, ctrlKey, currentTarget, target,
-    nativeEvent: { isComposing: false },
-    defaultPrevented: false,
-    preventDefault: () => {},
-    stopPropagation: () => {},
-  } as unknown as React.KeyboardEvent<HTMLTextAreaElement>);
-}
 
 function commitDraftText(conversationId: string, text: string) {
   const store = useInboxStore.getState();
@@ -1267,19 +1254,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       });
     }
   }, [conversationId, skills, onSideQuestion, queryMentions, cancelPendingDraft]);
-  // Dictation writes through the same setter a keystroke does, so the draft,
-  // its autosave and send see the words; the box's own value is the record.
-  // The field is made once and the controls stay put between keystrokes, so
-  // typing never draws the mic again.
-  const handleMessageChangeRef = useRef(handleMessageChange);
-  handleMessageChangeRef.current = handleMessageChange;
-  const [dictationField] = useState(() => textareaField(
-    () => textareaRef.current,
-    () => messageRef.current,
-    (val) => { messageRef.current = val; handleMessageChangeRef.current(val); },
-  ));
-  const dictation = useDictation(dictationField);
-  const focusComposerBox = useCallback(() => textareaRef.current?.focus(), []);
+  // Dictation writes through the same setter a keystroke does (useComposerDictation).
+  const { dictation, focusBox: focusComposerBox } = useComposerDictation(textareaRef, messageRef, handleMessageChange);
 
   const isSelectionActive = !!(selectedMessageContent && selectedMessageUuid);
   const savedDraftRef = useRef<string | null>(null);

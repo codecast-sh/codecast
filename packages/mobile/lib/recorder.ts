@@ -19,16 +19,8 @@ import { AppState, Platform } from 'react-native';
 import { api } from '@codecast/convex/convex/_generated/api';
 import type { Id } from '@codecast/convex/convex/_generated/dataModel';
 import type { ConvexReactClient } from 'convex/react';
-import {
-  CALL_HEARTBEAT_MS,
-  finishRunningDictation,
-  MAX_RECORDING_MS,
-  meterLevelFromDb,
-  RECORDING_BIT_RATE,
-  RECORDING_CHANNELS,
-  RECORDING_SAMPLE_RATE,
-  recRoomKey,
-} from '@codecast/shared/contracts';
+import { CALL_HEARTBEAT_MS, MAX_RECORDING_MS, meterLevelFromDb, RECORDING_BIT_RATE, RECORDING_CHANNELS, RECORDING_SAMPLE_RATE, recRoomKey } from '@codecast/shared/contracts';
+import { finishRunningDictation } from '@codecast/shared/contracts/dictation';
 import { startAsrCapture, type AsrCapture } from './asrCapture';
 import { getCallSnapshot } from './calls/callManager';
 import { uploadUriToStorage } from './uploadToStorage';
