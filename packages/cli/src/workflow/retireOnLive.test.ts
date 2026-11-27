@@ -83,12 +83,14 @@ function server(row: Record<string, unknown> = {}) {
 }
 
 const SINCE = Date.now() - 90_000;
+/** No pane on this machine: nobody can be watching it. */
+const detached = { paneFor: async () => null, tmuxSessions: async () => new Map<string, number>() };
 
 describe("a daemon asked to retire a session whose change is live", () => {
   test("its checkout holds nothing of its own beside what landed: retired, at the transcript length it read", async () => {
     const { root, landed } = landedWorld();
     const s = server();
-    expect(await retireOnLive(s.call, { conversation_id: CONV, root, since: SINCE, commits: [{ sha: landed }] })).toEqual({ retired: true });
+    expect(await retireOnLive(s.call, { conversation_id: CONV, root, since: SINCE, commits: [{ sha: landed }] }, detached)).toEqual({ retired: true });
     expect(s.retires).toEqual([{ session: CONV, expected_message_count: 7 }]);
   });
 
@@ -100,7 +102,7 @@ describe("a daemon asked to retire a session whose change is live", () => {
       tool(root, "Bash", { command: `cat > src/extra.ts <<'EOF'\nexport const extra = 1;\nEOF` }, 30_000),
     ]);
     const s = server();
-    expect(await retireOnLive(s.call, { conversation_id: CONV, root, since: SINCE, commits: [{ sha: landed }] })).toEqual({ retired: false, reason: "it has other changes: src/extra.ts" });
+    expect(await retireOnLive(s.call, { conversation_id: CONV, root, since: SINCE, commits: [{ sha: landed }] }, detached)).toEqual({ retired: false, reason: "it has other changes: src/extra.ts" });
     expect(s.retires).toEqual([]);
   });
 
@@ -113,7 +115,7 @@ describe("a daemon asked to retire a session whose change is live", () => {
     ]);
     git(root, "commit", "-qam", "api 3, local only");
     const s = server();
-    expect(await retireOnLive(s.call, { conversation_id: CONV, root, since: SINCE, commits: [{ sha: landed }] })).toEqual({ retired: false, reason: "it has commits origin/main lacks: src/api.ts" });
+    expect(await retireOnLive(s.call, { conversation_id: CONV, root, since: SINCE, commits: [{ sha: landed }] }, detached)).toEqual({ retired: false, reason: "it has commits origin/main lacks: src/api.ts" });
     expect(s.retires).toEqual([]);
   });
 
@@ -131,14 +133,14 @@ describe("a daemon asked to retire a session whose change is live", () => {
     git(root, "fetch", "-q", "origin");
     const squash = git(root, "rev-parse", "origin/main");
     const s = server();
-    expect(await retireOnLive(s.call, { conversation_id: CONV, root, since: SINCE, commits: [{ sha: squash }] })).toEqual({ retired: true });
+    expect(await retireOnLive(s.call, { conversation_id: CONV, root, since: SINCE, commits: [{ sha: squash }] }, detached)).toEqual({ retired: true });
   });
 
   test("a changed file no session's edits account for (a script's output) keeps it", async () => {
     const { root, landed } = landedWorld();
     write(root, "src/generated.ts", "export const g = 1;\n");
     const s = server();
-    expect(await retireOnLive(s.call, { conversation_id: CONV, root, since: SINCE, commits: [{ sha: landed }] })).toEqual({ retired: false, reason: "its checkout has changes no session's edits account for: src/generated.ts" });
+    expect(await retireOnLive(s.call, { conversation_id: CONV, root, since: SINCE, commits: [{ sha: landed }] }, detached)).toEqual({ retired: false, reason: "its checkout has changes no session's edits account for: src/generated.ts" });
     expect(s.retires).toEqual([]);
   });
 
@@ -146,11 +148,32 @@ describe("a daemon asked to retire a session whose change is live", () => {
     const { root, landed } = landedWorld();
     const ask = { conversation_id: CONV, root, since: SINCE, commits: [{ sha: landed }] };
     const wrote = server({ last_person_turn_at: Date.now() - 10_000 });
-    expect(await retireOnLive(wrote.call, ask)).toEqual({ retired: false, reason: "a person wrote to it after its own work" });
+    expect(await retireOnLive(wrote.call, ask, detached)).toEqual({ retired: false, reason: "a person wrote to it after its own work" });
     const dormant = server({ work_state: "dormant" });
-    expect(await retireOnLive(dormant.call, ask)).toEqual({ retired: false, reason: "it is not done (dormant)" });
+    expect(await retireOnLive(dormant.call, ask, detached)).toEqual({ retired: false, reason: "it is not done (dormant)" });
     const elsewhere = server();
-    expect(await retireOnLive(elsewhere.call, { ...ask, root: path.join(sandbox, "not-here") })).toEqual({ retired: false, reason: "its checkout is not on this machine" });
+    expect(await retireOnLive(elsewhere.call, { ...ask, root: path.join(sandbox, "not-here") }, detached)).toEqual({ retired: false, reason: "its checkout is not on this machine" });
     expect([...wrote.retires, ...dormant.retires, ...elsewhere.retires]).toEqual([]);
+  });
+
+  test("a person attached to its tmux session keeps it; an unreadable terminal keeps it; a detached pane is retired", async () => {
+    const { root, landed } = landedWorld();
+    const ask = { conversation_id: CONV, root, since: SINCE, commits: [{ sha: landed }] };
+    const panes: string[] = [];
+    const terminal = (clients: number | undefined) => ({
+      paneFor: async (id: string) => { panes.push(id); return "cc-jx7aaaa:0.0"; },
+      tmuxSessions: async () => new Map(clients === undefined ? [] : [["cc-jx7aaaa", clients]]),
+    });
+    const watching = server();
+    expect(await retireOnLive(watching.call, ask, terminal(1))).toEqual({ retired: false, reason: "a person has its terminal open" });
+    const gone = server();
+    expect(await retireOnLive(gone.call, ask, terminal(undefined))).toEqual({ retired: false, reason: "its terminal could not be read" });
+    const broken = server();
+    expect(await retireOnLive(broken.call, ask, { paneFor: async () => "cc-jx7aaaa:0.0", tmuxSessions: async () => { throw new Error("no server"); } })).toEqual({ retired: false, reason: "its terminal could not be read" });
+    expect([...watching.retires, ...gone.retires, ...broken.retires]).toEqual([]);
+    const idle = server();
+    expect(await retireOnLive(idle.call, ask, terminal(0))).toEqual({ retired: true });
+    expect(idle.retires).toEqual([{ session: CONV, expected_message_count: 7 }]);
+    expect(panes.every((id) => id === CONV)).toBe(true);
   });
 });

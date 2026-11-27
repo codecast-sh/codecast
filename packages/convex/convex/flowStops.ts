@@ -27,7 +27,7 @@ import { workspaceKeyHasFeature } from "./lib/teamFeatureGuard";
 import { siteUrl } from "./lib/siteUrl";
 import { runWorkflowOf } from "./lib/runGraph";
 import { openUpstream, taskByRef } from "./lib/taskGraph";
-import { commitSignal, heldSignals, normalizeSignal, openCauseOfHeld } from "./signals";
+import { commitSignal, heldSignals, moveProblemSignals, normalizeSignal, openCauseOfHeld } from "./signals";
 import { addDepCore, handTask } from "./tasks";
 import { resumeFailedRunCore } from "./failedRunResume";
 import { isTerminalTaskStatus } from "@codecast/shared/tasks";
@@ -44,6 +44,8 @@ const WORKSPACE_STOPS_READ = 500;
 const INCIDENT_RUNS_READ = 200;
 /** The stop text an incident's title carries; a station's whole output (main's CI log) belongs in its detail. */
 const STOP_TITLE_CHARS = 200;
+/** A breakage name an incident's title may carry: the parser's `shared="main_red"`, or an exit's id. Checked here, since a graph is what a client pushed. */
+const BREAKAGE_NAME = /^[A-Za-z0-9_]{1,64}$/;
 /**
  * How long a stop no incident holds yet counts toward one. A broken shared
  * pipeline stops the next changes through it within hours; a day still spans a
@@ -160,10 +162,14 @@ export async function recordRunStop(ctx: any, runId: Id<"workflow_runs">, now: n
   // Incidents are behind the workspace's run_incidents flag (Union first): off, the stop stays recorded and its
   // signal held, and no cause opens, nobody is handed one, no task is blocked.
   if (!(await workspaceKeyHasFeature(ctx, run.workspace, "run_incidents"))) return null;
-  // Held: the stops held under its key open their cause once they come from two changes. The cause's title is
-  // computed: it reaches @release's session (tasks.announceAssignment), where stop text (station output) must not.
-  const changes = filed.task_id ? 0 : (await stopsOfTasks(ctx, await heldSignals(ctx, db.workspaceKey, fingerprint), now)).tasks.size;
-  const causeId = filed.task_id ?? (changes >= 2 ? await openCauseOfHeld(ctx, db, signal, now, `${exitLabel} on ${changes} changes (${sharedExit})`) : null);
+  // Held: the live stops held under its key open their cause once they come from two changes; an older held stop
+  // never joins, so neither the count nor the open reads a run per stop of any age. The cause's title is computed
+  // from the breakage's name alone: it reaches @release's session (tasks.announceAssignment), where neither stop
+  // text (station output) nor the flow file's labels may.
+  const heldSince = now - LIVE_STOP_MS;
+  const changes = filed.task_id ? 0 : (await stopsOfTasks(ctx, await heldSignals(ctx, db.workspaceKey, fingerprint, heldSince), now)).tasks.size;
+  const title = `${breakage && BREAKAGE_NAME.test(breakage) ? breakage : "A shared stop"} on ${changes} changes`;
+  const causeId = filed.task_id ?? (changes >= 2 ? await openCauseOfHeld(ctx, db, signal, now, { title, heldSince }) : null);
   if (causeId) await openIncidentIfShared(ctx, causeId, now);
   return causeId;
 }
@@ -238,7 +244,12 @@ export async function openIncidentIfShared(ctx: any, causeId: Id<"tasks">, now: 
     const task: Doc<"tasks"> | null = await ctx.db.get(run.task_id!);
     if (task && upstream?.has(task.short_id)) continue;
     await ctx.db.patch(run._id, { incident_task_id: causeId });
-    if (task && upstream && !isTerminalTaskStatus(task.status)) await addDepCore(ctx, run.user_id, { short_id: task.short_id, blocked_by: cause.short_id });
+    if (!task || !upstream || isTerminalTaskStatus(task.status)) continue;
+    try {
+      await addDepCore(ctx, run.user_id, { short_id: task.short_id, blocked_by: cause.short_id });
+    } catch (e) {
+      console.error(`[flowStops] ${task.short_id} not blocked by ${cause.short_id}: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
   return true;
 }
@@ -255,9 +266,9 @@ async function lineResumes(ctx: any, run: Doc<"workflow_runs">): Promise<boolean
 
 /**
  * A cause closed (taskWaits.releaseDependents; `cause` is its row before the
- * move). Dropped as another's duplicate, it is not fixed: its runs move to the
- * cause it duplicates, whose blockers their tasks already took
- * (taskLinks.dropDuplicate). Else each run it holds that it still stops is
+ * move). Dropped as another's duplicate, or superseded by another, it is not
+ * fixed: its runs and stops move to the task it names, whose blockers their
+ * tasks already took (taskLinks.dropDuplicate, supersedeCore). Else each run it holds that it still stops is
  * resumed at its station by its own scheduled mutation (resumeIncidentRun), so
  * an incident holding dozens of runs never runs them all inside the close.
  * Returns the runs scheduled.
@@ -266,8 +277,12 @@ export async function settleIncidentRuns(ctx: any, cause: Doc<"tasks">, now = Da
   const runs: Doc<"workflow_runs">[] = await ctx.db.query("workflow_runs").withIndex("by_incident_status", (q: any) => q.eq("incident_task_id", cause._id).eq("status", "failed")).take(INCIDENT_RUNS_READ);
   if (!runs.length) return [];
   const closed: Doc<"tasks"> | null = await ctx.db.get(cause._id);
-  const survivor = closed?.status === "dropped" && closed.duplicate_of ? await taskByRef(ctx, closed.duplicate_of) : null;
-  if (survivor && survivor._id !== cause._id && !isTerminalTaskStatus(survivor.status)) {
+  const next = closed?.status === "dropped" ? closed.duplicate_of ?? closed.superseded_by : undefined;
+  const survivor = next ? await taskByRef(ctx, next) : null;
+  if (closed && survivor && survivor._id !== cause._id && survivor.workspace === closed.workspace && !isTerminalTaskStatus(survivor.status)) {
+    // Its stops and their keys go with the runs (a merge moved them already), so the survivor still stops them
+    // (stoppedBy), the sweep lists it, and its close resumes them, even when it is a task a person filed.
+    await moveProblemSignals(ctx, closed.user_id, closed, survivor, now);
     for (const run of runs) await ctx.db.patch(run._id, { incident_task_id: survivor._id });
     await openIncidentIfShared(ctx, survivor._id, now);
     return [];

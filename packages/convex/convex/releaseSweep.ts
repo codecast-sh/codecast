@@ -68,8 +68,9 @@ export type Laggard = { device: Id<"devices">; device_id: string | null; own: bo
 export type Unretired = { conversation_id: Id<"conversations">; short_id: string };
 export const SWEEP_KINDS = ["incidents", "late_targets", "failed_runs", "laggards", "unretired"] as const;
 export type SweepKind = (typeof SWEEP_KINDS)[number];
-/** `failed_kinds`: the kinds whose read failed this time, each listed empty, so one kind's failure never fails the rest. */
-export type ReleaseSweep = { workspace: string; checked_at: number; incidents: SweepIncident[]; late_targets: LateTarget[]; failed_runs: FailedRun[]; laggards: Laggard[]; unretired: Unretired[]; failed_kinds: SweepKind[] };
+/** `failed_kinds`: the kinds whose read failed this time, each listed empty, so one kind's failure never fails the rest.
+ *  `unretired_skipped`: the sessions whose retirement judgment failed this time, left out of `unretired`. */
+export type ReleaseSweep = { workspace: string; checked_at: number; incidents: SweepIncident[]; late_targets: LateTarget[]; failed_runs: FailedRun[]; laggards: Laggard[]; unretired: Unretired[]; unretired_skipped: number; failed_kinds: SweepKind[] };
 
 /** A name a sweep may carry (a target, repository, flow, station, device id): identifier characters only, else null. */
 const safeName = (s: string | null | undefined): string | null => (s && /^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$/.test(s) ? s : null);
@@ -239,11 +240,23 @@ export const retireJudge = internalQuery({
   },
 });
 
-async function unretired(ctx: ActionCtx, scope: SweepScope, now: number): Promise<Unretired[]> {
+/** The unretired sessions, and how many could not be judged: one session's failed judgment (a read past a limit) drops
+ *  that session alone, never the kind. */
+async function unretired(ctx: ActionCtx, scope: SweepScope, now: number): Promise<{ rows: Unretired[]; skipped: number }> {
   const byRepo: Id<"conversations">[][] = await Promise.all(scope.repositories.map((repository) => retireCandidatesOf(ctx, repository, scope.viewer, now)));
   const sessions = [...new Set(byRepo.flat())].slice(0, RETIRE_SESSIONS_MAX);
-  const judged: Array<Unretired | null> = await Promise.all(sessions.map((conversation_id) => ctx.runQuery(internal.releaseSweep.retireJudge, { workspace: scope.workspace, conversation_id, now })));
-  return judged.filter((u): u is Unretired => u !== null);
+  const judged = await Promise.allSettled(sessions.map((conversation_id): Promise<Unretired | null> => ctx.runQuery(internal.releaseSweep.retireJudge, { workspace: scope.workspace, conversation_id, now })));
+  const rows: Unretired[] = [];
+  let skipped = 0;
+  judged.forEach((j, i) => {
+    if (j.status === "fulfilled") {
+      if (j.value) rows.push(j.value);
+      return;
+    }
+    skipped++;
+    console.error(`[releaseSweep.sweep] ${sessions[i]} not judged: ${j.reason instanceof Error ? j.reason.message : String(j.reason)}`);
+  });
+  return { rows, skipped };
 }
 
 /** Who sweeps which workspace, and the repositories its targets name. */
@@ -286,6 +299,7 @@ export const sweep = action({
     const now = Date.now();
     const s: SweepScope = await ctx.runQuery(internal.releaseSweep.scope, args);
     const failed = new Set<SweepKind>();
+    let unretiredSkipped = 0;
     // Each kind on its own: one that fails (a read past a limit) is listed empty and named, the others still answer.
     const kind = async <T>(name: SweepKind, read: () => Promise<T[]>): Promise<T[]> => {
       try {
@@ -301,8 +315,12 @@ export const sweep = action({
       kind("late_targets", () => lateTargets(ctx, s.workspace, now)),
       kind("failed_runs", (): Promise<FailedRun[]> => ctx.runQuery(internal.releaseSweep.failedRunsOf, { workspace: s.workspace, now })),
       kind("laggards", (): Promise<Laggard[]> => ctx.runQuery(internal.releaseSweep.laggardsOf, { workspace: s.workspace, viewer: s.viewer, now })),
-      kind("unretired", () => unretired(ctx, s, now)),
+      kind("unretired", async () => {
+        const { rows, skipped } = await unretired(ctx, s, now);
+        unretiredSkipped = skipped;
+        return rows;
+      }),
     ]);
-    return { workspace: s.workspace, checked_at: now, incidents, late_targets, failed_runs, laggards, unretired: unretiredRows, failed_kinds: SWEEP_KINDS.filter((k) => failed.has(k)) };
+    return { workspace: s.workspace, checked_at: now, incidents, late_targets, failed_runs, laggards, unretired: unretiredRows, unretired_skipped: unretiredSkipped, failed_kinds: SWEEP_KINDS.filter((k) => failed.has(k)) };
   },
 });

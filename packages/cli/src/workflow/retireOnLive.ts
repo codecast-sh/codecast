@@ -23,7 +23,13 @@ export type RetireOnLiveArgs = {
   commits: Array<{ sha: string }>;
 };
 
-export async function retireOnLive(call: Call, args: RetireOnLiveArgs): Promise<{ retired: boolean; reason?: string }> {
+/** The daemon's view of the session's terminal: the pane the kill would take, and the hibernation pass's attached-client reading. */
+export type RetireTerminal = {
+  paneFor: (conversationId: string) => Promise<string | null>;
+  tmuxSessions: () => Promise<Map<string, number>>;
+};
+
+export async function retireOnLive(call: Call, args: RetireOnLiveArgs, terminal: RetireTerminal): Promise<{ retired: boolean; reason?: string }> {
   const keep = (reason: string) => ({ retired: false, reason });
   const landed = args.commits?.[0]?.sha;
   if (!args.conversation_id || !landed || typeof args.since !== "number") return keep("the ask names no session, commit or time");
@@ -43,13 +49,16 @@ export async function retireOnLive(call: Call, args: RetireOnLiveArgs): Promise<
   if (stray) return keep(stray);
   const unpushed = await unpushedCommits(root, upstream);
   if (unpushed) return keep(unpushed);
+  // Read last, nearest the kill: a person reading or drafting in its terminal is using it.
+  const watched = await watchedTerminal(terminal, args.conversation_id);
+  if (watched) return keep(watched);
   // The server kills it only if nothing moved since this read and nothing would be cut off (cliRetireSession).
   const retired = await call("/cli/sessions/retire", { session: args.conversation_id, expected_message_count: row.message_count ?? 0 });
   return retired?.retired ? { retired: true } : keep(retired?.reason ?? "it could not be retired");
 }
 
 /** The command as the daemon runs it (daemon.ts executeRemoteCommand): its answer is the command's result. */
-export async function runRetireOnLiveCommand(siteUrl: string, apiToken: string, commandArgs: string | undefined): Promise<{ retired: boolean; reason?: string }> {
+export async function runRetireOnLiveCommand(siteUrl: string, apiToken: string, commandArgs: string | undefined, terminal: RetireTerminal): Promise<{ retired: boolean; reason?: string }> {
   const call: Call = async (route, body) => {
     try {
       const resp = await cliFetch(`${siteUrl}${route}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ api_token: apiToken, ...body }) });
@@ -59,7 +68,20 @@ export async function runRetireOnLiveCommand(siteUrl: string, apiToken: string, 
       return null;
     }
   };
-  return retireOnLive(call, commandArgs ? JSON.parse(commandArgs) : {});
+  return retireOnLive(call, commandArgs ? JSON.parse(commandArgs) : {}, terminal);
+}
+
+/** A tmux client attached to its pane's session, as a reason to keep; no pane on this machine is nobody watching. */
+async function watchedTerminal(terminal: RetireTerminal, conversationId: string): Promise<string | null> {
+  try {
+    const pane = await terminal.paneFor(conversationId);
+    if (!pane) return null;
+    const clients = (await terminal.tmuxSessions()).get(pane.split(":")[0]);
+    if (clients === 0) return null;
+    return clients !== undefined && clients > 0 ? "a person has its terminal open" : "its terminal could not be read";
+  } catch {
+    return "its terminal could not be read";
+  }
 }
 
 /**
