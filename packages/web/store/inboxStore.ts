@@ -106,7 +106,7 @@ import {
   rowVerifiedWake,
   rowPinPredatesTurn,
 } from "@codecast/shared/contracts/inboxPlacement";
-import { agentStatusAt, liveFactsOf, sessionLiveAt } from "../lib/liveness";
+import { agentStatusAt, liveFactsOf } from "../lib/liveness";
 import { closeSetsAside } from "@codecast/shared/contracts/closeKind";
 import { closeFactsOf, holdFactsOfRow, nestedInFlightOf } from "../lib/sessionClose";
 // The shared inbox projection (docs/architecture/sync-convergence.md): the
@@ -126,7 +126,6 @@ import {
   isNestedIdentity,
   isAssignedAwayFromViewer,
   underOwnersModel,
-  ridesParentCard,
   isInboxMember,
   escalatedAsks,
   agentAnswersRow,
@@ -135,7 +134,6 @@ import {
   commandsSession,
   rollupParentIdOf,
   rideLeadPlacements,
-  roleLeadIdsOf,
   isUnderRole,
   isHardBlocked,
   DEAD_AGENT_STATUSES,
@@ -4499,66 +4497,6 @@ export function lastPlacedInbox(
   return _placedMemo.get(`${scope}\x1f${opts.focusedId ?? ""}`)?.val ?? null;
 }
 
-// Rows a session owns under the owners model (owner_session_id), read once
-// per sessions object and viewer: the rail nests them under that session's
-// card even though they are in nobody's inbox, and the team board gives them
-// no card of their own. Only what the inbox read sends with the parent (its
-// newest OWNED_CHILD_HORIZON children by creation, and past them up to
-// ADOPTED_CHILD_CAP sessions a person dragged under it, enrichInboxSessionRow;
-// the cache keeps older ones), and never a killed, closed or stashed one. A
-// snoozed one is skipped where it nests (placeInboxRows), since snoozing ends
-// on a clock.
-const OWNED_CHILD_HORIZON = 20;
-const ADOPTED_CHILD_CAP = 50;
-type OwnedChildren = { list: InboxSession[]; ids: ReadonlySet<string> };
-const ownedChildrenCache = new WeakMap<object, Map<string, OwnedChildren>>();
-/** A row its session owns rather than the viewer (owners model): it rides
- *  that session's card, never a card of its own. The server's rule for the
- *  slim child row (shared ridesParentCard): no role took it, nobody released
- *  it, and it is none of the viewer's inbox rows (an owner seat, or a wait
- *  that reached them). */
-export function isOwnedChildRow(s: InboxSession, meId: string | null | undefined): boolean {
-  return ridesParentCard(s, meId);
-}
-function ownedChildrenOf(sessions: Record<string, InboxSession>, meId: string | null | undefined): OwnedChildren {
-  const key = meId ?? "";
-  const hit = ownedChildrenCache.get(sessions)?.get(key);
-  if (hit) return hit;
-  const byParent = new Map<string, InboxSession[]>();
-  for (const id in sessions) {
-    if (!Object.hasOwn(sessions, id)) continue;
-    const s = sessions[id];
-    const parent = s.parent_conversation_id ? String(s.parent_conversation_id) : "";
-    if (!parent) continue;
-    if (!byParent.has(parent)) byParent.set(parent, []);
-    byParent.get(parent)!.push(s);
-  }
-  const list: InboxSession[] = [];
-  const created = (s: InboxSession) => s.started_at ?? s.updated_at ?? 0;
-  for (const [parent, kids] of byParent) {
-    let sent = kids;
-    if (kids.length > OWNED_CHILD_HORIZON) {
-      kids.sort((a, b) => created(b) - created(a));
-      const newest = kids.slice(0, OWNED_CHILD_HORIZON);
-      const adopted = kids.slice(OWNED_CHILD_HORIZON).filter((s) => s.adopted_at != null)
-        .sort((a, b) => (b.adopted_at ?? 0) - (a.adopted_at ?? 0)).slice(0, ADOPTED_CHILD_CAP);
-      sent = adopted.length ? [...newest, ...adopted] : newest;
-    }
-    for (const s of sent) {
-      // Only a child nested under its owner: the inbox sends those with their
-      // parent; a spawned worker reaches the store only as a stale crawl row.
-      if (String(s.owner_session_id ?? "") !== parent || !isOwnedChildRow(s, meId)) continue;
-      if (s.inbox_killed_at || s.inbox_stashed_at || isClosedSession(s)) continue;
-      list.push(s);
-    }
-  }
-  const out = { list, ids: new Set(list.map((s) => s._id)) };
-  let byViewer = ownedChildrenCache.get(sessions);
-  if (!byViewer) ownedChildrenCache.set(sessions, (byViewer = new Map()));
-  byViewer.set(key, out);
-  return out;
-}
-
 export function placeInboxRows(
   state: PlaceInboxState,
   opts: { focusedId?: string | null; scope?: "mine" | "team"; now?: number; nowMono?: number } = {},
@@ -5755,6 +5693,10 @@ import { ORG_LENS_MODES, isOrgLensMode, groupSessionsForOrgLens, orgLensAvailabl
 import { priorityPlaceReader, sortByPriority, type PriorityRankEntry, type PriorityStanding } from "./priorityOrder";
 import { hostedStopOf, splitHostedStops } from "../lib/hostedNotice";
 import { SESSION_STATUSES, sessionStatusOf, type SessionStatus, type StatusLive } from "../lib/sessionStatus";
+import { nestOwnedChildren, ownedChildrenOf, resolveShowSubagents, resolveSubagentFilter, subagentKept, withOpenOwnedChild, type SubagentFilter, type SubagentRow, type SubagentRowsMode } from "./subagentCards";
+export { cardOfNested, drawnUnderParentIds, flatHeaderCount, fullRowsCounts, isOwnedChildRow, resolveShowSubagents, resolveSubagentFilter, resolveSubagentRows, SUBAGENT_FILTER_STATES, subagentKept, subagentPasses, type SubagentFilter, type SubagentRow, type SubagentRowsMode } from "./subagentCards";
+import { dropOrphanSubagents, hoistNestedUnderParent, inboxNestParentOf, isSpawnedWorker, nestedSessionIds } from "./inboxNesting";
+export { inboxNestParentOf, isSpawnedWorker } from "./inboxNesting";
 import type { PriorityRow } from "@codecast/shared/contracts/priorities";
 import { teamMembersOf } from "../lib/activeTeam";
 import type { TeamShareMode } from "../lib/teamFeedRows";
@@ -5934,41 +5876,6 @@ export function resolveShowOld(ui: { inbox_show_old?: boolean } | undefined): bo
   return ui?.inbox_show_old ?? true;
 }
 
-// How a card shows its subagents. A person who had the old Subagents toggle
-// on keeps their nested cards; everyone else starts folded.
-export type SubagentRowsMode = "folded" | "compact" | "full" | "hidden";
-type SubagentPrefs = { show_subagents?: boolean; subagent_rows?: SubagentRowsMode; subagent_filter?: SubagentFilter };
-export function resolveSubagentRows(ui: SubagentPrefs | undefined): SubagentRowsMode {
-  return ui?.subagent_rows ?? (ui?.show_subagents ? "full" : "folded");
-}
-
-// Subagents drawn as their own cards (Full rows): what placement, nav and the
-// flat views key on.
-export function resolveShowSubagents(ui: SubagentPrefs | undefined): boolean {
-  return resolveSubagentRows(ui) === "full";
-}
-
-// Which of a card's subagents it shows; the working or waiting ones by default.
-export type SubagentFilter = "active" | "active_done" | "all";
-export function resolveSubagentFilter(ui: SubagentPrefs | undefined): SubagentFilter {
-  return ui?.subagent_filter ?? "active";
-}
-
-// A card's subagents and spawned workers as every surface draws them under it:
-// each one's state, which of them the person's filter keeps, and their order.
-// Here beside the prefs, so the keyboard order (computeVisualOrder) keeps the
-// same rows the rail draws; the web rail and the phone read the same.
-
-/** The states each filter level keeps; "all" keeps every state. */
-export const SUBAGENT_FILTER_STATES: Record<Exclude<SubagentFilter, "all">, ReadonlySet<SessionStatus>> = {
-  active: new Set<SessionStatus>(["needs_you", "error", "working", "starting"]),
-  active_done: new Set<SessionStatus>(["needs_you", "error", "working", "starting", "done"]),
-};
-
-export function subagentPasses(status: SessionStatus, filter: SubagentFilter): boolean {
-  return filter === "all" || SUBAGENT_FILTER_STATES[filter].has(status);
-}
-
 /** The store facts a card's state reads beside its row (components/inbox/
  *  SessionCard's liveness): an unconfirmed send, the revive stamp that clears
  *  the blocked badge, a pending `cast decide`, a hosted stop. */
@@ -5999,41 +5906,11 @@ export function subagentStatusOf(session: InboxSession, now: number, live: Statu
   return sessionStatusOf({ row: session, section: null, placement: railRowPlacement(session, now), now, live, nested: true });
 }
 
-const SET_ASIDE_STATUSES = new Set<SessionStatus>(["stashed", "killed"]);
-
-/** Whether the filter keeps a child. A stashed or killed child still reads
- *  Stashed or Killed, as its card does, but the filter judges it by its own
- *  activity, the test the bucket's "running" count uses: running, it counts
- *  as working. */
-export function subagentKept(session: InboxSession, status: SessionStatus, now: number, filter: SubagentFilter): boolean {
-  if (subagentPasses(status, filter)) return true;
-  return SET_ASIDE_STATUSES.has(status) && subagentPasses("working", filter) && sessionLiveAt(session, now);
-}
-
 /** The filter as a test on one nested row, the open one always kept: what
  *  Full rows keep in the flat views (flatViewSessions keepSub). */
 export function subagentKeepOf(filter: SubagentFilter, now: number, focusedId?: string | null, state?: SubagentLiveState): (s: InboxSession) => boolean {
   return (s) => s._id === focusedId || subagentKept(s, subagentStatusOf(s, now, subagentLiveOf(s, now, state)), now, filter);
 }
-
-/** The section header counts under Full rows: placeInboxRows counts every
- *  nested row it placed, and Full rows draw only those `keep` passes (the
- *  filter's, the open one), so the rest come off. Web and the phone read it. */
-export function fullRowsCounts(placed: Pick<PlacedInbox, "counts" | "nestedSectionOf" | "subsByParent">, keep: (s: InboxSession) => boolean): Record<InboxSectionKey, number> {
-  let counts = placed.counts;
-  if (placed.nestedSectionOf.size === 0) return counts;
-  const subs = new Map<string, InboxSession>();
-  for (const list of placed.subsByParent.values()) for (const sub of list) subs.set(sub._id, sub);
-  for (const [id, k] of placed.nestedSectionOf) {
-    const sub = subs.get(id);
-    if (!sub || keep(sub)) continue;
-    if (counts === placed.counts) counts = { ...counts };
-    counts[k]--;
-  }
-  return counts;
-}
-
-export type SubagentRow = { session: InboxSession; status: SessionStatus };
 
 /** A card's children with their states: each once, only those the filter
  *  keeps (and `keepId`, the open one, whatever its state), most urgent state
@@ -6235,45 +6112,6 @@ export function chipMatchesSession(
   return passesFilterTerms(opts.bucketFilters, opts.bucketByConv[s._id]);
 }
 
-// Subagent/teammate rows never float at their own slot in a flat list — they
-// render directly under their parent whenever the parent is in the list. The
-// view comparator places a child wherever ITS OWN activity lands, which strands
-// it between unrelated cards while its (recently-active) parent sorts far away
-// — three ↳-styled rows adrift in the middle of the inbox. Children keep the
-// comparator's relative order among siblings and follow chains (a child's own
-// children ride along). A teammate whose lead didn't make the list is dropped
-// (dropOrphanSubagents), same as a parentless Task subagent — leftover
-// reviewers must not become their own Done cards.
-function hoistNestedUnderParent(list: InboxSession[], nestWorkers = false): InboxSession[] {
-  const present = new Set(list.map((s) => s._id));
-  const nestParentOf = inboxNestParentOf(list, nestWorkers);
-  const nestedHere = (s: InboxSession) => {
-    const p = nestParentOf(s);
-    return p && p !== s._id && present.has(p) ? p : null;
-  };
-  const kidsByParent = new Map<string, InboxSession[]>();
-  for (const s of list) {
-    const p = nestedHere(s);
-    if (!p) continue;
-    if (!kidsByParent.has(p)) kidsByParent.set(p, []);
-    kidsByParent.get(p)!.push(s);
-  }
-  if (kidsByParent.size === 0) return list;
-  const out: InboxSession[] = [];
-  const emitted = new Set<string>();
-  const emit = (s: InboxSession) => {
-    if (emitted.has(s._id)) return;
-    emitted.add(s._id);
-    out.push(s);
-    for (const kid of kidsByParent.get(s._id) ?? []) emit(kid);
-  };
-  for (const s of list) if (!nestedHere(s)) emit(s);
-  // A parent-link cycle would leave its members un-emitted above (each waits on
-  // the other) — append them in sort order rather than dropping rows.
-  for (const s of list) emit(s);
-  return out;
-}
-
 // The flat (time / recent) view's session list AS RENDERED — the single builder
 // behind BOTH the panel's render and computeVisualOrder (keyboard nav), so the
 // two can never drift. This is the crux of "Ctrl+J/K skips New Session cards
@@ -6335,129 +6173,6 @@ export function flatViewSessions(
   return nestOwnedChildren(hoisted, subsByParent, keepOwned);
 }
 
-/** The rows of a flat list (flatViewSessions) drawn under their parent's card,
- *  exactly where the list puts them: nested under a card (subsByParent) the
- *  list also holds, or hoisted under a listed parent by the nest rule
- *  (hoistNestedUnderParent), whichever section each was placed in, so a
- *  teammate pinned on its own still reads as drawn under its lead. Pass the
- *  list's own `nestWorkers`. The rest stand as cards of their own. */
-export function drawnUnderParentIds(list: readonly InboxSession[], subsByParent: ReadonlyMap<string, readonly InboxSession[]>, nestWorkers = false): Set<string> {
-  const present = new Set(list.map((s) => s._id));
-  const out = new Set<string>();
-  for (const [parent, subs] of subsByParent) if (present.has(parent)) for (const sub of subs) if (present.has(sub._id)) out.add(sub._id);
-  const nestParentOf = inboxNestParentOf(list, nestWorkers);
-  for (const s of list) {
-    const p = nestParentOf(s);
-    if (p && p !== s._id && present.has(p)) out.add(s._id);
-  }
-  return out;
-}
-
-/** The flat "All" header's number on web and the phone: the rows the list
- *  draws, less the children their sessions own drawn under that card
- *  (`underParent`, drawnUnderParentIds), which add to no count, as the
- *  grouped headers leave them out (placeInboxRows ownedNested). */
-export function flatHeaderCount(list: readonly InboxSession[], underParent: ReadonlySet<string>, meId: string | null | undefined): number {
-  let n = 0;
-  for (const s of list) if (!(underParent.has(s._id) && isOwnedChildRow(s, meId))) n++;
-  return n;
-}
-
-// A child its session owns (owners model) is in nobody's inbox, so the list
-// holds at most the open one, at its own slot; placeInboxRows nests every one
-// under its owner's card (subsByParent). Each one `keep` passes goes directly
-// under that card, the open one moved there. With the card absent the open one
-// keeps its own row, so it never vanishes.
-function nestOwnedChildren(list: InboxSession[], subsByParent: Map<string, InboxSession[]>, keep: (s: InboxSession) => boolean): InboxSession[] {
-  const parentOf = new Map<string, string>();
-  for (const [parent, subs] of subsByParent) for (const sub of subs) if (underOwnersModel(sub)) parentOf.set(sub._id, parent);
-  if (parentOf.size === 0) return list;
-  const present = new Set(list.map((s) => s._id));
-  const kidsOf = new Map<string, InboxSession[]>();
-  for (const [parent, subs] of subsByParent) {
-    if (!present.has(parent)) continue;
-    const kids = subs.filter((sub) => parentOf.get(sub._id) === parent && keep(sub));
-    if (kids.length) kidsOf.set(parent, kids);
-  }
-  const out: InboxSession[] = [];
-  for (const s of list) {
-    const parent = parentOf.get(s._id);
-    if (parent && present.has(parent)) continue;
-    out.push(s);
-    for (const kid of kidsOf.get(s._id) ?? []) out.push(kid);
-  }
-  return out;
-}
-
-function nestedSessionIds(subsByParent: Map<string, InboxSession[]>): Set<string> {
-  const ids = new Set<string>();
-  for (const sessions of subsByParent.values()) {
-    for (const session of sessions) ids.add(session._id);
-  }
-  return ids;
-}
-
-// Drop Task subagents and team workers whose nest parent didn't make `list`
-// (see flatViewSessions). The focused row always renders; a pinned one is an
-// explicit "keep visible". A spawned worker (isSpawnedWorker) is never dropped:
-// it nests only while its spawner is listed, and otherwise stands as its own
-// row, so a worker cannot vanish with a parent that aged out or was set aside.
-function dropOrphanSubagents(list: InboxSession[], focusedId?: string | null, nestWorkers = false): InboxSession[] {
-  const present = new Set(list.map((s) => s._id));
-  const nestParentOf = inboxNestParentOf(list, nestWorkers);
-  return list.filter((s) => {
-    if (s._id === focusedId || s.is_pinned) return true;
-    // Under the owners model nothing nests: a listed row is one the viewer owns.
-    if (underOwnersModel(s)) return true;
-    // A role's session is a subagent of the role's card.
-    if (!isSubagentConversation(s) && !isAgentTeamWorker(s) && !isUnderRole(s)) return true;
-    const p = nestParentOf(s);
-    return !!p && p !== s._id && present.has(p);
-  });
-}
-
-// Which row a session nests under in a session list, over the rows present:
-// the shared child kinds (nestParentIdOf: a Task subagent, an agent-team
-// teammate) and a role's session under its role's standing session
-// (isUnderRole, org-roles-run-work.md R1). The ONE resolver every web nesting
-// computation calls, so the sections, the flat view, the set aside buckets and
-// the keyboard order cannot disagree about where a role's session sits.
-//
-// A third kind nests here for DISPLAY only: a session an agent spawned
-// (isSpawnedWorker: a `cast spawn` worker, a workflow sub). The shared
-// nestParentIdOf deliberately leaves those first-class, because the server
-// (kill cascade, org counts, revive) must keep treating them as their own
-// sessions; the web list alone folds them under the session that spawned them.
-// A workflow sub's parent is the run's host: the present row on the same run
-// that is neither a sub nor the run's own log.
-export function inboxNestParentOf(rows: Iterable<InboxSession>, nestWorkers = false): (s: InboxSession) => string | null {
-  const byId = new Map<string, InboxSession>();
-  for (const r of rows) byId.set(r._id, r);
-  const roleLeads = roleLeadIdsOf(byId.keys(), (id) => byId.get(id));
-  let runHosts: Map<string, string> | null = null;
-  const runHostOf = (runId: string) => {
-    if (!runHosts) {
-      runHosts = new Map();
-      for (const r of byId.values()) {
-        if (r.workflow_run_id && !r.is_workflow_sub && !r.is_workflow_primary && !runHosts.has(r.workflow_run_id)) runHosts.set(r.workflow_run_id, r._id);
-      }
-    }
-    return runHosts.get(runId) ?? null;
-  };
-  return (s) => {
-    // Under the owners model a row stands alone in its owners' inboxes; a
-    // child its session owns rides that card by owner_session_id
-    // (ownedChildrenOf), never by this parent pointer.
-    if (underOwnersModel(s)) return null;
-    const shared = nestParentIdOf(s);
-    if (shared) return shared;
-    if (isUnderRole(s)) return s.org_role_id ? roleLeads.get(s.org_role_id) ?? null : null;
-    if (!nestWorkers || !isSpawnedWorker(s)) return null;
-    const p = s.is_workflow_sub ? runHostOf(s.workflow_run_id!) : s.spawned_by_conversation_id!;
-    return p && p !== s._id ? p : null;
-  };
-}
-
 // Modern focused: the Modern style with its switch on (settings, Appearance).
 // Only the trims read it. It follows the style this device draws
 // (showsModern), not the account's, so a device showing Classic or Minimal
@@ -6471,18 +6186,6 @@ export function isModernFocused(ui: { modern_style?: boolean; visual_style?: str
 // lists every worker as its own row, as it always has.
 export function nestsWorkers(ui: { modern_style?: boolean; modern_focused?: boolean } | undefined): boolean {
   return isModernFocused(ui);
-}
-
-// A session an agent spawned that the shared nestParentIdOf leaves first-class:
-// a `cast spawn` worker (spawned_by, no team) or a workflow sub. Display only
-// (see inboxNestParentOf). A spawned session that leads its own team stays a
-// card of its own: its teammates nest under it, and a sub row never draws rows
-// of its own.
-export function isSpawnedWorker(s: InboxSession): boolean {
-  if (underOwnersModel(s) || nestParentIdOf(s) || isUnderRole(s)) return false;
-  if (s.is_workflow_sub) return !!s.workflow_run_id;
-  if (!s.spawned_by_conversation_id) return false;
-  return !(s.agent_team_name && s.agent_name === "team-lead");
 }
 
 // Whether a spawned worker is waiting on the person: its own section is
@@ -6782,24 +6485,6 @@ export function computeVisualOrder(state: Parameters<typeof visualOrderOf>[0], o
   const placed = placeInboxRows(state as PlaceInboxState, { focusedId });
   const order = visualOrderOf(state, opts, placed, focusedId);
   return opts.walk || state.showFavorites ? order : withOpenOwnedChild(order, placed.subsByParent, focusedId);
-}
-
-// The open subagent its session owns rides that session's card (placeInboxRows
-// ownedNested), so no section lists it; the flat views list it under the card
-// (nestOwnedChildren). Every other order puts it right after its card, so
-// Ctrl+J/K from it walks on from where it is drawn instead of the first row.
-function withOpenOwnedChild(order: InboxSession[], subsByParent: Map<string, InboxSession[]>, focusedId: string | null): InboxSession[] {
-  if (!focusedId || order.some((s) => s._id === focusedId)) return order;
-  const parent = cardOfNested(subsByParent, focusedId);
-  const open = parent ? subsByParent.get(parent)?.find((sub) => sub._id === focusedId) : undefined;
-  const at = open && underOwnersModel(open) ? order.findIndex((s) => s._id === parent) : -1;
-  return at < 0 ? order : [...order.slice(0, at + 1), open!, ...order.slice(at + 1)];
-}
-
-/** The card a nested row is drawn under (PlacedInbox.subsByParent), or null. */
-export function cardOfNested(subsByParent: ReadonlyMap<string, readonly InboxSession[]>, id: string): string | null {
-  for (const [parent, subs] of subsByParent) if (subs.some((sub) => sub._id === id)) return parent;
-  return null;
 }
 
 // Advance past a removed set: the first session below the current one in the

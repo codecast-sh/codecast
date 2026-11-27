@@ -87,9 +87,9 @@ export const WINDOW_SLOTS: Record<string, SlotClass> = {
   "store/inboxStore.ts:HELD_IN_NEW": CONSTANT,
   "store/inboxStore.ts:QUIET_BUCKETS": CONSTANT,
   "store/inboxStore.ts:SURFACED_PLAN_STATES": CONSTANT,
-  "store/inboxStore.ts:SET_ASIDE_STATUSES": CONSTANT,
 
   // the rest of store/
+  "store/subagentCards.ts:SET_ASIDE_STATUSES": CONSTANT,
   "store/gestureBridge.ts:sourceToken": "window",
   "store/gestureBridge.ts:channelFactory": { shared: "set once per realm by the sim's device bridge" },
   // The docs shots mode's offline Convex client: set only by lib/docsShots/install, which the sim never runs.
