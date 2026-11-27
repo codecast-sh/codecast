@@ -30,6 +30,7 @@ import { CollapsibleBody } from '@/components/CollapsibleBody';
 import { appPrompt, showActionSheet } from '@/lib/popups';
 import { FactChip, LinkRow, MoreToggle, ObjectHeader, ObjectMissing, ProgressBlock, SectionLabel, SessionsBlock, objectStyles, targetChip } from '@/components/objects/ObjectParts';
 import { goalStatusVisual, healthVisual, projectStatusVisual, sessionRowsFor } from '@/components/objects/objectStatus';
+import { EntityKindIcon, GoalStatusMark, HealthDot, ProjectStatusMark } from '@/components/marks';
 
 const TASKS_SHOWN = 8;
 
@@ -127,8 +128,8 @@ function GoalBody({ goal, goals }: { goal: InitiativeRow; goals: InitiativeRow[]
         )}
         <RNText style={objectStyles.title}>{goal.title}</RNText>
         <RNView style={objectStyles.chips}>
-          <FactChip icon={status.icon} label={status.label} color={status.color} onPress={pickStatus} testID="goal-status" />
-          {goal.health !== 'none' && <FactChip icon={health.icon} label={health.label} color={health.color} />}
+          <FactChip mark={<GoalStatusMark status={goal.status} size={11} />} label={status.label} color={status.color} onPress={pickStatus} testID="goal-status" />
+          {goal.health !== 'none' && <FactChip mark={<HealthDot health={goal.health} />} label={health.label} color={health.color} />}
           {ownerRole && <FactChip icon="user-o" label={`@${ownerRole.handle}`} color={Theme.textSecondary} link onPress={() => router.push(`/org/${ownerRole.short_id}` as never)} />}
           {ownerName && <FactChip icon="user-o" label={ownerName} color={Theme.textSecondary} />}
           {target && <FactChip icon="calendar-o" label={target.label} color={target.color} />}
@@ -185,7 +186,7 @@ function GoalBody({ goal, goals }: { goal: InitiativeRow; goals: InitiativeRow[]
             <RNView style={objectStyles.list}>
               {children.map((g) => {
                 const v = goalStatusVisual(g.status, Theme);
-                return <LinkRow key={g._id} icon="flag-o" color={v.color} title={g.title} meta={v.label} onPress={() => router.push(`/goal/${g.short_id || g._id}` as never)} />;
+                return <LinkRow key={g._id} mark={<EntityKindIcon type="initiative" size={13} color={v.color} />} color={v.color} title={g.title} meta={v.label} onPress={() => router.push(`/goal/${g.short_id || g._id}` as never)} />;
               })}
             </RNView>
           </RNView>
@@ -198,7 +199,7 @@ function GoalBody({ goal, goals }: { goal: InitiativeRow; goals: InitiativeRow[]
               {projects.map((p) => {
                 const v = projectStatusVisual(p.status, Theme);
                 const n = projectTaskCounts(Object.values(tasks) as any, [p._id]);
-                return <LinkRow key={p._id} icon={v.icon} color={v.color} title={p.title} meta={n.total ? `${n.done}/${n.total}` : undefined} onPress={() => router.push(`/project/${p.short_id || p._id}` as never)} testID={`goal-project-${p.short_id}`} />;
+                return <LinkRow key={p._id} mark={<ProjectStatusMark status={p.status} size={13} />} color={v.color} title={p.title} meta={n.total ? `${n.done}/${n.total}` : undefined} onPress={() => router.push(`/project/${p.short_id || p._id}` as never)} testID={`goal-project-${p.short_id}`} />;
               })}
             </RNView>
           ) : <RNText style={objectStyles.empty}>No project carries this goal yet</RNText>}
