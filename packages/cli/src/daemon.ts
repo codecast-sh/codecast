@@ -72,6 +72,7 @@ import {
 import { scanOpenBackgroundTasksInto, type OpenTaskInfo, type OpenTaskTimes, type PendingTaskCall } from "./backgroundTaskScan.js";
 import { parseWorkflowJournal, snapshotIsCurrent, workflowHostGone, workflowRunLastActivity } from "./workflowRunLive.js";
 import { HibernationWorkScan } from "./hibernationWork.js";
+import { ParkLedger } from "./parkLedger.js";
 import { governor, sampleLoad, describeLoad, readGovernorState, writeGovernorState, SAMPLE_INTERVAL_MS as GOVERNOR_SAMPLE_INTERVAL_MS } from "./loadGovernor.js";
 import { REVIVE_CANDIDATE_STATUSES, REVIVE_MAX_PER_PASS, recentRevives, isStationHandOpening, stationHandsFirst, REVIVE_MESSAGE, lastSignOfLifeMs, midWorkReviveDecision, priorRevives, recordRevive, unrecordRevive, reviveClientId, statusFileExpired } from "./midWorkRevive.js";
 import { TurnClaimLedger, TurnClaimRecovery, awaitingResume, claimTransition, type ClaimFacts, type TurnClaim } from "./turnClaims.js";
@@ -20778,10 +20779,13 @@ export function findSessionFile(sessionId: string, opts?: { staleOk?: boolean })
 const resumeSessionCache = new Map<string, string>();
 // Sessions this daemon parked to stay under the fleet cap. They keep beating
 // (see runHibernationPass) but hold no pane, so the entry is what tells a live
-// session apart from a parked one without a Convex read.
-const hibernatedSessions = new Set<string>();
+// session apart from a parked one without a Convex read. Kept on disk
+// (parkLedger.ts) and restored at boot by restoreHibernationParks.
+const hibernatedSessions = new ParkLedger();
+const PARK_LEDGER_FILE = path.join(CONFIG_DIR, "parked-sessions.json");
 // Session ids whose park stamp this daemon has cleared since it booted. The set
-// above is emptied by a restart, so after one the daemon cannot tell a session
+// above can miss a park (one the boot restore skipped, or a ledger lost), so
+// the daemon cannot always tell a session
 // it parked from one it never touched, and a wake that trusts only the set
 // leaves hibernated_at on a session that visibly has a pane. The first wake of
 // any session therefore clears the stamp whether or not the daemon remembers
@@ -24395,8 +24399,9 @@ export function trackSessionPaneForTests(
 }
 
 /** Test seam: what the daemon believes about one session's pane. `beating` is
- *  the load-bearing one — a parked session that stops beating is deleted by the
- *  server's stale-row cron within the hour. */
+ *  the load-bearing one — the server keeps a parked session's row (the stale
+ *  reap skips hibernated rows), but a run wake on it counts only while it
+ *  beats, so one that stops beating files under Needs You. */
 export function sessionParkStateForTests(sessionId: string): {
   parked: boolean;
   beating: boolean;
@@ -24409,6 +24414,11 @@ export function sessionParkStateForTests(sessionId: string): {
     paneTracked: resumeSessionCache.has(sessionId),
     status: lastSentAgentStatus.get(sessionId),
   };
+}
+
+/** Test seam: stop the park ledger writing to the file a test's restore named. */
+export function detachParkLedgerForTests(): void {
+  hibernatedSessions.detach();
 }
 
 /**
@@ -26330,8 +26340,8 @@ export function wakeStatusAfterPark(stored: AgentStatus | undefined): AgentStatu
 /**
  * A session came back: drop the local mark and clear the server stamp.
  *
- * The write is not gated on the local mark. A daemon restart empties
- * hibernatedSessions, so a session parked before the restart and resumed after
+ * The write is not gated on the local mark. hibernatedSessions can miss a park
+ * made before a restart (see hibernationStampCleared), so such a session resumed after
  * it would otherwise keep hibernated_at set on managed_sessions until the stale
  * row cron deleted the row, and that stamp is what tells the inbox a session is
  * parked. The first wake of a session after boot therefore always writes; every
@@ -26461,6 +26471,24 @@ function retryHibernationStamps(): void {
   for (const sessionId of pendingHibernationStamps.keys()) {
     if (!hibernationStampWrites.has(sessionId)) void flushHibernationStamp(sessionId);
   }
+}
+
+/**
+ * Boot: beat again every session the last daemon left parked. A session whose
+ * process is running came back without this daemon (a resume by hand), so it
+ * is not parked; its first wake clears the stamp.
+ */
+export function restoreHibernationParks(file = PARK_LEDGER_FILE): string[] {
+  const restored = hibernatedSessions.restore(file, (id) => resumeSessionCache.has(id) || sessionRegistryProcessAlive(id));
+  for (const id of restored) {
+    lastSentAgentStatus.set(id, "hibernated");
+    managedHeartbeatSessions.add(id);
+  }
+  if (restored.length > 0) {
+    ensureHeartbeatFlushLoop();
+    log(`Restored ${restored.length} parked session(s) from disk`);
+  }
+  return restored;
 }
 
 export function clearHibernationPark(sessionId: string, conversationId?: string): void {
@@ -32097,6 +32125,10 @@ async function main(): Promise<void> {
   setInterval(() => {
     governorTick().catch((err) => log(`[GOVERNOR] tick failed: ${String(err)}`, "debug"));
   }, GOVERNOR_SAMPLE_INTERVAL_MS);
+
+  // Parked sessions hold no process for the reconcile below to find: beat them
+  // again from the ledger the last daemon left.
+  restoreHibernationParks();
 
   // Re-establish session→pid liveness mapping (esp. for idle sessions that don't
   // write JSONL) so the Sessions page can tell live-idle from dead. Run once
