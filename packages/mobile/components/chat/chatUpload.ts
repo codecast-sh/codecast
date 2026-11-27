@@ -1,5 +1,6 @@
 // Image attach for mobile chat: pick from the library (or camera), upload to
-// Convex storage, hand back the attachment record chat.sendMessage takes.
+// Convex storage, hand back the attachment record chat.sendMessage takes. A
+// session's composer also picks any file here (pickFiles).
 //
 // The upload starts the moment the image is picked — by the time the person
 // finishes typing the caption, the bytes are usually up. In-flight uploads live
@@ -45,20 +46,32 @@ export type ChatAttachmentArg = {
   height?: number;
 };
 
-export type ImageSource = 'camera' | 'camera-burst' | 'library' | 'screen-recording';
+export type ImageSource = 'camera' | 'camera-burst' | 'library' | 'screen-recording' | 'file';
+
+// expo-document-picker came after binaries already in the field: on those,
+// Files says the app needs an update (pickFiles).
+const DocumentPicker: typeof import('expo-document-picker') | null = optionalNative(
+  'ExpoDocumentPicker',
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  () => require('expo-document-picker'),
+);
+
+export type PickedFile = { uri: string; name: string; mime: string };
 
 /** The most images one pick attaches, from the library or a run of camera shots. */
 const PICK_LIMIT = 6;
 
-/** Ask where an attachment comes from: a new photo or the library, and in a
- *  session's composer a screen recording (lib/screenRecordingSend). Null when dismissed. */
-export function chooseImageSource(opts: { screenRecording?: boolean } = {}): Promise<ImageSource | null> {
+/** Ask where an attachment comes from: a new photo or the library, in a
+ *  session's composer a screen recording (lib/screenRecordingSend), and where
+ *  an agent gets the turn, any file (web's paperclip). Null when dismissed. */
+export function chooseImageSource(opts: { screenRecording?: boolean; files?: boolean } = {}): Promise<ImageSource | null> {
   return new Promise((resolve) => {
     showActionSheet(undefined, [
       { label: 'Take photo', icon: 'camera', onPress: () => resolve('camera') },
       { label: 'Take several photos', icon: 'copy', onPress: () => resolve('camera-burst') },
       { label: 'Photo library', icon: 'image', onPress: () => resolve('library') },
       ...(opts.screenRecording ? [{ label: 'Screen recording', icon: 'video' as const, onPress: () => resolve('screen-recording' as const) }] : []),
+      ...(opts.files ? [{ label: 'Files', icon: 'paperclip' as const, onPress: () => resolve('file' as const) }] : []),
     ], { onCancel: () => resolve(null) });
   });
 }
@@ -112,6 +125,24 @@ export async function pickImages(source: ImageSource = 'library'): Promise<Picke
     appAlert(camera ? 'Camera unavailable' : 'Photo library unavailable', err instanceof Error ? err.message : String(err));
   }
   return picked;
+}
+
+/** Any files, from the phone or its cloud drives, copied to the app's cache so
+ *  the upload can read them. [] when cancelled; on a binary without the picker,
+ *  says the app needs an update. */
+export async function pickFiles(): Promise<PickedFile[]> {
+  if (!DocumentPicker) {
+    appAlert('Update Codecast', 'Attaching files needs the newest version of the app.');
+    return [];
+  }
+  try {
+    const result = await DocumentPicker.getDocumentAsync({ multiple: true, copyToCacheDirectory: true });
+    if (result.canceled) return [];
+    return result.assets.map((a) => ({ uri: a.uri, name: a.name, mime: a.mimeType ?? 'application/octet-stream' }));
+  } catch (err) {
+    appAlert('Files unavailable', err instanceof Error ? err.message : String(err));
+    return [];
+  }
 }
 
 /** Upload one picked image; resolves to its storage id (null on failure).
