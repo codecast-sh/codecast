@@ -4,9 +4,10 @@
 import type { Doc, Id } from "../_generated/dataModel";
 import { FEATURE, featureCheck, readerFor, type Reader } from "./priorityAccess";
 import { teamHasFeature } from "./teamFeatureGuard";
+import type { SessionPriorityRef } from "@codecast/shared/contracts/priorities";
 
 type Ctx = { db: any };
-export type SessionPriority = { id: string; title: string | null };
+export type SessionPriority = SessionPriorityRef;
 
 /** A reader of sessions' priorities for one viewer in one team, memoized per priority; null for every session while the team has the feature off. */
 export async function sessionPriorityReader(ctx: Ctx, viewer: Id<"users">, teamId: Id<"teams"> | null | undefined): Promise<(conv: Pick<Doc<"conversations">, "priority_id"> | null | undefined) => Promise<SessionPriority | null>> {

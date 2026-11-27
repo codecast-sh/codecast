@@ -4,6 +4,7 @@
 // Pure: no store, no React.
 import type { QueueCommit, QueueGroup, ShippingRun, ShippingShipper } from "@codecast/shared/contracts/deployTargets";
 import type { CheckoutRow } from "@codecast/shared/contracts/checkouts";
+import type { SessionPriorityRef } from "@codecast/shared/contracts/priorities";
 import { isOpen, prOfSubject, sessionsOf, supersededBy, type DeploySession, type TeamDeployRow } from "./targets";
 import { ageShort } from "../lineFlow";
 
@@ -228,7 +229,7 @@ export function prState(pr: Pick<OpenPr, "draft" | "checks_state" | "review_deci
 
 const sameSha = (a: string, b: string) => a.length >= 7 && b.length >= 7 && (a.startsWith(b) || b.startsWith(a));
 
-export type SessionRef = { id: string; short_id: string | null; title: string | null; user_id: string | null; priority: { id: string; title: string | null } | null };
+export type SessionRef = { id: string; short_id: string | null; title: string | null; user_id: string | null; priority: SessionPriorityRef | null };
 
 /** A commit as crediting reads it; `at` bounds which runs could have shipped it. */
 export type CreditedCommit = { sha?: string; at?: number; tasks: ReadonlyArray<string> };
