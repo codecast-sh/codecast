@@ -72,6 +72,7 @@ import {
 import { scanOpenBackgroundTasksInto, type OpenTaskInfo, type OpenTaskTimes, type PendingTaskCall } from "./backgroundTaskScan.js";
 import { parseWorkflowJournal, snapshotIsCurrent, workflowHostGone, workflowRunLastActivity } from "./workflowRunLive.js";
 import { HibernationWorkScan } from "./hibernationWork.js";
+import { ParkLedger } from "./parkLedger.js";
 import { governor, sampleLoad, describeLoad, readGovernorState, writeGovernorState, SAMPLE_INTERVAL_MS as GOVERNOR_SAMPLE_INTERVAL_MS } from "./loadGovernor.js";
 import { REVIVE_CANDIDATE_STATUSES, REVIVE_MAX_PER_PASS, recentRevives, isStationHandOpening, stationHandsFirst, REVIVE_MESSAGE, lastSignOfLifeMs, midWorkReviveDecision, priorRevives, recordRevive, unrecordRevive, reviveClientId, statusFileExpired } from "./midWorkRevive.js";
 import { TurnClaimLedger, TurnClaimRecovery, awaitingResume, claimTransition, type ClaimFacts, type TurnClaim } from "./turnClaims.js";
@@ -20778,8 +20779,10 @@ export function findSessionFile(sessionId: string, opts?: { staleOk?: boolean })
 const resumeSessionCache = new Map<string, string>();
 // Sessions this daemon parked to stay under the fleet cap. They keep beating
 // (see runHibernationPass) but hold no pane, so the entry is what tells a live
-// session apart from a parked one without a Convex read.
-const hibernatedSessions = new Set<string>();
+// session apart from a parked one without a Convex read. Kept on disk
+// (parkLedger.ts) and restored at boot by restoreHibernationParks.
+const hibernatedSessions = new ParkLedger();
+const PARK_LEDGER_FILE = path.join(CONFIG_DIR, "parked-sessions.json");
 // Session ids whose park stamp this daemon has cleared since it booted. The set
 // above is emptied by a restart, so after one the daemon cannot tell a session
 // it parked from one it never touched, and a wake that trusts only the set
@@ -32101,6 +32104,7 @@ async function main(): Promise<void> {
   // Re-establish session→pid liveness mapping (esp. for idle sessions that don't
   // write JSONL) so the Sessions page can tell live-idle from dead. Run once
   // shortly after boot so the page recovers fast post-restart, then on a timer.
+  restoreHibernationParks();
   setTimeout(() => { reconcileSessionLiveness().catch(() => {}); }, 10_000);
   setInterval(() => {
     reconcileSessionLiveness().catch(() => {});
