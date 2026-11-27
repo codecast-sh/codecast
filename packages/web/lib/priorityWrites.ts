@@ -1,9 +1,9 @@
 // The person's priority controls as both apps press them: each runs its store
 // action (store/prioritiesSlice), which paints at once and rides dispatch. A
-// refusal takes back only the rows that press painted: the store's rows are
+// refusal takes back only what that press painted: the store's rows are
 // immutable, so the rows changed are the ones whose reference the action
-// replaced, and each goes back to the row held before the press unless
-// something newer (a server push, another window) has replaced it since.
+// replaced, and each field it changed goes back to its value before the press
+// unless something newer (a server push, another window) has replaced it since.
 //
 // Checking off a milestone or a priority takes it out of the open
 // milestones (or the active list), so each check-off records an undo: its receipt's Undo (sonner
@@ -65,10 +65,20 @@ export function priorityWrites(onError: (message: string) => void): PriorityWrit
       (rows) => {
         const now = held();
         for (const key of KEYS) {
-          // A row replaced since the paint is newer than both: it stays.
-          const ours = rows[key].filter((r) => now[key][r.id] === r.painted);
-          const back = ours.filter((r) => r.before !== undefined).map((r) => r.before);
-          const gone = ours.filter((r) => r.before === undefined).map((r) => r.id);
+          const back: unknown[] = [];
+          const gone: string[] = [];
+          for (const r of rows[key]) {
+            const cur = now[key][r.id] as Rows | undefined;
+            // A row the press added goes, and one it removed comes back, unless something newer has been there since.
+            if (r.before === undefined) { if (cur === r.painted) gone.push(r.id); continue; }
+            if (cur === undefined || r.painted === undefined) { if (cur === r.painted) back.push(r.before); continue; }
+            // Field by field: what still holds the press's own value goes back. A field replaced since (a server push)
+            // is newer and stays, and the engine's release of the press's locks replaces only the fields it locked.
+            const was = r.before as Rows;
+            const paint = r.painted as Rows;
+            const fields = [...new Set([...Object.keys(was), ...Object.keys(paint)])].filter((f) => paint[f] !== was[f] && cur[f] === paint[f]);
+            if (fields.length) back.push({ ...cur, ...Object.fromEntries(fields.map((f) => [f, was[f]])) });
+          }
           if (back.length) st().syncTable(key, back, { isDelta: true });
           if (gone.length) st().dropRows(key, gone);
         }

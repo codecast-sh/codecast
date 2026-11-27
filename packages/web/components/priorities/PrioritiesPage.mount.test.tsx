@@ -585,6 +585,8 @@ test("the store's priority actions paint the rows at once", async () => {
   expect([get("pri-3").rank, get("pri-1").rank, get("pri-2").rank]).toEqual([1, 2, 3]);
   st.setPriorityAside("pri-2").catch(() => {});
   expect(get("pri-2").status).toBe("set_aside");
+  // The parked writes' locks would hold their paint over the reset.
+  useInboxStore.setState({ pending: {} } as any);
   st.syncTable("priorities", ROWS as any);
 });
 
