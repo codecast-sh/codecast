@@ -137,6 +137,20 @@ type RunFacts = Pick<ShippingRun, "node_statuses" | "current_node_id" | "pr" | "
 
 /** What each step's facts say, else its stations: done, in trouble (red verdict, failed station), running, or not reached. */
 type Read = "done" | "trouble" | "active" | "idle";
+/** What each step's facts say on their own (a verdict on the PR's head, the PR, the merge), null where none speaks. */
+function stepFacts(run: RunFacts, steps: readonly Step[]): { facts: Array<Read | null>; staleReview: boolean; reviewAt: number } {
+  // A review binds to the head it read: once a fix round pushed another, the verdict (and the review station's earlier
+  // pass) says nothing of the head the PR is on, as the PR's header says (changePage reviewOnHead).
+  const v = run.review_verdict;
+  const staleReview = !!(v?.head_sha && run.pr?.head_sha && !verdictOnHead(v.head_sha, run.pr.head_sha, run.station_rebases));
+  const reviewAt = steps.findIndex((s) => s.word === "Review");
+  const review: Read | null = v && !staleReview ? (v.verdict === "ship" ? "done" : "trouble") : null;
+  const facts: Array<Read | null> = steps === CHANGE_STEPS
+    ? [run.pr ? "done" : null, run.ci_verdict ? (run.ci_verdict.green ? "done" : "trouble") : null, review, run.merge ? "done" : null]
+    : [run.check_verdict ? (run.check_verdict.green ? "done" : "trouble") : null, review, isMerged(run) ? "done" : null];
+  return { facts, staleReview, reviewAt };
+}
+
 function readSteps(run: RunFacts, steps: readonly Step[] = stepsFor(run)): Read[] {
   const byStep: string[][] = steps.map(() => []);
   const forked = steps.map(() => false);
@@ -149,15 +163,7 @@ function readSteps(run: RunFacts, steps: readonly Step[] = stepsFor(run)): Read[
       if (status === "completed" && s.passes?.includes(leafOf(id))) passed[j] = true;
     });
   }
-  // A review binds to the head it read: once a fix round pushed another, the verdict (and the review station's earlier
-  // pass) says nothing of the head the PR is on, as the PR's header says (changePage reviewOnHead).
-  const v = run.review_verdict;
-  const staleReview = !!(v?.head_sha && run.pr?.head_sha && !verdictOnHead(v.head_sha, run.pr.head_sha, run.station_rebases));
-  const reviewAt = steps.findIndex((s) => s.word === "Review");
-  const review: Read | null = v && !staleReview ? (v.verdict === "ship" ? "done" : "trouble") : null;
-  const facts: Array<Read | null> = steps === CHANGE_STEPS
-    ? [run.pr ? "done" : null, run.ci_verdict ? (run.ci_verdict.green ? "done" : "trouble") : null, review, run.merge ? "done" : null]
-    : [run.check_verdict ? (run.check_verdict.green ? "done" : "trouble") : null, review, isMerged(run) ? "done" : null];
+  const { facts, staleReview, reviewAt } = stepFacts(run, steps);
   // A station's status says it ran, not what it found: a completed CI station without a verdict counts as done.
   return facts.map((fact, i) => {
     if (fact) return fact;
@@ -198,15 +204,17 @@ export function stepper(run: Pick<ShippingRun, "status" | "node_statuses" | "cur
     return states;
   }
   if (run.status === "running") {
-    // A running run is at the step its station belongs to: a later step's trouble is what an earlier round left (Merge's
-    // conflict, while the fixed change goes through Local CI again) and reads idle unless one of its stations runs now.
-    // A later step already done keeps it: Review answers beside CI, so its verdict on this head stands while CI runs.
+    // A running run is at the step its station belongs to: a later step's station states are what an earlier round left
+    // (Merge's conflict, while the fixed change goes through Local CI again) and read idle unless one of its stations
+    // runs now. A later step a fact speaks for keeps it: Review answers beside CI, so its verdict on this head (ship or
+    // changes) stands while CI runs.
     const stations = stationStatuses(run);
     const now = run.current_node_id && stations.has(run.current_node_id) ? at(run.current_node_id) : -1;
     if (now < 0) return states;
     const running = steps.map(() => false);
     for (const [id, status] of stations) if (status === "running" && at(id) >= 0) running[at(id)] = true;
-    return states.map((x, j) => (j < now ? x : running[j] ? "active" : j === now || x === "done" ? x : "idle"));
+    const { facts } = stepFacts(run, steps);
+    return states.map((x, j) => (j < now ? x : running[j] ? "active" : j === now || facts[j] ? x : "idle"));
   }
   if (run.status !== "failed") return states;
   let i = read.indexOf("trouble");

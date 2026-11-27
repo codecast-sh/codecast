@@ -344,6 +344,10 @@ describe("a running run's track is at its station (pl-1077 polish 3)", () => {
       node_statuses: [["pr", "completed"], ["checks", "running"], ["ci", "running"], ["review", "completed"]].map(([node_id, status]) => ({ node_id, status })),
     });
     expect(stepper(r)).toEqual(["done", "active", "done", "idle"]);
+    // A reviewer who asked for changes on this head is still the run's to fix while CI runs.
+    expect(stepper({ ...r, review_verdict: { verdict: "changes", at: 1, head_sha: "aaa" } })).toEqual(["done", "active", "active", "idle"]);
+    // A verdict on an older head speaks for nothing on this one.
+    expect(stepper({ ...r, review_verdict: { verdict: "changes", at: 1, head_sha: "old" } })).toEqual(["done", "active", "idle", "idle"]);
   });
 });
 
