@@ -17,7 +17,7 @@ import { runWorkflowOf } from "./lib/runGraph";
 import { patchTask } from "./lib/taskWrite";
 import { enqueuePendingMessage } from "./pendingMessages";
 import { settleRunTask } from "./workflow_runs";
-import { retireIfLive } from "./retireOnLive";
+import { askDaemonToRetire } from "./retireOnLive";
 
 /** How far back merges are read for the waiting set and a marker's carries. */
 const MERGE_WINDOW_MS = 90 * DAY;
@@ -322,7 +322,7 @@ export async function completeLiveRuns(ctx: any, deployId: Id<"deploys">, now = 
       }
       await settleRunTask(ctx, { ...run, ...patch }, "completed", undefined, now);
     }
-    await tellStoppedSession(ctx, run, task, graph?.label || graph?.name || "change", line);
+    await tellStoppedSession(ctx, run, task, graph?.label || graph?.name || "change", line, d.workspace);
   }
   return done;
 }
@@ -356,26 +356,36 @@ async function runsMergedInto(ctx: any, d: Doc<"deploys">): Promise<Doc<"workflo
 
 /**
  * Tell the session that heard the run stop (the one its runner's end message reached, found by that send's client
- * id) that the run is over at Live, once, or retire it when nothing is left for it. A killed session is left alone, and
- * a stop that reached nobody tells nobody.
+ * id) that the run is over at Live, once. The run's subject, whose change it was, is the one retired when nothing is
+ * left for it, never whichever session heard the stop: its daemon is asked (retireOnLive.askDaemonToRetire), and when
+ * the subject is the one to tell, the tell waits on that answer and goes only if it stays. A killed session is left
+ * alone, and a stop that reached nobody tells nobody.
  */
-async function tellStoppedSession(ctx: any, run: Doc<"workflow_runs">, task: Doc<"tasks"> | null, flow: string, line: string): Promise<void> {
+async function tellStoppedSession(ctx: any, run: Doc<"workflow_runs">, task: Doc<"tasks"> | null, flow: string, line: string, workspace: string): Promise<void> {
+  const now = Date.now();
+  const subject: Doc<"conversations"> | null = run.primary_conversation_id ? await ctx.db.get(run.primary_conversation_id) : null;
+  const content = `The ${flow} run${task?.short_id ? ` on ${task.short_id}` : ""} is over: Live. ${line} It had stopped at Deploy; a later deploy took the change live. Nothing more is waiting on this session for it.`;
+  const tell = { content: formatSessionMessage("unknown", content, { name: "codecast" }), client_id: `run:${run._id}:live`, from_user_id: run.user_id };
+  const told = await stopHeardBy(ctx, run, task);
+  const subjectHeard = !!subject && !!told && String(told._id) === String(subject._id);
+  const retiring = subject && !subject.inbox_killed_at ? (await askDaemonToRetire(ctx, subject, now, { workspace, ...(subjectHeard ? { tell } : {}) })) === null : false;
+  if (!told || (subjectHeard && retiring)) return;
+  // A send refused (a hosted session the run's owner does not own) leaves the run completed all the same.
+  await enqueuePendingMessage(ctx, told, run.user_id, { content: tell.content, client_id: tell.client_id }).catch(() => {});
+}
+
+/** The live session that heard the run stop and has not yet heard it is over, or null. */
+async function stopHeardBy(ctx: any, run: Doc<"workflow_runs">, task: Doc<"tasks"> | null): Promise<Doc<"conversations"> | null> {
   const candidates = [run.spawner_conversation_id, run.primary_conversation_id, task?.created_from_conversation, ...(task?.conversation_ids ?? []).slice(-5)];
   const ended = `run:${run._id}:end:`;
-  const clientId = `run:${run._id}:live`;
   for (const id of new Set(candidates.filter(Boolean).map(String))) {
     const told = await ctx.db.query("pending_messages").withIndex("by_conversation_client_id", (q: any) => q.eq("conversation_id", id).gte("client_id", ended).lt("client_id", `${ended}~`)).first();
     if (!told) continue;
-    const again = await ctx.db.query("pending_messages").withIndex("by_conversation_client_id", (q: any) => q.eq("conversation_id", id).eq("client_id", clientId)).first();
+    const again = await ctx.db.query("pending_messages").withIndex("by_conversation_client_id", (q: any) => q.eq("conversation_id", id).eq("client_id", `run:${run._id}:live`)).first();
     const conversation = await ctx.db.get(id);
-    if (again || !conversation || conversation.inbox_killed_at) return;
-    // Retired rather than told when nothing is left for it (retireOnLive.ts): a send would only wake it to read this.
-    if (!(await retireIfLive(ctx, conversation, Date.now()))) return;
-    const content = `The ${flow} run${task?.short_id ? ` on ${task.short_id}` : ""} is over: Live. ${line} It had stopped at Deploy; a later deploy took the change live. Nothing more is waiting on this session for it.`;
-    // A send refused (a hosted session the run's owner does not own) leaves the run completed all the same.
-    await enqueuePendingMessage(ctx, conversation, run.user_id, { content: formatSessionMessage("unknown", content, { name: "codecast" }), client_id: clientId }).catch(() => {});
-    return;
+    return again || !conversation || conversation.inbox_killed_at ? null : conversation;
   }
+  return null;
 }
 
 /** completeLiveRuns, after the write that took the deploy live (deploys.ts onDeployStatus). */

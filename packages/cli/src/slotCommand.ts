@@ -12,6 +12,8 @@ import { EXIT_BUSY, printHint } from "./infraExit.js";
 import { listMachineSlots, machineSlotProblem, takeMachineSlot } from "./machineSlot.js";
 
 const SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+/** How long the command has to end after cast passes it a signal, before it is killed: the place is given back only once it has ended. */
+export const CHILD_GRACE_MS = 10_000;
 
 export async function runSlotRun(command: string[], o: { name: string; wait?: string }): Promise<never> {
   const problem = machineSlotProblem(o.name);
@@ -27,6 +29,8 @@ export async function runSlotRun(command: string[], o: { name: string; wait?: st
   const slot = await takeMachineSlot(o.name, {
     waitMs,
     what: command.join(" "),
+    // A signal before the command starts ends cast at once (nothing holds a place yet); after, the handlers below.
+    signals: false,
     onWait: (why) => process.stderr.write(`queued: ${why}; starting when a place frees (cast slot ls lists them)\n`),
   });
   if (!slot.release) {
@@ -35,13 +39,19 @@ export async function runSlotRun(command: string[], o: { name: string; wait?: st
     process.exit(EXIT_BUSY);
   }
   const child = spawn(command[0]!, command.slice(1), { stdio: "inherit" });
-  // The place's own signal handler gives it back and ends this process; the command hears the signal first.
-  const forward = (sig: NodeJS.Signals) => () => { child.kill(sig); };
-  for (const sig of SIGNALS) process.prependListener(sig, forward(sig));
+  // A signal goes on to the command, and its place is given back once the command has ended, so a second holder never
+  // starts beside one still winding down; a command that outlives the grace is killed.
+  let grace: ReturnType<typeof setTimeout> | undefined;
+  const forward = (sig: NodeJS.Signals) => () => {
+    child.kill(sig);
+    grace ??= setTimeout(() => child.kill("SIGKILL"), CHILD_GRACE_MS);
+  };
+  for (const sig of SIGNALS) process.on(sig, forward(sig));
   const code = await new Promise<number>((resolve) => {
     child.on("error", (err) => { console.error(`cast slot run: ${err.message}`); resolve(127); });
     child.on("exit", (status, signal) => resolve(status ?? 128 + ((signal && osConstants.signals[signal]) || 0)));
   });
+  clearTimeout(grace);
   slot.release();
   process.exit(code);
 }

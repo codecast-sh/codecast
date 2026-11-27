@@ -94,7 +94,7 @@ export function renderQueueReport(r: QueueReport, now = Date.now()): string {
 
   lines.push(
     "",
-    "Limits: cast config check.reserve_gb <n> · check.per_machine <n> · interactive_jobs.per_machine <n> · local_ci.per_machine <n> · subagents.per_session <n> · subagents.per_machine <n>",
+    "Limits: cast config check.reserve_gb <n> · check.per_machine <n> · interactive_jobs.per_machine <n> · local_ci.per_machine <n> · worktree.per_machine <n> · subagents.per_session <n> · subagents.per_machine <n>",
     "A waiting worker starts when one ends; cast kill <id> drops one from the queue.",
   );
   return lines.join("\n");

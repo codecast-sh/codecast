@@ -290,7 +290,7 @@ export class Parser {
     if (attrs.agent) node.agent = String(attrs.agent);
     if (attrs.definition) node.definition = String(attrs.definition);
     if (attrs.isolated !== undefined) node.isolated = attrs.isolated === true || attrs.isolated === "true";
-    for (const k of ["parks", "machine", "fold"] as const) if (attrs[k] === true || attrs[k] === "true") node[k] = true;
+    for (const k of ["parks", "machine", "fold", "shared"] as const) if (attrs[k] === true || attrs[k] === "true") node[k] = true;
     if (attrs.asks_if) node.asks_if = String(attrs.asks_if);
     if (attrs.refresh !== undefined) node.refresh = attrs.refresh === true || attrs.refresh === "true";
     if (attrs.reviewer !== undefined) node.reviewer = attrs.reviewer === true || attrs.reviewer === "true";
@@ -299,6 +299,7 @@ export class Parser {
     if (attrs.silent !== undefined) node.silent = Number(attrs.silent);
     if (attrs.room !== undefined && Number.isInteger(Number(attrs.room)) && Number(attrs.room) > 0) node.room = Number(attrs.room);
     if (attrs.machine_slot !== undefined) node.machine_slot = String(attrs.machine_slot);
+    if (attrs.no_slot !== undefined) node.no_slot = String(attrs.no_slot);
     if (attrs.max_visits !== undefined) node.max_visits = attrs.max_visits as number;
     if (attrs.max_free_visits !== undefined) node.max_free_visits = Number(attrs.max_free_visits);
     if (attrs.max_retries !== undefined) node.max_retries = attrs.max_retries as number;

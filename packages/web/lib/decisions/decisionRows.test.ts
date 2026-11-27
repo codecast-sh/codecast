@@ -56,6 +56,15 @@ describe("arrangeDecisions", () => {
     expect(groups![2].label).toBe("owner:none");
   });
 
+  test("among cards escalated to me, the one more changes wait on comes first", () => {
+    const waited = [
+      row("two", { holder: { kind: "user", id: "u1" }, escalated: { at: NOW, note: "2 changes wait on this", to: ["u1"], waiting: 2 }, created_at: NOW - 5 * H }),
+      row("five", { holder: { kind: "user", id: "u1" }, escalated: { at: NOW, note: "5 changes wait on this", to: ["u1"], waiting: 5 } }),
+      row("plain", { holder: { kind: "user", id: "u1" }, created_at: NOW - 9 * H }),
+    ];
+    expect(arrangeDecisions(waited, decisionView({ tab: "team", group: "none" }), ctx).items.map((d) => d._id)).toEqual(["five", "two", "plain"]);
+  });
+
   test("a second grouping folds into one header", () => {
     const { groups } = arrangeDecisions(rows, decisionView({ tab: "team", group: "category", sub: "owner" }), ctx);
     expect(groups!.map((g) => g.label)).toEqual(["category:unknown · owner:user:u1", "category:approach · owner:user:u2", "category:scope · owner:user:u2", "category:scope · owner:user:u1"]);

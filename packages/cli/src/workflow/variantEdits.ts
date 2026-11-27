@@ -158,8 +158,7 @@ export function variantEdits(raw: RawGraph, own: Map<string, Record<string, Attr
     const anchor = String(a[anchorKey]);
     const what = say(id, anchorKey, anchor);
     if (baseIds.has(id)) throw new Error(`${what}: ${baseName} already has a station ${id}; ${anchorKey}= adds a new one, so give it a new id`);
-    // Placing makes the station's pass and fail routes; it may write only routes for outcomes of its own (`no_slot`).
-    if (edges.some((e) => e.from === id && (!e.condition || SAYS_SUCCESS.test(e.condition) || mentionsFailure(e)))) throw new Error(`${what}: ${id} is placed with ${anchorKey}= and also routed here; keep one: drop its edges, or drop ${anchorKey}= (a placed station writes only edges for its other outcomes, such as outcome = no_slot)`);
+    if (edges.some((e) => e.from === id)) throw new Error(`${what}: ${id} is placed with ${anchorKey}= and also routed here; keep one: drop its edges, or drop ${anchorKey}=`);
     if (anchor.includes(SEGMENT_SEP)) throw new Error(`${what}: ${anchor} is a step inside the ${anchor.split(SEGMENT_SEP)[0]} segment; place ${id} ${anchorKey} the segment itself (${anchorKey}="${anchor.split(SEGMENT_SEP)[0]}")`);
     if (pruned.includes(anchor)) throw new Error(`${what}: this file skips ${anchor}; place ${id} next to a station that stays`);
     if (!nodes.has(anchor) && !edges.some((e) => e.from === anchor || e.to === anchor)) throw new Error(`${what}: ${baseName} has no station ${anchor}; its stations: ${stations()}`);
@@ -195,7 +194,7 @@ export function variantEdits(raw: RawGraph, own: Map<string, Record<string, Attr
       lastAfter.set(anchor, id);
     } else {
       on = anchor;
-      edges = edges.map((e) => (e.to === anchor && e.from !== id ? { ...e, to: id } : e));
+      edges = edges.map((e) => (e.to === anchor ? { ...e, to: id } : e));
     }
     // A person's gate offers its choices as labelled edges (runner.ts executeRemoteHumanGate): go on, or send it back.
     const gate = shapeOf(a) === "hexagon";
