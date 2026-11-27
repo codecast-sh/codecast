@@ -27,31 +27,38 @@ export function claudeAgentNameOf(agentId: string): string | null {
   return /^a(.+)-[0-9a-f]{16}$/.exec(agentId)?.[1] ?? null;
 }
 
-/** The line the parent reads. It names the person only when one took the
- *  agent over; a machine's line, a role's answer or a release by someone who
- *  does not own it reads as a message handed to it. */
-export function takeoverLine(person: string | null, description: string, agentId: string, shortId: string): string {
+/** How the parent lost the agent, as its line tells it: a person took it
+ *  over, a person released it from the parent (the owners menu, `cast disown
+ *  parent`), or a message was handed to it with no person taking it (a
+ *  machine's line, a role's answer, a release by someone who does not own it). */
+export type TakeoverHow = { took: Id<"users"> } | { released: Id<"users"> } | null;
+
+/** The line the parent reads; `person` names the one in `how`. */
+export function takeoverLine(how: "took" | "released" | "handed", person: string | null, description: string, agentId: string, shortId: string): string {
   const name = claudeAgentNameOf(agentId);
   const agent = name ? `agent ${name} ("${description}", agent id ${agentId})` : `subagent "${description}" (agent ${agentId})`;
-  const opening = person ? `${person} took over your ${agent}. It now continues` : `Your ${agent} was handed a message and now continues`;
-  return `${opening} as its own session ${shortId}. If it is still running, stop it with TaskStop ${agentId}. Do not SendMessage ${name ?? "it"} again; reach it with \`cast send ${shortId}\`.`;
+  const opening = how === "took" ? `${person} took over your ${agent}. It now continues as its own session ${shortId}.`
+    : how === "released" ? `${person} released your ${agent} from you; it continues as its own session ${shortId} when it next gets a message.`
+    : `Your ${agent} was handed a message and now continues as its own session ${shortId}.`;
+  return `${opening} If it is still running, stop it with TaskStop ${agentId}. Do not SendMessage ${name ?? "it"} again; reach it with \`cast send ${shortId}\`.`;
 }
 
-/** Tell the parent of a Claude Code subagent that it was taken over (by
- *  `personId` when a person took it, else by a message handed to it).
+/** Tell the parent of a Claude Code subagent that it was taken over (TakeoverHow).
  *  Unlike other product lines (sayIntoSession) it wakes a parent whose prompt
  *  cache went cold: a copy still running inside it is what the person's
  *  message waits on. A killed or closed parent runs nothing and only keeps it. */
-export async function tellParentOfTakeover(ctx: { db: any }, senderId: Id<"users">, child: any, personId: Id<"users"> | null): Promise<void> {
+export async function tellParentOfTakeover(ctx: { db: any }, senderId: Id<"users">, child: any, how: TakeoverHow): Promise<void> {
   const agentId = child.agent_type === "claude_code" ? claudeAgentIdOf(child.session_id) : null;
   if (!agentId || !child.parent_conversation_id) return;
   const parent = await ctx.db.get(child.parent_conversation_id);
   if (!parent || parent.ended_at) return;
+  const personId = how && ("took" in how ? how.took : how.released);
   const person = personId ? personName(await ctx.db.get(personId)) : null;
+  const kind = !how ? "handed" : "took" in how ? "took" : "released";
   const description = child.subagent_description || child.title || "subagent";
   const asleep = wakeCost({ ...parent, ...wakeFieldsOf(parent) }, Date.now()).killed || isClosedSession(parent) || isClosedHidden(parent);
   await enqueuePendingMessage(ctx, parent, senderId, {
-    content: formatSessionMessage("unknown", takeoverLine(person, description, agentId, shortIdOf(child)), person ? { name: person } : {}),
+    content: formatSessionMessage("unknown", takeoverLine(kind, person, description, agentId, shortIdOf(child)), person ? { name: person } : {}),
     client_id: `takeover:${child._id}`,
     hold: asleep,
   });
@@ -83,12 +90,14 @@ export async function takeOverInProcessChild(ctx: { db: any }, senderId: Id<"use
   } else {
     await ctx.db.patch(row._id, { parent_released_at: Date.now() });
   }
-  await tellParentOfTakeover(ctx, senderId, row, taker);
+  await tellParentOfTakeover(ctx, senderId, row, taker ? { took: taker } : null);
 }
 
-/** After an owners change (sessionOwnership reparent): when it released the
- *  parent of a session running in its process, the parent stops its copy. */
+/** After an owners change (sessionOwnership reparent), which a person made:
+ *  when it released the parent of a session running in its process, the parent
+ *  stops its copy, told the person took it over or released it. */
 export async function tellParentIfReleased(ctx: { db: any }, actorId: Id<"users">, before: any, change: OwnersChange): Promise<void> {
   if (before.parent_released_at != null || change.adoptParent || !runsInParentProcess(before)) return;
-  if ((await ctx.db.get(before._id))?.parent_released_at != null) await tellParentOfTakeover(ctx, actorId, before, change.takeOver ? actorId : null);
+  if ((await ctx.db.get(before._id))?.parent_released_at == null) return;
+  await tellParentOfTakeover(ctx, actorId, before, change.takeOver ? { took: actorId } : { released: actorId });
 }

@@ -4078,8 +4078,7 @@ export async function spawnSessionForTask(
   );
 
   const conversationId = await ctx.db.insert("conversations", {
-    runs_in_parent: false,
-    user_id: userId,
+    user_id: userId, runs_in_parent: false,
     agent_type,
     session_id: sessionId,
     project_path,

@@ -105,6 +105,24 @@ describe("a person's message to an in-process child", () => {
     expect(told[0]).toContain(BY_JASON);
   });
 
+  test("releasing the parent in the owners menu, or `cast disown parent`, tells the parent who released it", async () => {
+    const released = `Jason released your subagent "bg wait test" (agent ${AGENT}) from you; it continues as its own session jxkid01 when it next gets a message. If it is still running, stop it with TaskStop ${AGENT}. Do not SendMessage it again; reach it with \`cast send jxkid01\`.`;
+    const menu = await world({ owners: true });
+    await menu.t.mutation(api.sessionOwnership.applyOwnersChange, { session_id: "jxkid01", release_parent: true, api_token: TOKEN });
+    expect((await menu.row(menu.ids.child)).parent_released_at).toBeNumber();
+    const told = await menu.parentLines();
+    expect(told).toHaveLength(1);
+    expect(told[0]).toContain(released);
+    // Its next message finds it released: the parent is not told again.
+    await menu.personSend(menu.ids.child, "now the message");
+    expect(await menu.parentLines()).toHaveLength(1);
+
+    const disown = await world({ owners: true });
+    await disown.t.run((ctx) => ctx.db.patch(disown.ids.child, { session_id: "agent-areview-mobile-fe89e5471ddad254", subagent_description: "Review phone app" } as any));
+    await disown.t.mutation(api.sessionOwnership.removeSessionOwner, { session_id: "jxkid01", owner: "parent", api_token: TOKEN });
+    expect((await disown.parentLines())[0]).toContain('Jason released your agent review-mobile ("Review phone app", agent id areview-mobile-fe89e5471ddad254) from you; it continues as its own session jxkid01 when it next gets a message. If it is still running, stop it with TaskStop areview-mobile-fe89e5471ddad254. Do not SendMessage review-mobile again; reach it with `cast send jxkid01`.');
+  });
+
   test("wakes a parent whose prompt cache went cold: a copy running inside it is what the message waits on", async () => {
     const w = await world();
     const longAgo = Date.now() - 3 * 60 * 60 * 1000;
