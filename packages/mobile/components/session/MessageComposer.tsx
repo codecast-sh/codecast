@@ -383,7 +383,9 @@ export function MessageComposer({
         {showStop
           ? <FontAwesome name="stop" size={11} color="#fff" />
           : dictation.sendWaiting
-            ? <ActivityIndicator size="small" color="#fff" />
+            // Theme.bg against the fill (blue mixed toward Theme.text): white
+            // is 2.3:1 on dark mode's pale blue, bg is over 4:1 in every palette.
+            ? <ActivityIndicator size="small" color={Theme.bg} />
             : <FontAwesome name={sendIcon} size={14} color="#fff" />}
       </NativePressable>
     </RNView>
