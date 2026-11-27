@@ -28,28 +28,20 @@ import { useLayoutEffect, type RefObject } from "react";
  * One measured pass: the smallest level whose content fits, applied to the row.
  * Exported so a harness (and a test) can drive the real logic, not a copy.
  */
-export function applySqueeze(row: HTMLElement, maxLevel: number, from = 0): number {
-  // Each trial restyles the page and reads a width back, a full style and
-  // layout pass, so the search starts at the last answer instead of zero:
-  // shedding more never widens the row, so the smallest level that fits is
-  // found by walking down while the level below still fits, or up until one
-  // does. A pass where nothing moved costs two trials, not every level.
-  let applied = -1;
-  const apply = (level: number) => {
+export function applySqueeze(row: HTMLElement, maxLevel: number): number {
+  // Every level from zero, never a walk from the last answer: shedding is not
+  // monotonic. Level 5 gives the title a floor, which widens a short title, so
+  // level 5 can overflow where level 4 fits; a walk down from 6 stopped at 5
+  // and held the header at 6 (status, facts and Ship hidden) after a rename.
+  // A trial costs about 0.4 ms on a real conversation page, so a pass costs
+  // one trial per level up to the answer: 0.4 ms when the row fits whole,
+  // about 3 ms at the deepest level (against 0.7 ms for the walk's two).
+  for (let level = 0; level <= maxLevel; level++) {
     const tokens = Array.from({ length: level }, (_, i) => String(i + 1)).join(" ");
     if (tokens) row.setAttribute("data-squeeze", tokens);
     else row.removeAttribute("data-squeeze");
-    applied = level;
-  };
-  const fits = (level: number) => { apply(level); return row.scrollWidth <= row.clientWidth + 1; };
-  let level = Math.max(0, Math.min(from, maxLevel));
-  if (fits(level)) {
-    while (level > 0 && fits(level - 1)) level--;
-    // The last trial may have been the level below, which did not fit.
-    if (applied !== level) apply(level);
-    return level;
+    if (row.scrollWidth <= row.clientWidth + 1) return level;
   }
-  while (level < maxLevel) if (fits(++level)) return level;
   return maxLevel;
 }
 
@@ -63,11 +55,10 @@ export function useSqueezeToFit(
     if (!row) return;
     let raf = 0;
     let lastWidth = -1;
-    let lastLevel = 0;
 
     const fit = () => {
       raf = 0;
-      lastLevel = applySqueeze(row, maxLevel, lastLevel);
+      applySqueeze(row, maxLevel);
     };
     const schedule = () => {
       if (!raf) raf = requestAnimationFrame(fit);
