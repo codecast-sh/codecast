@@ -12,7 +12,7 @@ import { CreateDialog, CreateDialogTitle, CreateChipCaret, createChipClass, crea
 import { DocEditor } from "./editor/DocEditor";
 import type { Editor } from "@tiptap/react";
 import { DictateControls } from "./dictation/DictateControls";
-import { useDictation } from "../lib/dictation/useDictation";
+import { dictatingIn, useDictation } from "../lib/dictation/useDictation";
 import { editorField } from "../lib/dictation/editorField";
 import type { MentionItem } from "./editor/MentionList";
 import { toast } from "sonner";
@@ -307,7 +307,12 @@ export function CreateTaskModal({ onClose, teamMembers, currentUser, defaults }:
       onSubmit={submit}
       // Capture: ahead of the editor's own keys (Mod-Enter is its line break)
       // and the dialog's Escape, from the title field as from the description.
-      onKeyDownCapture={(e) => { if (dictation.running()) dictation.keyDown(e, submit, (k) => k.key === "Enter" && (k.metaKey || k.ctrlKey)); }}
+      // A picker's search (Labels, Assignee) keeps its own Esc and Enter.
+      onKeyDownCapture={(e) => {
+        if (!dictation.running()) return;
+        if (e.target !== titleRef.current && !dictatingIn(e.target)) return;
+        dictation.keyDown(e, submit, (k) => k.key === "Enter" && (k.metaKey || k.ctrlKey));
+      }}
       canSubmit={!!title.trim()}
       submitLabel="Create task"
       width="lg"

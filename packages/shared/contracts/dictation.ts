@@ -26,6 +26,8 @@ import { letterScript, localTranscribeLanguages } from "./transcribeLanguage";
 export const DICTATION_SILENCE_MS = 60_000;
 /** Ten minutes is the most one recording runs. */
 export const DICTATION_MAX_MS = 600_000;
+/** How soon typing into the box ends a recording that hears nothing more. */
+const EDIT_POLL_MS = 1_000;
 
 export type DictationPhase = "idle" | "starting" | "listening" | "finishing";
 
@@ -51,8 +53,9 @@ export function dictationStopLine(stop: DictationStop | null): string | null {
       return "Dictation stopped at its 10m limit";
     case "dropped":
       return "Dictation stopped: lost the connection";
+    // The person's own typing stopped it: they know why, so nothing to say.
     case "edited":
-      return "Dictation stopped: the text changed";
+      return null;
     default:
       return null;
   }
@@ -258,6 +261,7 @@ export function createDictation(
   let run = 0;
   let silenceTimer: unknown = null;
   let maxTimer: unknown = null;
+  let editTimer: unknown = null;
   let finishing: Promise<boolean> | null = null;
   let disposed = false;
   /** finishThen's one slot, for the recording finishing now. */
@@ -271,7 +275,8 @@ export function createDictation(
   const clearTimers = () => {
     if (silenceTimer != null) clearTimer(silenceTimer);
     if (maxTimer != null) clearTimer(maxTimer);
-    silenceTimer = maxTimer = null;
+    if (editTimer != null) clearTimer(editTimer);
+    silenceTimer = maxTimer = editTimer = null;
   };
 
   const armSilence = (id: number) => {
@@ -310,7 +315,26 @@ export function createDictation(
     if (running === self) running = null;
     live.delete(self);
     run++;
+    // A send waiting on this recording runs now, with the text as it stands,
+    // however the recording ended (Cancel and unmount empty the slot first).
+    const pending = after;
+    after = null;
     set({ phase: "idle", stopped, error });
+    pending?.then();
+  };
+
+  /** Typing into the box mid-recording ends it at once, not at the next word
+   *  (which may never come once the person stops talking). */
+  const watchEdits = (id: number) => {
+    editTimer = setTimer(() => {
+      if (id !== run || state.phase !== "listening" || !anchor) return;
+      if (field.getValue() !== (written ?? anchor.original)) {
+        pipe?.close();
+        settle("edited");
+        return;
+      }
+      watchEdits(id);
+    }, EDIT_POLL_MS);
   };
 
   const heard = (id: number) => {
@@ -419,6 +443,7 @@ export function createDictation(
           pipe = opened;
           set({ phase: "listening" });
           armSilence(id);
+          watchEdits(id);
           maxTimer = setTimer(() => {
             if (id === run) void stop("limit");
           }, DICTATION_MAX_MS);
@@ -441,11 +466,12 @@ export function createDictation(
         after.then = then;
         return;
       }
-      const mine = (after = { then });
-      void stop(null).then((kept) => {
-        if (after === mine) after = null;
-        if (kept) mine.then();
-      });
+      // The send runs when the recording settles, however it ends, as long
+      // as the text stays: a recognizer that fails or a person who types
+      // during the last words still sent what is in the box (settle drains
+      // the slot). Only Cancel and unmount, which empty it, drop it.
+      after = { then };
+      void stop(null);
     },
     cancel() {
       after = null;

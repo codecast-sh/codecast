@@ -4,7 +4,20 @@
 // is the shared controller's (@codecast/shared/contracts/dictation).
 import { dictationLanguages, type DictationHost, type DictationPipe, type DictationPipeEvents } from "@codecast/shared/contracts/dictation";
 
+import { useInboxStore } from "../../store/inboxStore";
+import { claimMicrophoneAcrossWindows } from "./crossWindow";
+
 type ConvexAction = { action: (fn: any, args: any) => Promise<any> };
+
+/** What the mic says when a live, unmuted call in this window holds the
+ *  microphone (the phone's words, lib/dictationHost). A muted seat is not
+ *  using it: unmuting finishes the recording (callManager.setMuted). */
+export const DICTATION_CALL_BUSY = "Leave the huddle first — a call is using the microphone.";
+
+function callHoldsMicrophone(): boolean {
+  const { phase, muted } = useInboxStore.getState().call;
+  return (phase === "connecting" || phase === "connected") && !muted;
+}
 
 /** The caret menu's choice on this device; null is Auto. */
 const LANGUAGE_KEY = "codecast.dictation.language";
@@ -99,6 +112,9 @@ async function openMicrophone(convex: ConvexAction | null, events: DictationPipe
 export function dictationHost(convex: () => ConvexAction | null): DictationHost {
   return {
     open: (events, signal) => {
+      if (callHoldsMicrophone()) return Promise.reject(new Error(DICTATION_CALL_BUSY));
+      // One recording at a time across windows: theirs finish as this opens.
+      claimMicrophoneAcrossWindows();
       const t = testHost();
       return t ? t.open(events, signal) : openMicrophone(convex(), events, signal);
     },

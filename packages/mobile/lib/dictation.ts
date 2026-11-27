@@ -16,7 +16,7 @@ import { useConvex } from 'convex/react';
 import { teamVendorBlock } from '@codecast/shared/contracts';
 import { DICTATION_IDLE, createDictation, dictationLanguages, dictationStopLine, type Dictation, type DictationField, type DictationHost, type DictationState } from '@codecast/shared/contracts/dictation';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
-import { DICTATION_NEEDS_MIC, phoneDictationHost } from './dictationHost';
+import { DICTATION_NEEDS_MIC, DICTATION_NEEDS_UPDATE, phoneDictationHost } from './dictationHost';
 import { getDictationLanguage } from './dictationLanguage';
 import { appAlert, type AlertButton } from './popups';
 import { showNotice } from './undoBar';
@@ -57,9 +57,11 @@ function vendorBlockOf(s: any): string | null {
 /** Why a start failed, as a dialog: what the struck mic says when tapped
  *  (`retry` adds Try again), and what a refused microphone says at once.
  *  A refused microphone is fixed only in the phone's Settings, so it offers
- *  the way there. */
+ *  the way there. An app too old for dictation stays too old until it
+ *  updates, so it offers no Try again. */
 export function explainDictationFailure(error: string, retry?: () => void) {
-  const buttons: AlertButton[] = [{ text: retry ? 'OK' : 'Not now', style: 'cancel' }];
+  if (error === DICTATION_NEEDS_UPDATE) retry = undefined;
+  const buttons: AlertButton[] = [{ text: retry || error !== DICTATION_NEEDS_MIC ? 'OK' : 'Not now', style: 'cancel' }];
   if (retry) buttons.push({ text: 'Try again', onPress: retry });
   if (error === DICTATION_NEEDS_MIC) buttons.push({ text: 'Open Settings', onPress: () => void Linking.openSettings() });
   appAlert("Dictation didn't start", error, buttons);
