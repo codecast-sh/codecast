@@ -203,7 +203,7 @@ html.light .board-root {
 .board-frame-new { color: var(--sol-violet); background: color-mix(in srgb, var(--sol-violet) 14%, transparent); }
 .board-frame-chip { display: inline-flex; align-items: center; min-width: 0; font-weight: 500; cursor: pointer; }
 /* Reflow and Collapse sit at the title's height, clear of the frame's right edge and of each other.
-   The padding below them bridges the gap to the frame, so the pointer can reach them without losing the hover. */
+   They show while the pointer is anywhere in the frame's box or the band above it (useFrameHover). */
 .board-frame-tools {
   position: absolute;
   right: 12px;
@@ -219,7 +219,7 @@ html.light .board-root {
 }
 .board-frame-tools .board-bar-btn { background: var(--sol-card); border: 1px solid var(--sol-border); box-shadow: var(--board-chrome-shadow); }
 .board-frame-tools .board-bar-btn:hover { background: var(--sol-bg-alt); }
-.board-frame:hover > .board-frame-tools,
+.board-frame.is-hovered > .board-frame-tools,
 .board-frame-tools:focus-within { opacity: 1; pointer-events: auto; }
 .board-root.is-readonly .board-frame-tools { display: none; }
 /* A folded frame: one pill reading "<chip or title> (n)", with the chevron that opens it. */

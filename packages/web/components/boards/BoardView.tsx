@@ -75,6 +75,7 @@ import { useBoardSelectionChrome } from "./useBoardSelectionChrome";
 import { boardFolds } from "./boardFolds";
 import { BoardFrameContext, type BoardFrameActions } from "./BoardFrameParts";
 import { boardLayoutActions } from "./boardLayoutActions";
+import { useFrameHover } from "./useFrameHover";
 
 const MINIMAP_KEY = "board-minimap";
 /** Below this pane width the overview would cover the board itself, so it is not offered. */
@@ -128,6 +129,7 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
   const foldsRef = useRef(folds);
   foldsRef.current = folds;
   const ordered = useMemo(() => drawOrder(shown), [shown]);
+  const frameHover = useFrameHover(shown);
 
   const [tool, setToolState] = useState<BoardTool>("select");
   const [shapeKind, setShapeKind] = useState("rect");
@@ -632,13 +634,14 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
       onPointerMove={(e) => {
         const p = cam.clientToWorld(e.clientX, e.clientY);
         lastPointer.current = p;
+        frameHover.move(p, cam.cam.current.z);
         live.setPresence({ position: { point: { x: Math.round(p.x), y: Math.round(p.y) } }, selection });
         gestures.onPointerMove(e);
       }}
       onPointerUp={(e) => { setPressing(false); gestures.onPointerUp(e); }}
       onPointerCancel={(e) => { setPressing(false); gestures.onPointerUp(e); }}
       onLostPointerCapture={() => setPressing(false)}
-      onPointerLeave={() => { lastPointer.current = null; }}
+      onPointerLeave={() => { lastPointer.current = null; frameHover.leave(); }}
       onDoubleClick={gestures.onDoubleClick}
       onDragOver={(e) => { if (!readOnly && [...e.dataTransfer.items].some((i) => i.kind === "file" || i.type === "text/uri-list")) e.preventDefault(); }}
       onDrop={onDrop}
@@ -680,6 +683,7 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
               key={el.key}
               el={el}
               interactive={el.kind === "card" && selection.length === 1 && selection[0] === el.key}
+              hovered={el.kind === "frame" && frameHover.hovered === el.key}
               {...(el.kind === "page" ? { pageLive: livePage === el.key, onPageLive } : null)}
               {...(editing === el.key ? editHandlers : NOOP_EDIT)}
             />

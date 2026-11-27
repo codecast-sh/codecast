@@ -49,6 +49,7 @@ const { BoardFrameContext } = await import("./BoardFrameParts");
 const { boardFolds } = await import("./boardFolds");
 const { hitKey } = await import("./useBoardGestures");
 const { boardSvg } = await import("./boardExport");
+const { frameAt, useFrameHover } = await import("./useFrameHover");
 
 const container = document.createElement("div");
 document.body.appendChild(container);
@@ -147,6 +148,65 @@ describe("an open frame's hover controls", () => {
   test("a read-only board has none", async () => {
     await draw([board[0]], { readOnly: true });
     expect(q(".board-frame-tools")).toBeNull();
+  });
+});
+
+describe("hover follows the pointer through the frame's box", () => {
+  // The board's world at zoom 1 with the canvas at the page origin: client coordinates are world coordinates.
+  let renders = 0;
+  function Harness({ els }: { els: BoardEl[] }) {
+    const hover = useFrameHover(els);
+    renders++;
+    const all = new Map(els.map((e) => [e.key, e]));
+    const actions = { docId: null, readOnly: false, reflow: NOOP, toggleFold: NOOP, kindOf: (k: string) => all.get(k)?.kind };
+    return (
+      <div data-root onPointerMove={(e) => hover.move({ x: e.clientX, y: e.clientY }, 1)} onPointerLeave={hover.leave}>
+        <BoardFrameContext.Provider value={actions}>
+          {els.map((e) => <BoardElementView key={e.key} el={e} editing={false} onEditInput={NOOP} onEditDone={NOOP} hovered={e.kind === "frame" && hover.hovered === e.key} />)}
+        </BoardFrameContext.Provider>
+      </div>
+    );
+  }
+  const move = async (target: HTMLElement, x: number, y: number) => {
+    await act(() => { target.dispatchEvent(new dom.window.MouseEvent("pointermove", { bubbles: true, clientX: x, clientY: y })); });
+  };
+  const theme = [
+    el("f", "frame", { x: 0, y: 0, w: 600, h: 400, title: "Theme" }),
+    el("s", "sticky", { x: 40, y: 64, w: 200, h: 160, text: "covering" }),
+    el("g", "frame", { x: 1000, y: 0, w: 400, h: 300, title: "Other" }),
+  ];
+  const shows = (k: string) => q(`[data-key="${k}"]`)!.classList.contains("is-hovered");
+
+  test("a pointer over a sticky inside the frame shows that frame's tools, and only its", async () => {
+    await act(() => root.render(<Harness els={theme} />));
+    expect(shows("f")).toBe(false);
+    await move(q('[data-key="s"]')!, 100, 100);
+    expect(shows("f")).toBe(true);
+    expect(shows("g")).toBe(false);
+    expect(q('[data-key="f"] .board-frame-tools')).not.toBeNull();
+  });
+  test("moving within the same frame draws nothing new; leaving the frame or the board hides them", async () => {
+    await act(() => root.render(<Harness els={theme} />));
+    await move(q('[data-key="s"]')!, 100, 100);
+    const before = renders;
+    await move(q('[data-key="s"]')!, 180, 150);
+    await move(q("[data-root]")!, 500, 350);
+    expect(renders).toBe(before);
+    await move(q("[data-root]")!, 800, 350);
+    expect(shows("f")).toBe(false);
+    await move(q("[data-root]")!, 1100, 100);
+    expect(shows("g")).toBe(true);
+    await act(() => { q("[data-root]")!.dispatchEvent(new dom.window.MouseEvent("pointerout", { bubbles: true, relatedTarget: document.body })); });
+    expect(shows("g")).toBe(false);
+  });
+  test("the band above a frame, where its title and tools sit, counts; a nested frame wins over its parent", () => {
+    const boxes = [{ key: "outer", box: { x: 0, y: 0, w: 1000, h: 800 } }, { key: "inner", box: { x: 100, y: 100, w: 300, h: 200 } }];
+    expect(frameAt(boxes, { x: 500, y: -20 }, 1)).toBe("outer");
+    expect(frameAt(boxes, { x: 500, y: -60 }, 1)).toBeNull();
+    // Zoomed out, the title and tools draw larger in world units, and so does the band.
+    expect(frameAt(boxes, { x: 500, y: -60 }, 0.35)).toBe("outer");
+    expect(frameAt(boxes, { x: 200, y: 150 }, 1)).toBe("inner");
+    expect(frameAt(boxes, { x: 200, y: 90 }, 1)).toBe("inner");
   });
 });
 
