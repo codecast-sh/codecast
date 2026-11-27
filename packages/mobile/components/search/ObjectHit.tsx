@@ -19,7 +19,8 @@ import { CHROME_FONT_CAP, themedStyles, useTheme } from '@/constants/Theme';
 import { HighlightText } from './highlight';
 
 type IconName = React.ComponentProps<typeof FontAwesome>['name'];
-type Look = { icon: IconName; color: string; state?: string; stateColor?: string };
+/** `mark`: web's glyph for the hit's state or kind, drawn in place of `icon`. */
+type Look = { icon: IconName; mark?: ReactNode; color: string; state?: string; stateColor?: string };
 
 /** A long title shows the stretch around its hit, so the words found are
  *  never past the row's ellipsis. A phone row holds under thirty characters

@@ -5,17 +5,13 @@ import { Theme, Spacing, themedStyles, useTheme } from "@/constants/Theme";
 import { codeFont } from '@/constants/fonts';
 import type { PlanItem as PlanItemType } from "@codecast/web/store/inboxStore";
 import { formatRelativeTime } from "./SessionItem";
+import { PlanStatusMark, webLook } from "@/components/marks";
+import { PLAN_STATUS_CONFIG as WEB_PLAN_STATUS } from "@codecast/web/lib/planStatus";
 
 type PlanStatus = "draft" | "active" | "paused" | "done" | "abandoned";
-type IconName = React.ComponentProps<typeof FontAwesome>["name"];
 
-export const PLAN_STATUS_CONFIG: Record<PlanStatus, { icon: IconName; label: string; color: string }> = {
-  draft: { icon: "circle-o", label: "Draft", color: Theme.textMuted0 },
-  active: { icon: "dot-circle-o", label: "Active", color: Theme.cyan },
-  paused: { icon: "pause-circle", label: "Paused", color: Theme.accent },
-  done: { icon: "check-circle", label: "Done", color: Theme.green },
-  abandoned: { icon: "times-circle", label: "Abandoned", color: Theme.textMuted0 },
-};
+/** Web's PLAN_STATUS_CONFIG (drawn by PlanStatusMark). */
+export const PLAN_STATUS_CONFIG = webLook(WEB_PLAN_STATUS as Record<PlanStatus, { label: string; color: string }>);
 
 export const PLAN_STATUS_ORDER: PlanStatus[] = ["active", "draft", "paused", "done", "abandoned"];
 
@@ -27,7 +23,6 @@ export function PlanItemRow({
   onPress: () => void;
 }) {
   const Theme = useTheme();
-  const status = PLAN_STATUS_CONFIG[plan.status as PlanStatus] ?? PLAN_STATUS_CONFIG.draft;
   const progress = plan.progress;
   const donePct = progress && progress.total > 0 ? (progress.done / progress.total) * 100 : 0;
   const ipPct = progress && progress.total > 0 ? (progress.in_progress / progress.total) * 100 : 0;
@@ -36,7 +31,7 @@ export function PlanItemRow({
     <TouchableOpacity onPress={onPress} style={styles.row} activeOpacity={0.6}>
       <RNView style={styles.topLine}>
         <RNView style={styles.leftGroup}>
-          <FontAwesome name={status.icon} size={14} color={status.color} style={styles.statusIcon} />
+          <RNView style={styles.statusIcon}><PlanStatusMark status={plan.status} size={15} /></RNView>
           <RNText style={styles.title} numberOfLines={1}>{plan.title}</RNText>
         </RNView>
         <RNText style={styles.age}>{formatRelativeTime(plan.updated_at)}</RNText>
