@@ -17,8 +17,9 @@
 // Unassign: a pass or an escalation taken back; the decision returns to the
 // people it was asked of before the first hand-off.
 //
-// Refusals are returned, not thrown: the web sends these through the outbox
-// (dispatch passDecision / escalateDecision / unassignDecision).
+// The cores return a refusal; the CLI prints it, and dispatch (the web's
+// passDecision / escalateDecision / unassignDecision) throws it, so the
+// client takes its paint back and says why.
 import { mutation } from "./functions";
 import { v } from "convex/values";
 import { verifyApiToken } from "./apiTokens";

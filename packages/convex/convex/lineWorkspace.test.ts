@@ -382,6 +382,16 @@ describe("the team's open line decisions", () => {
     const inbox = await t.run((ctx) => ctx.db.query("decision_inbox").collect());
     expect(inbox.map((i: any) => String(i.user_id))).toEqual([String(ana)]);
   });
+
+  // A returned refusal acked as a success: the card painted as passed while the
+  // server kept it in the person's queue. Thrown, the client takes the paint back.
+  test("a pass the server refuses throws, and the decision stays where it was", async () => {
+    const { ana, eve, decision, dispatch, t } = await withDecision();
+    await expect(dispatch(String(ana), "passDecision", [String(decision), { kind: "user", id: String(eve) }])).rejects.toThrow(/not on this session's team/);
+    const row = await t.run((ctx) => ctx.db.get(decision));
+    expect(row?.passed_to).toBeUndefined();
+    expect(row?.asked_user_ids?.map(String)).toEqual([String(ana)]);
+  });
 });
 
 describe("a trial's open decisions", () => {

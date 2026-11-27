@@ -520,6 +520,12 @@ async function updateRole(
   const touched = patch.scope ? areasOf([role, { scope: patch.scope }]) : [];
   const ownersBefore = touched.length ? await ownerSnapshot(ctx, role, touched) : null;
   await ctx.db.patch(role._id, patch);
+  // The standing session is titled after the role at seating: a rename carries
+  // it along, unless a person has titled that thread something else since.
+  if (patch.name && patch.name !== role.name) {
+    const standing = await standingConversationOf(ctx, role);
+    if (standing && standing.title === role.name) await ctx.db.patch(standing._id, { title: patch.name, updated_at: patch.updated_at });
+  }
   const handoffs = ownersBefore ? await handOverAreaMoves(ctx, userId, areaMoves(touched, ownersBefore, await ownerSnapshot(ctx, role, touched)), "scope") : [];
   // The log entry (F1): the charter is free text in this slice, so the edit
   // lands as a task_history style row on the role until it becomes a doc.
