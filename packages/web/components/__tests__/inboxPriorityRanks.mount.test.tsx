@@ -1,8 +1,9 @@
 // The inbox's Priorities view as the person sees it: the WHOLE panel mounted
-// over a seeded store. Each card shows the rank of the viewer's priority it
-// serves ("#1"), "—" for a priority in another workspace (the window loads
-// only the active workspace's), or "None", while the view is up, and nothing of the kind in
-// any other view; Needs You lists its cards in rank order.
+// over a seeded store. While the view is up, a card serving one of the
+// viewer's priorities shows its rank ("1"), with that workspace's mark when the
+// priority is in another workspace (priorityRanks), and a card serving none
+// shows no chip; nothing of the kind in any other view. Needs You lists the
+// active workspace's ranks first, then other workspaces', then the rest.
 import { replaceGlobals } from "../../test-helpers/globals";
 import { afterAll, beforeEach, expect, mock, test } from "bun:test";
 import { JSDOM } from "jsdom";
@@ -80,6 +81,7 @@ const SECOND = id("second");
 const FIRST = id("first");
 const TEAMMATES = id("teammates");
 const ELSEWHERE = id("elsewhere");
+const UNKNOWN = id("unknown");
 
 function row(_id: string, title: string, extra: Record<string, unknown> = {}) {
   return {
@@ -115,6 +117,7 @@ function seed(mode: "priorities" | "grouped", prioritiesOn = true) {
     row(FIRST, "First priority", { priority_id: "p1", priority_step_key: "s1" }),
     row(TEAMMATES, "A teammate's priority", { priority_id: "pt", priority_step_key: "s1" }),
     row(ELSEWHERE, "Another workspace's priority", { priority_id: "pOther", priority_step_key: "s1" }),
+    row(UNKNOWN, "A priority with no rank loaded", { priority_id: "pGone", priority_step_key: "s1" }),
   ];
   useInboxStore.setState({
     sessions: Object.fromEntries(rows.map((r) => [r._id, r])),
@@ -122,6 +125,8 @@ function seed(mode: "priorities" | "grouped", prioritiesOn = true) {
       p1: priority("p1", 1), p2: priority("p2", 7), pt: priority("pt", 1, "someone"),
       ...Object.fromEntries([2, 3, 4, 5, 6].map((n) => [`f${n}`, priority(`f${n}`, n)])),
     },
+    // The viewer's ranks in every workspace (priorityRanks.mine): their personal #2.
+    priorityRanks: { pOther: { _id: "pOther", workspace: "user:me", rank: 2 } },
     conversations: {},
     pending: {},
     pendingMessages: {},
@@ -153,27 +158,28 @@ const cardOrder = (host: HTMLElement) =>
 
 beforeEach(() => { document.body.innerHTML = ""; });
 
-test("in the Priorities view every card shows its rank or None, in rank order", async () => {
+test("in the Priorities view a card shows its rank, another workspace's with its mark, and no chip when it has none", async () => {
   seed("priorities");
   const m = await mountInbox();
-  expect(rankOf(m.host, FIRST)).toBe("#1");
-  expect(rankOf(m.host, SECOND)).toBe("#7");
-  expect(rankOf(m.host, UNLINKED)).toBe("None");
-  // A teammate's priority is not the viewer's: no rank.
-  expect(rankOf(m.host, TEAMMATES)).toBe("None");
-  // A priority this window has not loaded is not "None": it is elsewhere.
-  // "—" on a mouse, where its tooltip says the rest; "other ws" in words on a touch screen, where nothing hovers.
-  const elsewhere = m.host.querySelector(`[data-session-id="${ELSEWHERE}"] [data-priority-rank]`)!;
-  expect([...elsewhere.children].map((c) => [c.textContent, c.className])).toEqual([
-    ["—", "[@media(pointer:coarse)]:hidden"],
-    ["other ws", "hidden [@media(pointer:coarse)]:inline"],
-  ]);
-  expect(m.host.querySelector(`[data-session-id="${ELSEWHERE}"] [data-priority-rank]`)?.getAttribute("title")).toBe("In another workspace");
+  const chip = (sid: string) => m.host.querySelector(`[data-session-id="${sid}"] [data-priority-rank]`);
+  expect(rankOf(m.host, FIRST)).toBe("1");
+  expect(rankOf(m.host, SECOND)).toBe("7");
+  expect(chip(FIRST)?.getAttribute("title")).toBe("Your priority #1");
+  expect(chip(FIRST)?.querySelectorAll("svg").length).toBe(1);
+  // No priority, a teammate's, or one whose rank is nowhere loaded: no chip at all.
+  expect(chip(UNLINKED)).toBeNull();
+  expect(chip(TEAMMATES)).toBeNull();
+  expect(chip(UNKNOWN)).toBeNull();
+  // The viewer's personal priority: its rank there, the target then the personal mark.
+  expect(rankOf(m.host, ELSEWHERE)).toBe("2");
+  expect(chip(ELSEWHERE)?.getAttribute("data-priority-workspace")).toBe("user:me");
+  expect(chip(ELSEWHERE)?.getAttribute("title")).toBe("Your priority #2 in your personal workspace");
+  expect(chip(ELSEWHERE)?.querySelectorAll("svg").length).toBe(2);
+  // This workspace's ranks first, then the other workspace's, then the rest.
   const order = cardOrder(m.host);
   expect(order.indexOf(FIRST)).toBeLessThan(order.indexOf(SECOND));
-  expect(order.indexOf(SECOND)).toBeLessThan(order.indexOf(UNLINKED));
-  expect(order.indexOf(SECOND)).toBeLessThan(order.indexOf(TEAMMATES));
   expect(order.indexOf(SECOND)).toBeLessThan(order.indexOf(ELSEWHERE));
+  for (const rest of [UNLINKED, TEAMMATES, UNKNOWN]) expect(order.indexOf(ELSEWHERE)).toBeLessThan(order.indexOf(rest));
   await m.unmount();
 });
 
@@ -211,7 +217,7 @@ async function stepperOrder(): Promise<string[]> {
   return seen;
 }
 
-test("Decisions rows carry their rank or None too, sorted by it, numbered as the stepper walks them", async () => {
+test("Decisions rows carry their rank too, sorted by it, numbered as the stepper walks them", async () => {
   seed("priorities");
   const ASK_NONE = id("asknone");
   const ASK_SECOND = id("asksecond");
@@ -229,7 +235,7 @@ test("Decisions rows carry their rank or None too, sorted by it, numbered as the
   const order = [...queue.querySelectorAll("[data-session-id]")].map((el) => el.getAttribute("data-session-id"));
   expect(order).toEqual([ASK_FIRST, ASK_SECOND, ASK_NONE]);
   const rankIn = (sid: string) => queue.querySelector(`[data-session-id="${sid}"] [data-priority-rank]`)?.textContent ?? null;
-  expect([rankIn(ASK_FIRST), rankIn(ASK_SECOND), rankIn(ASK_NONE)]).toEqual(["#1", "#7", "None"]);
+  expect([rankIn(ASK_FIRST), rankIn(ASK_SECOND), rankIn(ASK_NONE)]).toEqual(["1", "7", null]);
   // Numbered in the order they show, which is the order the stepper walks: one numbering everywhere.
   expect([...queue.querySelectorAll("[data-decision-queue-row]")].map((r) => r.getAttribute("data-decision-queue-row"))).toEqual(["1", "2", "3"]);
   expect(await stepperOrder()).toEqual([ASK_FIRST, ASK_SECOND, ASK_NONE]);
@@ -248,12 +254,14 @@ test("Decisions rows carry their rank or None too, sorted by it, numbered as the
 
 test("the host's feeders feed the priorities the view sorts by, with no inbox panel of their own; a follower's panel reads the replicated rows", async () => {
   const { useSyncInboxPriorities } = await import("../../hooks/usePriorities");
-  // The host's feeder, mounted as HostFeeders mounts it (asserted from the source below).
-  const HostFeeders = () => { useSyncInboxPriorities(); return null; };
+  const { useSyncPriorityRanks } = await import("../../hooks/useSyncPriorityRanks");
+  // The host's feeders, mounted as HostFeeders mounts them (asserted from the source below).
+  const HostFeeders = () => { useSyncInboxPriorities(); useSyncPriorityRanks(); return null; };
   const fs = await import("node:fs");
   const source = (f: string) => fs.readFileSync(new URL(f, import.meta.url), "utf8");
   const feeders = source("../DashboardLayout.tsx").split("function HostFeeders()")[1].split("\n}\n")[0];
   expect(feeders).toContain("useSyncInboxPriorities();");
+  expect(feeders).toContain("useSyncPriorityRanks();");
   // The panel feeds nothing itself: a host with no panel would leave the view unfed.
   expect(source("../GlobalSessionPanel.tsx")).not.toMatch(/useSyncPriorities\(|useSyncInboxPriorities\(/);
   const as = (role: "host" | "follower") => {
@@ -271,6 +279,7 @@ test("the host's feeders feed the priorities the view sorts by, with no inbox pa
   const hostRoot = createRoot(hostEl);
   await act(async () => hostRoot.render(<MemoryRouter initialEntries={["/priorities"]}><HostFeeders /></MemoryRouter>));
   expect(asked).toContain("priorities:list");
+  expect(asked).toContain("priorityRanks:mine");
   await act(async () => hostRoot.unmount());
   // Not while another view is up.
   seed("grouped");
@@ -278,6 +287,7 @@ test("the host's feeders feed the priorities the view sorts by, with no inbox pa
   const idleRoot = createRoot(document.createElement("div"));
   await act(async () => idleRoot.render(<MemoryRouter initialEntries={["/inbox"]}><HostFeeders /></MemoryRouter>));
   expect(asked).not.toContain("priorities:list");
+  expect(asked).not.toContain("priorityRanks:mine");
   await act(async () => idleRoot.unmount());
   // The follower's panel subscribes to nothing of its own, and its ranks follow the rows the host replicates.
   seed("priorities");
@@ -285,17 +295,17 @@ test("the host's feeders feed the priorities the view sorts by, with no inbox pa
   asked.length = 0;
   const m = await mountInbox();
   expect(asked).not.toContain("priorities:list");
-  expect(rankOf(m.host, FIRST)).toBe("#1");
-  expect(rankOf(m.host, SECOND)).toBe("#7");
+  expect(rankOf(m.host, FIRST)).toBe("1");
+  expect(rankOf(m.host, SECOND)).toBe("7");
   // The host's pass swaps p1 and p2; the replicated rows reach the follower's store through syncTable.
   await act(async () => {
     const st = useInboxStore.getState() as any;
     st.syncTable("priorities", Object.values(st.priorities).map((p: any) => (p._id === "p2" ? { ...p, ai_rank: 1 } : p._id === "p1" ? { ...p, ai_rank: 7 } : p)));
   });
   // The store's sync wakes subscribers on its own beat, not inside this act.
-  for (let i = 0; i < 40 && rankOf(m.host, SECOND) !== "#1"; i++) await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
-  expect(rankOf(m.host, SECOND)).toBe("#1");
-  expect(rankOf(m.host, FIRST)).toBe("#7");
+  for (let i = 0; i < 40 && rankOf(m.host, SECOND) !== "1"; i++) await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+  expect(rankOf(m.host, SECOND)).toBe("1");
+  expect(rankOf(m.host, FIRST)).toBe("7");
   expect(cardOrder(m.host).indexOf(SECOND)).toBeLessThan(cardOrder(m.host).indexOf(FIRST));
   await m.unmount();
   useInboxStore.setState({ syncRole: "host" } as any);
@@ -306,7 +316,7 @@ test("the view re-sorts when a session's priority changes after it mounted", asy
   const m = await mountInbox();
   const order = () => cardOrder(m.host);
   expect(order().indexOf(FIRST)).toBeLessThan(order().indexOf(UNLINKED));
-  expect(rankOf(m.host, UNLINKED)).toBe("None");
+  expect(rankOf(m.host, UNLINKED)).toBeNull();
   // The pass links the unlinked session to #1 and moves the first one to #7.
   await act(async () => {
     useInboxStore.setState((s: any) => ({
@@ -317,8 +327,8 @@ test("the view re-sorts when a session's priority changes after it mounted", asy
       },
     }));
   });
-  expect(rankOf(m.host, UNLINKED)).toBe("#1");
-  expect(rankOf(m.host, FIRST)).toBe("#7");
+  expect(rankOf(m.host, UNLINKED)).toBe("1");
+  expect(rankOf(m.host, FIRST)).toBe("7");
   expect(order().indexOf(UNLINKED)).toBeLessThan(order().indexOf(FIRST));
   await m.unmount();
 });

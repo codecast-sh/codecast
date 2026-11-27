@@ -232,7 +232,7 @@ describe("the Modern session card", () => {
   });
 
   test("in the Priorities view the rank also sits on line 1, before the time, which a compact card (Dormant, inbox_compact) keeps", async () => {
-    const html = render({ _id: "c-ranked" }, { priorityRank: 3 });
+    const html = render({ _id: "c-ranked" }, { priorityRank: { rank: 3, workspace: null } });
     const compactRank = html.indexOf("data-mc-compact-rank");
     expect(compactRank).toBeGreaterThan(-1);
     expect(compactRank).toBeLessThan(html.indexOf("data-mc-time"));

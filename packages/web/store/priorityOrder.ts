@@ -1,16 +1,40 @@
 // The inbox's Priorities order: each status section sorted by the viewer's
-// priority a session serves (its rank, then the milestone's place in that
-// priority), every other session after, in the order it already had. A leaf
-// (no store imports) so the store and the panel share it without a cycle.
+// priority a session serves, the active workspace's first (its rank, then the
+// milestone's place in that priority), then other workspaces' by rank, every
+// other session after, in the order it already had. A leaf (no store imports)
+// so the store and the panel share it without a cycle.
 import { priorityPositions, type PriorityRow } from "@codecast/shared/contracts/priorities";
+import { activeWorkspaceKey, workspaceDisplayName, workspaceRefOf } from "../lib/workspaceScope";
 import { makeCollectionSig } from "./wakeSig";
 
 type PriorityLinked = { priority_id?: string | null; priority_step_key?: string | null };
 type RankedRow = Pick<PriorityRow, "_id" | "status" | "person_pos" | "ai_rank" | "last_active_at" | "user_id" | "workspace" | "steps">;
 type Ranks = Map<string, number>;
 
-/** Where a session sits in the viewer's order: the priority's rank, then its milestone's index. */
-export type PriorityPlace = { rank: number; step: number };
+/** One of the viewer's active priorities with its rank, in any workspace they hold (convex priorityRanks.mine). */
+export type PriorityRankEntry = { _id: string; workspace: string; rank: number };
+
+/**
+ * Where a session sits in the viewer's order: the priority's rank, its
+ * milestone's index, and the priority's workspace when that is not the
+ * active one (null when it is).
+ */
+export type PriorityPlace = { rank: number; step: number; workspace: string | null };
+
+/** A session's place, or null: no link, or no rank of the viewer's (a teammate's priority, one not active). */
+export type PriorityStanding = PriorityPlace | null;
+
+/** What a card's rank chip shows: the rank, and the other workspace it is in. null: no chip. */
+export type PriorityRankLabel = { rank: number; workspace: string | null } | null;
+
+/** What the order reads off the store. */
+export type PriorityOrderState = {
+  priorities?: Record<string, RankedRow>;
+  priorityRanks?: Record<string, PriorityRankEntry>;
+  sessions?: Record<string, PriorityLinked | undefined>;
+  currentUser?: { _id?: unknown } | null;
+  clientState?: { ui?: { active_team_id?: string | null } };
+};
 
 /** The one reader of a session's priority link (the conversation's priority_id and priority_step_key). */
 export function sessionPriorityOf(s: PriorityLinked): { priorityId: string; stepKey: string | null } | null {
@@ -22,82 +46,76 @@ export function priorityRanks(priorities: Record<string, RankedRow> | undefined)
   return priorityPositions(Object.values(priorities ?? {}), (r) => String(r._id));
 }
 
-/** A priority's position among its owner's active priorities (1 = first), or null when it has none. */
-export function priorityRankOf(row: Pick<PriorityRow, "_id">, ranks: Ranks): number | null {
-  return ranks.get(String(row._id)) ?? null;
+const stepOf = (row: RankedRow | undefined, stepKey: string | null) => {
+  const at = row && stepKey ? row.steps.findIndex((st) => st.key === stepKey) : -1;
+  return at < 0 ? Infinity : at;
+};
+
+/**
+ * The standing reader the Priorities view sorts and labels by. The active
+ * workspace's ranks are read off its `priorities` rows, so a move paints at
+ * once; another workspace's off `priorityRanks`. Links are read from the
+ * state's current session rows by id: a placed row can be an older copy kept
+ * while nothing it draws changed.
+ */
+export function priorityPlaceReader(state: PriorityOrderState): (s: PriorityLinked & { _id?: string }) => PriorityStanding {
+  const viewer = state.currentUser?._id ? String(state.currentUser._id) : null;
+  const active = activeWorkspaceKey(state.clientState?.ui?.active_team_id, viewer);
+  const ranks = priorityRanks(state.priorities);
+  return (s) => {
+    const link = sessionPriorityOf((s._id && state.sessions?.[s._id]) || s);
+    if (!link || !viewer) return null;
+    const row = state.priorities?.[link.priorityId];
+    if (row && row.workspace === active) {
+      const rank = String(row.user_id) === viewer ? ranks.get(String(row._id)) : undefined;
+      return rank == null ? null : { rank, step: stepOf(row, link.stepKey), workspace: null };
+    }
+    const entry = state.priorityRanks?.[link.priorityId];
+    if (!entry) return null;
+    return { rank: entry.rank, step: stepOf(row, link.stepKey), workspace: entry.workspace === active ? null : entry.workspace };
+  };
 }
 
-/** Linked to a priority this window has not loaded: the feeder holds only the
- *  active workspace's priorities, and the inbox lists every workspace's sessions. */
-export const PRIORITY_ELSEWHERE = "elsewhere";
+const labels = new Map<string, NonNullable<PriorityRankLabel>>();
 
-/** A session's standing in the viewer's order: its place, "elsewhere", or null
- *  (no link, a teammate's priority, one with no rank). */
-export type PriorityStanding = PriorityPlace | typeof PRIORITY_ELSEWHERE | null;
-
-/** What a card's rank label says: "#N", "—" for elsewhere, "None" for null. */
-export type PriorityRankLabel = number | typeof PRIORITY_ELSEWHERE | null;
-
-export function sessionPriorityPlace(
-  s: PriorityLinked,
-  priorities: Record<string, RankedRow> | undefined,
-  viewerId: string | null | undefined,
-  ranks: Ranks = priorityRanks(priorities),
-): PriorityStanding {
-  const link = sessionPriorityOf(s);
-  if (!link) return null;
-  const row = priorities?.[link.priorityId];
-  if (!row) return PRIORITY_ELSEWHERE;
-  if (!viewerId || String(row.user_id) !== viewerId) return null;
-  const rank = priorityRankOf(row, ranks);
-  if (rank == null) return null;
-  const step = link.stepKey ? row.steps.findIndex((st) => st.key === link.stepKey) : -1;
-  return { rank, step: step < 0 ? Infinity : step };
-}
-
+/** A standing's chip label, one object per rank and workspace, so a card's prop keeps its identity while its label does. */
 export function rankLabelOf(standing: PriorityStanding): PriorityRankLabel {
-  return standing === PRIORITY_ELSEWHERE ? standing : standing?.rank ?? null;
+  if (!standing) return null;
+  const key = `${standing.rank}|${standing.workspace ?? ""}`;
+  let label = labels.get(key);
+  if (!label) labels.set(key, (label = { rank: standing.rank, workspace: standing.workspace }));
+  return label;
 }
 
-/**
- * A rank label in words, as both apps' rows draw it: the text, the text a
- * touch screen shows (where nothing hovers for the tooltip, "—" alone says
- * nothing), and the tooltip.
- */
-export function rankLabelWords(rank: PriorityRankLabel): { text: string; touch: string; title: string } {
-  if (typeof rank === "number") return { text: `#${rank}`, touch: `#${rank}`, title: `Your priority #${rank}` };
-  return rank === PRIORITY_ELSEWHERE
-    ? { text: "—", touch: "other ws", title: "In another workspace" }
-    : { text: "None", touch: "None", title: "Serves none of your priorities" };
-}
+/** The workspace a rank from outside the active one carries on its chip: a team's icon, colour and name, or the viewer's personal workspace. */
+export type WorkspaceMark = { personal: true; name: string } | { personal: false; name: string; icon: string | null; color: string | null };
 
-/**
- * The standing reader the Priorities view sorts and labels by, over one
- * state's priorities and viewer. `sessions`, when given, is the store's
- * current rows: a placed row can be an older copy kept while nothing it
- * draws changed, so a session's link is read from the live row by its id.
- */
-export function priorityPlaceReader(
-  priorities: Record<string, RankedRow> | undefined,
+export function workspaceMarkOf(
+  workspace: string,
+  teams: ReadonlyArray<{ _id?: string; name?: string; icon?: string | null; icon_color?: string | null }> | null | undefined,
   viewerId: string | null | undefined,
-  sessions?: Record<string, PriorityLinked | undefined>,
-): (s: PriorityLinked & { _id?: string }) => PriorityStanding {
-  const viewer = viewerId ? String(viewerId) : null;
-  const ranks = priorityRanks(priorities);
-  return (s) => sessionPriorityPlace((s._id && sessions?.[s._id]) || s, priorities, viewer, ranks);
+): WorkspaceMark | null {
+  const ref = workspaceRefOf({ workspace });
+  if (!ref) return null;
+  const name = workspaceDisplayName(ref, teams, viewerId);
+  if (ref.kind !== "team") return { personal: true, name };
+  const team = (teams ?? []).find((t) => t?._id === ref.id);
+  return { personal: false, name, icon: team?.icon ?? null, color: team?.icon_color ?? null };
 }
 
-/** Stable: ranked rows by rank then milestone, every other row after in its given order. */
+/** The chip's tooltip and accessible name. */
+export function rankTitle(label: NonNullable<PriorityRankLabel>, mark: WorkspaceMark | null): string {
+  return `Your priority #${label.rank}${mark ? ` in ${mark.name}` : ""}`;
+}
+
+/** Stable: the active workspace's ranked rows by rank then milestone, then other workspaces' by rank, every other row after in its given order. */
 export function sortByPriority<T>(items: readonly T[], placeOf: (s: T) => PriorityStanding): T[] {
-  const keyed = items.map((s, i) => {
-    const p = placeOf(s);
-    return { s, i, p: p === PRIORITY_ELSEWHERE ? null : p };
-  });
-  keyed.sort((a, b) => {
-    if (a.p && b.p) return a.p.rank - b.p.rank || a.p.step - b.p.step || a.i - b.i;
-    if (a.p || b.p) return a.p ? -1 : 1;
-    return a.i - b.i;
-  });
+  const tier = (p: PriorityStanding) => (!p ? 2 : p.workspace ? 1 : 0);
+  const keyed = items.map((s, i) => ({ s, i, p: placeOf(s) }));
+  keyed.sort((a, b) =>
+    tier(a.p) - tier(b.p)
+    || (a.p && b.p ? a.p.rank - b.p.rank || a.p.step - b.p.step : 0)
+    || a.i - b.i);
   return keyed.map((k) => k.s);
 }
 
@@ -131,8 +149,21 @@ export function walkPick<T extends { _id: string }>(order: readonly T[], current
   return pick?._id === currentId ? undefined : pick;
 }
 
-// What the order reads, as two digests for a list's wake deps: each session's
-// link, and each priority's owner, what its rank is read from and its milestone keys.
-export const sessionPriorityLinkSig = makeCollectionSig((s: PriorityLinked) => (s.priority_id ? `${s.priority_id}:${s.priority_step_key ?? ""}` : null));
-export const priorityRanksSig = makeCollectionSig((p: RankedRow) =>
+// What the order reads, as digests for a list's wake deps: each session's
+// link; each loaded priority's owner, what its rank is read from and its
+// milestone keys; each other-workspace rank; the viewer and active workspace.
+const EMPTY = {};
+const sessionPriorityLinkSig = makeCollectionSig((s: PriorityLinked) => (s.priority_id ? `${s.priority_id}:${s.priority_step_key ?? ""}` : null));
+const priorityRowsSig = makeCollectionSig((p: RankedRow) =>
   `${p.user_id}:${p.workspace}:${p.status}:${p.person_pos ?? ""}:${p.ai_rank ?? ""}:${p.last_active_at}:${p.steps.map((st) => st.key).join(",")}`);
+const priorityRankEntriesSig = makeCollectionSig((e: PriorityRankEntry) => `${e.workspace}:${e.rank}`);
+
+export function priorityOrderSig(s: PriorityOrderState): string {
+  return [
+    sessionPriorityLinkSig((s.sessions ?? EMPTY) as Record<string, PriorityLinked>),
+    priorityRowsSig(s.priorities ?? EMPTY),
+    priorityRankEntriesSig(s.priorityRanks ?? EMPTY),
+    String(s.currentUser?._id ?? ""),
+    s.clientState?.ui?.active_team_id ?? "",
+  ].join("|");
+}

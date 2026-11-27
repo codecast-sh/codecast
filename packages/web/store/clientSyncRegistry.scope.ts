@@ -48,6 +48,7 @@ export const DATA_SCOPE = {
   decisionStacks: "viewer",
   weeklyCards: "viewer",
   priorities: "workspace",
+  priorityRanks: "viewer",
   priorityDetails: "entity",
   handledDecisions: "viewer",
   decisionDetails: "entity",
