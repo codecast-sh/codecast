@@ -1,5 +1,6 @@
 import { nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
-import { inboxNestParentOf, type InboxSession } from "./inboxStore";
+import { inboxNestParentOf } from "./inboxNesting";
+import type { InboxSession } from "./inboxStore";
 
 // A set aside bucket's rows as cards with their sub rows beneath, one level
 // deep: each row nests under its outermost ancestor inside the bucket, and a

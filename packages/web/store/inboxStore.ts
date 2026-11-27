@@ -4823,6 +4823,8 @@ export function placeInboxRows(
     if (!workersNeedingYouByParent.has(top)) workersNeedingYouByParent.set(top, []);
     workersNeedingYouByParent.get(top)!.push(w.s);
   }
+  const { topLevel: snoozedCards, subsByTop } = hiddenBucketTree(snoozed); // a row snoozed with its card rides it in Sleeping
+  for (const [top, subs] of subsByTop) subsByParent.set(top, [...(subsByParent.get(top) ?? []), ...subs]);
   for (const subs of subsByParent.values()) {
     subs.sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
   }
@@ -5022,7 +5024,7 @@ export function placeInboxRows(
     dormant: reuseArray(prev?.dormant, dormant),
     working: reuseArray(prev?.working, working),
     stashed: reuseArray(prev?.stashed, stashed),
-    snoozed: reuseArray(prev?.snoozed, snoozed),
+    snoozed: reuseArray(prev?.snoozed, snoozedCards),
     dismissed: reuseArray(prev?.dismissed, dismissed),
     subsByParent: reuseArrayMap(prev?.subsByParent, subsByParent),
     forksByParent: reuseArrayMap(prev?.forksByParent, forksByParent),
@@ -5732,6 +5734,7 @@ import type { SubagentActivityOf } from "../lib/railActivity";
 import { nestOwnedChildren, ownedChildrenOf, resolveShowSubagents, resolveSubagentFilter, subagentKept, withOpenOwnedChild, type SubagentFilter, type SubagentRow, type SubagentRowsMode } from "./subagentCards";
 export { cardOfNested, drawnUnderParentIds, flatHeaderCount, fullRowsCounts, isOwnedChildRow, resolveShowSubagents, resolveSubagentFilter, resolveSubagentRows, SUBAGENT_FILTER_STATES, subagentKept, subagentPasses, type SubagentFilter, type SubagentRow, type SubagentRowsMode } from "./subagentCards";
 import { dropOrphanSubagents, hoistNestedUnderParent, inboxNestParentOf, isSpawnedWorker, nestedSessionIds } from "./inboxNesting";
+import { hiddenBucketTree } from "./hiddenBucketTree";
 export { inboxNestParentOf, isSpawnedWorker } from "./inboxNesting";
 import type { PriorityRow } from "@codecast/shared/contracts/priorities";
 import { teamMembersOf } from "../lib/activeTeam";

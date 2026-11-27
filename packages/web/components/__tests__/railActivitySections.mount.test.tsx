@@ -301,13 +301,22 @@ test("a snoozed row sleeps in Sleeping, whatever its work, saying until when", a
   await unmount();
 });
 
-test("a subagent snoozed with its parent is drawn in Sleeping too, and walked", async () => {
+test("a subagent snoozed with its parent rides the parent's card in Sleeping, as the subagent rows setting says", async () => {
   const CHILD = id("snoozedchild");
-  seed({ rows: [parked(CHILD, "Snoozed helper", { is_subagent: true, parent_conversation_id: SNOOZED, inbox_snoozed_until: NOW + 3 * HOUR })] });
-  const { host, unmount } = await mountInbox();
-  expect(sectionIds(host, "dormant")).toEqual(expect.arrayContaining([SNOOZED, CHILD]));
-  expect(computeVisualOrder(useInboxStore.getState() as any).map((s) => s._id)).toEqual(expect.arrayContaining([SNOOZED, CHILD]));
-  await unmount();
+  const helper = parked(CHILD, "Snoozed helper", { is_subagent: true, parent_conversation_id: SNOOZED, inbox_snoozed_until: NOW + 3 * HOUR });
+  seed({ rows: [helper], ui: { subagent_rows: "full", subagent_filter: "all" } });
+  const shown = await mountInbox();
+  // One card in Sleeping, the helper drawn under it, never a card of its own.
+  const card = shown.host.querySelector(`[data-session-id="${SNOOZED}"]`)!.closest(".relative.border-b")!;
+  expect(card.querySelector(`[data-session-id="${CHILD}"]`)).not.toBeNull();
+  expect(sectionIds(shown.host, "dormant").filter((sid) => sid === CHILD)).toHaveLength(1);
+  await shown.unmount();
+  // Folded rows with the default filter hide an idle helper, as under any card.
+  seed({ rows: [helper] });
+  const folded = await mountInbox();
+  expect(sectionIds(folded.host, "dormant")).toContain(SNOOZED);
+  expect(sectionIds(folded.host, "dormant")).not.toContain(CHILD);
+  await folded.unmount();
 });
 
 test("the conversation header's chip says what the row says", async () => {
