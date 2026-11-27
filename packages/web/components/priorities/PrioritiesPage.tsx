@@ -23,11 +23,11 @@ import { SwitchReview, type SwitchLedger } from "../consequential/ConsequentialS
 import { EmptyState } from "../ui/empty-state";
 import { SkeletonRows } from "../ui/skeleton";
 import { PageFrame, PageHeader } from "../ui/page-header";
+import { LegendButton, Mark } from "../Mark";
 import { behindLabel, nextPassLabel, ownerGroups, passDue, type PriorityRow } from "../../lib/priorities";
 import { COARSE_TALL, LIST_DAYS, buildModels, lastDays, layoutForWidth, TABLET_QUERY, localDayKey, type ListLayout, type PriorityModel } from "../../lib/priorityList";
 import { cn } from "../../lib/utils";
 import { PriorityBlock, type RankDrag } from "./PriorityBlock";
-import { Legend } from "./Legend";
 import { MessagesByWorkspace } from "./MessagesByWorkspace";
 import { linkedPrRefs, linkedSessionIds, usePriorityLiveStates, usePriorityLookups } from "../../hooks/usePriorityModels";
 import { useSidebarFocusId } from "../../hooks/useSidebarFocusId";
@@ -56,7 +56,7 @@ export default function PrioritiesPage() {
   const legacy = (
     <header className="flex items-center gap-2 px-4 pt-6">
       <h1 className="flex items-center gap-2 text-title font-semibold text-sol-text">Priorities{behindChip}</h1>
-      <span className="ml-auto"><Legend /></span>
+      <span className="ml-auto"><LegendButton lead="Priorities" /></span>
     </header>
   );
   // The count beside the title is the viewer's own active priorities, the list's rows.
@@ -83,7 +83,7 @@ export default function PrioritiesPage() {
 
   return (
     <PageFrame
-      header={<PageHeader legacy={legacy} title="Priorities" icon={Target} count={rows.length ? listed : null} status={behindChip} actions={<Legend />} />}
+      header={<PageHeader legacy={legacy} title="Priorities" glyph={<Mark id="entity.priority" labeled><Target className="size-4 shrink-0 text-sol-text-muted" aria-hidden /></Mark>} count={rows.length ? listed : null} status={behindChip} actions={<LegendButton lead="Priorities" />} />}
       legacyColumn="mx-auto w-full max-w-[1280px]"
       column="mx-auto w-full max-w-[1280px] px-3 pb-16 sm:px-6"
     >

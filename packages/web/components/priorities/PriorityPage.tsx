@@ -23,6 +23,7 @@ import { useSidebarFocusId } from "../../hooks/useSidebarFocusId";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useSearchParams } from "next/navigation";
+import { Mark } from "../Mark";
 import { ShareControl } from "../ShareControl";
 import { EmptyState } from "../ui/empty-state";
 import { SkeletonRows } from "../ui/skeleton";
@@ -89,7 +90,7 @@ function PriorityBody({ row }: { row: PriorityView }) {
     <article data-priority-page={row.short_id} className="[container-type:inline-size]">
       {/* On a phone the actions take a row of their own above the title, so the title has the whole width. */}
       <header className="flex items-start gap-3 max-sm:flex-col max-sm:gap-1">
-        <span className="mt-0.5 hidden size-8 shrink-0 items-center justify-center rounded-lg bg-sol-text/[0.06] text-sol-text-muted sm:flex"><Target className="size-[18px]" aria-hidden /></span>
+        <span className="mt-0.5 hidden size-8 shrink-0 items-center justify-center rounded-lg bg-sol-text/[0.06] text-sol-text-muted sm:flex"><Mark id="entity.priority" labeled><Target className="size-[18px]" aria-hidden /></Mark></span>
         <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2 max-sm:self-stretch">
           {renaming ? (
             <PriorityTitleInput row={row} onDone={() => setRenaming(false)} className="text-[22px] font-semibold leading-tight sm:text-[22px]" />
@@ -128,7 +129,7 @@ function PriorityBody({ row }: { row: PriorityView }) {
           data-priority-plan={plan.short_id}
           className="mt-4 flex min-h-7 min-w-0 items-center gap-2 text-ui text-sol-text decoration-sol-text-dim/50 hover:underline [@media(pointer:coarse)]:min-h-11"
         >
-          <MapIcon className="size-3.5 shrink-0 text-sol-text-dim" aria-hidden />
+          <Mark id="entity.plan"><MapIcon className="size-3.5 shrink-0 text-sol-text-dim" aria-hidden /></Mark>
           {/* One line on a wide page under a mouse; two on a phone or a touch screen, as other titles wrap. */}
           <span data-priority-plan-title className="min-w-0 truncate [@container(max-width:40rem)]:line-clamp-2 [@container(max-width:40rem)]:whitespace-normal [@media(pointer:coarse)]:line-clamp-2 [@media(pointer:coarse)]:whitespace-normal">{plan.title}</span>
           <span className="shrink-0 whitespace-nowrap text-meta tabular-nums text-sol-text-dim">{plan.done}/{plan.total}</span>

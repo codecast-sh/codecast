@@ -142,7 +142,7 @@ test("a session's row draws the mark the sidebar draws for it, its Done check an
     expect(b.querySelector('[data-milestone="s1"]')!.getAttribute("data-state")).toBe("idle");
     const c = await openLine(b, "s1");
     const item = c.querySelector(`[data-session-row="${fixtureId("donemark")}"]`)!;
-    expect([item.getAttribute("data-state"), item.getAttribute("data-mark")]).toEqual(["idle", "done"]);
+    expect([item.getAttribute("data-state"), item.getAttribute("data-row-mark")]).toEqual(["idle", "done"]);
     expect(item.querySelector('[data-status-mark="done"]')).not.toBeNull();
     expect(item.textContent).toContain("Done");
   } finally {
@@ -204,7 +204,7 @@ test("a workflow run's row draws its inbox's mark, an error in Needs You include
     expect(b.querySelector('[data-milestone="s1"]')!.getAttribute("data-state")).toBe("needs_you");
     const c = await openLine(b, "s1");
     const item = c.querySelector(`[data-session-row="${id}"]`)!;
-    expect(item.getAttribute("data-mark")).toBe("error");
+    expect(item.getAttribute("data-row-mark")).toBe("error");
     expect(item.querySelector('[data-status-mark="error"]')).not.toBeNull();
     expect(item.querySelector("[data-workflow-hint]")).not.toBeNull();
     expect(item.textContent).toContain("Error");

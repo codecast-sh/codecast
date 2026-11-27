@@ -247,6 +247,8 @@ test("the page: title, Correct…, Share and ⋯; ten days; the plan once; miles
     expect(describeFailures(page)).toBe("");
     const el = page.container;
     expect(el.querySelector("h1")?.textContent).toBe("Priorities for Union");
+    // Its glyph is the registered priority mark, its title beside it.
+    expect(el.querySelector('header [data-mark="entity.priority"]')!.hasAttribute("data-mark-labeled")).toBe(true);
     // The priority's own page shows its title whole.
     expect(el.querySelector("h1")!.className).not.toContain("line-clamp");
     // No meta line (rank, id, started, pips), no AI summary, no Next box, no Linked section.
