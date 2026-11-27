@@ -89,6 +89,17 @@ describe('DONE and POLISH', () => {
     ]);
   });
 
+  it('needs you outranks done: a done milestone that asks sits with the open ones, and returns to Done once answered', () => {
+    const asking = row({ links: [link('s1', [session('q', 'working')]), link('s2'), link('s3'), link('s4'), link('p1'), link('p2')] });
+    const { open, sections } = milestoneSections(model(asking, ['conv-q']));
+    expect(open.map((m) => m.key)).toEqual(['s1', 's2', 's3', 's4']);
+    expect(open[0].state.kind).toBe('needs_you');
+    expect(sections.map((s) => s.kind)).toEqual(['polish']);
+    const answered = milestoneSections(model(asking));
+    expect(answered.open.map((m) => m.key)).toEqual(['s2', 's3', 's4']);
+    expect(answered.sections[0]).toMatchObject({ kind: 'done', count: '1', rows: [expect.objectContaining({ key: 's1' })] });
+  });
+
   it('a priority with nothing done and no polish has no sections', () => {
     expect(milestoneSections(model(row({ steps: [step('s2', 'Calibrate goal finding')] }))).sections).toEqual([]);
   });
@@ -111,7 +122,7 @@ describe('an open milestone', () => {
       session('d', 'dormant'),
       session('f', 'done'),
     ], { sessions_more: 2 }), link('s3'), link('s4'), link('p1'), link('p2')] });
-    const c = connectedOf(ms(r, 's2', ['conv-a']), null);
+    const c = connectedOf(ms(r, 's2', ['conv-a']));
     expect(c.live.map((s) => s.short_id)).toEqual(['a', 'w', 'd', 'i']);
     expect(c.closed.map((s) => s.short_id).sort()).toEqual(['f', 'k']);
     expect(c.more).toBe(2);
@@ -122,7 +133,7 @@ describe('an open milestone', () => {
     const drawn: Record<string, any> = { 'conv-f': 'done', 'conv-t': 'stashed', 'conv-e': 'error' };
     const m = buildModels([r], undefined, (id) => (drawn[id] ? { mark: drawn[id], asks: false, target: id } : undefined), lastDays(10, NOW))[0].milestones.find((x) => x.key === 's2')!;
     expect(m.state.kind).toBe('idle');
-    const rows = Object.fromEntries(connectedOf(m, null).live.map((x) => [x.short_id, [x.state, sessionRowMark(x)]]));
+    const rows = Object.fromEntries(connectedOf(m).live.map((x) => [x.short_id, [x.state, sessionRowMark(x)]]));
     expect(rows).toEqual({ f: ['idle', 'done'], t: ['idle', 'stashed'], e: ['idle', 'error'] });
     // Not drawn: the row draws its own state.
     expect(sessionRowMark(ms(row(), 's3').sessions[0])).toBe('dormant');
@@ -151,18 +162,18 @@ describe('an open milestone', () => {
     expect(milestoneMark(m).kind).not.toBe('dormant');
   });
 
-  it("names its own plan, else the priority's on the list; the priority's screen shows that once and passes none", () => {
+  it("names only its own plan and the big plans it is part of, never the priority's, on the list as on the screen (web parity)", () => {
     const r = row({ plan: PLAN, links: [link('s1'), link('s2', [], { part_of: [BIG] }), link('s3', [], { plan: { ...PLAN, short_id: 'pl-61' } }), link('s4'), link('p1'), link('p2')] });
     const m = model(r);
     const s2 = m.milestones.find((x) => x.key === 's2')!;
-    expect(connectedOf(s2, m.plan).plans).toEqual([{ plan: PLAN, partOf: false }, { plan: BIG, partOf: true }]);
-    expect(connectedOf(s2, null).plans).toEqual([{ plan: BIG, partOf: true }]);
-    expect(connectedOf(m.milestones.find((x) => x.key === 's3')!, m.plan).plans.map((p) => p.plan.short_id)).toEqual(['pl-61']);
+    expect(connectedOf(s2).plans).toEqual([{ plan: BIG, partOf: true }]);
+    expect(connectedOf(m.milestones.find((x) => x.key === 's3')!).plans.map((p) => p.plan.short_id)).toEqual(['pl-61']);
+    expect(connectedOf(m.milestones.find((x) => x.key === 's4')!).plans).toEqual([]);
   });
 
   it('carries its tasks and pull requests; an "Eval request:" task is an ordinary task', () => {
     const r = row({ steps: [step('s2', 'Work the open eval requests', { refs: [{ kind: 'task', id: 'ct-1' }, { kind: 'pr', id: 'acme/app#12' }] })], links: [link('s2')] });
-    const c = connectedOf(model(r).milestones[0], null);
+    const c = connectedOf(model(r).milestones[0]);
     expect(c.tasks).toEqual(['ct-1']);
     expect(c.prs).toEqual(['acme/app#12']);
     expect(Object.keys(c).sort()).toEqual(['closed', 'live', 'more', 'plans', 'prs', 'tasks']);

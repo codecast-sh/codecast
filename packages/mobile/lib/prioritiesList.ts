@@ -60,15 +60,18 @@ export function startCompose(
 export type SectionKind = 'done' | 'polish';
 export type MilestoneSection = { kind: SectionKind; label: string; count: string; rows: MilestoneModel[] };
 
-/** A priority's milestones: its open critical ones, then DONE n and POLISH x/y, Done first, each only when it holds any. */
+/**
+ * A priority's milestones: its open critical ones, then DONE n and POLISH x/y, Done first, each only when it holds any.
+ * Needs you outranks done: a done milestone that asks sits with the open ones until it is answered.
+ */
 export function milestoneSections(model: Pick<PriorityModel, 'milestones'>): { open: MilestoneModel[]; sections: MilestoneSection[] } {
   const critical = model.milestones.filter((m) => m.tier === 'critical');
   const polish = model.milestones.filter((m) => m.tier === 'polish');
-  const done = critical.filter((m) => m.done);
+  const done = critical.filter((m) => m.state.kind === 'done');
   const sections: MilestoneSection[] = [];
   if (done.length) sections.push({ kind: 'done', label: 'Done', count: `${done.length}`, rows: done });
   if (polish.length) sections.push({ kind: 'polish', label: 'Polish', count: `${polish.filter((m) => m.done).length}/${polish.length}`, rows: polish });
-  return { open: critical.filter((m) => !m.done), sections };
+  return { open: critical.filter((m) => m.state.kind !== 'done'), sections };
 }
 
 /** Sections in order: closed ones side by side share a line; an open one is its head over its milestones. */
@@ -113,14 +116,13 @@ export type Connected = {
 };
 
 /**
- * Everything an open milestone is connected to, grouped by kind. Its plan is
- * its own, else `priorityPlan` (the list passes the priority's; its screen
- * shows that once above the milestones and passes null), then the big plans
- * it is part of.
+ * Everything an open milestone is connected to, grouped by kind. Its plans
+ * are its own and the big plans it is part of: the priority's plan is never
+ * repeated under a milestone, on the list or the screen (web Connected).
  */
-export function connectedOf(m: MilestoneModel, priorityPlan: PriorityPlanRef | null): Connected {
+export function connectedOf(m: MilestoneModel): Connected {
   const sessions = orderByState(m.sessions);
-  const own = m.plan ?? priorityPlan;
+  const own = m.plan;
   return {
     live: sessions.filter((s) => !isClosedSession(s)),
     closed: sessions.filter(isClosedSession),

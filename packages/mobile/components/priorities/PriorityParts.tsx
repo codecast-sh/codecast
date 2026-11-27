@@ -8,13 +8,12 @@ import { useState, type ReactNode } from 'react';
 import { StyleSheet, TouchableOpacity, View as RNView } from 'react-native';
 import { useRouter } from 'expo-router';
 import Feather from '@expo/vector-icons/Feather';
-import FontAwesome from '@expo/vector-icons/FontAwesome';
 import * as Haptics from 'expo-haptics';
 import { Text as RNText } from '@/components/Themed';
 import { CHROME_FONT_CAP, themedStyles, useTheme } from '@/constants/Theme';
 import { codeFont } from '@/constants/fonts';
 import { CODECAST_BASE_URL } from '@codecast/shared/entities';
-import type { PriorityPlanRef, PriorityRow, PriorityStep } from '@codecast/shared/contracts/priorities';
+import type { PriorityRow, PriorityStep } from '@codecast/shared/contracts/priorities';
 import { sessionRowMark, type MilestoneModel, type PriorityModel, type SessionLine } from '@codecast/web/lib/priorityList';
 import { SESSION_STATUS } from '@codecast/web/lib/sessionStatus';
 import { priorityHref } from '@codecast/web/lib/priorities';
@@ -22,8 +21,8 @@ import { priorityWrites } from '@codecast/web/lib/priorityWrites';
 import { branchesOf, type LinkLookups } from '@codecast/web/hooks/usePriorityModels';
 import { lookup } from '@codecast/web/lib/liveEntities';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
-import { STATUS_CONFIG } from '@/components/TaskItem';
 import { SessionStatusMark } from '@/components/SessionStatusMark';
+import { TaskStatusMark } from '@/components/marks';
 import { MilestoneMark, usePriorityActs } from '@/components/priorities/MilestoneMark';
 import { mobileEntityRoute } from '@/lib/linkRoutes';
 import { appAlert, appPrompt, showActionSheet } from '@/lib/popups';
@@ -149,7 +148,7 @@ export function PendingMark() {
 export function Milestones({ model, now, lookups, own, expand = false }: { model: PriorityModel; now: number; lookups: LinkLookups; own: OwnOf; expand?: boolean }) {
   const [openSections, setOpenSections] = useState<ReadonlySet<SectionKind>>(new Set());
   const { open, sections } = milestoneSections(model);
-  const line = (m: MilestoneModel) => <MilestoneLine key={m.key} model={model} m={m} now={now} lookups={lookups} own={own} defaultOpen={expand && !m.done} priorityPlan={expand ? null : model.plan} />;
+  const line = (m: MilestoneModel) => <MilestoneLine key={m.key} model={model} m={m} now={now} lookups={lookups} own={own} defaultOpen={expand && m.state.kind !== 'done'} />;
   const toggle = (kind: SectionKind) => setOpenSections((s) => {
     const next = new Set(s);
     if (!next.delete(kind)) next.add(kind);
@@ -192,14 +191,13 @@ function SectionWords({ label, count, open }: { label: string; count: string; op
   );
 }
 
-function MilestoneLine({ model, m, now, lookups, own, defaultOpen, priorityPlan }: {
+function MilestoneLine({ model, m, now, lookups, own, defaultOpen }: {
   model: PriorityModel;
   m: MilestoneModel;
   now: number;
   lookups: LinkLookups;
   own: OwnOf;
   defaultOpen: boolean;
-  priorityPlan: PriorityPlanRef | null;
 }) {
   const Theme = useTheme();
   const { row } = model;
@@ -249,7 +247,7 @@ function MilestoneLine({ model, m, now, lookups, own, defaultOpen, priorityPlan 
         )}
         {row.mine && <More label={`More for ${step.title}`} onPress={menu} testID={`priorities-milestone-menu-${m.key}`} />}
       </RNView>
-      {open && <Connected model={model} m={m} now={now} lookups={lookups} own={own} priorityPlan={priorityPlan} />}
+      {open && <Connected model={model} m={m} now={now} lookups={lookups} own={own} />}
     </RNView>
   );
 }
@@ -262,20 +260,19 @@ function MilestoneLine({ model, m, now, lookups, own, defaultOpen, priorityPlan 
  * ones folded), Tasks, Pull requests, Branches, Plans, Deploys. Each row
  * opens its native screen; the owner fixes a session's link from its ⋯.
  */
-function Connected({ model, m, now, lookups, own, priorityPlan }: {
+function Connected({ model, m, now, lookups, own }: {
   model: PriorityModel;
   m: MilestoneModel;
   now: number;
   lookups: LinkLookups;
   own: OwnOf;
-  priorityPlan: PriorityPlanRef | null;
 }) {
   const Theme = useTheme();
   const router = useRouter();
   const { openSession } = usePriorityActs();
   const [closedOpen, setClosedOpen] = useState(false);
   const { row } = model;
-  const c = connectedOf(m, priorityPlan);
+  const c = connectedOf(m);
   const branches = branchesOf(m, lookups);
   const deploys = lookups.deploysOf(m, row.workspace);
   const nSessions = c.live.length + c.closed.length + c.more;
@@ -401,12 +398,11 @@ function TaskRow({ id }: { id: string }) {
     return row ? `${row.status ?? 'open'}\u0000${row.title ?? ''}` : '';
   });
   const [status, title] = t ? t.split('\u0000') : ['open', ''];
-  const look = STATUS_CONFIG[status as keyof typeof STATUS_CONFIG] ?? STATUS_CONFIG.open;
   const closed = status === 'done' || status === 'dropped';
   return (
     <Item
       testID={`priorities-task-${id}`}
-      icon={<FontAwesome name={look.icon} size={13} color={look.color} accessibilityLabel={look.label} />}
+      icon={<TaskStatusMark status={status} size={13} />}
       title={<RNText style={[styles.itemTitle, closed && { color: Theme.textDim }, status === 'dropped' && styles.struck]} numberOfLines={2}>{title || id}</RNText>}
       onPress={() => router.push(`/task/${id}` as never)}
     />

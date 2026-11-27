@@ -34,6 +34,19 @@ test("the legend shows every deploy state and a task not loaded yet, drawn as an
   }
 }, 30_000);
 
+test("the legend shows Needs you both ways: the bordered milestone action, and a session row's bare mark", async () => {
+  const page = await open();
+  try {
+    // The milestone's action is bordered; the session row's is the inbox mark alone, as an opened milestone draws it.
+    expect(row("Needs you").querySelector("[data-status-mark]")!.closest("span.border")).not.toBeNull();
+    const bare = row("Needs you (session)").querySelector('[data-status-mark="needs_you"]')!;
+    expect(bare).not.toBeNull();
+    expect(bare.closest("span.border")).toBeNull();
+  } finally {
+    await page.unmount();
+  }
+}, 30_000);
+
 test("the legend's close X presses 44px under a coarse pointer: an 8px area around it", async () => {
   const page = await open();
   try {

@@ -6,7 +6,7 @@
 // Done/Undone and the rest of the owner's controls (controls), and a
 // double-click on its title renames it. On a desktop list the owner's rank is
 // a drag handle (arrow keys step it).
-import { useLayoutEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type DragEvent } from "react";
 import Link from "next/link";
 import { ChevronRight } from "lucide-react";
 import { pastBadge, priorityHref, rankProvenance, type PriorityRow } from "../../lib/priorities";
@@ -214,14 +214,14 @@ function PendingMark() {
 }
 
 /** A section's head: DONE 4 or POLISH 0/2, the number after the word, its caret beside it. */
-function SectionHead({ kind, label, count, open, onClick }: { kind: string; label: string; count: string; open: boolean; onClick: () => void }) {
+function SectionHead({ kind, label, count, open, onClick, className }: { kind: string; label: string; count: string; open: boolean; onClick: () => void; className?: string }) {
   return (
     <button
       type="button"
       data-section={kind}
       aria-expanded={open}
       onClick={onClick}
-      className={cn("-ml-1 inline-flex min-h-6 items-center gap-1 rounded px-1 hover:bg-sol-bg-alt hover:text-sol-text [@media(pointer:coarse)]:min-h-11", LABEL)}
+      className={cn("-ml-1 inline-flex min-h-6 items-center gap-1 rounded px-1 hover:bg-sol-bg-alt hover:text-sol-text [@media(pointer:coarse)]:min-h-11", LABEL, className)}
     >
       {label} <span className="font-normal">{count}</span>
       <ChevronRight className={cn("size-3 transition-transform", open && "rotate-90")} aria-hidden />
@@ -229,7 +229,7 @@ function SectionHead({ kind, label, count, open, onClick }: { kind: string; labe
   );
 }
 
-type Section = { kind: string; head: ReactNode; open: boolean; rows: MilestoneModel[] };
+type Section = { kind: string; label: string; count: string; open: boolean; toggle: () => void; rows: MilestoneModel[] };
 
 /**
  * A priority's milestones: the open critical ones, then Done and Polish. A
@@ -248,31 +248,30 @@ export function Milestones({ model, layout, now, lookups, expand, focus }: {
 }) {
   const critical = model.milestones.filter((m) => m.tier === "critical");
   const polish = model.milestones.filter((m) => m.tier === "polish");
-  const done = critical.filter((m) => m.done);
+  // Needs you outranks done: a done milestone that asks sits with the open ones until it is answered.
+  const done = critical.filter((m) => m.state.kind === "done");
   const [doneOpen, setDoneOpen] = useState(() => done.some((m) => m.key === focus));
   const [polishOpen, setPolishOpen] = useState(() => polish.some((m) => m.key === focus));
-  const line = (m: MilestoneModel) => <MilestoneRow key={m.key} model={model} m={m} layout={layout} now={now} lookups={lookups} defaultOpen={(expand && !m.done) || m.key === focus} />;
+  const line = (m: MilestoneModel) => <MilestoneRow key={m.key} model={model} m={m} layout={layout} now={now} lookups={lookups} defaultOpen={(expand && m.state.kind !== "done") || m.key === focus} />;
   const sections: Section[] = [];
-  if (done.length) sections.push({ kind: "done", open: doneOpen, rows: done, head: <SectionHead key="done" kind="done" label="Done" count={`${done.length}`} open={doneOpen} onClick={() => setDoneOpen((o) => !o)} /> });
-  if (polish.length) sections.push({ kind: "polish", open: polishOpen, rows: polish, head: <SectionHead key="polish" kind="polish" label="Polish" count={`${polish.filter((m) => m.done).length}/${polish.length}`} open={polishOpen} onClick={() => setPolishOpen((o) => !o)} /> });
-  // In order: consecutive closed sections share one line; an open one is its head over its milestones.
-  const runs: Section[][] = [];
-  for (const x of sections) {
-    const last = runs[runs.length - 1];
-    if (!x.open && last && !last[0].open) last.push(x);
-    else runs.push([x]);
-  }
+  if (done.length) sections.push({ kind: "done", label: "Done", count: `${done.length}`, open: doneOpen, toggle: () => setDoneOpen((o) => !o), rows: done });
+  if (polish.length) sections.push({ kind: "polish", label: "Polish", count: `${polish.filter((m) => m.done).length}/${polish.length}`, open: polishOpen, toggle: () => setPolishOpen((o) => !o), rows: polish });
+  // In order: consecutive closed sections share one line; an open one is its head over its milestones. Every head
+  // stays a child of this one container, keyed by its kind, and only CSS moves it, so pressing one never remounts
+  // it and its focus stays put. A section starts a line when it is open or follows an open one.
+  const starts = (i: number) => i === 0 || sections[i].open || sections[i - 1].open;
   return (
     <>
-      <ul>{critical.filter((m) => !m.done).map(line)}</ul>
-      {runs.map((run) => (run[0].open ? (
-        <div key={run[0].kind} data-section-open={run[0].kind} className="mt-0.5">
-          <div className="pl-8">{run[0].head}</div>
-          <ul>{run[0].rows.map(line)}</ul>
+      <ul>{critical.filter((m) => m.state.kind !== "done").map(line)}</ul>
+      {sections.length > 0 && (
+        <div data-sections className="mt-0.5 flex flex-wrap items-center gap-x-5">
+          {sections.flatMap((x, i) => [
+            i > 0 && <span key={`${x.kind}-break`} aria-hidden className={cn("h-0", starts(i) ? "basis-full" : "hidden")} />,
+            <SectionHead key={`${x.kind}-head`} kind={x.kind} label={x.label} count={x.count} open={x.open} onClick={x.toggle} className={starts(i) ? "ml-7" : undefined} />,
+            x.open && <ul key={`${x.kind}-rows`} data-section-open={x.kind} className="basis-full">{x.rows.map(line)}</ul>,
+          ])}
         </div>
-      ) : (
-        <div key={run[0].kind} className="mt-0.5 flex flex-wrap items-center gap-x-5 pl-8">{run.map((x) => x.head)}</div>
-      )))}
+      )}
     </>
   );
 }
