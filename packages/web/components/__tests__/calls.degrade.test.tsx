@@ -34,8 +34,11 @@ test("the calls page and the face row render through every missing query", async
   const page = await mountPage("/calls", { calls: <CallsPage /> });
   try {
     expect(describeFailures(page)).toBe("");
-    // The face row: the cached teammate is a face in the shell's top bar.
-    expect(page.container.querySelector(`[data-face-id="${TEAMMATE}"]`)).not.toBeNull();
+    // The face row: the cached teammate is a face in the shell's top bar,
+    // once its lazy chunk loads (slow on a loaded CI runner).
+    const face = () => page.container.querySelector(`[data-face-id="${TEAMMATE}"]`);
+    await page.waitFor(() => face() !== null);
+    expect(face()).not.toBeNull();
     // The list: an honest failure with a way to ask again.
     const text = page.text();
     expect(text).toContain("Your calls could not be loaded.");
