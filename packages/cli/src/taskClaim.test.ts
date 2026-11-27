@@ -43,6 +43,7 @@ import {
   handoffCommentText,
   parseFilesFlag,
   parseHandoffStatus,
+  parseLabelFlags,
   parseReviewVerdict,
   verdictCommentText,
 } from "./taskClaim.js";
@@ -81,6 +82,18 @@ describe("cast task handoff argument parsing", () => {
     expect(buildTaskHandoffBody("ct-9", null, input).change_guide).toEqual(guide);
     expect(handoffCommentText(input)).toContain("Guide: 1 step, on the task's evidence");
     expect("change_guide" in buildTaskHandoffBody("ct-9", null, { status: "done", evidence: "ok" })).toBe(false);
+  });
+
+  test("--label adds to the labels the task has, and writes none when it has them all", () => {
+    const input = { status: "done" as const, evidence: "ok", labels: parseLabelFlags(["mechanism", " harm-2, ,mechanism"]) };
+    expect(input.labels).toEqual(["mechanism", "harm-2"]);
+    expect(buildTaskHandoffBody("ct-9", null, input, ["harm-2", "ui"]).labels).toEqual(["harm-2", "ui", "mechanism"]);
+    expect(buildTaskHandoffBody("ct-9", null, input).labels).toEqual(["mechanism", "harm-2"]);
+    expect("labels" in buildTaskHandoffBody("ct-9", null, input, ["mechanism", "harm-2"])).toBe(false);
+    expect("labels" in buildTaskHandoffBody("ct-9", null, { status: "done", evidence: "ok" }, ["ui"])).toBe(false);
+    expect(handoffCommentText(input)).toBe("Handoff: done\n\nok\n\nLabelled: mechanism, harm-2");
+    expect(parseLabelFlags([])).toBeUndefined();
+    expect(parseLabelFlags([" , "])).toBeUndefined();
   });
 
   test("evidence is required; --files is optional and blanks are dropped", () => {

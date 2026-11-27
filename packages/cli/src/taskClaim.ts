@@ -145,6 +145,8 @@ export interface HandoffInput {
   pages?: string[];
   /** The author's walkthrough of the change (ct-57527), hunks attached. */
   guide?: ChangeGuide;
+  /** Labels the handoff adds to the task, beside the ones it has, named in the comment. */
+  labels?: string[];
 }
 
 /** `--files a,b` → ["a", "b"]; blanks dropped. */
@@ -152,6 +154,12 @@ export function parseFilesFlag(raw: string | undefined): string[] | undefined {
   if (!raw) return undefined;
   const files = raw.split(",").map((f) => f.trim()).filter(Boolean);
   return files.length ? files : undefined;
+}
+
+/** `--label a --label b,c` → ["a", "b", "c"], each once; blanks dropped. */
+export function parseLabelFlags(raw: readonly string[] | undefined): string[] | undefined {
+  const labels = [...new Set((raw ?? []).flatMap((l) => l.split(",")).map((l) => l.trim()).filter(Boolean))];
+  return labels.length ? labels : undefined;
 }
 
 // Words for how work ended that are not a handoff status. A handoff always
@@ -178,8 +186,10 @@ export function parseReviewVerdict(raw: string | undefined): ReviewVerdict {
 
 // A hand ends its turn with a handoff: the task moves to in_review carrying
 // what was done and how it was checked, so the role reads the task, never the
-// transcript. Rides /cli/work/update; the comment body is a second call.
-export function buildTaskHandoffBody(shortId: string, sessionId: string | null, input: HandoffInput): Record<string, any> {
+// transcript. Rides /cli/work/update; the comment body is a second call. The
+// update writes a task's labels whole, so added labels go after `taskLabels`,
+// the ones the task has, and none are written when it has them all.
+export function buildTaskHandoffBody(shortId: string, sessionId: string | null, input: HandoffInput, taskLabels: readonly string[] = []): Record<string, any> {
   if (!input.evidence.trim()) throw new Error("--evidence is required (what you verified, or why you stopped)");
   const body: Record<string, any> = {
     short_id: shortId,
@@ -189,6 +199,8 @@ export function buildTaskHandoffBody(shortId: string, sessionId: string | null, 
   };
   if (input.files?.length) body.files_changed = input.files;
   if (input.guide) body.change_guide = input.guide;
+  const added = (input.labels ?? []).filter((l) => !taskLabels.includes(l));
+  if (added.length) body.labels = [...taskLabels, ...added];
   if (sessionId) body.conversation_id = sessionId;
   return body;
 }
@@ -199,6 +211,7 @@ export function handoffCommentText(input: HandoffInput): string {
   if (input.pr) lines.push("", `PR: ${input.pr}`);
   if (input.pages?.length) lines.push("", `Pages: ${input.pages.map((slug) => `/a/${slug}`).join(", ")}`);
   if (input.guide) lines.push("", `Guide: ${input.guide.steps.length} step${input.guide.steps.length === 1 ? "" : "s"}, on the task's evidence`);
+  if (input.labels?.length) lines.push("", `Labelled: ${input.labels.join(", ")}`);
   return lines.join("\n");
 }
 
