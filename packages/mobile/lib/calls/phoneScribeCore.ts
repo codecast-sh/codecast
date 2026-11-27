@@ -48,6 +48,9 @@ export const RETRY_MS = 10_000;
 // opens again after this, doubling each time up to the cap.
 export const PIPE_RETRY_MS = 1_000;
 export const PIPE_RETRY_MAX_MS = 60_000;
+// Silence fed after a mute so the turn being spoken closes, before the mic is
+// closed: a muted huddle opens no mic (no indicator, no frames, no billing).
+export const MUTE_TAIL_MS = 1_000;
 
 /** The room this phone sits in: connected, or reconnecting to the same room. */
 function seatedRoom(call: PhoneCallView): string | null {
@@ -68,6 +71,7 @@ export function createPhoneScribe(d: PhoneScribeDeps) {
   let micRetryAt = 0;
   let lastAttachAt = 0;
   let pipeFailures = 0;
+  let mutedAt = 0;
 
   function watchRoom(roomKey: string | null): void {
     unwatchLive?.();
@@ -124,6 +128,7 @@ export function createPhoneScribe(d: PhoneScribeDeps) {
     const meId = d.meId();
     const flags = d.roomFlags(roomKey);
     const status = engine.getStatus();
+    if (!call.muted) mutedAt = 0;
     const verdict = decidePhoneScribe({
       roomKey,
       // Reconnecting holds whatever is running (decideAutoScribe holds while
@@ -145,8 +150,15 @@ export function createPhoneScribe(d: PhoneScribeDeps) {
     else if (verdict === "yield") run(() => retire({ graceful: false, keepLive: true }));
     else if (verdict === "stop") run(() => retire({ graceful: false, keepLive: false }));
     else if (verdict === "release") run(() => retire({ graceful: true, keepLive: true, releaseRoom: roomKey }));
-    // The run is ours but nothing feeds it: the OS refused the mic a moment
-    // ago, or the recognizer on it failed (the engine forgets a failed pipe).
+    else if (status.active && call.muted) {
+      if (!tap) return;
+      if (!mutedAt) {
+        mutedAt = d.now();
+        d.later(reconcile, MUTE_TAIL_MS);
+      } else if (d.now() - mutedAt >= MUTE_TAIL_MS) run(closeMic);
+    }
+    // The run is ours but nothing feeds it: unmuted, the OS refused the mic a
+    // moment ago, or the recognizer on it failed (the engine forgets a failed pipe).
     else if (status.active && status.trackCount === 0 && meId) {
       if (tap && micRetryAt <= lastAttachAt) {
         pipeFailures++;
@@ -164,7 +176,14 @@ export function createPhoneScribe(d: PhoneScribeDeps) {
       d.later(reconcile, RETRY_MS);
       return;
     }
-    await attachMic(roomKey, meId);
+    if (!d.call().muted) await attachMic(roomKey, meId);
+  }
+
+  async function closeMic(): Promise<void> {
+    await engine.finishPipe(MIC_KEY);
+    tap?.close();
+    tap = null;
+    mutedAt = 0;
   }
 
   async function attachMic(roomKey: string, meId: string): Promise<void> {
@@ -187,6 +206,7 @@ export function createPhoneScribe(d: PhoneScribeDeps) {
     }
     const micTap = opened.tap;
     tap = micTap;
+    mutedAt = 0;
     lastAttachAt = d.now();
     const me = d.call().participants.find((p) => p.isLocal);
     engine.attachPcm(

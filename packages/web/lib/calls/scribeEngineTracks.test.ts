@@ -71,4 +71,27 @@ test("attachPcm opens one pipe per opener and attributes its words", async () =>
   await engine.stop({ keepLive: true });
 });
 
+test("finishPipe keeps a pipe's last words, then detaches it", async () => {
+  const appended: string[] = [];
+  const c = {
+    mutation: async (_fn: unknown, args: any) => {
+      if (args.segments) appended.push(...args.segments.map((x: any) => x.text));
+      return { transcript_id: "t3", role: "scribe" };
+    },
+    action: async () => ({}),
+  };
+  const engine = createScribeEngine();
+  await engine.start({ convex: c, roomKey: "dm:u1" });
+  engine.attachPcm("local:mic", (o: any) => ({
+    speaking: false,
+    finish: async () => o.events.onUtterance({ text: "said before mute", t0: 0, t1: 1 }),
+    close: () => {},
+  }), "u1", "Cam");
+  await engine.finishPipe("local:mic");
+  await Promise.resolve();
+  expect(appended).toEqual(["said before mute"]);
+  expect(engine.getStatus().trackCount).toBe(0);
+  await engine.stop({ keepLive: true });
+});
+
 afterAll(() => mock.restore());

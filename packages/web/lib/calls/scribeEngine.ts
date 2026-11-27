@@ -147,6 +147,9 @@ export type ScribeEngine = {
    *  `open` builds the pipe, and runs again when a dropped pipe reopens. */
   attachPcm(key: string, open: AsrPipeOpener, speakerId: string, speakerName: string): void;
   detach(key: string): void;
+  /** Detach after committing what the pipe heard and waiting (bounded) for
+   *  its last words, which are appended as usual. */
+  finishPipe(key: string): Promise<void>;
   /** Milliseconds since `start`, which is the clock every segment offset uses. */
   elapsed(): number;
   stop(opts?: { keepLive?: boolean; graceful?: boolean }): Promise<void>;
@@ -293,6 +296,12 @@ export function createScribeEngine(): ScribeEngine {
     attach,
     attachPcm: (key, open, speakerId, speakerName) => attachSource(key, open, open, () => true, speakerId, speakerName),
     detach,
+    async finishPipe(key) {
+      const pipe = pipes.get(key);
+      if (!pipe) return;
+      await pipe.finish().catch(() => {});
+      if (pipes.get(key) === pipe) detach(key);
+    },
 
     async start(opts) {
       if (status.active) return transcriptId;

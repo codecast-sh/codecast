@@ -17,14 +17,14 @@ async function settle() {
 
 /** A phone scribe wired to fakes: the server, the call, the mic tap and the
  *  recognizer all write what happened, in order, to `log`. */
-function harness(opts: { roomKey?: string; openTap?: () => Promise<any> } = {}) {
+function harness(opts: { roomKey?: string; openTap?: () => Promise<any>; muted?: boolean } = {}) {
   const log: string[] = [];
   let clock = 1_000_000;
   const timers: Array<{ at: number; fn: () => void }> = [];
   const call: PhoneCallView = {
     phase: "connected",
     roomKey: opts.roomKey ?? "session:c1",
-    muted: false,
+    muted: opts.muted ?? false,
     participants: [{ identity: ME, name: "Me", phone: true, isLocal: true }],
   };
   let onLive: ((l: LiveView | null | undefined) => void) | null = null;
@@ -212,5 +212,53 @@ describe("phone scribe", () => {
     h.advance(1_000);
     await settle();
     expect(h.sessions).toHaveLength(3);
+  });
+
+  test("joined muted: the run is held but the mic stays closed until unmuted", async () => {
+    const h = await scribing({ muted: true });
+    expect(h.log).toContain("start");
+    expect(h.taps).toHaveLength(0);
+    h.call.muted = false;
+    h.scribe.reconcile();
+    await settle();
+    expect(h.taps).toHaveLength(1);
+    expect(h.engine.getStatus().trackCount).toBe(1);
+  });
+
+  test("muting closes the turn with a second of silence, then closes the mic", async () => {
+    const h = await scribing();
+    h.log.length = 0;
+    h.call.muted = true;
+    h.scribe.reconcile();
+    h.taps[0].push();
+    expect(h.sessions[0].fed.at(-1).every((x: number) => x === 0)).toBe(true);
+    h.advance(1_000);
+    await settle();
+    expect(h.log).toEqual(["finish", "append last words", "tap closed"]);
+    expect(h.engine.getStatus()).toMatchObject({ active: true, trackCount: 0 });
+    h.advance(120_000);
+    await settle();
+    expect(h.taps).toHaveLength(1);
+    h.call.muted = false;
+    h.scribe.reconcile();
+    await settle();
+    expect(h.taps).toHaveLength(2);
+    expect(h.engine.getStatus().trackCount).toBe(1);
+  });
+
+  test("unmuting within the silent second keeps the mic, and the next mute gets its own second", async () => {
+    const h = await scribing();
+    h.call.muted = true;
+    h.scribe.reconcile();
+    h.advance(500);
+    h.call.muted = false;
+    h.scribe.reconcile();
+    h.advance(600);
+    await settle();
+    expect(h.taps[0].closed).toBe(false);
+    h.call.muted = true;
+    h.scribe.reconcile();
+    await settle();
+    expect(h.taps[0].closed).toBe(false);
   });
 });
