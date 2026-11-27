@@ -185,13 +185,9 @@ describe("a pass run", () => {
 
   test("a merge declined becomes the person's correction on the absorbed priority: every pass reads it, and no run proposes the merge while it stands", async () => {
     const correction = `Not part of pri-1 “Evals people trust”: you declined merging them on a priority card.`;
-    for (const decline of ["dismiss", "untick"] as const) {
+    for (const decline of ["dismiss"] as const) {
       const { w, d } = await posted();
-      if (decline === "dismiss") await w.t.run((ctx) => finalizeAnswer(ctx as any, d, { status: "dismissed" }, ANA(w), { deliver: false }));
-      else await w.t.run(async (ctx) => {
-        await ctx.db.patch(d._id, { status: "answered", answer_text: "keep them apart" });
-        await settleClientResolution(ctx as any, d, { status: "answered", answer_text: "keep them apart" }, w.ana, Date.now());
-      });
+      await w.t.run((ctx) => finalizeAnswer(ctx as any, d, { status: "dismissed" }, ANA(w), { deliver: false }));
       const grader = await row(w, "pri-2");
       const declined = (await w.t.run((ctx) => ctx.db.query("priority_corrections").collect())).filter((c) => c.text === correction);
       expect(declined.map((c) => [c.priority_id, c.status, c.user_id])).toEqual([[grader._id, "pending", w.ana]]);
@@ -559,10 +555,11 @@ describe("answering the card", () => {
     });
     expect((await row(w, "pri-2")).status).toBe("active");
     const g = await row(w, "pri-1");
-    // Two corrections: the merge left unticked, on Grader calibration, and the words, on the card's priority.
+    // One correction, the words, on the card's priority. Words alone decline nothing: they may even ask for the merge.
     const all = await w.t.run((ctx) => ctx.db.query("priority_corrections").collect());
     const corrections = all.filter((c) => c.priority_id === g._id);
-    expect(all.map((c) => c.text)).toContain(`Not part of pri-1 “Evals people trust”: you declined merging them on a priority card.`);
+    expect(all.map((c) => c.text)).not.toContain(`Not part of pri-1 “Evals people trust”: you declined merging them on a priority card.`);
+    expect(all).toHaveLength(1);
     expect(corrections).toHaveLength(1);
     expect(corrections[0]).toMatchObject({ priority_id: g._id, status: "pending", user_id: w.ana, workspace: w.team });
     expect(corrections[0].text).toContain(d.short_id!);

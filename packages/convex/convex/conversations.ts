@@ -10427,8 +10427,7 @@ function isOpenAskUserQuestion(msg: any): boolean {
 }
 
 // Pending `cast decide` questions for the user that lift a session into
-// QUESTIONS (liftsAskingSession: blocking, or filed into a named stack, and not a
-// priority card, which sits in a session without being its question). Same people set as
+// QUESTIONS (liftsAskingSession: blocking or stacked, never a priority card). Same people set as
 // listForUserCore: decision_inbox (assignment), then the legacy owner index
 // for rows minted before asked_user_ids existed. session_decisions.user_id
 // is the RUNNER — using it here kept a hosted session's questions on the

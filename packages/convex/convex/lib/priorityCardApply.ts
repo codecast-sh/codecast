@@ -71,6 +71,8 @@ export async function settlePriorityCard(
   const answered = verdict.status === "answered";
   const accepted = answered ? [...new Set(ticked(verdict).map((i) => card.changes[i]?.id).filter((id): id is string => !!id))] : [];
   const text = answered ? verdict.answer_text?.trim() : undefined;
+  // Words alone ("Something else…") decline nothing: the words are the person's correction, and may even ask for the merge.
+  const declines = !(text && accepted.length === 0);
 
   const skipped: string[] = [];
   for (const c of card.changes) {
@@ -79,7 +81,7 @@ export async function settlePriorityCard(
     const into = await ownedRow(ctx, person, card.workspace, c.priority);
     if (!accepted.includes(c.id)) {
       // Declined: their correction on the absorbed priority, read by every pass and by every later card's filter.
-      if (gone && gone.status !== "merged") await doCorrect(ctx as any, person, gone.short_id, declinedMergeText(c.priority, into?.title ?? c.priority), undefined);
+      if (declines && gone && gone.status !== "merged") await doCorrect(ctx as any, person, gone.short_id, declinedMergeText(c.priority, into?.title ?? c.priority), undefined);
       continue;
     }
     // A merge stands when neither priority was merged by hand, deleted or set aside since (and the absorbed one is not the person's done).
