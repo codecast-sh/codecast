@@ -608,6 +608,7 @@ async function runClassifierLocal(golden: Golden, goldenPath: string, arg: (name
           asks.push({ trigger: a.trigger, ...reply });
         }
       }
+      if (!inherited && !s.asks.length) continue;
       placements.push({ session: s.id, title: s.title, choice, asks, ...(inherited ? { inherited_from: s.parent! } : {}) });
       if (choice && choice !== 'new') priorities.find((x) => x.short_id === choice.priority)?.sessions.unshift({ id: s.id, title: s.title, step_key: choice.step, last_active: s.last_active });
     }

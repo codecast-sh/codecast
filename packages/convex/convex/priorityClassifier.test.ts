@@ -479,7 +479,7 @@ describe('"new" and the re-run', () => {
 
   test("the calibration replay asks about each session as live would, when live would, against the priorities handed to it, and writes nothing", async () => {
     const w = await classifierWorld();
-    const { role, worker, sub } = await w.t.run(async (ctx) => {
+    const { role, worker, sub, taskTool } = await w.t.run(async (ctx) => {
       const seat = await ctx.db.insert("org_roles", { team_id: w.acme, title: "Head of Evals", created_at: 1 } as any);
       const make = (short_id: string, fields: Record<string, unknown>) => ctx.db.insert("conversations", {
         user_id: w.ana, agent_type: "claude_code", session_id: short_id, short_id, title: `Session ${short_id}`, team_id: w.acme, is_private: false, team_visibility: "full",
@@ -487,9 +487,12 @@ describe('"new" and the re-run', () => {
       } as any);
       return {
         role: await make("jx7role", { standing_role_id: seat }),
-        worker: await make("jx7work", { parent_conversation_id: w.teamConv }),
-        // Never asked about live, yet it takes its parent's placement when spawned.
-        sub: await make("jx7sub", { is_subagent: true, parent_conversation_id: w.teamConv }),
+        // A handoff: live asks about it, and it takes its source's placement first.
+        worker: await make("jx7work", { handed_off_from_conversation_id: w.teamConv }),
+        // A `cast spawn` subagent: never asked about live, yet it takes its parent's placement when spawned.
+        sub: await make("jx7sub", { is_subagent: true, parent_conversation_id: w.teamConv, spawned_by_conversation_id: w.teamConv }),
+        // A Task-tool subagent the daemon synced: never asked about and never given a placement.
+        taskTool: await make("jx7task", { is_subagent: true, parent_conversation_id: w.teamConv }),
       };
     });
     await w.send(w.ana, w.teamConv, w.now - 3 * H, "retry the flaky grader calls");
@@ -497,6 +500,7 @@ describe('"new" and the re-run', () => {
     await w.send(w.ana, w.teamConv, w.now - H, "LATER typed message");
     await w.send(w.ana, worker, w.now - 2.5 * H, "spawned worker");
     await w.send(w.ana, sub, w.now - 2.4 * H, "spawned subagent");
+    await w.send(w.ana, taskTool, w.now - 2.3 * H, "task tool subagent");
     await w.send(w.ana, w.oldConv, w.now - 2 * H, "answer the billing question");
     await w.t.run((ctx) => ctx.db.insert("thread_state_events", { conversation_id: w.oldConv, user_id: w.ana, at: w.now - 1.5 * H, text: "Billing export shipped", status: "working" }));
     await w.send(w.ana, role, w.now - 2 * H, "duty");
@@ -526,7 +530,7 @@ describe('"new" and the re-run', () => {
       ["jx7old", "new", ["title", "pin"], null],
     ]);
     expect(classifierPrompts().filter((p) => p.includes("Billing export shipped"))).toHaveLength(1);
-    expect(r.sessions_read.map((s: any) => short(s.id)).sort()).toEqual(["jx7old", "jx7role", "jx7sub", "jx7team", "jx7work"]);
+    expect(r.sessions_read.map((s: any) => short(s.id)).sort()).toEqual(["jx7old", "jx7role", "jx7sub", "jx7task", "jx7team", "jx7work"]);
     expect(r.priorities[0].sessions.map((s: any) => [short(s.id), s.step_key])).toEqual([["jx7sub", "s1"], ["jx7work", "s1"], ["jx7team", "s1"]]);
     expect(r.cost_usd).toBeGreaterThan(0);
     expect((await w.conversation(w.teamConv))?.priority_id).toBeUndefined();
