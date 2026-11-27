@@ -19,6 +19,7 @@
 import { v } from "convex/values";
 import { internalMutation, mutation, query } from "./functions";
 import type { Doc, Id } from "./_generated/dataModel";
+import { internal } from "./_generated/api";
 import { requireUserOrToken } from "./lib/auth";
 import { canAccessProject, resolveWorkspaceKey, workspaceGrantsAccess } from "./lib/access";
 import { nextShortId } from "./counters";
@@ -358,6 +359,8 @@ async function onDeployStatus(ctx: any, id: Id<"deploys">): Promise<void> {
   if (d.status === "live") {
     await fillDeployRange(ctx, id);
     await closeSuperseded(ctx, d);
+    // Runs that stopped at Deploy before a later deploy took their change live end at Live (deployCarries.completeLiveRuns).
+    await ctx.scheduler.runAfter(0, internal.deployCarries.completeRunsOnLive, { deploy: id });
   }
   const sha = d.sha ? ` at ${d.sha.slice(0, 7)}` : d.version ? ` ${d.version}` : "";
   const title = d.status === "live" ? `${d.short_id} live on ${d.target}${sha}` : `${d.short_id} to ${d.target}${sha} failed`;
