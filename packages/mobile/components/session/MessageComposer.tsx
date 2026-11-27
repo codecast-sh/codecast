@@ -3,7 +3,7 @@
 // once the text wraps. The session screen's reply box (app/session/[id]) and
 // the new session sheet's first message both draw it, so a first message can
 // carry what a reply can.
-import { useEffect, useRef, useState, type ComponentProps, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from 'react';
 import { StyleSheet, ScrollView, TouchableOpacity, KeyboardAvoidingView, Platform, View as RNView, Image, ActivityIndicator, Modal, useWindowDimensions, type StyleProp, type TextStyle, type ViewStyle } from 'react-native';
 import { useConvex } from 'convex/react';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
@@ -16,11 +16,15 @@ import { MOBILE_SESSION_STYLE as S } from '@codecast/shared/render/mobileSession
 import { mixColor } from '@/lib/solColor';
 import { GestureHandlerRootView, NativePressable } from '@/lib/gestureHandler';
 import { PulsingDot } from '@/components/SessionItem';
-import { ImageGallery } from '@/components/ImageGallery';
+import { ImageGallery, type GalleryNotes } from '@/components/ImageGallery';
+import { onImageNoteOpen, samePicture } from '@/lib/imagePins';
 import { useInboxStore, type OptimisticImage } from '@codecast/web/store/inboxStore';
 import { awaitUpload, releaseUpload } from '@codecast/web/lib/pendingUploads';
 import { insertImagePlaceholder, dropImagePlaceholder } from '@codecast/web/lib/imagePlaceholder';
 import { startUpload, forgetUpload, chooseImageSource, pickImages } from '@/components/chat/chatUpload';
+import { dropComposerPins } from '@codecast/web/lib/reviewActions';
+import { composePictureSend } from '@/lib/pictureNotesSend';
+import { stageSendPictures } from '@/lib/markPicture';
 import { beginScreenRecording, discardScreenRecording, pickScreenRecording, recordingUpload, screenRecordingContent, type BegunRecording, type PickedRecording } from '@/lib/screenRecordingSend';
 import { formatCallTime } from '@codecast/shared/contracts';
 import type { useComposerField } from '@/lib/composerField';
@@ -71,8 +75,9 @@ export function dispatchComposerSend(conversationId: string, content: string, im
 /** The images attached to the turn being written, uploading as soon as they
  *  are picked, each with an `[Image N]` token in the text (unless
  *  `placeholders` is false: a chat message carries its images beside the
- *  words, not referenced from them). */
-export function useComposerImages(setMessage: (update: (text: string) => string) => void, opts: { recordingsTo?: string; placeholders?: boolean } = {}) {
+ *  words, not referenced from them). `notesOn`: the conversation whose
+ *  pending notes can be pinned on these images, which go with an image. */
+export function useComposerImages(setMessage: (update: (text: string) => string) => void, opts: { recordingsTo?: string; placeholders?: boolean; notesOn?: string } = {}) {
   const placeholders = opts.placeholders !== false;
   // The session a screen recording would go to; none offers no recording.
   const allowRecording = !!opts.recordingsTo;
@@ -89,6 +94,7 @@ export function useComposerImages(setMessage: (update: (text: string) => string)
   const removeImage = (uri: string) => {
     const index = selectedImagesRef.current.findIndex(img => img.uri === uri);
     if (index < 0) return;
+    if (opts.notesOn) dropComposerPins(opts.notesOn, [{ previewUrl: uri, storageId: selectedImagesRef.current[index].storageId }]);
     selectedImagesRef.current = selectedImagesRef.current.filter(img => img.uri !== uri);
     setSelectedImages(selectedImagesRef.current);
     forgetUpload(uri);
@@ -154,11 +160,20 @@ export function useComposerImages(setMessage: (update: (text: string) => string)
     ? { media_type: img.mime, storage_id: img.storageId }
     : { media_type: img.mime, preview_url: img.uri, uploading: true });
 
+  /** A send's text with the pending notes taken in, and its images as
+   *  dispatchComposerSend carries them: each pinned one, and each picture the
+   *  notes quote from the transcript, as a copy with the notes' markers drawn
+   *  on (lib/pictureNotesSend, lib/markPicture). */
+  const takeSend = (conversationId: string, typed: string) => {
+    const { content, pictures } = composePictureSend(conversationId, typed, selectedImages);
+    return { content, images: stageSendPictures(convex, pictures) };
+  };
+
   /** The turn's text with its recording, when one is attached and named. */
   const withRecording = (text: string) => (recording?.begun ? screenRecordingContent(recording.begun, recording, text) : text);
 
   return {
-    selectedImages, pickImage, attachImages, removeImage, optimisticImages,
+    selectedImages, pickImage, attachImages, removeImage, optimisticImages, takeSend,
     recording,
     removeRecording: () => {
       if (recording?.begun) discardScreenRecording(convex, recording.begun);
@@ -174,6 +189,9 @@ export function useComposerImages(setMessage: (update: (text: string) => string)
 export type ComposerStatus = { color: string; dot?: string; label: string };
 
 const composerImageSrc = (img: ComposerImage) => img.uri;
+// A note pinned on a picture the turn carries names it by its local file,
+// and by its stored bytes once the upload lands (web composerPictureIndex).
+const describeComposerImage = (img: ComposerImage) => ({ src: img.uri, storageId: img.storageId, width: img.width, height: img.height });
 
 /** A button in the composer's bottom row beside attach (chat's mention and
  *  emoji): the same size and weight as attach, lit while `on`. */
@@ -201,7 +219,7 @@ export function ComposerTool({ icon, label, onPress, on }: {
 
 export function MessageComposer({
   field, images, placeholder, placeholderColor, canSend, onSend, sendIcon = 'arrow-up', stop, status, attach = true,
-  tools, error, onDismissError, suggestion, above, cardStyle, inputStyle, onFocusChange,
+  tools, error, onDismissError, suggestion, above, cardStyle, inputStyle, onFocusChange, notesTo,
 }: {
   field: ReturnType<typeof useComposerField>;
   images: ReturnType<typeof useComposerImages>;
@@ -228,6 +246,9 @@ export function MessageComposer({
   inputStyle?: StyleProp<TextStyle>;
   /** The inline box gained or lost focus (the owners strip shows while it has it). */
   onFocusChange?: (focused: boolean) => void;
+  /** The conversation whose quote batch notes pinned on the picked pictures
+   *  join (the viewer can reply there). Absent: the pictures open plain. */
+  notesTo?: string;
 }) {
   const Theme = useTheme();
   const insets = useSafeAreaInsets();
@@ -248,6 +269,26 @@ export function MessageComposer({
   const ghost = !message && !showStop ? suggestion ?? null : null;
   // The picked image open full screen, by its place in the strip.
   const [viewing, setViewing] = useState<number | null>(null);
+  const galleryNotes = useMemo<GalleryNotes<ComposerImage> | undefined>(
+    () => (notesTo ? { conversationId: notesTo, attached: true, describe: describeComposerImage } : undefined),
+    [notesTo],
+  );
+  // Opening a picked picture at one of its notes (lib/imagePins openImageNote,
+  // from the notes tray): the picture full screen, its pin's note open.
+  const pickedRef = useRef(images.selectedImages);
+  pickedRef.current = images.selectedImages;
+  useEffect(() => {
+    if (!notesTo) return;
+    return onImageNoteOpen(notesTo, (commentId) => {
+      const image = useInboxStore.getState().reviewComments[notesTo]?.find((c) => c.id === commentId)?.image;
+      if (!image?.point || !image.attached) return false;
+      const idx = pickedRef.current.findIndex((img) => samePicture({ src: img.uri, storageId: img.storageId }, image));
+      if (idx < 0) return false;
+      useInboxStore.getState().setReviewEditingId(commentId);
+      setViewing(idx);
+      return true;
+    });
+  }, [notesTo]);
 
   // Shared between the inline card and the fullscreen editor so both modes show
   // the same attachments/errors and drive the same send.
@@ -317,6 +358,7 @@ export function MessageComposer({
     <ImageGallery
       items={images.selectedImages}
       useSrc={composerImageSrc}
+      notes={galleryNotes}
       initialIndex={viewing ?? 0}
       visible={viewing !== null && expanded === inEditor && images.selectedImages.length > 0}
       onClose={() => setViewing(null)}
