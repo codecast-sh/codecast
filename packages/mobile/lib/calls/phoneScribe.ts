@@ -6,6 +6,7 @@
 // so it keeps going with the call screen closed and the phone locked.
 import { makeFunctionReference } from "convex/server";
 import { api } from "@codecast/convex/convex/_generated/api";
+import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { openAsrPcmSession } from "@codecast/web/lib/calls/asrPipe";
 import { createScribeEngine } from "@codecast/web/lib/calls/scribeEngine";
 import { useInboxStore } from "@codecast/web/store/inboxStore";
@@ -96,6 +97,7 @@ function reconcile(): void {
     transcribeOffAt: flags?.transcribe_off_at ?? null,
     scribeStartedAt: status.startedAt,
     rosterIds: call.participants.map((p) => p.identity),
+    phoneIds: call.participants.filter((p) => p.phone || p.isLocal).map((p) => p.identity),
     meId,
     live,
     scribeActive: status.active,
@@ -103,10 +105,27 @@ function reconcile(): void {
   if (verdict === "start" && !tapUnavailable && meId && Date.now() >= retryAt) void begin(roomKey, meId);
   else if (verdict === "yield") void letGo({ keepLive: true });
   else if (verdict === "stop") void letGo({ keepLive: false });
-  else if (verdict === "release") {
-    void letGo({ keepLive: true });
-    void convex.mutation(releaseScribe, { room_key: roomKey }).catch(() => {});
+  else if (verdict === "release") void release(roomKey);
+}
+
+// Hand the run to a seat that hears every track. The last words go first: a
+// graceful stop commits the line being spoken and appends it, and the flush
+// delivers them to the run's agents, while this phone is still the scribe
+// (after the hand-over the server refuses its writes). Convex applies one
+// client's mutations in order, so the release lands after both.
+async function release(roomKey: string): Promise<void> {
+  busy = true;
+  try {
+    const id = engine.getStatus().transcriptId;
+    tap?.close();
+    tap = null;
+    await engine.stop({ keepLive: true, graceful: true });
+    if (id) await convex.mutation(api.transcripts.flush, { transcript_id: id as Id<"transcripts"> }).catch(() => {});
+    await convex.mutation(releaseScribe, { room_key: roomKey }).catch(() => {});
+  } finally {
+    busy = false;
   }
+  reconcile();
 }
 
 async function begin(roomKey: string, meId: string): Promise<void> {
