@@ -27,7 +27,6 @@ import { usePrDeploy } from "../../hooks/usePrDeploy";
 import { usePullRequestRun } from "../../hooks/useSyncWorkflows";
 import { reviewOnHead, type ChangeLink } from "../../lib/ship/changePage";
 
-const TONE_ACCENT: Record<ChangeLink["tone"], "green" | "red" | "yellow" | "muted"> = { ok: "green", bad: "red", wait: "yellow", default: "muted" };
 import { copyToClipboard, relTimeShort } from "../../lib/utils";
 import { withShortcut } from "../../shortcuts/registry";
 import {
@@ -45,6 +44,8 @@ import {
   type PrReviewRow,
   type PrStateKey,
 } from "../../lib/prView";
+
+const TONE_ACCENT: Record<ChangeLink["tone"], "green" | "red" | "yellow" | "muted"> = { ok: "green", bad: "red", wait: "yellow", default: "muted" };
 
 // The header band: who, what, where it is going, and whether it can land.
 // Everything here is one line of reading, the detail lives in the tabs. The
