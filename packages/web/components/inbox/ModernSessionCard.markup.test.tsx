@@ -312,7 +312,7 @@ describe("the Modern session card", () => {
     // A flag's own native title would double the mark's tooltip.
     expect(html).not.toContain('title="Pinned"');
     const nested = render({ _id: "c-sub-mark", is_subagent: true, parent_conversation_id: "c-lead", is_idle: false, agent_status: "working" } as never, { variant: "working" });
-    expect(nested).toContain('data-mark="inbox.subagent"');
+    expect(nested).toContain('data-mark="inbox.spawned"');
   });
 
   test("text stays on the type scale", () => {

@@ -12,7 +12,8 @@ import type { DeployInfo } from "../../lib/priorityList";
 export type { DeployInfo };
 import { SessionStatusMark } from "../inbox/SessionStatusMark";
 import { Mark } from "../Mark";
-import { taskStatusMarkId } from "../../lib/marks/work";
+import { deployMarkId } from "../../lib/marks/work";
+import { deployPillState } from "../../lib/deploys/deployPill";
 import { Button } from "../ui/button";
 import { useEntityResolution } from "../../lib/entityDisplay";
 import { lookup } from "../../lib/liveEntities";
@@ -30,14 +31,15 @@ const NO_TASKS: string[] = [];
 export function DayStrip({ counts, todayIndex, landed, peak, size = "row" }: { counts: number[]; todayIndex: number; landed?: boolean[]; peak: number; size?: "row" | "mini" }) {
   const max = size === "row" ? 16 : 10;
   const top = Math.max(1, peak);
+  const perDay = counts.map((c, i) => (i === todayIndex ? `${c} today` : String(c))).join(" · ");
   return (
-    <Mark id="priority.ten_days">
+    <Mark id="priority.ten_days" hint={<span className="tabular-nums">{perDay}</span>}>
       <span data-day-strip className="flex items-end gap-px" style={{ height: max + (landed ? 5 : 0) }}>
         {counts.map((c, i) => {
           const h = c <= 0 ? 1 : Math.max(2, Math.round((Math.min(c, top) / top) * max));
           const today = i === todayIndex;
           return (
-            <span key={i} className="flex flex-col items-center justify-end gap-[2px]" title={`${c} messages${today ? " today" : ""}${landed?.[i] ? " · a milestone landed" : ""}`}>
+            <span key={i} className="flex flex-col items-center justify-end gap-[2px]">
               {landed && <i className={cn("block h-[3px] w-[2px]", landed[i] ? "bg-sol-text" : "bg-transparent")} />}
               <i
                 className={cn("block rounded-[1px]", size === "row" ? "w-[5px]" : "w-[3px]", today ? "border border-sol-green bg-transparent" : c > 0 ? "bg-sol-green" : "bg-sol-text/10")}
@@ -71,12 +73,11 @@ export function SessionChip({ s, className, labeled }: { s: SessionLine; classNa
       href={s.href}
       onClick={stop}
       data-chip="session"
-      title={`${label} · ${STATE_WORD[s.state]}`}
       className={cn("inline-flex h-6 min-w-0 max-w-[17rem] shrink items-center gap-1.5 rounded-full border border-sol-border/60 px-2 text-meta text-sol-text-muted hover:border-sol-text-dim/60 hover:text-sol-text", TOUCH_AREA, className)}
     >
       {!closed && <SessionStatusMark status={MARK[s.state]} size={12} labeled={labeled} />}
-      {s.workflow && <Mark id="priority.workflow"><Workflow className="size-3 shrink-0 text-sol-text-dim" aria-hidden /></Mark>}
-      <span className="min-w-0 truncate">{label}</span>
+      {s.workflow && <Mark id="inbox.flow"><Workflow className="size-3 shrink-0 text-sol-text-dim" aria-hidden /></Mark>}
+      <span className="min-w-0 truncate" title={`${label} · ${STATE_WORD[s.state]}`}>{label}</span>
       {closed && <span className="shrink-0 text-sol-text-dim">closed</span>}
     </Link>
   );
@@ -160,13 +161,12 @@ export function PlanChip({ plan, prefix, showSize, bar = true, labeled, classNam
       href={`/plans/${plan.short_id}`}
       onClick={stop}
       data-chip="plan"
-      title={`${plan.title} · ${plan.done}/${plan.total} done${plan.size > plan.total ? ` · ${plan.size} tasks` : ""}`}
       className={cn("inline-flex h-6 min-w-[6rem] max-w-[15rem] shrink items-center gap-1.5 rounded-[3px] border border-sol-border px-1.5 text-meta text-sol-text hover:border-sol-text-dim/60", TOUCH_AREA, className)}
     >
       <Mark id="entity.plan" labeled={labeled}><MapIcon className="size-3 shrink-0 text-sol-text-dim" aria-hidden /></Mark>
       {prefix && <span className="shrink-0 text-sol-text-dim">{prefix}</span>}
       {/* A "Part of" chip keeps 6rem for the title: in a narrow row (a phone) the bar leaves first, then "(N tasks)". */}
-      <span data-plan-title className={cn("min-w-0 truncate", showSize && "min-w-[6rem]")}>{plan.title}</span>
+      <span data-plan-title title={`${plan.title} · ${plan.done}/${plan.total} done${plan.size > plan.total ? ` · ${plan.size} tasks` : ""}`} className={cn("min-w-0 truncate", showSize && "min-w-[6rem]")}>{plan.title}</span>
       {bar && (
         <span aria-hidden data-plan-bar className={cn("flex shrink-0", showSize && "[@container(max-width:24rem)]:hidden")}>
           <Mark id="priority.plan_progress">
@@ -183,31 +183,33 @@ export function PlanChip({ plan, prefix, showSize, bar = true, labeled, classNam
   );
 }
 
-/** A task: no frame, a checkbox and its title. */
+/** A task: no frame, a checkbox (checked when done) and its title. */
 export function TaskChip({ id, className }: { id: string; className?: string }) {
   const r = useEntityResolution(id, "task");
   const task = r.entity as { title?: string; status?: string } | null;
   const done = task?.status === "done";
   const Box = done ? SquareCheck : Square;
   return (
-    <Link href={`/tasks/${id}`} onClick={stop} data-chip="task" title={task?.title ?? "Task"} className={cn("inline-flex h-6 min-w-[5rem] max-w-[14rem] shrink items-center gap-1 px-0.5 text-meta text-sol-text hover:underline decoration-sol-text-dim/50", TOUCH_AREA, done && "text-sol-text-muted", className)}>
-      <Mark id={taskStatusMarkId(task?.status)}><Box className="size-3.5 shrink-0 text-sol-text-dim" aria-hidden /></Mark>
-      <span className="min-w-0 truncate">{task?.title || "Task"}</span>
+    <Link href={`/tasks/${id}`} onClick={stop} data-chip="task" className={cn("inline-flex h-6 min-w-[5rem] max-w-[14rem] shrink items-center gap-1 px-0.5 text-meta text-sol-text hover:underline decoration-sol-text-dim/50", TOUCH_AREA, done && "text-sol-text-muted", className)}>
+      <Mark id={done ? "task.done" : "priority.task_todo"}><Box className="size-3.5 shrink-0 text-sol-text-dim" aria-hidden /></Mark>
+      <span className="min-w-0 truncate" title={task?.title ?? "Task"}>{task?.title || "Task"}</span>
     </Link>
   );
 }
 
 const PR_ICON = { open: GitPullRequest, merged: GitMerge, closed: GitPullRequestClosed } as const;
 
-/** A pull request: a solid-edged tag, the glyph for its state, its number and the state in words. */
+/** A pull request: a solid-edged tag, the glyph for its state, its number and the state in words. Every one sits under a "PRs" heading, so its glyph is named. */
 export function PrChip({ pr, state }: { pr: string; state?: string }) {
   const [repo, number] = pr.split("#");
   const st = state === "merged" ? "merged" : state === "closed" ? "closed" : "open";
   const Icon = PR_ICON[st];
+  // An unknown state claims none: the plain PR glyph.
+  const markId = state ? `pr.${st}` : "priority.pr";
   return (
-    <a href={`https://github.com/${repo}/pull/${number}`} target="_blank" rel="noreferrer" onClick={stop} data-chip="pr" title={pr}
+    <a href={`https://github.com/${repo}/pull/${number}`} target="_blank" rel="noreferrer" onClick={stop} data-chip="pr"
       className={cn("inline-flex h-[22px] shrink-0 items-center gap-1 rounded-[5px] border-[1.5px] border-sol-border bg-sol-bg px-1.5 text-meta tabular-nums text-sol-text", TOUCH_AREA)}>
-      <Mark id={`pr.${st}`} labeled={!!state}><Icon className="size-3 text-sol-text-muted" aria-hidden /></Mark><span className="font-mono">#{number}</span>{state && <span className="text-sol-text-dim">{st}</span>}
+      <Mark id={markId} labeled><Icon className="size-3 text-sol-text-muted" aria-hidden /></Mark><span className="font-mono" title={pr}>#{number}</span>{state && <span className="text-sol-text-dim">{st}</span>}
     </a>
   );
 }
@@ -234,20 +236,24 @@ export function KindCount({ kind, n }: { kind: LinkKind; n: number }) {
 /** A branch: a dashed frame, the branch glyph, its name in mono. `labeled`: a "Branches" heading sits beside it. */
 export function BranchChip({ name, labeled }: { name: string; labeled?: boolean }) {
   return (
-    <span data-chip="branch" title={name} className="inline-flex h-[22px] min-w-[5rem] max-w-[13rem] shrink items-center gap-1 rounded-[3px] border border-dashed border-sol-text-dim/60 px-1.5 font-mono text-mark text-sol-text-muted">
-      <Mark id="priority.branch" labeled={labeled}><GitBranch className="size-3 shrink-0" aria-hidden /></Mark>
-      <span className="min-w-0 truncate">{name}</span>
+    <span data-chip="branch" className="inline-flex h-[22px] min-w-[5rem] max-w-[13rem] shrink items-center gap-1 rounded-[3px] border border-dashed border-sol-text-dim/60 px-1.5 font-mono text-mark text-sol-text-muted">
+      <Mark id="git.branch" labeled={labeled}><GitBranch className="size-3 shrink-0" aria-hidden /></Mark>
+      <span className="min-w-0 truncate" title={name}>{name}</span>
     </span>
   );
 }
 
 
-/** A deploy: a filled pill, a rocket, where it went and how long ago. `labeled`: a "Deploys" heading sits beside it. */
+/**
+ * A deploy: a filled pill, a rocket in its state's color, where it went and how
+ * long ago. `labeled`: a "Deploys" heading sits beside it, so a state said in
+ * words names its rocket; a live one says so by color alone.
+ */
 export function DeployChip({ d, now, labeled }: { d: DeployInfo; now: number; labeled?: boolean }) {
   return (
-    <Link href="/deploys" onClick={stop} data-chip="deploy" title={`${d.target} · ${d.status}`} className={cn("inline-flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-sol-text/[0.07] px-2 text-meta text-sol-text hover:bg-sol-text/[0.12]", TOUCH_AREA)}>
-      <Mark id="priority.deploy" labeled={labeled}><Rocket className={cn("size-3", d.status === "live" ? "text-sol-green" : d.status === "failed" ? "text-sol-red" : "text-sol-text-muted")} aria-hidden /></Mark>
-      <span>{d.target}</span>
+    <Link href="/deploys" onClick={stop} data-chip="deploy" className={cn("inline-flex h-[22px] shrink-0 items-center gap-1 rounded-full bg-sol-text/[0.07] px-2 text-meta text-sol-text hover:bg-sol-text/[0.12]", TOUCH_AREA)}>
+      <Mark id={deployMarkId(deployPillState(d))} labeled={labeled && d.status !== "live"}><Rocket className={cn("size-3", d.status === "live" ? "text-sol-green" : d.status === "failed" ? "text-sol-red" : "text-sol-text-muted")} aria-hidden /></Mark>
+      <span title={`${d.target} · ${d.status}`}>{d.target}</span>
       {/* Not live: the state in words, so it reads in grayscale. */}
       {d.status !== "live" && <span data-deploy-state className="text-sol-text-muted">{d.status}</span>}
       <span className="tabular-nums text-sol-text-dim">{ago(d.at, now)}</span>

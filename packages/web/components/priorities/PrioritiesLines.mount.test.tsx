@@ -142,8 +142,8 @@ test("its marks are registered: bare on the closed line, labeled where the open 
     expect(marks(b.querySelector('[data-milestone="s2"] [data-line-chips]')!)).toEqual(["session.working"]);
     await act(async () => { (b.querySelector('[data-milestone="s1"] [role=button]') as HTMLElement).click(); });
     const detail = b.querySelector("[data-milestone-detail]")!;
-    // Each kind's heading names its glyph; a session's state word follows its chip; a task's state has no word.
-    expect(marks(detail)).toEqual(expect.arrayContaining(["entity.plan labeled", "priority.branch labeled", "priority.deploy labeled", "session.dormant labeled", "task.open"]));
+    // Each kind's heading names its glyph; a session's state word follows its chip; a task's state and a live deploy have no word.
+    expect(marks(detail)).toEqual(expect.arrayContaining(["entity.plan labeled", "git.branch labeled", "deploy.live", "session.dormant labeled", "priority.task_todo"]));
     expect(marks(detail)).not.toContain("session.dormant");
   } finally {
     await page.unmount();

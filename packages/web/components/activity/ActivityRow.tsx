@@ -101,8 +101,10 @@ export const ActivityRow = memo(function ActivityRow({ item, relative, showActor
           <ChevronRight aria-hidden className={`size-3.5 transition-transform modern:duration-press ${open ? "rotate-90" : ""}`} />
         </button>
         {showActor && <span title={item.actor.name}><Face actor={item.actor} size={18} /></span>}
-        <span className="flex shrink-0 items-center gap-1.5 sm:w-24 modern:sm:w-[5.5rem]" title={meta.meaning}>
-          <SessionStatusMark status={item.status} labeled />
+        <span className="flex shrink-0 items-center gap-1.5 sm:w-24 modern:sm:w-[5.5rem]">
+          {/* The word shows from sm up; below it the mark stands alone, so the legend lists it. */}
+          <span className="contents sm:hidden"><SessionStatusMark status={item.status} /></span>
+          <span className="hidden sm:contents"><SessionStatusMark status={item.status} labeled /></span>
           <SessionStatusWord status={item.status} title={item.reason ?? meta.meaning} className="hidden truncate text-ui font-medium sm:block" />
         </span>
         <Link
@@ -158,7 +160,7 @@ function ActivityRowDetail({ item, teamId }: { item: ActivityItem; teamId?: stri
   if (item.project) facts.push(["Project", <span key="p" className="inline-flex items-center gap-1.5"><span aria-hidden className={`size-1.5 rounded-full ${getLabelColor(item.project).dot}`} />{item.project}</span>]);
   const branch = branchOf(conv);
   if (branch) facts.push(["Branch", <span key="b" className="font-mono">{branch}</span>]);
-  facts.push(["Agent", <span key="a" className="inline-flex items-center gap-1.5"><AgentTypeIcon agentType={conv.agent_type || "claude_code"} className="size-3.5" />{formatAgentType(conv.agent_type || "claude_code")}{conv.model ? ` · ${formatModel(conv.model)}` : ""}</span>]);
+  facts.push(["Agent", <span key="a" className="inline-flex items-center gap-1.5"><AgentTypeIcon agentType={conv.agent_type || "claude_code"} className="size-3.5" labeled />{formatAgentType(conv.agent_type || "claude_code")}{conv.model ? ` · ${formatModel(conv.model)}` : ""}</span>]);
   if ((conv.message_count ?? 0) > 0) facts.push(["Messages", <span key="m" className="tabular-nums">{conv.message_count}</span>]);
   if (conv.duration_ms > 60_000) facts.push(["Ran", <span key="d" className="tabular-nums">{shortDuration(conv.duration_ms)}</span>]);
   if (conv.started_at) facts.push(["Started", <span key="s" className="tabular-nums">{new Date(conv.started_at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</span>]);

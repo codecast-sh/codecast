@@ -38,11 +38,10 @@ export function ActivityNowStrip({ people, personHref }: { people: NowPerson[]; 
                       <Link
                         href={`/conversation/${i.id}`}
                         data-now-session={i.id}
-                        title={i.line ? `${i.title} · ${i.line}` : i.title}
                         className="flex h-7 min-w-0 items-center gap-2 rounded-md px-0.5 text-ui hover:bg-sol-text/[0.04] modern:rounded-control"
                       >
                         <span className="flex w-[22px] shrink-0 justify-center"><SessionStatusMark status={i.status} /></span>
-                        <span className="min-w-0 truncate text-sol-text">{i.line || i.title}</span>
+                        <span title={i.line ? `${i.title} · ${i.line}` : i.title} className="min-w-0 truncate text-sol-text">{i.line || i.title}</span>
                       </Link>
                     </li>
                   ))}

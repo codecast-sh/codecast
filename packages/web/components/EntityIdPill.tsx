@@ -42,7 +42,7 @@ import {
 } from "lucide-react";
 import { taskVisual } from "./TaskStatusBadge";
 import { Mark } from "./Mark";
-import { taskStatusMarkId } from "../lib/marks/work";
+import { deployMarkId, taskStatusMarkId } from "../lib/marks/work";
 import { GoalHoverContent } from "./initiatives/GoalHoverContent";
 import { Popover, PopoverContent, PopoverAnchor } from "./ui/popover";
 import { useHoverCard } from "../hooks/useHoverCard";
@@ -129,10 +129,12 @@ import { usePrPillLook } from "../hooks/useRefLifecycle";
 import type { PrGlyph } from "../lib/changes/prPill";
 import { CommitHoverContent, PullRequestHoverContent, RepoObjectUnknownHoverContent } from "./RepoObjectHoverContent";
 import { deployLook } from "../lib/deploys/deployLook";
-import { deployPillSuffix, runRefKey } from "../lib/deploys/deployPill";
+import { deployPillSuffix, isRollback, runRefKey } from "../lib/deploys/deployPill";
 
 export { SessionHoverContent };
 
+/** Kinds whose hover card already names the kind (its own word, or GenericHoverContent's). */
+const KIND_IN_CARD = new Set<string>(["doc", "flow", "project", "proposal"]);
 /** Kinds whose pill draws the kind's own glyph. */
 const PILL_KINDS = new Set<string>(["session", "plan", "trigger", "doc", "project", "role", "person", "proposal", "call", "source", "replay", "flow", "priority", "commit"]);
 
@@ -1164,7 +1166,7 @@ export function EntityIdPill({
   // Who a session IS (session-characters.md S3): once a session wears a
   // character or a role, the reference reads as that person — the face in
   // place of the generic session glyph, the character's name in place of the
-  // title. The title is still one hover away, and on the link's tooltip, so
+  // title. The title is still one hover away, and on the label's tooltip, so
   // nothing is lost from a sentence that names four sessions.
   const prefs = useIdentityPrefs();
   const identity = isSession && entity ? sessionIdentity(entity, prefs) : null;
@@ -1210,18 +1212,24 @@ export function EntityIdPill({
   const glyph = <Icon className={`w-[1em] h-[1em] block ${isTask ? taskV.color : type === "source" && status === "error" ? "text-sol-red" : deployV?.iconClass ?? ""}`} />;
   // The glyph's registered mark: a pill shows its object's title, never its
   // kind, so the kind's glyph (or its state's) is bare. Kinds the chain above
-  // has no glyph for fall through to the task disc and stay unregistered.
+  // has no glyph for fall through to the task disc and stay unregistered. It is
+  // quiet: the pill's hover card names the state, or the kind (`cardKind`).
   const markId = isTask
     ? taskStatusMarkId(status)
     : type === "decision"
       ? `decision.${status === "answered" ? "answered" : status === "dismissed" || status === "withdrawn" ? "dismissed" : "pending"}`
       : isPr
         ? `pr.${prLook?.glyph ?? "open"}`
-        : type === "initiative"
-          ? "entity.goal"
-          : type && type !== "deploy" && PILL_KINDS.has(type)
-            ? `entity.${type}`
-            : null;
+        : deployV
+          ? deployMarkId(deployV.state, isRollback(entity))
+          : type === "initiative"
+            ? "entity.goal"
+            : type && type !== "deploy" && PILL_KINDS.has(type)
+              ? `entity.${type}`
+              : null;
+  // A kind's glyph says what the object is; the cards that don't already say it
+  // carry the word, so the quiet glyph's meaning is one hover away.
+  const cardKind = markId?.startsWith("entity.") && !(entity && KIND_IN_CARD.has(type!)) ? TYPE_LABEL[type!] : null;
 
   const colors = isSession
     ? "bg-sol-blue/[0.08] text-sol-blue hover:bg-sol-blue/[0.16]"
@@ -1349,7 +1357,9 @@ export function EntityIdPill({
   // instead of a box that jumps to a line of its own or stacks two lines
   // tall inside the sentence (ct-87448). `.entity-ref--flow` in globals.css.
   const flows = !wide && !saysState && !deployV;
-  const linkTitle = deployV ? `${fullLabel} · ${deployPillSuffix(entity, Date.now())}` : prLook?.word ? `${fullLabel} · ${prLook.word}` : wide || saysState || fullLabel !== pillLabel ? fullLabel : undefined;
+  const linkLabel = deployV ? `${fullLabel} · ${deployPillSuffix(entity, Date.now())}` : prLook?.word ? `${fullLabel} · ${prLook.word}` : undefined;
+  // A cut or shortened label keeps its whole title on the words, never around the glyph (its mark).
+  const labelTitle = wide || saysState || fullLabel !== pillLabel ? fullLabel : undefined;
   return (
     <>
     <Popover open={hoverOpen} onOpenChange={setHoverOpen}>
@@ -1365,8 +1375,7 @@ export function EntityIdPill({
           onMouseLeave={closeSoon}
           data-reveal-open={revealOpen ? "" : undefined}
           className={`not-prose entity-ref${compact ? " entity-ref-compact" : ""}${canReveal ? " entity-ref--split" : ""}${flows ? " entity-ref--flow" : " whitespace-normal inline-flex items-center gap-[0.2em] leading-none"} px-[0.2em] rounded-[0.2em] text-[1em] font-medium ${revealOpen ? "underline" : "no-underline"} ${colors}${settled ? " opacity-60" : ""}${wide ? " min-w-0 max-w-full" : saysState ? (canReveal ? " max-w-[calc(100%-1.3em)]" : " max-w-full") : ""} transition-colors cursor-pointer align-baseline hover:underline decoration-current/40 underline-offset-2`}
-          title={linkTitle}
-          aria-label={deployV || prLook?.word ? linkTitle : undefined}
+          aria-label={linkLabel}
         >
           <span className="entity-ref__icon relative flex-shrink-0 opacity-80 inline-flex items-center">
             {persona && entity ? (
@@ -1378,7 +1387,7 @@ export function EntityIdPill({
             ) : isSession && (entity?.author_name || entity?.author_avatar) ? (
               <AuthorAvatar name={entity.author_name} avatar={entity.author_avatar} size="1em" />
             ) : (
-              markId ? <Mark id={markId} side="bottom">{glyph}</Mark> : glyph
+              markId ? <Mark id={markId} quiet>{glyph}</Mark> : glyph
             )}
             {((isSession && status === "active") || (isTrigger && status === "running")) && (
               <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-sol-green" />
@@ -1387,7 +1396,7 @@ export function EntityIdPill({
           {/* The label, not the icon, gives the pill its baseline, so the
               text sits on the line with the words around it. */}
           {/* A pill that carries its state cuts its title, so the state stays on the line with it. */}
-          <span className={wide ? "self-baseline min-w-0 truncate leading-tight" : saysState ? "self-baseline min-w-0 max-w-[28ch] truncate leading-tight" : flows ? "entity-ref__label" : "self-baseline"}>{pillLabel}</span>
+          <span className={wide ? "self-baseline min-w-0 truncate leading-tight" : saysState ? "self-baseline min-w-0 max-w-[28ch] truncate leading-tight" : flows ? "entity-ref__label" : "self-baseline"} title={labelTitle}>{pillLabel}</span>
           {deployV && <DeployPillSuffix deploy={entity} />}
           {/* A pull request or commit says where it stands as its change: the Branches page's track, and the now's glyph. */}
           {saysState ? <RefChangeSegment type={isPr ? "pr" : "commit"} entity={entity} /> : null}
@@ -1423,6 +1432,7 @@ export function EntityIdPill({
             "inside" the card while crossing it, so moving up to click never
             dismisses the popover. */}
         <span aria-hidden className="absolute inset-x-0 top-full h-2" />
+        {cardKind ? <div data-card-kind className="px-3 pt-2 -mb-1.5 text-mark font-medium uppercase tracking-wide text-sol-text-dim">{cardKind}</div> : null}
         <HoverCardClose.Provider value={closeNow}>
         {/* A role's card is the one every place that names a role shows, a
             link of its own, so it is not wrapped in a second one. */}

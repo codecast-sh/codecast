@@ -104,10 +104,9 @@ export function MirrorMenuItems({ conversationId }: { conversationId: string }) 
           key={l.device_id}
           disabled={!l.online}
           onSelect={() => l.online && setLocalMirror(conversationId, true, l.device_id)}
-          title={`Keeps a copy in ${l.root}/.codecast/worktrees/sync-… on ${deviceDisplayName(l.device)}; edits there travel back here`}
         >
-          <DeviceIcon d={l.device} className="w-3 h-3 mr-1.5" />
-          <span className="flex-1 truncate">Sync with {deviceDisplayName(l.device)}</span>
+          <DeviceIcon d={l.device} className="size-4 modern:size-3.5 mr-1.5" />
+          <span className="flex-1 truncate" title={`Keeps a copy in ${l.root}/.codecast/worktrees/sync-… on ${deviceDisplayName(l.device)}; edits there travel back here`}>Sync with {deviceDisplayName(l.device)}</span>
           <span className="ml-2 flex shrink-0 items-center gap-1 whitespace-nowrap text-meta text-gray-400">
             {l.online ? "" : "offline"}
             <DeviceDot online={l.online} />

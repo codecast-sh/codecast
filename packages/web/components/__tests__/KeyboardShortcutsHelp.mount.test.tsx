@@ -95,6 +95,9 @@ test("the Icons tab reads the page only while it shows", async () => {
 
     await act(() => tabs()[1].click());
     expect(tabs()[1].getAttribute("aria-selected")).toBe("true");
+    // The first read waits out the panel's open transition.
+    expect(container.querySelector("[data-icon-legend]")?.textContent).not.toContain("No icons on this screen");
+    await act(() => new Promise((r) => setTimeout(r, 300)));
     expect(container.querySelector("[data-icon-legend]")?.textContent).toContain("No icons on this screen");
     expect(container.querySelector("kbd")).not.toBe(null); // the footer stays
     expect([made, live]).toEqual([1, 1]);

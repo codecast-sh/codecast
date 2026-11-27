@@ -369,7 +369,7 @@ export default function PlansPage() {
                   {/* The tab bar already says "Plans"; repeating it here was the
                       doubled title. Identity stays as the glyph alone. */}
                   <div className="flex items-center gap-2">
-                    <Mark id="entity.plan" labeled><MapIcon className="w-4 h-4 text-sol-cyan" /></Mark>
+                    <Mark id="entity.plan"><MapIcon className="w-4 h-4 text-sol-cyan" /></Mark>
                     <h2 className="sr-only">Plans</h2>
                   </div>
                   <div className="flex items-center gap-1.5">
@@ -537,7 +537,7 @@ function MobileList({
         legacy={
           <div ref={titlebarRef} className="px-4 py-3 border-b border-sol-border/30 flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <Mark id="entity.plan" labeled><MapIcon className="w-4 h-4 text-sol-cyan" /></Mark>
+              <Mark id="entity.plan"><MapIcon className="w-4 h-4 text-sol-cyan" /></Mark>
               <h1 className="text-base font-semibold text-sol-text">Plans</h1>
             </div>
             {toggle}

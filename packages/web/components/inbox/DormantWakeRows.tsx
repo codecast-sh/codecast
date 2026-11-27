@@ -44,10 +44,9 @@ export function DormantWakeRow({ session, rows, isActive, onOpen, onOpenSchedule
       <button
         className="w-full flex items-center gap-1.5 text-left cursor-pointer pl-2 pr-3 py-[3px] hover:bg-sol-blue/[0.05] transition-colors"
         onClick={() => (wake.kind === "trigger" ? onOpenSchedule(wake.row) : onOpen(session))}
-        title={warn ?? "Open"}
       >
-        <Mark id="inbox.sub_row" className="self-start"><SchedChildArrow label="What wakes this session" className="text-sol-text-dim/70" /></Mark>
-        <span className={`text-meta truncate min-w-0 ${warn ? "text-sol-yellow/90" : "text-sol-text-dim"}`}>{what}</span>
+        <SchedChildArrow label="What wakes this session" className="text-sol-text-dim/70" />
+        <span title={warn ?? undefined} className={`text-meta truncate min-w-0 ${warn ? "text-sol-yellow/90" : "text-sol-text-dim"}`}>{what}</span>
         <span className={`ml-auto shrink-0 whitespace-nowrap text-meta tabular-nums ${warn ? "text-sol-yellow/90" : "text-sol-text-dim"}`}><WakeWhen when={when} /></span>
       </button>
     </div>
@@ -116,16 +115,16 @@ function WakeReasonRowShell({ isActive, family, title, detail, badge, badgeClass
       <button
         className="w-full text-left cursor-pointer pr-3 pl-2 py-1 hover:bg-sol-blue/[0.05] transition-colors"
         onClick={onClick}
-        title="Open the session"
       >
         <div className="flex items-center gap-1.5 min-w-0">
-          <span className="flex items-center shrink-0 text-sol-blue/70" role="img" aria-label={ariaLabel}>
-            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-              <title>{ariaLabel}</title>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 4v12h12" />
-              <path strokeLinecap="round" strokeLinejoin="round" d="M14 12l4 4-4 4" />
-            </svg>
-          </span>
+          <Mark id="inbox.inside">
+            <span className="flex items-center shrink-0 text-sol-blue/70" role="img" aria-label={ariaLabel}>
+              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 4v12h12" />
+                <path strokeLinecap="round" strokeLinejoin="round" d="M14 12l4 4-4 4" />
+              </svg>
+            </span>
+          </Mark>
           {/* One line, in the folded strip's type: family, what it waits on,
               where that came from, and the wake's state when it has one. */}
           <div className="min-w-0 flex-1 flex items-center gap-1.5">

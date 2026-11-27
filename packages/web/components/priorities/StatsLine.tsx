@@ -126,7 +126,7 @@ function TodayBar({ today, loose, now, full }: { today: TodayView; loose: Priori
   return (
     <Popover open={noneOpen} onOpenChange={setNoneOpen}>
       {/* Its words sit beside it on the line, and its heading over it in the band. */}
-      <Mark id="priority.today_share" labeled className={full ? "w-full" : undefined}>
+      <Mark id="priority.today_share" labeled className={full ? "w-full" : undefined} hint={today.segments.map((s) => `${s.title} ${s.count}`).join(" · ")}>
         <PopoverAnchor asChild>
           <span data-today-bar className={cn("relative flex shrink-0 gap-px", full ? "h-3 w-full" : "h-[10px] w-[72px]")}>
             {today.segments.map((s) => {
@@ -140,12 +140,11 @@ function TodayBar({ today, loose, now, full }: { today: TodayView; loose: Priori
                   data-today-seg="none"
                   aria-label="Today's sessions outside every priority"
                   onClick={() => setNoneOpen(true)}
-                  title={`${s.title} · ${s.count} messages`}
                   className={cn(look, "cursor-pointer border border-sol-text-dim/50 p-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sol-blue/50", TOUCH_AREA)}
                   style={style}
                 />
               ) : (
-                <span key={s.key} data-today-seg={s.key} title={`${s.title} · ${s.count} messages`} className={look} style={style} />
+                <span key={s.key} data-today-seg={s.key} className={look} style={style} />
               );
             })}
           </span>

@@ -248,14 +248,13 @@ export function ContextChatInput({
                 type="button"
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => setSelectedAgent(agent.id)}
-                title={agent.label}
                 className={`px-2 py-0.5 text-meta font-medium rounded-md border transition-colors flex items-center gap-1 ${
                   agentKey === agent.id
                     ? agentAccent(agent.convexType).chip
                     : "bg-transparent text-sol-text-dim border-transparent hover:text-sol-text-muted"
                 }`}
               >
-                <AgentTypeIcon agentType={agent.convexType} className="w-3 h-3" />
+                <AgentTypeIcon agentType={agent.convexType} labeled={!inline || agentKey === agent.id} className="w-3 h-3" />
                 {/* Inline, the row stays one line: the picked agent says its
                     name, the others are their mark (named on hover). */}
                 {(!inline || agentKey === agent.id) && agent.label}

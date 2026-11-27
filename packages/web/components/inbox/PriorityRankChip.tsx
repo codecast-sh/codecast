@@ -12,11 +12,11 @@ export function PriorityRankChip({ rank }: { rank: NonNullable<PriorityRankLabel
   const viewerId = useInboxStore((s) => (s.currentUser?._id ? String(s.currentUser._id) : null));
   const mark = rank.workspace ? workspaceMarkOf(rank.workspace, teams, viewerId) : null;
   return (
-    <span data-priority-rank={rank.rank} data-priority-workspace={rank.workspace ?? undefined} title={rankTitle(rank, mark)} className={`${badgeVariants({ variant: "cyan" })} shrink-0 gap-1 tabular-nums`}>
+    <span data-priority-rank={rank.rank} data-priority-workspace={rank.workspace ?? undefined} className={`${badgeVariants({ variant: "cyan" })} shrink-0 gap-1 tabular-nums`}>
       <Mark id="inbox.priority_rank"><Target className="size-3 shrink-0" aria-hidden /></Mark>
-      {rank.rank}
+      <span title={rankTitle(rank, mark)}>{rank.rank}</span>
       {mark && (
-        <Mark id="inbox.priority_workspace">
+        <Mark id="inbox.priority_workspace" tinted hint={mark.name}>
           {mark.personal
             ? <User className="size-3 shrink-0 text-sol-text-muted" aria-hidden />
             : <TeamIcon icon={mark.icon} color={mark.color} className="size-3 shrink-0" />}

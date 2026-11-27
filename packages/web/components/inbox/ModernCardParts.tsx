@@ -56,32 +56,31 @@ export function ModernProjectChip({ project, label, directory, workProject, onFi
   const name = title || label || (known ? project : "");
   if (!name && !device) return null;
   const dot = title
-    ? <Mark id="inbox.project"><span aria-hidden className={`w-1.5 h-1.5 rotate-45 rounded-[1px] shrink-0 ${projectDotClass({ color: color || undefined, title })}`} /></Mark>
+    ? <Mark id="entity.project" tinted><span aria-hidden className={`w-1.5 h-1.5 rotate-45 rounded-[1px] shrink-0 ${projectDotClass({ color: color || undefined, title })}`} /></Mark>
     // A label keeps its label colour; a repository wears its workspace
     // colour, the one the card's lead tile is drawn in (WorkspaceTile).
-    : name ? <Mark id={label ? "inbox.label" : "inbox.repo"}><span aria-hidden className={`w-1.5 h-1.5 rounded-full shrink-0 ${label ? getLabelColor(name).dot : workspaceColorOf(name, workspaceColor).dot}`} /></Mark> : null;
+    : name ? <Mark id={label ? "inbox.label" : "inbox.repo"} tinted><span aria-hidden className={`w-1.5 h-1.5 rounded-full shrink-0 ${label ? getLabelColor(name).dot : workspaceColorOf(name, workspaceColor).dot}`} /></Mark> : null;
   const where = [title && `In ${title}`, label && `Label ${label}`, known && `${project} · ${directory || "no directory"}`, device?.title].filter(Boolean).join("\n");
   const onPress = title
     ? (e: React.MouseEvent) => clickProjectChip(workProjectChipKey(pid), null, e.altKey, e.shiftKey)
     : label ? onFilterLabel : onFilterProject;
   // With no project to name, the chip names the machine its glyph stands for.
-  const body = <>{device && <DeviceIcon d={device.d} labeled={!name} className="w-3 h-3" />}{dot}<span className="truncate">{name || device?.name}</span></>;
+  const body = <>{device && <DeviceIcon d={device.d} className="w-3 h-3" />}{dot}<span className="truncate" title={where}>{name || device?.name}</span></>;
   return onPress && name ? (
-    <button type="button" data-mc-chip="project" title={where} className={`${CHIP} ${PRESS} ${className}`} onClick={(e) => { stop(e); onPress(e); }}>
+    <button type="button" data-mc-chip="project" className={`${CHIP} ${PRESS} ${className}`} onClick={(e) => { stop(e); onPress(e); }}>
       {body}
     </button>
   ) : (
-    <span data-mc-chip="project" title={where} className={`${CHIP} ${className}`}>{body}</span>
+    <span data-mc-chip="project" className={`${CHIP} ${className}`}>{body}</span>
   );
 }
 
 /** The flow a session works for; opens its run. */
 export function ModernFlowChip({ runId, name, className = "" }: { runId: string | null | undefined; name?: string | null; className?: string }) {
   if (!runId) return null;
-  name ||= "Flow";
   return (
-    <Link href={runHref(runId)} data-mc-chip="flow" data-flow-chip title={name} onClick={stop} className={`${CHIP_ACCENT} ${PRESS} ${className}`}>
-      <Mark id="inbox.flow"><Workflow aria-hidden className="w-3 h-3 shrink-0" /></Mark><span className="truncate">{name}</span>
+    <Link href={runHref(runId)} data-mc-chip="flow" data-flow-chip onClick={stop} className={`${CHIP_ACCENT} ${PRESS} ${className}`}>
+      <Mark id="inbox.flow" labeled={!name}><Workflow aria-hidden className="w-3 h-3 shrink-0" /></Mark><span className="truncate" title={name || undefined}>{name || "Flow"}</span>
     </Link>
   );
 }
@@ -98,18 +97,18 @@ export function ModernBranchChip({ session, showBranch, className = "" }: { sess
     const glyph = PR_STATE_GLYPH[pr.state ?? ""] ?? {};
     const Pr = glyph.pr ?? GitPullRequest;
     const After = glyph.after;
+    const title = `${pr.repository} #${pr.number}${pr.title ? ` — ${pr.title}` : ""}\n${style.phrase}`;
     const body = (
       <>
         <Mark id={glyph.pr ? `pr.${pr.state}` : "pr.open"}><Pr aria-hidden className="w-3 h-3 shrink-0" /></Mark>
-        <span className="tabular-nums shrink-0">#{pr.number}</span>
+        <span className="tabular-nums shrink-0" title={title}>#{pr.number}</span>
         {After ? <Mark id={pr.state === "ci_red" ? "pr.failing" : `pr.${pr.state}`}><After aria-hidden data-pr-state={pr.state} className="w-3 h-3 shrink-0" style={{ color: accentVar(style.accent) }} /></Mark> : null}
         <span className="sr-only">{style.phrase}</span>
       </>
     );
-    const title = `${pr.repository} #${pr.number}${pr.title ? ` — ${pr.title}` : ""}\n${style.phrase}`;
     return href
-      ? <Link href={href} data-mc-chip="pr" title={title} onClick={stop} className={`${CHIP} ${PRESS} ${className}`}>{body}</Link>
-      : <span data-mc-chip="pr" title={title} className={`${CHIP} ${className}`}>{body}</span>;
+      ? <Link href={href} data-mc-chip="pr" onClick={stop} className={`${CHIP} ${PRESS} ${className}`}>{body}</Link>
+      : <span data-mc-chip="pr" className={`${CHIP} ${className}`}>{body}</span>;
   }
   const busy = session.cloud_placement === "pending" ? "preparing" : session.migration_batch_id ? "moving" : null;
   if (session.worktree_name || busy || session.cloud_workspace === "shared") {
@@ -120,8 +119,8 @@ export function ModernBranchChip({ session, showBranch, className = "" }: { sess
       : session.cloud_workspace === "shared" ? `Runs in the host's main checkout${branch ? ` (${branch})` : ""}`
       : `Worktree ${name}${branch ? ` (${branch})` : ""}`;
     return (
-      <span data-mc-chip="worktree" title={title} className={`${CHIP} ${className}`}>
-        <Mark id="inbox.worktree"><GitBranch aria-hidden className="w-3 h-3 shrink-0" /></Mark><span className="truncate font-mono">{name}</span>
+      <span data-mc-chip="worktree" className={`${CHIP} ${className}`}>
+        <Mark id="inbox.worktree"><GitBranch aria-hidden className="w-3 h-3 shrink-0" /></Mark><span className="truncate font-mono" title={title}>{name}</span>
       </span>
     );
   }
@@ -129,8 +128,8 @@ export function ModernBranchChip({ session, showBranch, className = "" }: { sess
   const repository = showBranch ? sessionRepository(session) : null;
   if (!repository || !branch || isDefaultBranch(branch)) return null;
   return (
-    <Link href={repoTreeHref(repository, branch)} data-mc-chip="branch" title={`${repository} at ${branch}`} onClick={stop} className={`${CHIP} ${PRESS} ${className}`}>
-      <Mark id="git.branch"><GitBranch aria-hidden className="w-3 h-3 shrink-0" /></Mark><span className="truncate font-mono">{branch}</span>
+    <Link href={repoTreeHref(repository, branch)} data-mc-chip="branch" onClick={stop} className={`${CHIP} ${PRESS} ${className}`}>
+      <Mark id="git.branch"><GitBranch aria-hidden className="w-3 h-3 shrink-0" /></Mark><span className="truncate font-mono" title={`${repository} at ${branch}`}>{branch}</span>
     </Link>
   );
 }
@@ -170,12 +169,11 @@ export function ModernCommentsChip({ session, viewerId, onOpenComments }: { sess
     <button
       type="button"
       data-mc-chip="comments"
-      title={`${n} open comment thread${n === 1 ? "" : "s"}${who && session.last_comment_excerpt ? ` — ${who}: ${session.last_comment_excerpt}` : ""}`}
       onClick={(e) => { stop(e); onOpenComments?.(session._id); }}
       className={`${yours ? CHIP_ACCENT : CHIP} ${PRESS} shrink-0`}
     >
       <Mark id="inbox.comments"><MessageSquare aria-hidden className="w-3 h-3 shrink-0" /></Mark>
-      <span className="tabular-nums">{n}</span>
+      <span className="tabular-nums" title={`${n} open comment thread${n === 1 ? "" : "s"}${who && session.last_comment_excerpt ? ` — ${who}: ${session.last_comment_excerpt}` : ""}`}>{n}</span>
     </button>
   );
 }
@@ -193,10 +191,10 @@ export function ModernLinkChip({ kind, label, title, onOpen, href, className = "
   const icon = kind === "parent" ? <Mark id="inbox.parent"><CornerUpLeft aria-hidden className="w-3 h-3 shrink-0" /></Mark>
     : kind === "implementation" ? <Mark id="inbox.implementation"><ArrowRight aria-hidden className="w-3 h-3 shrink-0" /></Mark>
     : <Mark id="inbox.role_sessions"><Users aria-hidden className="w-3 h-3 shrink-0" /></Mark>;
-  const body = <>{icon}<span className="truncate">{kind === "role" ? label : cleanTitle(label)}</span></>;
-  if (href) return <Link href={href} data-mc-chip={kind} title={title} onClick={stop} className={`${CHIP} ${PRESS} ${className}`}>{body}</Link>;
+  const body = <>{icon}<span className="truncate" title={title}>{kind === "role" ? label : cleanTitle(label)}</span></>;
+  if (href) return <Link href={href} data-mc-chip={kind} onClick={stop} className={`${CHIP} ${PRESS} ${className}`}>{body}</Link>;
   return (
-    <button type="button" data-mc-chip={kind} title={title} onClick={(e) => { stop(e); onOpen?.(); }} className={`${CHIP} ${PRESS} ${className}`}>
+    <button type="button" data-mc-chip={kind} onClick={(e) => { stop(e); onOpen?.(); }} className={`${CHIP} ${PRESS} ${className}`}>
       {body}
     </button>
   );

@@ -54,7 +54,7 @@ export function ParentSessionFace({ sessionId, title, size }: { sessionId: strin
   const row = useMemo(() => markRowOf(sessionId, title, sig), [sessionId, title, sig]);
   return (
     <span title={title} className="inline-flex shrink-0" data-owner-session>
-      <SessionMark session={row} size={size} iconClassName="w-3 h-3" />
+      <SessionMark session={row} size={size} iconClassName="w-3 h-3" quiet />
     </span>
   );
 }

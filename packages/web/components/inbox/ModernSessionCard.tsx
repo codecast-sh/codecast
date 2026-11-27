@@ -243,8 +243,8 @@ export function ModernSessionCardView({
   if (session.flow_run_id) chips.push(<ModernFlowChip key="flow" runId={session.flow_run_id} name={session.flow_name} className="shrink-[200]" />);
   if (ship) {
     chips.push(shipLink
-      ? <Link key="ship" href={shipLink} data-mc-chip="ship" title={ship.words} onClick={(e) => e.stopPropagation()} className={`${chipClass} shrink-[100] hover:text-sol-text`}><Mark id="entity.deploy"><Rocket aria-hidden className="w-3 h-3 shrink-0" /></Mark><span className="truncate">{ship.words}</span></Link>
-      : <ModernFactChip key="ship" kind="ship" title={ship.words} className="shrink-[100]"><Mark id="entity.deploy"><Rocket aria-hidden className="w-3 h-3 shrink-0" /></Mark><span className="truncate">{ship.words}</span></ModernFactChip>);
+      ? <Link key="ship" href={shipLink} data-mc-chip="ship" onClick={(e) => e.stopPropagation()} className={`${chipClass} shrink-[100] hover:text-sol-text`}><Mark id="inbox.ship"><Rocket aria-hidden className="w-3 h-3 shrink-0" /></Mark><span className="truncate" title={ship.words}>{ship.words}</span></Link>
+      : <ModernFactChip key="ship" kind="ship" className="shrink-[100]"><Mark id="inbox.ship"><Rocket aria-hidden className="w-3 h-3 shrink-0" /></Mark><span className="truncate" title={ship.words}>{ship.words}</span></ModernFactChip>);
   } else {
     chips.push(<ModernBranchChip key="branch" session={session} showBranch={chrome.showBranchPill} className="shrink-[100] min-w-[3rem]" />);
   }
@@ -278,7 +278,7 @@ export function ModernSessionCardView({
   chips.push(<ModernCommentsChip key="comments" session={session} viewerId={viewerId} onOpenComments={onOpenComments} />);
 
   const lead = nested ? (
-    <Mark id={subRow === "trigger" ? "inbox.trigger_run" : roleAbove ? "inbox.reports_to" : subRow === "worker" ? "inbox.worker" : "inbox.subagent"}>
+    <Mark id={subRow === "trigger" ? "inbox.trigger_run" : roleAbove ? "inbox.reports_to" : "inbox.spawned"} hint={roleAbove ? `@${roleAbove.handle}` : undefined}>
       <svg className={`w-3.5 h-3.5 ${subRow === "trigger" ? "text-sol-amber" : "text-sol-violet"}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.4} role="img" aria-label={subRow === "trigger" ? "Trigger session" : roleAbove ? `Reports to @${roleAbove.handle}` : subRow === "worker" ? "Worker" : "Subagent"}>
         {SUB_ARROW}
       </svg>

@@ -981,7 +981,7 @@ const CardBarStrip = memo(function CardBarStrip({ session, rows, activeSessionId
         isActive ? "bg-sol-cyan/[0.10]" : ""
       } ${paused ? "opacity-55 hover:opacity-90" : ""}`}
     >
-      <Mark id="inbox.sub_row" className="self-start"><SchedChildArrow label={label} className={primary ? undefined : "text-sol-blue/70"} /></Mark>
+      <SchedChildArrow label={label} className={primary ? undefined : "text-sol-blue/70"} />
       {primary && (
         <>
           <Mark id="entity.trigger"><Zap className="w-2.5 h-2.5 shrink-0 text-sol-amber/70" fill="currentColor" strokeWidth={0} /></Mark>
@@ -1078,10 +1078,9 @@ function WorkflowBar({ session, isActive }: { session: InboxSession; isActive: b
         disabled={opening}
         aria-busy={opening}
         onClick={open}
-        title="Jump to where this workflow started in the conversation"
       >
         <div className="flex gap-1.5 min-w-0">
-          <Mark id="inbox.sub_row">
+          <Mark id="inbox.inside">
             <span className="flex items-center mt-[2px] shrink-0 text-sol-cyan/70" role="img" aria-label={ariaLabel}>
               <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M6 4v12h12" />
@@ -1089,7 +1088,7 @@ function WorkflowBar({ session, isActive }: { session: InboxSession; isActive: b
               </svg>
             </span>
           </Mark>
-          <div className="min-w-0 flex-1">
+          <div className="min-w-0 flex-1" title="Jump to where this workflow started in the conversation">
             <div className="flex items-center gap-1.5 min-w-0">
               <span className="text-mark font-semibold uppercase tracking-wider text-sol-cyan/70 shrink-0">Workflow</span>
               <span className="text-xs truncate min-w-0 text-sol-text-muted font-normal">{session.workflow_run_name || "workflow run"}</span>
@@ -1143,13 +1142,12 @@ export function MonitorBars({ session, isActive }: {
             className="w-full text-left cursor-pointer pr-3 pl-2 py-1 hover:bg-sol-blue/[0.05] transition-colors"
             disabled={openingKey !== null}
             aria-busy={openingKey === row.toolUseId}
-            title="Jump to this task in the conversation"
             onClick={() => { void openWatchMessage(row); }}
           >
             <div className="flex gap-1.5 min-w-0">
               {/* Same corner arrow the schedule/subagent child rows carry, in
                   monitor blue: this watch runs inside the card above. */}
-              <Mark id="inbox.sub_row">
+              <Mark id="inbox.inside">
                 <span className="flex items-center mt-[2px] shrink-0 text-sol-blue/70" role="img" aria-label={ariaLabel}>
                   <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M6 4v12h12" />
@@ -1157,7 +1155,7 @@ export function MonitorBars({ session, isActive }: {
                   </svg>
                 </span>
               </Mark>
-              <div className="min-w-0 flex-1">
+              <div className="min-w-0 flex-1" title="Jump to this task in the conversation">
                 {/* Header line: identity eyebrow, what's being watched, and the
                     live badge with how long the watch has been standing. */}
                 <div className="flex items-center gap-1.5 min-w-0">
@@ -1483,10 +1481,12 @@ function TriggerDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen, on
         aria-label={`Triggers: ${rows.length} armed`}
         className="w-full flex items-center gap-1.5 overflow-hidden px-3 py-1.5 bg-sol-bg hover:bg-sol-bg-alt/60 transition-colors"
       >
-        <svg className={`w-3 h-3 shrink-0 ${attention ? "text-sol-red" : "text-sol-amber"}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-          <circle cx="12" cy="12" r="9" />
-          <path d="M12 7.5V12l3 2" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
+        <Mark id="entity.trigger" labeled>
+          <svg className={`w-3 h-3 shrink-0 ${attention ? "text-sol-red" : "text-sol-amber"}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+            <circle cx="12" cy="12" r="9" />
+            <path d="M12 7.5V12l3 2" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </Mark>
         <span className="shrink-0 whitespace-nowrap text-mark font-semibold uppercase tracking-wider text-sol-amber">
           Triggers <span className="text-sol-amber/60 modern:text-sol-amber tabular-nums">{rows.length}</span>
         </span>
@@ -3558,7 +3558,7 @@ function SessionListPanelImpl({
               {renderSection(deviceDisplayName(device), items, "text-sol-text", undefined, undefined, {
                 key: `machine_${deviceId}`,
                 monoLabel: true,
-                icon: device ? <DeviceIcon d={device} labeled className="w-3 h-3 shrink-0" /> : undefined,
+                icon: device ? <DeviceIcon d={device} className="w-3 h-3 shrink-0" /> : undefined,
                 ...groupTally(items),
               })}
             </div>

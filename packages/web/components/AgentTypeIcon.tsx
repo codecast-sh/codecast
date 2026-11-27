@@ -8,12 +8,13 @@ import { agentMarkId } from "../lib/marks/inbox";
 /** The agent's glyph, named on hover (lib/marks, agent.*). `mono` drops the
  *  brand colour so the glyph takes the colour around it (currentColor): the
  *  session mark draws it in its workspace's ink. `labeled` when the agent's
- *  name sits beside it. The caller's className sizes and places the mark's
- *  box; the glyph fills it. */
-export function AgentTypeIcon({ agentType, className = "w-3 h-3", mono = false, labeled }: { agentType: string; className?: string; mono?: boolean; labeled?: boolean }) {
+ *  name sits beside it; `quiet` inside something whose hover already names
+ *  it; `hint` adds what else the hover should say. The
+ *  caller's className sizes and places the mark's box; the glyph fills it. */
+export function AgentTypeIcon({ agentType, className = "w-3 h-3", mono = false, labeled, quiet, hint }: { agentType: string; className?: string; mono?: boolean; labeled?: boolean; quiet?: boolean; hint?: string }) {
   const glyph = agentGlyph(agentType, mono);
   if (!glyph) return null;
-  return <Mark id={agentMarkId(agentType, isHostedAgentType(agentType))} labeled={labeled} className={className}>{glyph}</Mark>;
+  return <Mark id={agentMarkId(agentType, isHostedAgentType(agentType))} labeled={labeled} quiet={quiet} tinted={mono} hint={hint} className={className}>{glyph}</Mark>;
 }
 
 function agentGlyph(agentType: string, mono: boolean) {

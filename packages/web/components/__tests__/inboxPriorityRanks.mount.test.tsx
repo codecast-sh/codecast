@@ -164,7 +164,7 @@ test("in the Priorities view a card shows its rank, another workspace's with its
   const chip = (sid: string) => m.host.querySelector(`[data-session-id="${sid}"] [data-priority-rank]`);
   expect(rankOf(m.host, FIRST)).toBe("1");
   expect(rankOf(m.host, SECOND)).toBe("7");
-  expect(chip(FIRST)?.getAttribute("title")).toBe("Your priority #1");
+  expect(chip(FIRST)?.querySelector("[title]")?.getAttribute("title")).toBe("Your priority #1");
   expect(chip(FIRST)?.querySelectorAll("svg").length).toBe(1);
   // No priority, a teammate's, or one whose rank is nowhere loaded: no chip at all.
   expect(chip(UNLINKED)).toBeNull();
@@ -173,7 +173,7 @@ test("in the Priorities view a card shows its rank, another workspace's with its
   // The viewer's personal priority: its rank there, the target then the personal mark.
   expect(rankOf(m.host, ELSEWHERE)).toBe("2");
   expect(chip(ELSEWHERE)?.getAttribute("data-priority-workspace")).toBe("user:me");
-  expect(chip(ELSEWHERE)?.getAttribute("title")).toBe("Your priority #2 in your personal workspace");
+  expect(chip(ELSEWHERE)?.querySelector("[title]")?.getAttribute("title")).toBe("Your priority #2 in your personal workspace");
   expect(chip(ELSEWHERE)?.querySelectorAll("svg").length).toBe(2);
   // This workspace's ranks first, then the other workspace's, then the rest.
   const order = cardOrder(m.host);

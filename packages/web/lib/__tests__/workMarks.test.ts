@@ -5,7 +5,8 @@
 import { describe, expect, test } from "bun:test";
 import { TASK_STATUS_CATEGORIES, PLAN_STATES } from "@codecast/shared/tasks";
 import { MARK_BY_ID } from "../marks";
-import { taskStatusMarkId } from "../marks/work";
+import { deployMarkId, taskStatusMarkId } from "../marks/work";
+import { DEPLOY_STATE_ICON, REACH_ICON } from "../deploys/deployLook";
 import { TASK_PRIORITY, taskPriorityLevel } from "../taskPriority";
 import { PLAN_STATUS_CONFIG } from "../planStatus";
 import { PR_STATE_META } from "../prView";
@@ -20,6 +21,13 @@ describe("work marks", () => {
     for (const s of Object.keys(PLAN_STATUS_CONFIG)) registered(`plan.${s}`);
     for (const s of PLAN_STATES) registered(`plan.${s}`);
     for (const s of Object.keys(PR_STATE_META)) registered(`pr.${s}`);
+  });
+
+  test("every deploy state and change state a pill draws is registered", () => {
+    for (const s of Object.keys(DEPLOY_STATE_ICON)) registered(deployMarkId(s));
+    registered(deployMarkId("live", true));
+    for (const s of Object.keys(REACH_ICON)) registered(`deploy.${s}`);
+    for (const s of ["done", "active", "waiting", "you", "back", "failed", "skipped", "stopped"]) registered(`change.now.${s}`);
   });
 
   test("every entity kind a card draws has a mark", () => {

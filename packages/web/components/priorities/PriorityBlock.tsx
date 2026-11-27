@@ -151,7 +151,7 @@ function Progress({ model, layout, onToggle }: { model: PriorityModel; layout: L
   const body = (
     <>
       {layout === "wide" && (
-        <Mark id="priority.critical">
+        <Mark id="priority.critical" hint={onToggle ? "click to show them" : undefined}>
           <span className="flex gap-[2px]">
             {Array.from({ length: t }, (_, i) => <i key={i} className={cn("block h-[7px] w-[7px] rounded-[1.5px]", i < d ? "bg-sol-green" : "bg-sol-text/15")} />)}
           </span>
@@ -161,7 +161,7 @@ function Progress({ model, layout, onToggle }: { model: PriorityModel; layout: L
     </>
   );
   return onToggle
-    ? <button type="button" data-progress-toggle onClick={onToggle} title={`${d} of ${t} critical milestones done: show them`} className={cn("flex items-center gap-1.5 rounded px-1 hover:bg-sol-bg-alt", TOUCH_AREA)}>{body}</button>
+    ? <button type="button" data-progress-toggle onClick={onToggle} aria-label={`${d} of ${t} critical milestones done: show them`} className={cn("flex items-center gap-1.5 rounded px-1 hover:bg-sol-bg-alt", TOUCH_AREA)}>{body}</button>
     : <span className="flex items-center gap-1.5 px-1">{body}</span>;
 }
 
@@ -190,8 +190,8 @@ const lastLanded = (days: number | null) => (days == null ? "none yet" : days ==
 /** "N landed · last Nd", where the momentum column has no room for words beside its strip: under it, on the row's meta line. */
 function MomentumWords({ model, stalled, className }: { model: PriorityModel; stalled?: boolean; className?: string }) {
   return (
-    <span data-momentum-words title={`${model.landed10} critical milestones landed in 10 days`} className={cn("whitespace-nowrap text-mark tabular-nums", className)}>
-      <span className="text-sol-text">{model.landed10} landed</span>
+    <span data-momentum-words className={cn("whitespace-nowrap text-mark tabular-nums", className)}>
+      <span title={`${model.landed10} critical milestones landed in 10 days`} className="text-sol-text">{model.landed10} landed</span>
       {/* `stalled`: a stalled priority says so here, in place of how long since. */}
       <span className="text-sol-text-dim"> · {stalled && model.stalledDays != null ? <StalledMark days={model.stalledDays} className="ml-0.5 inline-flex align-middle" /> : lastLanded(model.lastLandedDays)}</span>
     </span>

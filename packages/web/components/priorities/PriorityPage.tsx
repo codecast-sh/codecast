@@ -96,7 +96,7 @@ function PriorityBody({ row }: { row: PriorityView }) {
     <article data-priority-page={row.short_id} className="[container-type:inline-size]">
       {/* On a phone the actions take a row of their own above the title, so the title has the whole width. */}
       <header className="flex items-start gap-3 max-sm:flex-col max-sm:gap-1">
-        <span className="mt-0.5 hidden size-8 shrink-0 items-center justify-center rounded-lg bg-sol-text/[0.06] text-sol-text-muted sm:flex"><Mark id="entity.priority"><Target className="size-[18px]" aria-hidden /></Mark></span>
+        <span className="mt-0.5 hidden size-8 shrink-0 items-center justify-center rounded-lg bg-sol-text/[0.06] text-sol-text-muted sm:flex"><Mark id="entity.priority" labeled><Target className="size-[18px]" aria-hidden /></Mark></span>
         <div className="min-w-0 flex-1 max-sm:self-stretch">
           {/* The priority's own page shows its title whole. */}
           <h1 data-priority-title className="break-words text-[22px] font-semibold leading-tight text-sol-text">{row.title}</h1>

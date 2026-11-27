@@ -7,13 +7,26 @@ import type { ReactNode } from "react";
 import { MARK_BY_ID, type MarkGroup } from "../lib/marks";
 import { openIconLegend } from "../lib/iconLegend";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
+import type { ShortcutAction } from "../shortcuts";
 
 const warned = new Set<string>();
 
-/** `labeled`: its word sits beside it here, so the legend leaves it out. */
-export function Mark({ id, labeled, side = "top", className = "", children }: {
+/**
+ * `labeled`: its word sits beside it here, so the legend leaves it out.
+ * `quiet`: listed in the legend, but no tooltip of its own, for a glyph inside
+ * something that already opens a hover card naming it.
+ * `tinted`: the glyph wears its object's own colour (a project's, a label's,
+ * a repository's), not a colour that means something, so the legend keeps one
+ * picture of it, drawn in neutral ink.
+ * `action` / `hint`: keycaps or a short note after "Name · meaning" in the tooltip.
+ */
+export function Mark({ id, labeled, quiet, tinted, action, hint, side = "top", className = "", children }: {
   id: string;
   labeled?: boolean;
+  quiet?: boolean;
+  tinted?: boolean;
+  action?: ShortcutAction;
+  hint?: ReactNode;
   /** Layout for the mark's box (a percent size, a margin), which the glyph inside cannot take. */
   className?: string;
   side?: "top" | "bottom" | "left" | "right";
@@ -27,9 +40,11 @@ export function Mark({ id, labeled, side = "top", className = "", children }: {
     }
     return <>{children}</>;
   }
+  const box = <span data-mark={id} data-mark-labeled={labeled || undefined} data-mark-tinted={tinted || undefined} className={`inline-flex shrink-0 items-center justify-center${className && ` ${className}`}`}>{children}</span>;
+  if (quiet) return box;
   return (
-    <ShortcutTooltip side={side} label={<><span className="font-medium">{def.name}</span><span className="text-sol-text-muted"> · {def.meaning}</span></>}>
-      <span data-mark={id} data-mark-labeled={labeled || undefined} className={`inline-flex shrink-0 items-center justify-center${className && ` ${className}`}`}>{children}</span>
+    <ShortcutTooltip side={side} action={action} hint={hint} label={<><span className="font-medium">{def.name}</span><span className="text-sol-text-muted"> · {def.meaning}</span></>}>
+      {box}
     </ShortcutTooltip>
   );
 }

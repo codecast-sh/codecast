@@ -14,7 +14,7 @@ import { TaskLineChip } from "./StationStrip";
 import { TaskDecisionChip } from "../decisions/TaskDecisions";
 import { TaskStatusBadge } from "../TaskStatusBadge";
 import { LabelChips } from "../LabelChips";
-import { AgentTypeIcon, formatAgentType } from "../AgentTypeIcon";
+import { AgentTypeIcon } from "../AgentTypeIcon";
 import type { ItemRowState } from "../ListRowShell";
 import { taskLivenessState } from "../../lib/liveness";
 import { statusVisual, taskStatusOf, useTeamTaskStatusList } from "../../lib/taskStatuses";
@@ -129,9 +129,9 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
         aria-label={withShortcut("Change status", "task.status")}
       >
         {activeSession && taskLivenessState(task.status, activeSession) === "active" ? (
-          <LivePulseHalo><Mark id={statusMark}><StatusIcon className={`w-4 h-4 ${status.color}`} /></Mark></LivePulseHalo>
+          <LivePulseHalo><Mark id={statusMark} action="task.status" hint="Change status"><StatusIcon className={`w-4 h-4 ${status.color}`} /></Mark></LivePulseHalo>
         ) : (
-          <Mark id={statusMark}><StatusIcon className={`w-4 h-4 ${status.color}`} /></Mark>
+          <Mark id={statusMark} action="task.status" hint="Change status"><StatusIcon className={`w-4 h-4 ${status.color}`} /></Mark>
         )}
       </button>
       {<ShortId id={task.short_id} className="text-xs text-sol-text-dim w-16 cq-hide-compact" />}
@@ -163,10 +163,9 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
         <button
           onClick={(e) => { e.stopPropagation(); router.push(`/tasks/${parentChip.id}`); }}
           className={`flex items-center gap-1 text-meta px-1.5 py-0 rounded border border-sol-border/40 text-sol-text-dim hover:text-sol-cyan hover:border-sol-cyan/40 flex-shrink-0 font-mono cq-hide-compact transition-colors max-w-[10rem]${m ? ` ${modernPill({}, "modern:font-mono modern:font-normal modern:hover:text-sol-cyan")}` : ""}`}
-          title={`Subtask of ${parentChip.short_id}: ${parentChip.title}`}
         >
           <Mark id="task.parent"><CornerDownRight className="w-3 h-3 flex-shrink-0" /></Mark>
-          <span className="truncate">{parentChip.short_id}</span>
+          <span className="truncate" title={`Subtask of ${parentChip.short_id}: ${parentChip.title}`}>{parentChip.short_id}</span>
         </button>
       )}
       {/* A duplicate is dropped but keeps pointing at the task that superseded
@@ -191,8 +190,8 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
         const body = (
           <>
             {onToggleCollapse ? (collapsed ? <ChevronRight className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />) : null}
-            <Mark id="task.subtasks"><SubtaskRing done={progress.done} total={progress.total} /></Mark>
-            {progress.done}/{progress.total}
+            <Mark id="task.subtasks" hint={onToggleCollapse ? (collapsed ? "click to expand" : "click to collapse") : undefined}><SubtaskRing done={progress.done} total={progress.total} /></Mark>
+            <span title={tip}>{progress.done}/{progress.total}</span>
             {hiddenDescendantCount > 0 && <Mark id="task.hidden_subtasks"><Bot className="w-3 h-3" /></Mark>}
           </>
         );
@@ -202,9 +201,9 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
         // A button only when it actually toggles something; otherwise a span so
         // it doesn't look pressable-but-dead (the all-hidden case).
         return onToggleCollapse ? (
-          <button onClick={(e) => { e.stopPropagation(); onToggleCollapse(); }} className={`${cls} transition-colors ${hiddenDescendantCount > 0 ? "hover:bg-sol-cyan/10" : "hover:text-sol-text"}`} title={tip}>{body}</button>
+          <button onClick={(e) => { e.stopPropagation(); onToggleCollapse(); }} className={`${cls} transition-colors ${hiddenDescendantCount > 0 ? "hover:bg-sol-cyan/10" : "hover:text-sol-text"}`}>{body}</button>
         ) : (
-          <span className={cls} title={tip}>{body}</span>
+          <span className={cls}>{body}</span>
         );
       })()}
       {/* Origin. A task pulled from a call names the call and opens it. A
@@ -217,14 +216,13 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
       ) : taskOrigin(task) === "meeting" ? (
         <span
           className={`flex items-center gap-1 text-meta px-1.5 py-0 rounded bg-sol-magenta/10 text-sol-magenta border border-sol-magenta/20 flex-shrink-0 cq-hide-compact${m ? ` ${modernPill({ tone: "magenta" })}` : ""}`}
-          title="Captured from a meeting"
         >
-          <Users className="w-3 h-3" />meeting
+          <Mark id="task.from_meeting" labeled><Users className="w-3 h-3" /></Mark>meeting
         </span>
       ) : taskOrigin(task) === "agent" && (
         task.source_agent_type ? (
-          <span className="flex-shrink-0 opacity-60 cq-hide-compact" title={`Created by ${formatAgentType(task.source_agent_type)}`}>
-            <AgentTypeIcon agentType={task.source_agent_type} className="w-3.5 h-3.5" />
+          <span className="flex-shrink-0 opacity-60 cq-hide-compact">
+            <AgentTypeIcon agentType={task.source_agent_type} className="w-3.5 h-3.5" hint="filed this task" />
           </span>
         ) : (
           <span className="flex-shrink-0 cq-hide-compact"><Mark id="task.agent_made"><Bot className="w-3.5 h-3.5 text-sol-text-dim/60" /></Mark></span>
@@ -303,7 +301,7 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
           className="flex-shrink-0 hover:scale-125 transition-transform cq-hide-compact"
           aria-label={withShortcut("Set priority", "task.priority")}
         >
-          <Mark id={`task.priority.${priorityLevel}`}><PriorityIcon className={`w-3.5 h-3.5 ${priority.color}`} /></Mark>
+          <Mark id={`task.priority.${priorityLevel}`} action="task.priority" hint="Set priority"><PriorityIcon className={`w-3.5 h-3.5 ${priority.color}`} /></Mark>
         </button>
       )}
       <span className="text-xs text-sol-text-dim w-8 text-right tabular-nums cq-hide-compact">{ageStr}</span>
@@ -368,9 +366,9 @@ export function KanbanCard({
           <ShortId id={task.short_id} />
           {task.external && <IssueLink external={task.external} className="max-w-[9rem]" />}
           {parentChip && (
-            <span className="flex items-center gap-0.5 min-w-0 opacity-80" title={`Subtask of ${parentChip.short_id}: ${parentChip.title}`}>
+            <span className="flex items-center gap-0.5 min-w-0 opacity-80">
               <Mark id="task.parent"><CornerDownRight className="w-2.5 h-2.5 flex-shrink-0" /></Mark>
-              <span className="truncate max-w-[7rem]">{parentChip.short_id}</span>
+              <span className="truncate max-w-[7rem]" title={`Subtask of ${parentChip.short_id}: ${parentChip.title}`}>{parentChip.short_id}</span>
             </span>
           )}
         </span>

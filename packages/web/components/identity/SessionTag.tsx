@@ -28,7 +28,7 @@ type TagRow = IdentityRow & { agent_type?: string | null } & Record<string, unkn
  *  with the agent inside (WorkspaceTile), and the brand alone in Classic and
  *  Minimal. Every list of sessions leads its rows with this, so a session
  *  looks the same on the board, the rail, a task and the org chart. */
-export function SessionMark({ session, size = 16, iconClassName = "w-3.5 h-3.5", className = "flex-shrink-0", showAgent = true, onPick }: {
+export function SessionMark({ session, size = 16, iconClassName = "w-3.5 h-3.5", className = "flex-shrink-0", showAgent = true, quiet, onPick }: {
   session: TagRow;
   size?: number;
   /** The plain brand's box, sized to sit beside the surface's text. */
@@ -36,15 +36,17 @@ export function SessionMark({ session, size = 16, iconClassName = "w-3.5 h-3.5",
   className?: string;
   /** Off (the viewer hid agent icons), Modern's tile shows the workspace's initial. */
   showAgent?: boolean;
+  /** Inside something whose own hover already names it: the agent mark keeps no tooltip. */
+  quiet?: boolean;
   /** Opens the character picker: the face becomes a button with its hover card. */
   onPick?: (e: MouseEvent) => void;
 }) {
   const agent = session.agent_type || "claude_code";
   const modern = useIsModernStyle();
-  const badge = showAgent ? <AgentTypeIcon agentType={agent} className="w-full h-full p-[1px]" /> : undefined;
-  const fallback = modern ? <WorkspaceTile row={session} size={size} showAgent={showAgent} className={className} /> : (
-    <span className={`inline-flex ${className}`} title={agent}>
-      <AgentTypeIcon agentType={agent} className={iconClassName} />
+  const badge = showAgent ? <AgentTypeIcon agentType={agent} quiet={quiet} className="w-full h-full p-[1px]" /> : undefined;
+  const fallback = modern ? <WorkspaceTile row={session} size={size} showAgent={showAgent} quiet={quiet} className={className} /> : (
+    <span className={`inline-flex ${className}`}>
+      <AgentTypeIcon agentType={agent} quiet={quiet} className={iconClassName} />
     </span>
   );
   if (onPick) return <IdentityFace row={session} size={size} className={className} badge={badge} onPick={onPick} fallback={fallback} />;

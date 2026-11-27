@@ -104,7 +104,7 @@ export function relativeSeen(lastSeen: number, now = Date.now()): string {
  *  it. The caller's className sizes and places the mark's box; the glyph fills it. */
 export function DeviceIcon({ d, className = "w-3 h-3", labeled }: { d: Pick<Device, "platform"> & { is_remote?: boolean; icon?: string | null; icon_color?: string | null }; className?: string; labeled?: boolean }) {
   if (d.icon && (TEAM_ICONS as readonly string[]).includes(d.icon)) {
-    return <Mark id="device.custom" labeled={labeled} className={className}><TeamIcon icon={d.icon} color={d.icon_color} className="size-full" /></Mark>;
+    return <Mark id="device.custom" labeled={labeled} tinted className={className}><TeamIcon icon={d.icon} color={d.icon_color} className="size-full" /></Mark>;
   }
   if (d.is_remote) {
     // cloud / remote box
@@ -135,11 +135,13 @@ export function DeviceIcon({ d, className = "w-3 h-3", labeled }: { d: Pick<Devi
   );
 }
 
-/** Live online/offline dot. */
-export function DeviceDot({ online, className = "", labeled }: { online: boolean; className?: string; labeled?: boolean }) {
+/** Live online/offline dot. `marks` names it as something other than a
+ *  machine's connection (the tmux pill's pane); `quiet` inside a control that
+ *  already says what it is on hover. */
+export function DeviceDot({ online, className = "", labeled, quiet, marks }: { online: boolean; className?: string; labeled?: boolean; quiet?: boolean; marks?: { online: string; offline: string } }) {
   return (
     // Still, never a ping: the dot is drawn once per machine row.
-    <Mark id={online ? "device.online" : "device.offline"} labeled={labeled} className={className}>
+    <Mark id={marks ? (online ? marks.online : marks.offline) : online ? "device.online" : "device.offline"} labeled={labeled} quiet={quiet} className={className}>
       <span className="relative inline-flex h-1.5 w-1.5 flex-shrink-0">
         <span className={`relative inline-flex h-1.5 w-1.5 rounded-full ${online ? "bg-sol-green ring-2 ring-sol-green/30" : "bg-sol-text-dim"}`} />
       </span>
@@ -268,7 +270,7 @@ export function DeviceBadge({
         className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-meta bg-sol-text-dim/10 text-sol-text-muted border border-sol-text-dim/25 ${className}`}
         title="No device assigned yet — the next message routes to your most-recently-active machine."
       >
-        <DeviceDot online={false} labeled />
+        <DeviceDot online={false} labeled quiet />
         Unassigned
       </span>
     );
@@ -277,10 +279,9 @@ export function DeviceBadge({
   return (
     <span
       className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-meta border ${deviceAccentClasses(d)} max-w-[160px] ${className}`}
-      title={`Runs on ${deviceDisplayName(d)} (${deviceKindLabel(d)}) — ${d.online ? "online" : `last seen ${relativeSeen(d.last_seen)}`}`}
     >
-      <DeviceIcon d={d} labeled />
-      <span className="truncate">{deviceDisplayName(d)}</span>
+      <DeviceIcon d={d} />
+      <span className="truncate" title={`Runs on ${deviceDisplayName(d)} (${deviceKindLabel(d)}) — ${d.online ? "online" : `last seen ${relativeSeen(d.last_seen)}`}`}>{deviceDisplayName(d)}</span>
       <DeviceDot online={d.online} />
     </span>
   );
@@ -345,7 +346,7 @@ export function RunOnDeviceItems({
         onSelect={() => offered && move(d, isRemote)}
         className={isOwner ? RUNNING_HERE_ROW : isDest ? MOVING_HERE_ROW : undefined}
       >
-        <DeviceIcon d={d} labeled className="size-4 modern:size-3.5 mr-1.5" />
+        <DeviceIcon d={d} className="size-4 modern:size-3.5 mr-1.5" />
         <span className="flex-1 truncate">
           {offered ? `Move to ${name}` : name}
           {host && <span className="ml-1.5 text-sol-text-dim">{host}</span>}
@@ -373,7 +374,7 @@ export function RunOnDeviceItems({
       <DropdownMenuLabel className="text-mark uppercase tracking-wide text-sol-text-dim">Run on device · which machine</DropdownMenuLabel>
       {foreignOwner && (
         <DropdownMenuItem disabled className={RUNNING_HERE_ROW}>
-          <DeviceIcon d={foreignOwner} labeled className="size-4 modern:size-3.5 mr-1.5" />
+          <DeviceIcon d={foreignOwner} className="size-4 modern:size-3.5 mr-1.5" />
           <span className="flex-1 truncate">{deviceDisplayName(foreignOwner)}</span>
           <RunningHereTag
             online={foreignOwner.online}
