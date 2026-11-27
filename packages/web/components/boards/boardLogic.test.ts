@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { resizedBox, resizeOps, rotatedResizeBox, hitKey, withFrameContents, withGroup } from "./useBoardGestures";
+import { resizedBox, resizeOps, rotatedResizeBox, hitKey, withGroup } from "./useBoardGestures";
 import { fitCam, zoomAround } from "./useBoardCamera";
 import type { BoardEl } from "./boardTypes";
+import { carriedKeys } from "@codecast/shared/artifacts/board";
 
 const el = (key: string, kind: string, f: Record<string, any>) => ({ key, kind, rev: 1, ...f }) as BoardEl;
 
@@ -112,9 +113,8 @@ describe("a frame carries its arrows", () => {
     el("aOut", "connector", { from: "a", to: "out" }),
     el("freeOut", "connector", { x1: 20, y1: 20, x2: 900, y2: 300 }),
   ];
-  const byKey = new Map(els.map((e) => [e.key, e]));
   test("arrows whose ends are all inside move; ones reaching outside stay", () => {
-    const moved = new Set(withFrameContents(["f"], byKey));
+    const moved = new Set(carriedKeys({ elements: els }, ["f"]));
     for (const k of ["a", "b", "ab", "aFree", "free"]) expect(moved.has(k)).toBe(true);
     for (const k of ["out", "aOut", "freeOut"]) expect(moved.has(k)).toBe(false);
   });

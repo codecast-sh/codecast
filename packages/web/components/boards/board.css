@@ -182,7 +182,72 @@ html.light .board-root {
   white-space: nowrap;
   cursor: default;
   pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
+/* Theme frames (pl-1145): the discussion status, the "new" mark, the object's chip. */
+.board-frame-status,
+.board-frame-new {
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  padding: 0 5px;
+  border-radius: 4px;
+  color: var(--sol-text-muted);
+  background: color-mix(in srgb, var(--sol-text-dim) 14%, transparent);
+}
+.board-frame-status.is-leaning { color: var(--sol-blue); background: color-mix(in srgb, var(--sol-blue) 14%, transparent); }
+.board-frame-status.is-decided { color: var(--sol-green); background: color-mix(in srgb, var(--sol-green) 16%, transparent); }
+.board-frame-status.is-parked { color: var(--sol-text-dim); background: color-mix(in srgb, var(--sol-text-dim) 10%, transparent); }
+.board-frame-new { color: var(--sol-violet); background: color-mix(in srgb, var(--sol-violet) 14%, transparent); }
+.board-frame-chip { display: inline-flex; align-items: center; min-width: 0; font-weight: 500; cursor: pointer; }
+/* Reflow and Collapse sit at the title's height, clear of the frame's right edge and of each other.
+   The padding below them bridges the gap to the frame, so the pointer can reach them without losing the hover. */
+.board-frame-tools {
+  position: absolute;
+  right: 12px;
+  bottom: 100%;
+  display: flex;
+  gap: 8px;
+  padding-bottom: 6px;
+  transform-origin: 100% 100%;
+  transform: scale(max(1, calc(0.7 / var(--z))));
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease-out;
+}
+.board-frame-tools .board-bar-btn { background: var(--sol-card); border: 1px solid var(--sol-border); box-shadow: var(--board-chrome-shadow); }
+.board-frame-tools .board-bar-btn:hover { background: var(--sol-bg-alt); }
+.board-frame:hover > .board-frame-tools,
+.board-frame-tools:focus-within { opacity: 1; pointer-events: auto; }
+.board-root.is-readonly .board-frame-tools { display: none; }
+/* A folded frame: one pill reading "<chip or title> (n)", with the chevron that opens it. */
+.board-frame-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px 0 8px;
+  border-radius: 12px;
+  font-size: 15px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  cursor: default;
+}
+.board-frame-pill-chev {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  color: inherit;
+}
+button.board-frame-pill-chev:hover { background: color-mix(in srgb, currentColor 12%, transparent); }
+.board-frame-pill-title { display: inline-flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; }
+.board-frame-pill-count { flex: none; color: var(--sol-text-dim); font-weight: 500; }
 
 .board-image { border-radius: 4px; overflow: hidden; background: var(--sol-bg-alt); }
 .board-image img { width: 100%; height: 100%; object-fit: contain; display: block; pointer-events: none; }

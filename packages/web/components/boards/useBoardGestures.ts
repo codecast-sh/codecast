@@ -6,6 +6,7 @@ import { useCallback, useRef, useState } from "react";
 import type { ArtifactOp } from "@codecast/shared/artifacts";
 import {
   BOARD_DEFAULT_SIZE,
+  carriedKeys,
   clearOffset,
   cloneOps,
   connectorGeometry,
@@ -59,6 +60,8 @@ export type GestureDeps = {
   live: BoardLive;
   /** Current merged elements by key (a ref the view refreshes every render). */
   byKey: React.MutableRefObject<Map<string, BoardEl>>;
+  /** What folded frames hold: off the canvas, so never marqueed or snapped to. */
+  hidden(): Set<string>;
   selection: string[];
   setSelection(keys: string[]): void;
   tool: BoardTool;
@@ -86,32 +89,6 @@ export function hitKey(target: EventTarget | null): string | null {
   return node.getAttribute("data-key");
 }
 
-/**
- * The keys plus everything inside any selected frame, plus connectors whose
- * both ends are in the set. Moving, nudging and duplicating a frame all act
- * on this, so a frame always takes its contents along.
- */
-export function withFrameContents(keys: readonly string[], byKey: Map<string, BoardEl>): string[] {
-  const set = new Set(keys);
-  const frames: Box[] = [];
-  for (const k of keys) {
-    const el = byKey.get(k);
-    if (el?.kind !== "frame") continue;
-    const fb = elementBox(el);
-    frames.push(fb);
-    for (const o of byKey.values()) if (o.kind !== "connector" && o.kind !== "frame" && contains(fb, elementBounds(o))) set.add(o.key);
-  }
-  // An arrow comes along when each end is either attached to something that moves or a loose end inside a moving frame.
-  const inFrame = (x: unknown, y: unknown) => typeof x === "number" && typeof y === "number" && frames.some((f) => x >= f.x && x <= f.x + f.w && y >= f.y && y <= f.y + f.h);
-  for (const o of byKey.values()) {
-    if (o.kind !== "connector") continue;
-    const a = typeof o.from === "string" ? set.has(o.from) : inFrame(o.x1, o.y1);
-    const b = typeof o.to === "string" ? set.has(o.to) : inFrame(o.x2, o.y2);
-    if (a && b) set.add(o.key);
-  }
-  return [...set];
-}
-
 /** The keys that select together with `key`: its whole group. */
 export function withGroup(key: string, byKey: Map<string, BoardEl>): string[] {
   const g = byKey.get(key)?.group;
@@ -131,8 +108,8 @@ export function useBoardGestures(d: GestureDeps) {
 
   const beginMove = (start: Pt, keys: string[], duplicate: boolean, toggleOff?: string) => {
     const { byKey, live } = deps.current;
-    // A selected frame carries what sits inside it; work that out before any copy.
-    let moving = withFrameContents(keys, byKey.current);
+    // A selected frame carries what sits inside it, a folded one what it holds; work that out before any copy.
+    let moving = carriedKeys({ elements: [...byKey.current.values()] }, keys);
     if (duplicate) {
       const els = moving.map((k) => byKey.current.get(k)).filter(Boolean) as BoardEl[];
       const { ops, keys: copies, map } = cloneOps(els, 0, 0, nextZ({ elements: [...byKey.current.values()] }), (k) => byKey.current.has(k));
@@ -160,10 +137,11 @@ export function useBoardGestures(d: GestureDeps) {
       boxes.push(elementBounds(el));
     }
     const set = new Set(moving);
+    const hidden = deps.current.hidden();
     const view = deps.current.cam.viewport.world;
     const others: Box[] = [];
     for (const o of byKey.current.values()) {
-      if (set.has(o.key) || o.kind === "connector" || o.kind === "pen") continue;
+      if (set.has(o.key) || hidden.has(o.key) || o.kind === "connector" || o.kind === "pen") continue;
       const b = elementBounds(o);
       if (intersects(b, view)) others.push(b);
       if (others.length > 400) break;
@@ -364,8 +342,9 @@ export function useBoardGestures(d: GestureDeps) {
       case "marquee": {
         const box = normBox(cur.start, p);
         const hits: string[] = [];
+        const hidden = dd.hidden();
         for (const el of dd.byKey.current.values()) {
-          if (el.kind === "connector") continue;
+          if (el.kind === "connector" || hidden.has(el.key)) continue;
           const b = elementBounds(el);
           if (el.kind === "frame" ? contains(box, b) : intersects(box, b)) hits.push(el.key);
         }
