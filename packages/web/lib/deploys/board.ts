@@ -62,7 +62,8 @@ export type Step = { word: string; stations: readonly string[]; forks?: readonly
  */
 export const CHANGE_STEPS: readonly Step[] = [
   { word: "PR", stations: ["pr"] },
-  { word: "CI", stations: ["checks", "ci", "ci_alone", "retest"], fixing: "Fixing CI failures" },
+  // A flow that checks the change on its own machine before the pull request (Local CI) runs that as part of CI.
+  { word: "CI", stations: ["checks", "ci", "ci_alone", "retest", "local_ci", "local_ci_fix"], fixing: "Fixing CI failures" },
   { word: "Review", stations: ["review", "changes"], fixing: "Fixing review findings" },
   { word: "Merge", stations: ["merge", "landed"] },
 ];
@@ -195,6 +196,16 @@ export function stepper(run: Pick<ShippingRun, "status" | "node_statuses" | "cur
     if (i < 0) i = firstNotDone();
     if (i >= 0) states[i] = "waiting";
     return states;
+  }
+  if (run.status === "running") {
+    // A running run is at the step its station belongs to: a later step holds only what an earlier round left (Merge's
+    // conflict, while the fixed change goes through Local CI again), unless one of its stations runs now.
+    const stations = stationStatuses(run);
+    const now = run.current_node_id && stations.has(run.current_node_id) ? at(run.current_node_id) : -1;
+    if (now < 0) return states;
+    const running = steps.map(() => false);
+    for (const [id, status] of stations) if (status === "running" && at(id) >= 0) running[at(id)] = true;
+    return states.map((x, j) => (j < now ? x : running[j] ? "active" : j === now ? x : "idle"));
   }
   if (run.status !== "failed") return states;
   let i = read.indexOf("trouble");
@@ -581,7 +592,11 @@ export function splitQueue(queue: ReadonlyArray<BoardQueueCommit>, deploys: Read
   const live = deploys.filter((d) => d.status === "live").sort((a, b) => (b.live_at ?? b.created_at) - (a.live_at ?? a.created_at))[0] ?? null;
   const going = [...deploys].sort((a, b) => b.created_at - a.created_at).find((d) => isOpen(d) && d.sha && !supersededBy(d, live)) ?? null;
   if (!going) return { going, sending: [], next: [...queue] };
-  return { going, sending: upTo(queue, going.sha!), next: after(queue, going.sha!) };
+  // A deploy at a commit the queue does not list (one that touched none of the target's paths) sends what its own
+  // records name, and everything older on main.
+  const at = queue.some((c) => sameSha(c.sha, going.sha!)) ? going.sha! : queue.find((c) => going.commit_rows?.some((r) => sameSha(r.sha, c.sha)))?.sha;
+  if (!at) return { going, sending: [], next: [...queue] };
+  return { going, sending: upTo(queue, at), next: after(queue, at) };
 }
 
 /** Each task's newest place on main: waiting ("next"), going out in an unfinished deploy, else the newest deploy that carried it. */

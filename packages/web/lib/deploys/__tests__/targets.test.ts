@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mergeDeployRow, orderTargets, prOfSubject, rebuiltOnly, rollbackTarget, sessionTargets, targetNow, targetTone, teamRowOfView, type DeployTargetRow, type TeamDeployRow } from "../targets";
+import { mergeDeployRow, orderTargets, prOfSubject, readQueue, rebuiltOnly, rollbackTarget, sessionTargets, targetNow, targetTone, teamRowOfView, type DeployTargetRow, type TeamDeployRow } from "../targets";
 
 const target = (name: string, over: Partial<DeployTargetRow> = {}, groups: DeployTargetRow["queue"]["groups"] = []): DeployTargetRow => ({
   _id: `r#${name}`, workspace: "team:t", team_id: "t", name, repository: "o/r", runs: "here", policy: "press", command: "x", rollback: null, paths: [],
@@ -131,5 +131,39 @@ describe("one deploy fed by two feeds", () => {
   test("a value a feed does send replaces the old one, and a first row is taken as sent", () => {
     expect(mergeDeployRow(record, { ...view, commit_rows: [] }).commit_rows).toEqual([]);
     expect(mergeDeployRow(undefined, view)).toBe(view);
+  });
+});
+
+describe("readQueue: what waits reads as of the live deploy the store holds (pl-1077 polish 3)", () => {
+  // Five commits counted after dp-3785 (81021a8); dp-3797 at 094c875 went live since, carrying them and newer ones.
+  const c = (sha: string, main_at: number) => ({ sha, subject: sha, at: main_at, main_at, author: null, session: null, tasks: [], ci: "passed" as const, ci_url: null });
+  const counted = (after_sha: string | null | undefined, commits = [c("c14ced20", 5), c("f8cff0a0", 4), c("7d4bfc70", 3), c("f84df010", 2), c("14656330", 1)]) =>
+    target("cli", { queue: { known: true, truncated: false, commits: commits.length, untouched: 0, head_sha: commits[0]?.sha ?? null, head_ci: "passed", head_ci_url: null, shown: commits.length, groups: [{ key: "none", session: null, ci: "passed", commits }], ...(after_sha === undefined ? {} : { after_sha }) } });
+  const older = dp("dp-3785", "cli", "live", 10, { sha: "81021a8f" });
+  const newer = dp("dp-3797", "cli", "live", 20, { sha: "094c875f" });
+
+  test("a queue counted after an earlier live deploy lists nothing until the target answers again", () => {
+    const q = readQueue(counted("81021a8f"), [older, newer]).queue;
+    expect(q).toMatchObject({ reading: true, commits: 0, shown: 0, groups: [] });
+    expect(targetTone(readQueue(counted("81021a8f"), [older, newer]), targetNow(counted("81021a8f"), [older, newer]))).toBe("unknown");
+  });
+
+  test("a queue counted after the live deploy stands as it is", () => {
+    const t = counted("094c875f");
+    expect(readQueue(t, [older, newer])).toBe(t);
+  });
+
+  test("a queue that lists the live commit drops it and everything older, whatever it was counted after", () => {
+    const q = readQueue(counted(undefined, [c("f35e9c60", 9), c("094c875f", 8), c("39dd65b0", 7)]), [older, newer]).queue;
+    expect(q.groups.flatMap((g) => g.commits.map((x) => x.sha))).toEqual(["f35e9c60"]);
+    expect(q).toMatchObject({ commits: 1, shown: 1 });
+    expect(q.reading).toBeUndefined();
+  });
+
+  test("no claim when the store cannot tell: an older row with no base, or a base the store never saw go live", () => {
+    const bare = counted(undefined);
+    expect(readQueue(bare, [older, newer])).toBe(bare);
+    // A base the store never saw go live: nothing says the store's live deploy is the newer one.
+    expect(readQueue(counted("bbbbbbb1"), [older, newer]).queue.reading).toBeUndefined();
   });
 });

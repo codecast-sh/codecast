@@ -303,6 +303,30 @@ describe("the queue in main's order", () => {
     expect(splitQueue(q, [going])).toMatchObject({ going: { short_id: "dp-3" }, sending: [] });
     expect(splitQueue(q, [deploy("dp-4", 4, { status: "running", sha: "c2aaaaaa" })]).next.map((c) => c.sha)).toEqual(["c4aaaaaa", "c3aaaaaa"]);
   });
+  test("a deploy at a commit the queue does not list (it touched no path here) sends what its records name, and older", () => {
+    // dp-3802 went out at b819337, a commit that touched nothing of cli's: its records name the cli commits it carries.
+    const going = deploy("dp-5", 5, { status: "running", sha: "b8193370", commit_rows: [{ sha: "c4aaaaaa", subject: "x" }, { sha: "c3aaaaaa", subject: "y" }] });
+    expect(splitQueue(q, [going])).toMatchObject({ going: { short_id: "dp-5" }, next: [] });
+    expect(splitQueue(q, [going]).sending.map((c) => c.sha)).toEqual(["c4aaaaaa", "c3aaaaaa", "c2aaaaaa", "c1aaaaaa"]);
+    const partly = deploy("dp-6", 6, { status: "running", sha: "b8193370", commit_rows: [{ sha: "c2aaaaaa", subject: "x" }] });
+    expect(splitQueue(q, [partly]).next.map((c) => c.sha)).toEqual(["c4aaaaaa", "c3aaaaaa"]);
+  });
+});
+
+describe("a running run's track is at its station (pl-1077 polish 3)", () => {
+  test("Local CI again after Merge's conflict was fixed: CI is current, Merge's failure is an earlier round's", () => {
+    // ct-102487: approved, Merge conflicted, the session fixed it, and the change went back through Local CI.
+    const r = run("lc", {
+      current_node_id: "local_ci", current_node_label: "Local CI",
+      ci_verdict: { green: true, head_sha: "aaa", at: 1 }, review_verdict: { verdict: "ship", at: 1, head_sha: "aaa" }, pr: { repository: "o/r", number: 318, head_sha: "bbb", first_head_sha: "aaa", at: 1 },
+      node_statuses: [["pr", "completed"], ["checks", "completed"], ["ci", "completed"], ["review", "completed"], ["merge", "failed"], ["fix_conflict", "completed"], ["local_ci", "running"]].map(([node_id, status]) => ({ node_id, status })),
+    });
+    expect(stepsFor(r).map((s) => s.word)).toEqual(["PR", "CI", "Review", "Merge"]);
+    expect(stepper(r)).toEqual(["done", "active", "idle", "idle"]);
+    expect(runState(r).word).toBe("Local CI");
+    // The session's conflict fix lands nothing: the run is still on its way to main.
+    expect(isMerged(r)).toBe(false);
+  });
 });
 
 describe("what a card carried", () => {
