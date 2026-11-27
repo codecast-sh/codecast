@@ -19,6 +19,7 @@ import { ActionButton, LinkRow, ObjectHeader, ObjectMissing, SectionLabel, FactC
 import { HourStrip, Vital, ago, clock, groupKindLook, groupStatusColor, opsStyles } from '@/components/ops/OpsRows';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { STATUS_CONFIG } from '@/components/TaskItem';
+import { TaskStatusMark } from '@/components/marks';
 import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
 import { sampleWho, shortUrl } from '@codecast/web/components/ops/sampleText';
 import { detailGone, useOpsGroup, useOpsReplay, useOpsSamples, useOpsSources, useSyncOpsGroup, useSyncOpsReplay, useSyncOpsSources } from '@codecast/web/hooks/useSyncOps';
@@ -123,7 +124,7 @@ function IssueBody({ g }: { g: OpsGroup }) {
             <SectionLabel>Task</SectionLabel>
             <RNView style={opsStyles.card}>
               <LinkRow
-                icon={taskLook.icon}
+                mark={<TaskStatusMark status={taskStatus} size={14} />}
                 color={taskLook.color}
                 title={taskTitle && taskTitle !== g.title ? taskTitle : taskShort || 'Open its task'}
                 meta={taskShort ? (taskTitle && taskTitle !== g.title ? `${taskShort} · ${taskLook.label}` : taskLook.label) : undefined}
