@@ -1,5 +1,5 @@
 // The phone's message composer: a full-width text box over a row of attach,
-// status and send, the images picked for the turn, and a full-screen editor
+// status and send, the images and files picked for the turn, and a full-screen editor
 // once the text wraps. The session screen's reply box (app/session/[id]) and
 // the new session sheet's first message both draw it, so a first message can
 // carry what a reply can.
@@ -20,11 +20,14 @@ import { ImageGallery } from '@/components/ImageGallery';
 import { useInboxStore, type OptimisticImage } from '@codecast/web/store/inboxStore';
 import { awaitUpload, releaseUpload } from '@codecast/web/lib/pendingUploads';
 import { insertImagePlaceholder, dropImagePlaceholder } from '@codecast/web/lib/imagePlaceholder';
-import { startUpload, forgetUpload, chooseImageSource, pickImages } from '@/components/chat/chatUpload';
+import { startUpload, forgetUpload, chooseImageSource, pickImages, pickFiles, type PickedFile } from '@/components/chat/chatUpload';
+import { uploadUriToStorage } from '@/lib/uploadToStorage';
 import { beginScreenRecording, discardScreenRecording, pickScreenRecording, recordingUpload, screenRecordingContent, type BegunRecording, type PickedRecording } from '@/lib/screenRecordingSend';
-import { formatCallTime } from '@codecast/shared/contracts';
+import { appendFileTags, formatCallTime } from '@codecast/shared/contracts';
 import type { useComposerField } from '@/lib/composerField';
 import { appAlert } from '@/lib/popups';
+import { useDictation } from '@/lib/dictation';
+import { DICTATE_SEND_SLOP, DictateControls, sendSlotIsStop } from '@/components/DictateControls';
 
 // A send with attachments and no text carries this as its content.
 export const IMAGE_ONLY_CONTENT = '[image]';
@@ -36,6 +39,11 @@ export type ComposerImage = { uri: string; mime: string; width?: number; height?
 /** A screen recording attached to the turn: named by the server once
  *  `begun`, its bytes on their way until `uploaded`. */
 export type ComposerRecording = PickedRecording & { begun: BegunRecording | null; uploaded: boolean };
+
+/** A file attached to the turn that is neither an image nor a recording:
+ *  uploaded at once, and sent as a tag the delivering daemon swaps for the
+ *  path it saved the file to (shared/contracts/fileAttachment, web's useFileAttach). */
+export type ComposerFile = PickedFile & { storageId: string | null };
 
 // The optimistic-send core behind the composer's send button: pending row
 // in the store instantly, fire-and-forget delivery via the outbox (after the
@@ -71,8 +79,9 @@ export function dispatchComposerSend(conversationId: string, content: string, im
 /** The images attached to the turn being written, uploading as soon as they
  *  are picked, each with an `[Image N]` token in the text (unless
  *  `placeholders` is false: a chat message carries its images beside the
- *  words, not referenced from them). */
-export function useComposerImages(setMessage: (update: (text: string) => string) => void, opts: { recordingsTo?: string; placeholders?: boolean } = {}) {
+ *  words, not referenced from them). With `files`, any other file too, for
+ *  a turn an agent receives. */
+export function useComposerImages(setMessage: (update: (text: string) => string) => void, opts: { recordingsTo?: string; placeholders?: boolean; files?: boolean } = {}) {
   const placeholders = opts.placeholders !== false;
   // The session a screen recording would go to; none offers no recording.
   const allowRecording = !!opts.recordingsTo;
@@ -140,10 +149,34 @@ export function useComposerImages(setMessage: (update: (text: string) => string)
     setRecording((r) => (mine(r) ? (ok ? { ...r!, uploaded: true } : null) : r));
   };
 
+  const [files, setFiles] = useState<ComposerFile[]>([]);
+  const removeFile = (uri: string) => setFiles((prev) => prev.filter((f) => f.uri !== uri));
+  const attachFiles = (picked: PickedFile[]) => {
+    // A picked image joins the images, so the agent sees it as one.
+    const pictures = picked.filter((f) => f.mime.startsWith('image/'));
+    if (pictures.length) attachImages(pictures);
+    for (const file of picked.filter((f) => !f.mime.startsWith('image/'))) {
+      setFiles((prev) => (prev.some((f) => f.uri === file.uri) ? prev : [...prev, { ...file, storageId: null }]));
+      uploadUriToStorage(convex, file.uri, file.mime).then((storageId) => {
+        if (storageId) {
+          setFiles((prev) => prev.map((f) => (f.uri === file.uri ? { ...f, storageId } : f)));
+          return;
+        }
+        removeFile(file.uri);
+        appAlert('Upload failed', `Could not upload ${file.name}`);
+      });
+    }
+  };
+
   const pickImage = async () => {
-    const source = await chooseImageSource({ screenRecording: allowRecording });
+    const source = await chooseImageSource({ screenRecording: allowRecording, files: opts.files });
     if (!source) return;
     if (source === 'screen-recording') return void attachRecording();
+    if (source === 'file') {
+      const picked = await pickFiles();
+      if (picked.length) attachFiles(picked);
+      return;
+    }
     const picked = await pickImages(source);
     if (picked.length) attachImages(picked);
   };
@@ -154,8 +187,12 @@ export function useComposerImages(setMessage: (update: (text: string) => string)
     ? { media_type: img.mime, storage_id: img.storageId }
     : { media_type: img.mime, preview_url: img.uri, uploading: true });
 
-  /** The turn's text with its recording, when one is attached and named. */
-  const withRecording = (text: string) => (recording?.begun ? screenRecordingContent(recording.begun, recording, text) : text);
+  /** The turn's text with its recording, when one is attached and named,
+   *  and a tag per uploaded file. */
+  const withAttachments = (text: string) => {
+    const tagged = appendFileTags(text, files.filter((f) => f.storageId).map((f) => ({ storageId: f.storageId!, name: f.name })));
+    return recording?.begun ? screenRecordingContent(recording.begun, recording, tagged) : tagged;
+  };
 
   return {
     selectedImages, pickImage, attachImages, removeImage, optimisticImages,
@@ -164,10 +201,13 @@ export function useComposerImages(setMessage: (update: (text: string) => string)
       if (recording?.begun) discardScreenRecording(convex, recording.begun);
       setRecording(null);
     },
-    withRecording,
+    files, removeFile,
+    /** A file still going up: the send waits for it, as web's does. */
+    filesUploading: files.some((f) => !f.storageId),
+    withAttachments,
     /** Something besides text the send would carry. */
-    attached: selectedImages.length > 0 || !!recording?.begun,
-    clearImages: () => { setSelectedImages([]); setRecording(null); },
+    attached: selectedImages.length > 0 || !!recording?.begun || files.length > 0,
+    clearImages: () => { setSelectedImages([]); setRecording(null); setFiles([]); },
   };
 }
 
@@ -242,10 +282,19 @@ export function MessageComposer({
     setInputHeight(0);
     setExpanded(false);
   }, [epoch]);
-  const showStop = !canSend && !!stop;
+  // Speech into the box, through the same setter typing uses. A send pressed
+  // mid-recording waits for the last words, then sends what the box holds
+  // (the latest onSend, whose closure has them).
+  const dictation = useDictation({ value: message, onChangeText, inputRef, resetKey: epoch });
+  const onSendRef = useRef(onSend);
+  onSendRef.current = onSend;
+  // A file still uploading holds the send (the tile's spinner says why).
+  const sendReady = canSend && !images.filesUploading;
+  const send = () => { if (!images.filesUploading) dictation.send(() => onSendRef.current()); };
+  const showStop = sendSlotIsStop(canSend, !!stop);
   // The suggestion owns the empty box: its text is the placeholder, so it
   // wraps and grows the box like typed words, and typing replaces it.
-  const ghost = !message && !showStop ? suggestion ?? null : null;
+  const ghost = !message && !showStop && !dictation.active ? suggestion ?? null : null;
   // The picked image open full screen, by its place in the strip.
   const [viewing, setViewing] = useState<number | null>(null);
 
@@ -263,7 +312,7 @@ export function MessageComposer({
   // 'always', as every strip in the composer: a tap here never puts the
   // keyboard away, even on a preview between its remove buttons.
   const rec = images.recording;
-  const imageStripEl = images.selectedImages.length > 0 || rec ? (
+  const imageStripEl = images.selectedImages.length > 0 || rec || images.files.length > 0 ? (
     <ScrollView horizontal style={styles.imagePreviewContainer} showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="always">
       {rec && (
         <RNView style={[styles.imagePreview, styles.recordingTile]} accessibilityLabel={`Screen recording, ${formatCallTime(rec.durationMs)}`}>
@@ -303,6 +352,27 @@ export function MessageComposer({
             hitSlop={10}
             accessibilityRole="button"
             accessibilityLabel="Remove image"
+          >
+            <Feather name="x" size={12} color="#fff" />
+          </TouchableOpacity>
+        </RNView>
+      ))}
+      {images.files.map((file) => (
+        <RNView key={file.uri} style={[styles.imagePreview, styles.recordingTile, styles.fileTile]} accessibilityLabel={`File ${file.name}`}>
+          <Feather name="file" size={18} color={Theme.text} />
+          <RNText style={styles.fileTileName} numberOfLines={2} ellipsizeMode="middle">{file.name}</RNText>
+          {!file.storageId && (
+            <RNView style={styles.imageUploadingOverlay}>
+              <ActivityIndicator size="small" color="#fff" />
+            </RNView>
+          )}
+          <TouchableOpacity
+            style={styles.removeImageButton}
+            onPress={() => images.removeFile(file.uri)}
+            activeOpacity={0.7}
+            hitSlop={10}
+            accessibilityRole="button"
+            accessibilityLabel={`Remove ${file.name}`}
           >
             <Feather name="x" size={12} color="#fff" />
           </TouchableOpacity>
@@ -349,6 +419,7 @@ export function MessageComposer({
           </TouchableOpacity>
         </RNView>
       )}
+      <DictateControls dictation={dictation} />
       {/* Never `disabled` — a disabled TouchableOpacity drops the tap, and on a
           new session the JS thread is often still catching up (create, cache
           write, keyboard) while the native field already shows text. Keep the
@@ -357,18 +428,26 @@ export function MessageComposer({
           stop: the same interrupt web's Escape sends. Typing turns it back
           into send, so a follow-up can always be queued. */}
       <NativePressable
-        style={[styles.sendButton, showStop ? styles.stopButton : !canSend && styles.sendButtonDisabled]}
-        onPress={showStop ? stop!.onPress : onSend}
+        style={[styles.sendButton, showStop ? styles.stopButton : !sendReady && styles.sendButtonDisabled, dictation.sendWaiting && styles.sendButtonWaiting]}
+        onPress={showStop ? stop!.onPress : send}
         activeOpacity={0.7}
         delayPressIn={0}
-        hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+        // Beside the dictation controls, send's target starts at its own edge
+        // so a tap on ✓ or the chevron never sends.
+        hitSlop={dictation.shown ? DICTATE_SEND_SLOP : { top: 12, bottom: 12, left: 12, right: 12 }}
         pressRetentionOffset={{ top: 20, bottom: 20, left: 20, right: 20 }}
         accessibilityRole="button"
         accessibilityLabel={showStop ? stop!.label : 'Send'}
+        accessibilityState={dictation.sendWaiting ? { busy: true } : undefined}
       >
+        {/* A send pressed mid-dictation waits here for the last words. */}
         {showStop
           ? <FontAwesome name="stop" size={11} color="#fff" />
-          : <FontAwesome name={sendIcon} size={14} color="#fff" />}
+          : dictation.sendWaiting
+            // Theme.bg against the fill (blue mixed toward Theme.text): white
+            // is 2.3:1 on dark mode's pale blue, bg is over 4:1 in every palette.
+            ? <ActivityIndicator size="small" color={Theme.bg} />
+            : <FontAwesome name={sendIcon} size={14} color="#fff" />}
       </NativePressable>
     </RNView>
   );
@@ -392,9 +471,10 @@ export function MessageComposer({
           ]}
           value={message}
           onChangeText={onChangeText}
+          onSelectionChange={dictation.onSelectionChange}
           onFocus={onFocusChange ? () => onFocusChange(true) : undefined}
           onBlur={onFocusChange ? () => onFocusChange(false) : undefined}
-          placeholder={ghost?.text ?? placeholder}
+          placeholder={dictation.placeholder(ghost?.text ?? placeholder)}
           placeholderTextColor={ghost ? Theme.textMuted0 : placeholderColor ?? Theme.textMuted0}
           multiline
           maxLength={10000}
@@ -446,7 +526,8 @@ export function MessageComposer({
               style={styles.expandedInput}
               value={message}
               onChangeText={onChangeText}
-              placeholder={placeholder}
+              onSelectionChange={dictation.onSelectionChange}
+              placeholder={dictation.placeholder(placeholder)}
               placeholderTextColor={placeholderColor ?? Theme.textMuted0}
               multiline
               autoFocus
@@ -510,6 +591,15 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
     alignItems: 'center' as const,
     justifyContent: 'center' as const,
     gap: 4,
+  },
+  fileTile: {
+    width: 104,
+    paddingHorizontal: 8,
+  },
+  fileTileName: {
+    fontSize: 11,
+    color: Theme.textDim,
+    textAlign: 'center' as const,
   },
   recordingTileTime: {
     fontSize: 11,
@@ -645,6 +735,11 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   },
   sendButtonDisabled: {
     backgroundColor: Theme.bgHighlight,
+  },
+  // The spinner is wider than the arrow: the button stays a 32pt circle.
+  sendButtonWaiting: {
+    paddingLeft: 6,
+    paddingRight: 6,
   },
   stopButton: {
     backgroundColor: mixColor(Theme.red, 80, Theme.text),
