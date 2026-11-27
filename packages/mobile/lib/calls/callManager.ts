@@ -260,7 +260,8 @@ export async function joinCall(roomKey: string, opts: JoinOpts = {}): Promise<vo
       languages: localTranscribeLanguages(),
     });
     if (superseded()) return;
-    const { url, token } = await convex.action(api.calls.mintAccessToken, { room_key: roomKey });
+    // `client`: this seat hears only its own mic (phoneScribeRule reads it).
+    const { url, token } = await convex.action(api.calls.mintAccessToken, { room_key: roomKey, client: "phone" });
     if (superseded()) return;
     if (!opts.callKitManaged) {
       const lk = getLivekit();
