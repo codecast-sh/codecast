@@ -375,6 +375,7 @@ describe("reads", () => {
     const listed = (await rowsOf(as(bea), { workspace: ws })).find((r: any) => r.short_id === "pri-2");
     const shown = await as(bea).query(pri.show, { short_id: "pri-2" });
     expect(listed.short_id).toBe("pri-2");
+    expect((await rowsOf(as(bea), { workspace: ws })).map((r: any) => r.short_id)).not.toContain("pri-1");
     // pri-1 is hidden from Bea, yet pri-2 is still Ada's #2: the position is the owner's, in her whole active group.
     for (const row of [listed, shown]) expect([row.rank, row.person_pos, row.ai_rank, row.rank_source]).toEqual([2, null, 2, "ai"]);
     expect((await as(bea).query(pri.pinLine, { conversation_id: pin }))?.rank).toBe(2);
