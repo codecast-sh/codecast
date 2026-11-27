@@ -444,3 +444,11 @@ describe("changePr / deployLine", () => {
     expect(deployLine(liveRun, changeStations(change))).toBe(LIVE_LINE);
   });
 });
+
+test("a review the run gave on a head Merge only rebased still reads on the rebased head", () => {
+  const r = run({ pr: { number: 217, repository: "acme/app", head_sha: "bbbbbbb" }, review_verdict: { verdict: "ship", head_sha: "aaaaaaa" }, station_rebases: [{ from: "aaaaaaa", to: "bbbbbbb" }], node_statuses: ROUND });
+  const review = (x: any) => changeLinks(x, change).find((l) => l.kind === "review")?.label;
+  expect(review(r)).toBe(changeLinks(run({ ...r, pr: { ...r.pr, head_sha: "aaaaaaa" }, station_rebases: [] }), change).find((l) => l.kind === "review")?.label);
+  expect(review(r)).not.toBe("Review");
+  expect(review({ ...r, station_rebases: [] })).toBe("Review");
+});
