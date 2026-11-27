@@ -33,6 +33,7 @@ import { findInitiative } from "./lib/initiativeRef";
 import { canReadCall } from "./transcripts";
 import { docLiveState, docRevision } from "./lib/docBody";
 import { roleCharterOf } from "./lib/roleCharter";
+import { isPriorityCard } from "./lib/priorityCardAccess";
 
 // The org page's read side (docs/architecture/org-roles.md S3, S4): one query
 // returns the workspace's reporting tree — people, roles, anchors, and every
@@ -1045,6 +1046,8 @@ export async function computeScopeFeed(
           .order("desc")
           .take(take));
         for (const d of asked) {
+          // A priority card is its person's, not an open ask of the session it sits in (lib/priorityCardAccess).
+          if (isPriorityCard(d)) continue;
           const onTask = !!d.task_id && taskShortIds.has(d.task_id.toString());
           const openAsk = !d.task_id && d.status === "pending" && sessionIds.has(d.conversation_id.toString());
           if (onTask || openAsk) decisionById.set(d._id.toString(), d);

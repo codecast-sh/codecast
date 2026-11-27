@@ -5,23 +5,29 @@
 // and rides the same dispatch a single row's press does.
 
 import { approvesPersonsAct } from "@codecast/shared/contracts/commandRun";
+import { isPriorityCard } from "@codecast/shared/contracts/priorityCard";
 import { useInboxStore, type SessionDecisionItem } from "../../store/inboxStore";
 import { isOpen, type DecisionOwner } from "./decisionRows";
 
 type Rows = ReadonlyArray<SessionDecisionItem>;
 
-const open = (rows: Rows) => rows.filter(isOpen);
+/**
+ * The open rows a bulk verb may act on. A priority card is its person's alone
+ * and is acted on only through the card (THE RULE on isPriorityCard): no
+ * selection assigns, passes, escalates, answers or dismisses it.
+ */
+const handable = (rows: Rows) => rows.filter((d) => isOpen(d) && !isPriorityCard(d));
 
 export function assignDecisions(rows: Rows, to: DecisionOwner): number {
   const { passDecision } = useInboxStore.getState();
-  const targets = open(rows);
+  const targets = handable(rows);
   for (const d of targets) passDecision(d._id, to);
   return targets.length;
 }
 
 export function unassignDecisions(rows: Rows): number {
   const { unassignDecision } = useInboxStore.getState();
-  const targets = open(rows).filter((d) => !!d.passed_to);
+  const targets = handable(rows).filter((d) => !!d.passed_to);
   for (const d of targets) unassignDecision(d._id);
   return targets.length;
 }
@@ -32,7 +38,7 @@ export function unassignDecisions(rows: Rows): number {
  * its own card, so it is left out), in the first decision's order.
  */
 export function sharedAnswers(rows: Rows): string[] {
-  const targets = open(rows);
+  const targets = handable(rows);
   if (targets.length === 0 || targets.some((d) => d.kind && d.kind !== "single")) return [];
   const pickable = (d: SessionDecisionItem) => new Set(d.options.filter((_, i) => !approvesPersonsAct(d, i)).map((o) => o.label));
   const [first, ...rest] = targets.map(pickable);
@@ -42,7 +48,7 @@ export function sharedAnswers(rows: Rows): string[] {
 export function answerDecisions(rows: Rows, label: string): number {
   const { answerDecision } = useInboxStore.getState();
   let n = 0;
-  for (const d of open(rows)) {
+  for (const d of handable(rows)) {
     const index = d.options.findIndex((o) => o.label === label);
     if (index < 0 || approvesPersonsAct(d, index)) continue;
     void answerDecision(d._id, { index });
@@ -53,7 +59,7 @@ export function answerDecisions(rows: Rows, label: string): number {
 
 export function dismissDecisions(rows: Rows): number {
   const { answerDecision } = useInboxStore.getState();
-  const targets = open(rows);
+  const targets = handable(rows);
   for (const d of targets) void answerDecision(d._id, { dismiss: true });
   return targets.length;
 }
@@ -61,7 +67,7 @@ export function dismissDecisions(rows: Rows): number {
 /** Pass with a note: each moves to the new owner's queue, the note with it. */
 export function passDecisions(rows: Rows, to: DecisionOwner, note: string): number {
   const { passDecision } = useInboxStore.getState();
-  const targets = open(rows);
+  const targets = handable(rows);
   for (const d of targets) passDecision(d._id, to, note);
   return targets.length;
 }
@@ -69,7 +75,7 @@ export function passDecisions(rows: Rows, to: DecisionOwner, note: string): numb
 /** Escalate with a note: each goes up to its owner's manager, else the workspace's admins (store escalateDecision). */
 export function escalateDecisions(rows: Rows, note: string): number {
   const { escalateDecision } = useInboxStore.getState();
-  const targets = open(rows);
+  const targets = handable(rows);
   for (const d of targets) escalateDecision(d._id, note);
   return targets.length;
 }

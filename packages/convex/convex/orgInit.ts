@@ -96,6 +96,7 @@ type Ctx = { db: any };
 
 import { ANALYSIS_WINDOW_MS, IDLE_ROLE_DAYS, WAKE_HISTORY_DAYS, ANALYSIS_CAPS, LANDING_WINDOW_MS, LONG_RUNNING_MIN_AGE_MS } from "./lib/orgAnalysisCaps";
 import { roleCharterOf } from "./lib/roleCharter";
+import { isPriorityCard } from "./lib/priorityCardAccess";
 export { ANALYSIS_WINDOW_MS, IDLE_ROLE_DAYS, WAKE_HISTORY_DAYS, ANALYSIS_CAPS, LANDING_WINDOW_MS, LONG_RUNNING_MIN_AGE_MS } from "./lib/orgAnalysisCaps";
 
 const bump = (m: Map<string, number>, k: string, by = 1) => m.set(k, (m.get(k) ?? 0) + by);
@@ -699,7 +700,8 @@ export async function computeAnalysisSignals(ctx: Ctx, userId: Id<"users">, team
   const decisionsByCategory = new Map<string, number>();
   for (const memberId of memberIds) {
     const pending: any[] = await ctx.db.query("session_decisions").withIndex("by_user_status_created", (q: any) => q.eq("user_id", memberId).eq("status", "pending").gte("created_at", cutoff)).order("desc").take(ANALYSIS_CAPS.decisions);
-    for (const d of pending) bump(decisionsByCategory, d.category ?? "uncategorized");
+    // A priority card is its person's, not the team's open decision (lib/priorityCardAccess).
+    for (const d of pending) if (!isPriorityCard(d)) bump(decisionsByCategory, d.category ?? "uncategorized");
   }
   // The roles a person can hire ready made (org-hire.md H3): a release with
   // its files, so a hire change that names one can be carried out.

@@ -16,7 +16,7 @@ import { useSyncHandledDecisions } from "../../hooks/useSyncHandledDecisions";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { formatTimeAgo } from "../../lib/messageNavigator";
-import { groupDecisions, stackDue, STACK_GROUP_MIN, type DecisionGroup } from "../../lib/decisionGroups";
+import { groupDecisions, stackDue, PRIORITIES_SCOPE, STACK_GROUP_MIN, type DecisionGroup } from "../../lib/decisionGroups";
 import { DecisionCompactCard } from "./DecisionCompactCard";
 import { decisionHref } from "../../lib/decisionLinks";
 import { answeredLabel, answeredLine, answerSaid, askedOfViewer, inViewerQueue, questionAsStatement } from "../../lib/decisionQueue";
@@ -216,6 +216,7 @@ function ScopeLabel({ scopeKey, sample }: { scopeKey: string; sample?: SessionDe
   ]);
   const name: string | undefined = kind === "project" ? (st.projects as any)?.[id]?.title : kind === "plan" ? (st.plans as any)?.[id]?.title : kind === "session" ? st.sessions[id]?.title : undefined;
   if (kind === "role") return <><RoleName roleId={id} />'s scope</>;
+  if (scopeKey === PRIORITIES_SCOPE) return <>Priorities</>;
   // The live session row wins; the decision's snapshot (session_title) covers a
   // device whose sessions collection does not hold the asking conversation.
   if (kind === "session") return <>{name || sample?.session_title || "a session"}</>;

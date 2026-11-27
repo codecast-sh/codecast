@@ -32,6 +32,7 @@ import { findDecision, userMayRead } from "./lib/decisionAccess";
 import { resolveAskedPeople } from "./lib/decisionAudience";
 import { recordHandoffEntry } from "./decisionThread";
 import { approvalHandoffRefusal } from "./lib/changeApprovalRows";
+import { isPriorityCard, PRIORITY_CARD_HANDOFF_REFUSED } from "./lib/priorityCardAccess";
 import { managersMap, type OrgParty } from "./orgPeople";
 import { peopleAboveRole } from "@codecast/shared/contracts/orgLead";
 import { tellRole } from "./pendingMessages";
@@ -58,6 +59,8 @@ async function openForHandoff(ctx: Ctx, userId: Id<"users">, decisionId: string)
   if (!row) return { error: "Decision not found" };
   if (row.status !== "pending") return { error: `Decision is already ${row.status}` };
   if (!(await userMayRead(ctx, userId, row))) return { error: "Unauthorized: not your decision" };
+  // A priority card stays with its person whoever asks to hand it on (lib/priorityCardAccess, the rule).
+  if (isPriorityCard(row)) return { error: PRIORITY_CARD_HANDOFF_REFUSED };
   const conversation = await ctx.db.get(row.conversation_id);
   if (conversation && isHostedAgentType(conversation.agent_type)) return { error: HOSTED_ANSWER_REFUSED };
   const task = !conversation?.team_id && row.task_id ? await ctx.db.get(row.task_id) : null;

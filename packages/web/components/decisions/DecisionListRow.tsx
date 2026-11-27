@@ -13,6 +13,7 @@ import { ShortId } from "../ShortId";
 import { ageShort } from "../../lib/lineFlow";
 import { severityBand } from "../../lib/line/decisionFacts";
 import { DecisionThreadUnread } from "./DecisionThreadUnread";
+import { priorityCardAnswerWord, priorityCardAsk } from "../../lib/priorityCardDecision";
 import { decisionKindOf, decisionOwner, decisionSourceOf, isEscalated, ownerKey, DECISION_KIND_LABEL, SESSION_SOURCE, type DecisionAxis } from "../../lib/decisions/decisionRows";
 
 export type DecisionRowCtx = {
@@ -41,14 +42,14 @@ export const DecisionListRow = memo(function DecisionListRow({ d, state, ctx }: 
           : null}
       </span>
       {d.short_id && !ctx.compact && <ShortId id={d.short_id} className="text-xs text-sol-text-dim w-14 flex-shrink-0 cq-hide-compact" />}
-      <span className={`flex-1 text-sm truncate ${open ? "text-sol-text" : "text-sol-text-muted"}`}>{d.question}</span>
+      <span className={`flex-1 text-sm truncate ${open ? "text-sol-text" : "text-sol-text-muted"}`}>{d.priority_card ? priorityCardAsk(d.priority_card) : d.question}</span>
       <span className="flex items-center gap-2 flex-shrink-0 text-meta text-sol-text-dim">
         <DecisionThreadUnread decisionId={d._id} />
         {!open && (() => {
           // The answer can be a sentence: capped and truncated, whole in the
           // tooltip; a compact row says only that it was answered.
-          const answer = d.status === "dismissed" ? "Dismissed" : d.answer_text ?? (d.answer_index != null ? d.options[d.answer_index]?.label : "Answered") ?? "Answered";
-          const shown = ctx.compact && d.status !== "dismissed" ? "Answered" : answer;
+          const answer = priorityCardAnswerWord(d) ?? (d.status === "dismissed" ? "Dismissed" : d.answer_text ?? (d.answer_index != null ? d.options[d.answer_index]?.label : "Answered") ?? "Answered");
+          const shown = ctx.compact && d.status !== "dismissed" && !d.priority_card ? "Answered" : answer;
           return <span className="text-sol-green max-w-[14rem] truncate" title={answer} data-decision-answer>{shown}</span>;
         })()}
         {!!d.problem_reach && <span className="flex items-center gap-0.5 tabular-nums" title={`${d.problem_reach} ${d.problem_reach === 1 ? "person" : "people"} reached`} data-decision-reach><Users className="w-3 h-3" aria-hidden />{d.problem_reach}</span>}
@@ -58,11 +59,12 @@ export const DecisionListRow = memo(function DecisionListRow({ d, state, ctx }: 
         {!ctx.compact && !ctx.grouped.has("source") && source !== SESSION_SOURCE && <span className="max-w-[9rem] truncate cq-hide-compact">{source}</span>}
         {!ctx.compact && !ctx.grouped.has("area") && d.area_project_id && <span className="max-w-[9rem] truncate cq-hide-compact">{ctx.areaName(d.area_project_id)}</span>}
         <span className="tabular-nums w-8 text-right" title={new Date(d.created_at).toLocaleString()}>{ageShort(ctx.now - d.created_at)}</span>
-        <button type="button" onClick={(e) => { e.stopPropagation(); if (open) state.onOpenPalette("assign"); }}
+        {/* A priority card is its person's alone: it has no owner to change and nobody to assign it to. */}
+        {!d.priority_card && <button type="button" onClick={(e) => { e.stopPropagation(); if (open) state.onOpenPalette("assign"); }}
           className="flex items-center gap-1.5 min-w-0 max-w-[9rem] hover:text-sol-text" title={who ? `Owner: ${who.label}` : "Assign"} aria-label={who ? `Owner ${who.label}; reassign` : "Assign"} data-decision-assign>
           {who ? <span className="w-4 h-4 flex items-center justify-center flex-shrink-0">{who.face}</span> : <UserRoundPlus className="w-3.5 h-3.5 flex-shrink-0" />}
           {who && !ctx.compact && !ctx.grouped.has("owner") && <span className="truncate cq-hide-compact">{who.label}</span>}
-        </button>
+        </button>}
       </span>
     </div>
   );

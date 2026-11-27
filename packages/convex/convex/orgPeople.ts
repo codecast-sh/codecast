@@ -17,6 +17,7 @@ import { Id } from "./_generated/dataModel";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { internal } from "./_generated/api";
 import { requireWorkspaceFeature } from "./lib/teamFeatureGuard";
+import { isPriorityCard } from "@codecast/shared/contracts/priorityCard";
 
 type Ctx = { db: any };
 
@@ -495,7 +496,8 @@ export async function roleReportsOf(
     const inbox: any[] = await ctx.db.query("decision_inbox").withIndex("by_user_status", (q: any) => q.eq("user_id", uid).eq("status", "pending")).take(REPORT_INBOX_CAP);
     for (const row of inbox) {
       const d: any = await ctx.db.get(row.decision_id);
-      if (!d || d.status !== "pending" || now - d.created_at <= REPORT_WAIT_MS) continue;
+      // A priority card is its person's alone (isPriorityCard): it never reaches a manager's or a role's report.
+      if (!d || d.status !== "pending" || isPriorityCard(d) || now - d.created_at <= REPORT_WAIT_MS) continue;
       const conv: any = await ctx.db.get(d.conversation_id);
       if (!conv || !(await canAccessConversation(ctx as any, viewerId, conv))) continue;
       if (!inArea(await sessionWork(ctx, conv))) continue;

@@ -26,6 +26,8 @@ import { useDecisionStep, type DecisionStep } from "../../hooks/useDecisionStep"
 import { useDecisionQueue } from "../../hooks/useDecisionQueue";
 import { HandoffNote } from "./DecisionParties";
 import { ChangeCardHeadline, ChangeCardVerdictBar, ChangeCardView } from "./ChangeCardView";
+import { TOUCH_HEIGHT } from "../../lib/narrowTouch";
+import { PriorityCardDecision } from "./PriorityCardDecision";
 import { ShareControl } from "../ShareControl";
 import { decisionWaitLabel, ladderRecommenders, waitsOnViewer } from "../../lib/decisionLinks";
 import { DecisionAnswerPanel, restatesCard, useDecisionAnswering, useDecisionPage } from "./DecisionAnswering";
@@ -59,7 +61,12 @@ function Empty({ text }: { text: string }) {
 function DocumentBody({ decision, detail, answerable, pager, nav }: { decision: SessionDecisionItem; detail: DecisionDetailItem; answerable: boolean; pager: boolean; nav?: ReactNode }) {
   const a = useDecisionAnswering(decision, detail, answerable);
   const meId = useInboxStore((st) => st.currentUser?._id as string | undefined);
-  const { now, pending, rec, answerInOptions, verdictBar, chosen, onAnswer, onDismiss, heldNote, outcome, closed, banner, doubt } = a;
+  const { now, pending, rec, answerInOptions, verdictBar, chosen, onAnswer, onDismiss, heldNote, outcome, closed, doubt } = a;
+  // A priorities pass's proposal is drawn as its own card: headline, changes,
+  // answers and record. Its Accept none settles as a dismissal, which the card
+  // itself records, so no closed banner says it again.
+  const priorityCard = decision.priority_card;
+  const banner = priorityCard && decision.status === "dismissed" ? null : a.banner;
   // A card's cause task may carry the author's change guide; its evidence row holds it.
   useSyncTaskEvidence(a.cardTask);
   const guide = useTaskEvidenceByShortId(a.cardTask)?.change_guide ?? null;
@@ -87,13 +94,15 @@ function DocumentBody({ decision, detail, answerable, pager, nav }: { decision: 
   return (
     <div className={`h-full overflow-y-auto decision-doc${pager ? " decision-doc-nav" : ""}`} data-main-scroll>
       {/* One measure for every decision: a change card stacks its proof over its examples, so it needs no wider page. */}
-      <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 pb-16">
+      {/* A priority card sets its changes beside where your words went, so it takes a wider page. */}
+      <div className={`${priorityCard ? "max-w-6xl" : "max-w-4xl"} mx-auto px-4 sm:px-6 lg:px-8 pt-6 pb-16`}>
         {nav ?? (pager && (
           <nav className="decision-nav flex items-center gap-3" data-decision-nav>
-            <Link href="/decisions" className="inline-flex items-center gap-1 text-meta text-sol-text-dim hover:text-sol-text transition-colors no-underline">
+            <Link href="/decisions" className={`inline-flex items-center gap-1 text-meta text-sol-text-dim hover:text-sol-text transition-colors no-underline${priorityCard ? ` ${TOUCH_HEIGHT}` : ""}`} data-decision-nav-all>
               <ArrowLeft className="w-3 h-3" /> All decisions
             </Link>
-            <span className="ml-auto"><DecisionPager step={step} /></span>
+            {/* A priority card's page is built for the phone too: 44px controls there, no key caps. */}
+            <span className="ml-auto"><DecisionPager step={step} touch={!!priorityCard} /></span>
           </nav>
         ))}
 
@@ -104,25 +113,27 @@ function DocumentBody({ decision, detail, answerable, pager, nav }: { decision: 
             {/* The wait leads, as its consequence for the reader; a settled
                 card says its verdict once, as the card's last line with who
                 and when, so the header keeps only the age. */}
-            {!outcome && !banner && (
+            {/* A settled priority card says its own answer ("Accepted none"), so the header names no status word. */}
+            {!outcome && !banner && !(priorityCard && !pending) && (
               // Words in the wait's tone, not a box: the headline under it is the thing to read.
               <span className={pending && waitsOnViewer(decision, meId) ? (decision.blocking ? "text-sol-yellow" : "text-sol-blue") : "text-sol-text-dim"}>
                 {decisionWaitLabel(decision, meId)}
               </span>
             )}
-            <span>{!outcome && !banner && "· "}asked {formatTimeAgo(decision.created_at, now)}</span>
+            <span>{!outcome && !banner && !(priorityCard && !pending) && "· "}asked {formatTimeAgo(decision.created_at, now)}</span>
             {decision.resolved_at && !outcome && !banner && <span>· resolved {formatTimeAgo(decision.resolved_at, now)}</span>}
             {/* A line card answered Ship: the deploy that put its fix live (deploys.md). */}
             {decision.workflow_run_id && decision.status === "answered" && <DeployedIn taskId={decision.task_id} />}
             {/* The id is for citing, so it trails the line. */}
             <span className="font-mono opacity-70">{decision.short_id ?? "decision"}</span>
-            <ShareControl label="decision" path={`/decisions/${decision.short_id ?? decision._id}`} publicShare={{ kind: "decision", id: decision._id, token: (decision as any).share_token }} className="ml-auto" />
+            {/* A priority card is its person's alone (isPriorityCard): nobody else can open it, so it has nothing to share. */}
+            {!priorityCard && <ShareControl label="decision" path={`/decisions/${decision.short_id ?? decision._id}`} publicShare={{ kind: "decision", id: decision._id, token: (decision as any).share_token }} className="ml-auto" />}
           </div>
           {/* A gate on a flow: the whole flow around the station that asks, every station one click away. */}
           {decision.workflow_run_id && <FlowContext runId={decision.workflow_run_id} focus={{ decisionId: decision._id, nodeId: decision.gate_node_id }} className="mt-3" />}
           {/* A change card leads with what changed, and its cause and goal under
               it, so the first line says what and the second says why. */}
-          {decision.card ? <ChangeCardHeadline card={decision.card} question={decision.question} questionFirst className="mt-3" /> : (
+          {decision.card ? <ChangeCardHeadline card={decision.card} question={decision.question} questionFirst className="mt-3" /> : priorityCard ? null : (
             <>
               <h1 className="mt-3 decision-question text-sol-text">{decision.question}</h1>
               {meta}
@@ -132,12 +143,16 @@ function DocumentBody({ decision, detail, answerable, pager, nav }: { decision: 
         </header>
 
         {/* What the question is about, straight under the question. */}
-        {!decision.card && body && <section className="mt-6">{body}</section>}
+        {!decision.card && !priorityCard && body && <section className="mt-6">{body}</section>}
+
+        {/* The card asks, answers and records in one place: no option list or answer footer beside it. */}
+        {priorityCard && <section className="mt-5" data-decision-priority-card><PriorityCardDecision decision={decision} card={priorityCard} onAnswer={onAnswer} /></section>}
 
         {/* Two ways to discuss, each saying where the words go: into the
             session that asked (its transcript, where a message brings it to
-            the inbox), or onto the decision for the team. */}
-        <div className="mt-4 flex items-center gap-2.5 flex-wrap" data-decision-discuss>
+            the inbox), or onto the decision for the team. A priority card is
+            its person's alone and is acted on only through the card, so it has neither. */}
+        {!priorityCard && <div className="mt-4 flex items-center gap-2.5 flex-wrap" data-decision-discuss>
           <Button type="button" variant="blue" size="sm" onClick={() => void jumpToAsk()} data-decision-open-thread>
             <MessagesSquare />Talk to the session
           </Button>
@@ -150,12 +165,12 @@ function DocumentBody({ decision, detail, answerable, pager, nav }: { decision: 
           >
             <MessageSquare />Comment for the team{discussion.rows.length > 0 && <span className="text-sol-text-dim">{discussion.rows.length}</span>}
           </Button>
-        </div>
+        </div>}
 
         {/* ── The team thread (ct-74449): people and the session that owns the
             decision. It sits under the question and the button that opens
             it, above the evidence, so what the team said reads first. ── */}
-        {(discussOpen || discussion.rows.length > 0) && (
+        {!priorityCard && (discussOpen || discussion.rows.length > 0) && (
           <section className="mt-5" id="discuss" data-decision-discuss-section>
             <h2 className="decision-kicker mb-3">Comments</h2>
             <DecisionDiscussion decisionId={decision._id} open={discussOpen} onOpenChange={setDiscussOpen} bare noAsk />
@@ -197,12 +212,12 @@ function DocumentBody({ decision, detail, answerable, pager, nav }: { decision: 
           </section>
         )}
 
-        {!decision.card && <LeadRecommendation decision={decision} detail={detail} className="mt-8" />}
+        {!decision.card && !priorityCard && <LeadRecommendation decision={decision} detail={detail} className="mt-8" />}
 
 
         {/* ── Options ── */}
         {/* A settled card's options collapse into its outcome line. */}
-        {!verdictBar && !outcome && <section className="mt-8">
+        {!verdictBar && !outcome && !priorityCard && <section className="mt-8">
           <h2 className="decision-kicker">{!pending && a.changeable ? "Change your answer" : decision.card ? "Your call" : "Options"}{decision.kind && decision.kind !== "single" ? ` · ${decision.kind === "multi" ? "pick several" : decision.kind === "rank" ? "rank them" : "a form"}` : ""}</h2>
           {/* Option pages (L6) compare side by side above the list; a card's
               number answers on a single kind, where one option is the answer. */}
@@ -250,18 +265,18 @@ function DocumentBody({ decision, detail, answerable, pager, nav }: { decision: 
         </section>}
 
         {/* ── Answer ── */}
-        {a.answerSection && <section className="mt-8 decision-footer rounded-xl border border-sol-border/70 bg-sol-card/50 p-4 sm:p-5">
+        {a.answerSection && !priorityCard && <section className="mt-8 decision-footer rounded-xl border border-sol-border/70 bg-sol-card/50 p-4 sm:p-5">
           <DecisionAnswerPanel decision={decision} detail={detail} answerable={answerable} a={a} />
         </section>}
 
         {/* Settled: where to go from here, the thread that asked or the next decision waiting. */}
-        {!pending && !nav && <DecisionNext decisionId={decision._id} step={step} openSession={jumpToAsk} />}
+        {!pending && !nav && <DecisionNext decisionId={decision._id} step={step} openSession={priorityCard ? undefined : jumpToAsk} />}
       </div>
     </div>
   );
 }
 
-function DecisionNext({ decisionId, step, openSession }: { decisionId: string; step: DecisionStep; openSession: () => Promise<boolean> }) {
+function DecisionNext({ decisionId, step, openSession }: { decisionId: string; step: DecisionStep; openSession?: () => Promise<boolean> }) {
   // The list's next, else the first decision still waiting in the queue.
   const queue = useDecisionQueue();
   const queued = queue.find((q) => q.decisionId && q.decisionId !== decisionId);
@@ -269,9 +284,9 @@ function DecisionNext({ decisionId, step, openSession }: { decisionId: string; s
   return (
     // Pinned to the bottom of the page's scroll, so the next step shows where the answer was given.
     <div className="decision-next-bar mt-4 flex items-center gap-2.5 flex-wrap" data-decision-next>
-      <Button type="button" variant="outline" size="sm" onClick={() => void openSession()} data-decision-next-session>
+      {openSession && <Button type="button" variant="outline" size="sm" onClick={() => void openSession()} data-decision-next-session>
         <MessagesSquare />Open the session
-      </Button>
+      </Button>}
       <Button type="button" variant="blue" size="sm" className="ml-auto" disabled={!next} onClick={() => step.go(next)} data-decision-next-decision>
         {next ? <>Next decision<ArrowRight /></> : "No decisions waiting"}
       </Button>

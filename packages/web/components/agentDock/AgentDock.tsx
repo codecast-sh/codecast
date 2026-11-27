@@ -27,6 +27,7 @@ import { getProjectName, useInboxStore, type InboxSession } from "../../store/in
 import { useMinePlacement } from "../../hooks/useNeedsInputCount";
 import { useDecisionQueue, lastAssistantText } from "../../hooks/useDecisionQueue";
 import { useDecisionAnswer } from "../../hooks/useDecisionAnswer";
+import { usePriorityCardIds } from "../../hooks/usePriorityCardIds";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useMountEffect } from "../../hooks/useMountEffect";
@@ -62,6 +63,8 @@ import { Button } from "../ui/button";
 export function AgentDock() {
   const placed = useMinePlacement();
   const queue = useDecisionQueue();
+  // A priority card is its person's, never its session's ask: the dock does not list it as one.
+  const cardIds = usePriorityCardIds();
   const [edge, setEdge] = useState<AgentDockEdge>("right");
   const [minimized, setMinimized] = useState(false);
   useMountEffect(() => {
@@ -86,11 +89,11 @@ export function AgentDock() {
     const seen = new Set<string>();
     const out: DockEntry[] = [];
     const push = (e: DockEntry) => { if (!seen.has(e.id)) { seen.add(e.id); out.push(e); } };
-    for (const item of queue) if (!item.heldByRole && item.session) push({ id: item.conversationId, kind: "ask", session: item.session, item });
+    for (const item of queue) if (!item.heldByRole && item.session && !(item.decisionId && cardIds.has(item.decisionId))) push({ id: item.conversationId, kind: "ask", session: item.session, item });
     for (const s of [...placed.questions, ...placed.needsInput]) push({ id: s._id, kind: "waiting", session: s });
     for (const s of placed.done) push({ id: s._id, kind: "done", session: s });
     return out;
-  }, [placed, queue]);
+  }, [placed, queue, cardIds]);
 
   // One dot per live agent: what needs you on top, then what is running,
   // then what finished. Capped so the pill never runs down the screen.

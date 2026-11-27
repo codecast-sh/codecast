@@ -18,6 +18,7 @@ import { KeyCap } from "../KeyCap";
 import { groupClass, itemClass, paletteClass, paletteInputClass } from "../paletteStyles";
 import { answerDecisions, assignDecisions, dismissDecisions, escalateDecisions, passDecisions, sharedAnswers, unassignDecisions } from "../../lib/decisions/decisionBulk";
 import { isOpen, type DecisionOwner } from "../../lib/decisions/decisionRows";
+import { isPriorityCard } from "@codecast/shared/contracts/priorityCard";
 import { modernButton, modernScrim } from "../ui/modernLook";
 import { teamMembersOf } from "../../lib/activeTeam";
 
@@ -31,7 +32,8 @@ export function DecisionPalette({ targets, mode, standalone, onClose }: { target
   const statusSig = useInboxStore((s) => targets.map((t) => s.sessionDecisions[t._id]?.status ?? t.status).join(","));
   const rows = useMemo(() => {
     const coll = useInboxStore.getState().sessionDecisions;
-    return targets.map((t) => coll[t._id] ?? t).filter(isOpen);
+    // A priority card is answered only on its card: no bulk verb is offered for it.
+    return targets.map((t) => coll[t._id] ?? t).filter((d) => isOpen(d) && !isPriorityCard(d));
   }, [targets, statusSig]); // eslint-disable-line react-hooks/exhaustive-deps -- the signature stands in for the rows
   const [step, setStep] = useState<Step>(STEPS.has(mode) ? (mode as Step) : "root");
   const [query, setQuery] = useState("");
@@ -150,7 +152,7 @@ export function DecisionPalette({ targets, mode, standalone, onClose }: { target
   const content = (
     <CommandPrimitive className={paletteClass} loop shouldFilter={step !== "pass_note" && step !== "escalate"} data-decision-palette={step}>
       <div className="px-4 pt-3 pb-0"><div className="text-xs font-mono text-sol-text-dim truncate">{label}</div></div>
-      {rows.length === 0 ? <div className="py-6 text-center text-sm text-sol-text-dim">None of these is open</div> : body}
+      {rows.length === 0 ? <div className="py-6 text-center text-sm text-sol-text-dim" data-decision-palette-none>{targets.length > 0 && targets.every(isPriorityCard) ? "A priority card is answered on its own card" : "None of these is open"}</div> : body}
     </CommandPrimitive>
   );
   if (standalone) return content;

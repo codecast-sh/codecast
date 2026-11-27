@@ -14,6 +14,7 @@ import {
 } from "../lib/decisionQueue";
 import { SYNTHETIC_POLL_OPTION, type PollQuestion } from "../lib/pollPayload";
 import { agentAnswersRow } from "@codecast/shared/contracts";
+import { isPriorityCard } from "@codecast/shared/contracts/priorityCard";
 
 // Structural signature for the decision collection: everything the queue
 // branches on, nothing that churns. Rows only change on ask/answer, so this
@@ -209,14 +210,17 @@ export const DecisionStepperContext = createContext<DecisionStepper | null>(null
 
 // A conversation's pending `cast decide` rows as queue items, in the order
 // they are answered: the first is the one its card shows, the rest follow as
-// each is answered. Signature-gated: rows change only on ask/answer.
+// each is answered. Signature-gated: rows change only on ask/answer. A
+// priority card sitting in the session is not one of its asks (THE RULE on
+// isPriorityCard): it lives in its person's queue.
+export const sessionAsk = (d: { conversation_id?: string; priority_card?: unknown }, conversationId: string) => d.conversation_id === conversationId && !isPriorityCard(d);
 export function usePendingDecisionItems(conversationId: string | null | undefined): QueueItem[] {
   const s = useTrackedStore([
     (st: any) => {
       if (!conversationId) return "";
       let sig = "";
       for (const d of Object.values(st.sessionDecisions) as any[]) {
-        if (d.conversation_id === conversationId && d.status === "pending") sig += `${d._id}:${d.created_at}:${d.updated_at ?? 0}|`;
+        if (sessionAsk(d, conversationId) && d.status === "pending") sig += `${d._id}:${d.created_at}:${d.updated_at ?? 0}|`;
       }
       return sig;
     },
@@ -229,7 +233,7 @@ export function usePendingDecisionItems(conversationId: string | null | undefine
     if (!conversationId) return [];
     const mine: Record<string, any> = {};
     for (const d of Object.values(s.sessionDecisions) as any[]) {
-      if (d.conversation_id === conversationId) mine[d._id] = d;
+      if (sessionAsk(d, conversationId)) mine[d._id] = d;
     }
     // A blocking ask parks the session, so it outranks an advisory one that
     // happened to be posted earlier; otherwise oldest first, as in the queue.

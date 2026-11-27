@@ -10,6 +10,7 @@
 // Every read is a wake signature of the fields drawn, so a liveness heartbeat
 // re-renders nothing; time-driven state rides the shared 15s clock the feed
 // hooks already tick on.
+import { isPriorityCard } from "@codecast/shared/contracts/priorityCard";
 import { useMemo, useRef } from "react";
 import { isHostedAgentType } from "@codecast/shared/contracts";
 import { railRowPlacement, useTrackedStore, type InboxSession, type SessionDecisionItem } from "../../store/inboxStore";
@@ -76,7 +77,8 @@ export function useActivityItems(rows: readonly Conversation[], opts: { teamId: 
 
   const prs = useMemo(() => prThreads(events), [events]);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- decisionSig stands in for the churny map
-  const decisions = useMemo(() => Object.values(decisionMap) as DecisionRowLike[], [decisionSig]);
+  // A priority card is its person's, not its session's: it never marks the session as asking.
+  const decisions = useMemo(() => (Object.values(decisionMap) as DecisionRowLike[]).filter((d) => !isPriorityCard(d as { priority_card?: unknown })), [decisionSig]);
   const outcomes = useMemo(
     () => indexOutcomes({ events, prs, tasks, decisions, viewerId: viewer?._id ?? null }),
     [events, prs, tasks, decisions, viewer?._id],

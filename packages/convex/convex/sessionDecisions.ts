@@ -50,6 +50,8 @@ import { learnFromCardGate } from "./lineLearn";
 import { settleCardWaiting } from "./lineNotices";
 import { gateTrialPages, runOfStation, settleTrialCard, trialDeciderOf, trialProjectOf, trialStackOf, trialStationOf } from "./lib/trialDecision";
 import { linkProposalDecision, proposalToAsk, settleExpectationCard } from "./lib/expectationsApply";
+import { settlePriorityCard } from "./lib/priorityCardApply";
+import { isPriorityCard, priorityCardRefusal, priorityCardVisibleTo } from "./lib/priorityCardAccess";
 import { pendingApproval, secretApprovalRefusal, settleSecretApproval } from "./lib/secretApprovals";
 import { applyCommandRunReport, commandRunRefusal, settleCommandRun } from "./lib/commandRuns";
 import { RUN_OPTION, RUN_OPTIONS, parseRunCommand, type CommandRun } from "@codecast/shared/contracts/commandRun";
@@ -396,8 +398,8 @@ export async function reroutePendingDecisionsForConversation(
 /** One open decision routed again from its asking session: its people, inbox rows, ladder and holder. */
 export async function rerouteRow(ctx: Ctx, conversation: any, row: DecisionRow, now: number): Promise<void> {
   // An approval card is its people's (changeApprovalCards), never its session's: moving it would ask people whose
-  // answer cannot count.
-  if ((row as any).approval_card) return;
+  // answer cannot count. A priority card is its person's alone (lib/priorityCardAccess): it sits in whichever of their sessions was handy.
+  if ((row as any).approval_card || isPriorityCard(row)) return;
   const task = row.task_id ? await ctx.db.get(row.task_id) : null;
   // A proposal's decision asked by another session keeps routing as the station that proposed it.
   const proposal = await ctx.db.query("expectation_proposals").withIndex("by_decision", (q: any) => q.eq("decision_id", row._id)).first();
@@ -738,7 +740,7 @@ export async function hostedAnswerRefusal(ctx: Ctx, row: { conversation_id?: Id<
 // signed-in person's, whose Approve takes Touch ID (secretApprovalRefusal,
 // which reads the verdict for that). Returns why, or null.
 export async function answerRefusal(ctx: Ctx, row: DecisionRow, by: AnsweredBy, verdict?: Pick<Verdict, "status" | "answer_index">): Promise<string | null> {
-  return (await hostedAnswerRefusal(ctx, row, by)) ?? (await secretApprovalRefusal(ctx, row, by, verdict)) ?? (await commandRunRefusal(ctx, row as any, by, verdict)) ?? (await approvalCardRefusal(ctx, row as any, by, verdict));
+  return (await hostedAnswerRefusal(ctx, row, by)) ?? priorityCardRefusal(row, by) ?? (await secretApprovalRefusal(ctx, row, by, verdict)) ?? (await commandRunRefusal(ctx, row as any, by, verdict)) ?? (await approvalCardRefusal(ctx, row as any, by, verdict));
 }
 
 // The one place a decision is resolved, for every path (web resolve, CLI
@@ -861,6 +863,8 @@ async function settleResolution(ctx: Ctx, row: DecisionRow, verdict: Verdict, by
   await noticeAnsweredForPeople(ctx, row, verdict, by);
   // An expectations proposal's card applies or drops it (LM5).
   await settleExpectationCard(ctx, row, verdict, by, now);
+  // A priority change card writes the changes its person ticked (lib/priorityCardApply.ts).
+  await settlePriorityCard(ctx, row, verdict, by, now);
   // The admins' "Who decides for which areas?" card applies its answer (decisionAreas.ts).
   await settleAreasCard(ctx, row, verdict, by, now);
   // A Vault Ask first read's decision grants or denies that session (vault.md).
@@ -1214,11 +1218,12 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
     : undefined;
 
   // Re-asking the same question from the same session updates the open row
-  // instead of stacking duplicates (an agent may retry after a crash).
-  const openRows: DecisionRow[] = await ctx.db
+  // instead of stacking duplicates (an agent may retry after a crash). A
+  // priority card only sits in the session: it is its person's, never the session's own ask.
+  const openRows: DecisionRow[] = (await ctx.db
     .query("session_decisions")
     .withIndex("by_conversation_status", (q: any) => q.eq("conversation_id", conversation._id).eq("status", "pending"))
-    .collect();
+    .collect()).filter((r: DecisionRow) => !isPriorityCard(r));
   // Earlier asks still open in this session: the poster is the one party who
   // can withdraw the ones the work has moved past, so the response names them.
   const staleOpen = (excludeId?: string) =>
@@ -1446,6 +1451,8 @@ async function ownedDecision(
   if (!row) return { error: "Decision not found" };
   if (row.user_id.toString() !== auth.userId.toString()) return { error: "Unauthorized: not your decision" };
   if (sessionId && row.session_id !== sessionId) return { error: "Decision belongs to another session" };
+  // A priority card is posted by codecast for its person to answer; no session's agent edits or takes it back.
+  if (isPriorityCard(row)) return { error: "Decision not found" };
   return { row };
 }
 
@@ -1742,7 +1749,8 @@ export async function listForSessionCore(
     // the list reads as the queue does.
     const ended = new Map<string, Promise<boolean>>();
     rows = [];
-    for (const r of await listForUserCore(ctx, auth.userId, Date.now())) if (r.status === "pending" && !(await askerEnded(ctx, auth.userId, r, ended))) rows.push(r);
+    // A priority card is codecast's to its person, answered in the app; no agent lists it (its token is the person's).
+    for (const r of await listForUserCore(ctx, auth.userId, Date.now())) if (r.status === "pending" && !isPriorityCard(r) && !(await askerEnded(ctx, auth.userId, r, ended))) rows.push(r);
     rows.sort((a, b) => a.created_at - b.created_at);
     return { decisions: rows.map((r) => cliRowShape(r, own(r))) };
   }
@@ -1776,7 +1784,8 @@ export async function listForSessionCore(
     }
   }
   rows.sort((a, b) => b.created_at - a.created_at);
-  return { decisions: rows.map((r) => cliRowShape(r, own(r))) };
+  // A priority card only sits in the session: it is not the session's question.
+  return { decisions: rows.filter((r) => !isPriorityCard(r)).map((r) => cliRowShape(r, own(r))) };
 }
 
 /** Rows one `cast decide ls --answered-since` page aims for; it reads through a tie at its last millisecond. */
@@ -2333,6 +2342,8 @@ function answerBubbleShape(row: Doc<"session_decisions">) {
     form: row.form,
     report_slug: row.report_slug,
     card: row.card,
+    // Every caller has checked the viewer may receive the row: a card's row reaches its person only (lib/priorityCardAccess).
+    priority_card: row.priority_card,
     run: row.run,
     touch_id: row.touch_id,
     doc_id: row.doc_id,
@@ -2502,7 +2513,8 @@ export const findByAnswer = query({
       .query("session_decisions")
       .withIndex("by_conversation_status", (q) => q.eq("conversation_id", args.conversation_id).eq("status", "answered"))
       .collect();
-    const row = pickAnsweredDecision(rows, args.answer, args.near);
+    // A priority card in this session is its person's alone (lib/priorityCardAccess).
+    const row = pickAnsweredDecision(rows.filter((r) => priorityCardVisibleTo(r, userId)), args.answer, args.near);
     return row ? answerBubbleShape(row) : null;
   },
 });
@@ -2639,7 +2651,8 @@ const OPEN_PROBLEM_STATUSES = ["backlog", "open", "in_progress", "in_review"] as
  * per row, so a feed runs it once.
  */
 export async function decisionRowsForViewer(ctx: Ctx, viewerId: Id<"users">, given: DecisionRow[], inQueue: (row: DecisionRow) => boolean | Promise<boolean>, extra: Record<string, unknown> = {}) {
-  const rows = await withDecisionFacts(ctx, given);
+  // A priority card's row reaches its person and nobody else, whichever feed read it (lib/priorityCardAccess).
+  const rows = await withDecisionFacts(ctx, given.filter((r) => priorityCardVisibleTo(r, viewerId)));
   const severity = new Map<string, number | null>();
   const ended = new Map<string, Promise<boolean>>();
   const out = [];
@@ -2824,7 +2837,7 @@ export const listHandledByRoles = query({
     const out = [];
     for (const r of inbox) {
       const d = await ctx.db.get(r.decision_id);
-      if (!d || d.status !== "answered" || d.answered_by?.kind !== "role" || (d.resolved_at ?? 0) < cutoff) continue;
+      if (!d || d.status !== "answered" || d.answered_by?.kind !== "role" || (d.resolved_at ?? 0) < cutoff || !priorityCardVisibleTo(d, userId)) continue;
       out.push({
         ...d,
         role: await roleSummary(ctx, d.answered_by.id as Id<"org_roles">),

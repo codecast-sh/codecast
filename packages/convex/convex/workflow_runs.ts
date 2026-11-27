@@ -43,6 +43,7 @@ import { changeSessionOf } from "./lib/taskOwner";
 import { closeRunningStations, endRunFields } from "./lib/runEnd";
 import { graphOfVersion, pinnedVersionOf, repinToReported, rowAtVersion, runWorkflowOf, versionToPin } from "./lib/runGraph";
 import { claimPress, scheduleRunApprovalPost } from "./lib/changeApprovalRows";
+import { isPriorityCard } from "./lib/priorityCardAccess";
 
 export { withAgentSessions };
 
@@ -191,7 +192,8 @@ export async function stationSession(ctx: Ctx, ref: string | undefined, runId: I
 
 export async function openDecisionOf(ctx: Ctx, conversationId: Id<"conversations">) {
   const rows = await ctx.db.query("session_decisions").withIndex("by_conversation_status", (q: any) => q.eq("conversation_id", conversationId).eq("status", "pending")).collect();
-  return rows.filter((d: any) => !d.workflow_run_id).sort((a: any, b: any) => b.created_at - a.created_at)[0] ?? null;
+  // A priority card sitting in the session is not its question (lib/priorityCardAccess).
+  return rows.filter((d: any) => !d.workflow_run_id && !isPriorityCard(d)).sort((a: any, b: any) => b.created_at - a.created_at)[0] ?? null;
 }
 
 // Pause the run at a gate and ask the person through the one rail every
@@ -479,7 +481,7 @@ async function withdrawOpenGate(ctx: Ctx, run: any, now: number): Promise<void> 
     const conv: any = await findConversationByAnyRef(ctx as any, node.session_id, run.user_id);
     if (!conv || !isRunHand(conv, run)) continue;
     const open = await ctx.db.query("session_decisions").withIndex("by_conversation_status", (q: any) => q.eq("conversation_id", conv._id).eq("status", "pending")).collect();
-    for (const d of open) if (!d.workflow_run_id) await withdrawCore(ctx, d as any, now, undefined, why);
+    for (const d of open) if (!d.workflow_run_id && !isPriorityCard(d)) await withdrawCore(ctx, d as any, now, undefined, why);
   }
 }
 

@@ -18,6 +18,7 @@ import { formatTimeAgo } from "../../lib/messageNavigator";
 import { chosenOptions } from "../../lib/decisionLinks";
 import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import { ChangeCardHeadline } from "./ChangeCardView";
+import { priorityCardAsk, priorityCardRecord } from "../../lib/priorityCardDecision";
 import "./decisions.css";
 
 /** How many entries draw at first, and how many more each time the reader nears the end. */
@@ -41,7 +42,8 @@ export function AnsweredFeed({ rows }: { rows: ReadonlyArray<SessionDecisionItem
   const now = useCoarseNow(60_000);
   const { partyOf } = useDecisionParties();
   const answered = useMemo(
-    () => rows.filter((d) => d.status === "answered").sort((a, b) => answeredAt(b) - answeredAt(a)),
+    // A priority card's Accept none settles as a dismissal, and is still an answer: its record reads "Accepted none".
+    () => rows.filter((d) => d.status === "answered" || (d.status === "dismissed" && !!d.priority_card)).sort((a, b) => answeredAt(b) - answeredAt(a)),
     [rows],
   );
   const [shown, setShown] = useState(PAGE);
@@ -101,12 +103,14 @@ function FeedEntry({ d, now, answerer }: { d: SessionDecisionItem; now: number; 
         <span className="w-5 h-5 shrink-0 flex items-center justify-center">{answerer?.face}</span>
         <span className="text-sol-text font-medium truncate">{who}</span>
         <span className="shrink-0">answered {formatTimeAgo(answeredAt(d), now)}</span>
-        <button type="button" onClick={() => void jump()} className="min-w-0 inline-flex items-center gap-1 truncate hover:text-sol-text transition-colors" title="Open the session that asked" data-answered-feed-session>
+        {/* A priority card is its person's, not its session's question: no way into that session. */}
+        {!d.priority_card && <button type="button" onClick={() => void jump()} className="min-w-0 inline-flex items-center gap-1 truncate hover:text-sol-text transition-colors" title="Open the session that asked" data-answered-feed-session>
           <MessagesSquare className="w-3 h-3 shrink-0" /><span className="truncate">{d.session_title || "the session"}</span>
-        </button>
+        </button>}
         <Link href={href} className="ml-auto shrink-0 font-mono opacity-70 hover:opacity-100 no-underline text-sol-text-dim">{d.short_id ?? "open"}</Link>
       </header>
 
+      {d.priority_card ? <PriorityCardRecord d={d} href={href} /> : <>
       <Link href={href} className="block mt-2.5 no-underline text-sol-text hover:text-sol-blue transition-colors">
         {d.card ? <ChangeCardHeadline card={d.card} question={d.question} size="card" questionFirst /> : <h3 className="decision-question">{d.question}</h3>}
       </Link>
@@ -148,7 +152,21 @@ function FeedEntry({ d, now, answerer }: { d: SessionDecisionItem; now: number; 
           <FileText className="w-3 h-3" />{d.report_slug ? "Its report" : "Its document"}
         </Link>
       )}
+      </>}
     </article>
+  );
+}
+
+// A priority card's record, not its sixteen options: what was accepted, or the
+// person's words in place of an answer. The whole record opens the card.
+function PriorityCardRecord({ d, href }: { d: SessionDecisionItem; href: string }) {
+  const record = priorityCardRecord(d);
+  return (
+    <Link href={href} className="block mt-2.5 no-underline text-sol-text hover:text-sol-blue transition-colors" data-answered-feed-priority-card>
+      <h3 className="decision-question">{record?.headline ?? priorityCardAsk(d.priority_card!)}</h3>
+      {record?.text && <p className="mt-1.5 pl-3 border-l-2 border-sol-cyan/50 italic text-sol-text [overflow-wrap:anywhere]" data-answered-feed-words>{record.text}</p>}
+      <div className="mt-1.5 text-meta text-sol-text-dim">{priorityCardAsk(d.priority_card!)}</div>
+    </Link>
   );
 }
 

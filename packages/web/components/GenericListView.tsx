@@ -442,6 +442,8 @@ export interface GenericListViewProps<T> {
   flatItems: T[];
 
   renderRow: (item: T, state: ItemRowState) => ReactNode;
+  /** Whether a row can join the selection (its checkbox); every row when absent. */
+  isSelectable?: (item: T) => boolean;
   getItemId: (item: T) => string;
   getItemRoute: (item: T) => string;
   emptyIcon?: ReactNode;
@@ -545,6 +547,7 @@ export function GenericListView<T>({
   groups,
   flatItems,
   renderRow,
+  isSelectable,
   getItemId,
   getItemRoute,
   emptyIcon,
@@ -1025,7 +1028,7 @@ export function GenericListView<T>({
       // Click opens the detail in place (space toggles) by driving the URL.
       // While a peek is open a click moves it rather than leaving the list.
       onClick: () => { setFocusIndex(globalIdx); if (previewId) setPreviewId(id); else openDetail(item); },
-      onSelect: () => toggleSelect(id),
+      onSelect: () => { if (!isSelectable || isSelectable(item)) toggleSelect(id); },
       onContextMenu: (e: React.MouseEvent) => {
         if (contextMenuContent) {
           // The selection travels with the right-click when the clicked row is
@@ -1060,6 +1063,7 @@ export function GenericListView<T>({
         inTargetGroup={inTargetGroup}
         gapEdge={gapEdge}
         dragProps={dragProps}
+        selectable={!isSelectable || isSelectable(item)}
       >
         {renderRow(item, state)}
       </ListRowShell>

@@ -21,6 +21,7 @@ import { liveRoleByHandle, userCanAccessRole, userCanAdminRole, type ScopedSeat 
 import { OPEN_CATEGORIES } from "./lib/decisionCategory";
 import { findDecision, findStack, finalizeAnswer, answerRefusal, refreshHolder, activeGrantFor, GRANT_TTL_MS } from "./sessionDecisions";
 import { currentDecisions } from "./lib/superseded";
+import { isPriorityCard, priorityCardVisibleTo, PRIORITY_CARD_HANDOFF_REFUSED } from "./lib/priorityCardAccess";
 
 type Ctx = { db: any };
 type StackRow = Doc<"decision_stacks">;
@@ -212,6 +213,8 @@ export async function addToStackCore(ctx: Ctx, userId: Id<"users">, stackRef: st
   if (stack.status === "done") return { error: `Stack ${stack.short_id} is done` };
   const row = await findDecision(ctx, decisionRef);
   if (!row) return { error: `Decision not found: ${decisionRef}` };
+  // A stack's delegate role and policies would take it from its person (lib/priorityCardAccess, the rule).
+  if (isPriorityCard(row)) return { error: PRIORITY_CARD_HANDOFF_REFUSED };
   const people = (row.asked_user_ids ?? [row.user_id]).map(String);
   if (!people.includes(String(userId)) && row.user_id.toString() !== userId.toString()) {
     return { error: "Only a person the decision was asked of can add it to a stack" };
@@ -404,8 +407,8 @@ async function getStackCore(ctx: Ctx, userId: Id<"users">, ref: string) {
   const delegate = found.stack.policy.delegate_role_id ? await ctx.db.get(found.stack.policy.delegate_role_id) : null;
   return {
     stack: await listRow(ctx, found.stack),
-    // Members in stack order, full rows: the checklist renders each as a card.
-    decisions: members,
+    // Members in stack order, full rows: the checklist renders each as a card (a priority card's only to its person).
+    decisions: members.filter((d) => priorityCardVisibleTo(d, userId)),
     delegate_role: delegate ? { _id: delegate._id, short_id: delegate.short_id, name: delegate.name, handle: delegate.handle } : null,
   };
 }

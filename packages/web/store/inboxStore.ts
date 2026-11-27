@@ -1605,6 +1605,8 @@ export type SessionDecisionItem = {
   report_slug?: string;
   /** A change card (the-line-end-to-end.md LE10) the decision is about. */
   card?: import("@codecast/shared/contracts/changeCard").ChangeCard;
+  /** A priorities pass's proposal (pl-1131): option i is changes[i]; the page draws it as the priority change card. */
+  priority_card?: import("@codecast/shared/contracts/priorityCard").PriorityCard;
   /** `cast decide --run`: the command the card runs on a person's Run, and how that went. */
   run?: import("@codecast/shared/contracts/commandRun").CommandRun;
   /** When this window last had the decision's run asked again (reaskDecision) from the viewer's queue row, never sent to the server: the Re-ask button reads it until a new decision replaces this one. */

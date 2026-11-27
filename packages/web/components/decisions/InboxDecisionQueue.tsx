@@ -21,6 +21,7 @@ import { rankLabelOf, sortByPriority, type PriorityRankLabel, type PriorityStand
 import { projectRootOf } from "../../lib/recentProjectPaths";
 import { compactAge } from "../../lib/threadState";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
+import { priorityCardAsk } from "../../lib/priorityCardDecision";
 
 // The inbox panel's Decisions section IS the decision queue: one row per
 // decision waiting on the viewer, numbered in the order the stepper walks
@@ -34,13 +35,17 @@ import { useCoarseNow } from "../../hooks/useCoarseNow";
 // numbers, the order they show and the stepper's walk agree.
 
 const advisoryWhere = (d: SessionDecisionItem) => d.status === "pending" && !d.trial && !isStackedAsk(d);
+// A priority card is its person's, not its session's question: it lists on
+// its own row in its short form, under no session.
+const cardWhere = (d: SessionDecisionItem) => d.status === "pending" && !!d.priority_card;
+const cardSig = (d: SessionDecisionItem) => `${d.status}:${d.priority_card?.changes.length ?? 0}`;
 const advisorySig = (d: SessionDecisionItem) => `${d.status}:${d.blocking ? 1 : 0}:${d.stack_id ?? ""}:${d.in_queue === false ? 0 : 1}:${(d.asked_user_ids ?? []).join(",")}`;
 
 // How many decisions the section draws before folding the rest into one row:
 // it leads the inbox, so it must leave the sections under it on screen.
 const SHOWN_ASKS = 8;
 
-type Group = { conversationId: string; title: string; where?: Where; flow?: { runId: string; name?: string }; asks: { item: QueueItem; n: number }[]; session?: InboxSession };
+type Group = { key: string; conversationId: string; title: string; card?: string; where?: Where; flow?: { runId: string; name?: string }; asks: { item: QueueItem; n: number }[]; session?: InboxSession };
 
 // Where the session runs: the folder (a managed worktree folds to the
 // repository it hangs off) and the repository's name, as the rail names it.
@@ -99,14 +104,20 @@ export function InboxDecisionQueue({
   const meId = useInboxStore((s) => s.currentUser?._id as string | undefined);
   const showAgent = useInboxStore((s) => s.clientState.ui?.show_agent_icon !== false);
   const advisoryRows = useCollectionRows<SessionDecisionItem>("sessionDecisions", { where: advisoryWhere, sig: advisorySig });
+  const cardRows = useCollectionRows<SessionDecisionItem>("sessionDecisions", { where: cardWhere, sig: cardSig });
+  const cardAsk = useMemo(() => new Map(cardRows.map((d) => [d._id, priorityCardAsk(d.priority_card!)])), [cardRows]);
   const advisory = useMemo(() => advisoryRows.filter((d) => askedOfViewer(d, meId) && (!matches || matches(d.conversation_id))).length, [advisoryRows, meId, matches]);
 
   const groups = useMemo(() => {
     const byConv = new Map<string, Group>();
     numbered.forEach(({ item, n }) => {
-      let g = byConv.get(item.conversationId);
+      const card = item.decisionId ? cardAsk.get(item.decisionId) : undefined;
+      const key = card ? `card:${item.key}` : item.conversationId;
+      let g = byConv.get(key);
       if (!g) {
         g = {
+          key,
+          card,
           conversationId: item.conversationId,
           title: item.session?.title || item.sessionTitle || "Session",
           where: whereOf(item.session, item.projectPath),
@@ -114,14 +125,14 @@ export function InboxDecisionQueue({
           asks: [],
           session: item.session,
         };
-        byConv.set(item.conversationId, g);
+        byConv.set(key, g);
       }
       g.asks.push({ item, n });
     });
     return [...byConv.values()];
-  }, [numbered]);
+  }, [numbered, cardAsk]);
   // The first groups up to SHOWN_ASKS decisions, plus the lit one wherever it sits.
-  const isLit = (g: Group) => (cursor ? g.asks.some((a) => a.item.key === cursor) : g.conversationId === activeSessionId);
+  const isLit = (g: Group) => (cursor || g.card ? g.asks.some((a) => a.item.key === cursor) : g.conversationId === activeSessionId);
   const shown: Group[] = [];
   let budget = SHOWN_ASKS;
   for (const g of groups) {
@@ -141,8 +152,26 @@ export function InboxDecisionQueue({
     {!collapsed && <div className="pb-2 pt-1" data-inbox-decision-queue>
       {shown.map((g) => {
         const lit = isLit(g);
+        if (g.card) {
+          const { item, n } = g.asks[0];
+          return (
+            <div key={g.key} data-mc="card" data-active={lit ? "true" : undefined} data-decision-queue-priority-card
+              className={`relative overflow-hidden py-2 pl-3 pr-3 transition-colors ${lit ? ACTIVE_CARD_CLASS : "hover:bg-sol-bg-alt/80"}`}>
+              <Link
+                href={stepHref(item.conversationId, item.key)}
+                data-decision-queue-row={n}
+                data-here={lit ? "true" : undefined}
+                className={`flex items-baseline gap-2 min-w-0 py-0.5 text-ui no-underline ${lit ? "text-sol-text font-medium" : "text-sol-text-muted hover:text-sol-text"}`}
+              >
+                <span className={`w-5 shrink-0 text-center tabular-nums font-mono text-mark ${lit ? "text-sol-cyan" : "text-sol-text-dim"}`}>{n}</span>
+                <span className="truncate">{g.card}</span>
+                <span className="ml-auto shrink-0 pl-1 tabular-nums text-meta text-sol-text-dim" title={`Asked ${new Date(item.createdAt).toLocaleString()}`} data-decision-queue-age>{compactAge(now - item.createdAt)}</span>
+              </Link>
+            </div>
+          );
+        }
         return (
-          <QueueCard key={g.conversationId} id={g.conversationId} lit={lit} row={g.session} title={g.title} where={g.where} flow={g.flow} href={stepHref(g.conversationId)} showAgent={showAgent} rank={rankOf(g.conversationId, g.session)}>
+          <QueueCard key={g.key} id={g.conversationId} lit={lit} row={g.session} title={g.title} where={g.where} flow={g.flow} href={stepHref(g.conversationId)} showAgent={showAgent} rank={rankOf(g.conversationId, g.session)}>
             {g.asks.map(({ item, n }) => {
               const here = cursor ? item.key === cursor : lit && n === g.asks[0].n;
               return (

@@ -12,6 +12,7 @@ import { chosenOptions, ladderRecommenders } from "../../lib/decisionLinks";
 import { ANSWER_WORDS, answerView, buildDecisionAnswer, moveInOrder, togglePicked, type AnswerDraft } from "../../lib/decisionAnswer";
 import { ChangeCardAnswer, answerKeyAllowed, cardAnswerIndexes } from "./ChangeCardView";
 import { PassDecision } from "./PassDecision";
+import { isPriorityCard } from "@codecast/shared/contracts/priorityCard";
 import { useHeldOption } from "../../lib/agentTabGuard";
 import { useApproveGate } from "../../lib/passkeyPresence";
 
@@ -72,8 +73,8 @@ function GenericAnswerControls({
   const setValue = useCallback((key: string, fn: (v: any) => any) => patchDraft((cur) => ({ values: { ...cur.values, [key]: fn(cur.values?.[key] ?? values[key]) } })), [patchDraft, values]);
   const togglePick = useCallback((n: number) => patchDraft((cur) => togglePicked(cur, n)), [patchDraft]);
   const [error, setError] = useState<string | null>(null);
-  // Where it can be dismissed it can be handed on, except a trial's question.
-  const canPass = !!onDismiss && !decision.trial && decision.status === "pending";
+  // Where it can be dismissed it can be handed on, except a trial's question and a priority card (THE RULE on isPriorityCard).
+  const canPass = !!onDismiss && !decision.trial && decision.status === "pending" && !isPriorityCard(decision);
   const [passOpen, setPassOpen] = useState(false);
 
   const held = useHeldOption(decision);

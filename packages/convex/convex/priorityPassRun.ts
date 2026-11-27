@@ -15,6 +15,11 @@ import { v } from "convex/values";
 import { internalAction, internalMutation, internalQuery } from "./functions";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
+import type { MutationCtx } from "./_generated/server";
+import { PRIORITY_CARDS_EXPERIMENT } from "@codecast/shared/contracts/priorityCard";
+import { hasExperiment } from "./lib/experiments";
+import { dropDeclined, mergeCardDraft, planWithoutMerges, type CardDraft } from "./lib/priorityCardPass";
+import { cardAnsweredSince, declinedMergesFor, openCards, postPriorityCard } from "./priorityCardPost";
 import { nextShortId } from "./counters";
 import { runModelCall, type CallScope } from "./modelCalls";
 import { modelCallProblem } from "@codecast/shared/contracts/modelCall";
@@ -166,15 +171,23 @@ export const reserve = internalMutation({
   },
 });
 
-type Gate = { on: boolean; cursor_at: number; budgeted: boolean };
+type Gate = { on: boolean; cursor_at: number; budgeted: boolean; cards?: boolean; declined?: Array<{ absorbed: string; into: string }> };
 
-/** Whether the pass may write here (passOn), the cursor, and whether the workspace pays for model calls. */
+/**
+ * Whether the pass may write here (passOn), the cursor, whether the workspace
+ * pays for model calls, and whether the person's merges go on a card (the
+ * priority_cards experiment), with the merges they declined there.
+ */
 export const passGate = internalQuery({
   args: { user_id: v.id("users"), workspace: v.string() },
   handler: async (ctx, args): Promise<Gate> => {
     const on = await passOn(ctx, args.user_id, args.workspace);
     const budget = await ctx.db.query("team_budgets").withIndex("by_workspace", (q: any) => q.eq("workspace", args.workspace)).first();
-    return { on, cursor_at: await cursorFor(ctx, args.user_id, args.workspace, Date.now()), budgeted: (budget?.cap_usd ?? 0) > 0 };
+    const cards = await hasExperiment(ctx, args.user_id, PRIORITY_CARDS_EXPERIMENT);
+    return {
+      on, cursor_at: await cursorFor(ctx, args.user_id, args.workspace, Date.now()), budgeted: (budget?.cap_usd ?? 0) > 0,
+      ...(cards ? { cards, declined: await declinedMergesFor(ctx, args.user_id, args.workspace) } : {}),
+    };
   },
 });
 
@@ -307,18 +320,58 @@ export const releaseStrays = internalMutation({
  * its plan was made from what that run has since changed.
  */
 export const applyPlan = internalMutation({
-  args: { ...runRowArgs, from_cursor: v.number(), plan: v.any(), conversations: v.optional(v.record(v.string(), v.id("conversations"))), strays: v.optional(v.array(v.id("conversations"))), corrections: v.optional(v.array(v.id("priority_corrections"))), superseded: v.optional(v.array(v.id("priority_corrections"))) },
+  args: {
+    ...runRowArgs, from_cursor: v.number(), plan: v.any(), conversations: v.optional(v.record(v.string(), v.id("conversations"))), strays: v.optional(v.array(v.id("conversations"))), corrections: v.optional(v.array(v.id("priority_corrections"))), superseded: v.optional(v.array(v.id("priority_corrections"))),
+    /** The priority cards experiment is on: a card answered since this run started supersedes it. */
+    cards_on: v.optional(v.boolean()),
+    /** Behind the experiment, the run's merges (lib/priorityCardPass mergeCardDraft): `plan` is the run without them, and this card holds them, posted in this same write. */
+    card: v.optional(v.any()),
+  },
   handler: async (ctx, args): Promise<Counts | null> => {
-    const { plan: raw, from_cursor, conversations, strays, corrections, superseded, ...run } = args;
-    const vis = sessionVisibility(ctx);
+    const { plan, from_cursor, conversations, strays, corrections, superseded, card, cards_on, ...run } = args;
     const recent = await recentRuns(ctx, args.user_id, args.workspace);
-    if (recent.some((r) => r.status === "ok" && r.finished_at > args.started_at)) {
+    // A priority card the person answered since this run started wrote rows this plan was not made from: superseded too.
+    if (recent.some((r) => r.status === "ok" && r.finished_at > args.started_at) || (cards_on && (await cardAnsweredSince(ctx, args.user_id, args.workspace, args.started_at)))) {
       await settleRun(ctx, { ...run, cursor_at: from_cursor, status: "skipped", error: "superseded" });
       return null;
     }
-    const plan = raw as MergePlan;
+    const { counts, created } = await writePlan(ctx, { user_id: args.user_id, workspace: args.workspace }, plan as MergePlan, { conversations, strays });
+    const now = Date.now();
+
+    const run_id = await settleRun(ctx, { ...run, status: "ok", counts });
+    // The run's merges, on a card left without the ones an open card already holds.
+    if (card) {
+      const posted = await postPriorityCard(ctx, { user_id: args.user_id, workspace: args.workspace, run_id, cost_usd: args.cost_usd, from: from_cursor, to: args.cursor_at, conversations, created }, card as CardDraft, now, await openCards(ctx, args.user_id, args.workspace));
+      if (posted && "skipped" in posted) await ctx.db.patch(run_id, { error: posted.skipped });
+    }
+
+    for (const id of [...(corrections ?? []), ...(superseded ?? [])]) {
+      const c: Doc<"priority_corrections"> | null = await ctx.db.get(id);
+      if (c?.status === "pending" && !c.deleted_at && String(c.user_id) === String(args.user_id) && c.workspace === args.workspace) {
+        await ctx.db.patch(id, { status: "applied", applied_at: now, applied_window: { from: from_cursor, to: args.cursor_at }, ...((superseded ?? []).includes(id) ? { superseded: true } : {}) });
+      }
+    }
+    return counts;
+  },
+});
+
+/**
+ * A plan's writes (applyPlan's, and an answered priority card's through
+ * lib/priorityCardApply), with no run bookkeeping: the checks against the rows
+ * as they are now, as applyPlan describes them. `conversations` resolves the
+ * session names the plan uses; `strays` are sessions that left the workspace.
+ * `created`: each new priority's plan ref and the short id it was given.
+ */
+export async function writePlan(
+  ctx: MutationCtx,
+  args: { user_id: Id<"users">; workspace: string },
+  plan: MergePlan,
+  { conversations, strays }: { conversations?: Record<string, Id<"conversations">>; strays?: Id<"conversations">[] } = {},
+): Promise<{ counts: Counts; created: Record<string, string> }> {
+    const vis = sessionVisibility(ctx);
     const now = Date.now();
     const counts: Counts = { ...NO_COUNTS };
+    const created: Record<string, string> = {};
     const ids = new Map<string, Id<"priorities">>();
     const mine = async (shortId: string): Promise<Doc<"priorities"> | null> => {
       const row: Doc<"priorities"> | null = await ctx.db.query("priorities").withIndex("by_short_id", (q: any) => q.eq("short_id", shortId)).first();
@@ -364,6 +417,7 @@ export const applyPlan = internalMutation({
         updated_at: now,
       });
       ids.set(ref, id);
+      created[ref] = short_id;
       counts.created++;
       // A milestone born done takes its done time from its tasks and pull requests, not this pass (a catch-up builds from last week's).
       for (const st of w.steps) if (st.done && hasRecords(st)) await recomputeStepDone(ctx, id, st.key);
@@ -526,18 +580,8 @@ export const applyPlan = internalMutation({
     await recount(args.user_id);
     // A new priority or milestone: the classifier asks again about the sessions it left unassigned.
     if (counts.created || newMilestone) await askRerun(ctx, args.user_id, args.workspace);
-
-    for (const id of [...(corrections ?? []), ...(superseded ?? [])]) {
-      const c: Doc<"priority_corrections"> | null = await ctx.db.get(id);
-      if (c?.status === "pending" && !c.deleted_at && String(c.user_id) === String(args.user_id) && c.workspace === args.workspace) {
-        await ctx.db.patch(id, { status: "applied", applied_at: now, applied_window: { from: from_cursor, to: args.cursor_at }, ...((superseded ?? []).includes(id) ? { superseded: true } : {}) });
-      }
-    }
-
-    await settleRun(ctx, { ...run, status: "ok", counts });
-    return counts;
-  },
-});
+    return { counts, created };
+}
 
 export function callScope(workspace: string): CallScope {
   const ws = parseWorkspaceKey(workspace);
@@ -620,7 +664,7 @@ async function pass(ctx: any, args: PassArgs): Promise<PassResult> {
     return { status: "skipped", reason: "nothing_new", ...(chained ? { chained } : {}) };
   }
   const { input, readTo, left } = runShare(read, read.input, fittingPrefix(read.input));
-  const { req } = priorityPassRequest(input);
+  const { req } = priorityPassRequest(input, gate.cards ? { why: true } : {});
   const spec = { model: req.model, max_tokens: req.max_tokens, system: req.system, prompt: req.prompt, output: "json" as const, output_schema: req.output_schema };
   const reply = await runModelCall(
     ctx,
@@ -641,11 +685,18 @@ async function pass(ctx: any, args: PassArgs): Promise<PassResult> {
   }
   const { output, dropped } = parsePriorityPassOutput(reply.json, input);
   if (!output) return fail(`unreadable reply: ${dropped.join("; ")}`, true);
+  // Behind the priority cards experiment a run writes what it writes without it, but its merges wait on the person's card (sd-5035),
+  // posted in the same write, and a merge the person declined is never proposed again. A plan with no merge is written exactly as it
+  // would be without the experiment, and posts no card.
+  // A declined merge is held back like any other, and left off the card.
   const plan = mergePriorities(input, output);
+  const merging = !!gate.cards && plan.merges.length > 0;
+  const written = merging ? planWithoutMerges(input, output, plan) : plan;
+  const card = merging ? { card: dropDeclined(mergeCardDraft(plan, written, input, output), gate.declined ?? []) } : {};
   // A plan that fails to land still cost the call: record it (the day's ceiling counts it), and a repeat failure steps the cursor past after FAILURES_BEFORE_STEP.
   let counts: Counts | null;
   try {
-    counts = await ctx.runMutation(self.applyPlan, { ...base, run_id, cursor_at: readTo, from_cursor: cursor_at, cost_usd: reply.cost_usd, plan, conversations: read.conversations, strays: read.strays, corrections: read.corrections, superseded: read.superseded });
+    counts = await ctx.runMutation(self.applyPlan, { ...base, run_id, cursor_at: readTo, from_cursor: cursor_at, cost_usd: reply.cost_usd, plan: written, conversations: read.conversations, strays: read.strays, corrections: read.corrections, superseded: read.superseded, ...(gate.cards ? { cards_on: true } : {}), ...card });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     return fail(`applying the plan failed: ${message}`.slice(0, 500), !TRANSIENT_APPLY_ERRORS.test(message));

@@ -30,7 +30,7 @@
 // whatever its score, so blocked-and-reachable always leads (sd-3584).
 // Among equal scores the oldest leads: a parked agent's cost grows with its
 // age, so oldest-first minimizes fleet idle time.
-import { BLOCKED_BANNER_KINDS, escalatedAsks, isHostedAgentType, isStackedAsk } from "@codecast/shared/contracts";
+import { BLOCKED_BANNER_KINDS, escalatedAsks, isHostedAgentType, isStackedAsk, liftsAskingSession } from "@codecast/shared/contracts";
 import { APPROVAL_ANSWERS } from "@codecast/shared/contracts/assistant";
 import { byImpact } from "@codecast/shared/contracts/decisionImpact";
 import { nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
@@ -412,14 +412,15 @@ export function sessionHasOpenQuestion(
   return !!s.awaiting_input || s.agent_status === "permission_blocked" || escalatedAsks(s);
 }
 
-/** Conversation ids with a pending `cast decide` the viewer must answer. */
+/** Conversation ids with a pending `cast decide` the viewer must answer. A priority card sits in a session without
+ *  being its question, so it lifts none (liftsAskingSession, the server's rule too). */
 export function pendingDecisionConvIds(
   decisions: Record<string, SessionDecisionItem>,
   meId?: string | null,
 ): Set<string> {
   const ids = new Set<string>();
   for (const d of Object.values(decisions)) {
-    if (!isStackedAsk(d) || !inViewerQueue(d)) continue;
+    if (!liftsAskingSession(d) || !inViewerQueue(d)) continue;
     if (meId && d.asked_user_ids && !d.asked_user_ids.some((id) => String(id) === String(meId))) continue;
     ids.add(d.conversation_id);
   }

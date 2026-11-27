@@ -208,6 +208,7 @@
     "./contracts/mods": "./contracts/mods.ts",
     "./contracts/priorities": "./contracts/priorities.ts",
     "./contracts/priorityDerive": "./contracts/priorityDerive.ts",
+    "./contracts/priorityCard": "./contracts/priorityCard.ts",
     "./contracts/internalHost": "./contracts/internalHost.ts",
     "./contracts/secrets": "./contracts/secrets.ts",
     "./contracts/deliveryHold": "./contracts/deliveryHold.ts",

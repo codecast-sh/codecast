@@ -73,6 +73,15 @@ describe("roleReportsOf", () => {
     expect(p.waits).toEqual({ decisions_over_day: 1, open_tasks: 2, review_over_day: 1 });
   });
 
+  test("a person's priority card is theirs alone: it reaches neither the role's report nor its card", async () => {
+    const db = fixtures();
+    await db.patch("sd_old", { priority_card: { v: 1, changes: [] } });
+    const [p] = await roleReportsOf(ctxOf(db), { _id: ROLE, team_id: TEAM, status: "active", scope: { project_ids: [IN_AREA], plan_ids: [] } }, ADMIN as any, NOW);
+    expect(p.decisions).toEqual([]);
+    expect(p.waits.decisions_over_day).toBe(0);
+    expect((await roleCardOf(ctxOf(db), ROLE as any))?.people[0].waits).not.toContain("1 decision waiting over a day");
+  });
+
   test("a role nobody reports to reads nobody, and a retired one nothing", async () => {
     const db = fixtures();
     expect(await roleReportsOf(ctxOf(db), { _id: "org_roles_none", team_id: TEAM, status: "active", scope: { project_ids: [], plan_ids: [] } }, ADMIN as any, NOW)).toEqual([]);

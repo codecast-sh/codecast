@@ -19,6 +19,7 @@ import {
   arrangeDecisions, filterCounts, tabCounts, DECISION_AGES, DECISION_AXES, DECISION_AXIS_LABEL, DECISION_KINDS, DECISION_KIND_LABEL,
   DECISION_SORTS, DECISION_SORT_LABEL, DECISION_TAB_LABEL, SESSION_SOURCE, FLOW_SOURCE, type DecisionAxis, type DecisionTab,
 } from "../../lib/decisions/decisionRows";
+import { isPriorityCard } from "@codecast/shared/contracts/priorityCard";
 import { DecisionListRow, type DecisionRowCtx } from "./DecisionListRow";
 import { publishDecisionOrder } from "../../lib/decisions/decisionSet";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
@@ -61,6 +62,9 @@ export type DecisionListProps = {
   /** Hand the rows' order to the decision page's ‹ › (lib/decisions/decisionSet). */
   publishOrder?: boolean;
 };
+
+/** A priority card is acted on only through the card (isPriorityCard): it never joins a selection, so no bulk verb reaches it. */
+const selectableDecision = (d: SessionDecisionItem) => !isPriorityCard(d);
 
 export function DecisionList({ title, page, state, rows, tabs = ["mine", "team", "unassigned", "escalated", "answered"], hideAxes = [], routeOf, renderPreview, activeItemId, savedViews, headerExtra, displayExtra, customContent, emptyMessage, compact, publishOrder }: DecisionListProps) {
   const { view, set, prefs, replace } = state;
@@ -173,6 +177,7 @@ export function DecisionList({ title, page, state, rows, tabs = ["mine", "team",
       groups={groups}
       flatItems={arranged.items}
       renderRow={renderRow}
+      isSelectable={selectableDecision}
       renderPreview={renderPreview}
       getItemId={decisionItemId}
       getItemRoute={routeOf}

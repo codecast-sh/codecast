@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useState } from 'react';
 import { approveNeedsPresence } from '@codecast/shared/contracts/commandRun';
+import { isPriorityCard } from '@codecast/shared/contracts/priorityCard';
 import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
@@ -170,12 +171,17 @@ export default function DecisionScreen() {
             <TouchableOpacity onPress={() => answer({ dismiss: true })} hitSlop={8}>
               <Text style={styles.footerText}>Dismiss</Text>
             </TouchableOpacity>
-            <TouchableOpacity onPress={() => setHandoff(handoff === 'pass' ? null : 'pass')} hitSlop={8}>
-              <Text style={[styles.footerText, handoff === 'pass' && { color: Theme.text }]}>Pass</Text>
-            </TouchableOpacity>
-            <TouchableOpacity onPress={() => setHandoff(handoff === 'escalate' ? null : 'escalate')} hitSlop={8}>
-              <Text style={[styles.footerText, { color: Theme.orange }]}>Escalate</Text>
-            </TouchableOpacity>
+            {/* A priority card stays with its person: no Pass or Escalate (THE RULE on isPriorityCard). */}
+            {isPriorityCard(row) ? null : (
+              <>
+                <TouchableOpacity onPress={() => setHandoff(handoff === 'pass' ? null : 'pass')} hitSlop={8}>
+                  <Text style={[styles.footerText, handoff === 'pass' && { color: Theme.text }]}>Pass</Text>
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => setHandoff(handoff === 'escalate' ? null : 'escalate')} hitSlop={8}>
+                  <Text style={[styles.footerText, { color: Theme.orange }]}>Escalate</Text>
+                </TouchableOpacity>
+              </>
+            )}
             {nextId ? (
               <TouchableOpacity onPress={goNext} hitSlop={8}>
                 <Text style={styles.footerText}>Skip ›</Text>

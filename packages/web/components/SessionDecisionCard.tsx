@@ -1,6 +1,7 @@
 "use client";
 
 import { approvalButtonLabel } from "@codecast/shared/contracts/assistant";
+import { isPriorityCard } from "@codecast/shared/contracts/priorityCard";
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useDecisionAnswer } from "../hooks/useDecisionAnswer";
 import { useDecisionDraftText } from "../hooks/useDecisionDraft";
@@ -262,8 +263,8 @@ export function SessionDecisionCard({ item, stepper, asks, onPick, startSize, al
   }, [answerItemFreeText, onDone]);
   const dismiss = useCallback(() => { dismissItem(); onDone(); }, [dismissItem, onDone]);
   // A `cast decide` row can be handed on; a terminal prompt and a hosted
-  // assistant's ask (only its owner answers) cannot. A trial's stays put.
-  const canPass = item.source === "decide" && !!item.decisionId && !hosted && !item.trial;
+  // assistant's ask (only its owner answers) cannot. A trial's stays put, and so does a priority card (THE RULE on isPriorityCard).
+  const canPass = item.source === "decide" && !!item.decisionId && !hosted && !item.trial && !isPriorityCard(decisionRow);
 
   const onExit = stepper?.onExit;
   // Off the inbox (the /questions stepper) "open" must leave for the inbox;

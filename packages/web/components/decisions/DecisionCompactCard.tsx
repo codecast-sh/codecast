@@ -27,6 +27,8 @@ import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import { hasCanvasFence } from "../HtmlSnippet";
 import { plainParagraphs } from "@codecast/shared/contracts/plainText";
 import { decisionWords } from "@codecast/shared/contracts/changeCard";
+import { TOUCH_HEIGHT } from "../../lib/narrowTouch";
+import { priorityCardAnswerWord, priorityCardAsk } from "../../lib/priorityCardDecision";
 import "./decisions.css";
 import { useIsModernStyle } from "../../hooks/useVisualStyle";
 import { modernButton, modernPill } from "../ui/modernLook";
@@ -230,11 +232,14 @@ export function DecisionCompactCardView({
               className: "items-center gap-2",
               node: (
                 <>
-                  {onToggleSelect && (
+                  {/* A priority card never joins a stack (its delegate and defaults would answer it). */}
+                  {onToggleSelect && !decision.priority_card && (
                     <input type="checkbox" checked={!!selected} onChange={onToggleSelect} className="accent-[var(--sol-violet)]" aria-label="Select for a stack" />
                   )}
-                  {decision.blocking && <span className="w-1.5 h-1.5 shrink-0 rounded-full bg-sol-yellow" title="Blocking: the session is parked" aria-label="blocking" />}
-                  <AskingSessionView decision={decision} session={session} onJumpToAsk={onJumpToAsk} className="max-w-[22rem]" />
+                  {/* A priority card parks no session: it has no blocking dot. */}
+                  {decision.blocking && !decision.priority_card && <span className="w-1.5 h-1.5 shrink-0 rounded-full bg-sol-yellow" title="Blocking: the session is parked" aria-label="blocking" />}
+                  {/* A priority card names the pass that made it, never the session it sits in. */}
+                  {decision.priority_card ? <span className="text-sol-text-muted" data-decision-card-source>Priorities pass</span> : <AskingSessionView decision={decision} session={session} onJumpToAsk={onJumpToAsk} className="max-w-[22rem]" />}
                 </>
               ),
             },
@@ -309,7 +314,7 @@ export function DecisionCompactCardView({
               </div>
             ) : (
               <Link href={decisionHref(decision)} className="decision-question block mt-2 text-sol-text hover:text-sol-blue transition-colors">
-                {decision.question}
+                {decision.priority_card ? priorityCardAsk(decision.priority_card) : decision.question}
               </Link>
             )}
           </>
@@ -335,8 +340,11 @@ export function DecisionCompactCardView({
         {pageCount > 0 && (
           <div className="mt-2"><OptionPages decision={decision} answerable={pending && kind === "single"} onAnswer={(i) => onAnswer({ index: i })} /></div>
         )}
-        {decision.status === "answered" && !decision.card && (
+        {decision.status === "answered" && !decision.card && !decision.priority_card && (
           <div className="mt-2.5 border-t border-sol-border/50 pt-2" data-decision-answer><DecisionRecordedAnswer decision={decision} /></div>
+        )}
+        {decision.priority_card && !pending && (
+          <div className="mt-2.5 border-t border-sol-border/50 pt-2 text-[13px] text-sol-text-muted" data-decision-answer>{priorityCardAnswerWord(decision)}</div>
         )}
         {rec !== undefined && (
           <div className="mt-2 text-[12px] text-sol-cyan">a lead recommends: {decision.options[rec]?.label}</div>
@@ -347,15 +355,16 @@ export function DecisionCompactCardView({
           {kind === "single" ? (
             <DecisionAnswerControls decision={decision} onAnswer={onAnswer} onDismiss={onDismiss} keys={keys} size="compact" recommendation={rec} />
           ) : (
-            <Link href={decisionHref(decision)} className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded border border-sol-yellow/40 text-[12px] text-sol-text hover:bg-sol-yellow hover:text-sol-bg transition-colors${m ? ` ${modernButton({ variant: "outline", size: "sm" })}` : ""}`}>
-              {kind === "multi" ? "Pick several" : kind === "rank" ? "Rank the options" : "Fill in the form"}<ArrowUpRight className="w-3 h-3" />
+            <Link href={decisionHref(decision)} className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded border border-sol-yellow/40 text-[12px] text-sol-text hover:bg-sol-yellow hover:text-sol-bg transition-colors${m ? ` ${modernButton({ variant: "outline", size: "sm" })}` : ""}${decision.priority_card ? ` ${TOUCH_HEIGHT}` : ""}`} data-decision-open-card={decision.priority_card ? "" : undefined}>
+              {decision.priority_card ? "Review the changes" : kind === "multi" ? "Pick several" : kind === "rank" ? "Rank the options" : "Fill in the form"}<ArrowUpRight className="w-3 h-3" />
             </Link>
           )}
         </div>
       )}
       {pending && <RunFallbackLine run={decision.run} className={embedded ? "pb-3" : "px-4 pb-3"} />}
-      {/* The team thread, with the session that owns it, without leaving the queue (ct-74449). */}
-      {!folded && (
+      {/* The team thread, with the session that owns it, without leaving the queue (ct-74449). A
+          priority card is its person's alone, acted on only through the card: it has no thread. */}
+      {!folded && !decision.priority_card && (
         <div className={embedded ? "pb-3" : "px-4 pb-3"}><DecisionDiscussion decisionId={decision._id} compact /></div>
       )}
     </div>

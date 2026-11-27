@@ -64,7 +64,7 @@ import {
   escalatedToViewer,
   escalatedAsks,
   type OwnersModelRow,
-  isStackedAsk,
+  liftsAskingSession,
   type InboxBucket,
   type InboxPlacement,
   type InboxProjection,
@@ -10427,7 +10427,7 @@ function isOpenAskUserQuestion(msg: any): boolean {
 }
 
 // Pending `cast decide` questions for the user that lift a session into
-// QUESTIONS (isStackedAsk: blocking, or filed into a named stack). Same people set as
+// QUESTIONS (liftsAskingSession: blocking or stacked, never a priority card). Same people set as
 // listForUserCore: decision_inbox (assignment), then the legacy owner index
 // for rows minted before asked_user_ids existed. session_decisions.user_id
 // is the RUNNER — using it here kept a hosted session's questions on the
@@ -10441,7 +10441,7 @@ export async function loadPendingDecisionConvIds(ctx: any, userId: Id<"users">):
     .collect();
   for (const r of inbox) {
     const d = await ctx.db.get(r.decision_id);
-    if (!d || !isStackedAsk(d)) continue;
+    if (!d || !liftsAskingSession(d)) continue;
     if (d.asked_user_ids !== undefined && !d.asked_user_ids.some((id: any) => String(id) === uid)) continue;
     ids.add(d.conversation_id.toString());
   }
@@ -10450,7 +10450,7 @@ export async function loadPendingDecisionConvIds(ctx: any, userId: Id<"users">):
     .withIndex("by_user_status", (q: any) => q.eq("user_id", userId).eq("status", "pending"))
     .collect();
   for (const r of legacy) {
-    if (r.asked_user_ids !== undefined || !isStackedAsk(r)) continue;
+    if (r.asked_user_ids !== undefined || !liftsAskingSession(r)) continue;
     ids.add(r.conversation_id.toString());
   }
   return ids;

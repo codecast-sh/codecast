@@ -4,6 +4,7 @@
 import type { Doc, Id } from "../_generated/dataModel";
 import { canAccessConversation, canAccessTask } from "./access";
 import { roleGrants } from "./orgAccess";
+import { isPriorityCard, priorityCardVisibleTo } from "./priorityCardAccess";
 
 type DecisionRow = Doc<"session_decisions">;
 type Ctx = { db: any };
@@ -31,6 +32,8 @@ export async function findDecision(ctx: Ctx, ref: string): Promise<DecisionRow |
 // read the problem reads it, answers it and assigns it, so a team's line
 // decisions are the whole team's, whichever session asked.
 export async function userMayRead(ctx: Ctx, userId: Id<"users">, row: DecisionRow): Promise<boolean> {
+  // A priority card is its person's alone, whoever can read the session it sits in (THE RULE on isPriorityCard).
+  if (isPriorityCard(row)) return priorityCardVisibleTo(row, userId);
   const people = (row.asked_user_ids ?? [row.user_id]).map(String);
   if (people.includes(String(userId))) return true;
   const conversation = await ctx.db.get(row.conversation_id);
