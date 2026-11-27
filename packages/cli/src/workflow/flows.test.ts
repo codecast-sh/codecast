@@ -124,6 +124,9 @@ describe("expanding a segment", () => {
     // Run vars are left for the runner; only the declared param is filled in.
     expect(wait(`, except="x"`)).toContain(`--merge "$run_dir/merge.json"`);
     expect(() => parseWorkflowSource(main(`, except="a; rm -rf ."`), root)).toThrow(/may hold only words/);
+    // One run variable passes through, for the runner to expand; anything around it does not.
+    expect(wait(`, except="$ci_card.output"`)).toContain(`--except "$ci_card.output"`);
+    expect(() => parseWorkflowSource(main(`, except="$x; rm -rf ."`), root)).toThrow(/may hold only words/);
   });
 
   test("a change to a segment changes the stations of every flow that uses it", () => {

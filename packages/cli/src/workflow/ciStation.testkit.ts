@@ -80,6 +80,10 @@ export function fakeGh(o: {
   logs?: Record<number, string>;
   mainAt?: Record<string, Array<Record<string, any>>>;
   mainEarlier?: Array<Record<string, any>>;
+  /** Main's runs created at or after a date, newest first, as `gh run list --created >=` lists them. */
+  mainLater?: Array<Record<string, any>>;
+  /** What the head's tree query prints: `<mode> <sha> <path>` lines (and `truncated` for a tree GitHub cut short). */
+  tree?: string[];
   jobs?: Record<number, any[]>;
   workflows?: Record<string, string>;
   /** Other repository files by path, as GitHub's contents API serves them (the base's .codecast/line.toml). */
@@ -109,6 +113,7 @@ export function fakeGh(o: {
       const p = current();
       return { code: 0, out: JSON.stringify({ url: `https://github.com/${REPO}/pull/7`, headRefOid: p.head ?? HEAD, headRefName: "feature", baseRefName: "main", baseRefOid: BASE_OID, mergeable: p.mergeable ?? "MERGEABLE", statusCheckRollup: p.rollup }) };
     }
+    if (a.startsWith(`api repos/${REPO}/git/trees/`)) return o.tree ? { code: 0, out: o.tree.join("\n") } : { code: 1, out: "HTTP 404: Not Found" };
     if (a.startsWith(`api --paginate repos/${REPO}/pulls/7/files`)) return { code: 0, out: (o.files ?? ["src/app.ts"]).join("\n") };
     const compare = /^api repos\/acme\/app\/compare\/(\S+) --jq \.status$/.exec(a);
     if (compare) return o.compare?.[compare[1]!] ? { code: 0, out: o.compare[compare[1]!]! } : { code: 1, out: "HTTP 404: No common ancestor or unknown sha" };
@@ -122,6 +127,7 @@ export function fakeGh(o: {
       return { code: 0, out: JSON.stringify(runs) };
     }
     if (commit) return { code: 0, out: JSON.stringify(o.mainAt?.[commit[1]!] ?? []) };
+    if (a.startsWith("run list") && a.includes("--created >=")) return { code: 0, out: JSON.stringify(o.mainLater ?? []) };
     if (a.startsWith("run list") && a.includes("--created")) return { code: 0, out: JSON.stringify(o.mainEarlier ?? []) };
     if (a.startsWith("run rerun")) { attempt++; rerunOf = JSON.stringify(current().rollup); return { code: 0, out: "" }; }
     const log = /^api repos\/acme\/app\/actions\/jobs\/(\d+)\/logs( --allow-escape-sequences)?$/.exec(a);

@@ -159,3 +159,34 @@ describe("cast flow verdicts and a carried ship", () => {
     expect(said.map((l) => JSON.parse(l).next)).toEqual(["merge", "rerun_review"]);
   });
 });
+
+// ct-102368: a round reviewed afresh (a conflict fix, a retest) fetched no proof, so a CI edit a person already let
+// merge was asked again every round.
+describe("cast flow verdicts and an approved CI edit", () => {
+  test("a fresh review of a CI edit reads the server's proof, and merges on an unchanged edit a person shipped", async () => {
+    const fs = await import("node:fs");
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cast-flow-verdicts-ci-"));
+    const head = "a".repeat(40);
+    fs.writeFileSync(path.join(dir, "pr.json"), JSON.stringify({ url: "u", number: 7, head_sha: head, round: "r2" }));
+    fs.writeFileSync(path.join(dir, "ci.json"), JSON.stringify({ green: true, head_sha: head, failing: [], preexisting: [], pending: [], timed_out: false, ci_changed: true, ci_edit: "e1" }));
+    fs.writeFileSync(path.join(dir, "ci-approved.json"), JSON.stringify({ ci_edit: "e1" }));
+    const review = JSON.stringify({ round: "r2", head_sha: head, verdict: "ship", findings: [] });
+    const said: string[] = [];
+    const log = console.log;
+    console.log = (l: string) => { said.push(l); };
+    try {
+      for (const shipped of [true, false]) {
+        const posts: string[] = [];
+        const { program } = cast({}, async (p) => { posts.push(p); return { review: null, rebases: [], ci_shipped: shipped }; });
+        await program.parseAsync(["node", "cast", "flow", "verdicts", "--dir", dir, "--review", review, "--run", "run_3"]);
+        expect(posts).toEqual(["/cli/workflow-runs/merge-proof"]);
+      }
+    } finally {
+      console.log = log;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+    expect(said.map((l) => JSON.parse(l).next)).toEqual(["merge", "decide"]);
+  });
+});

@@ -254,13 +254,14 @@ function server(w: ReturnType<typeof world>) {
   };
 }
 
-async function run(w: ReturnType<typeof world>, subject = true) {
+/** `at`: `cast workflow resume ct-9 --at <station>` as the runner sees it, the same run picked up there as a new attempt. */
+async function run(w: ReturnType<typeof world>, subject = true, at?: string) {
   const graph = parseWorkflowSource(BUILTIN_WORKFLOW_TEMPLATES.change);
   const tip = git(w.root, "rev-parse", "feat");
   writeFrozenChange(w.runDir, { source: "branch", ...(subject ? { session: CONV.slice(0, 7), conversation: CONV } : {}), base: tip, tip, branch: "feat", worktree: "change-ct-9", paths: ["a.txt"], shared: [], held: [] });
   console.log = process.env.SHOW_RUN ? origLog : () => {};
   try {
-    return await runWorkflow(graph, { cwd: w.root, taskId: "ct-9", runId: "run-9", runSession: "conv_run", apiToken: "tok", convexSiteUrl: "https://convex.test", pollIntervalMs: 1 });
+    return await runWorkflow(graph, { cwd: w.root, taskId: "ct-9", runId: "run-9", runSession: "conv_run", apiToken: "tok", convexSiteUrl: "https://convex.test", pollIntervalMs: 1, ...(at ? { resume: { status: "failed", current_node_id: at, node_statuses: [], visits_reset_at: Date.now() + 5 } as any } : {}) });
   } finally {
     console.log = origLog;
   }
@@ -409,6 +410,17 @@ describe("the shipped change flow", () => {
     expect(s.briefs()).toEqual([]);
     expect(s.sent().at(-1).body).toContain("stopped at CI never reported");
     expect(s.sent().at(-1).body).toContain("CI did not finish: test-cli still running");
+  }, 120_000);
+
+  // ct-102369: a resume is a new attempt, and Merge clears only on CI and a review the server holds for it.
+  test("CI never reported names a resume at PR, which runs CI and a fresh review again on the same change, to Live", async () => {
+    const w = world({ ci: [SILENT, SILENT, GREEN], review: [SHIP, SHIP], merge: ["merged"] });
+    const s = server(w);
+    expect(await run(w)).toBe("failed");
+    expect(s.failReason()).toContain("(`cast workflow resume ct-9 --at pr`)");
+    fs.rmSync(path.join(process.env.FAKE_STATE!, "proof.json")); // the new attempt holds no review from the last one
+    expect(await run(w, true, "pr")).toBe("completed");
+    expect([count(w.calls(), "flow pr"), count(w.calls(), "flow ci"), s.spawned.length]).toEqual([2, 3, 2]);
   }, 120_000);
 
   test("CI that reports on its second try merges", async () => {

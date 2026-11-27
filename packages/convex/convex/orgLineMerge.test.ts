@@ -435,9 +435,12 @@ describe("a merge no role is behind", () => {
   test("merge proof: the runner reads this attempt's reviewed head and rebase links, nothing older and nobody else", async () => {
     const s = solo();
     Object.assign(s.run(), { station_rebases: [{ from: "1".repeat(40), to: "2".repeat(40), at: NOW, attempt: NOW - 1 }, { from: HEAD, to: "c".repeat(40), at: NOW, attempt: NOW }] });
-    expect(await mergeProofCore(s.ctx, HOST as any, "workflow_runs_1")).toEqual({ review: { verdict: "ship", head_sha: HEAD, node_id: "review__review" }, rebases: [{ from: HEAD, to: "c".repeat(40) }] });
-    s.run().visits_reset_at = NOW + 1;
-    expect(await mergeProofCore(s.ctx, HOST as any, "workflow_runs_1")).toEqual({ review: null, rebases: [] });
+    expect(await mergeProofCore(s.ctx, HOST as any, "workflow_runs_1")).toEqual({ review: { verdict: "ship", head_sha: HEAD, node_id: "review__review" }, rebases: [{ from: HEAD, to: "c".repeat(40) }], ci_shipped: false });
+    // A person's Ship on the run's own card in this attempt: the change flow asks nobody again for the same CI edit.
+    s.tables.session_decisions.push(card("session_decisions_1", { workflow_run_id: "workflow_runs_1", resolved_at: NOW + 1 }));
+    expect(await mergeProofCore(s.ctx, HOST as any, "workflow_runs_1")).toMatchObject({ ci_shipped: true });
+    s.run().visits_reset_at = NOW + 2;
+    expect(await mergeProofCore(s.ctx, HOST as any, "workflow_runs_1")).toEqual({ review: null, rebases: [], ci_shipped: false });
     await expect(mergeProofCore(s.ctx, "users_someone" as any, "workflow_runs_1")).rejects.toThrow("Only the run's own runner");
   });
 

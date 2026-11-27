@@ -7,13 +7,18 @@
 // a change to itself: the flow takes it to a person before Merge.
 //
 // When the head is red, the station reruns the failed jobs once to absorb
-// flakes, then splits the failures by whether main's own CI has them too. That
-// split only routes: a change whose every failure main also has is blocked by
+// flakes, then splits the failures by whether main's own CI has them too, or
+// main's CI never reached a verdict on them (its run at the tested sha was
+// cancelled or still going, and no later run of main holding that sha judged
+// them either). A job that fails only because jobs it needs failed (a summary
+// job like `verify`) is no failure of its own. That split only routes: a change
+// whose every failure is main's, or one main's CI never judged, is blocked by
 // main (the flow waits for main and reruns on a rebased head) rather than sent
 // back to its author. A wrong split misroutes and corrects itself on the
 // rebased rerun; it can never make a change green. It always exits 0.
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { createHash } from "node:crypto";
 import { spawnSync } from "../proc.js";
 import { LINE_PROFILE_REL_PATH, parseLineProfileText } from "../lineProfile.js";
 import { jobFailures, type CiFailure, type NamedFailure } from "@codecast/shared/contracts/ciFailures";
@@ -31,12 +36,24 @@ export interface CiResult {
   failing: CiFailure[];
   /** The failures main's CI has too, at the tested sha or its nearest run of that job. */
   preexisting: CiFailure[];
-  /** Red, and every failure is main's: wait for main, then rerun on a rebased head. */
+  /**
+   * The failures main's CI never judged: its run at the tested sha was cancelled or still going, and no later run of
+   * main holding that sha reached a verdict on the job. Neither the change's for sure nor main's.
+   */
+  unjudged: CiFailure[];
+  /** Red, and every failure is main's or one main's CI never judged: wait for main, then rerun on a rebased head. */
   blocked_by_main: boolean;
   /** The change edits CI (`.github/**`, a `[line] ci_paths` path, or a file list too long to rule it out): a person must Ship it. */
   ci_changed: boolean;
-  /** What was still running when the deadline passed. */
+  /**
+   * With ci_changed, what the CI edit is: a digest of each CI path the pull request touches with its content at the
+   * head. An approval of the edit holds while this is the same; null when it could not be read.
+   */
+  ci_edit: string | null;
+  /** What was still running, or never started, when the deadline passed. */
   pending: string[];
+  /** Of `pending`, the workflows that never started on the head. */
+  not_started: string[];
   reran: boolean;
   timed_out: boolean;
   /** No workflow runs on this pull request and no outside check reports on it. */
@@ -63,7 +80,7 @@ interface Check {
 
 interface HeadRun { databaseId: number; status: string; conclusion?: string; attempt?: number; workflowName?: string; event?: string }
 interface Job { name: string; databaseId: number; status: string; conclusion: string }
-interface MainRun { databaseId: number; headSha?: string; createdAt: string; status?: string }
+interface MainRun { databaseId: number; headSha?: string; createdAt: string; status?: string; conclusion?: string }
 
 const CHECK_PASSED = new Set(["SUCCESS", "SKIPPED", "NEUTRAL"]);
 const JOB_PASSED = new Set(["success", "skipped", "neutral"]);
@@ -117,7 +134,9 @@ function readChecks(rollup: any[]): Check[] {
 
 // ── workflow files: which ones run on this pull request ─────────────────────
 
-interface Workflow { name: string; on: unknown }
+/** A workflow job as its file declares it: the name its runs carry, and the jobs it needs. */
+interface WorkflowJob { name: string; needs: string[] }
+interface Workflow { name: string; on: unknown; jobs: Record<string, WorkflowJob> }
 
 /** A workflow file's name and triggers, or null when it does not parse (or this runtime has no YAML parser). */
 function parseWorkflow(text: string, file: string): Workflow | null {
@@ -125,8 +144,12 @@ function parseWorkflow(text: string, file: string): Workflow | null {
   let doc: any;
   try { doc = Bun.YAML.parse(text); } catch { return null; }
   if (!doc || typeof doc !== "object" || Array.isArray(doc)) return null;
+  const jobs: Record<string, WorkflowJob> = {};
+  for (const [id, j] of Object.entries(doc.jobs && typeof doc.jobs === "object" ? doc.jobs as Record<string, any> : {})) {
+    jobs[id] = { name: typeof j?.name === "string" ? j.name : id, needs: [j?.needs ?? []].flat().map(String) };
+  }
   // GitHub names a workflow without `name:` by its path.
-  return { name: typeof doc.name === "string" ? doc.name : file, on: doc.on ?? doc.true };
+  return { name: typeof doc.name === "string" ? doc.name : file, on: doc.on ?? doc.true, jobs };
 }
 
 const globRe = (g: string) => new RegExp(`^${g.replace(/[.+^$()|{}[\]\\]/g, "\\$&").replace(/\*\*\/?/g, "\u0000").replace(/\*/g, "[^/]*").replace(/\?/g, "[^/]").replace(/\u0000/g, ".*")}$`);
@@ -197,7 +220,7 @@ export async function runCiStation(o: CiStationOptions): Promise<{ result: CiRes
   const file = path.join(o.dir, "ci.json");
   // A verdict left by an earlier visit, perhaps on another head, must never stand in for this one.
   try { fs.rmSync(file, { force: true }); } catch {}
-  const result: CiResult = { green: false, head_sha: null, tested_main_sha: null, failing: [], preexisting: [], blocked_by_main: false, ci_changed: false, pending: [], reran: false, timed_out: false, no_ci: false, head_moved: false, observed_head: null };
+  const result: CiResult = { green: false, head_sha: null, tested_main_sha: null, failing: [], preexisting: [], unjudged: [], blocked_by_main: false, ci_changed: false, ci_edit: null, pending: [], not_started: [], reran: false, timed_out: false, no_ci: false, head_moved: false, observed_head: null };
   let summary: string;
   try {
     if (!(o.deadlineMs > 0)) throw new Error("--deadline is not a duration (90s, 60m, 2h, 1h30m)");
@@ -228,6 +251,9 @@ class Station {
   private files = new Map<string, string[] | null>();
   private moved = new Map<string, boolean>();
   private expected = new Map<string, { names: string[]; unsure: boolean }>();
+  /** Each workflow's jobs as its file at the head declares them, by the workflow's name. */
+  private workflowJobs = new Map<string, Record<string, WorkflowJob>>();
+  private holds = new Map<string, boolean>();
   private tested = new Map<string, string>();
   private logs = new Map<string, { code: number; out: string }>();
   private jobs = new Map<number, Job[]>();
@@ -352,6 +378,7 @@ class Station {
         if (wanted) result.head_sha = pr.headRefOid;
         const still = running.length ? running : going.map((r) => r.workflowName ?? `run ${r.databaseId}`);
         result.pending = [...still, ...missing];
+        result.not_started = missing;
         this.limit = this.now() + GRACE_MS;
         const why = still.length ? `${plural(still.length, "job")} still running (${still.join(", ")})`
           : missing.length ? `${missing.join(", ")} never started on ${head}`
@@ -427,6 +454,7 @@ class Station {
       const r = this.gh(["api", `repos/${this.repo}/contents/${file}?ref=${pr.headRefOid}`, "--jq", ".content"]);
       const wf = r.code === 0 ? parseWorkflow(Buffer.from(r.out.replace(/\s/g, ""), "base64").toString("utf-8"), file) : null;
       const runs = wf ? runsOnPullRequest(wf, { base: pr.baseRefName || "main", head: pr.headRefName ?? "" }, files) : null;
+      if (wf) this.workflowJobs.set(wf.name, wf.jobs);
       if (runs === null) out.unsure = true;
       else if (runs) out.names.push(wf!.name);
     }
@@ -487,31 +515,106 @@ class Station {
   }
 
   /**
-   * How main's CI ran a job: its run of the workflow on the tested sha, else the nearest earlier main run where
-   * that job ran (codecast's CI skips the jobs a commit's paths do not reach). Null when none within reach ran it.
-   * Returns whether it failed and the failures its log names.
+   * How main's CI ran a job: its run of the workflow on the tested sha. Where that run skipped the job (codecast's
+   * CI skips the jobs a commit's paths do not reach) or main has no run there, the nearest earlier main run where
+   * the job ran. Where that run never reached a verdict on it (cancelled, still going), the nearest later run of
+   * main that holds the tested sha, and failing that an earlier run speaks only for the failures it has (`unsure`):
+   * an earlier pass says nothing of the commits after it, so the job is `unjudged`. Null when no run within reach ran
+   * it. Returns whether it failed and the failures its log names.
    */
-  private mainJob(workflow: string, base: string, tested: string, name: string): MainJob | null {
+  private mainJob(workflow: string, base: string, tested: string, name: string): MainJob | "unjudged" | null {
     const atTested = this.mainRunsOf(workflow, ["--commit", tested]);
     const when = atTested[atTested.length - 1]?.createdAt ?? this.commitDate(tested);
     const earlier = when ? this.mainRunsOf(workflow, ["--branch", base, "--event", "push", "--created", `<=${when}`]) : [];
-    const seen = new Set<number>();
-    for (const run of [...atTested, ...earlier].slice(0, 12)) {
-      if (seen.has(run.databaseId) || (run.status && run.status !== "completed")) continue;
-      seen.add(run.databaseId);
-      const job = this.jobsOf(run.databaseId).find((j) => j.name === name && j.status === "completed" && !["skipped", "cancelled", ""].includes(j.conclusion ?? ""));
-      if (!job) continue;
+    // A job's verdict in a run: the job, or that it did not run there ("skipped") or has no verdict yet ("open").
+    const verdictIn = (run: MainRun): Job | "skipped" | "open" => {
+      if (run.status && run.status !== "completed") return "open";
+      const job = this.jobsOf(run.databaseId).find((j) => j.name === name);
+      if (!job) return run.conclusion === "cancelled" ? "open" : "skipped";
+      if (job.status !== "completed" || ["cancelled", ""].includes(job.conclusion ?? "")) return "open";
+      return job.conclusion === "skipped" ? "skipped" : job;
+    };
+    const judged = (job: Job): MainJob => {
       if (JOB_PASSED.has(job.conclusion)) return { failed: false, failures: [] };
       const log = this.log(job.databaseId);
       return { failed: true, failures: log.code === 0 ? jobFailures(name, log.out) : [] };
+    };
+    const seen = new Set<number>();
+    let open = false;
+    for (const run of atTested) {
+      seen.add(run.databaseId);
+      const v = verdictIn(run);
+      if (typeof v === "object") return judged(v);
+      if (v === "open") open = true;
+      else { open = false; break; }
     }
-    return null;
+    if (open && when) {
+      const later = this.mainRunsOf(workflow, ["--branch", base, "--event", "push", "--created", `>=${when}`]).filter((r) => !seen.has(r.databaseId)).reverse();
+      for (const run of later.slice(0, 8)) {
+        seen.add(run.databaseId);
+        const v = verdictIn(run);
+        if (typeof v === "object" && run.headSha && this.holdsSha(run.headSha, tested)) return judged(v);
+      }
+    }
+    for (const run of earlier.slice(0, 12)) {
+      if (seen.has(run.databaseId)) continue;
+      seen.add(run.databaseId);
+      const v = verdictIn(run);
+      if (typeof v !== "object") continue;
+      const main = judged(v);
+      // An earlier run vouches only for what it failed: a failure of the change's it lacks is unjudged, not the change's.
+      return !open ? main : main.failed ? { ...main, unsure: true } : "unjudged";
+    }
+    return open ? "unjudged" : null;
+  }
+
+  /** Whether `head` holds `sha` (GitHub's compare of the two says the head is ahead of it, or is it). */
+  private holdsSha(head: string, sha: string): boolean {
+    const key = `${sha}...${head}`;
+    if (!this.holds.has(key)) {
+      const r = this.call(["api", `repos/${this.repo}/compare/${key}`, "--jq", ".status"]);
+      this.holds.set(key, r.code === 0 && ["ahead", "identical"].includes(r.out.trim()));
+    }
+    return this.holds.get(key)!;
+  }
+
+  /**
+   * A digest of the CI paths the pull request touches, each as the head's tree holds it (its mode and blob sha, or
+   * absent when the change removed it), or null when the tree could not be read whole: what a person approves when
+   * they let a CI edit merge. A mode-only change keeps the blob sha, so the mode counts too.
+   */
+  private ciEdit(ciFiles: string[], head: string): string | null {
+    const r = this.call(["api", `repos/${this.repo}/git/trees/${head}?recursive=1`, "--jq", `(if .truncated then "truncated" else empty end), (.tree[] | select(.type != "tree") | "\\(.mode) \\(.sha) \\(.path)")`]);
+    if (r.code !== 0) return null;
+    const lines = r.out.split("\n").map((l) => l.trim()).filter(Boolean);
+    if (lines.includes("truncated")) return null;
+    const at = new Map(lines.map((l) => { const [mode, sha, ...p] = l.split(" "); return [p.join(" "), `${mode} ${sha}`] as const; }));
+    const entries = [...new Set(ciFiles)].sort().map((f) => `${at.get(f) ?? "absent"} ${f}`);
+    return createHash("sha256").update(entries.join("\n")).digest("hex").slice(0, 16);
+  }
+
+  /**
+   * A failed job that needs another job that failed in the same run, which is why it ran at all (a summary job,
+   * `if: always()`): it fails because they did, and is no failure of its own.
+   */
+  private gatesOnFailed(workflow: string | undefined, job: Job, bad: Job[]): boolean {
+    const jobs = workflow ? this.workflowJobs.get(workflow) : undefined;
+    if (!jobs) return false;
+    // A matrix job's runs carry its name with each `${{ … }}` filled in (`test-web (1/4)` from
+    // `test-web (${{ matrix.shard }}/4)`), or, with no expression in it, the name and its matrix values in parentheses.
+    const named = (id: string, j: Job) => {
+      const n = jobs[id]?.name ?? id;
+      const shape = new RegExp(`^${n.split(/\$\{\{.*?\}\}/).map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".+")}(?: \\(.+\\))?$`);
+      return shape.test(j.name);
+    };
+    const own = Object.keys(jobs).find((id) => named(id, job));
+    return !!own && jobs[own]!.needs.some((need) => bad.some((b) => b !== job && named(need, b)));
   }
 
   private mainRunsOf(workflow: string, filter: string[]): MainRun[] {
     const key = `${workflow}\u0000${filter.join(" ")}`;
     if (!this.mainRuns.has(key)) {
-      const r = this.call(["run", "list", "--repo", this.repo, "--workflow", workflow, ...filter, "--limit", "20", "--json", "databaseId,headSha,createdAt,status"]);
+      const r = this.call(["run", "list", "--repo", this.repo, "--workflow", workflow, ...filter, "--limit", "20", "--json", "databaseId,headSha,createdAt,status,conclusion"]);
       let runs: MainRun[] = [];
       try { runs = r.code === 0 ? JSON.parse(r.out || "[]") : []; } catch {}
       this.mainRuns.set(key, runs);
@@ -547,6 +650,7 @@ class Station {
     const ciPatterns = [...ALWAYS_CI, ...this.baseCiPaths(tested ?? base)];
     const ciFiles = files ? files.filter((f) => ciPatterns.some((p) => filterMatches(f, p))) : null;
     result.ci_changed = !files || ciFiles!.length > 0;
+    result.ci_edit = ciFiles?.length ? this.ciEdit(ciFiles, pr.headRefOid) : null;
     for (const run of failedRuns) {
       const workflow = run.workflowName ?? `run ${run.databaseId}`;
       const bad = this.jobsOf(run.databaseId).filter((j) => j.status === "completed" && !JOB_PASSED.has(j.conclusion));
@@ -558,13 +662,17 @@ class Station {
         continue;
       }
       for (const j of bad) {
+        if (this.gatesOnFailed(run.workflowName, j, bad)) continue;
         const log = this.log(j.databaseId);
         if (log.code !== 0) {
           result.failing.push({ job: j.name, test: null, assertion: null, file: null, line: null, excerpt: `${j.name} ${j.conclusion}; its log could not be read: ${log.out.trim().slice(0, 300)}` });
           continue;
         }
         const main = tested && run.workflowName ? this.mainJob(run.workflowName, base, tested, j.name) : null;
-        for (const named of jobFailures(j.name, log.out)) (onMain(main, named) ? result.preexisting : result.failing).push(named.failure);
+        for (const named of jobFailures(j.name, log.out)) {
+          const unjudged = main === "unjudged" || (!!main?.unsure && !onMain(main, named));
+          (unjudged ? result.unjudged : onMain(main as MainJob | null, named) ? result.preexisting : result.failing).push(named.failure);
+        }
       }
     }
     for (const c of failedOutside) result.failing.push({ job: c.name, test: null, assertion: null, file: null, line: null, excerpt: `${c.name} failed: ${c.url ?? "no link"}` });
@@ -572,7 +680,7 @@ class Station {
     const red = failedRuns.length > 0 || failedOutside.length > 0;
     // Green is GitHub's verdict alone; a change to CI is flagged beside it, for a person to judge before Merge.
     result.green = !red && !result.timed_out;
-    result.blocked_by_main = red && !result.timed_out && !result.failing.length && result.preexisting.length > 0;
+    result.blocked_by_main = red && !result.timed_out && !result.failing.length && result.preexisting.length + result.unjudged.length > 0;
     const edits = result.ci_changed ? (ciFiles ? `it edits CI (${ciFiles.slice(0, 3).join(", ")}${ciFiles.length > 3 ? ", ..." : ""})` : "its file list is too long to rule out an edit to CI") : "";
     if (!red) {
       if (result.ci_changed) return `CI green on #${o.pr}, but ${edits}: a person must look`;
@@ -581,10 +689,14 @@ class Station {
     }
     if (result.timed_out) return "";
     const tail = result.ci_changed ? `; ${edits}` : "";
-    if (result.blocked_by_main) return `CI red on #${o.pr}, blocked by main: all ${plural(result.preexisting.length, "failure")} also fail on main${tail}`;
+    const unjudged = result.unjudged.length ? `${plural(result.unjudged.length, "failure")} main's CI had no verdict on at ${String(tested).slice(0, 10)}` : "";
+    if (result.blocked_by_main) {
+      const onMainToo = result.preexisting.length ? `all ${plural(result.preexisting.length, "failure")} also fail on main` : "";
+      return `CI red on #${o.pr}, blocked by main: ${[onMainToo, unjudged].filter(Boolean).join(", and ")}${tail}`;
+    }
     const jobs = [...new Set(result.failing.map((f) => f.job))];
-    const also = result.preexisting.length ? ` (and ${result.preexisting.length} that main has too)` : "";
-    return `CI red on #${o.pr}: ${plural(result.failing.length, "failure")} in ${jobs.join(", ")}${also}${tail}`;
+    const also = [result.preexisting.length ? `${result.preexisting.length} that main has too` : "", unjudged].filter(Boolean).join("; ");
+    return `CI red on #${o.pr}: ${plural(result.failing.length, "failure")} in ${jobs.join(", ")}${also ? ` (and ${also})` : ""}${tail}`;
   }
 }
 
@@ -639,7 +751,7 @@ function ghCli(args: string[]): { code: number; out: string } {
 }
 
 /** How main's CI ran a job: whether it failed, and the failures its log names. */
-type MainJob = { failed: boolean; failures: NamedFailure[] };
+type MainJob = { failed: boolean; failures: NamedFailure[]; /** From a run before the tested sha, which main's CI never judged. */ unsure?: boolean };
 
 /**
  * Whether a change's failure is one main's job has too: a named one by its test and file. One the log cannot name

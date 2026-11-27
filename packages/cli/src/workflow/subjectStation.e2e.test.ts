@@ -15,7 +15,7 @@ import { parseWorkflowSource } from "./parser";
 import { lineRunDir, runSlug, runWorkflow } from "./runner";
 import { readCheckpoint } from "./runResume";
 import { startSubjectParker, subjectTakenOver } from "./subjectPark";
-import { failureExcerpt, runEndMessage } from "./subjectStation";
+import { failureExcerpt, gateAnswerMessage, runEndMessage } from "./subjectStation";
 import { CONV, git, graphIn, origLog, sandbox, server, start, useSandbox, world, worlds } from "./subjectStation.testkit";
 
 useSandbox();
@@ -166,7 +166,7 @@ describe("the session is the run's subject", () => {
     expect(outcome).toBe("failed");
     const sent = s.sent();
     expect(sent.filter((m) => /^Check failed/.test(m.body))).toHaveLength(3);
-    expect(sent.at(-1)!.body).toContain("stopped at Fix check: Check sent the change back 3 times and it still does not pass.");
+    expect(sent.at(-1)!.body).toContain("stopped at Fix check: Check sent the change back 3 times, the most one run allows, and the last round still found something to fix.");
   }, 60_000);
 });
 
@@ -717,6 +717,13 @@ describe("runEndMessage", () => {
       .toBe("The Checked run on ct-1 stopped at Fix check: Check sent the change back 3 times and it still does not pass. The change was not merged. Run it again with `cast flow run checked` once it is ready.");
     expect(runEndMessage(g, { taskId: "ct-1", endLabel: "Deploy failed", failed: true, failReason: "Stopped: The deploy that carried abc failed: web dp-2 (exit 1).", landed: true }))
       .toBe("The Checked run on ct-1 stopped at Deploy failed: The deploy that carried abc failed: web dp-2 (exit 1). The change is on the default branch; nothing after this stage ran.");
+  });
+});
+
+describe("gateAnswerMessage", () => {
+  test("a note that only repeats the choice is left out; a real one reads as a sentence", () => {
+    expect(gateAnswerMessage("Decide", "[S] Approve merge :: Merges it", "Approve merge")).toBe("Decide: Approve merge. The run goes on; this session will hear how it ends.");
+    expect(gateAnswerMessage("Decide", "[R] Revise :: x", "rename the job")).toBe("Decide: Revise. Their note: rename the job. The run goes on; this session will hear how it ends.");
   });
 });
 

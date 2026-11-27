@@ -20,7 +20,7 @@ describe("the web's snapshot of the shipped pool", () => {
     const graph = shippedFlowsSnapshot().find((f) => f.slug === "change")!;
     const asker = graph.nodes.find((n) => n.segment === "decide" && n.type !== "exit" && flows.change[n.id as string]?.prompt !== undefined)!;
     expect(asker.id).toBe("decide__decide");
-    expect(texts[flows.change[asker.id as string].prompt as number]).toBe("$review_question");
+    expect(texts[flows.change[asker.id as string].prompt as number]).toBe("$ci_card.output"); // the change flow asks why a person is asked (decide.cast param `question`)
     expect(flows.review.review.backend).toBe("session");
   });
 

@@ -360,6 +360,12 @@ describe("stops", () => {
     const j = journeyOf(change, run({ status: "failed", current_node_id: "brief", spawner_conversation_id: "c1", fail_reason: "Stopped: Verdicts sent the change back 3 times", node_statuses: [...ROUND, verdicts("brief", "red", "changes"), st("brief", "failed", 90, { visits: 4 })] }));
     expect(j.now).toMatchObject({ kind: "stopped", stage: "CI + Review", fix: "session", session: "c1", briefAt: 90 });
   });
+  // ct-102369: the session, `cast workflow show` and this page each named a different restart for CI never reported.
+  test("a stop that names its resume offers that resume, the restart the session and the CLI name too", () => {
+    const why = "Stopped: CI never reported on the pushed head, also after running it again. The change is not at fault: resume this run at PR (`cast workflow resume ct-9 --at pr`) to run CI and a fresh review on the same change once GitHub runs CI on pull requests again. What CI said: x";
+    const j = journeyOf(change, run({ status: "failed", current_node_id: "noci", spawner_conversation_id: "c1", fail_reason: why, node_statuses: [...ROUND, verdicts("no_ci", "timed_out", "ship"), st("noci", "failed", 20)] }));
+    expect(j.now).toMatchObject({ kind: "stopped", resume: { at: "pr", label: "PR" } });
+  });
   test("a deploy that missed its deadline opens the deploy; a runner crash runs again", () => {
     expect(journeyOf(change, run({ status: "failed", current_node_id: "deploy__failed", merge: { sha: "4a6e413b2c" }, fail_reason: "Stopped: Deploy stuck: cli is not live with 4a6e413 after 45m.", node_statuses: [...MERGED, st("deploy__wait", "failed", 16)] })).now).toMatchObject({ stage: "Deploy", fix: "deploy" });
     expect(journeyOf(change, run({ status: "failed", current_node_id: "checks", fail_reason: "the runner was stopped (SIGINT) at checks", node_statuses: [st("pr", "completed", 1), st("checks", "failed", 2), st("ci", "running", 2), st("review", "running", 2)] })).now).toMatchObject({ kind: "failed", stage: "CI + Review", fix: "again" });

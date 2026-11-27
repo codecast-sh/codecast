@@ -11,10 +11,18 @@
 // and it stands for the round only while the server still holds it, as Merge
 // requires. Only green CI on the pushed head and an accepted `ship` merge;
 // what only the machine can fix runs again once in the round; the rest goes
-// back to the session, never on to Merge.
+// back to the session, never on to Merge. A change that edits CI goes to a
+// person, unless a person already let this same edit merge in this attempt.
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { MergeProof } from "./prStation.js";
+
+/**
+ * The edit to CI a person let merge, kept across rounds ({ci_edit}, ci.json's digest; the PR station's ROUND_FILES
+ * leave it): Merge writes it once the server cleared a merge of a CI edit on a person's Ship, and Verdicts asks no
+ * person again for that same edit while the server still holds that answer for the run's attempt.
+ */
+export const CI_APPROVAL_FILE = "ci-approved.json";
 
 export type Verdicts = {
   /** CI and the review as the run card shows them. */
@@ -29,8 +37,9 @@ export type Verdicts = {
   review_result: Record<string, any> | null;
   /**
    * Whether a brief asks the session to change its code: CI judged the pushed head red with anything not every failure
-   * main also has (failures it names nobody, too), or this round's reviewer asked for changes. Only such a brief spends
-   * one of the session's rounds (change.cast); one only for a review that never arrived does not.
+   * main also has (failures it names nobody, too), or this round's reviewer asked for changes beyond low and nit
+   * findings. Only such a brief spends one of the session's rounds (change.cast); one only for a review that never
+   * arrived, or for small findings on a change CI passed, does not.
    */
   fix: boolean;
 };
@@ -56,6 +65,8 @@ function parse(text: string | undefined): Record<string, any> | null {
 const readJson = (file: string) => parse(fs.existsSync(file) ? fs.readFileSync(file, "utf-8") : undefined);
 const words = (list: unknown[]) => list.map((f) => (typeof f === "string" ? f : JSON.stringify(f))).join("; ");
 const plural = (n: number, what: string) => `${n} ${what}${n === 1 ? "" : "s"}`;
+/** A finding line starts with its severity (templates/line/review.md): blocker, high, medium, low or nit. */
+const SMALL_FINDING = /^\s*(low|nit)\b/i;
 
 /**
  * The heads a review of the head CI judged speaks for: that head, and every head the run's own stations rebased it
@@ -87,6 +98,14 @@ function reviewProblem(pin: Record<string, any> | null, round: unknown, heads: S
  * accepted review (the one Merge reads), or nothing when no review was accepted. `proof` is what the server holds for
  * the run's attempt: a carried review counts only when it is the reviewer's ship the server recorded on that head.
  */
+/**
+ * Whether Verdicts needs what the server holds for the run's attempt: for a ship the PR station carried (pr.json's
+ * `reviewed`), and for a change to CI, whose card a person's earlier Ship of the same edit spares (`ci_shipped`).
+ */
+export function needsProof(dir: string): boolean {
+  return !!readJson(path.join(dir, "pr.json"))?.reviewed || readJson(path.join(dir, "ci.json"))?.ci_changed === true;
+}
+
 export function changeVerdicts(dir: string, reviewPin: string | undefined, originHead?: string | null, proof?: MergeProof | null): Verdicts {
   const prFile = path.join(dir, "pr.json");
   const pr = readJson(prFile);
@@ -118,23 +137,31 @@ export function changeVerdicts(dir: string, reviewPin: string | undefined, origi
   const station = failing.filter((f) => f?.job === STATION_JOB);
   const real = failing.filter((f) => f?.job !== STATION_JOB);
   const pending: string[] = Array.isArray(ci?.pending) ? ci!.pending : [];
+  const notStarted: string[] = Array.isArray(ci?.not_started) ? ci!.not_started : [];
+  const running = pending.filter((p) => !notStarted.includes(p));
+  const unjudged: Array<Record<string, any>> = Array.isArray(ci?.unjudged) ? ci!.unjudged : [];
+  const pushed = String(pr?.head_sha ?? "unknown").slice(0, 10);
   const stationSaid = (f: Record<string, any>) => [f.assertion, f.excerpt].filter((s) => typeof s === "string" && s).join(": ") || "no reason";
   // GitHub runs no CI on a pull request that conflicts with its base: the station says so, and only the session can fix it.
   const conflict = station.find((f) => /merge conflict/i.test(stationSaid(f)));
   // What only the machine can fix: CI that never answered, answered for another head, or could not judge.
   const machine = !ci ? "CI left no ci.json"
-    : !pr?.head_sha || ci.head_sha !== pr.head_sha ? `CI judged ${String(ci.head_sha ?? "no commit").slice(0, 10)}, not the pushed head ${String(pr?.head_sha ?? "unknown").slice(0, 10)}`
-    : ci.timed_out === true ? `CI did not finish${pending.length ? `: ${pending.join(", ")} still running` : ""}`
+    : !pr?.head_sha || !ci.head_sha ? `CI never reported on the pushed head ${pushed}${station.length ? `: ${station.map(stationSaid).join("; ")}` : ""}`
+    : ci.head_sha !== pr.head_sha ? `CI reported on ${String(ci.head_sha).slice(0, 10)}, not on the pushed head ${pushed}`
+    : ci.timed_out === true && !running.length && notStarted.length ? `CI never started on ${pushed}: ${notStarted.join(", ")} never started`
+    : ci.timed_out === true ? `CI did not finish${running.length ? `: ${running.join(", ")} still running` : ""}${notStarted.length ? `, and ${notStarted.join(", ")} never started` : ""}`
     : station.length ? `the CI station could not judge: ${station.map(stationSaid).join("; ")}`
     : null;
   const passing = !!ci && !machine && !real.length && ci.green === true;
   // CI that judged the pushed head red asks for a fix unless every failure is main's; one naming no failure counts too.
   const ciAsks = !!ci && ci.head_sha === pr?.head_sha && !passing && (!machine || real.length > 0) && !(ci.blocked_by_main === true && !real.length);
-  const fix = ciAsks || review?.verdict === "changes";
+  // Only low and nit findings on a change CI passed: the session fixes them, and the round costs none of its three.
+  const small = passing && review?.verdict === "changes" && review.findings.length > 0 && review.findings.every((f: unknown) => typeof f === "string" && SMALL_FINDING.test(f));
+  const fix = ciAsks || (review?.verdict === "changes" && !small);
   const said = {
     ci: (machine && !conflict ? "timed_out" : passing ? "green" : ci?.blocked_by_main === true ? "blocked_by_main" : "red") as Verdicts["ci"],
     review: (review ? review.verdict : pin || carried ? "stale" : "missing") as Verdicts["review"],
-    ci_result: ci ? briefed(ci, real) : null,
+    ci_result: ci ? briefed(ci, real, unjudged) : null,
     review_result: review,
   };
 
@@ -150,21 +177,37 @@ export function changeVerdicts(dir: string, reviewPin: string | undefined, origi
     const judged = !!ci && ci.head_sha === pr?.head_sha;
     if (!real.length || !judged) return done({ ...said, next: "no_ci", why: machine });
   }
-  // Every failure also fails on main: nothing in them is the change's to fix, so the run waits for main, unless the
-  // reviewer gave the session something to do meanwhile.
+  // Every failure is main's, or one main's CI never judged: nothing in them is known to be the change's to fix, so the
+  // run waits for main, unless the reviewer gave the session something to do meanwhile.
   if (!passing && !machine && ci!.blocked_by_main === true && review?.verdict !== "changes") {
-    return done({ ...said, next: "wait_main", why: `every CI failure also fails on main (${real.length})` });
+    const onMain = Array.isArray(ci?.preexisting) ? ci!.preexisting.length : 0;
+    const why = !unjudged.length ? `every CI failure also fails on main (${onMain})`
+      : !onMain ? `main's CI had no verdict on any of CI's failures (${unjudged.length}), so they may be main's`
+      : `every CI failure also fails on main (${onMain}) or is one main's CI had no verdict on (${unjudged.length})`;
+    return done({ ...said, next: "wait_main", why });
   }
-  // CI cannot vouch for a change to CI itself: green, and the reviewer says ship, a person decides.
-  if (passing && ci!.ci_changed === true && review?.verdict === "ship") return done({ ...said, next: "decide", why: "This change edits CI, so CI can't vouch for it" });
+  // CI cannot vouch for a change to CI itself: green, and the reviewer says ship, a person decides, once for each edit
+  // to CI in the attempt. Merge records the edit it merged on a person's word (CI_APPROVAL_FILE); a later round whose CI
+  // files are the same, while the server still holds that person's answer, needs no second one.
+  if (passing && ci!.ci_changed === true && review?.verdict === "ship") {
+    const approved = readJson(path.join(dir, CI_APPROVAL_FILE));
+    if (typeof ci!.ci_edit === "string" && approved?.ci_edit === ci!.ci_edit && proof?.ci_shipped === true) {
+      return done({ ...said, next: "merge", why: "CI is green on the pushed head, the reviewer said ship, and a person already let this same edit to CI merge" });
+    }
+    return done({ ...said, next: "decide", why: "This change edits CI, so CI can't vouch for it" });
+  }
 
   const back: string[] = [];
-  if (!passing) back.push(`CI is red: ${plural(real.length, "failure")} this change causes`);
+  if (!passing) {
+    const causes = real.length || !unjudged.length ? `${plural(real.length, "failure")} this change causes` : "";
+    const maybe = unjudged.length ? `${plural(unjudged.length, "failure")} main's CI had no verdict on, so ${unjudged.length === 1 ? "it" : "they"} may be main's` : "";
+    back.push(`CI is red: ${[causes, maybe].filter(Boolean).join(", and ")}`);
+  }
   if (problem) {
     // A review that never arrived is the machine's to ask again, as long as CI leaves the session nothing to fix.
     if (!back.length && rerun("review_reruns")) return done({ ...said, next: "rerun_review", why: problem });
     back.push(problem);
-  } else if (review!.verdict === "changes") back.push(`the reviewer asked for changes${review!.findings.length ? `: ${words(review!.findings)}` : ""}`);
+  } else if (review!.verdict === "changes") back.push(`the reviewer asked for ${small ? "small fixes (low or nit; this round costs none of the three)" : "changes"}${review!.findings.length ? `: ${words(review!.findings)}` : ""}`);
   if (back.length || ci!.green !== true) return done({ ...said, next: "brief", why: back.join("; ") || "CI is not green" });
   return done({ ...said, next: "merge", why: "CI is green on the pushed head and the reviewer said ship" });
 }
@@ -174,7 +217,7 @@ export function changeVerdicts(dir: string, reviewPin: string | undefined, origi
  * to 64KB): the change's own failures, the first ones only and each excerpt cut, with how many there are. The whole
  * report stays in ci.json in the run's directory.
  */
-function briefed(ci: Record<string, any>, real: Array<Record<string, any>>): Record<string, any> {
+function briefed(ci: Record<string, any>, real: Array<Record<string, any>>, unjudged: Array<Record<string, any>>): Record<string, any> {
   const cut = (list: unknown) => (Array.isArray(list) ? list : []).slice(0, SHOWN_FAILURES).map((f: any) => ({ ...f, excerpt: typeof f?.excerpt === "string" ? f.excerpt.slice(0, EXCERPT_CAP) : f?.excerpt }));
-  return { ...ci, failing: cut(real), failing_count: real.length, preexisting: cut(ci.preexisting) };
+  return { ...ci, failing: cut(real), failing_count: real.length, preexisting: cut(ci.preexisting), unjudged: cut(unjudged) };
 }

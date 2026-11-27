@@ -153,7 +153,7 @@
       "label": "No verdicts",
       "shape": "Msquare",
       "type": "exit",
-      "stop": "Verdicts could not read the round: $verdicts.output",
+      "stop": "Verdicts could not read the round. The change is not at fault: resume this run at PR (`cast workflow resume $task_id --at pr`) to run CI and a fresh review on the same change once that is fixed. Verdicts said: $verdicts.output",
       "machine": true
     },
     {
@@ -161,7 +161,7 @@
       "label": "Review never finished",
       "shape": "Msquare",
       "type": "exit",
-      "stop": "The review never finished, also when asked again: $last_error",
+      "stop": "The review never finished, also when asked again. The change is not at fault: resume this run at PR (`cast workflow resume $task_id --at pr`) to run CI and a fresh review on the same change. What stopped it: $last_error",
       "machine": true
     },
     {
@@ -169,7 +169,7 @@
       "label": "CI never reported",
       "shape": "Msquare",
       "type": "exit",
-      "stop": "CI never reported on the pushed head, also after running it again: $verdicts.json.why",
+      "stop": "CI never reported on the pushed head, also after running it again. The change is not at fault: resume this run at PR (`cast workflow resume $task_id --at pr`) to run CI and a fresh review on the same change once GitHub runs CI on pull requests again. What CI said: $verdicts.json.why",
       "machine": true
     },
     {
@@ -177,7 +177,7 @@
       "label": "Main keeps moving",
       "shape": "Msquare",
       "type": "exit",
-      "stop": "Main keeps moving under this change: CI ran again 3 times and main moved again each time. $merge.output"
+      "stop": "Main keeps moving under this change: CI ran again 3 times and main moved again each time. When main is quieter, resume this run at PR (`cast workflow resume $task_id --at pr`) to run CI and a fresh review on the same change. Merge said: $merge.output"
     },
     {
       "id": "lost",
@@ -198,14 +198,14 @@
       "label": "Main stayed red",
       "shape": "Msquare",
       "type": "exit",
-      "stop": "$wait_main.output"
+      "stop": "Main's CI did not go green while this change waited for it, so the change's failures could not be told from main's. Once main is green, resume this run at PR (`cast workflow resume $task_id --at pr`) to run CI and a fresh review on the same change. $wait_main.output"
     },
     {
       "id": "mainred_again",
       "label": "Main stayed red",
       "shape": "Msquare",
       "type": "exit",
-      "stop": "Main CI went red under this change again after two waits for it: $verdicts.json.why"
+      "stop": "Main CI went red under this change again after two waits for it, so the change's failures could not be told from main's. Once main is green, resume this run at PR (`cast workflow resume $task_id --at pr`) to run CI and a fresh review on the same change. What CI said: $verdicts.json.why"
     },
     {
       "id": "unrebased",
@@ -716,7 +716,7 @@
     {
       "from": "verdicts",
       "to": "brief",
-      "label": "no verdict",
+      "label": "no verdict, or only small findings",
       "condition": "verdicts.json.next = brief"
     },
     {

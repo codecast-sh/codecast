@@ -35,9 +35,12 @@
 // two interact, runs CI again, at most three times. Each way back to the
 // session runs at most three times; the fourth ends the run, and the session
 // hears why. Only a brief that asks for a code change (CI red on the change,
-// or this round's reviewer asking for changes) spends one of Fix findings'
-// three; the first three briefs only for a review that never came spend none,
-// and any after those spend one like a code change.
+// or this round's reviewer asking for changes beyond low and nit findings)
+// spends one of Fix findings' three; the first three briefs only for a review
+// that never came, or for small findings on a change CI passed, spend none,
+// and any after those spend one like a code change. A failure main's CI never
+// judged (its run at the tested sha cancelled or unfinished) is not counted as
+// the change's: alone, such failures wait for main like main's own.
 // A task, branch or pull request named from inside a session has that session
 // as its subject; named from a plain shell it has none, and stops at the first
 // finding, saying what CI and the reviewer found.
@@ -63,7 +66,7 @@ digraph change {
   verdicts [label="Verdicts", shape=parallelogram, timeout=60, fold=true, script="cast flow verdicts --dir \"$run_dir\" --review \"$review.json\""]
   // On success stdout is merge.json alone, so the run reads $merge.json.sha; a merge with no sha on main refuses (exit 2).
   merge [label="Merge", shape=parallelogram, timeout=3600,
-    script="d=\"$run_dir\"; rm -f \"$d/merge.json\"; cast flow merge --pr \"$pr.json.number\" --branch \"$branch\" --dir \"$d\" > \"$d/merge.out\" 2> \"$d/merge.log\"; code=$?; if [ \"$code\" -eq 0 ]; then cat \"$d/merge.log\" \"$d/merge.out\" >&2; cat \"$d/merge.json\" || exit 2; else cat \"$d/merge.log\" \"$d/merge.out\"; fi; exit \"$code\""]
+    script="d=\"$run_dir\"; rm -f \"$d/merge.json\"; cast flow merge --pr \"$pr.json.number\" --branch \"$branch\" --dir \"$d\" > \"$d/merge.out\" 2> \"$d/merge.log\"; code=$?; if [ \"$code\" -eq 0 ]; then cat \"$d/merge.log\" \"$d/merge.out\" >&2; cat \"$d/merge.json\" || exit 2; else cat \"$d/merge.out\" \"$d/merge.log\"; fi; exit \"$code\""]
   // Someone pushed to the branch after this round pushed it: a new round reviews what is there, three times at most.
   moved [label="Branch moved", shape=parallelogram, timeout=60, script="echo \"$verdicts.json.why\""]
   // Merge pushed the branch rebased onto a moved main (rebase.json): CI judges that head under the same review. A head
@@ -73,11 +76,12 @@ digraph change {
   wait_main [label="Wait for green main", shape=parallelogram, parks=true, timeout=15000,
     script="cast flow wait-main --base \"$default_branch\" --deadline 4h --run \"$run_id\" --node wait_main"]
   onto_main [label="Onto main", shape=parallelogram, timeout=600, script="cast flow pr --rebase --base \"$default_branch\" --dir \"$run_dir\" --run \"$run_id\""]
-  // CI cannot vouch for a change to CI itself: the card the person answers says so beside the reviewer's note.
+  // CI cannot vouch for a change to CI itself: the card the person answers asks that, above the reviewer's note.
   ci_card [label="Why a person", shape=parallelogram, timeout=120,
-    script="cast task comment \"$task_id\" \"This change edits CI, so CI can't vouch for it: a person decides whether it ships.\" -t review >/dev/null; echo \"$verdicts.json.why\""]
-  // A question typed at the approval card goes to the reviewer, who has read the change.
-  decide [flow="decide", answerer="review", asks_if="it edits CI"]
+    script="cast task comment \"$task_id\" \"This change edits CI, so CI can't vouch for it: a person decides whether it ships.\" -t review >/dev/null; echo \"This change edits CI: merge it?\""]
+  // A question typed at the approval card goes to the reviewer, who has read the change. A person asked once is not
+  // asked again in the run while the change's CI files stay as they approved them (Verdicts, Merge's ci-approved.json).
+  decide [flow="decide", answerer="review", asks_if="it edits CI", question="$ci_card.output"]
   // Named for the runner (runner.ts, the run's end): a stop past here tells the session its change is on main.
   landed [label="Merged", shape=parallelogram, timeout=60, fold=true, script="echo \"$merge.json.sha\""]
   deploy [flow="deploy"]
@@ -94,14 +98,19 @@ digraph change {
   nopr      [shape=Msquare, label="No pull request", stop="$pr.output"]
   rejected  [shape=Msquare, label="Rejected", stop="The reviewer rejected the change: $verdicts.json.why"]
   found     [shape=Msquare, label="Found work", stop="CI or the reviewer found work, and no session made this change to fix it: $verdicts.json.why"]
-  verdictless [shape=Msquare, label="No verdicts", machine=true, stop="Verdicts could not read the round: $verdicts.output"]
-  unreviewed [shape=Msquare, label="Review never finished", machine=true, stop="The review never finished, also when asked again: $last_error"]
-  noci      [shape=Msquare, label="CI never reported", machine=true, stop="CI never reported on the pushed head, also after running it again: $verdicts.json.why"]
-  moving    [shape=Msquare, label="Main keeps moving", stop="Main keeps moving under this change: CI ran again 3 times and main moved again each time. $merge.output"]
+  // A stop where the change is ready and only a station failed it names a resume, whole (whole_stop): the session
+  // hears it, `cast workflow show` prints it, and the run page offers it as its press. Always at PR: a resume is a new
+  // attempt, and Merge clears only on CI and a review the server holds for the attempt, so the round runs again on the
+  // same branch. The resume comes before the station's own words, which may be long (a stop keeps its first 1000
+  // characters). Every other stop is the change's to fix, and a fresh run (Ship again) follows the fix.
+  verdictless [shape=Msquare, label="No verdicts", machine=true, whole_stop=true, stop="Verdicts could not read the round. The change is not at fault: resume this run at PR (`cast workflow resume $task_id --at pr`) to run CI and a fresh review on the same change once that is fixed. Verdicts said: $verdicts.output"]
+  unreviewed [shape=Msquare, label="Review never finished", machine=true, whole_stop=true, stop="The review never finished, also when asked again. The change is not at fault: resume this run at PR (`cast workflow resume $task_id --at pr`) to run CI and a fresh review on the same change. What stopped it: $last_error"]
+  noci      [shape=Msquare, label="CI never reported", machine=true, whole_stop=true, stop="CI never reported on the pushed head, also after running it again. The change is not at fault: resume this run at PR (`cast workflow resume $task_id --at pr`) to run CI and a fresh review on the same change once GitHub runs CI on pull requests again. What CI said: $verdicts.json.why"]
+  moving    [shape=Msquare, label="Main keeps moving", whole_stop=true, stop="Main keeps moving under this change: CI ran again 3 times and main moved again each time. When main is quieter, resume this run at PR (`cast workflow resume $task_id --at pr`) to run CI and a fresh review on the same change. Merge said: $merge.output"]
   lost      [shape=Msquare, label="Pull request lost", stop="$retest.output"]
   moving_branch [shape=Msquare, label="Branch keeps moving", stop="The branch keeps moving: 3 pushes during review or CI, and a 4th: $verdicts.json.why"]
-  mainred   [shape=Msquare, label="Main stayed red", stop="$wait_main.output"]
-  mainred_again [shape=Msquare, label="Main stayed red", stop="Main CI went red under this change again after two waits for it: $verdicts.json.why"]
+  mainred   [shape=Msquare, label="Main stayed red", whole_stop=true, stop="Main's CI did not go green while this change waited for it, so the change's failures could not be told from main's. Once main is green, resume this run at PR (`cast workflow resume $task_id --at pr`) to run CI and a fresh review on the same change. $wait_main.output"]
+  mainred_again [shape=Msquare, label="Main stayed red", whole_stop=true, stop="Main CI went red under this change again after two waits for it, so the change's failures could not be told from main's. Once main is green, resume this run at PR (`cast workflow resume $task_id --at pr`) to run CI and a fresh review on the same change. What CI said: $verdicts.json.why"]
   unrebased [shape=Msquare, label="Not onto main", stop="$onto_main.output"]
   nobody    [shape=Msquare, label="Needs a person", stop="This change edits CI, so CI can't vouch for it, and no session is behind the run to take it to a person."]
   dropped   [shape=Msquare, label="Dropped", stop="$stop_reason"]
@@ -153,7 +162,7 @@ digraph change {
   verdicts -> found    [condition="(verdicts.json.next = brief or verdicts.json.next = conflict) and not change_conversation", label="found work, no session"]
   verdicts -> ci_conflict [condition="verdicts.json.next = conflict", label="conflicts with main"]
   verdicts -> brief    [condition="verdicts.json.next = brief and verdicts.json.fix = true", label="CI red or changes asked"]
-  verdicts -> brief    [condition="verdicts.json.next = brief", label="no verdict", free_visit="brief"]
+  verdicts -> brief    [condition="verdicts.json.next = brief", label="no verdict, or only small findings", free_visit="brief"]
   verdicts -> verdictless [label="no verdicts"]
   merge -> landed       [condition="outcome = success and merge.json.sha"]
   merge -> fix_conflict [condition="outcome = failure and merge.exit_code = 1 and (merge.output contains \" conflicts with \" or merge.output contains \"rebuild the change on\") and change_conversation", label="conflict"]

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { fetchRuns, formatRunDetail, runByRef, slimRun, type RunListRow } from "./runsCli.js";
+import { fetchRuns, formatRunDetail, restartHint, runByRef, slimRun, stopWords, type RunListRow } from "./runsCli.js";
 
 const SITE = "https://x.test";
 const deps = { getCliEndpoint: () => ({ siteUrl: SITE, apiToken: "t" }), detectCurrentSessionId: () => null } as any;
@@ -77,4 +77,29 @@ test("the detail names each station with its label, time, outcome and session, a
   expect(out).toMatch(/triage \(Triage\)\s+completed, 2m, outcome success, session jx7a/);
   expect(out).toMatch(/build \(Build\)\s+running, 5m so far, 2 visits <$/m);
   expect(formatRunDetail({ ...run, status: "failed", fail_reason: "verify exited 1" }, new Map(), now)).toContain("failed: verify exited 1");
+});
+
+// ct-102369: the session, `cast workflow show` and the run page each said a different restart for the same stop.
+test("a failed run's restart is the one its stop names in the graph's words, else a fresh run of a change, else a resume", async () => {
+  const change = { task_short_id: "ct-9", workflow_slug: "change", takes_change: true };
+  expect(restartHint(change, await stopWords({ workflow_slug: "change", current_node_id: "noci" }))).toBe("resume it: cast workflow resume ct-9 --at pr");
+  // A reviewer's finding quoted into a stop's reason names no resume: only the graph's own words do.
+  const rejected = await stopWords({ workflow_slug: "change", current_node_id: "rejected" });
+  expect(rejected).not.toContain("cast workflow resume");
+  expect(restartHint(change, rejected)).toBe("once the change is fixed, run it again: cast flow run change --task ct-9");
+  expect(restartHint({ task_short_id: "ct-9", workflow_slug: "line" }, null)).toBe("try it again: cast workflow resume ct-9 --at <station>");
+});
+
+// A flow named change names the library's restart for a stop node it keeps as the library's (same id and label),
+// whatever stations it adds (codecast's own variant adds local_ci); a node of its own at that id names none.
+test("a variant of change keeps the library's restart at the library's stop nodes; a repo's own node names none", async () => {
+  const { BUILTIN_WORKFLOW_TEMPLATES } = await import("./templates.js");
+  const { parseWorkflowSource } = await import("./parser.js");
+  const shipped = [...parseWorkflowSource(BUILTIN_WORKFLOW_TEMPLATES.change).nodes.values()].map((n) => ({ id: n.id, label: n.label }));
+  const noci = { workflow_slug: "change", current_node_id: "noci" };
+  expect(await stopWords(noci, shipped)).toContain("--at pr");
+  expect(await stopWords(noci, [...shipped, { id: "local_ci", label: "Local CI" }])).toContain("--at pr");
+  expect(await stopWords(noci, shipped.map((n) => (n.id === "noci" ? { ...n, label: "Our own stop" } : n)))).toBeNull();
+  expect(await stopWords(noci, shipped.filter((n) => n.id !== "noci"))).toBeNull();
+  expect(await stopWords(noci, [{ id: "noci", stop: "Own words: `cast workflow resume x --at ci`" }])).toContain("--at ci");
 });

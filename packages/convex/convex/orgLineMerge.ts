@@ -394,7 +394,7 @@ export const recordRunPr = mutation({
 
 /** What the server holds for this attempt that a merge stands on: the reviewer's verdict and the head it read, and
  *  the recorded rebase links. The Merge station verifies the chain from that head itself, and trusts no file for it. */
-export async function mergeProofCore(ctx: any, userId: Id<"users">, runId: string): Promise<{ review: { verdict: string; head_sha: string; node_id: string } | null; rebases: Array<{ from: string; to: string }> }> {
+export async function mergeProofCore(ctx: any, userId: Id<"users">, runId: string): Promise<{ review: { verdict: string; head_sha: string; node_id: string } | null; rebases: Array<{ from: string; to: string }>; ci_shipped: boolean }> {
   const run = await ctx.db.get(runId as Id<"workflow_runs">);
   if (!run || String(run.user_id) !== String(userId)) throw new Error("Only the run's own runner reads what its merge stands on");
   const attempt = runAttempt(run);
@@ -402,6 +402,8 @@ export async function mergeProofCore(ctx: any, userId: Id<"users">, runId: strin
   return {
     review: r ? { verdict: r.verdict, head_sha: r.head_sha, node_id: r.node_id } : null,
     rebases: (run.station_rebases ?? []).filter((x: any) => x.attempt === attempt).map((x: any) => ({ from: x.from, to: x.to })),
+    // What a merge of a CI edit needs (clearForMergeCore): the change flow asks no person again for an edit they let merge.
+    ci_shipped: await personShippedRun(ctx, run, attempt),
   };
 }
 

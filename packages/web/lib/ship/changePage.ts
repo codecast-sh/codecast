@@ -251,7 +251,9 @@ export function changeAction(j: Journey, run: ChangeRun, g: ChangeGraph, ctx: { 
   if (stop?.fix === "session" && session) return session;
   // A deliberate stop (fix "run") repeats if run again: its session is the way on. Only an unplanned one runs again.
   const onMain = !!stop?.landed || !!stop?.mayHaveLanded || !!landedSha(run) || !!ctx.pr?.merged;
-  if (!onMain && subject && !mergeIsOff(run) && (n.kind === "unlanded" || stop?.fix === "again")) return { kind: "again", label: "Ship again", href: null };
+  // A stop that names its resume (the change is ready; one station goes again) offers that press (the bar's
+  // ResumeAtPress), never Ship again beside it.
+  if (!onMain && subject && !mergeIsOff(run) && !stop?.resume && (n.kind === "unlanded" || stop?.fix === "again")) return { kind: "again", label: "Ship again", href: null };
   if (session) return session;
   const card = run.gate_decision_short_id ?? run.gate_decision_id;
   return card ? { kind: "card", label: "Open the card", href: `/decisions/${card}` } : null;

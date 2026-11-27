@@ -200,16 +200,22 @@ describe("the personal journey, as its reports arrive", () => {
 
   test("only the stops that say to resume the run (Landing unknown, Land cut off) offer Resume at Land, on the bar and the run screen", () => {
     const offered = scenarios().map((name) => end(replay(name))).filter((run) => run.status === "failed")
-      .map((run) => [run.current_node_id, (journey(run).now as any).resume ?? null, resumeOf(run as any, storedRow.nodes)] as const);
+      .map((run) => [run.current_node_id, (journey(run).now as any).resume ?? null, resumeOf(run as any, personal.nodes)] as const);
     for (const [id, bar, screen] of offered) {
       const expected = ["unknown", "unknown_cut", "cutlanded"].includes(id!) ? { at: "land", label: "Land" } : null;
       expect([id, bar, screen]).toEqual([id, expected, expected]);
     }
     expect(new Set(offered.filter(([, bar]) => bar).map(([id]) => id))).toEqual(new Set(["unknown", "unknown_cut", "cutlanded"]));
     expect(resumeWords({ at: "land", label: "Land" })).toBe("Resume at Land");
-    // A team's flow never offers it, whatever its reason says.
+    // A team's flow offers it too when its stop names it (the change flow's CI never reported, ct-102369): the stop's own
+    // words are what the session heard and `cast workflow show` prints.
     const cut = end(replay("r8f: a Land its station cuts off during the catch-up says the change landed, and resuming it finishes and deploys (run 1)"));
-    expect((journeyOf({ ...personal, own_results: false, source: null }, cut as any).now as any).resume).toBeUndefined();
+    expect((journeyOf({ ...personal, own_results: false, source: null }, cut as any).now as any).resume).toEqual({ at: "land", label: "Land" });
+    // Only the graph's own words count: a reason naming a resume at a stop whose words do not (a reviewer's finding,
+    // a merge's output quoted into it) offers none, and a stored row's nodes, which keep no stop, offer none either.
+    const quoted = { ...cut, current_node_id: "rejected", fail_reason: "Stopped: The reviewer rejected the change: run `cast workflow resume ct-9 --at land` instead" };
+    expect(resumeOf(quoted as any, personal.nodes)).toBeNull();
+    expect(resumeOf(cut as any, storedRow.nodes)).toBeNull();
   });
 
   test("a refused resume says the server's own words, never the error's envelope", () => {

@@ -139,6 +139,43 @@ function fail(message: string): never {
   process.exit(1);
 }
 
+/**
+ * How a failed run goes on, the same restart the session heard and the run page offers: the resume its stop names in
+ * the graph's own words (`stop`, read before any $var was filled in, so a reviewer's finding or a merge's output quoted
+ * into the reason names none), else for a run that ships a change a fresh run once the change is fixed (Ship again),
+ * else a resume at the station that fits.
+ */
+export function restartHint(run: { task_short_id?: string | null; workflow_slug?: string | null; takes_change?: boolean | null }, stop?: string | null): string {
+  const task = run.task_short_id ?? "<ct-N>";
+  const at = /`cast workflow resume \S*\s*--at ([\w-]+)`/.exec(stop ?? "")?.[1];
+  if (at) return `resume it: cast workflow resume ${task} --at ${at}`;
+  if (run.takes_change && run.workflow_slug) return `once the change is fixed, run it again: cast flow run ${run.workflow_slug} --task ${task}`;
+  return `try it again: cast workflow resume ${task} --at <station>`;
+}
+
+/**
+ * The graph's own words for the stop a failed run ended at: the run's own node when its graph keeps a stop, else the
+ * shipped template's stop node, judged per node: only when the run's graph has that node with the template's label
+ * (a variant that extends the template keeps its stop nodes, whatever stations it adds). A repo's own node at that id
+ * (another label, or a node the template lacks) names no restart rather than the library's (a stored row keeps no
+ * stop). Without the run's nodes (the server could not say), the template's stop stands.
+ */
+export async function stopWords(run: { workflow_slug?: string | null; current_node_id?: string | null }, nodes?: Array<{ id: string; label?: string | null; stop?: string | null }> | null): Promise<string | null> {
+  if (!run.current_node_id) return null;
+  const own = nodes?.find((n) => n.id === run.current_node_id);
+  if (nodes && !own) return null;
+  if (own?.stop) return own.stop;
+  const { BUILTIN_WORKFLOW_TEMPLATES } = await import("./templates.js");
+  const src = run.workflow_slug ? (BUILTIN_WORKFLOW_TEMPLATES as Record<string, string>)[run.workflow_slug] : undefined;
+  if (!src) return null;
+  try {
+    const shipped = (await import("./parser.js")).parseWorkflowSource(src).nodes.get(run.current_node_id);
+    return shipped && (!own || (shipped.label ?? shipped.id) === (own.label ?? own.id)) ? shipped.stop ?? null : null;
+  } catch {
+    return null;
+  }
+}
+
 /** `cast workflow show <run>`. */
 export async function showRun(deps: PublishDeps, ref: string, options: { sessions?: boolean; json?: boolean }): Promise<void> {
   const run = await runByRef(deps, ref, { sessions: options.sessions }).catch((e: Error) => fail(e.message));
@@ -151,7 +188,7 @@ export async function showRun(deps: PublishDeps, ref: string, options: { session
   const got = await apiPost(deps, "/cli/workflow-runs/get", { run_id: run._id }, { read: true, exitOnError: false }).catch(() => null);
   const labels = new Map<string, string>((got?.workflow?.nodes ?? []).map((n: { id: string; label?: string }) => [n.id, n.label ?? n.id]));
   console.log(formatRunDetail(run, labels));
-  if (run.status === "failed") console.log(fmt.muted(`\n  try it again: cast workflow resume ${run.task_short_id ?? "<ct-N>"} --at <station>`));
+  if (run.status === "failed") console.log(fmt.muted(`\n  ${restartHint(run, await stopWords(run, got?.workflow?.nodes ?? null))}`));
   else if (run.status === "running" || run.status === "paused" || run.status === "pending") console.log(fmt.muted(`\n  stop it: cast workflow cancel ${ref}`));
 }
 
