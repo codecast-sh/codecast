@@ -1,14 +1,15 @@
 // What a link into /deploys points at, and how the page opens for it. A chip
 // clicked anywhere (a PR, a commit, a task, a session, a deploy) opens the
 // page with that thing highlighted: on the target that has it, on its Ship
-// run in Shipping, or on the deploy card (and its row) that carried it. The
+// run or its open pull request in Shipping, or on the deploy card (and its
+// row) that carried it. The
 // switch's view and Mine ride the same address (show=, mine=1), so a link
 // opens the page as its sender saw it.
 import type { QueueCommit, ShippingRun } from "@codecast/shared/contracts/deployTargets";
 import type { DeployReach, ReachState } from "@codecast/shared/contracts/deployReach";
 import { prNumberOf } from "@codecast/shared/changes";
 import { deploysOf, type DeployTargetRow, type TeamDeployRow } from "./targets";
-import { NO_BRANCH, VIEWS, type BoardRow, type BoardView, type Carried, type CarriedCommit } from "./board";
+import { NO_BRANCH, VIEWS, type BoardRow, type BoardView, type Carried, type CarriedCommit, type OpenPr } from "./board";
 
 export type DeployFocus =
   | { kind: "pr"; pr: number }
@@ -104,6 +105,13 @@ export function runMatches(r: Pick<ShippingRun, "task_short_id" | "task_id" | "p
     case "branch": return r.merge?.branch === f.name;
     default: return false;
   }
+}
+
+/** Whether an open pull request no run carries is the thing the link names: by its number, or by its branch. */
+export function prMatches(pr: Pick<OpenPr, "number" | "head_ref">, f: DeployFocus | null): boolean {
+  if (!f) return false;
+  if (f.kind === "pr") return pr.number === f.pr;
+  return f.kind === "branch" && !!pr.head_ref && pr.head_ref === f.name;
 }
 
 /** Whether one commit a deploy card lists is the thing the link names. */

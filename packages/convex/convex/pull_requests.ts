@@ -638,6 +638,9 @@ export const getPRsForTimeline = query({
       }
     }
 
-    return [...prs.values()].sort((a, b) => b.updated_at - a.updated_at).slice(0, limit);
+    const rows = [...prs.values()].sort((a, b) => b.updated_at - a.updated_at);
+    // One repository's answer holds every open PR it read, past `limit` (its newest loop already stopped at `limit`):
+    // the Deploys page lists each one, and drops a row it held as open that the answer lacks (it closed).
+    return repository ? rows : rows.slice(0, limit);
   },
 });
