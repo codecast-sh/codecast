@@ -54,11 +54,27 @@ export type ClassifierEvalResult = {
 };
 
 /**
- * The window's sessions live would ask about, each with its parent (a fork,
- * spawn worker or handoff, not a Task-tool subagent) and its asks as of their
- * moments; and the tasks the priorities name. A session's first title is
- * taken at its first typed message (title generation runs at the second
- * message), else at its first activity in the window.
+ * The session a child took its placement from when live created it
+ * (lib/priorityLinks inheritLink's callers): a fork (forkConversation, or the
+ * daemon's parent message), a handoff, or a subagent spawn.ts started (a
+ * `cast spawn` worker, or a ship session, which may have no spawner). A
+ * Task-tool subagent the daemon synced gets none.
+ */
+function inheritsFrom(conv: Doc<"conversations">): string | null {
+  if (conv.forked_from) return String(conv.forked_from);
+  if (conv.handed_off_from_conversation_id) return String(conv.handed_off_from_conversation_id);
+  if (conv.parent_conversation_id && (conv.parent_message_uuid || (conv.is_subagent && (conv.spawned_by_conversation_id || conv.ship_target_key)))) return String(conv.parent_conversation_id);
+  return null;
+}
+
+/**
+ * The window's sessions as live would treat them: each one live asks about,
+ * with its asks as of their moments, and each one live never asks about (a
+ * spawned subagent, a workflow's session) that inherits a placement, with
+ * none; each with the session it would inherit from (inheritsFrom). Also the
+ * tasks the priorities name. A session's first title is taken at its first
+ * typed message (title generation runs at the second message), else at its
+ * first activity in the window.
  */
 export const evalFacts = internalQuery({
   args: {
@@ -71,7 +87,13 @@ export const evalFacts = internalQuery({
     const sessions: EvalSession[] = [];
     for (const { conversation_id, first_at } of args.sessions) {
       const conv = await ctx.db.get(conversation_id);
-      if (!conv || !classifierReads(conv)) continue;
+      if (!conv) continue;
+      const parent = inheritsFrom(conv);
+      // One live never asks about can still inherit its placement at creation: read with no asks, so the replay only inherits.
+      if (!classifierReads(conv)) {
+        if (parent) sessions.push({ id: String(conv._id), title: conv.title ?? "", last_active: first_at, parent, asks: [] });
+        continue;
+      }
       const firstTyped = await ctx.db.query("messages").withIndex("by_conversation_nav_prompt", (q) => q.eq("conversation_id", conv._id).eq("nav_prompt", true)).first();
       const firstPin = await ctx.db.query("thread_state_events").withIndex("by_conversation_at", (q) => q.eq("conversation_id", conv._id)).first();
       const titleAt = firstTyped?.timestamp ?? first_at;
@@ -79,7 +101,7 @@ export const evalFacts = internalQuery({
       const asks = firstPin && firstPin.at <= titleAt
         ? [await ask("pin", firstPin.at)]
         : [await ask("title", titleAt), ...(firstPin ? [await ask("pin", firstPin.at)] : [])];
-      sessions.push({ id: String(conv._id), title: conv.title ?? "", last_active: first_at, parent: conv.parent_conversation_id ? String(conv.parent_conversation_id) : null, asks });
+      sessions.push({ id: String(conv._id), title: conv.title ?? "", last_active: first_at, parent, asks });
     }
     return { sessions, tasks: [...(await classifierTasks(ctx, args.tasks, args.workspace)).values()] };
   },
@@ -125,6 +147,8 @@ export const evalClassify = internalAction({
             asks.push({ trigger: ask.trigger, choice, ...(reply.error ? { error: reply.error } : {}) });
           }
         }
+        // A session live never asks about, whose parent the replay left unplaced, inherits nothing: it is no placement.
+        if (!inherited && !s.asks.length) continue;
         result.placements.push({ session: s.id, title: s.title, choice, asks, ...(inherited ? { inherited_from: s.parent! } : {}) });
         if (!choice || choice === "new") continue;
         state.priorities.find((x) => x.short_id === choice.priority)?.sessions.unshift({ id: s.id, title: s.title, step_key: choice.step, last_active: s.last_active });

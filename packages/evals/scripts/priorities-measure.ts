@@ -520,7 +520,7 @@ function runClassifier(golden: Golden, goldenPath: string, arg: (name: string, f
 }
 
 /** What live would ask in one workspace over the window (evalFacts), read once from prod: the classifier's whole input but the priorities. */
-type ClassifierFacts = { person: string; sessions: EvalSession[]; tasks: ClassifierTask[]; sessions_read: Array<{ id: string; title: string }> };
+type ClassifierFacts = { person: string; sessions: EvalSession[]; tasks: ClassifierTask[]; sessions_read: Array<{ id: string; title: string; kind?: string; asked?: boolean }> };
 
 /** Reads one workspace's facts through passInputs and evalFacts, chunk by chunk as evalClassify does. Read-only. */
 function readClassifierFacts(user_id: string, workspace: string, window_start: number, window_end: number, taskIds: string[]): ClassifierFacts {
@@ -539,7 +539,8 @@ function readClassifierFacts(user_id: string, workspace: string, window_start: n
     });
     if (!facts.tasks.length) facts.tasks = chunk.tasks;
     facts.sessions.push(...chunk.sessions);
-    facts.sessions_read.push(...read.input.sessions.map((s) => ({ id: read.conversations[s.id] ?? s.id, title: s.title })));
+    const asked = new Set(chunk.sessions.filter((x) => x.asks.length).map((x) => x.id));
+    facts.sessions_read.push(...read.input.sessions.map((s) => ({ id: read.conversations[s.id] ?? s.id, title: s.title, kind: s.kind, asked: asked.has(read.conversations[s.id] ?? s.id) })));
     if (!read.more || read.read_to <= cursor) return facts;
     cursor = read.read_to;
   }
@@ -607,6 +608,7 @@ async function runClassifierLocal(golden: Golden, goldenPath: string, arg: (name
           asks.push({ trigger: a.trigger, ...reply });
         }
       }
+      if (!inherited && !s.asks.length) continue;
       placements.push({ session: s.id, title: s.title, choice, asks, ...(inherited ? { inherited_from: s.parent! } : {}) });
       if (choice && choice !== 'new') priorities.find((x) => x.short_id === choice.priority)?.sessions.unshift({ id: s.id, title: s.title, step_key: choice.step, last_active: s.last_active });
     }

@@ -479,18 +479,31 @@ describe('"new" and the re-run', () => {
 
   test("the calibration replay asks about each session as live would, when live would, against the priorities handed to it, and writes nothing", async () => {
     const w = await classifierWorld();
-    const { role, worker } = await w.t.run(async (ctx) => {
+    const { role, worker, sub, ship, taskTool } = await w.t.run(async (ctx) => {
       const seat = await ctx.db.insert("org_roles", { team_id: w.acme, title: "Head of Evals", created_at: 1 } as any);
       const make = (short_id: string, fields: Record<string, unknown>) => ctx.db.insert("conversations", {
         user_id: w.ana, agent_type: "claude_code", session_id: short_id, short_id, title: `Session ${short_id}`, team_id: w.acme, is_private: false, team_visibility: "full",
         started_at: 1, updated_at: 1, message_count: 3, status: "active", ...fields,
       } as any);
-      return { role: await make("jx7role", { standing_role_id: seat }), worker: await make("jx7work", { parent_conversation_id: w.teamConv }) };
+      return {
+        role: await make("jx7role", { standing_role_id: seat }),
+        // A handoff: live asks about it, and it takes its source's placement first.
+        worker: await make("jx7work", { handed_off_from_conversation_id: w.teamConv }),
+        // A `cast spawn` subagent: never asked about live, yet it takes its parent's placement when spawned.
+        sub: await make("jx7sub", { is_subagent: true, parent_conversation_id: w.teamConv, spawned_by_conversation_id: w.teamConv }),
+        // A ship session started with no requester: a spawn.ts subagent with no spawner, which inherits all the same.
+        ship: await make("jx7ship", { is_subagent: true, parent_conversation_id: w.teamConv, ship_target_key: "task:ct-11" }),
+        // A Task-tool subagent the daemon synced: never asked about and never given a placement.
+        taskTool: await make("jx7task", { is_subagent: true, parent_conversation_id: w.teamConv }),
+      };
     });
     await w.send(w.ana, w.teamConv, w.now - 3 * H, "retry the flaky grader calls");
     await w.t.run((ctx) => ctx.db.insert("thread_state_events", { conversation_id: w.teamConv, user_id: w.ana, at: w.now - 2 * H, text: "Grader retries landed", status: "working", serves: "pri-1/s1" }));
     await w.send(w.ana, w.teamConv, w.now - H, "LATER typed message");
     await w.send(w.ana, worker, w.now - 2.5 * H, "spawned worker");
+    await w.send(w.ana, sub, w.now - 2.4 * H, "spawned subagent");
+    await w.send(w.ana, ship, w.now - 2.35 * H, "ship it");
+    await w.send(w.ana, taskTool, w.now - 2.3 * H, "task tool subagent");
     await w.send(w.ana, w.oldConv, w.now - 2 * H, "answer the billing question");
     await w.t.run((ctx) => ctx.db.insert("thread_state_events", { conversation_id: w.oldConv, user_id: w.ana, at: w.now - 1.5 * H, text: "Billing export shipped", status: "working" }));
     await w.send(w.ana, role, w.now - 2 * H, "duty");
@@ -506,7 +519,7 @@ describe('"new" and the re-run', () => {
         return answer("pri-1/s1");
       }
       // The later session sees the earlier ones as examples under its milestone.
-      expect(p).toContain('sessions: "Session jx7work"; "Session jx7team"');
+      expect(p).toContain('sessions: "Session jx7ship"; "Session jx7sub"; "Session jx7work"');
       return answer("new");
     };
     const r = await w.t.action(fn.priorityClassifierEval.evalClassify, { user_id: w.ana, workspace: w.team, window_start: w.now - DAY, window_end: w.now, priorities: seeded });
@@ -516,11 +529,13 @@ describe('"new" and the re-run', () => {
     expect(r.placements.map((p: any) => [short(p.session), p.choice, p.asks.map((a: any) => a.trigger), short(p.inherited_from ?? null)])).toEqual([
       ["jx7team", { priority: "pri-1", step: "s1" }, ["title"], null],
       ["jx7work", { priority: "pri-1", step: "s1" }, [], "jx7team"],
+      ["jx7sub", { priority: "pri-1", step: "s1" }, [], "jx7team"],
+      ["jx7ship", { priority: "pri-1", step: "s1" }, [], "jx7team"],
       ["jx7old", "new", ["title", "pin"], null],
     ]);
     expect(classifierPrompts().filter((p) => p.includes("Billing export shipped"))).toHaveLength(1);
-    expect(r.sessions_read.map((s: any) => short(s.id)).sort()).toEqual(["jx7old", "jx7role", "jx7team", "jx7work"]);
-    expect(r.priorities[0].sessions.map((s: any) => [short(s.id), s.step_key])).toEqual([["jx7work", "s1"], ["jx7team", "s1"]]);
+    expect(r.sessions_read.map((s: any) => short(s.id)).sort()).toEqual(["jx7old", "jx7role", "jx7ship", "jx7sub", "jx7task", "jx7team", "jx7work"]);
+    expect(r.priorities[0].sessions.map((s: any) => [short(s.id), s.step_key])).toEqual([["jx7ship", "s1"], ["jx7sub", "s1"], ["jx7work", "s1"], ["jx7team", "s1"]]);
     expect(r.cost_usd).toBeGreaterThan(0);
     expect((await w.conversation(w.teamConv))?.priority_id).toBeUndefined();
     expect(await classifications(w)).toHaveLength(0);
