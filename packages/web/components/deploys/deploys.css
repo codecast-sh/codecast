@@ -196,8 +196,10 @@ a.dpp-run-title:hover { text-decoration: underline; }
 .dpp-run-detail { flex-basis: 100%; font-size: 12px; color: var(--sol-text-dim); overflow-wrap: anywhere; }
 .dpp-refs { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; min-width: 0; font-size: 12px; }
 .dpp-refs > * { max-width: 100%; }
-.dpp-branch { display: inline-flex; align-items: center; gap: 3px; min-width: 0; font-family: var(--font-mono); font-size: 11.5px; color: var(--sol-text-muted); overflow-wrap: anywhere; }
-.dpp-branch svg { flex: none; width: 12px; height: 12px; }
+/* A branch wears a pill like the app's own: green, mono, wrapping as prose with each line's box closed. */
+.dpp-branch-pill { display: inline; padding: 0 0.25em; border-radius: 0.2em; font-family: var(--font-mono); font-size: 0.92em; font-weight: 500; line-height: 1.55; color: var(--sol-green); background: color-mix(in srgb, var(--sol-green) 8%, transparent); text-decoration: none; overflow-wrap: anywhere; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+.dpp-branch-pill:hover { background: color-mix(in srgb, var(--sol-green) 16%, transparent); text-decoration: underline; text-decoration-color: color-mix(in srgb, currentColor 40%, transparent); text-underline-offset: 2px; }
+.dpp-branch-pill svg { display: inline; width: 0.95em; height: 0.95em; vertical-align: -2px; margin-right: 3px; opacity: 0.8; }
 .dpp-flowname { font-size: 11.5px; color: var(--sol-text-dim); }
 .dpp-earlier { font-size: 11.5px; font-style: italic; color: var(--sol-text-dim); text-decoration: none; border-bottom: 1px dotted currentColor; }
 .dpp-fold { display: flex; align-items: center; gap: 6px; width: 100%; padding: 9px 12px; font: inherit; font-size: 12.5px; font-weight: 600; text-align: left; color: var(--sol-text-secondary); background: color-mix(in srgb, var(--sol-text) 3%, transparent); border: 0; border-radius: 10px; cursor: pointer; }
@@ -248,14 +250,14 @@ button.dpp-card-title:hover { text-decoration: underline; }
 .dpp-row { display: grid; grid-template-columns: 10px minmax(0, 1fr); align-items: baseline; gap: 8px; padding: 3px 0; font-size: 12.5px; border-top: 1px solid color-mix(in srgb, var(--dp-rule-2) 60%, transparent); }
 .dpp-row:first-child { border-top: 0; }
 .dpp-row[data-counted] { grid-template-columns: 10px minmax(0, 1fr) auto; }
-.dpp-row[data-id-col] { grid-template-columns: 10px 72px minmax(0, 1fr) auto; }
 .dpp-row:hover { background: color-mix(in srgb, var(--sol-text) 4%, transparent); }
-.dpp-gutter { display: inline-flex; align-items: center; align-self: center; }
+/* Every column sits on the row's first line: the gutter takes a text baseline (a zero-width space) and centres its dot on it, so a wrapped title never pulls the dot or the counts down. */
+.dpp-gutter { display: inline-block; }
+.dpp-gutter::before { content: "\200b"; }
+.dpp-gutter > .dpp-you { vertical-align: middle; }
 .dpp-row-main { min-width: 0; padding-left: 1.3em; text-indent: -1.3em; overflow-wrap: anywhere; }
-.dpp-row[data-id-col] .dpp-row-main { padding-left: 0; text-indent: 0; }
 /* The hanging indent belongs to the row's own lines: anything inside that lays out its own box (a branch, a pill's icon, a note) starts flush. */
 .dpp-row-main * { text-indent: 0; }
-.dpp-row-id { white-space: nowrap; }
 .dpp-newer { margin-left: 8px; font-size: 11.5px; font-style: italic; color: var(--sol-text-dim); }
 .dpp-row-main > .entity-ref { display: inline !important; line-height: 1.55; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
 .dpp-row-main > .entity-ref > span { display: inline !important; white-space: normal !important; overflow: visible !important; text-overflow: clip !important; }
@@ -308,8 +310,8 @@ button.dpp-card-title:hover { text-decoration: underline; }
   .dpp-card-head { row-gap: 3px; }
   .dpp-meta { order: 3; flex-basis: 100%; }
   .dpp-lines { grid-template-columns: 46px 50px; gap: 6px; font-size: 11px; }
-  .dpp-row[data-id-col] { grid-template-columns: 10px 60px minmax(0, 1fr) auto; }
-  .dpp-row { min-height: 44px; align-items: center; }
+  /* A one-line row centres in its 44px; a taller one keeps its columns on the first line (baseline, above). */
+  .dpp-row { min-height: 44px; align-content: center; }
   .dpp-more-rows, .dpp-fold { min-height: 44px; }
 }
 /* On a phone the state words wrap under the stepper: no divider or indent there. */
