@@ -21,13 +21,12 @@ import { internalQuery, mutation, query } from "./functions";
 import { internal } from "./_generated/api";
 import { accessStampFromDoc, authorizedFor, heldKeysFor, parseWorkspaceKey } from "./lib/accessKeys";
 import { teamFeatureOffMessage } from "./lib/teamFeatureGuard";
-import { positionOf } from "./lib/priorityGroup";
 import { FEATURE, featureCheck, readerFor, type Reader } from "./lib/priorityAccess";
 import { hasOkRun, runBlocker } from "./priorityPassRun";
 import { sessionVisibility } from "./lib/prioritySessionVisibility";
 import type { PriorityDetail, PriorityHistory, PriorityList, PriorityPinLine } from "@codecast/shared/contracts/priorities";
 import type { Doc, Id } from "./_generated/dataModel";
-import { type Priority, type Result, cliWorkspace, criticalCounts, isOwner, listFor, showFor, tokenUser } from "./priorityRead";
+import { type Priority, type Result, cliWorkspace, criticalCounts, isOwner, listFor, positionOf, showFor, tokenUser } from "./priorityRead";
 import { historyFor } from "./priorityHistory";
 import { doCreate } from "./priorityCreate";
 import { createWorkContext } from "./data";
@@ -85,9 +84,11 @@ export const history = query({
  * The line under a mapped session's pinned state: for the priority's owner,
  * and for a teammate holding its workspace key when this open session is
  * listed to that team and the priority needs no rewrite (summary level is
- * enough: the line names the priority, not the transcript). No scan of the
- * priority's other sessions: one conversation read, one priority read, the
- * owner's membership, and the owner's active priorities for its position.
+ * enough: the line names the priority, not the transcript). Access judges
+ * the open session alone: one conversation read, one priority read, the
+ * owner's membership. Its position reads the owner's active priorities, and
+ * for a teammate which of them they can read (positionOf), so the line, the
+ * list and the page give one number.
  */
 export const pinLine = query({
   args: { conversation_id: v.id("conversations") },
@@ -105,13 +106,14 @@ export const pinLine = query({
       if (!(await sessionVisibility(ctx).listedTo(conv, ws.teamId))) return null;
     }
     if (!(await featureCheck(ctx)(p.workspace))) return null;
+    const r = await readerFor(ctx, viewer);
     // A teammate reads a step only as the page shows it to them (Reader.stepsFor): never one written from a session they cannot see.
-    const steps = isOwner(viewer, p) ? p.steps : await (await readerFor(ctx, viewer)).stepsFor(p);
+    const steps = isOwner(viewer, p) ? p.steps : await r.stepsFor(p);
     const step = steps.find((s) => s.key === conv.priority_step_key && !s.dropped);
     return {
       short_id: p.short_id,
       title: p.title,
-      rank: await positionOf(ctx, p),
+      rank: await positionOf(ctx, r, p),
       ...criticalCounts(p),
       ...(step ? { step_title: step.title } : {}),
     };

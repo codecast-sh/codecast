@@ -285,7 +285,8 @@ async function letGoStrays(
   for (const id of strays) {
     const conv: Doc<"conversations"> | null = await ctx.db.get(id);
     const held: Doc<"priorities"> | null = conv?.priority_id ? await ctx.db.get(conv.priority_id) : null;
-    if (!conv || !held || (await inWorkspace(vis, conv, pair.user_id, pair.workspace)) || String(held.user_id) !== String(pair.user_id) || held.workspace !== pair.workspace) continue;
+    // Still counting in the workspace, the person's own or a teammate's they started there (lib/priorityLinks linkFromStart): it stays.
+    if (!conv || !held || (await vis.workspaceOf(conv)) === pair.workspace || String(held.user_id) !== String(pair.user_id) || held.workspace !== pair.workspace) continue;
     await move(conv, undefined, undefined);
     if (!rewritten.has(held.short_id)) await ctx.db.patch(held._id, { needs_rewrite: true });
   }

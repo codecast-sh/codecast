@@ -9,6 +9,7 @@ import { LATE_MARGIN_MS, sessionNames } from "./priorityPassInputs";
 import { PRIORITY_PASS_DAILY_USD, PRIORITY_PASS_FIRST_USD, applyPlan, catchUpSpent, hasOkRun, runBlocker } from "./priorityPassRun";
 import { DAY, H, pass, proposal, stubModel, world } from "./priorityPassRun.testkit";
 import { api, internal } from "./_generated/api";
+import { linkFromStart } from "./lib/priorityLinks";
 
 const pri = (api as any).priorities;
 
@@ -658,6 +659,27 @@ describe("applyPlan", () => {
     expect(await w.t.run((ctx) => ctx.db.get(bens))).toMatchObject({ title: "Ben's", status: "active" });
     expect(await w.t.run((ctx) => ctx.db.get(ranked))).toMatchObject({ title: "Ranked still", person_pos: 2 });
     expect((await w.runs()).at(-1)).toMatchObject({ status: "ok", cursor_at: 5 });
+  });
+
+  test("a teammate's session started on a milestone stays there through the owner's pass, which never reads it", async () => {
+    const w = await world();
+    await w.send(w.ana, w.teamConv, w.now - 2 * H, "get grader faults under ten percent");
+    model.reply = () => JSON.stringify({ priorities: [proposal()], unassigned: [] });
+    expect((await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team })).status).toBe("ok");
+    const [p] = await w.priorities();
+    // Ben starts a session from Ana's milestone.
+    expect(await w.t.run((ctx) => linkFromStart(ctx, w.ben, w.benConv, p.short_id, "s1"))).toBe(true);
+    await w.send(w.ana, w.teamConv, w.now - 8 * 60_000, "grader faults at nine percent");
+    model.reply = () => JSON.stringify({ priorities: [proposal({ short_id: "pri-1" })], unassigned: [] });
+    expect((await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team })).status).toBe("ok");
+    expect(model.prompts.at(-1)).not.toContain("jx7ben");
+    expect(await w.conversation(w.benConv)).toMatchObject({ priority_id: p._id, priority_step_key: "s1", priority_set_by: "link" });
+    expect((await w.priorities())[0].needs_rewrite).toBeUndefined();
+    // Once Ben makes it private it leaves the workspace, and the next pass lets it go.
+    await w.t.run((ctx) => ctx.db.patch(w.benConv, { is_private: true, team_visibility: "private" }));
+    await w.send(w.ana, w.teamConv, w.now - 4 * 60_000, "grader faults at eight percent");
+    expect((await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team })).status).toBe("ok");
+    expect((await w.conversation(w.benConv))?.priority_id).toBeUndefined();
   });
 
   test("a merge survivor's carried place lands only on a row the person has not placed since", async () => {

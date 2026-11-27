@@ -86,7 +86,7 @@ export async function readerFor(ctx: Ctx, viewer: Id<"users">): Promise<Reader> 
   const listed = async (c: Doc<"conversations">) => {
     if (String(c.user_id) === String(viewer) || String(c.owner_user_id ?? "") === String(viewer)) return true;
     if (c.team_id && held.has(`team:${c.team_id}`) && (await vis.listedTo(c, c.team_id))) return true;
-    return isSessionOwner(ctx, c._id, viewer);
+    return isSessionOwner(ctx, c._id, viewer, c);
   };
   const canRead = async (p: Priority) => {
     if (String(p.user_id) === String(viewer)) return true;

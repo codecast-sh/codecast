@@ -62,7 +62,7 @@ export type PassInputs = {
   more: boolean;
   /** Where the cursor goes when every returned session is read. */
   read_to: number;
-  /** Sessions a priority here still holds that have left this workspace (made private, moved): applyPlan lets them go. */
+  /** Sessions a priority here still holds that have left this workspace (made private, moved): applyPlan lets them go. A teammate's session started on one (lib/priorityLinks linkFromStart) stays while it counts here. */
   strays: Id<"conversations">[];
   /** The pending corrections the input holds: applyPlan marks them applied. */
   corrections: Id<"priority_corrections">[];
@@ -517,10 +517,10 @@ export const passInputs = internalQuery({
       const readable: Doc<"conversations">[] = [];
       let left = false;
       for (const c of held) {
-        if (!(await inWorkspace(vis, c, args.user_id, args.workspace))) {
+        if ((await vis.workspaceOf(c)) !== args.workspace) {
           strays.push(c._id);
           left = true;
-        } else if (await mayRead(c)) readable.push(c);
+        } else if (String(c.user_id) === String(args.user_id) && (await mayRead(c))) readable.push(c);
       }
       // Named one at a time: whether a name must be longer depends on those named before it.
       const sessionsOf: PassPriority["sessions"] = [];

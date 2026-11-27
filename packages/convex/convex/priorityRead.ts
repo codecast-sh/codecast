@@ -5,9 +5,9 @@
 import { verifyApiToken } from "./apiTokens";
 import { accessStampFor, authorizedFor } from "./lib/accessKeys";
 import { teamFeatureOffMessage } from "./lib/teamFeatureGuard";
-import { rankSourceOf } from "@codecast/shared/contracts/priorities";
+import { effectivePriorityOrder, rankSourceOf } from "@codecast/shared/contracts/priorities";
 import { FEATURE, TEAMMATE_SESSIONS, featureCheck, readerFor, type Reader } from "./lib/priorityAccess";
-import { activeGroup, positionOf, positionsOf } from "./lib/priorityGroup";
+import { activeGroup, positionsOf } from "./lib/priorityGroup";
 import { passTiming } from "./priorityPassSweep";
 import { isSessionOwner } from "./sessionOwners";
 import { rowPinPredatesTurn } from "@codecast/shared/contracts/inboxPlacement";
@@ -22,7 +22,7 @@ export const DAY = 86_400_000;
 /** Sessions a list shows per priority, and how many of the owner's mapped sessions it reads to count them before the pass stored a count ("50+" past that). */
 const LIST_SESSIONS = 3;
 const LIST_COUNT_CAP = 50;
-/** The most teammates' priorities one list judges, the most recently active first (more with `all` or a status); past that it says `teammates_truncated`. */
+/** The most teammates' priorities one list judges in one workspace, the most recently active first (more with `all` or a status); past that it says `teammates_truncated`. */
 export const TEAMMATE_PRIORITIES_CAP = 60;
 export const TEAMMATE_ALL_CAP = 200;
 /** The most of one person's priorities of one status in one workspace any read takes (the active ones a rank orders, a list's own). */
@@ -70,6 +70,27 @@ export function cliWorkspace(viewer: Id<"users">, args: { team_id?: Id<"teams">;
 export const STATUS_ORDER: Record<PriorityStatus, number> = { active: 0, done: 1, quiet: 2, set_aside: 3, merged: 4 };
 /** What a list shows without a status: everything but merged, read status by status so merged rows are never read. */
 const LISTED_STATUSES: PriorityStatus[] = ["active", "done", "quiet", "set_aside"];
+
+/**
+ * One owner's active priorities in one workspace, each with its position as
+ * the reader sees it, from the group every rank read orders (lib/priorityGroup).
+ * The owner reads their real order. A teammate reads that order over the ones
+ * they can read, numbered 1..n, so one hidden from them (one that needs a
+ * rewrite, one whose sessions are not listed to them) leaves no gap.
+ */
+export async function positionsFor(ctx: Ctx, r: Reader, owner: Id<"users">, workspace: string): Promise<Map<string, number>> {
+  const group = await activeGroup(ctx, owner, workspace);
+  if (String(owner) === String(r.viewer)) return positionsOf(group);
+  const out = new Map<string, number>();
+  for (const p of effectivePriorityOrder(group)) if (await r.canRead(p)) out.set(String(p._id), out.size + 1);
+  return out;
+}
+
+/** One priority's position as the reader sees it (positionsFor): the same in a list, on the page and on the pin line. */
+export async function positionOf(ctx: Ctx, r: Reader, p: Priority): Promise<number | null> {
+  if (p.status !== "active") return null;
+  return (await positionsFor(ctx, r, p.user_id, p.workspace)).get(String(p._id)) ?? null;
+}
 
 export function criticalCounts(p: Priority): { critical_done: number; critical_total: number } {
   const critical = p.steps.filter((s) => s.tier === "critical" && !s.dropped);
@@ -144,10 +165,10 @@ async function correctionPending(ctx: Ctx, viewer: Id<"users">, p: Priority): Pr
 }
 
 /**
- * `position` is where it shows among the owner's active priorities (null when
- * not active); `steps` are the ones the viewer may see (Reader.stepsFor); the
- * row lists at most `limit` sessions. The critical-path counts are the
- * priority's own, over every step.
+ * `position` is where it shows among the owner's active priorities as the
+ * viewer reads them (positionsFor; null when not active); `steps` are the
+ * ones the viewer may see (Reader.stepsFor); the row lists at most `limit`
+ * sessions. The critical-path counts are the priority's own, over every step.
  */
 function rowFor(viewer: Id<"users">, p: Priority, owner: Owner, position: number | null, steps: PriorityStep[], mapped: Mapped, pending: boolean, limit = Infinity): PriorityRow {
   const { count, more } = sessionCount(viewer, p, mapped);
@@ -158,9 +179,10 @@ function rowFor(viewer: Id<"users">, p: Priority, owner: Owner, position: number
     summary: p.summary,
     status: p.status,
     rank: position,
-    person_pos: p.person_pos ?? null,
-    ai_rank: p.ai_rank ?? null,
-    rank_source: rankSourceOf(p),
+    // A teammate reads the position alone, never the scale behind it: the scale counts priorities they cannot see.
+    person_pos: isOwner(viewer, p) ? p.person_pos ?? null : null,
+    ai_rank: isOwner(viewer, p) ? p.ai_rank ?? null : null,
+    rank_source: isOwner(viewer, p) ? rankSourceOf(p) : null,
     status_set_by: p.status_set_by ?? "pass",
     serves: p.serves ?? null,
     steps,
@@ -207,7 +229,7 @@ type LinkReads = {
   task: (shortId: string) => Promise<Doc<"tasks"> | null>;
   plan: (id: string) => Promise<LinkPlan | null>;
   listed: (c: Doc<"conversations">) => Promise<boolean>;
-  /** The viewer's own session (theirs, or one they co-own): only these can ask the viewer anything. */
+  /** The viewer's own session (theirs, or one they co-own). */
   mine: (c: Doc<"conversations">) => Promise<boolean>;
   /** The milestone keys of a priority's pending corrections ("" for one on the priority itself). */
   pending: (p: Priority) => Promise<Set<string>>;
@@ -227,7 +249,7 @@ function linkReads(ctx: Ctx, r: Reader): LinkReads {
     const c = await convs(id);
     if (!c) return false;
     const viewer = String(r.viewer);
-    return String(c.user_id) === viewer || String(c.owner_user_id ?? "") === viewer || isSessionOwner(ctx, c._id, r.viewer);
+    return String(c.user_id) === viewer || String(c.owner_user_id ?? "") === viewer || isSessionOwner(ctx, c._id, r.viewer, c);
   });
   const convs = memo(async (ref): Promise<Doc<"conversations"> | null> => {
     const id = ctx.db.normalizeId("conversations", ref);
@@ -267,9 +289,9 @@ const planRef = ({ short_id, title, done, total, size }: PlanFacts): PriorityPla
  * the step, or it is the step's own plan's current session), each listed to
  * the viewer, best first; the plans its tasks belong to, by the attribution
  * rules (priorityDerive); whether every task it names is done ("Looks
- * done?"); and whether a correction on it waits for a pass. Only for the
- * viewer's own active priorities (listFor). A session that is not the
- * viewer's never asks them anything: its needs-you reads idle.
+ * done?"); and whether a correction on it waits for a pass. For every active
+ * priority the viewer can read (listFor), a teammate's as their own: each
+ * session reports its real state, a teammate's needs-you included.
  */
 async function linksFor(r: Reader, reads: LinkReads, p: Priority, steps: PriorityStep[], now: number): Promise<{ links: PriorityMilestoneLinks[]; plan: PriorityPlanRef | null }> {
   const bySteps = new Map<string, Map<string, { c: Doc<"conversations">; why: PriorityLinkWhy[] }>>(steps.map((s) => [s.key, new Map()]));
@@ -315,12 +337,11 @@ async function linksFor(r: Reader, reads: LinkReads, p: Priority, steps: Priorit
     const sessions: PriorityLinkedSession[] = [];
     for (const { c, why } of bySteps.get(s.key)!.values()) {
       const mine = await reads.mine(c);
-      const state = linkedSessionState(c, now);
       sessions.push({
         short_id: c.short_id ?? String(c._id),
         conversation_id: String(c._id),
         title: c.title ?? "",
-        state: state === "needs_you" && !mine ? "idle" : state,
+        state: linkedSessionState(c, now),
         mine,
         workflow: isWorkflowSession(c as any),
         why,
@@ -351,7 +372,7 @@ export async function echo(ctx: Ctx, viewer: Id<"users">, id: Id<"priorities">):
   const p: Priority = await ctx.db.get(id);
   const r = await readerFor(ctx, viewer);
   const mapped = await mappedSessions(r, p, listRead(viewer, p));
-  return rowFor(viewer, p, ownerOf(await owners(ctx, [p]), p), await positionOf(ctx, p), await r.stepsFor(p), mapped, await correctionPending(ctx, viewer, p), LIST_SESSIONS);
+  return rowFor(viewer, p, ownerOf(await owners(ctx, [p]), p), await positionOf(ctx, r, p), await r.stepsFor(p), mapped, await correctionPending(ctx, viewer, p), LIST_SESSIONS);
 }
 
 /**
@@ -361,8 +382,10 @@ export async function echo(ctx: Ctx, viewer: Id<"users">, id: Id<"priorities">):
  * read newest first (by_user_workspace_active, OWN_SCAN_READ rows a workspace,
  * at most OWN_PRIORITIES_READ a status), and `own_truncated` says when more
  * were there; teammates' newest first (by_workspace_status_active), at most
- * TEAMMATE_PRIORITIES_CAP judged (TEAMMATE_ALL_CAP with `all` or a status),
- * and `teammates_truncated` says when more were there.
+ * TEAMMATE_PRIORITIES_CAP judged in each workspace (TEAMMATE_ALL_CAP with
+ * `all` or a status), so a read of every workspace returns for each what a
+ * read of that one returns, and `teammates_truncated` says when any workspace
+ * had more.
  */
 export async function visiblePriorities(ctx: Ctx, r: Reader, workspace: string | undefined, status: PriorityStatus | undefined, all: boolean): Promise<{ rows: Priority[]; own_truncated: boolean; teammates_truncated: boolean }> {
   const since = Date.now() - FINISHED_WINDOW_DAYS * DAY;
@@ -371,7 +394,7 @@ export async function visiblePriorities(ctx: Ctx, r: Reader, workspace: string |
   const featureOn = featureCheck(ctx);
   const keys = workspace ? (r.held.has(workspace) ? [workspace] : []) : [...r.held];
   const own: Priority[] = [];
-  const theirs: Priority[] = [];
+  const judged: Priority[] = [];
   let truncated = false;
   let ownTruncated = false;
   for (const key of keys) {
@@ -383,6 +406,7 @@ export async function visiblePriorities(ctx: Ctx, r: Reader, workspace: string |
       .order("desc")
       .take(OWN_SCAN_READ + 1);
     if (scan.length > OWN_SCAN_READ) ownTruncated = true;
+    const theirs: Priority[] = [];
     for (const st of status ? [status] : LISTED_STATUSES) {
       const ofStatus = scan.slice(0, OWN_SCAN_READ).filter((p) => p.status === st && (!windowed(st) || p.last_active_at >= since));
       if (ofStatus.length > OWN_PRIORITIES_READ) ownTruncated = true;
@@ -399,11 +423,11 @@ export async function visiblePriorities(ctx: Ctx, r: Reader, workspace: string |
       if (rows.length > limit) truncated = true;
       for (const p of rows.slice(0, limit)) if (!isOwner(r.viewer, p)) theirs.push(p);
     }
+    theirs.sort((a, b) => b.last_active_at - a.last_active_at);
+    if (theirs.length > cap) truncated = true;
+    for (const p of theirs.slice(0, cap)) if (await r.canRead(p)) judged.push(p);
   }
-  theirs.sort((a, b) => b.last_active_at - a.last_active_at);
-  const judged: Priority[] = [];
-  for (const p of theirs.slice(0, cap)) if (await r.canRead(p)) judged.push(p);
-  return { rows: [...own, ...judged], own_truncated: ownTruncated, teammates_truncated: truncated || theirs.length > cap };
+  return { rows: [...own, ...judged], own_truncated: ownTruncated, teammates_truncated: truncated };
 }
 
 /**
@@ -414,12 +438,11 @@ export async function listFor(ctx: Ctx, viewer: Id<"users">, args: { workspace?:
   const r = await readerFor(ctx, viewer);
   const { rows, own_truncated, teammates_truncated } = await visiblePriorities(ctx, r, args.workspace, args.status, !!args.all);
   const people = await owners(ctx, rows);
-  // Every position is its owner's in their whole active group, as positionOf, the pin line and a move read it, whoever reads the list.
+  // Positions come from each owner's whole group, as positionOf, the pin line and a move read them.
   const positions = new Map<string, number>();
-  const groups = new Map(rows.filter((p) => p.status === "active").map((p) => [`${p.user_id} ${p.workspace}`, p] as const));
-  for (const p of groups.values()) {
-    for (const [id, at] of positionsOf(await activeGroup(ctx, p.user_id, p.workspace))) positions.set(id, at);
-  }
+  const groups = new Map<string, Priority>();
+  for (const p of rows) if (p.status === "active") groups.set(`${p.user_id} ${p.workspace}`, p);
+  for (const p of groups.values()) for (const [id, at] of await positionsFor(ctx, r, p.user_id, p.workspace)) positions.set(id, at);
   const at = (p: Priority) => positions.get(String(p._id)) ?? Infinity;
   const mine = (p: Priority) => (String(p.user_id) === String(viewer) ? 0 : 1);
   rows.sort((a, b) =>
@@ -435,8 +458,8 @@ export async function listFor(ctx: Ctx, viewer: Id<"users">, args: { workspace?:
   const now = Date.now();
   for (const p of rows) {
     const steps = await r.stepsFor(p);
-    // Links only on the viewer's own active priorities: the rows whose milestones show a state.
-    const linked = isOwner(viewer, p) && p.status === "active" ? await linksFor(r, reads, p, steps, now) : null;
+    // Links on every active priority, a teammate's too: the rows whose milestones show a state.
+    const linked = p.status === "active" ? await linksFor(r, reads, p, steps, now) : null;
     const row = rowFor(viewer, p, ownerOf(people, p), positions.get(String(p._id)) ?? null, steps, await mappedSessions(r, p, listRead(viewer, p)), await correctionPending(ctx, viewer, p), LIST_SESSIONS);
     out.push(linked ? { ...row, ...linked } : row);
   }
@@ -463,7 +486,7 @@ export async function showFor(ctx: Ctx, viewer: Id<"users">, shortId: string): P
   const mapped = await mappedSessions(r, p, SHOW_SESSIONS);
   const steps = await r.stepsFor(p);
   const corrections = await correctionsOf(ctx, viewer, p);
-  const row = rowFor(viewer, p, ownerOf(await owners(ctx, [p]), p), await positionOf(ctx, p), steps, mapped, corrections.some((c) => c.status === "pending"));
+  const row = rowFor(viewer, p, ownerOf(await owners(ctx, [p]), p), await positionOf(ctx, r, p), steps, mapped, corrections.some((c) => c.status === "pending"));
   const sessions = row.sessions;
   // The page and the reference card draw each step's sessions and plans as the list does, for any priority the viewer can read.
   const linked = await linksFor(r, linkReads(ctx, r), p, steps, Date.now());
