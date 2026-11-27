@@ -25,6 +25,8 @@ import { beginScreenRecording, discardScreenRecording, pickScreenRecording, reco
 import { formatCallTime } from '@codecast/shared/contracts';
 import type { useComposerField } from '@/lib/composerField';
 import { appAlert } from '@/lib/popups';
+import { useDictation } from '@/lib/dictation';
+import { DictateControls } from '@/components/DictateControls';
 
 // A send with attachments and no text carries this as its content.
 export const IMAGE_ONLY_CONTENT = '[image]';
@@ -242,10 +244,17 @@ export function MessageComposer({
     setInputHeight(0);
     setExpanded(false);
   }, [epoch]);
-  const showStop = !canSend && !!stop;
+  // Speech into the box, through the same setter typing uses. A send pressed
+  // mid-recording waits for the last words, then sends what the box holds
+  // (the latest onSend, whose closure has them).
+  const dictation = useDictation({ value: message, onChangeText, inputRef, resetKey: epoch });
+  const onSendRef = useRef(onSend);
+  onSendRef.current = onSend;
+  const send = () => dictation.send(() => onSendRef.current());
+  const showStop = !canSend && !!stop && !dictation.active;
   // The suggestion owns the empty box: its text is the placeholder, so it
   // wraps and grows the box like typed words, and typing replaces it.
-  const ghost = !message && !showStop ? suggestion ?? null : null;
+  const ghost = !message && !showStop && !dictation.active ? suggestion ?? null : null;
   // The picked image open full screen, by its place in the strip.
   const [viewing, setViewing] = useState<number | null>(null);
 
@@ -349,6 +358,7 @@ export function MessageComposer({
           </TouchableOpacity>
         </RNView>
       )}
+      <DictateControls dictation={dictation} />
       {/* Never `disabled` — a disabled TouchableOpacity drops the tap, and on a
           new session the JS thread is often still catching up (create, cache
           write, keyboard) while the native field already shows text. Keep the
@@ -358,7 +368,7 @@ export function MessageComposer({
           into send, so a follow-up can always be queued. */}
       <NativePressable
         style={[styles.sendButton, showStop ? styles.stopButton : !canSend && styles.sendButtonDisabled]}
-        onPress={showStop ? stop!.onPress : onSend}
+        onPress={showStop ? stop!.onPress : send}
         activeOpacity={0.7}
         delayPressIn={0}
         hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
@@ -392,9 +402,10 @@ export function MessageComposer({
           ]}
           value={message}
           onChangeText={onChangeText}
+          onSelectionChange={dictation.onSelectionChange}
           onFocus={onFocusChange ? () => onFocusChange(true) : undefined}
           onBlur={onFocusChange ? () => onFocusChange(false) : undefined}
-          placeholder={ghost?.text ?? placeholder}
+          placeholder={dictation.placeholder(ghost?.text ?? placeholder)}
           placeholderTextColor={ghost ? Theme.textMuted0 : placeholderColor ?? Theme.textMuted0}
           multiline
           maxLength={10000}
@@ -446,7 +457,8 @@ export function MessageComposer({
               style={styles.expandedInput}
               value={message}
               onChangeText={onChangeText}
-              placeholder={placeholder}
+              onSelectionChange={dictation.onSelectionChange}
+              placeholder={dictation.placeholder(placeholder)}
               placeholderTextColor={placeholderColor ?? Theme.textMuted0}
               multiline
               autoFocus
