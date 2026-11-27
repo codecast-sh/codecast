@@ -93,15 +93,17 @@ const took = (r: RunNodeRow) => (r.started_at != null && r.completed_at != null 
  * once the line was republished without it, the run's own history is the only true order.
  */
 export function flowContext(
-  run: { _id?: string; status?: string; current_node_id?: string; gate_node_id?: string; gate_decision_id?: string; gate_decision_short_id?: string; fail_reason?: string; node_statuses?: any[] } | null | undefined,
+  run: { _id?: string; status?: string; current_node_id?: string; gate_node_id?: string; gate_decision_id?: string; gate_decision_short_id?: string; gate_decision_status?: string; fail_reason?: string; node_statuses?: any[] } | null | undefined,
   graph?: { nodes?: Array<{ id: string; label?: string; type?: string }> } | null,
   focus: FlowFocus = {},
 ): FlowContext {
   const empty = { stations: [], ahead: [], at: -1, focus: -1, lineChanged: false };
   if (!run) return empty;
   const alive = ALIVE.has(run.status ?? "");
-  // An empty gate id means no gate: the run stands at its current node.
-  const standing = run.gate_node_id || run.current_node_id;
+  // The run stands at its gate only while paused there on an open question; the row keeps the gate (answered) once the
+  // run moves on, and an empty gate id means no gate: it stands at its current node.
+  const atGate = run.status === "paused" && !!run.gate_node_id && (run.gate_decision_status ?? "pending") === "pending";
+  const standing = atGate ? run.gate_node_id : run.current_node_id;
   const graphNodes = graph?.nodes ?? [];
   // The run ran another version of the flow when a station it reached, or the one it stands at, is not in the graph
   // as published now; live or ended, its own history is then the only true order.
