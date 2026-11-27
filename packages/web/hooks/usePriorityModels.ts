@@ -60,7 +60,7 @@ function markFactsHash(r: InboxSession): number {
   }
   return h;
 }
-/** What the sidebar's Decisions queue reads off a decision (lib/decisionQueue queuesDecision): who it is asked of, and whether it stands. */
+/** What the Decisions queue (the sidebar's section, the phone's screen) reads off a decision (lib/decisionQueue queuesDecision): who it is asked of, and whether it stands. */
 const queuedDecisionsSig = makeCollectionSig((d: SessionDecisionItem) =>
   `${d.conversation_id}|${d.status}|${d.blocking ? 1 : 0}|${d.stack_id ?? ""}|${d.in_queue === false ? 0 : 1}|${(d.asked_user_ids ?? []).join(",")}`);
 

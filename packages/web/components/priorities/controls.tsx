@@ -21,6 +21,7 @@ import { usePriorities, usePriorityWrites } from "../../hooks/usePriorities";
 import { priorityHref, rankProvenance } from "../../lib/priorities";
 import { COARSE_TALL, type SessionLine } from "../../lib/priorityList";
 import { cn } from "../../lib/utils";
+import { useMountEffect } from "../../hooks/useMountEffect";
 
 const stop = (e: { stopPropagation: () => void }) => e.stopPropagation();
 /** Opens a popover after the menu that asked for it has closed, so the menu's own close does not take its focus. */
@@ -382,20 +383,32 @@ function returnFocus(host: HTMLElement | null) {
 
 /**
  * A milestone's (or, with its `label`, a priority's) title being renamed in
- * place: Enter or leaving keeps it, Escape takes it back. Uncontrolled, so
- * typing commits nothing. Ended by Enter or Escape, focus goes back to the
- * title (returnFocus), never to the page.
+ * place: Enter keeps it, Escape takes it back, and so does leaving it, unless
+ * the person left on purpose (a press outside the box, or Tab), which keeps
+ * it. A browser extension can swallow Escape and just blur the box, and a
+ * window switch blurs it too: neither may save an edit the person was
+ * abandoning. Uncontrolled, so typing commits nothing. Ended by Enter or
+ * Escape, focus goes back to the title (returnFocus), never to the page.
  */
 export function MilestoneTitleInput({ title, onDone, className, label = "Milestone title" }: { title: string; onDone: (title: string | null) => void; className?: string; label?: string }) {
   const done = useRef(false);
+  const box = useRef<HTMLInputElement>(null);
+  const leaving = useRef(false);
   const finish = (value: string | null) => {
     if (done.current) return;
     done.current = true;
     const next = value?.trim();
     onDone(next && next !== title ? next : null);
   };
+  useMountEffect(() => {
+    // On a touch screen the focus moves only once the tap ends, so the press alone marks the leaving.
+    const press = (e: Event) => { if (!box.current?.contains(e.target as Node)) leaving.current = true; };
+    document.addEventListener("pointerdown", press, true);
+    return () => document.removeEventListener("pointerdown", press, true);
+  });
   return (
     <input
+      ref={box}
       autoFocus
       data-rename-input
       defaultValue={title}
@@ -405,12 +418,14 @@ export function MilestoneTitleInput({ title, onDone, className, label = "Milesto
       onClick={stop}
       onKeyDown={(e) => {
         e.stopPropagation();
+        // Typing on after a press outside that kept the focus here: still editing.
+        leaving.current = e.key === "Tab";
         if (e.key !== "Enter" && e.key !== "Escape") return;
         const host = e.currentTarget.parentElement;
         finish(e.key === "Enter" ? e.currentTarget.value : null);
         returnFocus(host);
       }}
-      onBlur={(e) => finish(e.currentTarget.value)}
+      onBlur={(e) => finish(leaving.current ? e.currentTarget.value : null)}
       className={cn("min-w-0 flex-1 rounded-control border border-sol-border bg-sol-bg px-1.5 py-0.5 text-[16px] text-sol-text focus:border-sol-text-dim focus:outline-none sm:text-ui", className)}
     />
   );

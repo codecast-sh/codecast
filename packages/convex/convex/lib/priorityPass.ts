@@ -661,7 +661,9 @@ export function mergePriorities(input: PriorityPassInput, output: PriorityPassOu
       if (JSON.stringify(w[k]) !== JSON.stringify((r.prior as unknown as PriorityWrite)[k])) (patch as any)[k] = w[k];
     }
     if (r.proposal || Object.keys(patch).length) plan.updates.push({ short_id: r.prior.short_id, patch, seen_steps: r.prior.steps.map((s) => s.key) });
-    if (r.proposal && r.prior.needs_rewrite && (w.title !== r.prior.title || r.proposal.summary !== r.prior.summary)) plan.rewritten.push(r.prior.short_id);
+    // A title the person set is kept (w.title is always the prior's), so for such a row any proposal is the rewrite.
+    const rewrote = r.prior.title_set_by === "person" || w.title !== r.prior.title || r.proposal?.summary !== r.prior.summary;
+    if (r.proposal && r.prior.needs_rewrite && rewrote) plan.rewritten.push(r.prior.short_id);
   }
 
   for (const [session, m] of sessionMap) {

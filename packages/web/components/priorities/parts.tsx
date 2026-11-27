@@ -144,9 +144,15 @@ export function NeedsYouMark({ href, label }: { href?: string; label?: string })
   );
 }
 
-/** A deploy in an open milestone's list (and the legend): green once live, red when it failed, grey on its way. */
+/**
+ * A deploy in an open milestone's list (and the legend), each state its own
+ * shape so a grayscale screen tells them apart: live a green rocket, failed
+ * the sessions' red error mark, still on its way a dashed grey rocket.
+ */
 export function DeployMark({ status }: { status: string }) {
-  return <Rocket className={cn("size-3.5", status === "live" ? "text-sol-green" : status === "failed" ? "text-sol-red" : "text-sol-text-dim")} />;
+  if (status === "failed") return <span data-deploy-mark="failed" className="flex"><SessionStatusMark status="error" size={13} /></span>;
+  if (status === "live") return <Rocket data-deploy-mark="live" className="size-3.5 text-sol-green" />;
+  return <Rocket data-deploy-mark="pending" strokeDasharray="3 2" className="size-3.5 text-sol-text-dim" />;
 }
 
 /** A task whose row has not loaded has no status to draw: a neutral dot, never Open. */

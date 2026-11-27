@@ -292,6 +292,33 @@ test("needs you outranks done: a done milestone whose session asks sits with the
   }
 }, 60_000);
 
+test("a polish milestone that needs you sits with the open ones, never behind POLISH, and still counts in POLISH x/y", async () => {
+  const r = row(13, "Polish asking", 1, [
+    step("s1", "Open one", "critical"),
+    step("p1", "Polish asking", "polish"),
+    step("p2", "Polish done", "polish", true),
+    step("p3", "Polish open", "polish"),
+  ], { links: [links("p1", [sess("polq", "Polish question", "needs_you", 1)])] });
+  const unseed = seedNeedsYou("polq");
+  const page = await mount(view({ rows: [r] }));
+  try {
+    const b = block(page.container, "pri-13");
+    const openRows = () => [...b.querySelectorAll("li[data-milestone]")].filter((li) => !li.closest("[data-section-open]")).map((li) => li.getAttribute("data-milestone"));
+    expect(openRows()).toEqual(["s1", "p1"]);
+    expect(states(b)).toEqual({ s1: "start", p1: "needs_you" });
+    expect(b.querySelector('[data-section="polish"]')!.textContent).toBe("Polish 1/3");
+    await (React as any).act(async () => { (b.querySelector('[data-section="polish"]') as HTMLElement).click(); });
+    expect([...b.querySelectorAll('[data-section-open="polish"] li[data-milestone]')].map((li) => li.getAttribute("data-milestone"))).toEqual(["p2", "p3"]);
+    // Answered: it folds back behind POLISH.
+    await (React as any).act(async () => { unseed(); });
+    await page.waitFor(() => openRows().length === 1, 2000);
+    expect([...b.querySelectorAll('[data-section-open="polish"] li[data-milestone]')].map((li) => li.getAttribute("data-milestone"))).toEqual(["p1", "p2", "p3"]);
+  } finally {
+    unseed();
+    await page.unmount();
+  }
+}, 60_000);
+
 test("only the viewer's own priorities; the past ones fold into one line at the bottom, offering no New session", async () => {
   const theirs = row(20, "A teammate's priority", 1, [step("s1", "Their milestone", "critical")], { mine: false, user_id: "someone-else", owner: "Sam Teammate", links: [] });
   const page = await mount(view({ rows: [...ROWS, theirs] }));

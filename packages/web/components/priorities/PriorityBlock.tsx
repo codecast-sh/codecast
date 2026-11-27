@@ -232,7 +232,7 @@ function SectionHead({ kind, label, count, open, onClick, className }: { kind: s
 type Section = { kind: string; label: string; count: string; open: boolean; toggle: () => void; rows: MilestoneModel[] };
 
 /**
- * A priority's milestones: the open critical ones, then Done and Polish. A
+ * A priority's milestones: the open critical ones and any that need you, then Done and Polish. A
  * closed section is its head, sharing one line with the next closed one; an
  * open one is its head, caret and all, over its milestones. `expand` opens
  * every open milestone (the priority's page); `focus` opens the one a link
@@ -246,23 +246,25 @@ export function Milestones({ model, layout, now, lookups, expand, focus }: {
   expand?: boolean;
   focus?: string | null;
 }) {
-  const critical = model.milestones.filter((m) => m.tier === "critical");
+  // A milestone that reads Needs you, whatever its tier and whether done, sits with the open ones, never folded.
+  // DONE n counts its fold; POLISH x/y counts every polish milestone; a head with an empty fold is hidden (lib/priorityList).
+  const unfolded = (m: MilestoneModel) => m.state.kind === "needs_you" || (m.tier === "critical" && !m.done);
   const polish = model.milestones.filter((m) => m.tier === "polish");
-  // Needs you outranks done: a done milestone that asks sits with the open ones until it is answered.
-  const done = critical.filter((m) => m.state.kind === "done");
+  const done = model.milestones.filter((m) => m.tier === "critical" && !unfolded(m));
   const [doneOpen, setDoneOpen] = useState(() => done.some((m) => m.key === focus));
   const [polishOpen, setPolishOpen] = useState(() => polish.some((m) => m.key === focus));
   const line = (m: MilestoneModel) => <MilestoneRow key={m.key} model={model} m={m} layout={layout} now={now} lookups={lookups} defaultOpen={(expand && m.state.kind !== "done") || m.key === focus} />;
   const sections: Section[] = [];
   if (done.length) sections.push({ kind: "done", label: "Done", count: `${done.length}`, open: doneOpen, toggle: () => setDoneOpen((o) => !o), rows: done });
-  if (polish.length) sections.push({ kind: "polish", label: "Polish", count: `${polish.filter((m) => m.done).length}/${polish.length}`, open: polishOpen, toggle: () => setPolishOpen((o) => !o), rows: polish });
+  const polishFolded = polish.filter((m) => !unfolded(m));
+  if (polishFolded.length) sections.push({ kind: "polish", label: "Polish", count: `${polish.filter((m) => m.done).length}/${polish.length}`, open: polishOpen, toggle: () => setPolishOpen((o) => !o), rows: polishFolded });
   // In order: consecutive closed sections share one line; an open one is its head over its milestones. Every head
   // stays a child of this one container, keyed by its kind, and only CSS moves it, so pressing one never remounts
   // it and its focus stays put. A section starts a line when it is open or follows an open one.
   const starts = (i: number) => i === 0 || sections[i].open || sections[i - 1].open;
   return (
     <>
-      <ul>{critical.filter((m) => m.state.kind !== "done").map(line)}</ul>
+      <ul>{model.milestones.filter(unfolded).map(line)}</ul>
       {sections.length > 0 && (
         <div data-sections className="mt-0.5 flex flex-wrap items-center gap-x-5">
           {sections.flatMap((x, i) => [

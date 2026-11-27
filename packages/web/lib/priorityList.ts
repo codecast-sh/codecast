@@ -70,8 +70,9 @@ export const MILESTONE_STATE_WORD: Record<Exclude<MilestoneStateKind, "none">, s
 
 /**
  * A milestone reads Needs you exactly when one of its sessions sits where its
- * inbox counts it as needing you: Questions, Needs You, or a pinned card
- * waiting on the viewer. Otherwise it takes the most urgent of its live
+ * inbox counts it as needing you: Questions, Needs You, the viewer's
+ * Decisions queue (on both inboxes), or a pinned card waiting on the viewer.
+ * Otherwise it takes the most urgent of its live
  * sessions' drawn marks (working › dormant › idle). Marks outside that
  * vocabulary (done, error) read as idle: a done session's results wait to be
  * read, so it still counts as someone on it. A stashed session counts as
@@ -79,8 +80,12 @@ export const MILESTONE_STATE_WORD: Record<Exclude<MilestoneStateKind, "none">, s
  * session to its owner. Rows always draw the inbox's own mark.
  *
  * Needs you outranks done. A done milestone with a session the inbox counts
- * as needing you reads Needs you and sits with the open milestones, never in
- * the DONE fold, until the ask is answered. Then it returns to DONE.
+ * as needing you reads Needs you until the ask is answered. Any milestone that
+ * reads Needs you, whatever its tier and whether done, sits with the open
+ * milestones and is never folded. DONE n counts what its fold holds, so a done
+ * milestone that asks leaves it; POLISH x/y is a progress count over every
+ * polish milestone (x the done ones), asking or not. A section head whose fold
+ * is empty is hidden.
  *
  * `live` answers what the inbox draws (hooks/usePriorityModels liveMarkOf
  * over store/inboxMark inboxMarkOf), or undefined when it draws nothing: then
