@@ -489,7 +489,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       let earlier: string | null = null;
       try { earlier = earlierRunTree((await cast(["ws", "path", worktree], top)).out.trim(), resets); } catch (err) { console.error((err as Error).message); process.exit(1); }
       if (branch) {
-        const { head, remote_tip: remoteTip } = await branchHead(top, branch);
+        const { head, remote_tip: remoteTip } = await branchHead(top, branch, earlier);
         if (!head) { console.error(`No branch ${branch} here or on origin`); process.exit(1); }
         const { branchChangePaths } = await import("./workflow/flowChangeFile.js");
         // The files the branch changes, so a station gated on paths (when=) runs when they say it should.

@@ -355,9 +355,19 @@ export async function originTip(root: string, branch: string): Promise<string> {
 async function originSupersedes(root: string, branch: string, sha: string, remote: string): Promise<boolean> {
   const under = (a: string, b: string) => isAncestor(root, a, b).catch(() => false);
   if (await under(sha, remote)) return true;
-  const held = ((await gitTry(root, ["reflog", "show", "--format=%H", `refs/remotes/origin/${branch}`])) ?? "").split("\n").filter(Boolean);
+  const held = ((await gitTry(root, ["reflog", "show", "-n", "50", "--format=%H", `refs/remotes/origin/${branch}`])) ?? "").split("\n").filter(Boolean);
   for (const h of new Set(held)) if (await under(sha, h)) return true;
   return false;
+}
+
+/** Whether a worktree other than `own` has `branch` checked out (the main checkout included). */
+async function heldElsewhere(root: string, branch: string, own?: string | null): Promise<boolean> {
+  const real = (p: string) => { try { return fs.realpathSync(p); } catch { return path.resolve(p); } };
+  const list = (await gitTry(root, ["worktree", "list", "--porcelain"])) ?? "";
+  return list.split("\n\n").some((entry) => {
+    const tree = /^worktree (.+)$/m.exec(entry)?.[1];
+    return !!tree && entry.split("\n").includes(`branch refs/heads/${branch}`) && (!own || real(tree) !== real(own));
+  });
 }
 
 /**
@@ -367,15 +377,17 @@ async function originSupersedes(root: string, branch: string, sha: string, remot
  * landed"). A local branch origin has superseded (behind origin, or a tip origin held before the author rebased and
  * force-pushed it from another worktree) starts from origin's tip: run from the stale copy, the PR station found
  * origin holding commits the run never had and stopped the run (ct-102399, ct-102339, ct-101957). A local branch with
- * commits of its own keeps them. Empty when neither this checkout nor origin has the branch.
+ * commits of its own keeps them, and so does one checked out in a worktree other than `own` (the run's own earlier
+ * tree, which the run resets to the change): moving it there would leave that checkout showing a staged revert of the
+ * author's rebase. Empty when neither this checkout nor origin has the branch.
  */
-export async function branchHead(root: string, branch: string): Promise<{ head: string; remote_tip: string }> {
+export async function branchHead(root: string, branch: string, own?: string | null): Promise<{ head: string; remote_tip: string }> {
   const remote_tip = await originTip(root, branch);
   let head = await git(root, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).catch(() => "");
   if (!head && remote_tip) {
     await git(root, ["branch", "--quiet", "--no-track", branch, remote_tip]);
     head = remote_tip;
-  } else if (head && remote_tip && head !== remote_tip && (await originSupersedes(root, branch, head, remote_tip))) {
+  } else if (head && remote_tip && head !== remote_tip && !(await heldElsewhere(root, branch, own)) && (await originSupersedes(root, branch, head, remote_tip))) {
     await git(root, ["update-ref", `refs/heads/${branch}`, remote_tip, head]);
     head = remote_tip;
   }

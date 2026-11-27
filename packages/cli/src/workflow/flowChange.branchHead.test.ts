@@ -71,6 +71,31 @@ describe("branchHead", () => {
     expect(git(here, "rev-parse", "refs/heads/ashot/feature")).toBe(rewritten);
   });
 
+  // PR #303 review: a branch someone has checked out must not move under them, or their tree shows the author's
+  // rebase as a staged revert. Only the run's own earlier tree, which the run resets to the change, may move.
+  const rewritten = () => {
+    const { other, here, tip } = world();
+    git(here, "fetch", "-q", "origin", "+refs/heads/ashot/feature:refs/remotes/origin/ashot/feature");
+    git(here, "branch", "ashot/feature", tip);
+    git(other, "commit", "-q", "--amend", "-m", "the change, rebased");
+    git(other, "push", "-q", "--force", "origin", "ashot/feature");
+    const tree = `${here}-tree`;
+    git(here, "worktree", "add", "-q", tree, "ashot/feature");
+    return { here, tip, tree, rebased: git(other, "rev-parse", "HEAD") };
+  };
+
+  test("a branch checked out in another worktree keeps its head, and that checkout is untouched", async () => {
+    const { here, tip, tree, rebased } = rewritten();
+    expect(await branchHead(here, "ashot/feature")).toEqual({ head: tip, remote_tip: rebased });
+    expect(git(tree, "rev-parse", "HEAD")).toBe(tip);
+    expect(git(tree, "status", "--porcelain")).toBe("");
+  });
+
+  test("a branch checked out only in the run's own earlier tree moves to origin's rewritten tip", async () => {
+    const { here, tree, rebased } = rewritten();
+    expect(await branchHead(here, "ashot/feature", tree)).toEqual({ head: rebased, remote_tip: rebased });
+  });
+
   test("a local commit origin never held keeps the local branch when origin was rewritten too", async () => {
     const { other, here, tip } = world();
     git(here, "fetch", "-q", "origin", "+refs/heads/ashot/feature:refs/remotes/origin/ashot/feature");
