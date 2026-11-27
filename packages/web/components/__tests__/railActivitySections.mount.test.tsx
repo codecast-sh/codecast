@@ -10,7 +10,7 @@
 //   sleeping  each flavor's line: waiting on a person (coloured pill), a
 //             session, a task ("landing") or a PR ("to merge") with neutral
 //             pills, a trigger's countdown, and the stalled warning line
-//   snoozed   a snoozed row stays in Snoozed, whatever its work
+//   snoozed   a snoozed row sleeps in Sleeping, whatever its work, saying until when
 //   walk      the keyboard walk visits the rows in the order they draw
 //
 // Run: bun test components/__tests__/railActivitySections.mount.test.tsx
@@ -244,7 +244,7 @@ test("a row whose change is in CI draws in Shipping, compact, with the rocket, n
 
 test("each Sleeping flavor says what wakes it", async () => {
   const { host, unmount } = await mountInbox();
-  expect(sectionIds(host, "dormant").sort()).toEqual([ON_PERSON, ON_SESSION, ON_TASK, ON_PR, SCHEDULED, STALLED].sort());
+  expect(sectionIds(host, "dormant").sort()).toEqual([ON_PERSON, ON_SESSION, ON_TASK, ON_PR, SCHEDULED, STALLED, SNOOZED].sort());
 
   const person = lineOf(host, ON_PERSON)!;
   expect(person.getAttribute("data-activity-line")).toBe("waiting");
@@ -292,10 +292,12 @@ test("the under-line's arrow sits in the card's mark column and its words in the
   await unmount();
 });
 
-test("a snoozed row stays in Snoozed, whatever its work", async () => {
+test("a snoozed row sleeps in Sleeping, whatever its work, saying until when", async () => {
   const { host, unmount } = await mountInbox();
-  for (const key of ["working", "shipping", "dormant"]) expect(sectionIds(host, key)).not.toContain(SNOOZED);
+  for (const key of ["working", "shipping"]) expect(sectionIds(host, key)).not.toContain(SNOOZED);
+  expect(sectionIds(host, "dormant")).toContain(SNOOZED);
   expect(useInboxStore.getState().dormantSplitNav?.working.has(SNOOZED)).toBeFalsy();
+  expect(lineOf(host, SNOOZED)!.textContent).toContain("snoozed until");
   await unmount();
 });
 
