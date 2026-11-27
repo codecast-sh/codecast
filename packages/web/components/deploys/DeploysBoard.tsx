@@ -12,8 +12,8 @@ import type { DeployReach } from "@codecast/shared/contracts/deployReach";
 import type { DeployPauseView } from "@codecast/shared/contracts/deployPause";
 import { entityRoute } from "@codecast/shared/entities";
 import {
-  VIEWS, ago, attemptGroups, carriedOfAttempts, carriedOfQueue, fold, mineSessionIds, queueCommits, recordedOf, rowsFor, shipperOf, shippingRuns, splitQueue, tasksOnMain, yourSessions,
-  type BoardDeploy, type BoardQueueCommit, type BoardRow, type BoardView, type Bucket, type CardId, type Carried, type DeployCard as Card, type DeployLine,
+  VIEWS, ago, attemptGroups, carriedOfAttempts, carriedOfQueue, fold, mineSessionIds, openPrs, queueCommits, recordedOf, rowsFor, shipperOf, shippingRuns, splitQueue, tasksOnMain, yourSessions,
+  type BoardDeploy, type BoardQueueCommit, type BoardRow, type BoardView, type Bucket, type CardId, type Carried, type DeployCard as Card, type DeployLine, type OpenPr,
 } from "../../lib/deploys/board";
 import { carriedMatches, commitMatches, deployMatches, focusWord, reachDeployOn, rowMatches, type DeployFocus } from "../../lib/deploys/focus";
 import { changeSpot, type Held, type HoldWord, type Spot } from "../../lib/deploys/spot";
@@ -55,6 +55,10 @@ export type DeploysBoardProps = {
   shipping: { runs: ReadonlyArray<ShippingRun>; shippers: ReadonlyArray<ShippingShipper> } | null;
   /** The Ship runs could not be read (a backend without the query yet): Shipping says so; nothing is credited. */
   shippingError?: boolean;
+  /** The target repository's pull requests the store holds (Shipping draws the open ones no run carries); null while unread. */
+  prs: ReadonlyArray<OpenPr> | null;
+  /** The viewer's GitHub login: Mine keeps the pull requests they opened. */
+  meLogin: string | null;
   /** deployRefs.deployLines by deploy id, for the cards shown: their commits' lines, PR and branch ("—" until read). */
   linesByDeploy?: ReadonlyMap<string, ReadonlyArray<DeployLine>>;
   /** The deploys whose lines the cards now shown want, each time that set changes. */
