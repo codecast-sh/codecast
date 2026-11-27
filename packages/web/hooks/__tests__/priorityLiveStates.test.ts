@@ -52,12 +52,12 @@ test("asking in Needs You: Needs you", () => {
   expect(milestone()).toBe("needs_you");
 });
 
-test("asking but folded below the old-session fold: not drawn, so it sleeps; shown again with old sessions on: Needs you", () => {
+test("asking but folded below the old-session fold: not drawn, so it reads idle; shown again with old sessions on: Needs you", () => {
   const old = NOW - 3 * 86_400_000;
   put({ [ID]: asking(old), [fixtureId("fresh1")]: { ...asking(NOW - MIN), thread_state_status: "dormant" } });
   ui({ inbox_show_old: false });
   expect(mark()).toBeNull();
-  expect(milestone()).toBe("dormant");
+  expect(milestone()).toBe("idle");
   ui({ inbox_show_old: true });
   expect(mark()).toBe("needs_you");
   expect(milestone()).toBe("needs_you");
@@ -82,7 +82,7 @@ test("Team scope, the session not in the team inbox: not drawn, not Needs you", 
   ui({ inbox_scope: "team" });
   useInboxStore.setState({ teamInboxIds: new Set([fixtureId("someoneelse")]), teamInboxIdSnapshot: { team_id: TEAM_ID } } as any);
   expect(mark()).toBeNull();
-  expect(milestone()).toBe("dormant");
+  expect(milestone()).toBe("idle");
 });
 
 test("the focused session is held in place: its card keeps drawing Needs you while it is open", () => {
@@ -146,6 +146,7 @@ test("a role's lead asking: the session riding it needs you through the lead, an
   expect(m.state.kind).toBe("needs_you");
   expect(m.state.session!.href).toBe(`/conversation/${lead}`);
   expect(m.sessions[0].href).toBe(`/conversation/${lead}`);
+  expect([m.state.session!.target, m.sessions[0].target]).toEqual([lead, lead]);
 });
 
 test("a session the sidebar draws under Done keeps its Done check on its row, while the milestone reads it as idle", () => {
@@ -164,11 +165,34 @@ test("stashed: its row draws the stash tray, and the milestone has nobody on it 
   expect(m.sessions[0].mark).toBe("stashed");
 });
 
-test("not in the store: no mark; the server's needs_you falls back to sleeping if yours, idle if someone else's", () => {
+test("an ask queued for the viewer in the sidebar's Decisions needs you wherever its session sits: stashed, snoozed, dismissed, or not in the store", () => {
+  const decide = (conversation_id: string) => useInboxStore.setState({ sessionDecisions: { dq: { _id: "dq", conversation_id, status: "pending", blocking: true, in_queue: true, created_at: NOW - MIN, updated_at: NOW - MIN, question: "Which one?", options: [] } } } as any);
+  const quiet = { ...asking(), thread_state_status: "dormant" };
+  for (const [name, row] of [["stashed", { ...quiet, inbox_stashed_at: NOW - MIN }], ["snoozed", { ...quiet, inbox_snoozed_until: NOW + 60 * MIN }], ["dismissed", { ...quiet, inbox_dismissed_at: NOW - MIN }]] as const) {
+    const id = fixtureId(`dq${name}`);
+    put({ [id]: row });
+    decide(id);
+    expect([name, drawn(id)]).toEqual([name, { mark: "needs_you", asks: true, target: id }]);
+    expect([name, milestone(id, { server: "idle" })]).toEqual([name, "needs_you"]);
+    // Without the ask, the same row does not need you.
+    useInboxStore.setState({ sessionDecisions: {} } as any);
+    expect([name, milestone(id, { server: "idle" })]).not.toEqual([name, "needs_you"]);
+  }
+  const absent = fixtureId("dqabsent");
+  decide(absent);
+  expect(drawn(absent)).toEqual({ mark: "needs_you", asks: true, target: absent });
+  expect(milestone(absent, { server: "idle" })).toBe("needs_you");
+  // The phone's Decisions are its placed Questions: an absent session draws nothing there.
+  expect(drawn(absent, "phone")).toBeNull();
+});
+
+test("not in the store: no mark; the server's needs_you reads idle, never sleeping, whoever owns it", () => {
   const absent = fixtureId("absent1");
   expect(mark(absent)).toBeNull();
-  expect(milestone(absent)).toBe("dormant");
+  expect(milestone(absent)).toBe("idle");
   expect(milestone(absent, { mine: false })).toBe("idle");
+  // Its row says Idle, never the Sleeping moon.
+  expect(model(absent).sessions[0].state).toBe("idle");
 });
 
 test("a workflow run asking through its parent's question: Needs you", () => {
@@ -212,6 +236,66 @@ test("a heartbeat that moves nothing placement reads places nothing: no new answ
       useInboxStore.setState((s: any) => ({ sessions: { ...s.sessions, [ID]: { ...s.sessions[ID], inbox_dismissed_at: NOW } } }));
     });
     expect(page.container.querySelector("[data-mark]")!.getAttribute("data-mark")).toBe("killed");
+  } finally {
+    await page.unmount();
+  }
+}, 60_000);
+
+test("the wake reads a digest of what a mark reads: streamed messages on a working session wake nothing; its own state, and its role lead's, do", async () => {
+  const lead = fixtureId("digestlead");
+  const rider = fixtureId("digestrider");
+  const base = { message_count: 4, status: "completed", updated_at: NOW - 10 * MIN, last_turn_at: NOW - 11 * MIN, user_id: VIEWER_ID, thread_state_at: NOW - 10 * MIN };
+  put({
+    [ID]: { ...asking(), thread_state_status: "working", agent_status: "working", agent_status_updated_at: NOW - 5000, last_heartbeat: NOW - 1000, daemon_alive_until: NOW + 60_000 },
+    [lead]: { ...base, standing_role_id: "role9", thread_state_status: "working", agent_status: "working", agent_status_updated_at: NOW - 5000, last_heartbeat: NOW - 1000, daemon_alive_until: NOW + 60_000 },
+    [rider]: { ...base, org_role_id: "role9", thread_state_status: "working" },
+  });
+  let renders = 0;
+  function Probe() {
+    usePriorityLiveStates([ID, rider], NOW);
+    renders++;
+    return null;
+  }
+  const page = await mountSurface(React.createElement(Probe));
+  const write = (id: string, patch: Record<string, unknown>) => (React as any).act(async () => {
+    useInboxStore.setState((s: any) => ({ sessions: { ...s.sessions, [id]: { ...s.sessions[id], ...patch } } }));
+  });
+  try {
+    const before = renders;
+    // The agent streams five messages: counts and stamps move, nothing a mark reads.
+    for (let i = 5; i < 10; i++) await write(ID, { message_count: i, last_message_at: NOW + i, updated_at: NOW + i });
+    expect(renders).toBe(before);
+    // A field the mark reads wakes it.
+    await write(ID, { pending_api_error: "rate limited", pending_api_error_kind: "usage_limit" });
+    expect(renders).toBeGreaterThan(before);
+    // So does the rider's lead's own state: the rider wears its mark.
+    const afterOwn = renders;
+    await write(lead, { session_error: "boom" });
+    expect(renders).toBeGreaterThan(afterOwn);
+  } finally {
+    await page.unmount();
+  }
+}, 60_000);
+
+test("a decision reassigned to or away from the viewer repaints the milestone at once", async () => {
+  const id = fixtureId("reassigned");
+  put({ [id]: { ...asking(), thread_state_status: "dormant", inbox_stashed_at: NOW - MIN } });
+  const decide = (asked: string[]) => (React as any).act(async () => {
+    useInboxStore.setState({ sessionDecisions: { dr: { _id: "dr", conversation_id: id, status: "pending", blocking: true, in_queue: true, asked_user_ids: asked, created_at: NOW - MIN, updated_at: NOW - MIN, question: "Which?", options: [] } } } as any);
+  });
+  function Probe() {
+    const live = usePriorityLiveStates([id], NOW);
+    return React.createElement("span", { "data-asks": live(id)?.asks ? "1" : "0" });
+  }
+  await decide([VIEWER_ID]);
+  const page = await mountSurface(React.createElement(Probe));
+  const asks = () => page.container.querySelector("[data-asks]")!.getAttribute("data-asks");
+  try {
+    expect(asks()).toBe("1");
+    await decide(["someone-else"]);
+    expect(asks()).toBe("0");
+    await decide([VIEWER_ID]);
+    expect(asks()).toBe("1");
   } finally {
     await page.unmount();
   }

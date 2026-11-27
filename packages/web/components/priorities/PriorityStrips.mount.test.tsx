@@ -160,3 +160,23 @@ test("on a touch screen each breakdown row is one tap target whose card lists ev
     }
   }
 }, 60_000);
+
+test("under a coarse pointer each breakdown row is 44px, so neighbouring rows' tap targets never overlap", async () => {
+  const prev = { history: answers["priorities:history"], list: answers["priorities:list"] };
+  answers["priorities:history"] = HISTORY;
+  answers["priorities:list"] = listOf(ROWS);
+  const page = await mount(view());
+  try {
+    await page.waitFor(() => !!page.container.querySelector("[data-messages-by-workspace] [data-workspace]"));
+    for (const row of page.container.querySelectorAll("[data-messages-by-workspace] [data-workspace]")) {
+      // 8px above and below a 28px bar: the row is the 44px its tap target spans.
+      for (const cls of ["[@media(pointer:coarse)]:min-h-11", "[@media(pointer:coarse)]:py-2"]) expect(row.className.split(/\s+/)).toContain(cls);
+    }
+  } finally {
+    await page.unmount();
+    for (const [k, v] of [["priorities:history", prev.history], ["priorities:list", prev.list]] as const) {
+      if (v === undefined) delete answers[k];
+      else answers[k] = v;
+    }
+  }
+}, 60_000);

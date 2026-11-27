@@ -435,6 +435,9 @@ test("a teammate's priority: its owner by the title, its title is no rename, and
     await page.waitFor(() => !!page.container.querySelector("[data-priority-page]"));
     const el = page.container;
     expect(el.querySelector("header [data-priority-owner]")?.textContent).toBe("Sam Teammate");
+    // No write control on a teammate's milestones or their sessions.
+    expect(el.querySelector("[data-priority-page] [data-milestone-menu]")).toBeNull();
+    expect(el.querySelector("[data-priority-page] [data-session-menu]")).toBeNull();
     await act(async () => { el.querySelector("h1")!.dispatchEvent(new (window as any).MouseEvent("dblclick", { bubbles: true })); });
     expect(el.querySelector("[data-rename-input]")).toBeNull();
     await act(async () => { el.querySelector('[data-priority-menu="pri-60"]')!.dispatchEvent(new (window as any).KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });

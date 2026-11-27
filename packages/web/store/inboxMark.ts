@@ -6,9 +6,10 @@
 // (lib/sessionStatus cardSectionOf, the panel's INBOX_SECTION_DECLARED_STATUS).
 import { isHostedAgentType, isUnderRole } from "@codecast/shared/contracts";
 import { hostedStopOf } from "../lib/hostedNotice";
+import { queuesDecision, queuesOwnAsk } from "../lib/decisionQueue";
 import { INBOX_SECTION_DECLARED_STATUS, cardSectionOf, sessionStatusOf, type SessionStatus } from "../lib/sessionStatus";
 import {
-  drawnSectionOf, placeInboxRows, railRowPlacement, subagentLiveOf, subagentStatusOf,
+  drawnSectionOf, filterInboxScope, placeInboxRows, railRowPlacement, subagentLiveOf, subagentStatusOf,
   type InboxSectionKey, type PlaceInboxState, type PlacedInbox, type SubagentLiveState,
 } from "./inboxStore";
 
@@ -54,6 +55,19 @@ function drawnParentOf(placed: PlacedInbox, id: string): string | null {
  */
 export type DrawnMark = { mark: SessionStatus; asks: boolean; target: string };
 
+/**
+ * Whether the sidebar's Decisions section lists this session for the viewer
+ * (hooks/useDecisionQueue buildDecisionQueue, by its own predicates): an
+ * authored ask queued for them, or, in their own scope, the session's own
+ * open question or permission prompt.
+ */
+function inDecisionQueue(state: PlaceInboxState, id: string): boolean {
+  const meId = state.currentUser?._id ? String(state.currentUser._id) : undefined;
+  for (const d of Object.values(state.sessionDecisions ?? {})) if (d.conversation_id === id && queuesDecision(d, meId)) return true;
+  const row = filterInboxScope(state.sessions, "mine", meId)[id];
+  return !!row && queuesOwnAsk(row, state.questionResolutions);
+}
+
 /** The sections the inbox counts as needing the viewer (its Needs You count and Questions). */
 const ASKING_SECTIONS: ReadonlySet<InboxSectionKey> = new Set(["questions", "needsInput"]);
 
@@ -78,7 +92,10 @@ const ASKING_SECTIONS: ReadonlySet<InboxSectionKey> = new Set(["questions", "nee
  * asks where the inbox counts it (nestedSectionOf), or when its own ask is
  * what lifted its lead into Questions. A role's session riding
  * its lead is the role's to triage: it wears the lead's mark, and the lead's
- * conversation is where to answer. On the sidebar a hosted conversation that
+ * conversation is where to answer. On the sidebar a session with an ask in
+ * its Decisions section (the viewer's queue) asks wherever it sits, and one
+ * the inbox does not otherwise draw is drawn there as an ask; the phone's
+ * Decisions are its placed Questions. On the sidebar a hosted conversation that
  * ended on a stop is drawn under "Couldn't finish" and asks nothing; the
  * phone keeps it under Needs You as an ask.
  *
@@ -94,13 +111,18 @@ export function inboxMarkOf(
   { inbox, now, focusedId }: { inbox: MarkInbox; now: number; focusedId: string | null },
 ): DrawnMark | null {
   const row = state.sessions[id];
-  if (!row) return null;
+  // The sidebar's Decisions section lists every ask queued for the viewer wherever its session sits (stashed,
+  // snoozed, dismissed, not even in the store): such a session needs the viewer, drawn there as an ask.
+  const queued = inbox === "sidebar" && inDecisionQueue(state, id);
+  const asked: DrawnMark = { mark: "needs_you", asks: true, target: id };
+  if (!row) return queued ? asked : null;
   const placed = placeInboxRows(state, { focusedId, now });
   const live = subagentLiveOf(row, now, state);
   // The phone files a hosted stop under Needs You and draws it there as an ask.
   if (inbox === "phone") live.stopped = false;
   const stopped = inbox === "sidebar" && !!hostedStopOf(row as any, state.messages?.[id] as any);
   const hosted = isHostedAgentType(row.agent_type);
+  if (queued && (drawnHiddenOf(placed, id) || (!drawnSectionOf(placed, id) && !drawnParentOf(placed, id)))) return asked;
   const hidden = drawnHiddenOf(placed, id);
   if (hidden) return { mark: sessionStatusOf({ row, section: cardSectionOf(hidden, undefined), now, live, hosted }), asks: false, target: id };
   const section = drawnSectionOf(placed, id);
@@ -110,13 +132,13 @@ export function inboxMarkOf(
     if (isUnderRole(row)) return inboxMarkOf(state, parent, { inbox, now, focusedId });
     // Counted where the inbox counts it nested, or the ask its lead was lifted into Questions for (askingChildParents).
     const counted = placed.nestedSectionOf.get(id);
-    const asks = (!!counted && ASKING_SECTIONS.has(counted) && !stopped) || (drawnSectionOf(placed, parent) === "questions" && !!live.asking);
+    const asks = queued || (!!counted && ASKING_SECTIONS.has(counted) && !stopped) || (drawnSectionOf(placed, parent) === "questions" && !!live.asking);
     return { mark: subagentStatusOf(row, now, live), asks, target: id };
   }
   const key = section === "needsInput" && stopped ? "hosted_stopped" : PANEL_KEY_OF_SECTION[section];
   const cardSection = section === "questions" ? "questions" : cardSectionOf(section === "working" ? "working" : "default", INBOX_SECTION_DECLARED_STATUS[key]);
   const mark = sessionStatusOf({ row, section: cardSection, placement: cardSection ? null : railRowPlacement(row, now), now, live, hosted });
   // A pinned card keeps its own verdict: it waits on the viewer when that verdict is an ask or a failure to clear.
-  const asks = section === "pinned" ? mark === "needs_you" || mark === "error" : ASKING_SECTIONS.has(section) && key !== "hosted_stopped";
+  const asks = queued || (section === "pinned" ? mark === "needs_you" || mark === "error" : ASKING_SECTIONS.has(section) && key !== "hosted_stopped");
   return { mark, asks, target: id };
 }

@@ -27,7 +27,8 @@ export function MessagesByWorkspace({ days, todayIndex }: { days: string[]; toda
     <section data-messages-by-workspace className="mt-6 border-t border-sol-border/60 pt-3 [container-type:inline-size]">
       <div className="mb-1 text-mark font-semibold uppercase tracking-wide text-sol-text-dim">Where your messages went</div>
       {spaces.map((s) => (
-        <div key={s.workspace} data-workspace={s.workspace} className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-x-2 py-1.5">
+        // Under a coarse pointer each row is 44px, so its 44px tap target (StripTap) never overlaps the next row's.
+        <div key={s.workspace} data-workspace={s.workspace} className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-x-2 py-1.5 [@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:py-2">
           <span className="truncate pb-0.5 text-ui text-sol-text">
             {s.name} <span data-workspace-total className="text-meta tabular-nums text-sol-text-dim">{s.total}</span>
           </span>

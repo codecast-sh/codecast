@@ -65,6 +65,7 @@ describe("the chokepoint is the only counting reader of the synced view keys", (
       ["hooks/useSyncTeamInboxSessions.ts", "feeder mount gate: which subscriptions run, not what counts"],
       ["components/GlobalSessionPanel.tsx", "chokepoint memo dep + the scope toggle write"],
       ["components/FleetBoard.tsx", "chokepoint memo dep"],
+      ["hooks/usePriorityModels.ts", "chokepoint memo dep: placement re-runs when the scope moves"],
       ["lib/instantSessionSearch.ts", "chokepoint memo dep: scope only re-runs the memo, the rows come from instantSessionRows"],
     ]);
     expect(offendersFor(ALL_DIRS, /\binbox_scope\b/, allowed)).toEqual([]);

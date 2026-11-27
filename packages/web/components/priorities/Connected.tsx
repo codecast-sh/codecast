@@ -6,7 +6,7 @@
 // its thing; the owner fixes a session's link from its ⋯.
 import { useState, type ReactNode } from "react";
 import Link from "next/link";
-import { ChevronRight, GitBranch, GitMerge, GitPullRequest, GitPullRequestClosed, Map as MapIcon, Rocket, Workflow } from "lucide-react";
+import { ChevronRight, GitBranch, GitMerge, GitPullRequest, GitPullRequestClosed, Map as MapIcon, Workflow } from "lucide-react";
 import type { PriorityPlanRef } from "@codecast/shared/contracts/priorities";
 import { entityRoute } from "@codecast/shared/entities";
 import { isClosedSession, orderByState } from "@codecast/shared/contracts/priorityDerive";
@@ -18,6 +18,7 @@ import { SESSION_STATUS } from "../../lib/sessionStatus";
 import { cn } from "../../lib/utils";
 import { branchesOf, type LinkLookups } from "../../hooks/usePriorityModels";
 import { SessionMenu } from "./controls";
+import { DeployMark, UnknownTaskMark } from "./parts";
 
 const stop = (e: React.MouseEvent) => e.stopPropagation();
 const age = (t: number, now: number) => { const a = ago(t, now); return a === "just now" ? a : `${a} ago`; };
@@ -90,7 +91,7 @@ export function Connected({ model, m, now, lookups }: {
       </Group>
       <Group kind="deploys" label="Deploys" n={deploys.length}>
         {deploys.map((d) => (
-          <Item key={d.id} href={(d.short_id && entityRoute("deploy", d.short_id)) || "/deploys"} icon={<Rocket className={cn("size-3.5", d.status === "live" ? "text-sol-green" : d.status === "failed" ? "text-sol-red" : "text-sol-text-dim")} />} title={d.target} meta={`${d.status} · ${age(d.at, now)}`} />
+          <Item key={d.id} href={(d.short_id && entityRoute("deploy", d.short_id)) || "/deploys"} icon={<DeployMark status={d.status} />} title={d.target} meta={`${d.status} · ${age(d.at, now)}`} />
         ))}
       </Group>
       {empty && <li className="py-1 text-meta text-sol-text-dim">Nothing connected yet</li>}
@@ -129,16 +130,19 @@ function SessionItem({ s, now, menu }: { s: SessionLine; now: number; menu?: Rea
   const label = useSessionLabel(s);
   const mark = sessionRowMark(s);
   const asks = mark === "needs_you";
-  const icon = s.workflow && !asks ? <Workflow className="size-3.5 text-sol-text-dim" aria-label="Workflow run" /> : <SessionStatusMark status={mark} size={12} />;
+  // Every row draws its inbox's mark; a workflow run says what it is with a small glyph beside its word.
   return (
     <Item
       data-session-row={s.conversation_id}
       data-state={s.state}
       data-mark={mark}
       href={s.href}
-      icon={icon}
+      icon={<SessionStatusMark status={mark} size={12} />}
       title={label}
-      meta={<><span className={asks ? "font-medium text-sol-yellow" : undefined}>{SESSION_STATUS[mark].word}</span> · {age(s.last_active_at, now)}</>}
+      meta={<>
+        {s.workflow && <Workflow data-workflow-hint className="mr-1 inline size-3 align-[-2px] text-sol-text-dim" aria-label="Workflow run" />}
+        <span className={asks ? "font-medium text-sol-yellow" : undefined}>{SESSION_STATUS[mark].word}</span> · {age(s.last_active_at, now)}
+      </>}
       menu={menu}
     />
   );
@@ -156,7 +160,7 @@ function TaskItem({ id }: { id: string }) {
       href={`/tasks/${id}`}
       icon={t
         ? <span className={v.color} data-task-status={t.status ?? "open"}><Icon className="size-3.5" /></span>
-        : <span data-task-status="unknown" aria-hidden className="block size-1.5 rounded-full bg-sol-text-dim/50" />}
+        : <UnknownTaskMark />}
       title={<span className={cn(closed && "text-sol-text-dim", t?.status === "dropped" && "line-through decoration-sol-text-dim/60")}>{t?.title || id}</span>}
     />
   );

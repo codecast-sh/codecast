@@ -22,8 +22,9 @@ import { SessionStatusMark } from '@/components/SessionStatusMark';
 /** Opening a linked session (its native screen), and New session on a milestone. */
 export function usePriorityActs() {
   const router = useRouter();
-  const openSession = useCallback((s: Pick<SessionLine, 'conversation_id'>) => {
-    const route = mobileEntityRoute('session', s.conversation_id);
+  // Its target: the session itself, or the lead a role's session rides, where the answer is.
+  const openSession = useCallback((s: Pick<SessionLine, 'target'>) => {
+    const route = mobileEntityRoute('session', s.target);
     if (route) router.push(route as never);
   }, [router]);
   // Web's New session: the same brief, and the session linked to the milestone at creation.

@@ -5,15 +5,13 @@ import { agentStatusAt } from "../lib/liveness";
 import { makeCollectionSig } from "../store/wakeSig";
 import { mapSlots } from "../store/simSlot";
 import {
-  askedOfViewer,
   decisionQueueItems,
-  isStackedAsk,
-  sessionHasOpenQuestion,
+  queuesDecision,
+  queuesOwnAsk,
   sortQueue,
   type QueueItem,
 } from "../lib/decisionQueue";
 import { SYNTHETIC_POLL_OPTION, type PollQuestion } from "../lib/pollPayload";
-import { agentAnswersRow } from "@codecast/shared/contracts";
 import { isPriorityCard } from "@codecast/shared/contracts/priorityCard";
 
 // Structural signature for the decision collection: everything the queue
@@ -123,7 +121,7 @@ export function buildDecisionQueue(
   meId: string | undefined,
 ): QueueItem[] {
   const mine = filterInboxScope(sessions, "mine", meId);
-  const items = decisionQueueItems(decisions, sessions, (d) => isStackedAsk(d) && askedOfViewer(d, meId));
+  const items = decisionQueueItems(decisions, sessions, (d) => queuesDecision(d, meId));
 
   // A session that has an authored decision open is already represented;
   // its AUQ row would be the same interruption counted twice.
@@ -135,7 +133,7 @@ export function buildDecisionQueue(
     // section renders with, so the queue and the rail agree in every render.
     // A prompt its agent owner answers is the agent's, never the person's
     // queue, until the agent passes it up (shared agentAnswersRow).
-    if (agentAnswersRow(row) || !sessionHasOpenQuestion(row, resolutions)) {
+    if (!queuesOwnAsk(row, resolutions)) {
       // No longer asking — forget the stamp so a future question is timed
       // from when it actually appeared, not from this tab's first boot.
       forgetBlocked(row._id);

@@ -38,7 +38,7 @@ test("each open milestone shows one state in the session language; only Needs yo
     expect(states(b("pri-2"))).toEqual({ s1: "dormant", s2: "dormant", s3: "start", s4: "dormant" });
     expect(states(b("pri-3"))).toEqual({ s1: "working" });
     // The server says "Session mapping" asks too, but the sidebar does not hold it: it sleeps.
-    expect(states(b("pri-4"))).toEqual({ s1: "needs_you", s2: "dormant" });
+    expect(states(b("pri-4"))).toEqual({ s1: "needs_you", s2: "idle" });
     expect(states(b("pri-5"))).toEqual({ s1: "start" });
     // Needs you opens the session to answer; New session the composer. Nothing else in the box column is a link.
     const ask = b("pri-1").querySelector('[data-milestone="s2"] [data-state-action="needs_you"]')!;
@@ -55,14 +55,14 @@ test("each open milestone shows one state in the session language; only Needs yo
   }
 }, 60_000);
 
-test("a session the server says asks, but the sidebar does not hold, shows as sleeping, never Needs you", async () => {
+test("a session the server says asks, but the sidebar does not hold, reads idle, never Needs you and never Sleeping", async () => {
   // No store rows: the sidebar's Needs You is empty, whatever the server reads off the conversations.
   const page = await mount(view());
   try {
-    expect(states(block(page.container, "pri-1")).s2).toBe("dormant");
-    expect(states(block(page.container, "pri-4"))).toEqual({ s1: "dormant", s2: "dormant" });
+    expect(states(block(page.container, "pri-1")).s2).toBe("idle");
+    expect(states(block(page.container, "pri-4"))).toEqual({ s1: "idle", s2: "idle" });
     expect(page.container.querySelector('[data-state-action="needs_you"]')).toBeNull();
-    expect(block(page.container, "pri-4").querySelector('[data-milestone="s1"] [data-status-mark="dormant"]')).not.toBeNull();
+    expect(block(page.container, "pri-4").querySelector('[data-milestone="s1"] [data-status-mark="idle"]')).not.toBeNull();
   } finally {
     await page.unmount();
   }
@@ -70,7 +70,7 @@ test("a session the server says asks, but the sidebar does not hold, shows as sl
   const unseed = seedNeedsYou("mapping");
   const again = await mount(view());
   try {
-    expect(states(block(again.container, "pri-4"))).toEqual({ s1: "dormant", s2: "needs_you" });
+    expect(states(block(again.container, "pri-4"))).toEqual({ s1: "idle", s2: "needs_you" });
   } finally {
     await again.unmount();
     unseed();
@@ -145,7 +145,7 @@ test("Needs you follows the sidebar's inbox scope: under Team scope a session ou
     setScope("team");
     useInboxStore.setState({ teamInboxIds: new Set([fixtureId("someoneelse")]), teamInboxIdSnapshot: { team_id: TEAM_ID } } as any);
     page = await mount(view());
-    expect(states(block(page.container, "pri-1")).s2).toBe("dormant");
+    expect(states(block(page.container, "pri-1")).s2).toBe("idle");
     await page.unmount();
   } finally {
     setScope("mine");
@@ -339,8 +339,8 @@ test("the legend behind the ⓘ in the page header names every mark", async () =
     const words = [...document.querySelectorAll("[data-legend-row]")].map((r) => r.getAttribute("data-legend-row"));
     expect(words).toEqual([
       "Needs you", "New session", "Working", "Sleeping", "Idle", "Done", "Closed", "Starting", "Error", "Stashed", "Workflow run",
-      "Backlog", "Open", "In Progress", "In Review", "Done", "Dropped",
-      "Pull request, open", "Pull request, merged", "Pull request, closed", "Branch", "Plan", "Deploy",
+      "Backlog", "Open", "In Progress", "In Review", "Done", "Dropped", "Not loaded yet",
+      "Pull request, open", "Pull request, merged", "Pull request, closed", "Branch", "Plan", "Deploy, live", "Deploy, failed", "Deploy, not live yet",
     ]);
     // Every head but the first has its gap above it; Tasks drops it only where it heads the second of two columns.
     const heads = [...document.querySelectorAll("[data-legend-head]")].map((h) => `${h.textContent}:${h.className.split(/\s+/).filter((c) => /(^|:)mt-/.test(c)).join(" ")}`);
