@@ -4,6 +4,8 @@
 // Pure: no store, no React.
 import type { QueueCommit, QueueGroup, ShippingRun, ShippingShipper } from "@codecast/shared/contracts/deployTargets";
 import type { CheckoutRow } from "@codecast/shared/contracts/checkouts";
+import type { SessionPriorityRef } from "@codecast/shared/contracts/priorities";
+import { entityRoute } from "@codecast/shared/entities";
 import { isOpen, prOfSubject, sessionsOf, supersededBy, type DeploySession, type TeamDeployRow } from "./targets";
 import { ageShort } from "../lineFlow";
 
@@ -228,7 +230,7 @@ export function prState(pr: Pick<OpenPr, "draft" | "checks_state" | "review_deci
 
 const sameSha = (a: string, b: string) => a.length >= 7 && b.length >= 7 && (a.startsWith(b) || b.startsWith(a));
 
-export type SessionRef = { id: string; short_id: string | null; title: string | null; user_id: string | null; priority: { id: string; title: string | null } | null };
+export type SessionRef = { id: string; short_id: string | null; title: string | null; user_id: string | null; priority: SessionPriorityRef | null };
 
 /** A commit as crediting reads it; `at` bounds which runs could have shipped it. */
 export type CreditedCommit = { sha?: string; at?: number; tasks: ReadonlyArray<string> };
@@ -515,13 +517,22 @@ export type BoardRow = Lines & {
   branch?: string;
   /** A priority's sessions. */
   sessions?: string[];
+  /** The priority a Priorities row groups, with its owner's rank. */
+  priority?: SessionPriorityRef;
   commits?: number;
 };
 
 /** Own rows first; otherwise the order they came in (newest work first). */
 const ownFirst = (rows: BoardRow[]) => rows.map((r, i) => [r, i] as const).sort(([a, i], [b, j]) => Number(b.mine) - Number(a.mine) || i - j).map(([r]) => r);
 
-export function rowsFor(c: Carried, view: BoardView, isMine: (sessionId: string) => boolean): BoardRow[] {
+/** Priorities: yours by rank, then teammates' by rank, then the unranked (own rows first), No priority last. */
+function byRank(rows: BoardRow[], me: string | null): BoardRow[] {
+  const tier = (r: BoardRow) => (!r.priority ? 3 : r.priority.rank == null ? 2 : me && r.priority.user_id === me ? 0 : 1);
+  return ownFirst(rows).sort((a, b) => tier(a) - tier(b) || (a.priority?.rank ?? 0) - (b.priority?.rank ?? 0));
+}
+
+/** `me` (the viewer's user id) orders the Priorities view: their own priorities first. */
+export function rowsFor(c: Carried, view: BoardView, isMine: (sessionId: string) => boolean, me: string | null = null): BoardRow[] {
   const mineCommit = (x: CarriedCommit) => !!x.session && isMine(x.session);
   if (view === "sessions") {
     const rows: BoardRow[] = c.sessions.map((s) => ({ key: s.id, label: s.title, session: s.id, commits: s.commits, insertions: s.insertions, deletions: s.deletions, mine: isMine(s.id) }));
@@ -539,16 +550,14 @@ export function rowsFor(c: Carried, view: BoardView, isMine: (sessionId: string)
     const groups = new Map<string, BoardRow>();
     for (const s of c.sessions) {
       const key = s.priority?.id ?? "none";
-      const g = groups.get(key) ?? { key, label: s.priority?.title ?? null, sessions: [], commits: 0, mine: false };
+      const g = groups.get(key) ?? { key, label: s.priority?.title ?? null, ...(s.priority ? { priority: s.priority } : {}), sessions: [], commits: 0, mine: false };
       g.sessions!.push(s.id);
       g.commits! += s.commits;
       g.mine ||= isMine(s.id);
       addLines(g, s);
       groups.set(key, g);
     }
-    const none = groups.get("none");
-    groups.delete("none");
-    return ownFirst([...groups.values(), ...(none ? [none] : [])]);
+    return byRank([...groups.values()], me);
   }
   if (view === "branches" && !c.branchesKnown) return [];
   const rows = new Map<string, BoardRow>();
@@ -559,11 +568,22 @@ export function rowsFor(c: Carried, view: BoardView, isMine: (sessionId: string)
       ? { key, label: x.branch ?? null, ...(x.branch ? { branch: x.branch } : {}), commits: 0, mine: false }
       : { key, label: x.subject, pr: x.pr, sha: x.sha, commits: 0, mine: false });
     row.commits!++;
+    // A branch opens its pull request (branchHref): the first of its commits that names one.
+    if (view === "branches" && x.branch) row.pr ??= x.pr;
     row.mine ||= mineCommit(x);
     addLines(row, x);
     rows.set(key, row);
   }
   return ownFirst([...rows.values()]);
+}
+
+/**
+ * Where a branch opens: its pull request's page when it has one, else the branch on GitHub. Moves to the Branch page
+ * (proposed `/branch/<owner>/<repo>/<name…>`) when that ships.
+ */
+export function branchHref(repository: string, branch: string, pr: number | null | undefined): string {
+  const page = pr ? entityRoute("pr", `${repository}#${pr}`) : null;
+  return page ?? `https://github.com/${repository}/tree/${branch.split("/").map(encodeURIComponent).join("/")}`;
 }
 
 /** How long ago, as a card or run says it: "now" inside a minute. */

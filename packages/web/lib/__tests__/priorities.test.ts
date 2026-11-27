@@ -68,6 +68,7 @@ function row(short_id: string, over: Partial<PriorityRow> = {}): PriorityRow {
     workspace: "team:t1",
     user_id: "me" as any,
     owner: "Jason",
+    owner_image: null,
     mine: true,
     first_seen_at: 0,
     last_active_at: 0,
@@ -147,10 +148,11 @@ describe("the store actions' paints", () => {
     ]);
   });
 
-  test("a teammate's priorities carry no rank, and keep their order among themselves", () => {
-    const rows = [row("pri-1", { ai_rank: 1 }), row("pri-6", { ai_rank: 2, user_id: "ash" as any, mine: false }), row("pri-5", { ai_rank: 1, user_id: "ash" as any, mine: false })];
+  test("a teammate's priorities keep the server's rank (it counts the owner's whole group), and their order among themselves", () => {
+    // Ash's pri-7 is active but not among the viewer's rows: the server's ranks count it, so pri-5 is 2, not 1.
+    const rows = [row("pri-1", { ai_rank: 1 }), row("pri-6", { ai_rank: 3, rank: 3, user_id: "ash" as any, mine: false }), row("pri-5", { ai_rank: 2, rank: 2, user_id: "ash" as any, mine: false })];
     const live = withLiveRanks(rows);
-    expect(live.map((r) => [r.short_id, r.rank])).toEqual([["pri-1", 1], ["pri-6", null], ["pri-5", null]]);
+    expect(live.map((r) => [r.short_id, r.rank])).toEqual([["pri-1", 1], ["pri-6", 3], ["pri-5", 2]]);
     expect(ids(ownerGroups(live)[1].active)).toEqual(["pri-5", "pri-6"]);
   });
 

@@ -101,7 +101,7 @@ function PriorityBody({ row }: { row: PriorityView }) {
           {/* The priority's own page shows its title whole. */}
           <h1 data-priority-title className="break-words text-[22px] font-semibold leading-tight text-sol-text">{row.title}</h1>
           <div data-priority-meta className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-meta text-sol-text-dim">
-            {/* An active priority with no rank (a teammate's) shows no badge; only a past one says why it is past. */}
+            {/* An active priority shows its owner's rank, a teammate's too; only a past one says why it is past. */}
             {active ? (row.rank != null && <span data-rank className="font-semibold tabular-nums text-sol-text">#{row.rank}</span>) : <span>{pastBadge(row)}</span>}
             {active && why && <span data-rank-by>{why}</span>}
             {(!active || row.rank != null) && <Dot />}

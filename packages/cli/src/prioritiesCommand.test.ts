@@ -10,7 +10,7 @@ const HOUR = 3_600_000;
 
 const row = (over: Partial<PriorityRow>): PriorityRow => ({
   _id: "p1", short_id: "pri-1", title: "Trusted evals", summary: "", status: "active", rank: 1, person_pos: null, ai_rank: 1, rank_source: "ai", serves: null, steps: [],
-  counts: { critical_done: 3, critical_total: 6 }, workspace: "team:t1", user_id: "u1", owner: "Ada", mine: true,
+  counts: { critical_done: 3, critical_total: 6 }, workspace: "team:t1", user_id: "u1", owner: "Ada", owner_image: null, mine: true,
   first_seen_at: NOW - 30 * 24 * HOUR, last_active_at: NOW - 2 * HOUR, done_at: null, session_count: 0, session_count_more: false, sessions: [],
   status_set_by: "pass", correction_pending: false,
   ...over,

@@ -1062,6 +1062,7 @@ export function EntityIdPill({
   to,
   wide = false,
   bare = false,
+  undimmed = false,
   idLabel,
 }: {
   shortId?: string;
@@ -1090,6 +1091,8 @@ export function EntityIdPill({
   /** The pill without the state it says on the line ("not live yet"): a surface whose row already says where the
    *  object stands (a Deploys queue). Its hover card still says it. */
   bare?: boolean;
+  /** A merged pull request at full colour, not dimmed as settled: a list where every one is merged (a Deploys board). */
+  undimmed?: boolean;
   /** Read as this ID whatever the object is titled or whoever the session is (a column of IDs); the hover card says the rest. */
   idLabel?: string;
 }) {
@@ -1262,7 +1265,7 @@ export function EntityIdPill({
               ? deployV.chrome
             // A merged pull request is settled, so it dims like an answered decision; its live dot stays bright.
             : isPr
-              ? entity?.state === "merged" ? "bg-sol-green/[0.05] text-sol-green/60 hover:bg-sol-green/[0.12]" : "bg-sol-green/[0.08] text-sol-green hover:bg-sol-green/[0.16]"
+              ? entity?.state === "merged" && !undimmed ? "bg-sol-green/[0.05] text-sol-green/60 hover:bg-sol-green/[0.12]" : "bg-sol-green/[0.08] text-sol-green hover:bg-sol-green/[0.16]"
               : isCommit
                 ? "bg-sol-yellow/[0.08] text-sol-yellow hover:bg-sol-yellow/[0.16]"
                 : "bg-sol-violet/[0.08] text-sol-violet hover:bg-sol-violet/[0.16]";
@@ -1330,7 +1333,7 @@ export function EntityIdPill({
   // A GitHub Actions run is a deploy only once codecast says so; until then, and for every CI run, it stays its link.
   if (type === "deploy" && !entity && runRefKey(rawId)) return <>{fallback}</>;
   // A priority in hand is its own pill: the critical meter on the line, the card on hover, a sheet on a tap.
-  if (type === "priority" && entity) return <PriorityPill row={entity} href={href} label={pillLabel} suffix={suffix} />;
+  if (type === "priority" && entity) return <PriorityPill row={entity} href={href} label={pillLabel} suffix={suffix} wide={wide} />;
 
   // Quiet chrome: the reference sits IN the sentence — same size as the
   // prose, no border, a faint tint of the type's color, the way a mention

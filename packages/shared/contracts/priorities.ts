@@ -122,13 +122,13 @@ export type PriorityRow = {
   title: string;
   summary: string;
   status: PriorityStatus;
-  /** Its position among the owner's active priorities in its workspace (null unless active): priorityPositions over the rows' keys. Null, with the three below, on a teammate's row: a place counts priorities they cannot see. */
+  /** Its position among the owner's active priorities in its workspace (null unless active): priorityPositions over the owner's whole active group. A teammate who can read it gets the owner's real position, as with the three below. */
   rank: number | null;
-  /** Where the person placed it, on one scale with ai_rank (null until they move it). */
+  /** Where its owner placed it, on one scale with ai_rank (null until they move it). */
   person_pos: number | null;
   /** Where the pass slotted it, on the same scale (read only while it is not placed). */
   ai_rank: number | null;
-  /** "person": they placed it ("you placed it"); "ai": the pass did ("ranked by AI"). */
+  /** "person": its owner placed it; "ai": the pass did ("ranked by AI"). */
   rank_source: PriorityRankSource | null;
   /** "person" when the person marked it done or merged it: the pass leaves its status alone. */
   status_set_by: PrioritySetBy;
@@ -138,6 +138,8 @@ export type PriorityRow = {
   workspace: string;
   user_id: string;
   owner: string;
+  /** The owner's avatar URL, null when they have none: the pill and card draw their face. */
+  owner_image: string | null;
   mine: boolean;
   first_seen_at: number;
   last_active_at: number;
@@ -332,3 +334,11 @@ export function placePriority<T extends PriorityOrderRow>(rows: readonly T[], ro
   order.splice(at < others.length ? order.indexOf(others[at]) : order.indexOf(others[at - 1]) + 1, 0, row);
   return order.map((r, i) => (r === row || isPlaced(r) ? { row: r, person_pos: i + 1 } : { row: r, ai_rank: i + 1 }));
 }
+
+/**
+ * The priority a session serves, as surfaces that list sessions carry it (the
+ * Deploys board, deploy targets): its pri-N, title, the owner's rank (null when
+ * it is not active) and the owner. rank and user_id are optional: rows cached
+ * before the server sent them lack both.
+ */
+export type SessionPriorityRef = { id: string; title: string | null; rank?: number | null; user_id?: string | null };

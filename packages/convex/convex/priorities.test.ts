@@ -11,6 +11,7 @@ import { hashToken } from "./apiTokens";
 import { teamFeatureOffMessage } from "./lib/teamFeatureGuard";
 import { HISTORY_SENDS_CAP, TEAMMATE_PRIORITIES_CAP } from "./priorityRead";
 import { sessionListedToTeam, sessionSharedWithTeam } from "./lib/prioritySessionVisibility";
+import { sessionPriorityReader } from "./lib/sessionPriority";
 import type { Id } from "./_generated/dataModel";
 
 setDefaultTimeout(60_000);
@@ -367,21 +368,38 @@ describe("reads", () => {
     expect(await as(ada).query(pri.pinLine, { conversation_id: c1 })).toMatchObject({ short_id: "pri-1" });
   });
 
-  test("a teammate reads no rank, in the list, on the page and on the pin line alike, so the owner's hidden #1 leaves no gap", async () => {
-    const { t, as, ada, bea, ws, p1 } = await world();
+  test("a teammate reads the owner's rank and place, in the list, on the page, on the pin line and on a session's priority alike, counting the owner's hidden #1", async () => {
+    const { t, as, ada, bea, acme, ws, p1 } = await world();
     await t.run(async (ctx) => ctx.db.patch(p1, { needs_rewrite: true }));
     const pin = await t.run(async (ctx) => (await ctx.db.query("conversations").withIndex("by_short_id", (q) => q.eq("short_id", "jx7two5")).first())!._id);
     const listed = (await rowsOf(as(bea), { workspace: ws })).find((r: any) => r.short_id === "pri-2");
     const shown = await as(bea).query(pri.show, { short_id: "pri-2" });
-    // No place of any kind: not the position, not the scale, not who set it.
-    for (const row of [listed, shown]) expect([row.rank, row.person_pos, row.ai_rank, row.rank_source]).toEqual([null, null, null, null]);
-    expect((await as(bea).query(pri.pinLine, { conversation_id: pin }))?.rank ?? null).toBeNull();
-    // The owner reads the same rank from all three.
+    expect(listed.short_id).toBe("pri-2");
+    expect((await rowsOf(as(bea), { workspace: ws })).map((r: any) => r.short_id)).not.toContain("pri-1");
+    // pri-1 is hidden from Bea, yet pri-2 is still Ada's #2: the position is the owner's, in her whole active group.
+    for (const row of [listed, shown]) expect([row.rank, row.person_pos, row.ai_rank, row.rank_source]).toEqual([2, null, 2, "ai"]);
+    expect((await as(bea).query(pri.pinLine, { conversation_id: pin }))?.rank).toBe(2);
+    const ref = await t.run(async (ctx) => (await sessionPriorityReader(ctx, bea, acme))(await ctx.db.get(pin)));
+    expect(ref).toEqual({ id: "pri-2", title: "Priority pri-2", rank: 2, user_id: String(ada) });
+    // The owner reads the same rank from all of them.
     const own = (await rowsOf(as(ada), { workspace: ws })).find((r: any) => r.short_id === "pri-2");
     expect([own.rank, (await as(ada).query(pri.show, { short_id: "pri-2" })).rank, (await as(ada).query(pri.pinLine, { conversation_id: pin })).rank]).toEqual([2, 2, 2]);
     expect([own.ai_rank, own.rank_source]).toEqual([2, "ai"]);
-    // A write's echo is the owner's, with the place.
+    expect(await t.run(async (ctx) => (await sessionPriorityReader(ctx, ada, acme))(await ctx.db.get(pin)))).toEqual(ref);
+    // A write's echo carries the place, and a teammate's next read follows it.
     expect(await as(ada).mutation(pri.moveTo, { short_id: "pri-2", to: 1 })).toMatchObject({ rank: 1, rank_source: "person" });
+    expect((await rowsOf(as(bea), { workspace: ws })).find((r: any) => r.short_id === "pri-2")).toMatchObject({ rank: 1, rank_source: "person" });
+  });
+
+  test("a row carries its owner's face: their own photo, else GitHub's, else none", async () => {
+    const { t, as, ada, bea, ws } = await world();
+    const face = async () => [(await rowsOf(as(bea), { workspace: ws }))[0].owner_image, (await as(bea).query(pri.show, { short_id: "pri-2" })).owner_image];
+    expect(await face()).toEqual([null, null]);
+    await t.run(async (ctx) => ctx.db.patch(ada, { github_avatar_url: "https://gh/ada.png" }));
+    expect(await face()).toEqual(["https://gh/ada.png", "https://gh/ada.png"]);
+    await t.run(async (ctx) => ctx.db.patch(ada, { image: "https://photo/ada.png" }));
+    expect(await face()).toEqual(["https://photo/ada.png", "https://photo/ada.png"]);
+    expect(await as(ada).mutation(pri.moveTo, { short_id: "pri-2", to: 1 })).toMatchObject({ owner: "Ada", owner_image: "https://photo/ada.png" });
   });
 
   test("a teammate's access reads only the newest four sessions (failing closed), while the pin line judges the open session alone", async () => {

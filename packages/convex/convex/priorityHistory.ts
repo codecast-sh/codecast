@@ -7,7 +7,7 @@ import { getOwnerMembership } from "./privacy";
 import { TEAM_VISIBILITY_RANK, effectiveMembershipVisibility } from "./teamVisibility";
 import type { PriorityHistory, PriorityHistoryLane, PriorityLooseSession } from "@codecast/shared/contracts/priorities";
 import type { Doc, Id } from "./_generated/dataModel";
-import { type Ctx, DAY, HISTORY_CONVERSATION_CAP, HISTORY_SENDS_CAP, LOOSE_SESSIONS, MAX_HISTORY_DAYS, type Priority, STATUS_ORDER, ownerNames, visiblePriorities } from "./priorityRead";
+import { type Ctx, DAY, HISTORY_CONVERSATION_CAP, HISTORY_SENDS_CAP, LOOSE_SESSIONS, MAX_HISTORY_DAYS, type Priority, STATUS_ORDER, owners, visiblePriorities } from "./priorityRead";
 
 /**
  * Typed messages per local day: one lane per priority the viewer can read and
@@ -109,10 +109,10 @@ export async function historyFor(ctx: Ctx, viewer: Id<"users">, args: { days?: n
   }
 
   // Teammates' priorities they let the viewer read, each owner's own typing in an even share of what is left.
-  const names = await ownerNames(ctx, [...byOwner.values()].map((owned) => owned[0]));
+  const names = await owners(ctx, [...byOwner.values()].map((owned) => owned[0]));
   const share = { sends: Math.floor(sendsLeft / Math.max(1, byOwner.size)), convs: Math.floor(convsLeft / Math.max(1, byOwner.size)) };
   for (const [ownerId, owned] of byOwner) {
-    const owner = names.get(ownerId) ?? "";
+    const owner = names.get(ownerId)?.name ?? "";
     const byId = new Map(owned.map((p) => [String(p._id), p]));
     const memberships = new Map<string, Promise<any>>();
     const typed = await typedBy(owned[0].user_id, share);
