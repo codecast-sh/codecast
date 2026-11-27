@@ -76,6 +76,8 @@ const rows = () => [
 let calls: Array<[string, unknown[]]> = [];
 beforeEach(() => {
   calls = [];
+  // The stub dispatch never settles a write's locks (lib/dispatchBinding does), so each test starts with none.
+  useInboxStore.setState({ pending: {} } as any);
   const st = useInboxStore.getState() as any;
   st._setDispatch(async (action: string, args: unknown[]) => { calls.push([action, args]); return null; });
   st.syncTable("priorities", rows());

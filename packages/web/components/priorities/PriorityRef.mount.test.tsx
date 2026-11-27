@@ -454,6 +454,8 @@ test("the owner double-clicks the page's title to rename it in place: Enter save
   } finally {
     await page.unmount();
     (useInboxStore.getState() as any)._clearRuntimeBindings?.();
+    // The stub dispatch never settles the rename's lock (lib/dispatchBinding does).
+    useInboxStore.setState({ pending: {} } as any);
     useInboxStore.getState().syncTable("priorities", [] as any);
   }
 });
