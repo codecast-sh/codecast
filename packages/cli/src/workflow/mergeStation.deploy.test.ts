@@ -6,6 +6,8 @@ import { join } from "node:path";
 import { runShell } from "../land/shipCheckout.js";
 import { pollUntil } from "../test-helpers/pollUntil";
 import { BRANCH, PR_URL, T, setup } from "./mergeStation.testkit";
+import { noteLanded } from "./mergeScratch";
+import { stopOnSignal } from "./mergeStation";
 
 // The Merge station's before-merge deploy steps: from a tree that holds main,
 // another round when main moves under them, what a failure says is deployed,
@@ -292,7 +294,8 @@ describe("cast flow merge: before-merge steps", () => {
       expect(Date.now() - started).toBeLessThan(4000);
       expect(r.code).toBe(2);
       await new Promise((res) => setTimeout(res, 20));
-      expect(order).toEqual(["lease take", "lease release", "exit 143"]);
+      // The first run merged the change, so this one, stopped while it waits to send its steps again, says merged.
+      expect(order).toEqual(["lease take", "lease release", "exit 0"]);
       expect(signals.listenerCount("SIGTERM")).toBe(0);
     } finally { s.done(); }
   }, T);
@@ -332,6 +335,26 @@ describe("cast flow merge: before-merge steps", () => {
       process.kill(-group, "SIGKILL");
       await run;
     } finally { s.done(); }
+  }, T);
+
+  test("a station signalled after its change merged says merged (exit 0, the sha), never Not merged", async () => {
+    const signals = new EventEmitter();
+    const codes: number[] = [];
+    const said: string[] = [];
+    const log = console.log;
+    console.log = (l: string) => { said.push(String(l)); };
+    const off = stopOnSignal({ signals, exit: (c: number) => { codes.push(c); } } as any, new AbortController(), async () => {});
+    try {
+      noteLanded("a".repeat(40));
+      signals.emit("SIGTERM");
+      await pollUntil(() => codes.length > 0, "the station to exit");
+      expect(codes).toEqual([0]);
+      expect(said).toContain("a".repeat(40));
+    } finally {
+      console.log = log;
+      off();
+      noteLanded(null);
+    }
   }, T);
 
   /** A step that records the tree it ran from; on its first run, someone pushes to the branch so GitHub refuses the
