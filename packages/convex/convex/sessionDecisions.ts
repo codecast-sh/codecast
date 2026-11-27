@@ -1241,7 +1241,12 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
           r.asked_message_count !== undefined ? Math.max(0, conversation.message_count - r.asked_message_count) : undefined,
       }));
 
-  const existing = openRows.find((r) => r.question === args.question);
+  // A run's gate never takes a card another run holds, even from the same session in the same words (two Ship runs a
+  // session started both ask "This change edits CI: merge it?"): one run taking the other's open card sent the answer
+  // to one and left the other paused on a card it no longer held. A session's own re-ask (no run named) still updates
+  // its open card, a run's station re-asking the card its gate took up included.
+  const otherRuns = (r: DecisionRow) => !!args.workflow_run_id && !!r.workflow_run_id && String(r.workflow_run_id) !== String(args.workflow_run_id);
+  const existing = openRows.find((r) => r.question === args.question && !otherRuns(r));
   // Who may answer (D1): the run's own asks take the flow's category; a card a session of the run posts, or one a gate
   // took up, is a person's unless the gate says otherwise; a re-ask keeps the open card's category.
   const assigned = categoryFor(args.category, {
