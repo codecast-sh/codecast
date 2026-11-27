@@ -16,6 +16,7 @@ import { useDeployLines, useSyncDeployLines } from "../../hooks/useDeployLines";
 import { useShipping } from "../../hooks/useSyncShipping";
 import { isGoing, orderTargets, productionOf, recordTargets, targetNow, targetTone, type DeployTargetRow, type TargetTone } from "../../lib/deploys/targets";
 import type { BoardView } from "../../lib/deploys/board";
+import { useOpenPullRequests } from "../../hooks/useSyncTimeline";
 import { useDeployPress } from "../../hooks/useDeployPress";
 import { FOCUS_PARAMS, focusRef, focusRepository, focusSettled, focusTarget, pickTarget, reachAnyDeploy, targetKey, type DeployFocus } from "../../lib/deploys/focus";
 import { useDeployReach } from "../../hooks/useDeployReach";
@@ -66,6 +67,7 @@ export function DeploysPage({ initialTarget, initialTeam, initialDeploy, initial
   const pickShow = (v: BoardView) => pickFilters(v, mine);
   const pickMine = (on: boolean) => pickFilters(show, on);
   const me = useInboxStore((s) => (s.currentUser as { _id?: string } | null)?._id ?? null);
+  const meLogin = useInboxStore((s) => (s.currentUser as { github_username?: string } | null)?.github_username ?? null);
   // Shipping paints from the store; a run whose PR has not opened finds its repository by the checkout it runs in.
   // Web goes live before the backend that answers it: a failed read with nothing stored reads as unavailable.
   const shipping = useShipping(teamId);
@@ -100,6 +102,9 @@ export function DeploysPage({ initialTarget, initialTeam, initialDeploy, initial
   // A deploy link opens at that deploy's target; a change's link opens where its reach says (focusAt), not at the deploy that found the team.
   const want = pickedId ?? (initialDeploy && where ? targetKey(where.target, where.repository) : null) ?? focusAt?._id ?? null;
   const picked = pickTarget(ordered, want);
+  // Every open pull request of the picked target's repository, whether or not a Ship run carries it (Shipping draws
+  // the ones no run does). The timeline's feeder reads a repository's open PRs whole.
+  const prs = useOpenPullRequests(picked && !picked.record_only ? picked.repository : null);
   // The targets the linked change is on are outlined, the rest dimmed: a run's change reads across every target it goes to.
   const onFocus = useMemo(() => focusTargets(allTargets, deploys, focus, reach), [allTargets, deploys, focus, reach]);
   const press = useDeployPress(teamId, deploys, productions);
@@ -148,7 +153,7 @@ export function DeploysPage({ initialTarget, initialTeam, initialDeploy, initial
       {picked ? (
         <DeploysBoard
           key={picked._id} target={picked} production={productionOf(productions, picked)} deploys={deploys}
-          shipping={shipping.shipping} shippingError={shipping.error} linesByDeploy={linesByDeploy} onLinesWanted={setLineIds} checkouts={checkouts}
+          shipping={shipping.shipping} shippingError={shipping.error} prs={prs} meLogin={meLogin} linesByDeploy={linesByDeploy} onLinesWanted={setLineIds} checkouts={checkouts}
           me={me ? String(me) : null} now={now} priorities={priorities} focus={focus} reach={reach} openDeploy={initialDeploy ?? null}
           show={show} mine={mine} onShow={pickShow} onMine={pickMine} onClearFocus={clearFocus}
           onPress={press.open} onRollback={press.openRollback} onPause={() => press.openPause(picked, allTargets)} onLift={() => press.lift(picked)}
