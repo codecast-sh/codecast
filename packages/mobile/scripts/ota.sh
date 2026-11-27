@@ -8,6 +8,22 @@
 set -euo pipefail
 
 SHA="${1:?usage: ota.sh <sha>}"
+
+# It runs on whichever machine last published the deploy targets, which need not be one
+# where someone ran `eas login` (dp-3801 to dp-3875 ran on a box without it). So eas signs
+# in the same way everywhere: EXPO_TOKEN from the environment, else the Vault's
+# expo-publish-token, put in eas's env alone; this machine's own login is the last resort.
+EAS="${EAS:-npx -y eas-cli@latest}"
+EXPO_SECRET=expo-publish-token
+if [ -z "${EXPO_TOKEN:-}" ]; then
+  if cast vault run "$EXPO_SECRET" -- true 2>/dev/null; then
+    EAS="cast vault run $EXPO_SECRET -- $EAS"
+  elif ! $EAS whoami >/dev/null 2>&1; then
+    echo "Expo sign-in required on $(hostname -s): no EXPO_TOKEN here, no value for $EXPO_SECRET in the Vault, and no eas login on this machine" >&2
+    exit 1
+  fi
+fi
+
 ROOT="$(git rev-parse --show-toplevel)"
 WT="$(mktemp -d "${TMPDIR:-/tmp}/codecast-ota.XXXXXX")"
 cleanup() { git -C "$ROOT" worktree remove --force "$WT" >/dev/null 2>&1 || rm -rf "$WT"; }
@@ -21,10 +37,11 @@ done
 (cd "$WT" && bun install --frozen-lockfile >/dev/null)
 
 cd "$WT/packages/mobile"
-EAS="${EAS:-npx -y eas-cli@latest}"
 MESSAGE="$(git log -1 --format=%s "$SHA")"
 PLATFORMS="$(node -p "(require('./app.json').expo.platforms || ['ios','android']).join(' ')")"
-CHANNELS="$($EAS channel:list --json --non-interactive | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).currentPage.filter(c=>!c.isPaused).map(c=>c.name).join(" ")))')"
+# Read whole before parsing, so a failing eas stops the send on its own error.
+LISTED="$($EAS channel:list --json --non-interactive)"
+CHANNELS="$(printf '%s' "$LISTED" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).currentPage.filter(c=>!c.isPaused).map(c=>c.name).join(" ")))')"
 [ -n "$CHANNELS" ] || { echo "No EAS channels to publish to"; exit 1; }
 
 for channel in $CHANNELS; do
