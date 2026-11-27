@@ -8,6 +8,7 @@ import {
   connectorGeometry,
   labelSpot,
   elementBox,
+  foldedCount,
   frameCollapsed,
   shapeFontSize,
   shapeOutline,
@@ -209,7 +210,7 @@ const FrameView = memo(function FrameView({ el, editing, onEditInput, onEditDone
   const label = editing ? <InlineEditor value={title} className="board-frame-title-edit" onInput={onEditInput} onDone={onEditDone} selectAll singleLine /> : <FrameTitle el={el} title={title} />;
   if (folded) {
     // A folded frame is a pill, pressed and dragged as a whole (no data-frame: its body is not canvas).
-    const n = folded.holds.filter((k) => actions.kindOf(k) !== "connector").length;
+    const n = foldedCount(el, actions.get);
     return (
       <div data-key={el.key} data-folded className="board-el board-frame board-frame-pill" style={boxStyle(el, { background: tint(el.color ?? "gray", 10), borderColor: tint(el.color ?? "gray", 34), color })}>
         {actions.readOnly ? (

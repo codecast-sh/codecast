@@ -432,7 +432,8 @@ describe("describe", () => {
     const v1 = apply(v0, collapseFrameOps(v0, "el_f"));
     const lines = describeBoard(v1).split("\n");
     const at = lines.findIndex((l) => l.startsWith("el_f  frame"));
-    expect(lines[at]).toMatch(/ref pri-3  status open  collapsed \(3\)$/);
+    // The count is the pill's: two stickies, the arrow between them aside.
+    expect(lines[at]).toMatch(/ref pri-3  status open  collapsed \(2\)$/);
     const held = lines.slice(at + 1, at + 4);
     expect(held.every((l) => l.startsWith("  "))).toBe(true);
     expect(held.map((l) => l.trim().split(/\s+/)[0]).sort()).toEqual(["el_a", "el_ab", "el_b"]);

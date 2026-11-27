@@ -1,7 +1,8 @@
 // What folded frames (pl-1145) hide from the canvas. The renderer, the
-// marquee, the minimap, fit and export all draw from `shown`; an arrow with
-// one end inside a fold is drawn to the fold's pill (`endOf`).
-import { frameCollapsed, hiddenKeys } from "@codecast/shared/artifacts/board";
+// marquee, the selection, the minimap, fit and export all draw from `shown`;
+// whatever points at a held element (an arrow's end, a comment pin) points at
+// the fold's pill instead (`resolved`).
+import { foldedCount, frameCollapsed, hiddenKeys } from "@codecast/shared/artifacts/board";
 import type { BoardEl } from "./boardTypes";
 
 export type BoardFolds = {
@@ -10,11 +11,13 @@ export type BoardFolds = {
   shown: BoardEl[];
   /** The element an arrow end attached to `key` is drawn to: the visible pill that hides it, else itself. */
   endOf(key: string): BoardEl | undefined;
+  /** Every key to what stands for it on the canvas: a held key to its pill. Pins and fit read this in place of byKey. */
+  resolved: Map<string, BoardEl>;
 };
 
 export function boardFolds(elements: readonly BoardEl[], byKey: Map<string, BoardEl>): BoardFolds {
   const hidden = hiddenKeys({ elements: elements as BoardEl[] });
-  if (!hidden.size) return { hidden, shown: elements as BoardEl[], endOf: (k) => byKey.get(k) };
+  if (!hidden.size) return { hidden, shown: elements as BoardEl[], endOf: (k) => byKey.get(k), resolved: byKey };
   // Which fold holds each key; a fold held by another fold hands its keys up to the outer, visible one.
   const holder = new Map<string, string>();
   for (const e of elements) {
@@ -34,10 +37,17 @@ export function boardFolds(elements: readonly BoardEl[], byKey: Map<string, Boar
     }
     return true;
   });
-  return { hidden, shown, endOf: (k) => byKey.get(hidden.has(k) ? pillOf(k) ?? k : k) };
+  const resolved = new Map(byKey);
+  for (const k of hidden) {
+    const pill = pillOf(k);
+    const el = pill ? byKey.get(pill) : undefined;
+    if (el) resolved.set(k, el);
+    else resolved.delete(k);
+  }
+  return { hidden, shown, endOf: (k) => resolved.get(k), resolved };
 }
 
-/** How many things a folded frame holds, as its pill counts them: arrows aside. */
+/** How many things a folded frame holds, as its pill counts them (the shared foldedCount rule). */
 export function foldCount(el: BoardEl, byKey: Map<string, BoardEl>): number {
-  return (frameCollapsed(el)?.holds ?? []).filter((k) => byKey.get(k)?.kind !== "connector").length;
+  return foldedCount(el, (k) => byKey.get(k));
 }

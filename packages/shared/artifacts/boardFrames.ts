@@ -19,6 +19,7 @@
 // Every *Ops function returns one batch of set ops, holding only fields that change: apply it with a single
 // `live.apply(ops)` (one undo step, one synced change).
 //
+//   foldedCount(el, get)             the pill's "(n)": held elements on the board, arrows aside
 //   hiddenKeys(view)                 keys held by any folded frame (nested folds included)
 //   carriedKeys(view, keys)          what moves with a selection: frame contents, nested frames, held keys, arrows whose ends both move
 //   moveFrameOps(view, key, dx, dy)  move a frame (or any selection) with everything it carries
@@ -51,6 +52,14 @@ export function frameCollapsed(el: ArtifactElement | undefined): FrameCollapsed 
   const c = el?.kind === "frame" ? (el.collapsed as any) : null;
   if (!c || typeof c !== "object" || typeof c.w !== "number" || typeof c.h !== "number" || !Array.isArray(c.holds)) return null;
   return { w: c.w, h: c.h, holds: c.holds.filter((k: unknown): k is string => typeof k === "string") };
+}
+
+/** What a folded frame's "(n)" counts: the held elements still on the board, arrows aside. One rule for the pill, export and `cast board read`. */
+export function foldedCount(el: ArtifactElement, get: (key: string) => ArtifactElement | undefined): number {
+  return (frameCollapsed(el)?.holds ?? []).filter((k) => {
+    const kind = get(k)?.kind;
+    return !!kind && kind !== "connector";
+  }).length;
 }
 
 export function frameStatus(el: ArtifactElement): FrameStatus | null {
