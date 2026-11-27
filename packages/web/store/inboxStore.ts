@@ -5149,6 +5149,14 @@ export function chipFilterSection(
   return out;
 }
 
+// A collapsed section still draws the open session's card under its header
+// (the rail's peek, GlobalSessionPanel's renderSection), so the walk keeps
+// that row of the section, or the card hosting it, and nothing else.
+function peekRows<T extends { _id: string }>(rows: readonly T[], peekId: string | null | undefined, subsByParent: Map<string, InboxSession[]>): T[] {
+  if (!peekId) return [];
+  return rows.filter((s) => s._id === peekId || (subsByParent.get(s._id) ?? []).some((sub) => sub._id === peekId));
+}
+
 export function visualOrderSessions(
   placed: PlacedInbox,
   projectFilters?: readonly ProjectFilterTerm[],
@@ -5158,8 +5166,10 @@ export function visualOrderSessions(
     bucketFilters?: readonly BucketFilterTerm[];
     bucketByConv?: Record<string, string | undefined>;
     // Grouped-view collapse: sessions inside a collapsed status section are
-    // skipped, so Ctrl+J/K only walks cards the panel actually renders.
+    // skipped, so Ctrl+J/K only walks cards the panel actually renders; the
+    // open session (peekId) peeks out of its collapsed section and is kept.
     collapsedSections?: Record<string, boolean>;
+    peekId?: string | null;
     // Narrow the walk to one slice of the order (InboxWalk), exactly as the
     // chokepoint files it.
     walk?: InboxWalk;
@@ -5202,8 +5212,8 @@ export function visualOrderSessions(
     [working, "working"], [shipping, "shipping"], [sleeping, "dormant"],
   ];
   const result: InboxSession[] = [];
-  for (const [rows, key] of sections) {
-    if (collapsed?.[key]) continue;
+  for (const [all, key] of sections) {
+    const rows = collapsed?.[key] ? peekRows(all, opts.peekId, placed.subsByParent) : all;
     result.push(...(placeOf && key !== "pinned" ? sortByPriority(rows, placeOf) : rows));
   }
   if (!opts.walk) return result;
@@ -6387,11 +6397,8 @@ function visualOrderOf(state: {
   const bucketByConv = convBucketMap(state.bucketAssignments);
   const mode = resolveInboxViewMode(state);
   const collapsed = state.collapsedSections ?? {};
+  const peek = <T extends { _id: string }>(rows: readonly T[]) => peekRows(rows, focusedId, placed.subsByParent);
   if (mode === "time" || mode === "recent") {
-    // The flat views render under a single collapsible "All" section; collapsing
-    // it hides every card, so nav must walk nothing (else it lands on a hidden
-    // row and the panel's auto-reveal effect force-expands the section).
-    if (collapsed["all"]) return [];
     // Full rows list only the nested rows the "Which ones" filter keeps, as
     // the panel draws them, on the clock the panel draws on.
     const showSubagents = resolveShowSubagents(state.clientState.ui);
@@ -6407,17 +6414,20 @@ function visualOrderOf(state: {
       nestWorkers: nestsWorkers(state.clientState.ui),
       oldestFirst: resolveInboxOldestFirst(state.clientState.ui),
     });
+    // The flat views render under a single collapsible "All" section;
+    // collapsed, it draws only the open session's peek, so nav walks only that.
+    const shown = collapsed["all"] ? peek(flat) : flat;
     // A flat card still wears the bucket verdict (its badge reads from the same
     // placement), so a walk is the same membership in flat order.
-    return opts.walk ? flat.filter(walkFilterOf(placed, opts.walk)) : flat;
+    return opts.walk ? shown.filter(walkFilterOf(placed, opts.walk)) : shown;
   }
   // The Browser view: every session holding a tab, stashed rows and workers
   // included, flat (GlobalSessionPanel's browserView).
   if (mode === "browser") {
-    if (collapsed.browser) return [];
     const chipOpts = chipFilterOpts(state, bucketByConv);
     const rows = Object.values(state.sessions).filter((s) => chipMatchesSession(s, chipOpts));
-    return groupSessionsByBrowser(rows, browserTabsByConversation(state.browserTabs, Date.now()));
+    const grouped = groupSessionsByBrowser(rows, browserTabsByConversation(state.browserTabs, Date.now()));
+    return collapsed.browser ? peek(grouped) : grouped;
   }
   // Grouped and the lenses: the placed status sections over the SAME visible
   // set; the lens branches below regroup all of it, pinned rows included (each
@@ -6426,6 +6436,7 @@ function visualOrderOf(state: {
     bucketFilters: chipBucketFilters(state),
     bucketByConv,
     collapsedSections: mode === "grouped" || mode === "priorities" ? collapsed : undefined,
+    peekId: focusedId,
     walk: opts.walk,
     projectOf: projectOfFromState(state),
     priorityRankOf: priorityRankOfForFilters(state, chipProjectFilters(state)),
@@ -6436,30 +6447,30 @@ function visualOrderOf(state: {
   if (mode === "bucket") {
     const { labelGroups, projectGroups } = groupSessionsForLabelView(base, state.buckets, bucketByConv);
     return [
-      ...labelGroups.flatMap((g) => (collapsed[`bucket_${g.bucket._id}`] ? [] : g.items)),
-      ...projectGroups.flatMap((g) => (collapsed[`bucketproj_${g.name}`] ? [] : g.items)),
+      ...labelGroups.flatMap((g) => (collapsed[`bucket_${g.bucket._id}`] ? peek(g.items) : g.items)),
+      ...projectGroups.flatMap((g) => (collapsed[`bucketproj_${g.name}`] ? peek(g.items) : g.items)),
     ];
   }
   if (mode === "plan") {
     const { planGroups, projectGroups } = groupSessionsByPlan(base, { plans: state.plans as Record<string, PlanItem> | undefined, placements: placed.placements, sessions: state.sessions });
     return [
-      ...planGroups.flatMap((g) => (collapsed[`plan_${g.key}`] || planTierFolded(planTierOf(g.standing.state), collapsed) ? [] : g.items)),
-      ...projectGroups.flatMap((g) => (collapsed[`planproj_${g.name}`] ? [] : g.items)),
+      ...planGroups.flatMap((g) => (planTierFolded(planTierOf(g.standing.state), collapsed) ? [] : collapsed[`plan_${g.key}`] ? peek(g.items) : g.items)),
+      ...projectGroups.flatMap((g) => (collapsed[`planproj_${g.name}`] ? peek(g.items) : g.items)),
     ];
   }
   if (mode === "machine") {
     const roster = new Set((state.machineRoster ?? []).map((d) => d.device_id));
     const { machineGroups, projectGroups } = groupSessionsByMachine(base, (id) => roster.has(id));
     return [
-      ...machineGroups.flatMap((g) => (collapsed[`machine_${g.deviceId}`] ? [] : g.items)),
-      ...projectGroups.flatMap((g) => (collapsed[`machineproj_${g.name}`] ? [] : g.items)),
+      ...machineGroups.flatMap((g) => (collapsed[`machine_${g.deviceId}`] ? peek(g.items) : g.items)),
+      ...projectGroups.flatMap((g) => (collapsed[`machineproj_${g.name}`] ? peek(g.items) : g.items)),
     ];
   }
   if (isOrgLensMode(mode)) {
     const { groups, projectGroups } = groupSessionsForOrgLens(mode, base, orgLensSourcesOf(state));
     return [
-      ...groups.flatMap((g) => (collapsed[`${mode}_${g.key}`] ? [] : g.items)),
-      ...projectGroups.flatMap((g) => (collapsed[`${mode}proj_${g.name}`] ? [] : g.items)),
+      ...groups.flatMap((g) => (collapsed[`${mode}_${g.key}`] ? peek(g.items) : g.items)),
+      ...projectGroups.flatMap((g) => (collapsed[`${mode}proj_${g.name}`] ? peek(g.items) : g.items)),
     ];
   }
   if (mode === "trigger") {
@@ -6489,7 +6500,7 @@ function visualOrderOf(state: {
     );
     return [
       ...walked,
-      ...projectGroups.flatMap((g) => (collapsed[`trigproj_${g.name}`] ? [] : g.items)),
+      ...projectGroups.flatMap((g) => (collapsed[`trigproj_${g.name}`] ? peek(g.items) : g.items)),
     ];
   }
   return base;
