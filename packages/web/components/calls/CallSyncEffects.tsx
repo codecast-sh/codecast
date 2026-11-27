@@ -4,6 +4,7 @@ import { useCallRing } from "../../hooks/useCallRing";
 import { useWalkieSync } from "../../hooks/useWalkieSync";
 import { useRoomThreadAlerts } from "../../hooks/useRoomThreadAlerts";
 import { useRecordingNoticeToast } from "./RoomRecording";
+import { HuddleAutoScribe } from "./HuddleAutoScribe";
 
 export function CallSyncEffects() {
   useCallSync();
@@ -12,5 +13,5 @@ export function CallSyncEffects() {
   useRecorderSync();
   useRoomThreadAlerts();
   useRecordingNoticeToast();
-  return null;
+  return <HuddleAutoScribe />;
 }

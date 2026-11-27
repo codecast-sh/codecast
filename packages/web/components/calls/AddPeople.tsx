@@ -1,5 +1,6 @@
 import { UserPlus } from "lucide-react";
 import { useAddToCall } from "./useCallFeed";
+import { useScribe, type ScribeLive } from "./useScribe";
 
 /** The call controls' add button: the same list as the thread's header. */
 export function AddPeopleButton({
@@ -9,11 +10,12 @@ export function AddPeopleButton({
   iconClassName = "h-4 w-4",
 }: {
   roomKey: string;
-  live: { transcript_id: string; team_id?: string; routes?: Array<{ kind: string; target: string }> } | null;
+  live: NonNullable<ScribeLive> | null;
   className?: string;
   iconClassName?: string;
 }) {
-  const { open, adding } = useAddToCall({ roomKey, liveTranscriptId: live?.transcript_id ?? null, routes: live?.routes ?? [], teamId: live?.team_id });
+  const scribe = useScribe(roomKey, live);
+  const { open, adding } = useAddToCall({ roomKey, liveTranscriptId: live?.transcript_id ?? null, routes: live?.routes ?? [], teamId: live?.team_id, scribe });
   return (
     <button
       className={className || "rounded-md p-1.5 text-sol-text-muted transition-colors hover:bg-sol-bg-alt"}

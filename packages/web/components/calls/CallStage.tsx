@@ -87,6 +87,9 @@ import { StagePinContext } from "../../lib/calls/stagePins";
 import { StagePinLabel, StagePinTile } from "./StagePinTile";
 import { StagePinButton } from "./StagePinPicker";
 import { StageShareButton } from "./StageShareButton";
+import { useScribe, type ScribeLive } from "./useScribe";
+import { BoardBanner, BoardStage, ScribeChip } from "./HuddleBoard";
+import { huddleWorkspaceKey, readHuddleSetting } from "../../lib/calls/huddleSettings";
 
 /** How long a speaker holds the floor before a follower's app moves to them. */
 const STAGE_FOLLOW_SETTLE_MS = 1500;
@@ -246,7 +249,9 @@ export function CallStage({
         started_by: string | null;
         started_at: number;
         team_id: string;
-        routes: Array<{ kind: string; target: string; mode: string; added_by: string }>;
+        routes: Array<{ kind: string; target: string; mode: string; added_by: string; role?: string }>;
+        short_id: string | null;
+        scribe_claim: { by: string; at: number } | null;
         tail: Array<{ seq: number; speaker_name: string; text: string; at: number }>;
       }
     | null
@@ -283,6 +288,18 @@ export function CallStage({
   const transcribing = !!live && !!live.started_by && !transcribeOff;
 
   const [view, setView] = useState<StageView>("auto");
+  const scribe = useScribe(call.roomKey, live);
+  const workspace = huddleWorkspaceKey(live?.team_id);
+  const workspaceName = useInboxStore((st: any) => (st.teams ?? []).find((t: any) => String(t?._id) === live?.team_id)?.name ?? "this workspace");
+  // A huddle opens on the board where the person asked for that
+  // (lib/calls/huddleSettings), once its workspace is known, unless they
+  // already picked a view.
+  const viewDefaulted = useRef(false);
+  useWatchEffect(() => {
+    if (viewDefaulted.current || !workspace) return;
+    viewDefaulted.current = true;
+    if (readHuddleSetting(useInboxStore.getState().clientState?.ui, "huddleBoardView", workspace)) setView((v) => (v === "auto" ? "board" : v));
+  }, [workspace]);
   const [threadOpen, setThreadOpen] = useState(takeCallThreadRequest);
   // The rail leaves with motion: it stays mounted through a 150ms exit and
   // goes on the animation's end. Exits are shorter than entrances (200ms in).
@@ -306,7 +323,8 @@ export function CallStage({
   const onRailClosed = useCallback(() => setRailClosing(false), []);
   // The agents in the room, for the button: while the rail is closed, the
   // state a person waits on most is "an agent is answering".
-  const agentWorking = useAgentsInRoom(live?.routes ?? []).some((a) => a.working);
+  // Scribe works the board out of sight: it never answers in the thread.
+  const agentWorking = useAgentsInRoom((live?.routes ?? []).filter((r) => r.role !== "scribe")).some((a) => a.working);
   const [pinned, setPinned] = useState<string | null>(null);
   // The face SPEAKER view follows when nothing is pinned: whoever spoke last.
   // Read off the store, not through a render: the stage redraws when the
@@ -527,6 +545,24 @@ export function CallStage({
 
         <HeaderRule />
 
+        {/* Scribe, while it is in the call: the chip stands for it, and its
+            menu is the way out. Nothing while it is absent. */}
+        {scribe.present && (
+          <>
+            <ScribeChip
+              scribe={scribe}
+              session={live?.routes.find((r) => r.role === "scribe")?.target ?? null}
+              onOpenBoard={() => setView("board")}
+              onOpenSession={(id) => {
+                if (panel) return void navigateMainWindow(`/conversation/${id}`);
+                useInboxStore.getState().navigateToSession(id);
+                collapse();
+              }}
+            />
+            <HeaderRule />
+          </>
+        )}
+
         {/* The thread: the one rail beside the stage. Not the transcription
             switch: the dot says the room is being transcribed whether or not
             the rail is open, and the switch itself lives in the thread. The
@@ -626,7 +662,21 @@ export function CallStage({
         <StageHostProvider value={stageHost}>
         <StagePinContext.Provider value={pinActions}>
         <div key={view} className={`flex min-h-0 min-w-0 flex-1 animate-in fade-in duration-200 max-sm:flex-col transition-opacity ${call.reconnecting ? "opacity-50" : ""}`}>
-          {view === "grid" ? (
+          {view === "board" && call.roomKey ? (
+            <BoardStage
+              roomKey={call.roomKey}
+              callKey={live?.transcript_id ?? null}
+              pins={pins}
+              roster={roster}
+              cameras={cameras}
+              phase={call.phase}
+              banner={
+                live && (
+                  <BoardBanner callKey={live.transcript_id} workspace={workspace} workspaceName={workspaceName} scribe={scribe} />
+                )
+              }
+            />
+          ) : view === "grid" ? (
             <GridStage roster={roster} cameras={cameras} screens={screens} />
           ) : view === "speaker" ? (
             <SpeakerStage
@@ -1006,7 +1056,7 @@ function CaptionsLane({
 // sits alone at the right. Round buttons on a borderless pill: state reads
 // by tint (cyan = camera on, violet = sharing, green = transcribing, red =
 // muted), never by outline.
-function ControlBar({ call, live }: { call: any; live: { transcript_id: string; routes?: Array<{ kind: string; target: string }> } | null }) {
+function ControlBar({ call, live }: { call: any; live: NonNullable<ScribeLive> | null }) {
   const transcribing = !!live;
 
   return (

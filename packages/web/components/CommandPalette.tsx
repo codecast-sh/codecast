@@ -192,6 +192,7 @@ import {
   ChevronRight,
   PictureInPicture2,
   Users,
+  PenLine,
   Sparkles,
   LayoutDashboard,
   Plus,
@@ -221,7 +222,7 @@ import { applyRelationPick, relationItems, reportRelationPick, type RelationTask
 import { taskVisual } from "./TaskStatusBadge";
 import { WAIT_STATE_STYLE } from "./tasks/TaskBlockedMark";
 import { RelationQueryHint, relationQueryError } from "./tasks/TaskRelations";
-import { pickWhoRows, type PalettePickKind, type PalettePickTarget } from "../lib/palettePick";
+import { pickWhoRows, type PalettePickExtra, type PalettePickKind, type PalettePickTarget } from "../lib/palettePick";
 
 import { Button } from "./ui/button";
 
@@ -2765,6 +2766,30 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
       ))}
     </CommandPrimitive.Group>
   );
+  // One extra row of a pick (lib/palettePick): a lead one above the people,
+  // the rest under them.
+  const pickExtraRow = (x: PalettePickExtra) => (
+    <CommandPrimitive.Item
+      key={`pick-${x.key}`}
+      value={`__pick__ ${x.label}|||${x.key}`}
+      onSelect={() => finishPick({ kind: "extra", key: x.key })}
+      className={`${itemClass} ${x.primary ? "text-sol-text data-[selected=true]:bg-sol-violet/15" : ""}`}
+    >
+      {x.icon === "scribe" ? (
+        <PenLine className="w-4 h-4 flex-shrink-0 text-sol-violet" />
+      ) : x.icon === "doc" ? (
+        <FileText className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
+      ) : x.icon === "slack" ? (
+        <Hash className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
+      ) : (
+        <Sparkles className="w-4 h-4 flex-shrink-0 text-sol-violet" />
+      )}
+      <div className="flex-1 min-w-0">
+        <div className="truncate">{x.label}</div>
+        {x.description && <div className="truncate text-meta text-sol-text-dim mt-0.5">{x.description}</div>}
+      </div>
+    </CommandPrimitive.Item>
+  );
   // A pasted Zoom, Meet, Teams, Webex or GoTo link: one row that sends a bot
   // to that meeting, where meeting bots are on (the create row's own gate).
   const meetingLink = !picking && !standalone && createKinds.some((k) => k.id === "meeting-bot") ? meetingLinkIn(query) : null;
@@ -3037,6 +3062,12 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
           <CommandPrimitive.Group className={groupClass}>{askHostedRow}</CommandPrimitive.Group>
         )}
 
+        {pick && (pick.extras ?? []).some((x) => x.lead) && (
+          <CommandPrimitive.Group className={groupClass}>
+            {(pick.extras ?? []).filter((x) => x.lead).map(pickExtraRow)}
+          </CommandPrimitive.Group>
+        )}
+
         {(["person", "role"] as const).map((kind) => {
           const rows = whoRows.filter((r) => r.kind === kind);
           return rows.length > 0 && (
@@ -3057,28 +3088,9 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
           );
         })}
 
-        {pick && (pick.extras ?? []).some((x) => !x.needsQuery || query.trim()) && (
+        {pick && (pick.extras ?? []).some((x) => !x.lead && (!x.needsQuery || query.trim())) && (
           <CommandPrimitive.Group heading={whoRows.length ? "Agents" : undefined} className={groupClass}>
-            {(pick.extras ?? []).filter((x) => !x.needsQuery || query.trim()).map((x) => (
-              <CommandPrimitive.Item
-                key={`pick-${x.key}`}
-                value={`__pick__ ${x.label}|||${x.key}`}
-                onSelect={() => finishPick({ kind: "extra", key: x.key })}
-                className={`${itemClass} ${x.primary ? "text-sol-text data-[selected=true]:bg-sol-violet/15" : ""}`}
-              >
-                {x.icon === "doc" ? (
-                  <FileText className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
-                ) : x.icon === "slack" ? (
-                  <Hash className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
-                ) : (
-                  <Sparkles className="w-4 h-4 flex-shrink-0 text-sol-violet" />
-                )}
-                <div className="flex-1 min-w-0">
-                  <div className="truncate">{x.label}</div>
-                  {x.description && <div className="truncate text-meta text-sol-text-dim mt-0.5">{x.description}</div>}
-                </div>
-              </CommandPrimitive.Item>
-            ))}
+            {(pick.extras ?? []).filter((x) => !x.lead && (!x.needsQuery || query.trim())).map(pickExtraRow)}
           </CommandPrimitive.Group>
         )}
 
