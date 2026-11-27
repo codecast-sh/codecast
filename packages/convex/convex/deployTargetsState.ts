@@ -6,7 +6,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { conversationFromSessionTrailer, normalizeRepository, resolveTaskLinksFromText } from "./lib/gitRefs";
 import { afterFor, deployStepsOf } from "./deploysView";
 import { ciOf } from "./deployTargetsCi";
-import { canRedeploySha, commitTouchesTarget, groupQueueBySession, type QueueCommit } from "@codecast/shared/contracts/deployTargets";
+import { canRedeploySha, commitTouchesTarget, groupQueueBySession, isLiveVersionBump, type QueueCommit } from "@codecast/shared/contracts/deployTargets";
 import { deviceDisplayName, parseOwnerRepo } from "@codecast/shared/contracts";
 import { liveDeployOf, type DeployPushSummary } from "@codecast/shared/contracts/deploys";
 import type { TargetDevPush } from "@codecast/shared/contracts/deployTargets";
@@ -341,7 +341,10 @@ export async function targetState(ctx: any, t: Doc<"deploy_targets">, viewer?: I
     return a ? { new_errors: a.new_errors, regressions: a.regressions, reopened: a.reopened, quiet: a.quiet, open: a.open } : null;
   };
   const after = await mainCommitsAfter(ctx, t.repository, live?.sha ?? null);
-  const touching = after.commits.filter((c) => commitTouchesTarget(t, (c.files ?? []).map((f) => f.filename)));
+  const filesOf = (c: Doc<"commits">) => (c.files ?? []).map((f) => f.filename);
+  const touching = after.commits.filter((c) => commitTouchesTarget(t, filesOf(c)));
+  // The release's own version bump for the version now live, committed to main after its cut, waits on nothing.
+  const waiting = touching.filter((c) => !isLiveVersionBump(t, { subject: c.message, files: filesOf(c) }, live?.version));
   const skipped = after.commits.length - touching.length;
   const head = after.commits[after.commits.length - 1] ?? null;
   const headCi = head ? await ciOf(ctx, t.workspace, t.repository, head.sha) : live?.sha ? await ciOf(ctx, t.workspace, t.repository, live.sha) : null;
@@ -350,7 +353,7 @@ export async function targetState(ctx: any, t: Doc<"deploy_targets">, viewer?: I
   // What the viewer may see of each session: its title, owner, priority and branch only when they may read it.
   const ws = parseWorkspaceKey(t.workspace);
   const reader = viewer ? await queueReaderFor(ctx, viewer, ws?.type === "team" ? ws.teamId : null) : undefined;
-  for (const c of touching.slice(-QUEUE_SHOWN).reverse()) shown.push(await queueCommitOf(ctx, t.workspace, c, convCache, taskCache, reader));
+  for (const c of waiting.slice(-QUEUE_SHOWN).reverse()) shown.push(await queueCommitOf(ctx, t.workspace, c, convCache, taskCache, reader));
   return {
     name: t.name,
     repository: t.repository,
@@ -381,7 +384,7 @@ export async function targetState(ctx: any, t: Doc<"deploy_targets">, viewer?: I
       // The live commit it counts after: a reader holding a newer live deploy knows this queue is behind it.
       after_sha: live?.sha ?? null,
       truncated: after.truncated,
-      commits: touching.length,
+      commits: waiting.length,
       // Commits on main after the live sha that touch none of this target's paths: they ship nothing here.
       untouched: skipped,
       head_sha: head?.sha ?? live?.sha ?? null,

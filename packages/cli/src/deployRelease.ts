@@ -11,12 +11,12 @@
 // same path as a target's Deploy button, so each one shows on the Deploys page
 // with its steps. Nothing here names a project's tools.
 
-import { releaseOrder, type DeployTarget } from "@codecast/shared/contracts/deployTargets";
-import { holds, targetState, targetTouches, type DeployTargetRow } from "./workflow/awaitDeploy.js";
+import { isLiveVersionBump, releaseOrder, type DeployTarget } from "@codecast/shared/contracts/deployTargets";
+import { holds, targetState, targetTouches, type DeployTargetRow, type TargetDeploy } from "./workflow/awaitDeploy.js";
 import { git, gitTry } from "./wipSnapshot.js";
 
 /** A target as the server's targets read lists it: what runs there and who publishes it. */
-export type ServerTarget = DeployTargetRow & { device_id?: string | null; root?: string | null; policy?: string };
+export type ServerTarget = DeployTargetRow & { device_id?: string | null; root?: string | null; policy?: string; live?: (TargetDeploy & { version?: string | null }) | null };
 
 export type PlanStep = {
   target: string;
@@ -40,8 +40,9 @@ export type ReleaseInput = {
   except?: string[];
   /** A change's files: only targets they touch take part. */
   files?: string[];
-  /** Commits after `from` up to the release's sha touching these paths past `unless`; null when `from` is not in this checkout. */
-  commitsSince: (from: string, paths: string[], unless: string[]) => Promise<number | null>;
+  /** Commits after `from` up to the release's sha touching these paths past `unless`, less the release's own bump for
+   *  `liveVersion` (isLiveVersionBump); null when `from` is not in this checkout. */
+  commitsSince: (from: string, paths: string[], unless: string[], liveVersion: string | null) => Promise<number | null>;
   /** Whether a deployed sha already holds the release's sha. */
   carries: (deployed: string) => Promise<boolean>;
 };
@@ -65,7 +66,7 @@ export async function planRelease(input: ReleaseInput): Promise<PlanStep[]> {
     const state = await targetState(row, input.carries);
     if (state.state === "live") { out.push(step("skip", `already live (${state.deploy.short_id})`)); continue; }
     const liveSha = row.live?.sha ?? null;
-    const commits = liveSha ? await input.commitsSince(liveSha, t.paths, t.unless ?? []) : null;
+    const commits = liveSha ? await input.commitsSince(liveSha, t.paths, t.unless ?? [], row.live?.version ?? null) : null;
     if (commits === 0) { out.push(step("skip", "nothing waiting: no commit since its live deploy touches it", 0)); continue; }
     const waiting = commits === null ? (liveSha ? "its live deploy is not in this checkout's history" : "nothing recorded live") : `${commits} commit${commits === 1 ? "" : "s"} waiting`;
     if (t.runs === "push") out.push(step("wait", `deploys itself on push; ${waiting}`, commits));
@@ -190,13 +191,22 @@ export function formatResults(results: TargetResult[]): string {
   }).join("\n");
 }
 
-/** Commits after `from` up to `sha` touching any of `paths` (every path when none) past `unless`, read in `cwd`. */
-export async function commitsSince(cwd: string, from: string, sha: string, paths: string[], unless: string[] = []): Promise<number | null> {
+/**
+ * Commits after `from` up to `sha` touching any of `paths` (every path when none) past `unless`, read in `cwd`. The
+ * release's own version bump for `liveVersion`, committed to main after its cut, carries nothing and is not counted,
+ * as the server's queue leaves it out (isLiveVersionBump).
+ */
+export async function commitsSince(cwd: string, from: string, sha: string, paths: string[], unless: string[] = [], liveVersion: string | null = null): Promise<number | null> {
   if ((await gitTry(cwd, ["cat-file", "-e", `${from}^{commit}`])) === null) return null;
   if ((await gitTry(cwd, ["merge-base", "--is-ancestor", from, sha])) === null) return null;
   const specs = [...paths.map((p) => `:(glob)${p}`), ...unless.map((p) => `:(glob,exclude)${p}`)];
-  const out = await git(cwd, ["rev-list", "--count", `${from}..${sha}`, ...(specs.length ? ["--", ...specs] : [])]);
-  return Number(out.trim()) || 0;
+  // Each commit as `\x00subject\n\nfile...`: the files listed are only those the pathspecs match.
+  const out = await git(cwd, ["log", "--format=%x00%s", "--name-only", `${from}..${sha}`, ...(specs.length ? ["--", ...specs] : [])]);
+  const commits = out.split("\0").slice(1).map((block) => {
+    const [subject, ...files] = block.split("\n");
+    return { subject, files: files.map((f) => f.trim()).filter(Boolean) };
+  });
+  return commits.filter((c) => !isLiveVersionBump({ paths, unless }, c, liveVersion)).length;
 }
 
 export { holds };

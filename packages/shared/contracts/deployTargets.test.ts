@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { commitCiState, commitTouchesTarget, DeployTargetError, fileShipsTo, globMatch, groupQueueBySession, parseLiveReader, readJsonLive, parseDeployTargetEntries, parseDeployTargets, publishableTarget, releaseOrder, targetFromLineDeploy, type QueueCommit } from "./deployTargets";
+import { commitCiState, commitTouchesTarget, DeployTargetError, fileShipsTo, globMatch, groupQueueBySession, isLiveVersionBump, parseLiveReader, readJsonLive, parseDeployTargetEntries, parseDeployTargets, publishableTarget, releaseOrder, targetFromLineDeploy, type QueueCommit } from "./deployTargets";
 
 describe("deploy targets from config (deploys.md DP10)", () => {
   const SHIP = [{ name: "convex", when: ["api/**"], run: "deploy.sh", stage: "before_push" as const }];
@@ -117,5 +117,25 @@ describe("a release's order and steps (DP15)", () => {
     // Braces would match nothing (a missed deploy), so the file is refused, naming the target and the key.
     expect(() => parse([{ name: "web", runs: "push", when: ["packages/{web,shared}/**"] }])).toThrow(`target web: 'when' glob "packages/{web,shared}/**" uses braces`);
     expect(() => parse([{ name: "cli", run: "x", when: "cli/**", unless: "**/*.{test,spec}.ts" }])).toThrow("target cli: 'unless' glob");
+  });
+});
+
+describe("a release's own version bump (isLiveVersionBump)", () => {
+  const cli = { paths: ["packages/cli/**", "packages/shared/**"], unless: ["**/*.test.ts"] };
+  const desktop = { paths: ["packages/electron/**"] };
+
+  test("the bump the release workflow commits after its cut, for the version live now, is carried", () => {
+    expect(isLiveVersionBump(cli, { subject: "chore(cli): bump version to 1.1.323", files: ["packages/cli/package.json"] }, "1.1.323")).toBe(true);
+    // The desktop bump also rewrites the web server's download link: that file ships to web, not desktop.
+    expect(isLiveVersionBump(desktop, { subject: "chore(electron): bump desktop to v1.1.134", files: ["packages/electron/package.json", "packages/web/server/index.ts"] }, "v1.1.134")).toBe(true);
+  });
+
+  test("anything else is work: another version, code beside the bump, no live version, a dependency bump", () => {
+    expect(isLiveVersionBump(cli, { subject: "chore(cli): bump version to 1.1.324", files: ["packages/cli/package.json"] }, "1.1.323")).toBe(false);
+    expect(isLiveVersionBump(cli, { subject: "chore(cli): bump version to 1.1.323", files: ["packages/cli/package.json", "packages/cli/src/a.ts"] }, "1.1.323")).toBe(false);
+    expect(isLiveVersionBump(cli, { subject: "chore(cli): bump version to 1.1.323", files: ["packages/cli/package.json"] }, null)).toBe(false);
+    expect(isLiveVersionBump(cli, { subject: "chore(deps): bump zod from 1.1.0 to 1.1.323", files: ["packages/cli/package.json"] }, "1.1.323")).toBe(false);
+    expect(isLiveVersionBump(cli, { subject: "fix(cli): read 1.1.323 config", files: ["packages/cli/package.json"] }, "1.1.323")).toBe(false);
+    expect(isLiveVersionBump(cli, { subject: "chore(cli): bump version to 1.1.323", files: [] }, "1.1.323")).toBe(false);
   });
 });
