@@ -21,7 +21,7 @@ import { usePriorities, usePriorityWrites } from "../../hooks/usePriorities";
 import { priorityHref, rankProvenance } from "../../lib/priorities";
 import { COARSE_TALL, type SessionLine } from "../../lib/priorityList";
 import { cn } from "../../lib/utils";
-import { MilestoneBox } from "./parts";
+import { useMountEffect } from "../../hooks/useMountEffect";
 
 const stop = (e: { stopPropagation: () => void }) => e.stopPropagation();
 /** Opens a popover after the menu that asked for it has closed, so the menu's own close does not take its focus. */
@@ -43,21 +43,16 @@ function useOwnActive(row: PriorityRow): PriorityRow[] {
 }
 
 /**
- * A ⋯ button. `touch`: 44px, the phone layout's size. Otherwise it looks
- * 24px, and a coarse pointer (Daylight's desktop grid) presses a 44px area
- * around it. `reveal`: on a mouse it shows while its line is hovered (the
- * class names that group); on a touch screen and while its menu is open it
- * always shows. `gutter`: the button sits in the page's right gutter, so its
- * press area grows leftward only and never widens the page.
+ * A ⋯ button: it looks 24px, and a coarse pointer presses a 44px area around
+ * it. `reveal`: on a mouse it shows while its line is hovered (the class
+ * names that group); on a touch screen and while its menu is open it always
+ * shows.
  */
-function menuButtonClass(touch?: boolean, reveal?: string, gutter?: boolean) {
+function menuButtonClass(reveal?: string) {
   return cn(
-    "flex shrink-0 items-center justify-center rounded text-sol-text-dim hover:bg-sol-bg-highlight hover:text-sol-text focus-visible:opacity-100 data-[state=open]:opacity-100",
-    touch ? "size-11" : cn(
-      "relative size-6 [@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:content-['']",
-      gutter ? "[@media(pointer:coarse)]:after:-inset-y-2.5 [@media(pointer:coarse)]:after:-left-5 [@media(pointer:coarse)]:after:right-0" : "[@media(pointer:coarse)]:after:-inset-2.5",
-    ),
-    !touch && reveal && cn("opacity-0 [@media(hover:none)]:opacity-100 [@media(pointer:coarse)]:opacity-100", reveal),
+    "relative flex size-6 shrink-0 items-center justify-center rounded text-sol-text-dim hover:bg-sol-bg-highlight hover:text-sol-text focus-visible:opacity-100 data-[state=open]:opacity-100",
+    "[@media(pointer:coarse)]:after:absolute [@media(pointer:coarse)]:after:-inset-2.5 [@media(pointer:coarse)]:after:content-['']",
+    reveal && cn("opacity-0 [@media(hover:none)]:opacity-100 [@media(pointer:coarse)]:opacity-100", reveal),
   );
 }
 
@@ -150,8 +145,12 @@ function dropLedger(row: PriorityRow, step: Pick<PriorityStep, "key" | "title">)
   };
 }
 
-/** The priority's ⋯: who placed it, then the owner's moves, done, set aside or restore, merge, Correct…, and Copy link for anyone. */
-export function PriorityMenu({ row, touch, reveal, gutter, label, className }: { row: PriorityRow; touch?: boolean; reveal?: string; gutter?: boolean; label?: string; className?: string }) {
+/**
+ * The priority's ⋯: who placed it, then the owner's moves, done, set aside or
+ * restore, merge, Correct…, and Copy link for anyone. Rename is a double-click
+ * on the title; only a coarse pointer keeps it here (`onRename`).
+ */
+export function PriorityMenu({ row, reveal, label, className, onRename }: { row: PriorityRow; reveal?: string; label?: string; className?: string; onRename?: () => void }) {
   const writes = usePriorityWrites();
   const [correcting, setCorrecting] = useState(false);
   const [merging, setMerging] = useState<PriorityRow | null>(null);
@@ -162,12 +161,13 @@ export function PriorityMenu({ row, touch, reveal, gutter, label, className }: {
         <span className="inline-flex">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <button type="button" data-priority-menu={row.short_id} aria-label={label ?? `More for ${row.title}`} onClick={stop} className={menuButtonClass(touch, reveal, gutter)}>
+              <button type="button" data-priority-menu={row.short_id} aria-label={label ?? `More for ${row.title}`} onClick={stop} className={menuButtonClass(reveal)}>
                 <MoreHorizontal className="size-3.5" />
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className={cn("min-w-[12rem]", TOUCH_ITEMS)} onClick={stop} onCloseAutoFocus={(e) => e.preventDefault()}>
               {why && <DropdownMenuLabel data-menu-rank-by className="text-meta font-normal text-sol-text-dim">#{row.rank} · {why}</DropdownMenuLabel>}
+              {row.mine && onRename && <DropdownMenuItem data-act="rename" onSelect={afterMenu(onRename)} className="[@media(pointer:fine)]:hidden">Rename</DropdownMenuItem>}
               {row.mine && <OwnerPriorityItems row={row} onCorrect={afterMenu(() => setCorrecting(true))} onMerge={setMerging} />}
               <DropdownMenuItem data-act="copy-link" onSelect={() => copyLink(row.short_id)}>Copy link</DropdownMenuItem>
             </DropdownMenuContent>
@@ -207,7 +207,8 @@ function OwnerPriorityItems({ row, onCorrect, onMerge }: { row: PriorityRow; onC
           </DropdownMenuSubContent>
         </DropdownMenuSub>
       )}
-      {rank != null && <DropdownMenuSeparator />}
+      {/* Only a group that has a move in it ends in a separator. */}
+      {rank != null && count > 1 && <DropdownMenuSeparator />}
       {row.status !== "done" && <DropdownMenuItem data-act="mark-done" onSelect={() => writes.markDone(row.short_id)}>Mark done</DropdownMenuItem>}
       {row.status === "active" && <DropdownMenuItem data-act="set-aside" onSelect={() => writes.setAside(row.short_id)}>Set aside</DropdownMenuItem>}
       {(row.status === "set_aside" || row.status === "done") && <DropdownMenuItem data-act="restore" onSelect={() => writes.restore(row.short_id)}>Restore</DropdownMenuItem>}
@@ -230,14 +231,16 @@ function OwnerPriorityItems({ row, onCorrect, onMerge }: { row: PriorityRow; onC
   );
 }
 
-/** A milestone's ⋯, for the owner: Done or Undone, Rename, its tier, Drop, Correct…. */
-export function MilestoneMenu({ row, step, onRename, touch, reveal, gutter, className }: {
+/**
+ * A milestone's ⋯, for the owner: Done or Undone, its tier, Drop, Correct….
+ * Rename is a double-click on the title; only a coarse pointer, which has no
+ * double-click to speak of, keeps it here.
+ */
+export function MilestoneMenu({ row, step, onRename, reveal, className }: {
   row: PriorityRow;
   step: PriorityStep;
   onRename: () => void;
-  touch?: boolean;
   reveal?: string;
-  gutter?: boolean;
   className?: string;
 }) {
   const writes = usePriorityWrites();
@@ -250,13 +253,13 @@ export function MilestoneMenu({ row, step, onRename, touch, reveal, gutter, clas
         <span className="inline-flex">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <button type="button" data-milestone-menu={step.key} aria-label={`More for ${step.title}`} onClick={stop} className={menuButtonClass(touch, reveal, gutter)}>
+              <button type="button" data-milestone-menu={step.key} aria-label={`More for ${step.title}`} onClick={stop} className={menuButtonClass(reveal)}>
                 <MoreHorizontal className="size-3.5" />
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className={cn("min-w-[11rem]", TOUCH_ITEMS)} onClick={stop} onCloseAutoFocus={(e) => e.preventDefault()}>
               <DropdownMenuItem data-act="step-done" onSelect={() => writes.setStepDone(row.short_id, step.key, !step.done)}>{step.done ? "Undone" : "Done"}</DropdownMenuItem>
-              <DropdownMenuItem data-act="rename" onSelect={afterMenu(onRename)}>Rename</DropdownMenuItem>
+              <DropdownMenuItem data-act="rename" onSelect={afterMenu(onRename)} className="[@media(pointer:fine)]:hidden">Rename</DropdownMenuItem>
               <DropdownMenuItem data-act="tier" onSelect={() => writes.setStepTier(row.short_id, step.key, polish ? "critical" : "polish")}>{polish ? "Move to critical" : "Move to polish"}</DropdownMenuItem>
               <DropdownMenuItem data-act="drop" onSelect={() => setDropping(true)}>Drop…</DropdownMenuItem>
               <DropdownMenuSeparator />
@@ -277,13 +280,13 @@ export function MilestoneMenu({ row, step, onRename, touch, reveal, gutter, clas
 }
 
 /** A session's ⋯ under a milestone, for the owner of both: off this milestone, off this priority, or to another milestone. */
-export function SessionMenu({ row, s, stepKey, touch }: { row: PriorityRow; s: Pick<SessionLine, "short_id" | "title">; stepKey: string | null; touch?: boolean }) {
+export function SessionMenu({ row, s, stepKey }: { row: PriorityRow; s: Pick<SessionLine, "short_id" | "title">; stepKey: string | null }) {
   const writes = usePriorityWrites();
   return (
     <span className="inline-flex" onClick={stop} onKeyDown={stop}>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <button type="button" data-session-menu={s.short_id} aria-label={`Fix the link to ${s.title || "this session"}`} onClick={stop} className={menuButtonClass(touch, "group-hover/session:opacity-100")}>
+          <button type="button" data-session-menu={s.short_id} aria-label={`Fix the link to ${s.title || "this session"}`} onClick={stop} className={menuButtonClass("group-hover/session:opacity-100")}>
             <MoreHorizontal className="size-3.5" />
           </button>
         </DropdownMenuTrigger>
@@ -367,51 +370,69 @@ export function LooksDone({ row, step }: { row: PriorityRow; step: Pick<Priority
 }
 
 /**
- * A milestone's box as the owner's Done toggle. `className` sizes the press
- * area (the whole left gutter of a line on the list); the box stays where it
- * was drawn.
+ * Where focus goes once a rename ends by key: the title the input stood in
+ * for when it can hold focus (`data-rename-return`), else the row around it.
+ * Read from the input's parent, which outlives the input.
  */
-export function MilestoneToggle({ row, step, className }: { row: PriorityRow; step: Pick<PriorityStep, "key" | "title" | "done">; className?: string }) {
-  const writes = usePriorityWrites();
-  return (
-    <button
-      type="button"
-      data-milestone-toggle={step.key}
-      aria-pressed={step.done}
-      aria-label={step.done ? `Mark ${step.title} not done` : `Mark ${step.title} done`}
-      onClick={(e) => { e.stopPropagation(); writes.setStepDone(row.short_id, step.key, !step.done); }}
-      onKeyDown={stop}
-      className={cn("flex shrink-0 items-center rounded-control", className)}
-    >
-      <MilestoneBox done={step.done} />
-    </button>
-  );
+function returnFocus(host: HTMLElement | null) {
+  setTimeout(() => {
+    const target = host?.querySelector<HTMLElement>("[data-rename-return]") ?? host?.closest<HTMLElement>("[tabindex], a[href], button");
+    target?.focus();
+  }, 0);
 }
 
-/** A milestone's title being renamed in place: Enter or leaving keeps it, Escape takes it back. Uncontrolled, so typing commits nothing. */
-export function MilestoneTitleInput({ title, onDone, className }: { title: string; onDone: (title: string | null) => void; className?: string }) {
+/**
+ * A milestone's (or, with its `label`, a priority's) title being renamed in
+ * place: Enter keeps it, Escape takes it back, and so does leaving it, unless
+ * the person left on purpose (a press outside the box, or Tab), which keeps
+ * it. A browser extension can swallow Escape and just blur the box, and a
+ * window switch blurs it too: neither may save an edit the person was
+ * abandoning. Uncontrolled, so typing commits nothing. Ended by Enter,
+ * Escape or a bare blur, focus goes back to the title (returnFocus), never to
+ * the page.
+ */
+export function MilestoneTitleInput({ title, onDone, className, label = "Milestone title" }: { title: string; onDone: (title: string | null) => void; className?: string; label?: string }) {
   const done = useRef(false);
+  const box = useRef<HTMLInputElement>(null);
+  const leaving = useRef(false);
   const finish = (value: string | null) => {
     if (done.current) return;
     done.current = true;
     const next = value?.trim();
     onDone(next && next !== title ? next : null);
   };
+  useMountEffect(() => {
+    // On a touch screen the focus moves only once the tap ends, so the press alone marks the leaving.
+    const press = (e: Event) => { if (!box.current?.contains(e.target as Node)) leaving.current = true; };
+    document.addEventListener("pointerdown", press, true);
+    return () => document.removeEventListener("pointerdown", press, true);
+  });
   return (
     <input
+      ref={box}
       autoFocus
       data-rename-input
       defaultValue={title}
-      aria-label="Milestone title"
+      aria-label={label}
       maxLength={200}
       onFocus={(e) => e.currentTarget.select()}
       onClick={stop}
       onKeyDown={(e) => {
         e.stopPropagation();
-        if (e.key === "Enter") finish(e.currentTarget.value);
-        else if (e.key === "Escape") finish(null);
+        // Typing on after a press outside that kept the focus here: still editing.
+        leaving.current = e.key === "Tab";
+        if (e.key !== "Enter" && e.key !== "Escape") return;
+        const host = e.currentTarget.parentElement;
+        finish(e.key === "Enter" ? e.currentTarget.value : null);
+        returnFocus(host);
       }}
-      onBlur={(e) => finish(e.currentTarget.value)}
+      onBlur={(e) => {
+        if (leaving.current) return finish(e.currentTarget.value);
+        // A bare blur is a cancel (an Escape an extension ate): focus goes back to the title, as Escape's does, never to the page.
+        const host = e.currentTarget.parentElement;
+        finish(null);
+        returnFocus(host);
+      }}
       className={cn("min-w-0 flex-1 rounded-control border border-sol-border bg-sol-bg px-1.5 py-0.5 text-[16px] text-sol-text focus:border-sol-text-dim focus:outline-none sm:text-ui", className)}
     />
   );

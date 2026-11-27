@@ -37,7 +37,7 @@ export const APP_SURFACES: AppSurface[] = [
   dash("prompts", "a day of what each person typed into sessions, a column per person (?d=YYYY-MM-DD picks the day)"),
   dash("crosstalk", "agents talking to each other across sessions"),
   dash("goals", "every goal, with its owner, health and the projects serving it (/goals/<in-N> opens one)"),
-  dash("priorities", "each person's priorities: rank, critical path, steps with their tasks, sessions and PRs, 15-day history (?open=<pri-N> opens one; behind the priorities team feature)"),
+  dash("priorities", "your own priorities in rank order: each milestone's state, its connected sessions, tasks and PRs, a 10-day history, and where your messages went (/priorities/<pri-N> opens one; behind the priorities team feature)"),
   dash("projects", "every project grouped by the goal it serves (/projects/<pj-…> opens its board)"),
   dash("map", "every live session on one zoomable canvas, in piles you arrange, with the org's roles and reporting lines on top"),
   dash("org", "the people and agent roles who carry the work, and what waits on you (/org/<or-N|@handle> opens one)"),

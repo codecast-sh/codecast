@@ -2,27 +2,27 @@
 // as a pill: the owner's face, the rank badge, the title, a small critical
 // meter and n/m. On a mouse the pill's card opens on hover; on a touch screen
 // a tap opens the same card as a bottom sheet, since nothing there can hover.
-// The card is the /priorities list's left half: face, rank, title and meter,
-// the plan, each open critical milestone with its box (a toggle for the
-// owner), then pri-N, Share and Open. The row comes from the store
-// (lib/entityDisplay feeds priorities.show into priorityDetails).
+// The card says whose it is and where it ranks (face, badge, title), its plan,
+// its open critical milestones with their state marks (the list's,
+// shared/contracts/priorityDerive milestoneStateOf), then pri-N, Share and
+// Open. The row comes from the store (lib/entityDisplay feeds priorities.show
+// into priorityDetails).
 import { useState, type ReactNode } from "react";
 import Link from "next/link";
-import { Share2, Target } from "lucide-react";
+import { Map as MapIcon, Share2, Target } from "lucide-react";
 import { toast } from "sonner";
 import type { PriorityRow } from "@codecast/shared/contracts/priorities";
 import { HoverCard } from "../ui/HoverCard";
 import { Sheet, SheetContent, SheetTitle } from "../ui/sheet";
 import { useCoarsePointer } from "../../hooks/useCoarsePointer";
 import { usePriorityModel } from "../../hooks/usePriorityModels";
+import { useSidebarFocusId } from "../../hooks/useSidebarFocusId";
 import { publicUrl } from "@codecast/shared/entities";
 import { priorityHref } from "../../lib/priorities";
 import { cn } from "../../lib/utils";
-import { TOUCH_AREA } from "../../lib/priorityList";
-import { MilestoneBox, PlanChip } from "./parts";
 import { AuthorAvatar } from "../entityDisplay";
 import { Mark } from "../Mark";
-import { MilestoneToggle } from "./controls";
+import { MilestoneStateMark } from "./parts";
 
 /** The critical path as pips and n/m. `size="inline"` scales with the prose it sits in. */
 export function CriticalMeter({ done, total, size = "card", className }: { done: number; total: number; size?: "inline" | "card"; className?: string }) {
@@ -30,13 +30,11 @@ export function CriticalMeter({ done, total, size = "card", className }: { done:
   const inline = size === "inline";
   return (
     <span data-critical-meter className={cn("inline-flex shrink-0 items-center gap-[0.3em]", className)} aria-label={`${done} of ${total} critical milestones done`}>
-      <Mark id="priority.critical">
-        <span aria-hidden className={cn("inline-flex", inline ? "gap-px" : "gap-[2px]")}>
-          {Array.from({ length: total }, (_, i) => (
-            <i key={i} className={cn("block rounded-[1px]", inline ? "h-[0.5em] w-[0.32em]" : "h-[7px] w-[7px] rounded-[1.5px]", i < done ? "bg-sol-green" : "bg-sol-text/20")} />
-          ))}
-        </span>
-      </Mark>
+      <span aria-hidden className={cn("inline-flex", inline ? "gap-px" : "gap-[2px]")}>
+        {Array.from({ length: total }, (_, i) => (
+          <i key={i} className={cn("block rounded-[1px]", inline ? "h-[0.5em] w-[0.32em]" : "h-[7px] w-[7px] rounded-[1.5px]", i < done ? "bg-sol-green" : "bg-sol-text/20")} />
+        ))}
+      </span>
       <span className={cn("tabular-nums", inline ? "" : "text-meta text-sol-text-muted")}>{done}/{total}</span>
     </span>
   );
@@ -65,26 +63,36 @@ export function OwnerFace({ row, size = "1.1em", className }: { row: PriorityRow
   );
 }
 
-/** The card a reference opens: the list's left half (face, rank, title, meter, plan, the open critical milestones), then pri-N, Share and Open. `tall`: 44px targets, for a finger. */
+/** The open critical milestones a card lists, at most. */
+const CARD_MILESTONES = 3;
+
+/** The card a reference opens: whose it is and its rank (face, badge, title), its plan, its open milestones and their states, then pri-N, Share and Open. `tall`: 44px rows and buttons, for a finger. */
 export function PriorityCard({ row, onOpen, tall }: { row: PriorityRow; onOpen?: () => void; tall?: boolean }) {
-  const model = usePriorityModel(row);
-  const open = model.milestones.filter((m) => m.tier === "critical" && !m.done);
+  const model = usePriorityModel(row, undefined, undefined, "sidebar", useSidebarFocusId());
+  // The open critical milestones, and any milestone that needs you whatever its tier (lib/priorityList's rule).
+  const open = model.milestones.filter((m) => m.state.kind === "needs_you" || (m.tier === "critical" && !m.done));
   return (
     <div data-priority-card={row.short_id} className="bg-sol-bg p-3">
       <div className="flex items-start gap-2">
         <span className="mt-[2px] flex shrink-0 items-center gap-1 text-[14px]"><OwnerFace row={row} size={18} /><RankMark rank={row.rank} /></span>
         <div className="min-w-0 flex-1 text-ui font-semibold leading-snug text-sol-text">{row.title}</div>
-        <span className="mt-[3px]"><CriticalMeter done={row.counts.critical_done} total={row.counts.critical_total} /></span>
       </div>
-      {model.plan && <div className="mt-1.5 flex pl-[42px]"><PlanChip plan={model.plan} showSize /></div>}
+      {model.plan && (
+        <Link href={`/plans/${model.plan.short_id}`} data-chip="plan" className="mt-1.5 flex min-w-0 items-center gap-2 pl-[42px] text-meta text-sol-text-muted no-underline hover:underline">
+          <Mark id="entity.plan"><MapIcon className="size-3.5 shrink-0 text-sol-text-dim" aria-hidden /></Mark>
+          <span className="min-w-0 truncate">{model.plan.title}</span>
+          <span className="shrink-0 tabular-nums text-sol-text-dim">{model.plan.done}/{model.plan.total}</span>
+        </Link>
+      )}
       {open.length > 0 && (
-        <ul data-priority-milestones className="mt-2 flex flex-col">
-          {open.map((m) => (
-            <li key={m.key} data-milestone={m.key} className={cn("flex min-w-0 items-center gap-2 py-[3px] pl-[42px]", tall && "min-h-11")}>
-              {row.mine ? <MilestoneToggle row={row} step={m.step} className={cn(tall && "-my-3 h-11 pr-1", TOUCH_AREA)} /> : <MilestoneBox done={false} />}
-              <span className="min-w-0 flex-1 truncate text-ui text-sol-text" title={m.step.title}>{m.step.title}</span>
+        <ul data-priority-milestones className="mt-2 pl-[22px]">
+          {open.slice(0, CARD_MILESTONES).map((m) => (
+            <li key={m.key} data-milestone={m.key} data-state={m.state.kind} className={cn("flex min-w-0 items-center gap-2", tall ? "min-h-11" : "min-h-7")}>
+              <MilestoneStateMark row={row} m={m} />
+              <span className="min-w-0 truncate text-ui text-sol-text" title={m.step.title}>{m.step.title}</span>
             </li>
           ))}
+          {open.length > CARD_MILESTONES && <li className="pl-8 text-meta tabular-nums text-sol-text-dim">+{open.length - CARD_MILESTONES} more</li>}
         </ul>
       )}
       <div className="mt-3 flex items-center justify-end gap-1.5">

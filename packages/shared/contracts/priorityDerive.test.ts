@@ -1,6 +1,6 @@
 // Run: cd packages/shared && bun test contracts/priorityDerive.test.ts
 import { describe, expect, test } from "bun:test";
-import { attributePlans, bestSession, isWorkflowSession, nextActionOf, orderSessions, type ActionMilestone, type PlanFacts } from "./priorityDerive";
+import { attributePlans, isWorkflowSession, milestoneStateOf, orderByState, orderSessions, type PlanFacts } from "./priorityDerive";
 
 const plan = (id: string, size: number, status = "active"): PlanFacts => ({ id, short_id: id, title: id, done: 0, total: size, size, status });
 // The doc's shapes: pl-1075 "Every change merges green through one flow" (37 tasks), pl-619 a 140-task program.
@@ -62,43 +62,56 @@ describe("attributePlans", () => {
 
 const s = (state: any, last_active_at: number, workflow = false, id = `${state}${last_active_at}`) => ({ id, state, workflow, last_active_at });
 type S = ReturnType<typeof s>;
-const m = (key: string, sessions: S[], tier: "critical" | "polish" = "critical", done = false): ActionMilestone<S> => ({ key, tier, done, sessions });
+const m = (sessions: S[], done = false) => ({ done, sessions });
+const OWN = { canStart: true };
 
-describe("nextActionOf", () => {
-  test("Answer outranks Resume, Open and Start, on any open milestone, polish too", () => {
-    const a = nextActionOf([m("s1", [s("working", 5)]), m("s2", []), m("p1", [s("needs_you", 3)], "polish")]);
-    expect(a?.kind).toBe("answer");
-    expect(a?.milestone.key).toBe("p1");
+describe("milestoneStateOf", () => {
+  test("needs you > working > dormant > idle, whatever order the sessions come in", () => {
+    expect(milestoneStateOf(m([s("idle", 9), s("working", 1), s("needs_you", 3), s("dormant", 5)]), OWN).kind).toBe("needs_you");
+    expect(milestoneStateOf(m([s("idle", 9), s("dormant", 5), s("working", 1)]), OWN).kind).toBe("working");
+    expect(milestoneStateOf(m([s("idle", 9), s("dormant", 5)]), OWN).kind).toBe("dormant");
+    expect(milestoneStateOf(m([s("idle", 9)]), OWN).kind).toBe("idle");
   });
 
-  test("Answer goes to the most recently waiting session a person drives before a workflow run's", () => {
-    const a = nextActionOf([m("s1", [s("needs_you", 1, false, "old"), s("needs_you", 9, true, "run")]), m("s2", [s("needs_you", 5, false, "new")])]);
-    expect(a?.session?.id).toBe("new");
+  test("the session to answer is the most recent ask; a workflow run's ask counts too", () => {
+    const st = milestoneStateOf(m([s("needs_you", 1, false, "old"), s("needs_you", 9, true, "run"), s("working", 20)]), OWN);
+    expect([st.kind, st.session?.id]).toEqual(["needs_you", "run"]);
   });
 
-  test("someone else's session never asks the viewer: no Answer for it", () => {
+  test("a state is the viewer's final verdict: a teammate's session that asks the viewer makes the milestone Needs you", () => {
+    // The sidebar holds it under Needs You (a cast decide addressed to the viewer), so its state arrives as needs_you.
     const theirs = { ...s("needs_you", 9, false, "theirs"), mine: false };
-    const a = nextActionOf([m("s1", [theirs, s("dormant", 1, false, "mine")])]);
-    expect([a?.kind, a?.session?.id]).toEqual(["resume", "mine"]);
+    expect(milestoneStateOf(m([theirs, s("working", 1, false, "mine")]), OWN)).toEqual({ kind: "needs_you", session: theirs });
+    expect(orderByState([s("working", 20, false, "mine"), theirs]).map((x) => x.id)).toEqual(["theirs", "mine"]);
   });
 
-  test("a done milestone's ask is not the priority's action", () => {
-    expect(nextActionOf([m("s1", [s("needs_you", 1)], "critical", true), m("s2", [s("dormant", 1)])])?.kind).toBe("resume");
+  test("needs you outranks done: a done milestone asks while a session of its asks, and is done once it stops", () => {
+    const ask = s("needs_you", 1);
+    expect(milestoneStateOf(m([s("working", 9), ask], true), OWN)).toEqual({ kind: "needs_you", session: ask });
+    expect(milestoneStateOf(m([s("working", 9), s("idle", 1)], true), OWN)).toEqual({ kind: "done" });
+    expect(milestoneStateOf(m([], true), OWN)).toEqual({ kind: "done" });
   });
 
-  test("otherwise the first open critical milestone: Open, Resume, or Start", () => {
-    expect(nextActionOf([m("s1", [s("working", 1)])])?.kind).toBe("open");
-    expect(nextActionOf([m("s1", [s("idle", 1)])])?.kind).toBe("resume");
-    expect(nextActionOf([m("s1", [s("killed", 9), s("done", 9)])])?.kind).toBe("start");
-    expect(nextActionOf([m("s1", [], "critical", true), m("s2", [])])?.milestone.key).toBe("s2");
-    expect(nextActionOf([m("p1", [], "polish")])).toBeNull();
+  test("no live session: start on the owner's own active priority, else nothing", () => {
+    expect(milestoneStateOf(m([s("killed", 9), s("done", 9)]), OWN).kind).toBe("start");
+    expect(milestoneStateOf(m([]), OWN).kind).toBe("start");
+    expect(milestoneStateOf(m([]), { canStart: false }).kind).toBe("none");
   });
+});
 
-  test("a person's session ranks above a workflow run, and a closed run is never best", () => {
-    expect(bestSession([s("working", 9, true, "run"), s("dormant", 1, false, "mine")])?.id).toBe("mine");
-    expect(bestSession([s("killed", 9, true, "run")])).toBeUndefined();
-    expect(orderSessions([s("killed", 9, true, "closed-run"), s("working", 1, true, "run"), s("idle", 1, false, "mine")]).map((x) => x.id)).toEqual(["mine", "run", "closed-run"]);
-  });
+test("orderByState: the sidebar's order, then the most recent; closed last", () => {
+  const list = [s("killed", 99, false, "closed"), s("idle", 5, false, "idle"), s("working", 1, true, "run"), s("working", 3, false, "work"), s("needs_you", 0, false, "ask")];
+  expect(orderByState(list).map((x) => x.id)).toEqual(["ask", "work", "run", "idle", "closed"]);
+});
+
+test("orderSessions: a person's session ranks above a workflow run, and every closed session last, a person's included", () => {
+  expect(orderSessions([s("killed", 9, true, "closed-run"), s("working", 1, true, "run"), s("idle", 1, false, "mine")]).map((x) => x.id)).toEqual(["mine", "run", "closed-run"]);
+  expect(orderSessions([s("done", 99, false, "closed-mine"), s("idle", 1, true, "run")]).map((x) => x.id)).toEqual(["run", "closed-mine"]);
+});
+
+test("orderSessions orders the server's own states: someone else's needs_you there ranks as idle", () => {
+  const theirs = { ...s("needs_you", 9, false, "theirs"), mine: false };
+  expect(orderSessions([theirs, s("dormant", 1, false, "mine")]).map((x) => x.id)).toEqual(["mine", "theirs"]);
 });
 
 test("isWorkflowSession: a run's field, or a subagent titled as a step", () => {

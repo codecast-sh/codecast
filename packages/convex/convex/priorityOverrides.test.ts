@@ -146,6 +146,57 @@ describe("priority overrides survive the next pass", () => {
   });
 });
 
+describe("a priority's title the person set", () => {
+  test("the owner renames it, and a later pass proposing another title leaves theirs", async () => {
+    const w = await seeded();
+    const me = as(w, w.ana);
+    expect(await me.mutation(pri.renameTitle, { short_id: "pri-1", title: "  Evals people trust  " })).toMatchObject({ short_id: "pri-1", title: "Evals people trust" });
+    expect(await byShort(w, "pri-1")).toMatchObject({ title: "Evals people trust", title_set_by: "person" });
+
+    await w.send(w.ana, w.teamConv, late(), "grader still flaky");
+    model.reply = () => JSON.stringify({ priorities: [proposal({ short_id: "pri-1", title: "Grader reliability", summary: "Faults at 12%" })], unassigned: [] });
+    await run(w);
+    expect(await byShort(w, "pri-1")).toMatchObject({ title: "Evals people trust", title_set_by: "person", summary: "Faults at 12%" });
+
+    // A plan written straight to applyPlan (one made before the rename) is held the same way.
+    await w.t.mutation(pass.applyPlan, {
+      user_id: w.ana, workspace: w.team, started_at: Date.now(), from_cursor: 1, cursor_at: 2, model: "m",
+      plan: { creates: [], updates: [{ short_id: "pri-1", patch: { title: "Theirs" } }], merges: [], sessions: [], unmap: [], notes: [], rewritten: [] },
+    });
+    expect((await byShort(w, "pri-1")).title).toBe("Evals people trust");
+  });
+
+  test("a renamed priority is never merged away by the pass", async () => {
+    const w = await seeded();
+    await w.send(w.ana, w.oldConv, late(), "other work");
+    model.reply = () => JSON.stringify({ priorities: [proposal({ title: "Second", steps: [{ title: "Other", tier: "critical", refs: [] }], sessions: [{ session: "jx7old", step: "Other" }] })], unassigned: [] });
+    await run(w);
+    await as(w, w.ana).mutation(pri.renameTitle, { short_id: "pri-2", title: "Mine to keep" });
+
+    await w.send(w.ana, w.teamConv, late(), "more grader work");
+    model.reply = () => JSON.stringify({ priorities: [proposal({ short_id: "pri-1", merges: ["pri-2"] })], unassigned: [] });
+    await run(w);
+    expect(await byShort(w, "pri-2")).toMatchObject({ status: "active", title: "Mine to keep", title_set_by: "person" });
+    expect((await byShort(w, "pri-2")).merged_into).toBeUndefined();
+    expect((await w.conversation(w.oldConv))?.priority_id).toBe((await byShort(w, "pri-2"))._id);
+
+    // A plan made before the rename that still merges it is held the same way.
+    await w.t.mutation(pass.applyPlan, {
+      user_id: w.ana, workspace: w.team, started_at: Date.now(), from_cursor: 1, cursor_at: 2, model: "m",
+      plan: { creates: [], updates: [], merges: [{ short_id: "pri-2", merged_into: "pri-1", step_keys: {} }], sessions: [], unmap: [], notes: [], rewritten: [] },
+    });
+    expect(await byShort(w, "pri-2")).toMatchObject({ status: "active", title: "Mine to keep" });
+  });
+
+  test("only the owner renames it, and never to an empty title", async () => {
+    const w = await seeded();
+    await expect(as(w, w.ben).mutation(pri.renameTitle, { short_id: "pri-1", title: "Ben's now" })).rejects.toThrow();
+    await expect(as(w, w.ana).mutation(pri.renameTitle, { short_id: "pri-1", title: "   " })).rejects.toThrow("a priority title is 1 to 200 characters");
+    expect(await byShort(w, "pri-1")).toMatchObject({ title: "Trusted evals" });
+    expect((await byShort(w, "pri-1")).title_set_by).toBeUndefined();
+  });
+});
+
 describe("a person's merge while a pass reads", () => {
   test("the stale plan keeps the milestones the merge carried in, and its own new step takes the next key", async () => {
     const w = await seeded();

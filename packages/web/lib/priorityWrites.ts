@@ -5,8 +5,8 @@
 // replaced, and each goes back to the row held before the press unless
 // something newer (a server push, another window) has replaced it since.
 //
-// Checking off a milestone or a priority takes it out of sight while Hide
-// done is on, so each check-off records an undo: its receipt's Undo (sonner
+// Checking off a milestone or a priority takes it out of the open
+// milestones (or the active list), so each check-off records an undo: its receipt's Undo (sonner
 // on web, the phone's undo bar, each the engine's notifier), and ⌘Z on web,
 // put back exactly what the press replaced (priorities.undoStepDone and
 // undoDone), so a milestone the pass held is the pass's again and a priority
@@ -98,6 +98,7 @@ export function priorityWrites(onError: (message: string) => void): PriorityWrit
         () => undoStepDone(id, key, setBy),
       );
     },
+    renamePriority: (id, title) => run(() => st().renamePriorityTitle(id, title)),
     renameStep: (id, key, title) => run(() => st().renamePriorityStep(id, key, title)),
     dropStep: (id, key) => run(() => st().dropPriorityStep(id, key)),
     markDone: (id) => {

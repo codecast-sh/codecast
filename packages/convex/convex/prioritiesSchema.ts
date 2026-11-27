@@ -47,6 +47,8 @@ export const priorityTables = {
     workspace: v.string(),
     short_id: v.string(), // "pri-N"
     title: v.string(),
+    /** "person" when the person renamed it: the pass never changes its title. */
+    title_set_by: v.optional(setBy),
     summary: v.string(),
     status: v.union(v.literal("active"), v.literal("done"), v.literal("quiet"), v.literal("set_aside"), v.literal("merged")),
     merged_into: v.optional(v.id("priorities")),

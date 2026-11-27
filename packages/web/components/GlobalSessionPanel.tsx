@@ -18,7 +18,6 @@ import { rowDropAt, useAdoptDrag } from "../hooks/useAdoptDrag";
 import { AdoptHint } from "./inbox/AdoptHint";
 import { copyToClipboard, formatShortDate } from "../lib/utils";
 import { LoginCodePaste } from "./LoginCodePaste";
-import type { ThreadStateStatus } from "@codecast/shared/contracts";
 import { ORG_STATE_META } from "./org/orgMeta";
 import { StatusDot } from "./StatusDot";
 import type { WorkState } from "@codecast/shared/contracts";
@@ -105,6 +104,7 @@ import { CompactPlanRow, PlanAskButton, PlanGroupFacts, PlanGroupMark, PlanTierH
 import { PLAN_TIERS, planTierFolded, planTierKey, planTierOf } from "../store/inboxStore";
 import { prioritiesAnywhere, priorityOrderSig, priorityPlaceReader, rankLabelOf, sortByPriority } from "../store/priorityOrder";
 import { useWorkspaceFeature } from "../lib/teamFeatures";
+import { INBOX_SECTION_DECLARED_STATUS } from "../lib/sessionStatus";
 import type { PlanItem } from "../store/inboxStore";
 import { windowOrgTree } from "../store/orgSlice";
 import { useSyncPlansWithArgs } from "../hooks/useSyncPlans";
@@ -1690,11 +1690,6 @@ function SessionBeacon({
 // Memoized (see the export at the bottom of the file): the layout re-renders
 // often with identical props, and every un-memoized pass here rebuilt ~100
 // cards' worth of elements.
-// The declared status a status section's header already says, so a card under
-// it does not repeat it as a chip.
-const SECTION_DECLARED_STATUS: Record<string, ThreadStateStatus | undefined> = {
-  needs_input: "blocked", done: "done", new_results: "done", dormant: "dormant",
-};
 
 function SessionListPanelImpl({
   onSessionSelect,
@@ -3169,7 +3164,7 @@ function SessionListPanelImpl({
                   onDefer={s.deferSession}
                   onPin={s.pinSession}
                   variant={sectionVariant || "default"}
-                  sectionStatus={SECTION_DECLARED_STATUS[key]}
+                  sectionStatus={INBOX_SECTION_DECLARED_STATUS[key]}
                   forkColorKey={forkColorKeyOf(session)}
                   roleSessions={roleSessionsByLead.get(session._id)}
                   subRow={flatNestParentOf && isUnderRole(session) && flatNestParentOf(session) ? "role" : flat && nestedWorkerIds.has(session._id) ? "worker" : undefined}

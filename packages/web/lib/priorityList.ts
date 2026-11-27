@@ -1,16 +1,15 @@
 // What /priorities draws (components/priorities), derived on read from the
 // store's priority rows (their links and plans come from convex
-// priorities.list), the history answer (typing per day, today's unassigned
-// sessions) and the inbox's live session states. Nothing here is stored:
-// next actions, the bracket rail, momentum, today's shares, waiting on you.
+// priorities.list), the history answer (typing per day) and the inbox's live
+// session states. Nothing here is stored: each milestone's state, the ten
+// days of typing.
 import type { PriorityHistory, PriorityLinkedSession, PriorityPlanRef, PriorityRow, PrioritySessionState, PriorityStep } from "@codecast/shared/contracts/priorities";
-import { asksPerson, bestSession, isClosedSession, nextActionOf, orderSessions, type NextAction } from "@codecast/shared/contracts/priorityDerive";
+import { milestoneStateOf, orderSessions, type MilestoneState, type MilestoneStateKind } from "@codecast/shared/contracts/priorityDerive";
 import type { SessionStatus } from "./sessionStatus";
+import type { DrawnMark } from "../store/inboxMark";
 
 export const LIST_DAYS = 10;
 const DAY = 86_400_000;
-/** A priority this old with no critical landing in this many days reads Stalled. */
-const STALL_DAYS = 5;
 
 /** "2026-11-25" for a timestamp, in the viewer's local calendar. */
 export function localDayKey(ts: number): string {
@@ -43,32 +42,82 @@ export function ago(ts: number, now: number): string {
   return h < 24 ? `${h}h` : `${Math.round(h / 24)}d`;
 }
 
-/** The inbox's states (lib/sessionStatus) in the list's words. */
-export function stateOfStatus(s: SessionStatus): PrioritySessionState {
+/**
+ * A drawn mark in the milestone vocabulary, for a session that does not ask:
+ * working › dormant › idle (a stashed one counts toward no milestone:
+ * buildModels). A mark outside it (done, stashed, error) reads as
+ * idle; starting is working; a dismissed row is closed. A needs-you glyph
+ * where the inbox does not count it as needing the viewer waits on someone
+ * else: sleeping.
+ */
+function stateOfMark(s: SessionStatus): PrioritySessionState {
   switch (s) {
-    case "needs_you": case "error": return "needs_you";
     case "working": case "starting": return "working";
-    case "dormant": return "dormant";
-    case "done": return "done";
+    case "dormant": case "needs_you": return "dormant";
     case "killed": return "killed";
     default: return "idle";
   }
 }
 
 export const STATE_WORD: Record<PrioritySessionState, string> = {
-  needs_you: "Needs you", working: "Working", dormant: "Dormant", idle: "Idle", done: "Done", killed: "Closed",
+  needs_you: "Needs you", working: "Working", dormant: "Sleeping", idle: "Idle", done: "Done", killed: "Closed",
 };
 
-const demote = (s: Pick<PriorityLinkedSession, "mine">, state: PrioritySessionState): PrioritySessionState => (state === "needs_you" && s.mine === false ? "idle" : state);
+/** A milestone's state mark in words (its tooltip, the legend). */
+export const MILESTONE_STATE_WORD: Record<Exclude<MilestoneStateKind, "none">, string> = {
+  needs_you: STATE_WORD.needs_you, start: "New session", working: STATE_WORD.working, dormant: STATE_WORD.dormant, idle: STATE_WORD.idle, done: "Done",
+};
 
-/** A linked session as the list draws it: the inbox's live state over the server's, where it opens, and today's typing. */
-export type SessionLine = PriorityLinkedSession & { href: string; today: number };
+/**
+ * A milestone reads Needs you exactly when one of its sessions sits where its
+ * inbox counts it as needing you: Questions, Needs You, the viewer's
+ * Decisions queue (on both inboxes), or a pinned card waiting on the viewer.
+ * Otherwise it takes the most urgent of its live
+ * sessions' drawn marks (working › dormant › idle). Marks outside that
+ * vocabulary (done, error) read as idle: a done session's results wait to be
+ * read, so it still counts as someone on it. A stashed session counts as
+ * nobody on it: a milestone whose only live sessions are stashed offers a New
+ * session to its owner. Rows always draw the inbox's own mark.
+ *
+ * Needs you outranks done. A done milestone with a session the inbox counts
+ * as needing you reads Needs you until the ask is answered. Any milestone that
+ * reads Needs you, whatever its tier and whether done, sits with the open
+ * milestones and is never folded. DONE n counts what its fold holds, so a done
+ * milestone that asks leaves it; POLISH x/y is a progress count over every
+ * polish milestone (x the done ones), asking or not. A section head whose fold
+ * is empty is hidden.
+ *
+ * `live` answers what the inbox draws (hooks/usePriorityModels liveMarkOf
+ * over store/inboxMark inboxMarkOf), or undefined when it draws nothing: then
+ * the server's state stands, a needs_you there read as idle whoever owns it
+ * (nothing asks through a session the inbox does not draw, and it is not
+ * asleep either). A session riding its role's lead opens at the
+ * lead (`target`), where the answer is.
+ */
+const lineOf = (s: PriorityLinkedSession, live: (conversationId: string) => DrawnMark | undefined): SessionLine => {
+  const drawn = live(s.conversation_id);
+  if (drawn) return { ...s, state: drawn.asks ? "needs_you" : stateOfMark(drawn.mark), mark: drawn.mark, target: drawn.target, href: `/conversation/${drawn.target}` };
+  return { ...s, state: s.state === "needs_you" ? "idle" : s.state, target: s.conversation_id, href: `/conversation/${s.conversation_id}` };
+};
+
+/**
+ * A linked session as the list draws it: its state in the milestone
+ * vocabulary, the mark its inbox draws when it draws one (its row shows that
+ * mark), and the conversation it opens (`target`: its own, or the lead it
+ * rides, where the answer is; `href` is web's route to it).
+ */
+export type SessionLine = PriorityLinkedSession & { target: string; href: string; mark?: SessionStatus };
+
+/** The mark a session's row draws (both apps): its inbox's mark (Done's check, the stash tray, an error), else its own state's. */
+export const sessionRowMark = (s: Pick<SessionLine, "mark" | "state">): SessionStatus => s.mark ?? s.state;
 
 export type MilestoneModel = {
   key: string;
   tier: PriorityStep["tier"];
   done: boolean;
   step: PriorityStep;
+  /** Its state mark (shared/contracts/priorityDerive milestoneStateOf). */
+  state: MilestoneState<SessionLine>;
   /** Best first (orderSessions). */
   sessions: SessionLine[];
   /** Linked sessions the row did not carry. */
@@ -82,87 +131,42 @@ export type MilestoneModel = {
   tasks: string[];
   /** "owner/repo#N" refs. */
   prs: string[];
-  today: number;
 };
 
 export type PriorityModel = {
   row: PriorityRow;
   milestones: MilestoneModel[];
   plan: PriorityPlanRef | null;
-  /** Typing per day over the shown days, and which of them a critical milestone landed on. */
+  /** Messages typed into it per shown day. */
   counts: number[];
-  landed: boolean[];
-  today: number;
-  landed10: number;
-  /** Days since a critical milestone last landed; null when none has. */
-  lastLandedDays: number | null;
-  /** Open critical work with no landing in STALL_DAYS or more, on a priority at least that old; else null. */
-  stalledDays: number | null;
-  action: NextAction<MilestoneModel> | null;
-  /** One session working at least half the open critical milestones (two or more): it heads a bracket over the lines from its first to its last. */
-  rail: { session: SessionLine; keys: string[] } | null;
 };
-
-const startOfDay = (t: number) => {
-  const d = new Date(t);
-  d.setHours(0, 0, 0, 0);
-  return d.getTime();
-};
-
-/** The session covering most of a priority's open critical milestones, and the lines its bracket spans. */
-export function railOf(milestones: readonly MilestoneModel[]): PriorityModel["rail"] {
-  const open = milestones.filter((m) => m.tier === "critical" && !m.done);
-  if (open.length < 2) return null;
-  const reach = new Map<string, { s: SessionLine; at: number[] }>();
-  open.forEach((m, i) => {
-    for (const s of m.sessions) {
-      if (isClosedSession(s)) continue;
-      const r = reach.get(s.conversation_id) ?? { s, at: [] };
-      r.at.push(i);
-      reach.set(s.conversation_id, r);
-    }
-  });
-  const best = [...reach.values()]
-    .filter((r) => r.at.length >= 2 && r.at.length * 2 >= open.length)
-    .sort((a, b) => Number(a.s.workflow) - Number(b.s.workflow) || b.at.length - a.at.length)[0];
-  if (!best) return null;
-  return { session: best.s, keys: open.slice(best.at[0], best.at[best.at.length - 1] + 1).map((m) => m.key) };
-}
 
 /**
- * Every priority's model. `live` answers the inbox's verdict for a session
- * the store holds (by conversation id); the server's doc-only state stands
- * for the rest.
+ * Every priority's model. `live` answers what its inbox draws for a session
+ * (by conversation id); the server's state stands for the rest.
  */
 export function buildModels(
   rows: readonly PriorityRow[],
   history: PriorityHistory | undefined,
-  live: (conversationId: string) => PrioritySessionState | undefined,
+  live: (conversationId: string) => DrawnMark | undefined,
   days: readonly string[],
-  now: number,
 ): PriorityModel[] {
-  const todayKey = localDayKey(now);
-  const todayAt = history?.days.indexOf(todayKey) ?? -1;
-  const typedToday = (shortId: string) => (todayAt === -1 ? 0 : history?.sessions?.[shortId]?.[todayAt] ?? 0);
   const lanes = new Map((history?.lanes ?? []).map((l) => [l.short_id ?? l.key, l]));
-  const daySet = new Set(days);
   return rows.map((row) => {
     const links = new Map((row.links ?? []).map((l) => [l.key, l]));
+    // Starting work is the owner's, and only on a priority still in play.
+    const canStart = row.mine && row.status === "active";
     // Reads never return a dropped milestone; a row cached before that rule is held to it here.
     const milestones = row.steps.filter((step) => !step.dropped).map((step): MilestoneModel => {
       const l = links.get(step.key);
-      const sessions = orderSessions((l?.sessions ?? []).map((s) => ({
-        ...s,
-        // Another's session never asks the viewer anything, whatever the inbox says of it.
-        state: demote(s, live(s.conversation_id) ?? s.state),
-        href: `/conversation/${s.conversation_id}`,
-        today: typedToday(s.short_id),
-      })));
+      const sessions = orderSessions((l?.sessions ?? []).map((s) => lineOf(s, live)));
       return {
         key: step.key,
         tier: step.tier,
         done: step.done,
         step,
+        // A stashed session is set aside: nobody is on the milestone through it.
+        state: milestoneStateOf({ done: step.done, sessions: sessions.filter((x) => x.mark !== "stashed") }, { canStart }),
         sessions,
         more: l?.sessions_more ?? 0,
         looksDone: !!l?.looks_done && !step.done,
@@ -171,261 +175,15 @@ export function buildModels(
         partOf: l?.part_of ?? [],
         tasks: step.refs.filter((r) => r.kind === "task").map((r) => r.id),
         prs: step.refs.filter((r) => r.kind === "pr").map((r) => r.id),
-        today: sessions.reduce((n, s) => n + s.today, 0),
       };
     });
-    const counts = alignCounts(history, days, lanes.get(row.short_id)?.counts);
-    const critical = row.steps.filter((s) => s.tier === "critical" && s.done && s.done_at).map((s) => s.done_at!);
-    const landedDays = new Set(critical.map(localDayKey));
-    const last = critical.length ? Math.max(...critical) : null;
-    // Days by the calendar, as "last Nd" counts them.
-    const daysSince = (t: number) => Math.round((startOfDay(now) - startOfDay(t)) / DAY);
-    const quiet = daysSince(last ?? row.first_seen_at);
-    const openCritical = row.steps.some((s) => s.tier === "critical" && !s.done);
-    const stalled = row.status === "active" && openCritical && daysSince(row.first_seen_at) >= STALL_DAYS && quiet >= STALL_DAYS;
-    return {
-      row,
-      milestones,
-      plan: row.plan ?? null,
-      counts,
-      landed: days.map((d) => landedDays.has(d)),
-      today: counts[days.indexOf(todayKey)] ?? 0,
-      landed10: critical.filter((t) => daySet.has(localDayKey(t))).length,
-      lastLandedDays: last == null ? null : daysSince(last),
-      stalledDays: stalled ? quiet : null,
-      // A teammate's priority offers no action: starting, resuming and answering its work is theirs to do.
-      action: row.mine && row.status === "active" ? nextActionOf(milestones) : null,
-      rail: row.status === "active" ? railOf(milestones) : null,
-    };
+    return { row, milestones, plan: row.plan ?? null, counts: alignCounts(history, days, lanes.get(row.short_id)?.counts) };
   });
 }
 
-/**
- * The session a milestone line names when the priority's action is not on
- * it, on the phone and the page: one that asks, other than the one the
- * action already answers; else the best of the sessions a person drives,
- * ahead of workflow runs, so the line reads Dormant rather than a review's
- * Idle.
- */
-export function lineSession(model: Pick<PriorityModel, "action">, m: Pick<MilestoneModel, "sessions">): SessionLine | undefined {
-  const answered = model.action?.session?.conversation_id;
-  const asking = m.sessions.find((s) => asksPerson(s) && s.conversation_id !== answered) ?? m.sessions.find(asksPerson);
-  return asking ?? bestSession(m.sessions.filter((s) => !s.workflow)) ?? bestSession(m.sessions);
-}
-
-/** Something waiting on the viewer: a session asking on an open milestone of one of their active priorities. */
-/**
- * Something waiting on the viewer. `label` is what its row reads: the
- * milestone, or "milestone · session" where more than one session waits on
- * the same milestone (`who` is that session's part), so the rows tell them
- * apart.
- */
-export type WaitingItem = { key: string; priority: string; rank: number | null; milestone: string; milestoneKey: string; label: string; who: string | null; session: SessionLine };
-
-/** A session's title as a row says it: a workflow step reads "Review: <what it works on>", never its id. */
-export function sessionWords(s: Pick<SessionLine, "title">): string {
-  const step = /^([A-Z][A-Za-z]+) · (?:ct|pl)-\d+\s*(.*)$/.exec(s.title);
-  return step ? `${step[1]}: ${step[2] || "work"}` : s.title || "Untitled session";
-}
-
-/** A title's words, lower case, a plural's trailing s dropped: "scorer" and "scorers" are one word. */
-const wordsOf = (t: string) => t.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean).map((w) => (w.length > 3 && w.endsWith("s") && !w.endsWith("ss") ? w.slice(0, -1) : w));
-
-/**
- * A session's part of "milestone · session": its title, unless the title
- * nearly repeats the milestone (it opens with two or more of the
- * milestone's words, or has no word the milestone lacks). Then what
- * differs: the title past the shared opening, or "session N" when nothing
- * does.
- */
-export function distinctFrom(milestone: string, title: string, n: number): string {
-  const known = new Set(wordsOf(milestone));
-  const parts = title.split(/\s+/).filter(Boolean);
-  const ms = wordsOf(milestone);
-  let shared = 0;
-  while (shared < parts.length && shared < ms.length && wordsOf(parts[shared]).join("") === ms[shared]) shared++;
-  const own = wordsOf(title).filter((w) => !known.has(w));
-  if (shared < 2 && own.length > 0) return title;
-  const tail = parts.slice(shared).join(" ").replace(/^[\s·:–—-]+/, "");
-  return tail && wordsOf(tail).some((w) => !known.has(w)) ? tail : `session ${n}`;
-}
-
-/** Every session asking the viewer, by rank, critical milestones before polish, each once. */
-export function waitingOf(models: readonly PriorityModel[]): WaitingItem[] {
-  const out: WaitingItem[] = [];
-  const seen = new Set<string>();
-  const mine = models.filter((m) => m.row.mine && m.row.status === "active").sort((a, b) => (a.row.rank ?? 1e9) - (b.row.rank ?? 1e9));
-  for (const pm of mine) {
-    const open = pm.milestones.filter((m) => !m.done).sort((a, b) => Number(a.tier === "polish") - Number(b.tier === "polish"));
-    for (const m of open) {
-      for (const s of m.sessions.filter(asksPerson).sort((a, b) => b.last_active_at - a.last_active_at)) {
-        if (seen.has(s.conversation_id)) continue;
-        seen.add(s.conversation_id);
-        out.push({ key: `${pm.row.short_id}:${m.key}:${s.short_id}`, priority: pm.row.short_id, rank: pm.row.rank, milestone: m.step.title, milestoneKey: m.key, label: m.step.title, who: null, session: s });
-      }
-    }
-  }
-  const perMilestone = new Map<string, number>();
-  for (const w of out) perMilestone.set(`${w.priority}:${w.milestoneKey}`, (perMilestone.get(`${w.priority}:${w.milestoneKey}`) ?? 0) + 1);
-  const nth = new Map<string, number>();
-  return out.map((w) => {
-    const at = `${w.priority}:${w.milestoneKey}`;
-    if ((perMilestone.get(at) ?? 0) < 2) return w;
-    nth.set(at, (nth.get(at) ?? 0) + 1);
-    const who = distinctFrom(w.milestone, sessionWords(w.session), nth.get(at)!);
-    return { ...w, label: `${w.milestone} · ${who}`, who };
-  });
-}
-
-// ── Today and the ten days ───────────────────────────────────────────────
-
-export type TodaySegment = { key: string; title: string; count: number; tone: "top" | "rest" | "none" };
-export type TodayShare = { label: string; count: number; pct: number };
-
-/** Whole percentages that add up to exactly 100 (largest remainder). */
-export function shares(values: readonly number[]): number[] {
-  const total = values.reduce((a, b) => a + b, 0);
-  if (!total) return values.map(() => 0);
-  const raw = values.map((v) => (v / total) * 100);
-  const out = raw.map(Math.floor);
-  let left = 100 - out.reduce((a, b) => a + b, 0);
-  for (const [, i] of raw.map((r, i) => [r - Math.floor(r), i] as const).sort((a, b) => b[0] - a[0])) {
-    if (left <= 0) break;
-    out[i]++;
-    left--;
-  }
-  return out;
-}
-
-/**
- * Where today's messages went, among the viewer's own lanes: each priority in
- * rank order (the top three strong), then no priority. `parts` are the
- * shares in words, #1 #2 #3 rest none, adding up to 100.
- */
-export function todayOf(history: PriorityHistory | undefined, rows: readonly PriorityRow[], now: number): {
-  segments: TodaySegment[];
-  parts: TodayShare[];
-  total: number;
-  topPct: number;
-} {
-  const at = history?.days.indexOf(localDayKey(now)) ?? -1;
-  if (!history || at === -1) return { segments: [], parts: [], total: 0, topPct: 0 };
-  const rank = new Map(rows.filter((r) => r.mine && r.status === "active").map((r) => [r.short_id, r.rank]));
-  const segs = history.lanes
-    .filter((l) => !l.owner && (l.counts[at] ?? 0) > 0)
-    .map((l) => {
-      const r = l.short_id ? rank.get(l.short_id) ?? null : null;
-      const tone: TodaySegment["tone"] = !l.short_id ? "none" : r != null && r <= 3 ? "top" : "rest";
-      return { key: l.key, title: l.short_id ? `${r != null ? `#${r} ` : ""}${l.title}` : "No priority", count: l.counts[at] ?? 0, tone, r, order: !l.short_id ? 1e9 : r ?? 1e6 };
-    })
-    .sort((a, b) => a.order - b.order);
-  const byRank = (n: number) => segs.filter((s) => s.r === n).reduce((c, s) => c + s.count, 0);
-  const top = [byRank(1), byRank(2), byRank(3)];
-  const rest = segs.filter((s) => s.tone !== "none" && !(s.r != null && s.r <= 3)).reduce((c, s) => c + s.count, 0);
-  const none = segs.filter((s) => s.tone === "none").reduce((c, s) => c + s.count, 0);
-  const pct = shares([...top, rest, none]);
-  const parts = [
-    ...top.map((count, i) => ({ label: `#${i + 1}`, count, pct: pct[i] })),
-    { label: "rest", count: rest, pct: pct[3] },
-    { label: "none", count: none, pct: pct[4] },
-  ].filter((p) => p.count > 0);
-  return {
-    segments: segs.map(({ key, title, count, tone }) => ({ key, title, count, tone })),
-    parts,
-    total: segs.reduce((c, s) => c + s.count, 0),
-    topPct: pct[0] + pct[1] + pct[2],
-  };
-}
-
-export type Landed = { title: string; priority: string; rank: number | null; tier: PriorityStep["tier"] };
-
-/** Every milestone that landed on each of `days`, critical first. */
-export function landedByDay(rows: readonly PriorityRow[], days: readonly string[]): Map<string, Landed[]> {
-  const out = new Map<string, Landed[]>(days.map((d) => [d, []]));
-  for (const r of rows) {
-    if (r.status === "merged") continue;
-    for (const s of r.steps) {
-      if (!s.done || !s.done_at) continue;
-      out.get(localDayKey(s.done_at))?.push({ title: s.title, priority: r.title, rank: r.status === "active" ? r.rank : null, tier: s.tier });
-    }
-  }
-  for (const list of out.values()) list.sort((a, b) => Number(a.tier === "polish") - Number(b.tier === "polish"));
-  return out;
-}
-
-// ── Filters, layout ──────────────────────────────────────────────────────
-
-export const SHOW_KINDS = ["sessions", "plans", "tasks", "prs", "branches", "deploys"] as const;
-export type ShowKind = (typeof SHOW_KINDS)[number];
-export type ListFilters = { mine: boolean; hideDone: boolean; show: Record<ShowKind, boolean> };
-const DEFAULT_SHOW = "sessions,plans";
-
-/** The rows the list draws under `f`: never a merged one; Mine keeps the viewer's, Hide done keeps the active. The page's count is their number. */
-export function listedRows<T extends Pick<PriorityRow, "status" | "mine">>(rows: readonly T[], f: Pick<ListFilters, "mine" | "hideDone">): T[] {
-  return rows.filter((r) => r.status !== "merged" && (!f.mine || r.mine) && (!f.hideDone || r.status === "active"));
-}
-
-/** The filters a page address carries; each default is left out of it. */
-export function readFilters(params: URLSearchParams | null | undefined): ListFilters {
-  const kinds = new Set((params?.get("show") ?? DEFAULT_SHOW).split(","));
-  return {
-    mine: params?.get("mine") !== "0",
-    hideDone: params?.get("done") !== "1",
-    show: Object.fromEntries(SHOW_KINDS.map((k) => [k, kinds.has(k)])) as Record<ShowKind, boolean>,
-  };
-}
-
-/** The address parameters the filters own (lib/rememberedFilters restores them when an address names none). */
-export const FILTER_PARAMS = ["mine", "done", "show"] as const;
-
-/** `f` as address parameters, a default as null. */
-export function filterParams(f: ListFilters): Record<(typeof FILTER_PARAMS)[number], string | null> {
-  const kinds = SHOW_KINDS.filter((k) => f.show[k]).join(",");
-  return { mine: f.mine ? null : "0", done: f.hideDone ? null : "1", show: kinds === DEFAULT_SHOW ? null : kinds || "none" };
-}
-
-/** The address for `f`, keeping the address's other parameters. */
-export function filtersHref(f: ListFilters, params: URLSearchParams | null | undefined): string {
-  const next = new URLSearchParams(params?.toString() ?? "");
-  for (const [k, v] of Object.entries(filterParams(f))) v === null ? next.delete(k) : next.set(k, v);
-  const qs = next.toString();
-  return qs ? `/priorities?${qs}` : "/priorities";
-}
+// ── Layout ───────────────────────────────────────────────────────────────
 
 export type ListLayout = "phone" | "wide";
-
-/** The width a line's session words ("in ‹session›", or its session chip) always keep, and the most they take before a plan shows. */
-export const LINE_LABEL_MIN = 80;
-export const LINE_LABEL_MAX = 192;
-/** The width a line's plan keeps for its title's words (8rem, or the whole title when shorter). */
-export const LINE_PLAN_TITLE_MIN = 128;
-
-/**
- * Which of a milestone line's optional parts fit its row (`room` px, `gap`
- * between parts), after the parts that always show (`fixed`: the action and
- * "+N"; each session label at 5rem, `labels` being their natural widths):
- * each kind's count chip in order while it fits; then the plan (`plan`: its
- * chrome and its title's 8rem), only once each label has its words up to
- * 12rem; then, on a line with no session label, the words after "+N"
- * (`words`: " sessions"). So with no room the words leave first, then the
- * plan, then the counts from the end.
- */
-export function fitLine({ room, gap, fixed, labels, kinds, plan, words }: {
-  room: number; gap: number; fixed: number[]; labels: number[]; kinds: number[]; plan: number | null; words: number;
-}): { kinds: number; plan: boolean; words: boolean } {
-  let used = [...fixed, ...labels.map(() => LINE_LABEL_MIN)].reduce((sum, w, i) => sum + w + (i ? gap : 0), 0);
-  const step = (w: number) => (used > 0 ? gap : 0) + w;
-  let fits = 0;
-  for (const w of kinds) {
-    if (used + step(w) > room) break;
-    used += step(w);
-    fits++;
-  }
-  const grow = labels.reduce((sum, w) => sum + Math.max(0, Math.min(w, LINE_LABEL_MAX) - LINE_LABEL_MIN), 0);
-  const showPlan = plan != null && used + grow + step(plan) <= room;
-  if (showPlan) used += grow + step(plan);
-  return { kinds: fits, plan: showPlan, words: words > 0 && labels.length === 0 && used + words <= room };
-}
 
 /**
  * Under a coarse pointer (a phone, Daylight), a press area at least 44px each
@@ -438,43 +196,14 @@ export const TOUCH_AREA = "relative [@media(pointer:coarse)]:after:absolute [@me
 /** A button 44px tall under a coarse pointer, its look kept on a mouse (the Modern style sizes buttons itself, so it is named too). */
 export const COARSE_TALL = "[@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:modern:h-11";
 
-/** The polish link's slot in a wide row's progress column: one width on every row and on the column head, so the pips line up. */
-export const POLISH_SLOT = "flex w-[5.25rem] shrink-0 justify-start";
-
-/**
- * The one grid every priority row and the column heads share, so each column
- * sits at one x down the list (every class spelled whole: Tailwind generates
- * only what it reads). Wide: rank | title | progress | today | momentum, the
- * momentum column its strip alone until the list (a container) is 44rem
- * wide, then the strip with its words on one line. A wide row's ⋯ sits
- * outside the grid, in the page's right gutter. Each row is a grid of its
- * own, so the progress column has one width rather than its content's.
- * Phone: rank | title | progress | strip | menu.
- */
-export const LIST_GRID: Record<ListLayout, string> = {
-  wide: "grid grid-cols-[20px_minmax(0,1fr)_11.5rem_28px_64px] items-center gap-x-2 [@container(min-width:44rem)]:grid-cols-[20px_minmax(0,1fr)_12.5rem_32px_13rem] [@container(min-width:44rem)]:gap-x-3",
-  phone: "grid grid-cols-[18px_minmax(0,1fr)_auto_auto_44px] items-center gap-x-2",
-};
-
 /**
  * The desktop grid for a list at least 520px wide, or on a touch screen at
  * least 900px wide (Daylight, 947), however narrow its sidebars leave the
  * list; a phone-sized list (~370px at 402) folds into the phone layout.
  */
-export const WIDE_MIN_LIST_WIDTH = 520;
+const WIDE_MIN_LIST_WIDTH = 520;
 export const TABLET_QUERY = "(pointer: coarse) and (min-width: 900px)";
 export const layoutForWidth = (width: number, tablet = false): ListLayout => (tablet || width >= WIDE_MIN_LIST_WIDTH ? "wide" : "phone");
 
-/** A workflow run's sessions folded to "3 reviews · 1 run": its step words counted. */
-export function runKinds(runs: readonly Pick<SessionLine, "title">[]): string {
-  const kinds = new Map<string, number>();
-  for (const r of runs) {
-    const word = (/^([A-Z][a-z]+)\b/.exec(r.title)?.[1] ?? "run").toLowerCase();
-    kinds.set(word, (kinds.get(word) ?? 0) + 1);
-  }
-  const plural = (w: string, n: number) => (n === 1 ? w : w.endsWith("y") ? `${w.slice(0, -1)}ies` : /(x|h|s)$/.test(w) ? `${w}es` : `${w}s`);
-  return [...kinds].map(([k, n]) => `${n} ${plural(k, n)}`).join(" · ");
-}
-
-/** A deploy a milestone reached, as its chip draws it (components/priorities/parts DeployChip). */
-export type DeployInfo = { id: string; target: string; status: string; at: number };
+/** A deploy a milestone reached, as its row draws it (Connected, with components/priorities/parts DeployMark). */
+export type DeployInfo = { id: string; short_id: string; target: string; status: string; at: number };

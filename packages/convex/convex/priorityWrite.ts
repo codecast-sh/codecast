@@ -91,6 +91,20 @@ export async function doMilestone(ctx: Ctx & { scheduler: any }, viewer: Id<"use
   return echo(ctx, viewer, p._id);
 }
 
+/**
+ * The person renames a priority: the title is theirs, the pass never writes it
+ * again, and never merges it away. A later rewrite still clears needs_rewrite and
+ * shows teammates this title, which is accepted: the person wrote it.
+ */
+export async function doRetitle(ctx: Ctx, viewer: Id<"users">, shortId: string, raw: string): Promise<Result<PriorityRow>> {
+  const p = await owned(ctx, viewer, shortId);
+  if ("error" in p) return p;
+  const title = raw.trim();
+  if (!title || title.length > MAX_TITLE) return { error: `a priority title is 1 to ${MAX_TITLE} characters` };
+  if (title !== p.title || p.title_set_by !== "person") await ctx.db.patch(p._id, { title, title_set_by: "person", updated_at: Date.now() });
+  return echo(ctx, viewer, p._id);
+}
+
 /** Leaving the ranking ends both places, the person's and the pass's. */
 const UNRANKED = { person_pos: undefined, ai_rank: undefined };
 

@@ -533,6 +533,7 @@ export const passInputs = internalQuery({
       priorities.push({
         short_id: p.short_id,
         title: p.title,
+        ...(p.title_set_by ? { title_set_by: p.title_set_by } : {}),
         summary: p.summary,
         status: p.status as PassPriority["status"],
         person_pos: p.person_pos ?? null,

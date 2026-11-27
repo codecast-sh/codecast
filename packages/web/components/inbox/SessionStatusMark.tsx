@@ -9,11 +9,12 @@ import { STATUS_MARK_SHAPES } from "../../lib/sessionStatusShapes";
 
 /** A state's mark, in its colour, named on hover. `labeled` when the state's
  *  word sits beside it, so the icon legend leaves it out. `markId` names
- *  another meaning drawn in a session's mark (a plan's state). */
-export function SessionStatusMark({ status, size = 10, className = "", labeled, markId }: { status: SessionStatus; size?: number; className?: string; labeled?: boolean; markId?: string }) {
+ *  another meaning drawn in a session's mark (a plan's state). `quiet` when
+ *  it sits inside a mark that already names it (Mark quiet). */
+export function SessionStatusMark({ status, size = 10, className = "", labeled, quiet, markId }: { status: SessionStatus; size?: number; className?: string; labeled?: boolean; quiet?: boolean; markId?: string }) {
   const meta = SESSION_STATUS[status];
   return (
-    <Mark id={markId ?? `session.${status}`} labeled={labeled}>
+    <Mark id={markId ?? `session.${status}`} labeled={labeled} quiet={quiet}>
       <svg data-status-mark={status} viewBox="0 0 10 10" width={size} height={size} aria-hidden className={`shrink-0 ${meta.text} ${className}`}>
         {STATUS_MARK_SHAPES[meta.mark]}
       </svg>

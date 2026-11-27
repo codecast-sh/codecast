@@ -1,54 +1,14 @@
 // The /priorities list's test fixtures, shared by components/priorities/PrioritiesPage.mount.test.tsx and
-// PrioritiesLines.mount.test.tsx: rows shaped like priorities.list's contract, its history, the views
-// and helpers over them, and the layout stub the milestone line measures against. A test file installs
-// the DOM and the backend (missingBackend.tsx) first, then imports this with `await import`, so the app
-// modules below load against them.
+// PrioritiesLines.mount.test.tsx: rows shaped like priorities.list's contract, its history, and the views
+// and helpers over them. A test file installs the DOM and the backend (missingBackend.tsx) first, then
+// imports this with `await import`, so the app modules below load against them.
 import React from "react";
 import { MemoryRouter } from "react-router";
 import { useInboxStore } from "../store/inboxStore";
 import { PrioritiesView } from "../components/priorities/PrioritiesPage";
-import { lastDays, readFilters } from "../lib/priorityList";
+import { lastDays } from "../lib/priorityList";
 import { fixtureId, mountSurface, TEAM_ID, VIEWER_ID } from "./missingBackend";
 
-
-// The milestone line's row measures itself (PriorityBlock LineChips). jsdom lays nothing out and the shared
-// stub gives every element 800px, so the row gets a layout of its own, the way a browser lays it out: the
-// action button 65px, "+N" 24px (its " sessions" 5px a character more), each kind's count chip 36px, a session
-// label drawn at 80px, the plan's chrome 72px, 6px between parts and 12px of left padding, in a chips cell of
-// `lineCell` px (600 unless a test narrows it). Words that ellipsize (a label's, a plan's title) are drawn in
-// 60px and take 5px a character whole.
-let lineCell = 600;
-/** A closed line's parts, first to last, as it shows them. */
-export const partsOf = (line: Element) => [...line.children].filter((c) => (c as HTMLElement).dataset.fit).map((c) => {
-  const fit = (c as HTMLElement).dataset.fit;
-  if (fit === "fixed") return "action";
-  if (fit === "kind") return `${c.querySelector("[data-chip-count]")!.getAttribute("data-chip-count")} ${c.textContent}`;
-  if (fit === "plan") return "plan";
-  return c.textContent;
-});
-{
-  const proto = (window as any).HTMLElement.prototype;
-  const offset = Object.getOwnPropertyDescriptor(proto, "offsetWidth")!;
-  const client = Object.getOwnPropertyDescriptor(proto, "clientWidth")!;
-  const scroll = Object.getOwnPropertyDescriptor((window as any).Element.prototype, "scrollWidth")!;
-  const FIT: Record<string, number> = { fixed: 65, more: 24, kind: 36, label: 80, plan: 132 };
-  const chars = (el: Element) => 5 * (el.textContent ?? "").length;
-  const ellipsized = (el: HTMLElement) => !!el.closest?.('[data-fit="label"], [data-fit="plan"]') && (el.classList.contains("truncate") || el.hasAttribute("data-plan-title"));
-  Object.defineProperty(proto, "offsetWidth", { configurable: true, get(this: HTMLElement) {
-    if (this.hasAttribute?.("data-more-words")) return chars(this);
-    const f = this.dataset?.fit;
-    if (!f) return offset.get!.call(this);
-    const words = f === "more" ? this.querySelector("[data-more-words]") : null;
-    return (FIT[f] ?? 0) + (words ? chars(words) : 0);
-  } });
-  Object.defineProperty(proto, "clientWidth", { configurable: true, get(this: HTMLElement) { return this.hasAttribute?.("data-line-chips") ? lineCell : ellipsized(this) ? 60 : client.get!.call(this); } });
-  Object.defineProperty(proto, "scrollWidth", { configurable: true, get(this: HTMLElement) { return ellipsized(this) ? chars(this) : this.clientWidth; } });
-  void scroll;
-  for (const host of [window as any, globalThis as any]) {
-    const real = host.getComputedStyle.bind(host);
-    host.getComputedStyle = (el: Element, pseudo?: string) => (el.hasAttribute?.("data-line-chips") ? { paddingLeft: "12px", paddingRight: "0px", columnGap: "6px" } : real(el, pseudo));
-  }
-}
 
 export const HOUR = 3_600_000;
 export const DAY = 24 * HOUR;
@@ -65,6 +25,22 @@ export const PL_619 = { short_id: "pl-619", title: "The whole platform program",
 export const base = { summary: "", person_pos: null, rank_source: "ai", serves: null, workspace: `team:${TEAM_ID}`, user_id: VIEWER_ID, owner: "Dana Viewer", owner_image: null, mine: true, first_seen_at: NOW - 3 * DAY, last_active_at: NOW, done_at: null, session_count: 0, session_count_more: false, sessions: [] as any[], status: "active", status_set_by: "pass", correction_pending: false };
 export const counts = (steps: any[]) => ({ critical_done: steps.filter((s) => s.tier === "critical" && s.done).length, critical_total: steps.filter((s) => s.tier === "critical").length });
 export const row = (id: number, title: string, rank: number | null, steps: any[], extra: Record<string, unknown> = {}) => ({ ...base, _id: `p${id}`, short_id: `pri-${id}`, title, rank, ai_rank: rank, steps, counts: counts(steps), ...extra });
+
+/**
+ * Puts the conversations `tags` name in the store as the sidebar files them
+ * under Needs You (blocked on the viewer, theirs): only such a row makes a
+ * milestone read Needs you. A linked session the store does not hold sleeps,
+ * whatever the server says. Returns the cleanup.
+ */
+export function seedNeedsYou(...tags: string[]): () => void {
+  const asking = { message_count: 4, status: "completed", updated_at: NOW - 10 * 60_000, last_turn_at: NOW - 11 * 60_000, user_id: VIEWER_ID, thread_state_status: "blocked", thread_state_at: NOW - 10 * 60_000 };
+  useInboxStore.setState((s: any) => ({ sessions: { ...s.sessions, ...Object.fromEntries(tags.map((t) => [fixtureId(t), { _id: fixtureId(t), title: t, ...asking }])) } }));
+  return () => useInboxStore.setState((s: any) => {
+    const rest = { ...s.sessions };
+    for (const t of tags) delete rest[fixtureId(t)];
+    return { sessions: rest };
+  });
+}
 
 export const DRIVER = sess("drive1", "Deploy redesign", "dormant", 1);
 export const ROWS = [
@@ -85,6 +61,7 @@ export const ROWS = [
     plan: null,
     links: [links("s1", [sess("evalcost", "Eval cost reduction", "working", 0)], { plan: PL_1075 }), links("s2", [], { part_of: [PL_619] })],
   }),
+  // The server says these two ask; only the ones a test seeds into the sidebar's Needs You (seedNeedsYou) read Needs you.
   row(4, "Priorities for Union", 4, [step("s1", "Calibrate goal finding", "critical"), step("s2", "Session mapping reaches 0.75", "critical")], {
     plan: null,
     links: [links("s1", [sess("calib1", "Priorities feature build", "needs_you", 3)]), links("s2", [sess("mapping", "Session mapping", "needs_you", 7)])],
@@ -113,12 +90,10 @@ export const listOf = (priorities: unknown[], timing: { next_pass_at?: number | 
   ({ priorities, own_truncated: false, teammates_truncated: false, next_pass_at: null, behind_by_ms: null, ...timing });
 export const mount = (node: React.ReactNode, path = "/priorities") => mountSurface(<MemoryRouter initialEntries={[path]}>{node}</MemoryRouter>);
 export const order = (el: HTMLElement) => [...el.querySelectorAll("li[data-priority]")].map((n) => n.getAttribute("data-priority"));
-export const FILTERS = readFilters(new URLSearchParams());
-export const view = (over: Record<string, unknown> = {}) => (
-  <PrioritiesView rows={ROWS as any} history={HISTORY as any} now={NOW} layout="wide" filters={FILTERS} onFilters={() => {}} compact={false} onCompact={() => {}} {...over} />
-);
+export const view = (over: Record<string, unknown> = {}) => <PrioritiesView rows={ROWS as any} history={HISTORY as any} now={NOW} layout="wide" {...over} />;
 export const block = (el: HTMLElement, id: string) => el.querySelector(`li[data-priority="${id}"]`) as HTMLElement;
-export const primaries = (b: HTMLElement) => [...b.querySelectorAll("[data-action]")];
+/** Each milestone line's state, by key. */
+export const states = (b: HTMLElement) => Object.fromEntries([...b.querySelectorAll("li[data-milestone]")].map((li) => [li.getAttribute("data-milestone"), li.getAttribute("data-state")]));
 
 
 export const KINDS = row(9, "Every kind of link", 1, [
@@ -131,37 +106,4 @@ export function seedKinds() {
   useInboxStore.setState({ tasks: { tk8001: { _id: "tk8001", short_id: "ct-8001", title: "Write the wiring", status: "open" } } } as any);
   useInboxStore.getState().syncTable("sessions", [{ _id: fixtureId("kinds2"), title: "Kinds helper", worktree_branch: "feat/every-link", updated_at: NOW - 3 * HOUR }] as any, { isDelta: true });
   useInboxStore.getState().syncTable("teamDeploys", [{ _id: "dep8001", workspace: `team:${TEAM_ID}`, target: "web", status: "live", live_at: NOW - HOUR, created_at: NOW - 2 * HOUR, sessions: [], tasks: [{ short_id: "ct-8001" }] }] as any, { isDelta: true });
-}
-export const ALL_KINDS = readFilters(new URLSearchParams("show=sessions,plans,tasks,prs,branches,deploys"));
-export const CHIP_KINDS = ["session", "plan", "task", "pr", "branch", "deploy"];
-
-// The milestone line's one-row rule, locked across chips-cell widths. Layout is stubbed the way a browser lays
-// the row out (the stub at the top of this file): the action button 65px, "+N" 24px, each kind's count chip
-// 36px, 6px between parts, 12px of left padding; the session's words hold 80px (5rem) always, and before the
-// plan shows they take their natural width up to 192px (12rem) while the plan keeps its chrome and 128px (8rem)
-// of its title.
-/** The chips cell's width at 1280 with the inbox open, measured in the browser on the fixture list. */
-export const DESK_INBOX_CELL = 463;
-export async function lineAt(cell: number, rows: unknown[], filters = readFilters(new URLSearchParams("show=sessions,plans,tasks,prs")), priority = "pri-14", milestone = "s1") {
-  lineCell = cell;
-  try {
-    const page = await mount(view({ rows, filters }));
-    try {
-      const line = block(page.container, priority).querySelector(`[data-milestone="${milestone}"] [data-line-chips]`)!;
-      return {
-        action: !!line.querySelector("[data-action]"),
-        label: line.querySelector("[data-in-session]")?.textContent ?? null,
-        more: line.querySelector("[data-more-sessions]")?.textContent ?? null,
-        moreLabel: line.querySelector("[data-more-sessions]")?.getAttribute("aria-label") ?? null,
-        kinds: [...line.querySelectorAll("[data-chip-count]")].map((c) => `${c.getAttribute("data-chip-count")} ${c.textContent}`),
-        plan: line.querySelector('[data-chip="plan"]')?.textContent ?? null,
-        // What the fit held for the session's words and the plan, when the plan shows.
-        held: (line as HTMLElement).style.getPropertyValue("--line-label") ? [(line as HTMLElement).style.getPropertyValue("--line-label"), (line as HTMLElement).style.getPropertyValue("--line-plan")] : null,
-      };
-    } finally {
-      await page.unmount();
-    }
-  } finally {
-    lineCell = 600;
-  }
 }

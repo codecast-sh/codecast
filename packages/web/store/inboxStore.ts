@@ -4092,7 +4092,7 @@ export function placedRailPlacement(placed: Pick<PlacedInbox, "placements">, id:
 // sections, not the placements, say where a row sits.
 const DRAWN_SECTIONS = ["questions", "pinned", "newSessions", "needsInput", "done", "dormant", "working"] as const;
 const _drawnSection = new WeakMap<PlacedInbox, Map<string, InboxSectionKey>>();
-function drawnSectionOf(placed: PlacedInbox, id: string): InboxSectionKey | null {
+export function drawnSectionOf(placed: PlacedInbox, id: string): InboxSectionKey | null {
   let map = _drawnSection.get(placed);
   if (!map) {
     map = new Map();

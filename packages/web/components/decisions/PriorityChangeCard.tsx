@@ -7,7 +7,7 @@
 // option rows. Presentational: the caller owns the ticks and the answer.
 import { useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import {
-  ArrowDown, ArrowUp, CheckCheck, CircleCheck, CircleDot, CircleX, Flag, GitMerge, PenLine, Plus, Quote, RotateCcw, Sparkles, SquarePlus, Target,
+  ArrowDown, ArrowUp, Check, CheckCheck, CircleCheck, CircleDot, CircleX, Flag, GitMerge, PenLine, Plus, Quote, RotateCcw, Sparkles, SquarePlus, Target,
   type LucideIcon,
 } from "lucide-react";
 import {
@@ -18,7 +18,6 @@ import type { DecisionOption } from "../../store/inboxStore";
 import { DecisionOptionList } from "./DecisionOptionList";
 import { acceptLabel, toggleTicked } from "../../lib/priorityCardTicks";
 import { priorityCardHeadline } from "../../lib/priorityCardDecision";
-import { MilestoneMark } from "../priorities/parts";
 import { TooltipProvider } from "../ui/tooltip";
 import { LegendButton, Mark } from "../Mark";
 import { MARK_BY_ID } from "../../lib/marks";
@@ -377,5 +376,18 @@ export function PriorityChangeCard({ card, ticked, onToggle, answered, onAnswer,
         </div>
       </article>
     </TooltipProvider>
+  );
+}
+
+/** A milestone's state on the card: an open ring, or a green check once done. */
+function MilestoneMark({ done }: { done: boolean }) {
+  return (
+    <Mark id={done ? "priority.milestone_done" : "priority.milestone_open"}>
+      <span data-milestone-mark={done ? "done" : "open"} role="img" aria-label={done ? "Done" : "Open"} className="flex size-[14px] shrink-0 items-center justify-center">
+        {done
+          ? <Check className="size-3.5 text-sol-green" strokeWidth={2.5} aria-hidden />
+          : <span aria-hidden className="block size-[8px] rounded-full border-[1.5px] border-sol-text-dim" />}
+      </span>
+    </Mark>
   );
 }

@@ -266,6 +266,68 @@ describe("reads", () => {
     expect(beaShown.correction_pending).toBe(false);
   });
 
+  test("a milestone's capped sessions keep every live one: closed sessions are cut first, never a live workflow run", async () => {
+    const { t, as, ada, acme, ws, p1, c1 } = await world();
+    await t.run(async (ctx) => {
+      const conv = (short_id: string, fields: Record<string, unknown>) => ctx.db.insert("conversations", {
+        user_id: ada, team_id: acme, agent_type: "claude_code", session_id: short_id, short_id, title: `Session ${short_id}`,
+        started_at: NOW, updated_at: NOW, message_count: 3, is_private: false, team_visibility: "full", status: "active",
+        priority_id: p1, priority_step_key: "s2", ...fields,
+      } as any);
+      // Six of the person's sessions, all closed and newer than the run.
+      for (let i = 0; i < 6; i++) await conv(`jx7cl${i}`, { inbox_killed_at: NOW, updated_at: NOW - i * 1000 });
+      // One live review a workflow ran, older than all of them.
+      await conv("jx7rvw1", { title: "Review · ct-901 tidy", is_subagent: true, parent_conversation_id: c1, updated_at: NOW - DAY });
+    });
+    const [row] = await rowsOf(as(ada), { workspace: ws });
+    const s2 = row.links.find((l: any) => l.key === "s2");
+    const shown = s2.sessions.map((s: any) => s.short_id);
+    // The live ones lead (the person's mapped session, then the run); the closed fill the rest, and the cut takes only closed ones.
+    expect(shown.slice(0, 2)).toEqual(["jx7one1", "jx7rvw1"]);
+    expect(shown).toHaveLength(6);
+    expect(s2.sessions.slice(2).every((s: any) => s.state === "killed" || s.state === "done")).toBe(true);
+    expect(s2.sessions_more).toBe(2);
+  });
+
+  test("the cap never cuts a live session: six old sleeping ones and the newest idle one are all sent", async () => {
+    const { t, as, ada, acme, ws, p1 } = await world();
+    await t.run(async (ctx) => {
+      const conv = (short_id: string, fields: Record<string, unknown>) => ctx.db.insert("conversations", {
+        user_id: ada, team_id: acme, agent_type: "claude_code", session_id: short_id, short_id, title: `Session ${short_id}`,
+        started_at: NOW, message_count: 3, is_private: false, team_visibility: "full", status: "active",
+        priority_id: p1, priority_step_key: "s2", ...fields,
+      } as any);
+      for (let i = 0; i < 6; i++) await conv(`jx7sl${i}`, { thread_state_status: "dormant", thread_state_at: NOW - (3 + i) * DAY, last_turn_at: NOW - (3 + i) * DAY, updated_at: NOW - (3 + i) * DAY });
+      await conv("jx7new1", { updated_at: NOW });
+      await conv("jx7cls1", { inbox_killed_at: NOW, updated_at: NOW - 1000 });
+    });
+    const [row] = await rowsOf(as(ada), { workspace: ws });
+    const s2 = row.links.find((l: any) => l.key === "s2");
+    const shown = s2.sessions.map((s: any) => s.short_id);
+    for (const id of ["jx7new1", "jx7one1", ...Array.from({ length: 6 }, (_, i) => `jx7sl${i}`)]) expect(shown).toContain(id);
+    // Eight live sessions fill past the six: the closed one is the only cut, and the only one counted as more.
+    expect(shown).not.toContain("jx7cls1");
+    expect(s2.sessions_more).toBe(1);
+  });
+
+  test("a session settled done reads closed only while the verdict is current: once it works again it is live", async () => {
+    const { t, as, ada, acme, ws, p1 } = await world();
+    await t.run(async (ctx) => {
+      const conv = (short_id: string, fields: Record<string, unknown>) => ctx.db.insert("conversations", {
+        user_id: ada, team_id: acme, agent_type: "claude_code", session_id: short_id, short_id, title: `Session ${short_id}`,
+        started_at: NOW, message_count: 3, is_private: false, team_visibility: "full", status: "active",
+        priority_id: p1, priority_step_key: "s2", ...fields,
+      } as any);
+      // Settled done, nothing since; and settled done a day ago, working again now.
+      await conv("jx7setl", { settle_verdict: "done", settle_verdict_at: NOW, updated_at: NOW - 1000 });
+      await conv("jx7agan", { settle_verdict: "done", settle_verdict_at: NOW - DAY, updated_at: NOW });
+    });
+    const [row] = await rowsOf(as(ada), { workspace: ws });
+    const states = Object.fromEntries(row.links.find((l: any) => l.key === "s2").sessions.map((s: any) => [s.short_id, s.state]));
+    expect(states.jx7setl).toBe("done");
+    expect(states.jx7agan).toBe("idle");
+  });
+
   test("history names today's sessions no priority holds, for the No priority share", async () => {
     const { as, ada, ws } = await world();
     const res = await as(ada).query(pri.history, { days: 10, workspace: ws });

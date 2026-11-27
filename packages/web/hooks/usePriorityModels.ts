@@ -2,68 +2,147 @@
 // priority page) reads beside its rows: the inbox's live verdict for each
 // linked session, and the store's lookups for a milestone's branches, pull
 // requests and deploys (lib/priorityList builds the models from them).
+import { isPriorityCard } from "@codecast/shared/contracts/priorityCard";
 import { useMemo } from "react";
-import type { PriorityHistory, PriorityRow, PrioritySessionState } from "@codecast/shared/contracts/priorities";
-import { buildModels, stateOfStatus, type MilestoneModel, type PriorityModel } from "../lib/priorityList";
-import { sessionStatusOf } from "../lib/sessionStatus";
+import type { PriorityHistory, PriorityRow } from "@codecast/shared/contracts/priorities";
+import { buildModels, type MilestoneModel, type PriorityModel } from "../lib/priorityList";
 import type { TeamDeployRow } from "../lib/deploys/targets";
-import { isUnderRole } from "@codecast/shared/contracts";
-import { placeInboxRows, railRowPlacement, useInboxStore, waitsOnViewer, type InboxSession } from "../store/inboxStore";
-import { useWorkspaceCollection } from "./useWorkspaceCollection";
-import { useCoarseNow } from "./useCoarseNow";
+import { hostedStopsSig } from "../lib/hostedNotice";
+import {
+  pendingSendWakeSig, placementDecisionsSig, resolveShowOld, sessionStructuralSig, sessionsWakeSig, teamInboxIdsOf, useInboxStore, useTrackedStore,
+  type InboxSession, type SessionDecisionItem,
+} from "../store/inboxStore";
+import { makeCollectionSig } from "../store/wakeSig";
+import { inboxMarkOf, type DrawnMark, type MarkInbox } from "../store/inboxMark";
+import { useWorkspacesCollection } from "./useWorkspaceCollection";
+import { INBOX_CLOCK_MS, useCoarseNow } from "./useCoarseNow";
 import type { DeployInfo } from "../lib/priorityList";
 
-type PlaceState = Parameters<typeof placeInboxRows>[0];
-const asksYouByState = new WeakMap<object, (row: InboxSession) => boolean>();
+/**
+ * Whose inbox a milestone's marks follow: web's sidebar, or the phone's inbox
+ * (store/inboxMark inboxMarkOf).
+ */
+export type LiveInbox = MarkInbox;
 
 /**
- * Whether your sidebar files a row under Questions or Needs You, flat or
- * nested under a Needs You lead, as that section's count reads it: placed
- * needs_input, waiting on you (else it sits in Dormant), and not a role's
- * session (the role triages those). Placed once per store state, however
- * many priority cards ask.
+ * Where `inbox` holds its rows in place: the sidebar's focused id
+ * (hooks/useSidebarFocusId, read on web and handed in), else the store's
+ * currentSessionId, the phone's.
  */
-function sidebarAsksYou(s: PlaceState, now: number): (row: InboxSession) => boolean {
-  let hit = asksYouByState.get(s);
-  if (!hit) {
-    const placed = placeInboxRows(s, { scope: "mine", now });
-    const meId = s.currentUser?._id?.toString?.() ?? null;
-    const flat = new Set(placed.needsInput.map((r) => r._id));
-    hit = (row) => placed.isQuestion(row) || flat.has(row._id)
-      || (placed.placements.get(row._id)?.bucket === "needs_input" && waitsOnViewer(row, meId) && !isUnderRole(row));
-    asksYouByState.set(s, hit);
+type Focus = string | null | undefined;
+const focusOf = (s: { currentSessionId?: string | null }, focusedId: Focus) => (focusedId === undefined ? s.currentSessionId ?? null : focusedId);
+
+/** What `inbox` draws for one session (usePriorityLiveStates), or undefined when that inbox does not draw it. */
+export function liveMarkOf(s: Parameters<typeof inboxMarkOf>[0] & { currentSessionId?: string | null }, id: string, now: number, inbox: LiveInbox = "sidebar", focusedId?: Focus): DrawnMark | undefined {
+  return inboxMarkOf(s, id, { inbox, now, focusedId: focusOf(s, focusedId) }) ?? undefined;
+}
+
+/** A row's liveness stamps: a heartbeat moves them and nothing a card draws. */
+/**
+ * What a linked row's card reads for its mark beyond the inbox's structural
+ * signature (sessionStatusOf, subagentStatusOf, the asks rule): its turn
+ * state, an ask or a prompt, a failure, the agent's status, a hosted stop.
+ * Counts and stamps only as the bits a mark branches on, so a streamed
+ * message or a heartbeat signs the same.
+ */
+const markFactsOf = (r: InboxSession): string => [
+  sessionStructuralSig(r), r.thread_state_status ?? "", r.awaiting_input ? 1 : 0,
+  r.pending_api_error ? 1 : 0, r.pending_api_error_kind ?? "", r.session_error ? 1 : 0, r.agent_status ?? "", r.status ?? "",
+  r.hosted_stop ?? "", (r.message_count ?? 0) > 0 ? 1 : 0, r.is_connected ? 1 : 0, r.tool_call_open_at ? 1 : 0, r.agent_type ?? "",
+].join(":");
+const markFactsByRow = new WeakMap<object, number>();
+/** FNV-1a over a row's mark facts, kept per row object: a row the store did not touch is not signed again. */
+function markFactsHash(r: InboxSession): number {
+  let h = markFactsByRow.get(r);
+  if (h === undefined) {
+    h = 0x811c9dc5;
+    for (const ch of markFactsOf(r)) h = Math.imul(h ^ ch.charCodeAt(0), 0x01000193);
+    markFactsByRow.set(r, h);
   }
-  return hit;
+  return h;
+}
+/** What the Decisions queue (the sidebar's section, the phone's screen) reads off a decision (lib/decisionQueue queuesDecision): who it is asked of, and whether it stands. */
+// A priority card is its person's, never its session's ask (isPriorityCard), so it wakes no milestone.
+const queuedDecisionsSig = makeCollectionSig((d: SessionDecisionItem) => isPriorityCard(d) ? "" :
+  `${d.conversation_id}|${d.status}|${d.blocking ? 1 : 0}|${d.stack_id ?? ""}|${d.in_queue === false ? 0 : 1}|${(d.asked_user_ids ?? []).join(",")}`);
+
+/** The rows that stand as roles' leads, by role, per structural state of the sessions (a lead is a structural fact). */
+let leadsMemo: { sig: string; leads: Map<string, string> } | null = null;
+function roleLeadsOf(sessions: Record<string, InboxSession>): Map<string, string> {
+  const sig = sessionsWakeSig(sessions);
+  if (leadsMemo?.sig !== sig) {
+    const leads = new Map<string, string>();
+    for (const id in sessions) if (sessions[id]?.standing_role_id) leads.set(String(sessions[id].standing_role_id), id);
+    leadsMemo = { sig, leads };
+  }
+  return leadsMemo.leads;
+}
+/**
+ * A digest of the linked rows' mark facts and, for a role's session, its
+ * lead's: what the marks read beyond the inbox's own wake signatures. Short
+ * and numeric, never the rows spelled out.
+ */
+function linkedRowsSig(sessions: Record<string, InboxSession>, ids: readonly string[]): string {
+  let leads: Map<string, string> | null = null;
+  const out: number[] = [];
+  for (const id of ids) {
+    const r = sessions[id];
+    if (!r) { out.push(0); continue; }
+    out.push(markFactsHash(r));
+    if (r.org_role_id) {
+      leads ??= roleLeadsOf(sessions);
+      const lead = sessions[leads.get(String(r.org_role_id)) ?? ""];
+      if (lead) out.push(markFactsHash(lead));
+    }
+  }
+  return out.map((h) => (h >>> 0).toString(36)).join(".");
 }
 
 /**
- * The inbox's verdict for each linked session the store holds, by
- * conversation id. A session needs you exactly when your inbox files it
- * under Needs You or Questions (placeInboxRows, mine scope); a row's own
- * facts say how it is otherwise, never that it waits on you, since a wait
- * that belongs to someone else (a card addressed to a teammate, a session
- * another person owns) sits in your Dormant. One subscription to a
- * signature of just those rows' states, so a heartbeat elsewhere wakes
- * nothing.
+ * What each linked session's inbox draws for it, by conversation id
+ * (lib/priorityList buildModels reads it and states the whole rule). The
+ * inbox is placed again only when what placement reads moves: the inbox's
+ * own wake signatures (structural session change, pending sends, decisions,
+ * the view keys), a linked row's own facts, the focus and a coarse clock for
+ * its time-driven flips. A heartbeat that changes none of them places nothing
+ * and wakes nothing.
  */
-export function usePriorityLiveStates(ids: readonly string[], now: number): (conversationId: string) => PrioritySessionState | undefined {
+export function usePriorityLiveStates(ids: readonly string[], now: number, inbox: LiveInbox = "sidebar", focusedId?: Focus): (conversationId: string) => DrawnMark | undefined {
+  const s = useTrackedStore([
+    (st) => sessionsWakeSig(st.sessions),
+    (st) => st.sessionsWithQueuedMessages,
+    (st) => st.blockedReviveRequestedAt,
+    (st) => pendingSendWakeSig(st.pendingMessages),
+    (st) => st.pendingSessionCreates,
+    (st) => st.currentUser?._id,
+    (st) => st.clientState.ui?.inbox_scope,
+    (st) => resolveShowOld(st.clientState.ui),
+    (st) => teamInboxIdsOf(st),
+    (st) => placementDecisionsSig(st.sessionDecisions),
+    (st) => queuedDecisionsSig(st.sessionDecisions),
+    (st) => st.questionResolutions,
+    (st) => st.newSessionHolds,
+    (st) => st.killedShelf?.ids,
+    (st) => st.livenessHeldAt,
+    (st) => hostedStopsSig(st.sessions, st.messages),
+    (st) => st.currentSessionId,
+    // Each linked row's own facts its card reads (an ask, an error, a stop), and its role lead's: a digest.
+    (st) => linkedRowsSig(st.sessions, ids),
+  ]);
+  const coarseNow = useCoarseNow(INBOX_CLOCK_MS);
   const key = ids.join(",");
-  const sig = useInboxStore((s) => {
-    const asksYou = sidebarAsksYou(s, now);
-    const out: string[] = [];
-    for (const id of key.split(",")) {
-      const row = (s.sessions as Record<string, any>)[id];
-      if (!row) continue;
-      const own = stateOfStatus(sessionStatusOf({ row, placement: railRowPlacement(row, now), now }));
-      const state = asksYou(row) ? "needs_you" : own === "needs_you" ? "dormant" : own;
-      out.push(`${id}:${state}`);
-    }
-    return out.join(",");
-  });
+  const rowsSig = linkedRowsSig(s.sessions, ids);
+  const focus = focusOf(s, focusedId);
   return useMemo(() => {
-    const states = new Map(sig.split(",").filter(Boolean).map((p) => p.split(":") as [string, PrioritySessionState]));
-    return (id: string) => states.get(id);
-  }, [sig]);
+    const at = Math.max(now, coarseNow);
+    const marks = new Map<string, DrawnMark>();
+    for (const id of key ? key.split(",") : []) {
+      const m = liveMarkOf(s as any, id, at, inbox, focus);
+      if (m) marks.set(id, m);
+    }
+    return (id: string) => marks.get(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the wake signatures stand in for the churny refs placement reads
+  }, [key, rowsSig, inbox, focus, now, coarseNow, sessionsWakeSig(s.sessions), s.sessionsWithQueuedMessages, s.blockedReviveRequestedAt, pendingSendWakeSig(s.pendingMessages), s.pendingSessionCreates, s.currentUser?._id, s.clientState.ui?.inbox_scope, resolveShowOld(s.clientState.ui), teamInboxIdsOf(s), placementDecisionsSig(s.sessionDecisions), queuedDecisionsSig(s.sessionDecisions), s.questionResolutions, s.newSessionHolds, s.killedShelf?.ids, s.livenessHeldAt, hostedStopsSig(s.sessions, s.messages)]);
 }
 
 /** Every linked session's conversation id across `rows`, sorted, once each. */
@@ -84,14 +163,20 @@ function prStateIn(coll: Record<string, any> | undefined, ref: string): string |
   return idx.get(ref.toLowerCase());
 }
 
-/** The newest deploy per target that shipped one of a milestone's tasks or carried one of its sessions' commits. */
-function deploysFor(m: MilestoneModel, deploys: readonly TeamDeployRow[]): DeployInfo[] {
+/**
+ * The newest deploy per target that shipped one of a milestone's tasks or
+ * carried one of its sessions' commits. A milestone's deploys come only from
+ * its priority's own workspace (`workspace`): where the store holds none of
+ * that workspace's deploys there are none, never another workspace's.
+ */
+function deploysFor(m: MilestoneModel, workspace: string, deploys: readonly TeamDeployRow[]): DeployInfo[] {
   const tasks = new Set(m.tasks);
   const sessions = new Set(m.sessions.map((s) => s.conversation_id));
   const out: DeployInfo[] = [];
   const hits = deploys
+    .filter((d) => d.workspace === workspace)
     .filter((d) => (d.tasks ?? []).some((t) => t.short_id && tasks.has(t.short_id)) || d.sessions.some((x) => sessions.has(x.conversation_id)))
-    .map((d) => ({ id: d._id, target: d.target, status: d.status, at: d.live_at ?? d.finished_at ?? d.created_at }))
+    .map((d) => ({ id: d._id, short_id: d.short_id, target: d.target, status: d.status, at: d.live_at ?? d.finished_at ?? d.created_at }))
     .sort((a, b) => b.at - a.at);
   for (const d of hits) if (!out.some((x) => x.target === d.target)) out.push(d);
   return out;
@@ -101,7 +186,8 @@ function deploysFor(m: MilestoneModel, deploys: readonly TeamDeployRow[]): Deplo
 export type LinkLookups = {
   branchOf: (conversationId: string) => string | null;
   prState: (ref: string) => string | undefined;
-  deploysOf: (m: MilestoneModel) => DeployInfo[];
+  /** `workspace`: the milestone's priority's own (PriorityRow.workspace). */
+  deploysOf: (m: MilestoneModel, workspace: string) => DeployInfo[];
 };
 
 const DEFAULT_BRANCHES = new Set(["main", "master", "HEAD", "develop"]);
@@ -112,12 +198,12 @@ export const branchesOf = (m: MilestoneModel, lookups: LinkLookups) =>
 
 const NO_DAYS: string[] = [];
 
-/** One priority's model (lib/priorityList buildModels), with the inbox's live verdict laid over its sessions. */
-export function usePriorityModel(row: PriorityRow, history?: PriorityHistory, days: string[] = NO_DAYS): PriorityModel {
+/** One priority's model (lib/priorityList buildModels), with `inbox`'s live verdict laid over its sessions. */
+export function usePriorityModel(row: PriorityRow, history?: PriorityHistory, days: string[] = NO_DAYS, inbox: LiveInbox = "sidebar", focusedId?: string | null): PriorityModel {
   const now = useCoarseNow(30_000);
   const ids = useMemo(() => linkedSessionIds([row]), [row]);
-  const live = usePriorityLiveStates(ids, now);
-  return useMemo(() => buildModels([row], history, live, days, now)[0], [row, history, live, days, now]);
+  const live = usePriorityLiveStates(ids, now, inbox, focusedId);
+  return useMemo(() => buildModels([row], history, live, days)[0], [row, history, live, days]);
 }
 
 /** Every pull request (`owner/repo#N`) the milestones of `rows` name, sorted, once each. */
@@ -126,13 +212,14 @@ export function linkedPrRefs(rows: ReadonlyArray<{ steps: ReadonlyArray<{ refs: 
 }
 
 /**
- * The lookups for the linked sessions (`sessionIds`) and pull requests
- * (`prRefs`) a surface draws. One subscription to a signature of just their
- * branches and states, so a branch or a PR's state changing repaints its
- * chip, and nothing else in those collections wakes it.
+ * The lookups for the linked sessions (`sessionIds`), pull requests
+ * (`prRefs`) and the workspaces (`workspaces`: the drawn priorities' own) a
+ * surface draws. One subscription to a signature of just their branches and
+ * states, so a branch or a PR's state changing repaints its chip, and nothing
+ * else in those collections wakes it.
  */
-export function usePriorityLookups(sessionIds: readonly string[], prRefs: readonly string[]): LinkLookups {
-  const deploys = useWorkspaceCollection<TeamDeployRow>("teamDeploys", (d) => `${d.status}:${d.live_at ?? ""}:${d.sessions.length}:${d.tasks?.length ?? 0}`);
+export function usePriorityLookups(sessionIds: readonly string[], prRefs: readonly string[], workspaces: readonly string[]): LinkLookups {
+  const deploys = useWorkspacesCollection<TeamDeployRow>("teamDeploys", (d) => `${d.status}:${d.live_at ?? ""}:${d.sessions.length}:${d.tasks?.length ?? 0}`, workspaces);
   const ids = sessionIds.join(",");
   const prs = prRefs.join(",");
   const sig = useInboxStore((s) => {
@@ -147,7 +234,7 @@ export function usePriorityLookups(sessionIds: readonly string[], prRefs: readon
       return row?.worktree_branch || row?.git_branch || null;
     },
     prState: (ref) => prStateIn(useInboxStore.getState().pullRequests as Record<string, any>, ref),
-    deploysOf: (m) => deploysFor(m, deploys),
+    deploysOf: (m, workspace) => deploysFor(m, workspace, deploys),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the signature is what the getState() reads above wake on
   }), [deploys, sig]);
 }

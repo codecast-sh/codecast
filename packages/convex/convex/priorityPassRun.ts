@@ -308,7 +308,8 @@ export const releaseStrays = internalMutation({
  * stands, as the rows are now (so a setting made while the model was reading
  * holds too). The pass's output is rejected wherever it would change one: a
  * placed rank (the plan writes ai_rank, and person_pos only to carry a
- * merged priority's place to a survivor without one); a step's
+ * merged priority's place to a survivor without one); a renamed title, or a
+ * merge of that priority away; a step's
  * tier, title, done state or drop (holdPersonSteps); a set-aside, done or merged status; a session the person placed,
  * a known link or the classifier mapped, or one
  * mapped to a priority they said it is not part of. A step added to a
@@ -436,6 +437,7 @@ export async function writePlan(
       const patch: Partial<PriorityWrite> = { ...u.patch };
       // A merge survivor's carried place lands only where the person has not placed it since.
       if (row.person_pos != null) delete patch.person_pos;
+      if (row.title_set_by === "person") delete patch.title;
       if (row.status === "set_aside" || row.status_set_by === "person") {
         delete patch.status;
         delete patch.done_at;
@@ -503,7 +505,7 @@ export async function writePlan(
       const row = await mine(m.short_id);
       const into = await resolve(m.merged_into);
       const intoRow: Doc<"priorities"> | null = into ? await ctx.db.get(into) : null;
-      if (!row || !into || !intoRow || row.status === "set_aside" || row.status === "merged" || row.status_set_by === "person" || intoRow.status === "merged") continue;
+      if (!row || !into || !intoRow || row.status === "set_aside" || row.status === "merged" || row.status_set_by === "person" || row.title_set_by === "person" || intoRow.status === "merged") continue;
       await ctx.db.patch(row._id, { status: "merged", merged_into: into, ai_rank: undefined, updated_at: now });
       // A milestone of the absorbed priority a session the person placed (or a known link) sits on goes to the survivor too, as a person's merge carries every one
       // (priorities.ts doMerge): the plan saw only its newest sessions. One the plan mapped live already has its key.

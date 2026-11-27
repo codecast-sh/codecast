@@ -11,7 +11,8 @@ import { activeGroup, positionOf, positionsOf } from "./lib/priorityGroup";
 import { passTiming } from "./priorityPassSweep";
 import { isSessionOwner } from "./sessionOwners";
 import { rowPinPredatesTurn } from "@codecast/shared/contracts/inboxPlacement";
-import { attributePlans, isWorkflowSession, orderSessions, type PlanFacts } from "@codecast/shared/contracts/priorityDerive";
+import { isSettleVerdictCurrent } from "@codecast/shared/contracts";
+import { attributePlans, isClosedSession, isWorkflowSession, orderSessions, type PlanFacts } from "@codecast/shared/contracts/priorityDerive";
 import type { PriorityCorrection, PriorityDetail, PriorityLinkedSession, PriorityLinkWhy, PriorityList, PriorityMilestoneLinks, PriorityPlanRef, PriorityRow, PrioritySession, PrioritySessionState, PriorityStatus, PriorityStep } from "@codecast/shared/contracts/priorities";
 import type { Doc, Id } from "./_generated/dataModel";
 import { planFactsOf } from "./lib/priorityLinks";
@@ -30,7 +31,7 @@ const OWN_PRIORITIES_READ = 200;
 export const OWN_SCAN_READ = 1_000;
 /** The most mapped sessions `show` reads. */
 const SHOW_SESSIONS = 200;
-/** A list's links: the newest mapped sessions it reads per priority, a task's newest sessions, and how many a step shows. */
+/** A list's links: the newest mapped sessions it reads per priority, a task's newest sessions, and how many closed ones a step shows besides its live ones (the server never cuts a live session from what it reads: the LINK_MAPPED_READ newest mapped per priority). */
 const LINK_MAPPED_READ = 10;
 const LINK_TASK_SESSIONS = 2;
 const LINK_STEP_SESSIONS = 6;
@@ -191,7 +192,8 @@ export function linkedSessionState(c: Doc<"conversations">, now: number): Priori
   const pin = rowPinPredatesTurn(c as any) ? undefined : c.thread_state_status;
   if (pin === "blocked" || c.pending_api_error || c.session_error) return "needs_you";
   if (pin === "dormant" || (c.inbox_snoozed_until ?? 0) > now || c.parked_wake_kind || c.armed_trigger_kind) return "dormant";
-  if (pin === "done" || c.settle_verdict === "done") return "done";
+  // A settle verdict holds only while no activity followed it (a session settled done that started working again is live).
+  if (pin === "done" || (c.settle_verdict === "done" && isSettleVerdictCurrent(c))) return "done";
   return "idle";
 }
 
@@ -325,11 +327,16 @@ async function linksFor(r: Reader, reads: LinkReads, p: Priority, steps: Priorit
         last_active_at: Math.floor(c.updated_at / LINK_ACTIVE_ROUND_MS) * LINK_ACTIVE_ROUND_MS,
       });
     }
+    // The server never cuts a live session from what it reads (the LINK_MAPPED_READ newest mapped per priority, and
+    // each task's newest): every live one read is sent, and only the closed fill what room is left.
     const ordered = orderSessions(sessions);
+    const live = ordered.filter((x) => !isClosedSession(x));
+    const closed = ordered.filter(isClosedSession);
+    const closedShown = Math.max(0, LINK_STEP_SESSIONS - live.length);
     links.push({
       key: s.key,
-      sessions: ordered.slice(0, LINK_STEP_SESSIONS),
-      sessions_more: Math.max(0, ordered.length - LINK_STEP_SESSIONS),
+      sessions: [...live, ...closed.slice(0, closedShown)],
+      sessions_more: Math.max(0, closed.length - closedShown),
       plan: own?.plan ? planRef(own.plan) : null,
       part_of: (own?.part_of ?? []).map(planRef),
       looks_done: !s.done && !!tasksDone.get(s.key),
@@ -428,7 +435,7 @@ export async function listFor(ctx: Ctx, viewer: Id<"users">, args: { workspace?:
   const now = Date.now();
   for (const p of rows) {
     const steps = await r.stepsFor(p);
-    // Links only on the viewer's own active priorities: the rows a next action is drawn on.
+    // Links only on the viewer's own active priorities: the rows whose milestones show a state.
     const linked = isOwner(viewer, p) && p.status === "active" ? await linksFor(r, reads, p, steps, now) : null;
     const row = rowFor(viewer, p, ownerOf(people, p), positions.get(String(p._id)) ?? null, steps, await mappedSessions(r, p, listRead(viewer, p)), await correctionPending(ctx, viewer, p), LIST_SESSIONS);
     out.push(linked ? { ...row, ...linked } : row);

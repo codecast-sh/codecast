@@ -113,7 +113,7 @@ import { DecisionPagesFeeder, DecisionFramesPreload } from "./decisions/Decision
 import { useSyncCallsAhead } from "../hooks/useSyncCalls";
 import { useSyncPlanDetailsAhead } from "../hooks/useSyncPlans";
 import { useSyncDocs } from "../hooks/useSyncDocs";
-import { isInboxRoute, isInboxSessionView, pageOwnsRailHighlight, railPointerOnNavigate, sessionFocusKind } from "../lib/inboxRouting";
+import { isInboxRoute, isInboxSessionView, pageOwnsRailHighlight, railPointerOnNavigate, sessionListActiveIdOf } from "../lib/inboxRouting";
 import { useOpenSession } from "../hooks/useOpenSession";
 import { useIsModernFocused } from "../hooks/useVisualStyle";
 import { RecentSwitcherHost } from "./RecentSwitcher";
@@ -168,26 +168,6 @@ const DashboardNestCtx: React.Context<boolean> =
   (_g.__DashboardNestCtx = createContext(false));
 
 const noop = () => {};
-
-type ShellState = ReturnType<typeof useInboxStore.getState>;
-
-/** The session the rail lights. Which pointer it reads comes from the shared
- *  helper (sessionFocusKind), so whatever MOVES this highlight (the workbench
- *  filter's eviction) reads the same answer. On conversation pages the id
- *  comes from the URL, so non-owner viewers (ViewerView), who never set
- *  currentSessionId, still get the right row lit. */
-function sessionListActiveIdOf(st: ShellState, pathname: string | null): string | null {
-  const isOnConversationPage = pathname?.includes("/conversation/") ?? false;
-  const conversationPageId = isOnConversationPage && pathname
-    ? pathname.replace('/conversation/', '').split(/[/?#]/)[0]
-    : null;
-  const focusKind = sessionFocusKind(pathname, st.currentConversation?.source);
-  return focusKind === "current"
-    ? (st.viewingDismissedId ?? st.currentSessionId)
-    : focusKind === "url"
-    ? (conversationPageId ?? st.currentSessionId)
-    : st.sidePanelSessionId;
-}
 
 // The session list, wherever the shell draws it (the rail, the right peek,
 // the phone drawer). It reads its own highlight pointers, so a session switch

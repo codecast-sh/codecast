@@ -90,11 +90,14 @@ export function KeyboardShortcutsPanel() {
   }, [flowsOn, bindingsVersion, s.shortcutsPanelOpen]);
 
   return (
+    // Beside the page from sm up; on a phone, where a 320px column would squeeze the page to nothing, a full-width
+    // sheet over its lower part (the icon legend still reads the page under it, lib/iconLegend isOnScreen).
     <div
-      className="h-full shrink-0 overflow-hidden transition-[width] duration-200 ease-out"
+      data-legend-sheet
+      className={`h-full shrink-0 overflow-hidden transition-[width] duration-200 ease-out max-sm:fixed max-sm:inset-x-0 max-sm:bottom-0 max-sm:top-auto max-sm:z-[150] max-sm:h-[70dvh] max-sm:!w-full max-sm:rounded-t-2xl max-sm:shadow-dialog max-sm:transition-none ${s.shortcutsPanelOpen ? "" : "max-sm:hidden"}`}
       style={{ width: s.shortcutsPanelOpen ? 320 : 0 }}
     >
-      {everOpened.current && <div className="h-full w-[320px] bg-sol-bg border-l border-sol-border/60 flex flex-col">
+      {everOpened.current && <div className="h-full w-[320px] max-sm:w-full bg-sol-bg border-l border-sol-border/60 max-sm:border-l-0 max-sm:border-t flex flex-col">
         <div className="flex items-center justify-between px-4 py-3 border-b border-sol-border/40">
           <div role="tablist" className="flex items-center gap-0.5 rounded-control bg-sol-text/[0.05] p-0.5">
             {(["shortcuts", "icons"] as const).map((t) => (
