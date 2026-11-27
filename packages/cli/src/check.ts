@@ -458,15 +458,40 @@ export function removeOwnState(dir: string, pid: number): void {
 /** What makes a process a watcher: its command line runs `cast check-watch`. Tests that stand in for a watcher with their own pid widen it. */
 export const watcherIdentity = { matches: (command: string, _pid: number): boolean => /\bcheck-watch\b/.test(command) };
 
-/** Which of `pids` run `cast check-watch`, from one ps; null when ps cannot say (then every pid is taken at its word). */
-function watcherPids(pids: number[]): Set<number> | null {
-  if (!pids.length) return new Set();
-  const r = spawnSync("ps", ["-o", "pid=,command=", "-p", pids.join(",")], { encoding: "utf-8", timeout: 5_000 });
-  if (r.error || (r.status !== 0 && r.status !== 1)) return null;
+/**
+ * How long a pid ps confirmed as a watcher is trusted without asking ps again, while it is seen alive at least
+ * this often. A pid only changes program by dying and being handed out again, and macOS hands pids out in order:
+ * wrapping its 99,999 took about 20 minutes at load 227 (78 spawns a second, 2026-11-26).
+ */
+export const WATCHER_PID_TRUST_MS = 30_000;
+/** Pids ps confirmed as watchers, each with when it was last seen alive. */
+const confirmedWatchers = new Map<number, number>();
+
+/**
+ * Which of `pids` (all alive now) run `cast check-watch`; null when ps cannot say (then every pid is taken at its
+ * word). One ps costs 0.7s, mostly kernel time, on a Mac running 1,200 processes whatever pids it is asked about,
+ * and an ask queued for a slot lists the watchers several times a second: 8 queued asks kept 2-3 cores busy in ps
+ * (2026-11-26). So ps is asked only about a pid not confirmed within WATCHER_PID_TRUST_MS.
+ */
+function watcherPids(pids: number[], now: number): Set<number> | null {
+  for (const pid of confirmedWatchers.keys()) if (!pids.includes(pid)) confirmedWatchers.delete(pid);
   const out = new Set<number>();
+  const unsure: number[] = [];
+  for (const pid of pids) {
+    const seen = confirmedWatchers.get(pid);
+    if (seen !== undefined && now - seen < WATCHER_PID_TRUST_MS) out.add(pid);
+    else unsure.push(pid);
+  }
+  for (const pid of out) confirmedWatchers.set(pid, now);
+  if (!unsure.length) return out;
+  const r = spawnSync("ps", ["-o", "pid=,command=", "-p", unsure.join(",")], { encoding: "utf-8", timeout: 5_000 });
+  if (r.error || (r.status !== 0 && r.status !== 1)) return null;
   for (const line of String(r.stdout ?? "").split("\n")) {
     const m = /^\s*(\d+)\s+(.*)$/.exec(line);
-    if (m && watcherIdentity.matches(m[2]!, Number(m[1]))) out.add(Number(m[1]));
+    if (m && watcherIdentity.matches(m[2]!, Number(m[1]))) {
+      out.add(Number(m[1]));
+      confirmedWatchers.set(Number(m[1]), now);
+    }
   }
   return out;
 }
@@ -943,7 +968,7 @@ export function lastLogLine(dir: string, fromByte = 0): string | null {
 }
 
 /** Every live watcher on this machine, for `cast check-status` and the cap; a state file whose pid is gone is cleared. */
-export function listWatchers(): Array<WatchState & { dir: string }> {
+export function listWatchers(now = Date.now()): Array<WatchState & { dir: string }> {
   const out: Array<WatchState & { dir: string }> = [];
   const home = checkHome();
   if (!fs.existsSync(home)) return out;
@@ -963,7 +988,7 @@ export function listWatchers(): Array<WatchState & { dir: string }> {
   }
   // A state file that outlived its watcher (a reboot, a kill -9) can name a pid another program now has:
   // that is no watcher to measure, count or stop.
-  const programs = watcherPids(out.map((w) => w.pid));
+  const programs = watcherPids(out.map((w) => w.pid), now);
   if (!programs) return out;
   const kept: Array<WatchState & { dir: string }> = [];
   for (const w of out) {
