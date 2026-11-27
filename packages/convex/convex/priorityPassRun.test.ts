@@ -6,7 +6,8 @@
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import type { MergePlan } from "./lib/priorityPass";
 import { LATE_MARGIN_MS, sessionNames } from "./priorityPassInputs";
-import { PRIORITY_PASS_DAILY_USD, PRIORITY_PASS_FIRST_USD, applyPlan, catchUpSpent, hasOkRun, runBlocker } from "./priorityPassRun";
+import { PRIORITY_PASS_CAPS, type PassSession, type PriorityPassInput } from "./lib/priorityPass";
+import { PRIORITY_PASS_DAILY_USD, PRIORITY_PASS_FIRST_USD, applyPlan, catchUpSpent, fittingPrefix, hasOkRun, runBlocker } from "./priorityPassRun";
 import { DAY, H, pass, proposal, stubModel, world } from "./priorityPassRun.testkit";
 import { api, internal } from "./_generated/api";
 import { linkFromStart } from "./lib/priorityLinks";
@@ -267,6 +268,13 @@ describe("relative rank across pass runs", () => {
 });
 
 describe("runPass, harder cases", () => {
+  test("one call reads at most sessions_per_call sessions, however many fit its prompt, so its reply stays under max_tokens", () => {
+    const session = (i: number): PassSession => ({ id: `jx7s${i}`, kind: "session", title: `S${i}`, first_prompt: "p", pin: null, idle_summary: null, last_active: i, tasks: [], prs: [], pin_events: [], typed: [] } as unknown as PassSession);
+    const input = (n: number) => ({ person: "Ana", workspace: "Acme", now: 1, window_start: 0, priorities: [], initiatives: [], step_tasks: [], calls: [], sessions: Array.from({ length: n }, (_, i) => session(i)) }) as unknown as PriorityPassInput;
+    expect(fittingPrefix(input(PRIORITY_PASS_CAPS.sessions_per_call * 2))).toBe(PRIORITY_PASS_CAPS.sessions_per_call);
+    expect(fittingPrefix(input(5))).toBe(5);
+  });
+
   test("a workspace with no model budget still gets its pass, on codecast's own key", async () => {
     const w = await world();
     await w.t.run(async (ctx) => {
