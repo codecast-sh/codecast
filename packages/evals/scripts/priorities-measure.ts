@@ -43,7 +43,7 @@ import { join, resolve } from 'node:path';
 import { STRONG_MODEL, modelCost, parseJsonBlock, postMessages, replyText } from '../../convex/convex/lib/anthropic';
 import { PRIORITY_PASS_MODEL, PRIORITY_PASS_SYSTEM, type PassPriority } from '../../convex/convex/lib/priorityPass';
 import { PRIORITY_CLASSIFIER_MODEL, classifierPriorities, classifierRequest, parseClassifierReply, type ClassifierChoice, type ClassifierTask } from '../../convex/convex/lib/priorityClassifier';
-import type { EvalSession } from '../../convex/convex/priorityClassifierEval';
+import type { EvalAsk, EvalSession } from '../../convex/convex/priorityClassifierEval';
 import { evalsApiKey } from '../src/adapters/apiCall';
 import { REPO_ROOT } from '../src/paths';
 
@@ -259,6 +259,27 @@ export function heldOut(golden: Golden, every: number): Set<string> {
   return new Set(every > 0 ? golden.priorities.filter((_, i) => i % every === every - 1).map((g) => g.id) : []);
 }
 
+/** Characters a typed word takes, space included, for a words:N cadence. */
+const CHARS_PER_WORD = 6;
+
+/**
+ * How each labeled session's reads went, in order: whether its first read
+ * filed it right (what shows at once), and the share of its reads that did
+ * (how often it sat right while it ran). A seeded goal's session is right
+ * under its goal; a held-out goal's, when the read says "new".
+ */
+export function scoreReads(golden: Golden, placements: Array<{ session: string; asks: Array<{ choice: ClassifierChoice | null }> }>, held: Set<string>) {
+  const goldenOf = (pri: string) => golden.priorities[Number(/^pri-(\d+)$/.exec(pri)?.[1] ?? 0) - SEED_BASE - 1]?.id ?? null;
+  const right = (label: string, c: ClassifierChoice | null) => (held.has(label) ? c === 'new' : !!c && c !== 'new' && goldenOf(c.priority) === label);
+  const rows = placements.flatMap((p) => {
+    const label = golden.session_labels[labelId(p.session)];
+    return label && p.asks.length ? [p.asks.map((a) => right(label, a.choice))] : [];
+  });
+  const first = rows.filter((r) => r[0]).length;
+  const life = rows.length ? rows.reduce((sum, r) => sum + r.filter(Boolean).length / r.length, 0) / rows.length : null;
+  return { sessions: rows.length, first: { correct: first, of: rows.length, score: ratio(first, rows.length) }, life, reads: rows.reduce((n, r) => n + r.length, 0) };
+}
+
 /**
  * The classifier's session score over the labeled sessions the window read.
  * A seeded pri-N is golden priority N (seedState numbering). A session of a
@@ -323,7 +344,7 @@ const castTaskStatus: TaskStatus = async (ids) => {
 };
 
 /** What a run read and produced: from a fresh pass in production, or from a saved result.json (--rescore). */
-type PassRun = { produced: Produced[]; read: Map<string, string>; scoredNames: string[]; workspaces: unknown[]; passUsd: number; args: { golden: string; user: string; workspace: string; from: string; to: string; chunk: number | null; system_file?: string | null; system_sha?: string; seed_golden?: boolean; classifier?: boolean; model?: string; holdout?: number } };
+type PassRun = { produced: Produced[]; read: Map<string, string>; scoredNames: string[]; workspaces: unknown[]; passUsd: number; args: { golden: string; user: string; workspace: string; from: string; to: string; chunk: number | null; system_file?: string | null; system_sha?: string; seed_golden?: boolean; classifier?: boolean; model?: string; holdout?: number; cadence?: string } };
 
 async function main() {
   const arg = (name: string, fallback?: string) => {
@@ -409,7 +430,8 @@ function reportClassifier(golden: Golden, run: PassRun, out: string, rescoredFro
   const held = heldOut(golden, args.holdout ?? 0);
   const s = scoreClassifier(golden, produced, read, held);
   const fmt = (m: { correct: number; of: number; score: number | null }) => `${m.score == null ? '  -  ' : m.score.toFixed(2)}  ${m.correct} of ${m.of}`;
-  const placements = (run.workspaces as Array<{ placements?: Array<{ choice: ClassifierChoice | null; asks: Array<{ trigger: string }>; inherited_from?: string }> }>).flatMap((w) => w.placements ?? []);
+  const placements = (run.workspaces as Array<{ placements?: Array<{ session: string; choice: ClassifierChoice | null; asks: Array<{ trigger: string; choice: ClassifierChoice | null }>; inherited_from?: string }> }>).flatMap((w) => w.placements ?? []);
+  const reads = scoreReads(golden, placements, held);
   const titleOf = new Map(golden.priorities.map((g) => [g.id, g.title]));
   const producedTitle = new Map(produced.map((p) => [p.key, p.title]));
   const lines = [
@@ -420,6 +442,8 @@ function reportClassifier(golden: Golden, run: PassRun, out: string, rescoredFro
     `standing        ${fmt(s.metrics.standing)} standing sessions left unplaced (never asked about)`,
     `as the pass scores it ${fmt(s.metrics.as_pass)} placement and standing; the pass's seeded run: 0.86 (compare at --holdout 0)`,
     `asks            ${placements.filter((p) => p.asks.length).length} sessions asked (${placements.filter((p) => p.asks.length > 1).length} again at their first pin) · ${placements.filter((p) => p.inherited_from).length} inherited from their parent · ${placements.filter((p) => p.choice && p.choice !== 'new').length} placed, ${placements.filter((p) => p.choice === 'new').length} new, ${placements.filter((p) => !p.choice).length} unreadable`,
+    `first read      ${fmt(reads.first)} labeled sessions filed right at their first read (cadence ${args.cadence ?? 'first'})`,
+    `over its life   ${reads.life == null ? '  -  ' : reads.life.toFixed(2)}  mean share of a session's reads that filed it right (${reads.reads} reads over ${reads.sessions} sessions)`,
     `cost            classifier $${run.passUsd.toFixed(3)}`,
     ...s.results.filter((r) => !r.correct && r.kind !== 'standing').map((r) => `  wrong ${r.kind.padEnd(9)} ${r.session} "${r.title}" · golden ${r.label} "${titleOf.get(r.label)}" · placed ${r.produced ? `${r.produced} "${producedTitle.get(r.produced)}"` : 'nowhere'}`),
     `verdict         ${s.pass ? 'PASS' : 'FAIL'} (combined)`,
@@ -523,7 +547,7 @@ function runClassifier(golden: Golden, goldenPath: string, arg: (name: string, f
 type ClassifierFacts = { person: string; sessions: EvalSession[]; tasks: ClassifierTask[]; sessions_read: Array<{ id: string; title: string; kind?: string; asked?: boolean }> };
 
 /** Reads one workspace's facts through passInputs and evalFacts, chunk by chunk as evalClassify does. Read-only. */
-function readClassifierFacts(user_id: string, workspace: string, window_start: number, window_end: number, taskIds: string[]): ClassifierFacts {
+function readClassifierFacts(user_id: string, workspace: string, window_start: number, window_end: number, taskIds: string[], everyMessage: boolean): ClassifierFacts {
   const now = Math.min(window_end + 5 * 60_000, Date.now());
   const facts: ClassifierFacts = { person: '', sessions: [], tasks: [], sessions_read: [] };
   let cursor = window_start;
@@ -532,12 +556,20 @@ function readClassifierFacts(user_id: string, workspace: string, window_start: n
       'priorityPassInputs:passInputs', { user_id, workspace, now, window_start: cursor });
     facts.person = read.input.person;
     const firstAt = (s: (typeof read.input.sessions)[number]) => Math.min(...[...s.typed, ...s.pin_events].map((r) => r.at), s.last_active);
-    const chunk = convexRun<{ sessions: EvalSession[]; tasks: ClassifierTask[] }>('priorityClassifierEval:evalFacts', {
-      workspace,
-      sessions: read.input.sessions.filter((s) => s.kind !== 'role').map((s) => ({ conversation_id: read.conversations[s.id], first_at: firstAt(s) })),
-      tasks: facts.tasks.length ? [] : taskIds,
-    });
-    if (!facts.tasks.length) facts.tasks = chunk.tasks;
+    const wanted = read.input.sessions.filter((s) => s.kind !== 'role').map((s) => ({ conversation_id: read.conversations[s.id], first_at: firstAt(s) }));
+    // An ask per message reads far more per session: a few sessions a call keeps each query inside Convex's read limit.
+    const per = everyMessage ? 6 : wanted.length || 1;
+    const chunk: { sessions: EvalSession[] } = { sessions: [] };
+    for (let i = 0; i < Math.max(wanted.length, 1); i += per) {
+      const part = convexRun<{ sessions: EvalSession[]; tasks: ClassifierTask[] }>('priorityClassifierEval:evalFacts', {
+        workspace,
+        sessions: wanted.slice(i, i + per),
+        tasks: facts.tasks.length ? [] : taskIds,
+        ...(everyMessage ? { every_message: true } : {}),
+      });
+      if (!facts.tasks.length) facts.tasks = part.tasks;
+      chunk.sessions.push(...part.sessions);
+    }
     facts.sessions.push(...chunk.sessions);
     const asked = new Set(chunk.sessions.filter((x) => x.asks.length).map((x) => x.id));
     facts.sessions_read.push(...read.input.sessions.map((s) => ({ id: read.conversations[s.id] ?? s.id, title: s.title, kind: s.kind, asked: asked.has(read.conversations[s.id] ?? s.id) })));
@@ -563,7 +595,12 @@ async function runClassifierLocal(golden: Golden, goldenPath: string, arg: (name
   const held = heldOut(golden, holdout);
   const labeled = new Set([...Object.keys(golden.session_labels), ...golden.standing_sessions]);
   const factsPath = process.argv.includes('--facts') ? resolve(arg('facts').replace(/^~/, homedir())) : null;
-  type Saved = { args: { from: string; to: string; workspace: string }; window_start: number; workspaces: Array<{ workspace: string; name: string; facts: ClassifierFacts }> };
+  type Saved = { args: { from: string; to: string; workspace: string }; window_start: number; every_message?: boolean; workspaces: Array<{ workspace: string; name: string; facts: ClassifierFacts }> };
+  // first: live's cadence (the title, then the first pin after a "new"). message, or words:N: re-read the session at each
+  // typed message, or once N more words have been typed, the latest read standing (needs facts read with an ask a message).
+  const cadence = process.argv.includes('--cadence') ? arg('cadence') : 'first';
+  const wordsPer = /^words:(\d+)$/.exec(cadence)?.[1];
+  if (cadence !== 'first' && cadence !== 'message' && !wordsPer) throw new Error(`--cadence ${cadence}: first, message or words:N`);
   let saved: Saved;
   if (factsPath) saved = JSON.parse(readFileSync(factsPath, 'utf8'));
   else {
@@ -571,9 +608,10 @@ async function runClassifierLocal(golden: Golden, goldenPath: string, arg: (name
     const taskIds = [...new Set(golden.priorities.flatMap((g) => (g.critical ?? []).flatMap((s) => (s.task ? [s.task] : []))))];
     saved = { args: { from, to, workspace: scope }, window_start, workspaces: workspaces.map((w) => {
       console.error(`${w.name}: reading facts…`);
-      return { ...w, facts: readClassifierFacts(user_id, w.workspace, window_start, window_end, taskIds) };
-    }) };
+      return { ...w, facts: readClassifierFacts(user_id, w.workspace, window_start, window_end, taskIds, cadence !== 'first') };
+    }), every_message: cadence !== 'first' };
   }
+  if (cadence !== 'first' && !saved.every_message) throw new Error(`--cadence ${cadence} needs facts read with an ask a message: run without --facts first`);
   let usd = 0;
   const ask = async (input: Parameters<typeof classifierRequest>[0]) => {
     for (let attempt = 0; ; attempt++) {
@@ -596,7 +634,42 @@ async function runClassifierLocal(golden: Golden, goldenPath: string, arg: (name
       for (const p of priorities) for (const s of p.sessions) if (s.id === id) return { priority: p.short_id, step: s.step_key };
       return null;
     };
-    for (const s of w.facts.sessions) {
+    if (cadence !== 'first') {
+      const unfile = (id: string) => { for (const p of priorities) p.sessions = p.sessions.filter((x) => x.id !== id); };
+      // Each session's reads, kept by the cadence: every message, or the first and then each once N more words came.
+      const kept = (asks: EvalAsk[]) => {
+        if (!wordsPer) return asks;
+        let since = Infinity;
+        return asks.filter((a) => {
+          since += a.chars ?? 0;
+          if (since < Number(wordsPer) * CHARS_PER_WORD) return false;
+          since = 0;
+          return true;
+        });
+      };
+      type Event = { at: number; s: (typeof w.facts.sessions)[number]; a: EvalAsk | null };
+      const events: Event[] = w.facts.sessions.flatMap((s) => (s.asks.length ? kept(s.asks).map((a) => ({ at: a.at, s, a })) : [{ at: s.last_active, s, a: null }]));
+      const bySession = new Map<string, (typeof placements)[number]>();
+      // In time order across sessions, as live would see them: each read sees the placements made before it.
+      for (const { s, a } of events.sort((x, y) => x.at - y.at)) {
+        let row = bySession.get(s.id);
+        if (!a) {
+          const inherited = s.parent ? placementOf(s.parent) : null;
+          if (!inherited) continue;
+          row = { session: s.id, title: s.title, choice: inherited, asks: [], inherited_from: s.parent! };
+        } else {
+          const reply = await ask({ person: w.facts.person, priorities: classifierPriorities(priorities, tasks), session: a.session });
+          row ??= { session: s.id, title: s.title, choice: null, asks: [] };
+          row.asks.push({ trigger: a.trigger, ...reply });
+          row.choice = reply.choice;
+        }
+        bySession.set(s.id, row);
+        unfile(s.id);
+        const choice = row.choice;
+        if (choice && choice !== 'new') priorities.find((x) => x.short_id === choice.priority)?.sessions.unshift({ id: s.id, title: s.title, step_key: choice.step, last_active: s.last_active });
+      }
+      placements.push(...bySession.values());
+    } else for (const s of w.facts.sessions) {
       const inherited = s.parent ? placementOf(s.parent) : null;
       let choice: ClassifierChoice | null = inherited;
       const asks: (typeof placements)[number]['asks'] = [];
@@ -628,7 +701,7 @@ async function runClassifierLocal(golden: Golden, goldenPath: string, arg: (name
     scoredNames: scoredRuns.map((r) => r.name),
     workspaces: runs.map(({ priorities: _, ...r }) => r),
     passUsd: usd,
-    args: { golden: goldenPath, user: process.argv.includes('--user') ? arg('user') : '', workspace: saved.args.workspace, from: saved.args.from, to: saved.args.to, chunk: null, seed_golden: true, classifier: true, model, holdout },
+    args: { golden: goldenPath, user: process.argv.includes('--user') ? arg('user') : '', workspace: saved.args.workspace, from: saved.args.from, to: saved.args.to, chunk: null, seed_golden: true, classifier: true, model, holdout, cadence },
   };
 }
 

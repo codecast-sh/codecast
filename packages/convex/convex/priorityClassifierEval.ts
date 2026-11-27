@@ -31,13 +31,21 @@ import { classifierTasks, classifyOnce, sessionFor } from "./priorityClassifier"
 // Codegen catches up on the next push.
 const fns = internal as any;
 
+/** The most asks `every_message` makes of one session, and the typed messages it reads to pick them. */
+const EVERY_MESSAGE_ASKS = 30;
+const TYPED_SCAN = 400;
+
 /** No new chunk (at most 50 sessions, up to two calls each, in turn) starts past this: the action returns `resume` inside Convex's ten minutes. */
 const EVAL_CHUNKS_START_WITHIN_MS = 3 * MINUTE;
 
 export type ClassifierEvalState = { cursor_at: number; priorities: PassPriority[] };
 
-/** What live would ask about one session, in order: its first title's or first pin's ask, then its first pin's after a "new". */
-export type EvalAsk = { trigger: "title" | "pin"; at: number; session: ClassifierSession };
+/**
+ * What live would ask about one session, in order: its first title's or first pin's ask, then its first pin's after a "new".
+ * With `every_message`, an ask at each typed message instead (a cadence to measure, not what live does), with that
+ * message's length in `chars`.
+ */
+export type EvalAsk = { trigger: "title" | "pin" | "message"; at: number; session: ClassifierSession; chars?: number };
 /** Keyed by conversation id (a short id is shared by other conversations); in production a short id is its first 7 characters, which the golden labels use. */
 export type EvalSession = { id: string; title: string; last_active: number; parent: string | null; asks: EvalAsk[] };
 
@@ -82,6 +90,8 @@ export const evalFacts = internalQuery({
     /** The conversations passInputs read (PassInputs conversations), each with its first activity in the window. */
     sessions: v.array(v.object({ conversation_id: v.id("conversations"), first_at: v.number() })),
     tasks: v.array(v.string()),
+    /** An ask at each typed message in the window, at most EVERY_MESSAGE_ASKS a session, evenly spread (priorities-measure --cadence). */
+    every_message: v.optional(v.boolean()),
   },
   handler: async (ctx, args): Promise<{ sessions: EvalSession[]; tasks: ClassifierTask[] }> => {
     const sessions: EvalSession[] = [];
@@ -93,6 +103,18 @@ export const evalFacts = internalQuery({
       if (!classifierReads(conv)) {
         if (parent) sessions.push({ id: String(conv._id), title: conv.title ?? "", last_active: first_at, parent, asks: [] });
         continue;
+      }
+      if (args.every_message) {
+        const typed: Doc<"messages">[] = (await ctx.db.query("messages").withIndex("by_conversation_nav_prompt", (q) => q.eq("conversation_id", conv._id).eq("nav_prompt", true)).take(TYPED_SCAN))
+          .filter((m: Doc<"messages">) => m.timestamp >= first_at);
+        const step = Math.max(1, Math.ceil(typed.length / EVERY_MESSAGE_ASKS));
+        const picked = typed.filter((_, i) => i % step === 0);
+        if (picked.length) {
+          const asks: EvalAsk[] = [];
+          for (const m of picked) asks.push({ trigger: "message", at: m.timestamp, chars: m.content?.length ?? 0, session: await sessionFor(ctx, conv, args.workspace, { at: m.timestamp, pin: true }) });
+          sessions.push({ id: String(conv._id), title: conv.title ?? "", last_active: first_at, parent, asks });
+          continue;
+        }
       }
       const firstTyped = await ctx.db.query("messages").withIndex("by_conversation_nav_prompt", (q) => q.eq("conversation_id", conv._id).eq("nav_prompt", true)).first();
       const firstPin = await ctx.db.query("thread_state_events").withIndex("by_conversation_at", (q) => q.eq("conversation_id", conv._id)).first();

@@ -7,7 +7,7 @@
 // of an open golden step.
 import { describe, expect, test } from 'bun:test';
 
-import { SEED_BASE, classifierSeed, heldOut, score, scoreClassifier, seedState, type Golden, type Judge, type Match, type Produced, type StepPair, type TaskStatus } from './priorities-measure';
+import { SEED_BASE, classifierSeed, heldOut, score, scoreClassifier, scoreReads, seedState, type Golden, type Judge, type Match, type Produced, type StepPair, type TaskStatus } from './priorities-measure';
 
 const golden: Golden = {
   person: 'Ana',
@@ -215,6 +215,20 @@ describe('the classifier replay', () => {
     expect(s.not_read).toEqual(['s9']);
     expect(s.pass).toBe(false);
     expect(s.results.filter((r) => !r.correct).map((r) => [r.session, r.kind])).toEqual([['s2', 'placement'], ['s3', 'new']]);
+  });
+
+  test('reads: a session is right at its first read, and over its life by the share of its reads that filed it right', () => {
+    const pri = (n: number) => ({ priority: `pri-${SEED_BASE + n}`, step: null });
+    // g2 and g4 held out. s1 (g1) wrong then right twice; s3 (g2, held out) right at once ("new"); st1 is no label.
+    const r = scoreReads(golden, [
+      { session: 's1', asks: [{ choice: pri(3) }, { choice: pri(1) }, { choice: pri(1) }] },
+      { session: 's3', asks: [{ choice: 'new' }, { choice: pri(1) }] },
+      { session: 'st1', asks: [{ choice: pri(1) }] },
+      { session: 's4', asks: [] },
+    ], heldOut(golden, 2));
+    expect(r.first).toEqual({ correct: 1, of: 2, score: 0.5 });
+    expect(r.life).toBeCloseTo((2 / 3 + 1 / 2) / 2);
+    expect(r.reads).toBe(5);
   });
 
   test('a run names a session whose short id collides by a longer prefix of its id; the golden label still finds it', () => {
