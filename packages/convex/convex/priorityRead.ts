@@ -87,20 +87,28 @@ const LISTED_STATUSES: PriorityStatus[] = ["active", "done", "quiet", "set_aside
  * the reader sees it, from the group every rank read orders (lib/priorityGroup).
  * The owner reads their real order. A teammate reads that order over the ones
  * they can read, numbered 1..n, so one hidden from them (one that needs a
- * rewrite, one whose sessions are not listed to them) leaves no gap.
+ * rewrite, one whose sessions are not listed to them) leaves no gap. A
+ * teammate's numbering stops once every id in `wanted` has its number: each
+ * priority it judges costs a read, and those ranked below go unread.
  */
-export async function positionsFor(ctx: Ctx, r: Reader, owner: Id<"users">, workspace: string): Promise<Map<string, number>> {
+export async function positionsFor(ctx: Ctx, r: Reader, owner: Id<"users">, workspace: string, wanted: ReadonlySet<string>): Promise<Map<string, number>> {
   const group = await activeGroup(ctx, owner, workspace);
   if (String(owner) === String(r.viewer)) return positionsOf(group);
   const out = new Map<string, number>();
-  for (const p of effectivePriorityOrder(group)) if (await r.canRead(p)) out.set(String(p._id), out.size + 1);
+  let left = group.filter((p) => wanted.has(String(p._id))).length;
+  for (const p of effectivePriorityOrder(group)) {
+    if (!left) break;
+    if (!(await r.canRead(p))) continue;
+    out.set(String(p._id), out.size + 1);
+    if (wanted.has(String(p._id))) left--;
+  }
   return out;
 }
 
 /** One priority's position as the reader sees it (positionsFor): the same in a list, on the page and on the pin line. */
 export async function positionOf(ctx: Ctx, r: Reader, p: Priority): Promise<number | null> {
   if (p.status !== "active") return null;
-  return (await positionsFor(ctx, r, p.user_id, p.workspace)).get(String(p._id)) ?? null;
+  return (await positionsFor(ctx, r, p.user_id, p.workspace, new Set([String(p._id)]))).get(String(p._id)) ?? null;
 }
 
 export function criticalCounts(p: Priority): { critical_done: number; critical_total: number } {
@@ -476,9 +484,14 @@ export async function listFor(ctx: Ctx, viewer: Id<"users">, args: { workspace?:
   const people = await owners(ctx, rows);
   // Positions come from each owner's whole group, as positionOf, the pin line and a move read them.
   const positions = new Map<string, number>();
-  const groups = new Map<string, Priority>();
-  for (const p of rows) if (p.status === "active") groups.set(`${p.user_id} ${p.workspace}`, p);
-  for (const p of groups.values()) for (const [id, at] of await positionsFor(ctx, r, p.user_id, p.workspace)) positions.set(id, at);
+  const groups = new Map<string, { p: Priority; wanted: Set<string> }>();
+  for (const p of rows) {
+    if (p.status !== "active") continue;
+    const key = `${p.user_id} ${p.workspace}`;
+    if (!groups.has(key)) groups.set(key, { p, wanted: new Set() });
+    groups.get(key)!.wanted.add(String(p._id));
+  }
+  for (const { p, wanted } of groups.values()) for (const [id, at] of await positionsFor(ctx, r, p.user_id, p.workspace, wanted)) positions.set(id, at);
   const at = (p: Priority) => positions.get(String(p._id)) ?? Infinity;
   const mine = (p: Priority) => (String(p.user_id) === String(viewer) ? 0 : 1);
   rows.sort((a, b) =>
@@ -499,10 +512,11 @@ export async function listFor(ctx: Ctx, viewer: Id<"users">, args: { workspace?:
   const now = Date.now();
   for (const p of rows) {
     const steps = await r.stepsFor(p);
-    // Links on every active priority, a teammate's too: the rows a next action is drawn on. Full for the viewer's own and TEAMMATE_LINKED teammates' (the read cap).
-    const linked = p.status === "active" ? await linksFor(r, reads, p, steps, now, isOwner(viewer, p) || fullLinks.has(String(p._id))) : null;
+    // Links on every active priority, a teammate's too: the rows a next action is drawn on. Full `links` for the viewer's own and TEAMMATE_LINKED teammates' (the read cap); the rest `mapped_links`, so a client never takes them for full ones.
+    const full = isOwner(viewer, p) || fullLinks.has(String(p._id));
+    const linked = p.status === "active" ? await linksFor(r, reads, p, steps, now, full) : null;
     const row = rowFor(viewer, p, ownerOf(people, p), positions.get(String(p._id)) ?? null, steps, await mappedSessions(r, p, listRead(viewer, p)), await correctionPending(ctx, viewer, p), LIST_SESSIONS);
-    out.push(linked ? { ...row, ...linked } : row);
+    out.push(!linked ? row : full ? { ...row, ...linked } : { ...row, mapped_links: linked.links });
   }
   return { priorities: out, own_truncated, teammates_truncated, ...(args.workspace ? await passTiming(ctx, viewer, args.workspace, Date.now()) : { behind_by_ms: null, next_pass_at: null }) };
 }

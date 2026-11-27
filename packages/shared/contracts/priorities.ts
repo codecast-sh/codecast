@@ -152,8 +152,10 @@ export type PriorityRow = {
   sessions: PrioritySession[];
   /** The owner wrote a correction no pass has read yet (always false for a teammate). */
   correction_pending: boolean;
-  /** Links per step (priorityDerive): a list carries them on the viewer's own active rows only, `show` on every priority; absent from a server that predates them. */
+  /** Links per step (priorityDerive): a list carries them on the active rows it links in full (the viewer's own and its first teammates'), `show` on every priority; absent from a server that predates them. */
   links?: PriorityMilestoneLinks[];
+  /** A list's other teammates' active rows (past its read budget): each step's links from the sessions mapped to it alone, no task or plan read, so no plan and nothing looks done. `show` carries full `links` for them. */
+  mapped_links?: PriorityMilestoneLinks[];
   /** The plan holding tasks from at least half the task-bearing steps (attributePlans); absent as above. */
   plan?: PriorityPlanRef | null;
   /** The call it was made in (a transcript id), present only when it was: a board marks frames of that call's objects "new". */

@@ -22,6 +22,13 @@ export const FEATURE = "priorities" as const;
  * ones its row counts ("4+" past that).
  */
 export const TEAMMATE_SESSIONS = 4;
+/**
+ * The newest sessions mapped to a priority its access reads to find the
+ * owner's newest TEAMMATE_SESSIONS among them: teammates' sessions started on
+ * it (lib/priorityLinks linkFromStart) never count, so this many leaves room
+ * for them; past it, hidden (failing closed).
+ */
+export const ACCESS_SESSIONS_READ = 20;
 
 type Ctx = { db: any };
 type Priority = Doc<"priorities">;
@@ -63,8 +70,9 @@ export type Reader = {
    * can read the call it was pulled from (`from_call`: the people in the
    * meeting saw it made) while it is still as created there (`pass_at` 0: no
    * pass has written it, so its title, summary and milestones hold nothing
-   * from the owner's sessions), or, in a team, sees at least one of its
-   * newest TEAMMATE_SESSIONS sessions listed to that team.
+   * from the owner's sessions), or, in a team, sees at least one of the
+   * owner's own newest TEAMMATE_SESSIONS sessions on it listed to that team
+   * (a teammate's session on it never counts). Judged once a call per priority.
    */
   canRead: (p: Priority) => Promise<boolean>;
   /** The priority's steps as the viewer may see them (stepsFor). */
@@ -88,7 +96,8 @@ export async function readerFor(ctx: Ctx, viewer: Id<"users">): Promise<Reader> 
     if (c.team_id && held.has(`team:${c.team_id}`) && (await vis.listedTo(c, c.team_id))) return true;
     return isSessionOwner(ctx, c._id, viewer, c);
   };
-  const canRead = async (p: Priority) => {
+  const judged = new Map<string, Promise<boolean>>();
+  const judge = async (p: Priority) => {
     if (String(p.user_id) === String(viewer)) return true;
     if (p.needs_rewrite || !authorizedFor(accessStampFromDoc("priorities", p), String(viewer), held)) return false;
     if (p.from_call && p.pass_at === 0) {
@@ -97,8 +106,14 @@ export async function readerFor(ctx: Ctx, viewer: Id<"users">): Promise<Reader> 
     }
     const ws = parseWorkspaceKey(p.workspace);
     if (ws?.type !== "team") return false;
-    for (const c of (await sessionsOf(p, TEAMMATE_SESSIONS + 1)).slice(0, TEAMMATE_SESSIONS)) if (await vis.listedTo(c, ws.teamId)) return true;
+    const owners = (await sessionsOf(p, ACCESS_SESSIONS_READ)).filter((c) => String(c.user_id) === String(p.user_id));
+    for (const c of owners.slice(0, TEAMMATE_SESSIONS)) if (await vis.listedTo(c, ws.teamId)) return true;
     return false;
+  };
+  const canRead = (p: Priority) => {
+    const key = String(p._id);
+    if (!judged.has(key)) judged.set(key, judge(p));
+    return judged.get(key)!;
   };
 
   // A step ref shown to a teammate: a session listed to them, a task they can read, a pull request or commit in a repository of the team's.

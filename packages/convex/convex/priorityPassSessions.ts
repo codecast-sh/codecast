@@ -110,7 +110,7 @@ export async function moveMergedPage(ctx: { db: any }, from: Id<"priorities">, t
     await move(conv, not ? undefined : into, to && live.has(to) ? to : undefined, conv.priority_set_by);
   }
   if (intoRow && mark !== null) await ctx.db.patch(into, { steps, step_key_max: mark, updated_at: Date.now() });
-  if (intoRow) await recount(intoRow.user_id);
+  if (intoRow) await recount();
   return { next: page.length === SESSION_PAGE ? page[page.length - 1]._creationTime : null, into, step_keys: keys };
 }
 
@@ -201,8 +201,9 @@ export async function clearDeadStepKeysNow(ctx: { db: any; scheduler: any }, pri
 /**
  * Moves sessions between priorities and then counts again, from the index,
  * every priority a session moved to or from, so a count that drifted heals:
- * the person's own in any workspace (a session made private leaves a team
- * priority from the personal pass). A move is the pass's unless `set_by`
+ * in any workspace (a session made private leaves a team priority from the
+ * personal pass), and whoever owns it (a teammate's session leaves its
+ * owner's priority). A move is the pass's unless `set_by`
  * says who else made it (a merge carries the session's own).
  */
 export function sessionMover(ctx: { db: any }) {
@@ -214,10 +215,10 @@ export function sessionMover(ctx: { db: any }) {
     // A done pin that named this milestone before the session was on it counts now.
     if (to && step_key && (to !== conv.priority_id || step_key !== conv.priority_step_key)) await replayDonePin(ctx, conv, to, step_key);
   };
-  const recount = async (userId: Id<"users">) => {
+  const recount = async () => {
     for (const [id, delta] of moved) {
       const row: Doc<"priorities"> | null = await ctx.db.get(id);
-      if (!row || String(row.user_id) !== String(userId)) continue;
+      if (!row) continue;
       const held = (await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", id)).take(SESSION_COUNT_CAP + 1)).length;
       const capped = held > SESSION_COUNT_CAP;
       const session_count = capped ? Math.max(SESSION_COUNT_CAP, (row.session_count ?? 0) + delta) : held;

@@ -23,7 +23,6 @@ import { accessStampFromDoc, authorizedFor, heldKeysFor, parseWorkspaceKey } fro
 import { teamFeatureOffMessage } from "./lib/teamFeatureGuard";
 import { FEATURE, featureCheck, readerFor, type Reader } from "./lib/priorityAccess";
 import { hasOkRun, runBlocker } from "./priorityPassRun";
-import { sessionVisibility } from "./lib/prioritySessionVisibility";
 import type { PriorityDetail, PriorityHistory, PriorityList, PriorityPinLine } from "@codecast/shared/contracts/priorities";
 import type { Doc, Id } from "./_generated/dataModel";
 import { type Priority, type Result, cliWorkspace, criticalCounts, isOwner, listFor, positionOf, showFor, tokenUser } from "./priorityRead";
@@ -99,14 +98,14 @@ export const pinLine = query({
     if (!conv?.priority_id) return null;
     const p = await ctx.db.get(conv.priority_id);
     if (!p || p.status === "merged") return null;
-    // Only the open session is judged: the owner's, or a teammate's listed to the team that holds the priority.
+    const r = await readerFor(ctx, viewer);
+    // The open session is judged when it is the owner's, listed to the team that holds the priority; a teammate's session on it (a Start) never opens it: the priority must be readable (Reader.canRead).
     if (String(p.user_id) !== String(viewer)) {
       const ws = parseWorkspaceKey(p.workspace);
-      if (p.needs_rewrite || ws?.type !== "team" || !authorizedFor(accessStampFromDoc("priorities", p), String(viewer), await heldKeysFor(ctx, viewer))) return null;
-      if (!(await sessionVisibility(ctx).listedTo(conv, ws.teamId))) return null;
+      if (p.needs_rewrite || ws?.type !== "team" || !authorizedFor(accessStampFromDoc("priorities", p), String(viewer), r.held)) return null;
+      if (!(String(conv.user_id) === String(p.user_id) ? await r.vis.listedTo(conv, ws.teamId) : await r.canRead(p))) return null;
     }
     if (!(await featureCheck(ctx)(p.workspace))) return null;
-    const r = await readerFor(ctx, viewer);
     // A teammate reads a step only as the page shows it to them (Reader.stepsFor): never one written from a session they cannot see.
     const steps = isOwner(viewer, p) ? p.steps : await r.stepsFor(p);
     const step = steps.find((s) => s.key === conv.priority_step_key && !s.dropped);

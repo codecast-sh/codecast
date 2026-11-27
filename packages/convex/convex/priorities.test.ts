@@ -13,6 +13,7 @@ import { HISTORY_SENDS_CAP, TEAMMATE_PRIORITIES_CAP } from "./priorityRead";
 import { sessionListedToTeam, sessionSharedWithTeam } from "./lib/prioritySessionVisibility";
 import { sessionPriorityReader } from "./lib/sessionPriority";
 import { linkFromStart } from "./lib/priorityLinks";
+import { readerFor } from "./lib/priorityAccess";
 import type { Id } from "./_generated/dataModel";
 
 setDefaultTimeout(60_000);
@@ -532,14 +533,15 @@ describe("reads", () => {
     expect(everywhere.priorities.filter((r: any) => r.workspace === `team:${beta}`).map((r: any) => [r.short_id, r.rank])).toEqual([["pri-90", 1]]);
   });
 
-  test("Start on a teammate's milestone links the new session when the starter can read the priority, and is refused when they cannot", async () => {
-    const { t, as, ada, bea, acme, ws, p1 } = await world();
-    const start = (short_id: string, step?: string) => t.run(async (ctx) => {
+  test("Start on a teammate's milestone links the new session when the starter can read the priority and milestone, and is refused otherwise", async () => {
+    const { t, as, ada, bea, acme, off, ws, p1, dark } = await world();
+    let n = 0;
+    const start = (short_id: string, step?: string, fields: Record<string, unknown> = {}, starter: Id<"users"> = bea) => t.run(async (ctx) => {
       const conv = await ctx.db.insert("conversations", {
-        user_id: bea, team_id: acme, agent_type: "claude_code", session_id: `start-${short_id}`, short_id: `jx7s${short_id.slice(4)}`, title: "started",
-        started_at: NOW, updated_at: NOW, message_count: 1, is_private: false, team_visibility: "full", status: "active",
+        user_id: bea, team_id: acme, agent_type: "claude_code", session_id: `start-${n}`, short_id: `jx7st${n++}`, title: "started",
+        started_at: NOW, updated_at: NOW, message_count: 1, is_private: false, team_visibility: "full", status: "active", ...fields,
       } as any);
-      return { linked: await linkFromStart(ctx, bea, conv, short_id, step), conv: (await ctx.db.get(conv))! };
+      return { linked: await linkFromStart(ctx, starter, conv, short_id, step), conv: (await ctx.db.get(conv))! };
     });
     const ok = await start("pri-1", "s2");
     expect(ok.linked).toBe(true);
@@ -547,15 +549,99 @@ describe("reads", () => {
     // The owner sees it on that milestone, not hers.
     const [row] = await rowsOf(as(ada), { workspace: ws });
     expect(row.links.find((l: any) => l.key === "s2").sessions.find((s: any) => s.short_id === ok.conv.short_id)).toMatchObject({ mine: false, why: ["mapped"] });
+    const refused = async (...args: Parameters<typeof start>) => {
+      const res = await start(...args);
+      expect(res.linked).toBe(false);
+      expect(res.conv.priority_id).toBeUndefined();
+    };
     // Ada's personal priority, and one in a team Bea is not in: not hers to read.
-    for (const short_id of ["pri-5", "pri-6"]) {
-      const refused = await start(short_id);
-      expect(refused.linked).toBe(false);
-      expect(refused.conv.priority_id).toBeUndefined();
-    }
+    await refused("pri-5");
+    await refused("pri-6");
+    // A session that is not the starter's, and one of hers in another workspace.
+    await refused("pri-1", "s2", {}, ada);
+    await refused("pri-1", "s2", { team_id: undefined, is_private: true, team_visibility: "private" });
+    // A milestone written from a session Bea cannot see is hidden from her: no Start on it.
+    await t.run(async (ctx) => {
+      const p = (await ctx.db.get(p1))!;
+      await ctx.db.patch(p1, { steps: [...p.steps, { ...step("s4", "polish"), refs: [{ kind: "session", id: "jx7pvt3" }] }] });
+    });
+    await refused("pri-1", "s4");
+    // Priorities off in a team Bea is in, though she can read the priority: refused until it is on.
+    await t.run(async (ctx) => {
+      await ctx.db.insert("team_memberships", { user_id: bea, team_id: off, role: "member", joined_at: 1 } as any);
+      await ctx.db.insert("conversations", {
+        user_id: ada, team_id: off, agent_type: "claude_code", session_id: "off-1", short_id: "jx7off1", title: "off",
+        started_at: NOW, updated_at: NOW, message_count: 1, is_private: false, team_visibility: "full", status: "active", priority_id: dark,
+      } as any);
+    });
+    expect(await t.run(async (ctx) => (await readerFor(ctx, bea)).canRead((await ctx.db.get(dark))!))).toBe(true);
+    await refused("pri-6", undefined, { team_id: off });
+    await t.run(async (ctx) => ctx.db.patch(off, { features: { priorities: true } } as any));
+    expect((await start("pri-6", undefined, { team_id: off })).linked).toBe(true);
     // One that needs a rewrite is its owner's alone.
     await t.run(async (ctx) => ctx.db.patch(p1, { needs_rewrite: true }));
-    expect((await start("pri-1", "s2")).conv.priority_id).toBeUndefined();
+    await refused("pri-1", "s2");
+  });
+
+  test("a teammate's Start never keeps a priority readable once its owner stops sharing", async () => {
+    const { t, as, ada, bea, cy, acme, ws, p1 } = await world();
+    const { started, adaMember } = await t.run(async (ctx) => {
+      await ctx.db.insert("team_memberships", { user_id: cy, team_id: acme, role: "member", joined_at: 1 } as any);
+      const started = await ctx.db.insert("conversations", {
+        user_id: bea, team_id: acme, agent_type: "claude_code", session_id: "start-1", short_id: "jx7beas", title: "started",
+        started_at: NOW, updated_at: NOW + 1, message_count: 1, is_private: false, team_visibility: "full", status: "active",
+      } as any);
+      expect(await linkFromStart(ctx, bea, started, "pri-1", "s2")).toBe(true);
+      const adaMember = (await ctx.db.query("team_memberships").withIndex("by_user_team", (q: any) => q.eq("user_id", ada).eq("team_id", acme)).first())!._id;
+      return { started, adaMember };
+    });
+    const cyReads = async () => (await rowsOf(as(cy), { workspace: ws })).map((r: any) => r.short_id);
+    expect(await cyReads()).toContain("pri-1");
+    // Ada leaves the team: her sessions are no longer listed to it, and Bea's on pri-1 opens nothing.
+    await t.run(async (ctx) => ctx.db.delete(adaMember));
+    expect(await cyReads()).toEqual([]);
+    expect(await as(cy).query(pri.show, { short_id: "pri-1" })).toBeNull();
+    expect(await as(cy).query(pri.pinLine, { conversation_id: started })).toBeNull();
+    expect(await t.run(async (ctx) => (await readerFor(ctx, cy)).canRead((await ctx.db.get(p1))!))).toBe(false);
+  });
+
+  test("a teammate's Start can be undone by either side, and the priority it left is counted again", async () => {
+    const { t, as, ada, bea, acme, p1 } = await world();
+    const startOn = (short_id: string) => t.run(async (ctx) => {
+      const conv = await ctx.db.insert("conversations", {
+        user_id: bea, team_id: acme, agent_type: "claude_code", session_id: short_id, short_id, title: "started",
+        started_at: NOW, updated_at: NOW, message_count: 1, is_private: false, team_visibility: "full", status: "active",
+      } as any);
+      expect(await linkFromStart(ctx, bea, conv, "pri-1", "s2")).toBe(true);
+      return conv;
+    });
+    const conv = (id: Id<"conversations">) => t.run(async (ctx) => (await ctx.db.get(id))!);
+    const count = () => t.run(async (ctx) => (await ctx.db.get(p1))!.session_count);
+    await t.run(async (ctx) => ctx.db.patch(p1, { session_count: 2 }));
+    // Bea says her session is not part of Ada's priority: it leaves and never maps there again.
+    const mine = await startOn("jx7bst1");
+    expect(await count()).toBe(3);
+    await as(bea).mutation(pri.sessionNotThis, { session: "jx7bst1" });
+    const left = await conv(mine);
+    expect([left.priority_id, left.priority_not]).toEqual([undefined, [p1]]);
+    expect(await count()).toBe(2);
+    // Ada says Bea's session is not part of hers: unlinked only, Bea's own word on it is left alone.
+    const theirs = await startOn("jx7bst2");
+    await as(ada).mutation(pri.sessionNotThis, { session: "jx7bst2" });
+    const after = await conv(theirs);
+    expect([after.priority_id, after.priority_not]).toEqual([undefined, undefined]);
+    expect(await count()).toBe(2);
+    // Bea moves a started session onto a priority of her own: Ada's count drops.
+    const moved = await startOn("jx7bst3");
+    const beas = await t.run(async (ctx) => ctx.db.insert("priorities", {
+      user_id: bea, workspace: (await ctx.db.get(p1))!.workspace, short_id: "pri-80", title: "Bea's", summary: "", status: "active", steps: [],
+      first_seen_at: NOW, last_active_at: NOW, pass_at: NOW, created_at: NOW, updated_at: NOW, session_count: 0,
+    } as any));
+    await as(bea).mutation(pri.moveSession, { session: "jx7bst3", short_id: "pri-80" });
+    expect((await conv(moved)).priority_id).toBe(beas);
+    expect(await count()).toBe(2);
+    // Neither may touch a session that is neither theirs nor on a priority of theirs.
+    await expect(as(bea).mutation(pri.sessionNotThis, { session: "jx7one1" })).rejects.toThrow();
   });
 
   test("a teammate sees a step's refs they may read, and not a step written from a session since locked private", async () => {

@@ -14,7 +14,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { sessionVisibility, type SessionVisibility } from "./lib/prioritySessionVisibility";
 import { teamHasFeature } from "./lib/teamFeatureGuard";
 import { PRIORITY_PASS_CAPS } from "./lib/priorityPass";
-import { LATE_MARGIN_MS, RESERVATION_TTL_MS, activitySince, cursorFor, cursorState, inWorkspace, livePriorities } from "./priorityPassInputs";
+import { LATE_MARGIN_MS, RESERVATION_TTL_MS, activitySince, cursorFor, cursorState, inWorkspace, leftWorkspace, livePriorities } from "./priorityPassInputs";
 import { scheduledPassAt } from "./priorityPassSchedule";
 
 /** (person, workspace) pairs one team's sweep runs; the rest wait for the next sweep. */
@@ -166,7 +166,7 @@ async function holdsStray(ctx: { db: any }, vis: SessionVisibility, pair: Pair, 
   for (const p of (await livePriorities(ctx, pair.user_id, pair.workspace, now, Math.min(SWEEP_STRAY_PER_PAIR, budget.left))).slice(0, SWEEP_STRAY_PER_PAIR)) {
     if (budget.left-- <= 0) return false;
     const held: Doc<"conversations">[] = await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", p._id)).order("desc").take(PRIORITY_PASS_CAPS.sessions_per_priority);
-    for (const c of held) if (!(await inWorkspace(vis, c, pair.user_id, pair.workspace))) return true;
+    for (const c of held) if (await leftWorkspace(vis, c, pair.workspace)) return true;
   }
   return false;
 }
