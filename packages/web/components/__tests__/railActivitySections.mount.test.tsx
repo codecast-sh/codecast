@@ -301,6 +301,15 @@ test("a snoozed row sleeps in Sleeping, whatever its work, saying until when", a
   await unmount();
 });
 
+test("a subagent snoozed with its parent is drawn in Sleeping too, and walked", async () => {
+  const CHILD = id("snoozedchild");
+  seed({ rows: [parked(CHILD, "Snoozed helper", { is_subagent: true, parent_conversation_id: SNOOZED, inbox_snoozed_until: NOW + 3 * HOUR })] });
+  const { host, unmount } = await mountInbox();
+  expect(sectionIds(host, "dormant")).toEqual(expect.arrayContaining([SNOOZED, CHILD]));
+  expect(computeVisualOrder(useInboxStore.getState() as any).map((s) => s._id)).toEqual(expect.arrayContaining([SNOOZED, CHILD]));
+  await unmount();
+});
+
 test("the conversation header's chip says what the row says", async () => {
   const { DormantWakeChip } = await import("../conversation/DormantWakeChip");
   const chipText = async (conversationId: string) => {

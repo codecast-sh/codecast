@@ -135,7 +135,7 @@ export function inboxMarkOf(
   if (inbox === "phone") live.stopped = false;
   const stopped = inbox === "sidebar" && !!hostedStopOf(row as any, state.messages?.[id] as any);
   const hosted = isHostedAgentType(row.agent_type);
-  // A snoozed row sleeps in Sleeping (snoozedSleepingRows), drawn there like the section's own rows.
+  // A snoozed row sleeps in Sleeping, drawn there like the section's own rows.
   const section = drawnSectionOf(placed, id) ?? (snoozedIdsOf(placed).has(id) ? "dormant" : null);
   // A row the inbox lifts into Questions (an ask on a stashed or snoozed session) is drawn there, whatever bucket also holds it.
   const hidden = section === "questions" ? null : drawnHiddenOf(placed, id);
