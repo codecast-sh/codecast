@@ -205,6 +205,12 @@ a.dpp-run-title:hover { text-decoration: underline; }
 .dpp-chev { width: 14px; height: 14px; transition: transform .15s; }
 .dpp-fold[aria-expanded="true"] .dpp-chev { transform: rotate(90deg); }
 .dpp-fold-sub { font-weight: 400; color: var(--sol-text-dim); }
+/* Open pull requests no run carries start their own run of cards under the Ship runs. */
+.dpp-group { display: flex; align-items: baseline; gap: 6px; margin-top: 6px; padding: 0 2px; font-size: 12.5px; font-weight: 600; color: var(--sol-text-secondary); }
+.dpp-group .dpp-pick-n { margin-left: 0; }
+/* A run waiting on a decision: the words open it. */
+.dpp-decide { color: inherit; text-decoration: none; border-bottom: 1px solid currentColor; }
+.dpp-decide:hover { border-bottom-width: 2px; }
 
 /* Deploys: one card kind, its state first, its edge saying whose turn it is. */
 .dpp-card { display: flex; flex-direction: column; gap: 6px; padding: 10px 14px 12px; }

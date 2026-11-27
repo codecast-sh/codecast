@@ -1,46 +1,34 @@
-// How a project's and a goal's status read on the phone (the web keeps the
-// same words and colours in lib/projectStatus and InitiativeAtoms), and the
-// sessions a project or goal holds, as rows the session list draws.
-import type FontAwesome from '@expo/vector-icons/FontAwesome';
+// How a project's and a goal's status read on the phone: the word and colour
+// of web's own tables (lib/projectStatus, lib/initiativeColors), whose glyphs
+// components/marks draws. And the sessions a project or goal holds, as rows
+// the session list draws.
 import type { Palette } from '@/constants/Theme';
 import type { SessionData } from '@/components/SessionItem';
 import type { OrgSession } from '@codecast/web/components/org/orgTypes';
+import { webColor } from '@/lib/solColor';
+import { projectStatusOf } from '@codecast/web/lib/projectStatus';
+import { HEALTH_COLOR, INITIATIVE_STATUS_VISUAL } from '@codecast/web/lib/initiativeColors';
 import { INITIATIVE_HEALTH_LABEL, INITIATIVE_STATUS_LABEL, type InitiativeHealth, type InitiativeStatus } from '@codecast/shared/contracts/initiative';
 
-type IconName = React.ComponentProps<typeof FontAwesome>['name'];
-type Visual = { icon: IconName; label: string; color: string };
+type Visual = { label: string; color: string };
 
-export const PROJECT_STATUS_ORDER = ['active', 'planning', 'paused', 'done'] as const;
+export { PROJECT_STATUS_ORDER } from '@codecast/web/lib/projectStatus';
 
+/** Drawn by ProjectStatusMark. A status nobody wrote down reads as active, as on the web. */
 export function projectStatusVisual(status: string | undefined, t: Palette): Visual {
-  switch (status) {
-    case 'planning': return { icon: 'circle-o', label: 'Planning', color: t.violet };
-    case 'paused': return { icon: 'pause-circle-o', label: 'Paused', color: t.yellow };
-    case 'done': return { icon: 'check-circle', label: 'Done', color: t.green };
-    // A status nobody wrote down reads as active, as on the web.
-    default: return { icon: 'dot-circle-o', label: 'Active', color: t.cyan };
-  }
+  const v = projectStatusOf(status);
+  return { label: v.label, color: webColor(v.color, t) };
 }
 
+/** Drawn by GoalStatusMark. */
 export function goalStatusVisual(status: InitiativeStatus, t: Palette): Visual {
-  const label = INITIATIVE_STATUS_LABEL[status] ?? status;
-  switch (status) {
-    case 'proposed': return { icon: 'circle-thin', label, color: t.textDim };
-    case 'planned': return { icon: 'circle-o', label, color: t.textMuted };
-    case 'completed': return { icon: 'check-circle', label, color: t.textMuted };
-    case 'cancelled': return { icon: 'times-circle-o', label, color: t.textDim };
-    default: return { icon: 'dot-circle-o', label, color: t.magenta };
-  }
+  const v = INITIATIVE_STATUS_VISUAL[status] ?? INITIATIVE_STATUS_VISUAL.active;
+  return { label: INITIATIVE_STATUS_LABEL[status] ?? status, color: webColor(v.color, t) };
 }
 
+/** Drawn by HealthDot. */
 export function healthVisual(health: InitiativeHealth, t: Palette): Visual {
-  const label = INITIATIVE_HEALTH_LABEL[health];
-  switch (health) {
-    case 'on_track': return { icon: 'circle', label, color: t.green };
-    case 'at_risk': return { icon: 'exclamation-circle', label, color: t.yellow };
-    case 'off_track': return { icon: 'times-circle', label, color: t.red };
-    default: return { icon: 'circle-thin', label, color: t.textDim };
-  }
+  return { label: INITIATIVE_HEALTH_LABEL[health], color: webColor(HEALTH_COLOR[health], t) };
 }
 
 /** The sessions of some projects: the store's rows tagged with one of them,
