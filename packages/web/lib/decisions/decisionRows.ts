@@ -176,7 +176,9 @@ function compare(sort: DecisionSort, dir: "asc" | "desc", me: string | null) {
   const reach = (a: Row, b: Row) => (b.problem_reach ?? 0) - (a.problem_reach ?? 0);
   const urgent = (a: Row, b: Row) => {
     const esc = (d: Row) => (isEscalated(d) ? (me && d.escalated?.to?.includes(me) ? 2 : 1) : 0);
-    return esc(b) - esc(a) || Number(!!b.blocking) - Number(!!a.blocking);
+    // Among escalated cards, the one more changes wait on comes first.
+    const waiting = (d: Row) => (isEscalated(d) ? d.escalated?.waiting ?? 0 : 0);
+    return esc(b) - esc(a) || waiting(b) - waiting(a) || Number(!!b.blocking) - Number(!!a.blocking);
   };
   const impact = (a: Row, b: Row) => urgent(a, b) || byImpact(a, b) || reach(a, b) || findings(a, b) || sev(a, b) || age(a, b);
   return (a: Row, b: Row): number => {

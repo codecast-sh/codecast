@@ -1,7 +1,7 @@
 /**
  * Named slots on this machine: at most a few holders of one name at once (its
- * cap in machineCaps.ts MACHINE_SLOTS), and none while the machine is short of
- * memory. Each place is a lock held by a live pid (lockFile.ts acquireFileSlot),
+ * cap in machineCaps.ts MACHINE_SLOTS), and one while the machine is short of
+ * memory (never none: pressure that outlasts every holder would starve them all). Each place is a lock held by a live pid (lockFile.ts acquireFileSlot),
  * so a holder that died frees its place on the next try, and a waiter says so
  * in the slot's waiting/ directory for `cast slot ls`. Memory is the machine's
  * own pressure (watcherMemory.ts underPressure: the kernel's level, or swap
@@ -32,27 +32,30 @@ export type SlotTaken = { release: () => void } | { release: null; why: string }
 
 /**
  * Take a place in slot `name`, waiting up to `waitMs` (forever when unset).
- * `onWait` hears, once, why it waits; a wait that runs out comes back with
- * why instead of a release. The place is also given back when the process
- * exits or takes a signal.
+ * `onWait` hears, once, why it waits; a wait that runs out, or that `stop`
+ * gives up, comes back with why instead of a release. The place is also given
+ * back when the process exits, and, unless `signals` is false, when it takes
+ * a signal (lockFile.ts acquireFileLock re-raises it after).
  */
-export async function takeMachineSlot(name: string, opts: { waitMs?: number; what: string; onWait?: (why: string) => void }): Promise<SlotTaken> {
+export async function takeMachineSlot(name: string, opts: { waitMs?: number; what: string; onWait?: (why: string) => void; signals?: boolean; stop?: () => boolean }): Promise<SlotTaken> {
   const cap = machineCap(name as MachineCapKey);
   const taken = (verb: string) => `all ${cap} ${name} slots on this machine ${verb} taken`;
   let pressure = false;
   let checkedAt = -Infinity;
-  const ready = () => {
+  const room = () => {
     if (Date.now() - checkedAt >= PRESSURE_RECHECK_MS) {
       checkedAt = Date.now();
       const memory = machineMemoryProbe.read();
       pressure = !!memory && underPressure(memory, os.totalmem());
     }
-    return !pressure;
+    return pressure ? 1 : cap;
   };
   try {
     const release = await acquireFileSlot(machineSlotDir(name), cap, {
       waitMs: opts.waitMs,
-      ready,
+      room,
+      stop: opts.stop,
+      signals: opts.signals,
       describe: `${name} slots`,
       what: opts.what,
       onWait: () => opts.onWait?.(pressure ? "the machine is short of memory" : taken("are")),
@@ -60,7 +63,7 @@ export async function takeMachineSlot(name: string, opts: { waitMs?: number; wha
     return { release };
   } catch (err) {
     const message = (err as Error).message;
-    return { release: null, why: pressure ? "the machine stayed short of memory" : /are taken/.test(message) ? taken("stayed") : message };
+    return { release: null, why: opts.stop?.() ? "the run ended while it waited" : pressure ? "the machine stayed short of memory" : /are taken/.test(message) ? taken("stayed") : message };
   }
 }
 

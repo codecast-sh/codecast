@@ -180,8 +180,8 @@ export function lookupContextVar(context: Record<string, string>, key: string): 
   if (key.startsWith("context.")) return lookupContextVar(context, key.slice("context.".length));
   // A station that has not run in this attempt has made no visits. A resume clears the counts (clearVisits), and
   // unset, `propose.visits < 3` and `propose.visits >= 3` were both false: a build sent back to propose fell through
-  // to its failure edge (ct-62191, Oct 27).
-  if (/^[\w-]+\.visits$/.test(key)) return "0";
+  // to its failure edge (ct-62191, Oct 27). The same for its free visits (`merge.free.visits < 3`).
+  if (/^[\w-]+(\.free)?\.visits$/.test(key)) return "0";
   return undefined;
 }
 

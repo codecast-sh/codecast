@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { generateKeyPairSync } from "node:crypto";
 import { publicKeyToBase64, sha256Hex, signManifest, type UpdaterFs } from "@platform/cli-kit/update";
-import { DARWIN_SIGNING_TEAM, RELEASE_BASE_URL, RELEASE_MANIFEST_SIGNING, createCodecastUpdater, makeCurlDownload, makeDarwinSignatureCheck, UPDATE_IN_PROGRESS } from "./update";
+import { DARWIN_SIGNING_TEAM, RELEASE_BASE_URL, RELEASE_MANIFEST_SIGNING, createCodecastUpdater, makeCurlDownload, makeDarwinSignatureCheck, UPDATE_IN_PROGRESS, forcedUpdateWaits, updateRunAfter } from "./update";
 import { exclusiveUpdate, isReleaseRace, updateWithRetry } from "./updateRetry";
 
 const enc = new TextEncoder();
@@ -216,6 +216,27 @@ describe("a download that raced the manifest is tried once more", () => {
     expect(isReleaseRace("download_incomplete")).toBe(true);
     expect(isReleaseRace("download_curl_22")).toBe(false);
     expect(isReleaseRace(undefined)).toBe(false);
+  });
+});
+
+describe("a floor no release reaches (ct-102483)", () => {
+  it("a machine on the newest release waits instead of reinstalling it and restarting below the floor", () => {
+    // Floor 1.1.400, newest release 1.1.306: installing puts 1.1.306 back, the
+    // daemon restarts still below 1.1.400, and installs again every check.
+    expect(forcedUpdateWaits("1.1.306", "1.1.306")).toBe(true);
+    expect(forcedUpdateWaits("1.1.307", "1.1.306")).toBe(true);
+    // Once latest.json moves, it installs.
+    expect(forcedUpdateWaits("1.1.306", "1.1.307")).toBe(false);
+    // Unread manifest: install, and the install reports why it failed.
+    expect(forcedUpdateWaits("1.1.306", null)).toBe(false);
+  });
+});
+
+describe("a self update another process is already installing", () => {
+  it("leaves the device row's request open, not failed", () => {
+    expect(updateRunAfter(UPDATE_IN_PROGRESS, 5)).toBeNull();
+    expect(updateRunAfter("checksum_mismatch_darwin-arm64", 5)).toEqual({ state: "failed", error: "checksum_mismatch_darwin-arm64", at: 5 });
+    expect(updateRunAfter(undefined)).toEqual({ state: "failed", error: "unknown error", at: undefined });
   });
 });
 

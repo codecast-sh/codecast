@@ -86,6 +86,7 @@ case "$1 $2" in
       conflict) echo "feat conflicts with main in a.txt; main's commits that touched them: 1234abcd fix"; exit 1 ;;
       stale) echo "feat would set back what main changed after it was built: 1234abcd fix; rebuild the change on main"; exit 1 ;;
       refused) echo "the repository protects main from this merge"; exit 2 ;;
+      inline) echo "still waiting for the lease after 40m: 2nd in line behind the merge of PR #9 on host-2; nothing was done, and the run asks again in the same place"; exit 4 ;;
       crashed) echo "TypeError: undefined is not an object" >&2; exit 1 ;;
       retest|retest-pushed)
         # As the real station records it, with the real recorder: from the head CI tested to the rebase it pushed.
@@ -462,6 +463,20 @@ describe("the shipped change flow", () => {
     expect(count(w.calls(), "flow pr --refresh")).toBe(1);
     expect(s.spawned).toHaveLength(1);
     expect(JSON.parse(fs.readFileSync(path.join(w.runDir, "pr.json"), "utf-8")).head_sha).toMatch(/^rebased/);
+  }, 120_000);
+
+  test("a merge still in line after its wait runs again in its place, with nothing else asked again; past three it stops not merged", async () => {
+    const w = world({ ci: [GREEN], review: [SHIP], merge: ["inline", "inline", "merged"] });
+    const s = server(w);
+    expect(await run(w)).toBe("completed");
+    expect(w.calls()).toEqual(["flow pr", "flow ci", "flow verdicts", "flow merge", "flow merge", "flow merge", "flow await-deploy"]);
+    expect(s.briefs()).toEqual([]);
+    const long = world({ ci: [GREEN], review: [SHIP], merge: ["inline", "inline", "inline", "inline"] });
+    const s2 = server(long);
+    expect(await run(long)).toBe("failed");
+    expect(count(long.calls(), "flow merge")).toBe(4);
+    expect(s2.sent().at(-1).body).toContain("stopped at Not merged");
+    expect(s2.sent().at(-1).body).toContain("still waiting for the lease after 40m");
   }, 120_000);
 
   test("main that keeps moving is retested three times, then the run stops and says why", async () => {

@@ -6,6 +6,7 @@
  * (shared/contracts/subagentFleet.ts), from the same config shape.
  */
 
+import * as os from "node:os";
 import { readLocalConfig } from "./config/readLocalConfig.js";
 
 /**
@@ -15,12 +16,19 @@ import { readLocalConfig } from "./config/readLocalConfig.js";
  */
 export const CHECK_WATCHERS_BACKSTOP = 16;
 
+/** Checked worktrees a machine holds at once by default: one per 16 GB, since one checked codecast worktree alone holds
+ *  about 15 GB of typecheck watchers, and never none. */
+export const worktreesFor = (totalBytes: number): number => Math.max(1, Math.floor(totalBytes / 1024 ** 3 / 16));
+
 export const MACHINE_CAPS = {
   check: { env: "CAST_CHECK_MAX_WATCHERS", fallback: CHECK_WATCHERS_BACKSTOP, what: "typecheck watchers" },
   interactive_jobs: { env: "CAST_INTERACTIVE_JOBS_MAX", fallback: 8, what: "commands run as Interactive jobs" },
   // Named slots (machineSlot.ts), taken by a flow station's machine_slot= or `cast slot run --name`. Two Local CI
   // runs side by side already fill a laptop.
   local_ci: { env: "CAST_LOCAL_CI_MAX", fallback: 2, what: "Local CI runs", slot: true },
+  // Work in a worktree of its own that typechecks and tests there (/implement, orchestrate's hands): `cast slot run
+  // --name worktree -- <cmd>`.
+  worktree: { env: "CAST_WORKTREE_MAX", fallback: worktreesFor(os.totalmem()), what: "worktrees at work", slot: true },
 } as const;
 
 export type MachineCapKey = keyof typeof MACHINE_CAPS;

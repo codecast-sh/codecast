@@ -43,7 +43,7 @@ import { noticeCauseReopened } from "./lineNotices";
 import { titleSimilarity } from "./taskMining";
 import { callModel } from "./lib/anthropic";
 import { isTerminalTaskStatus } from "@codecast/shared/tasks";
-import { FLOW_STOP_SOURCE, SIGNAL_KINDS, type SignalKind } from "@codecast/shared/contracts/signalFingerprint";
+import { holdsFlowStop, SIGNAL_KINDS, type SignalKind } from "@codecast/shared/contracts/signalFingerprint";
 import { LINE_SIGNAL_CAP, LINE_SIGNAL_WINDOW_MS, lineProfileContentKey, lineProfileUnchanged } from "@codecast/shared/contracts/lineProfile";
 import { lineFinderValidator, lineProfileFactsValidator } from "./lib/lineProfileValidator";
 import { isPlaced, placeSignal, scopeProject, type Placement } from "./lib/signalPlacement";
@@ -526,6 +526,15 @@ async function openCauseWithHeld(ctx: any, db: WorkDb, seed: CauseSeed & { finge
 }
 
 /**
+ * A cause opened for the signals held under the seed's key, every one of them
+ * joining it: flowStops.ts, once the held stops come from two changes. The
+ * seed's own signal is one of the held rows already.
+ */
+export async function openCauseOfHeld(ctx: any, db: WorkDb, seed: SignalInput, now: number): Promise<Id<"tasks">> {
+  return (await openCauseWithHeld(ctx, db, seed, filedPlacement(null), { now, issueKey: null, split: null, newCause: {}, extra: 0 })).taskId;
+}
+
+/**
  * A signal's project as a caller that already knows it says it: a project it
  * names is the filer's, and no project leaves the problem to Ground.
  */
@@ -619,11 +628,11 @@ export async function commitSignal(ctx: any, db: WorkDb, userId: Id<"users">, si
  * one (`cast signal add`, a cause filed from the line page), the lesson the
  * line's learn station files from a person's card answer (LE12), a case
  * against a judge, made from a finding someone found wrong (LL11), and a step
- * of the line's deploy stage that failed (deploys.md DP9), and a run its flow
- * stopped (flowStops.ts), whose cause becomes an incident once a second change
- * stops the same way.
+ * of the line's deploy stage that failed (deploys.md DP9). A run its flow
+ * stopped is held: flowStops.ts opens its cause only once a second change
+ * stops the same way (openCauseOfHeld).
  */
-const CAUSE_OPENING_SOURCES = new Set(["person", "lesson", JUDGE_CASE_SOURCE, "deploy", FLOW_STOP_SOURCE]);
+const CAUSE_OPENING_SOURCES = new Set(["person", "lesson", JUDGE_CASE_SOURCE, "deploy"]);
 
 /**
  * The explicit conversion step (LE4). A signal no open cause holds opens a new
@@ -658,6 +667,8 @@ export const dropUnconvertedCauses = internalMutation({
       seen.add(String(row.task_id));
       const task = await ctx.db.get(row.task_id);
       if (!task || task.source !== "signal" || task.status !== "open") continue;
+      // An incident's held stops opened it on purpose (flowStops.ts), though their source opens nothing alone.
+      if (holdsFlowStop(task.cause?.fingerprints)) continue;
       const signals = await ctx.db.query("signals").withIndex("by_task", (q) => q.eq("task_id", task._id)).collect();
       const sources = [...new Set(signals.map((s) => s.source))];
       let converts = false;
@@ -673,7 +684,7 @@ export const dropUnconvertedCauses = internalMutation({
 });
 
 /** The workspace's held signals under one key, newest first. */
-async function heldSignals(ctx: any, workspace: string, fingerprint: string): Promise<Doc<"signals">[]> {
+export async function heldSignals(ctx: any, workspace: string, fingerprint: string): Promise<Doc<"signals">[]> {
   return (await keyRows(ctx, workspace, fingerprint)).filter((r) => !r.task_id && !r.retired);
 }
 
