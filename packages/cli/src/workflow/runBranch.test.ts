@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -121,18 +121,66 @@ describe("another run's worktree holding the branch (ct-98893)", () => {
     expect(fs.existsSync(treeOf(OTHER))).toBe(true);
   });
 
-  test("a worktree no run made holding the branch refuses: it is not the run's to move", async () => {
-    git(repo, "worktree", "add", "-q", path.join(repo, "mine"), BRANCH);
-    await expect(claimRunBranch(repo, OURS, BRANCH, { task: "ct-1", rewrites: false, live: live(), now: later() }))
-      .rejects.toThrow("which no run made");
-    expect(git(path.join(repo, "mine"), "rev-parse", "--abbrev-ref", "HEAD")).toBe(BRANCH);
-  });
-
   test("a worktree whose directory is gone holds nothing: it is pruned and the branch is free", async () => {
     git(repo, "worktree", "add", "-q", path.join(repo, "gone"), BRANCH);
     fs.rmSync(path.join(repo, "gone"), { recursive: true, force: true });
     expect(await claimRunBranch(repo, "change-ct-3", BRANCH, { task: "ct-3", rewrites: false, live: live() })).toBeNull();
     expect(git(repo, "worktree", "list")).not.toContain("gone");
+  });
+});
+
+describe("a worktree no run made holding the branch (ct-102064)", () => {
+  const mine = () => path.join(repo, "mine");
+  const claim = (cwd: string, rewrites = false) => claimRunBranch(repo, OURS, BRANCH, { task: "ct-1", rewrites, live: live(), now: later(), cwd });
+
+  test("the caller's own clean one is detached at the same commit, the caller told, and the run's worktree then checks the branch out", async () => {
+    git(repo, "worktree", "add", "-q", mine(), BRANCH);
+    fs.mkdirSync(path.join(mine(), "sub"));
+    const tip = git(repo, "rev-parse", BRANCH);
+    const notice = await claim(path.join(mine(), "sub"));
+    expect(notice).toBe(`Detached your worktree ${mine()} from ${BRANCH} at the same commit (it had nothing uncommitted) so the run can check the branch out: a commit made there now is on no branch, so push one with git push origin HEAD:refs/heads/${BRANCH}`);
+    expect(git(mine(), "rev-parse", "--abbrev-ref", "HEAD")).toBe("HEAD");
+    expect(git(mine(), "rev-parse", "HEAD")).toBe(tip);
+    expect(git(repo, "rev-parse", BRANCH)).toBe(tip);
+    const { acquireWorkspace } = await import("../workspace/lifecycle.js");
+    const ws = await acquireWorkspace(repo, OURS, { branch: BRANCH, skipPool: true, skipSetup: true, skipHooks: true, noPorts: true });
+    expect(git(ws.workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(BRANCH);
+  }, 60_000);
+
+  test("the caller's own with uncommitted files refuses, naming them, and stays on the branch with its files", async () => {
+    git(repo, "worktree", "add", "-q", mine(), BRANCH);
+    fs.writeFileSync(path.join(mine(), "a.txt"), "half done\n");
+    fs.writeFileSync(path.join(mine(), "notes.md"), "todo\n");
+    await expect(claim(mine())).rejects.toThrow(`${BRANCH} is checked out in your worktree ${mine()}, with uncommitted files (a.txt, notes.md)`);
+    expect(git(mine(), "rev-parse", "--abbrev-ref", "HEAD")).toBe(BRANCH);
+    expect(fs.readFileSync(path.join(mine(), "a.txt"), "utf8")).toBe("half done\n");
+  });
+
+  test("the main checkout is never switched off it, the caller's own included", async () => {
+    git(repo, "switch", "-q", BRANCH);
+    await expect(claim(repo)).rejects.toThrow(`${BRANCH} is checked out in the main checkout ${repo}`);
+    expect(git(repo, "rev-parse", "--abbrev-ref", "HEAD")).toBe(BRANCH);
+  });
+
+  // No process or session signal says nobody commits there next: a session with no id on its command line, one the
+  // server does not list, one sharing the caller's id (a sibling subagent), or none at all, all look alike.
+  test("anyone else's clean one refuses as it always did, whatever works in it, and stays on the branch", async () => {
+    git(repo, "worktree", "add", "-q", mine(), BRANCH);
+    for (const tail of [null, ": codex app-server", ": --session-id 0b5e55ed-0000-4000-8000-000000000001"]) {
+      const agent = tail ? spawn("/bin/sh", ["-c", `sleep 60; ${tail}`], { cwd: mine(), stdio: "ignore" }) : null;
+      try {
+        await expect(claim(repo)).rejects.toThrow(`${BRANCH} is checked out in ${mine()}, which no run made: switch that worktree off it (git -C ${mine()} switch --detach)`);
+        expect(git(mine(), "rev-parse", "--abbrev-ref", "HEAD")).toBe(BRANCH);
+      } finally {
+        agent?.kill("SIGKILL");
+      }
+    }
+  });
+
+  test("a freeze over foreign commits refuses before switching the caller's worktree off the branch", async () => {
+    git(repo, "worktree", "add", "-q", mine(), BRANCH);
+    await expect(claim(mine(), true)).rejects.toThrow(`${BRANCH} holds commits no run of ct-1 froze`);
+    expect(git(mine(), "rev-parse", "--abbrev-ref", "HEAD")).toBe(BRANCH);
   });
 });
 
