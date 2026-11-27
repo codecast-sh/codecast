@@ -118,6 +118,20 @@ describe("cast plan create --from-call", () => {
     const plan = await t.run(async (ctx: any) => await ctx.db.query("plans").withIndex("by_short_id", (q: any) => q.eq("short_id", made.short_id)).first());
     expect(plan.from_call).toBe(call);
   });
+
+  test("--team personal files it in the caller's personal workspace, even from a team session", async () => {
+    const { t, ben, team } = await world();
+    const session = await t.run(async (ctx: any) =>
+      ctx.db.insert("conversations", { user_id: ben, team_id: team, is_private: false, team_visibility: "full", agent_type: "claude_code", session_id: "s-team", started_at: NOW, updated_at: NOW, message_count: 0, status: "active" } as any),
+    );
+    const plan = async (args: Record<string, unknown>) => {
+      const made = await t.mutation(api.plans.create, { api_token: TOKEN, title: "Huddle plan", conversation_id: String(session), ...args } as any);
+      return t.run(async (ctx: any) => await ctx.db.query("plans").withIndex("by_short_id", (q: any) => q.eq("short_id", made.short_id)).first());
+    };
+    // Without the flag, the team-visible session hands the plan its team.
+    expect((await plan({})).workspace).toBe(`team:${team}`);
+    expect((await plan({ workspace: "personal" })).workspace).toBe(`user:${ben}`);
+  });
 });
 
 describe("cast task create --under", () => {

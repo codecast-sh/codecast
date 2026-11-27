@@ -49,6 +49,23 @@ describe("scribeStatus", () => {
   });
 });
 
+describe("scribeInstructions in a personal huddle", () => {
+  test("names the Personal workspace and files every create there", () => {
+    const text = scribeInstructions({ solo: true, callShortId: "cl-9", personal: true, workspaceName: "Union" });
+    expect(text).toContain("Personal workspace");
+    expect(text).not.toContain("Union");
+    const creates = text.split("\n").filter((l) => /cast (task|plan|priorities) create/.test(l));
+    expect(creates.length).toBeGreaterThanOrEqual(4);
+    for (const line of creates) expect(line).toContain("--from-call cl-9 --team personal");
+  });
+
+  test("a team huddle names its team and adds no workspace flag", () => {
+    const text = scribeInstructions({ solo: false, callShortId: "cl-9", workspaceName: "Union" });
+    expect(text).toContain("the Union workspace");
+    expect(text).not.toContain("--team personal");
+  });
+});
+
 describe("scribeChunkHeader", () => {
   const base = { name: "Scribe", lane: "context" as const, held: false, call: "cl-9", board: "d1" };
   const others = (h: string) => {

@@ -20079,6 +20079,7 @@ plan
   .option("--policy <name>", "How the plan's agents share findings: lead (report to the lead, the default) or shared-log (post typed entries to the plan)", choiceOption(["lead", "shared-log"]))
   .option("--human", "File it as a person's plan, on the shelf (a script a person drives; a terminal is detected on its own)")
   .option("--from-call <call>", "The call this plan was pulled from (cl-42, from `cast calls`)")
+  .option("--team <name|id|personal>", "Workspace to file it in: a team, or personal (default: the session's team, else the directory's mapping)")
   .option("--json", "Output the created plan as JSON: { short_id, title, tasks }")
   .action(async (title: string, options: any) => {
     // Steps are read before the plan is filed, so bad input files nothing.
@@ -20104,6 +20105,7 @@ plan
     if (options.modelStylesheet) body.model_stylesheet = options.modelStylesheet;
     if (options.policy) body.messaging_policy = options.policy;
     if (options.fromCall !== undefined) body.from_call = await taskCallArg(options.fromCall);
+    if (options.team) Object.assign(body, workspaceScope(await readWorkspace(options.team)));
 
     const sessionId = detectCurrentSessionId();
     if (options.fromSession) {

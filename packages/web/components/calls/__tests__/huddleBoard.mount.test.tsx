@@ -37,6 +37,7 @@ const { boardBannerState } = await import("../../../lib/calls/huddleSettings");
 const { HuddlesSection } = await import("../CallSettings");
 const { openFeedTargetPicker } = await import("../useCallFeed");
 const { StageHostProvider } = await import("../stageHost");
+const { useBoardViewDefault } = await import("../../../hooks/useBoardViewDefault");
 afterAll(() => {
   closeDomWindow(dom);
   restoreGlobals();
@@ -47,7 +48,7 @@ type Status = "absent" | "joining" | "listening";
 const scribeOf = (status: Status, invite = mock(() => {}), remove = mock(() => {})) => ({ present: status !== "absent", status, invite, remove });
 
 beforeEach(() => {
-  useInboxStore.setState((s: any) => ({ clientState: { ...s.clientState, ui: { active_team_id: "t1" } }, teams: [{ _id: "t1", name: "Codecast" }, { _id: "t2", name: "Union" }] }));
+  useInboxStore.setState((s: any) => ({ currentUser: { _id: "me" }, clientStateInitialized: true, clientState: { ...s.clientState, ui: { active_team_id: "t1" } }, teams: [{ _id: "t1", name: "Codecast" }, { _id: "t2", name: "Union" }] }));
 });
 
 async function mount(node: React.ReactNode) {
@@ -200,6 +201,60 @@ test("board view shows the call's board, got once per call, and pins nothing", a
   useInboxStore.setState({ openCallBoard: real.openCallBoard, pinCallBoard: real.pinCallBoard, pinToStage: real.pinToStage } as any);
 });
 
+test("board view opened before the call has a record asks again once it does", async () => {
+  const openCallBoard = mock(async () => {
+    throw new Error("The huddle has no call record yet: turn transcription on to give it a board");
+  });
+  const real = useInboxStore.getState().openCallBoard;
+  useInboxStore.setState({ openCallBoard } as any);
+  const PinTile = ({ share }: { share: any }) => <div data-test-pin={share.pin.ref} />;
+  const stage = (callKey: string | null) => (
+    <StageHostProvider value={{ getRoom: () => null, PinTile }}>
+      <BoardStage roomKey="channel:late" callKey={callKey} pins={[]} roster={[]} cameras={[]} phase="connected" />
+    </StageHostProvider>
+  );
+  const m = await mount(stage(null));
+  await act(async () => {});
+  expect(m.container.textContent).toContain("turn transcription on");
+  // Transcription starts: the record appears, and the board opens without leaving the view.
+  useInboxStore.setState({ openCallBoard: mock(async () => ({ doc_id: "d9" })) } as any);
+  await m.render(stage("call-late"));
+  await act(async () => {});
+  expect(m.container.querySelector("[data-test-pin]")?.getAttribute("data-test-pin")).toBe("doc:d9");
+  expect(m.container.textContent).not.toContain("turn transcription on");
+  await act(() => m.root.unmount());
+  useInboxStore.setState({ openCallBoard: real } as any);
+});
+
+test("Open huddles on the board waits for the settings to load before deciding", async () => {
+  const toBoard = mock(() => {});
+  function Probe({ ws }: { ws: string | null }) {
+    useBoardViewDefault(ws, toBoard);
+    return null;
+  }
+  // A cold reload into a live call: the workspace is known, the settings are not yet.
+  useInboxStore.setState({ clientStateInitialized: false } as any);
+  const m = await mount(<Probe ws={WS} />);
+  expect(toBoard).not.toHaveBeenCalled();
+  await act(() => {
+    useInboxStore.setState((s: any) => ({ clientStateInitialized: true, clientState: { ...s.clientState, ui: { ...s.clientState.ui, huddleBoardView: { [WS]: true } } } }));
+  });
+  expect(toBoard).toHaveBeenCalledTimes(1);
+  // Decided once: later changes leave the person's own view alone.
+  await m.render(<Probe ws="team:t2" />);
+  expect(toBoard).toHaveBeenCalledTimes(1);
+  await act(() => m.root.unmount());
+  // Settings say no: the view stays.
+  const off = mock(() => {});
+  function ProbeOff() {
+    useBoardViewDefault("team:t2", off);
+    return null;
+  }
+  const n = await mount(<ProbeOff />);
+  expect(off).not.toHaveBeenCalled();
+  await act(() => n.root.unmount());
+});
+
 test("the header chip: nothing while absent; joining, listening; its menu removes Scribe", async () => {
   const remove = mock(() => {});
   const chip = (status: Status) => <ScribeChip scribe={scribeOf(status, undefined, remove)} session="s1" onOpenBoard={() => {}} onOpenSession={() => {}} />;
@@ -242,6 +297,25 @@ test("Settings → Calls writes each workspace's huddle settings under its own k
   expect(review()).toBeNull();
   expect(ui().huddleAutoScribe).toEqual({ "team:t2": false });
   expect(ui().huddleBoardView).toEqual({ [WS]: true });
+  // Personal is a choice beside the teams: the person's own huddles, keyed to them.
+  expect([...select.querySelectorAll("option")].map((o) => o.textContent)).toEqual(["Personal", "Codecast", "Union"]);
+  await act(() => {
+    select.value = "personal";
+    select.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+  });
+  await act(() => switchOf("Open huddles on the board").click());
+  expect(ui().huddleBoardView).toEqual({ [WS]: true, "user:me": true });
+  await act(() => switchOf("Invite Scribe to every huddle").click());
+  expect(review()!.textContent).toContain("Every huddle in Personal");
+  await confirmReview();
+  expect(ui().huddleAutoScribe).toEqual({ "team:t2": false, "user:me": true });
+  await act(() => m.root.unmount());
+});
+
+test("with no active team, Settings → Calls starts on Personal", async () => {
+  useInboxStore.setState((s: any) => ({ clientState: { ...s.clientState, ui: {} } }));
+  const m = await mount(<HuddlesSection />);
+  expect((m.container.querySelector("select") as HTMLSelectElement).value).toBe("personal");
   await act(() => m.root.unmount());
 });
 

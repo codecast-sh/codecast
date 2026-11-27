@@ -68,6 +68,7 @@ import {
   isRoomlessKey,
   scribeChunkHeader,
   scribeStatus,
+  SCRIBE_CLAIM_TTL_MS,
   isRecordingActive,
   lineSaidAt,
   liveFeedChunkHeader,
@@ -216,7 +217,7 @@ export async function syncAgentFeeds(ctx: any, t: Doc<"transcripts">): Promise<v
     .query("call_agent_feeds")
     .withIndex("by_transcript", (q: any) => q.eq("transcript_id", t._id))
     .collect();
-  const wanted = new Map<string, { conversationId: Id<"conversations">; addedBy: Id<"users">; face: boolean }>();
+  const wanted = new Map<string, { conversationId: Id<"conversations">; addedBy: Id<"users">; face: boolean; scribe: boolean }>();
   if (t.status === "live") {
     for (const r of t.routes) {
       if (r.kind !== "session") continue;
@@ -228,7 +229,7 @@ export async function syncAgentFeeds(ctx: any, t: Doc<"transcripts">): Promise<v
       await linkCallSession(ctx, t._id, conv._id as Id<"conversations">, addedBy, { live: true });
       if (r.mode !== "live") continue;
       // Scribe never gets a face, whatever its route's flag says.
-      wanted.set(String(conv._id), { conversationId: conv._id as Id<"conversations">, addedBy, face: r.face !== false && r.role !== "scribe" });
+      wanted.set(String(conv._id), { conversationId: conv._id as Id<"conversations">, addedBy, face: r.face !== false && r.role !== "scribe", scribe: r.role === "scribe" });
     }
   }
   for (const row of existing) {
@@ -284,6 +285,8 @@ export async function syncAgentFeeds(ctx: any, t: Doc<"transcripts">): Promise<v
   }
   // The first agent in the room gives the call its board, pinned on the
   // stage: the agents keep it as the room's shared picture of the talk.
+  // Scribe's board is made but not pinned: people reach it through board
+  // view (and "Open huddles on the board"), so its arrival moves nobody's stage.
   // Scheduled, not imported: callStage reaches docs.ts, and a static import
   // from here closes an import cycle that breaks module load.
   if (wanted.size > 0 && t.status === "live" && !isRoomlessKey(t.room_key) && !t.board_doc_id) {
@@ -292,6 +295,7 @@ export async function syncAgentFeeds(ctx: any, t: Doc<"transcripts">): Promise<v
       transcript_id: t._id,
       user_id: first.addedBy,
       conversation_id: first.conversationId,
+      ...(first.scribe ? { pin: false } : {}),
     });
   }
 }
@@ -625,6 +629,9 @@ export const addRoute = mutation({
     // Only the claim's holder seats Scribe, and only while the claim is
     // still the call's: an expired claim somebody else re-claimed is lost.
     const scribe = args.role === "scribe";
+    // A retried seat (its first try committed, the answer was lost) is done
+    // already: the seat cleared the claim, so the check below would refuse it.
+    if (scribe && t.routes.some((r) => r.kind === args.kind && r.target === args.target && r.role === "scribe")) return;
     if (scribe && (!t.scribe_claim || t.scribe_claim.removed || String(t.scribe_claim.by) !== String(userId) || t.scribe_claim.at !== args.claim)) {
       throw new Error("This Scribe invite no longer holds: it was withdrawn, or someone else invited Scribe");
     }
@@ -701,6 +708,12 @@ export const inviteScribe = mutation({
     const t = await liveScribeTranscript(ctx, userId, args.room_key);
     if (!t) throw new Error("The huddle is not being transcribed, so Scribe would hear nothing");
     const now = Date.now();
+    // The claimer asking again (a lost answer retried, an outbox replay) gets
+    // its own claim back, so its flow carries on rather than read "taken".
+    const mine = t.scribe_claim;
+    if (mine && !mine.removed && String(mine.by) === String(userId) && now - mine.at < SCRIBE_CLAIM_TTL_MS) {
+      return { claimed: true, claim_id: mine.at, transcript_id: t._id };
+    }
     const existing = scribeStatus(t, now);
     if (existing !== "absent") return { claimed: false, existing };
     if (args.auto && t.scribe_claim?.removed) return { claimed: false, existing: "removed" };
@@ -2041,6 +2054,10 @@ export const getLive = query({
       routes: t.routes.map((r: Route) => routeView(t, r)),
       // Scribe's instructions name the call by it.
       short_id: t.short_id ?? null,
+      // One person's own huddle (a solo huddle, a private session's room):
+      // it belongs to their personal workspace, whatever team it bills to,
+      // so Scribe and the huddle settings work there (web huddleWorkspace).
+      personal: await isOwnerOnlyRoom(ctx, t.room_key),
       // Scribe on its way (inviteScribe): who claimed the slot and when.
       // Whether it still holds is judged by the reader's clock (scribeStatus).
       scribe_claim: t.scribe_claim ? { by: String(t.scribe_claim.by), at: t.scribe_claim.at, ...(t.scribe_claim.removed ? { removed: true } : {}) } : null,

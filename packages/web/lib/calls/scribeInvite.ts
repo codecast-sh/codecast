@@ -14,6 +14,8 @@ export type ScribeInviteLive = {
   transcript_id: string;
   team_id: string;
   short_id?: string | null;
+  /** One person's own huddle: Scribe works in their personal workspace. */
+  personal?: boolean;
   routes: Array<{ kind: string; target: string }>;
 };
 
@@ -22,8 +24,8 @@ export type ScribeInviteDeps = {
   invite: (roomKey: string, auto?: boolean) => Promise<{ claimed: true; claim_id: number } | { claimed: false } | undefined>;
   /** store.removeScribe with the claim: gives back only this client's claim. */
   giveBack: (roomKey: string, claim: number) => Promise<unknown>;
-  /** spawnSessionWithMessage */
-  spawn: (body: (stubId: string) => string, onReady: (convexId: string) => void, teamId: string | null, openPanel: boolean) => Promise<string>;
+  /** spawnSessionWithMessage; `privately`: a session the team never sees. */
+  spawn: (body: (stubId: string) => string, onReady: (convexId: string) => void, teamId: string | null, openPanel: boolean, privately: boolean) => Promise<string>;
   /** transcripts.addRoute */
   seat: (args: { transcript_id: string; kind: "session"; target: string; mode: "live"; face: false; role: "scribe"; claim: number }) => Promise<unknown>;
   /** characterForRoom(seed, charactersInRoom(routes)) */
@@ -55,11 +57,16 @@ export async function inviteScribeFlow(
   let stub: string | null = null;
   let session: string | null = null;
   try {
+    // A person's own huddle stays theirs: Scribe is a private session, and
+    // what it files goes to their personal workspace, not the team the call
+    // borrowed to bill to.
+    const personal = !!live.personal;
     const ctx = deps.context(roomKey, live.team_id);
     const instructions = scribeInstructions({
       solo: ctx.occupants <= 1,
       callShortId: live.short_id ?? undefined,
-      workspaceName: ctx.workspaceName,
+      workspaceName: personal ? undefined : ctx.workspaceName,
+      personal,
     });
     let character: Character | null = null;
     session = await deps.spawn(
@@ -71,8 +78,9 @@ export async function inviteScribeFlow(
       (id) => {
         if (character) deps.setCharacter(id, { avatar: character.avatar, name: character.name });
       },
-      live.team_id,
+      personal ? null : live.team_id,
       false,
+      personal,
     );
     await deps.seat({ transcript_id: live.transcript_id, kind: "session", target: session, mode: "live", face: false, role: "scribe", claim });
     return "claimed";

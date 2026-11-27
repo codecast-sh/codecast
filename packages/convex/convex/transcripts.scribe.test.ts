@@ -294,3 +294,70 @@ test("Scribe never gets a face", async () => {
   ).rejects.toThrow(/Scribe has no face/);
   expect((await feeds())[0].face).toBe(false);
 });
+
+test("a retried seat that already landed succeeds and changes nothing", async () => {
+  const { ana, room, anaAgent, as, seat, call, feeds } = await seed();
+  const claim = await as(String(ana)).mutation(api.transcripts.inviteScribe, { room_key: room });
+  await seat(String(ana), String(anaAgent), claim.claim_id);
+  // The answer was lost and the outbox sends the same seat again: the claim is gone, the seat is done.
+  await expect(seat(String(ana), String(anaAgent), claim.claim_id)).resolves.toBeNull();
+  expect((await call()).routes).toEqual([expect.objectContaining({ target: String(anaAgent), role: "scribe" })]);
+  expect(await feeds()).toHaveLength(1);
+});
+
+test("the claimer asking again gets its own claim back; anyone else still finds it joining", async () => {
+  const { ana, ben, room, anaAgent, as, seat } = await seed();
+  const first = await as(String(ana)).mutation(api.transcripts.inviteScribe, { room_key: room, auto: true });
+  expect(first.claimed).toBe(true);
+  // A replay of the same invite (lost answer, outbox after a reload).
+  const replay = await as(String(ana)).mutation(api.transcripts.inviteScribe, { room_key: room, auto: true });
+  expect(replay).toEqual({ claimed: true, claim_id: first.claim_id, transcript_id: first.transcript_id });
+  expect(await as(String(ben)).mutation(api.transcripts.inviteScribe, { room_key: room })).toEqual({ claimed: false, existing: "joining" });
+  // The flow carries on with the claim it got back.
+  await seat(String(ana), String(anaAgent), replay.claim_id);
+  // Past the claim's life, or after a removal, it is no longer the claimer's to replay.
+  await as(String(ben)).mutation(api.transcripts.removeScribe, { room_key: room });
+  expect(await as(String(ana)).mutation(api.transcripts.inviteScribe, { room_key: room, auto: true })).toEqual({ claimed: false, existing: "removed" });
+});
+
+test("an expired claim is not the claimer's to replay: a new invite claims afresh", async () => {
+  const { ana, room, as } = await seed();
+  const first = await as(String(ana)).mutation(api.transcripts.inviteScribe, { room_key: room });
+  setSystemTime(Date.now() + SCRIBE_CLAIM_TTL_MS + 1000);
+  const again = await as(String(ana)).mutation(api.transcripts.inviteScribe, { room_key: room });
+  expect(again.claimed).toBe(true);
+  expect(again.claim_id).not.toBe(first.claim_id);
+});
+
+test("the live call says whether it is one person's own: a solo room is, a room of two is not", async () => {
+  const { t, ana, team, room, as } = await seed();
+  expect((await as(String(ana)).query(api.transcripts.getLive, { room_key: room })).personal).toBe(false);
+  const solo = dmRoomKey(String(ana));
+  await t.run(async (ctx: any) => {
+    const now = Date.now();
+    await ctx.db.insert("call_members", { room_key: solo, team_id: team, user_id: ana, user_name: "Ana", joined_at: now, last_seen: now, muted: false, camera: false, sharing: false } as any);
+    await ctx.db.insert("transcripts", { room_key: solo, team_id: team, started_by: ana, status: "live", started_at: now, routes: [], last_seq: 0 } as any);
+  });
+  const live = await as(String(ana)).query(api.transcripts.getLive, { room_key: solo });
+  expect(live.team_id).toBe(String(team));
+  expect(live.personal).toBe(true);
+});
+
+test("Scribe's arrival makes the call's board without pinning it; another agent's still pins", async () => {
+  const { t, ana, room, anaAgent, benAgent, as, seat, call } = await seed();
+  const scheduled = () =>
+    t.run(async (ctx: any) => (await ctx.db.system.query("_scheduled_functions").collect()).filter((f: any) => f.name.includes("ensureBoardForFeed")).map((f: any) => f.args[0]));
+  const claim = await as(String(ana)).mutation(api.transcripts.inviteScribe, { room_key: room });
+  await seat(String(ana), String(anaAgent), claim.claim_id);
+  const [forScribe] = await scheduled();
+  expect(forScribe).toMatchObject({ conversation_id: anaAgent, pin: false });
+  await t.mutation(internal.callStage.ensureBoardForFeed, forScribe);
+  const pins = () => t.run(async (ctx: any) => await ctx.db.query("call_stage_pins").collect());
+  expect((await call()).board_doc_id).toBeDefined();
+  expect(await pins()).toEqual([]);
+  // The rule for any other first agent is unchanged: made and pinned.
+  const callId = (await call())._id;
+  await t.run(async (ctx: any) => ctx.db.patch(callId, { board_doc_id: undefined }));
+  await t.mutation(internal.callStage.ensureBoardForFeed, { transcript_id: callId, user_id: ana, conversation_id: benAgent });
+  expect(await pins()).toHaveLength(1);
+});

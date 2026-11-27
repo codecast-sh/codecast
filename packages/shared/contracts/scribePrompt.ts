@@ -132,15 +132,23 @@ Then [pass].`;
  *  wrote its own "transcript" as the reply and filed tasks from it. */
 const SCRIBE_PROMPT_START = `No words have arrived yet: reply with exactly ${HUDDLE_PASS} now. The room's words reach you only in messages that begin "Huddle transcript (live)"; nothing you write yourself is the transcript.`;
 
-export function scribeInstructions(opts: { solo: boolean; callShortId?: string; workspaceName?: string }): string {
-  const text = [
+/** `personal`: one person's own huddle (a solo huddle, a private session's
+ *  room), which belongs to their personal workspace whatever team it bills
+ *  to. Every create then names that workspace, since a session's creates
+ *  otherwise land in its team or its folder's. */
+export function scribeInstructions(opts: { solo: boolean; callShortId?: string; workspaceName?: string; personal?: boolean }): string {
+  let text = [
     SCRIBE_PROMPT_INTRO,
-    opts.workspaceName ? `This huddle is in the ${opts.workspaceName} workspace.` : "",
+    opts.personal
+      ? "This huddle is in your Personal workspace: everything you create goes there, so every create carries `--team personal`."
+      : opts.workspaceName ? `This huddle is in the ${opts.workspaceName} workspace.` : "",
     SCRIBE_PROMPT_HEAD,
     `## Group or solo\n${opts.solo ? SCRIBE_PROMPT_SOLO : SCRIBE_PROMPT_GROUP}`,
     SCRIBE_PROMPT_TAIL,
     SCRIBE_PROMPT_START,
   ].filter(Boolean).join("\n\n");
+  // Every create names the call it came from: the personal workspace rides along.
+  if (opts.personal) text = text.replaceAll("--from-call <call>", "--from-call <call> --team personal");
   return opts.callShortId ? text.replaceAll("<call>", opts.callShortId) : text;
 }
 

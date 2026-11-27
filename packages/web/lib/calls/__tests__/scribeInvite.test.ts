@@ -31,13 +31,32 @@ describe("inviteScribeFlow", () => {
     expect(await inviteScribeFlow("channel:a", live, d, { onClaimed })).toBe("claimed");
     expect(onClaimed).toHaveBeenCalledTimes(1);
     expect(d.seat).toHaveBeenCalledWith({ transcript_id: "t1", kind: "session", target: "conv-1", mode: "live", face: false, role: "scribe", claim: 42 });
-    // Spawned for the room's team, without opening a panel.
+    // Spawned for the room's team, without opening a panel, seen by the team as usual.
     expect(d.spawn.mock.calls[0][2]).toBe("team1");
     expect(d.spawn.mock.calls[0][3]).toBe(false);
+    expect(d.spawn.mock.calls[0][4]).toBe(false);
     // The room's face, named Scribe.
     expect(d.character).toHaveBeenCalledWith("stub-1", live.routes);
     expect(d.setCharacter).toHaveBeenCalledWith("conv-1", { avatar: "fox", name: "Scribe" });
     expect(d.giveBack).not.toHaveBeenCalled();
+  });
+
+  test("a person's own huddle keeps Scribe theirs: a private session, briefed to file in Personal", async () => {
+    let briefing = "";
+    const d = deps({
+      spawn: mock(async (body: (stub: string) => string, onReady: (id: string) => void) => {
+        briefing = body("stub-1");
+        onReady("conv-1");
+        return "conv-1";
+      }) as any,
+    });
+    // The call bills to a team it borrowed; the huddle is still the person's.
+    await inviteScribeFlow("dm:me", { ...live, personal: true }, d);
+    expect(d.spawn.mock.calls[0][2]).toBeNull();
+    expect(d.spawn.mock.calls[0][4]).toBe(true);
+    expect(briefing).toContain("Personal workspace");
+    expect(briefing).not.toContain("Codecast workspace");
+    expect(briefing).toContain("--from-call cl-7 --team personal");
   });
 
   test("auto asks as an automatic invite", async () => {

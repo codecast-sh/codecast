@@ -83,11 +83,24 @@ test("invites once per call where the workspace asks for it, and not elsewhere",
   await render();
   expect(invite).toHaveBeenCalledTimes(3);
 
+  // A solo huddle bills to a team it borrowed, but asks by the person's own
+  // setting: the team's says nothing about it.
+  seat("dm:u1");
+  live = { ...liveCall("call-solo", "t1"), personal: true };
+  await act(() => useInboxStore.getState().updateClientUI({ huddleAutoScribe: { "team:t1": false, "user:u1": true } }));
+  await render();
+  expect(invite).toHaveBeenCalledTimes(4);
+  seat("dm:u1");
+  live = { ...liveCall("call-solo-2", "t1"), personal: true };
+  await act(() => useInboxStore.getState().updateClientUI({ huddleAutoScribe: { "team:t1": true, "user:u1": false } }));
+  await render();
+  expect(invite).toHaveBeenCalledTimes(4);
+
   // Nor does a guest's seat ask.
   useInboxStore.setState({ currentUser: { _id: "guest:g1" } } as any);
   seat("channel:c");
   live = liveCall("call-guest");
   await render();
-  expect(invite).toHaveBeenCalledTimes(3);
+  expect(invite).toHaveBeenCalledTimes(4);
   await act(() => root.unmount());
 });

@@ -41,6 +41,8 @@ export function spawnSessionWithMessage(
   teamId?: string | null,
   // false: the session works out of sight (Scribe keeps the board, not a thread).
   openPanel = true,
+  // A session the team never sees, from its first write (a person's own huddle).
+  privately = false,
 ): Promise<string> {
   const store = useInboxStore.getState() as any;
   const projectPath = defaultNewSessionPath(store, teamId);
@@ -55,6 +57,7 @@ export function spawnSessionWithMessage(
         project_path: projectPath,
         git_root: gitRoot,
         session_id: sid,
+        ...(privately ? { private: true } : {}),
       }),
   });
   const text = typeof body === "function" ? body(stubId) : body;

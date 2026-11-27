@@ -9,7 +9,7 @@ import { callParticipantKind, isRoomlessKey } from "@codecast/shared/contracts";
 import { useMyUserId } from "../store/inboxStore";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useWatchEffect } from "./useWatchEffect";
-import { huddleWorkspaceKey, useHuddleSetting } from "../lib/calls/huddleSettings";
+import { huddleWorkspace, useHuddleSetting } from "../lib/calls/huddleSettings";
 import { useScribe, type ScribeLive } from "../components/calls/useScribe";
 
 // Asked already from this window: only a debounce, the server decides.
@@ -22,7 +22,7 @@ export function useAutoScribe(seated: string | null, onError?: (title: string, m
   const roomKey = seated && !isRoomlessKey(seated) && me && callParticipantKind(String(me)) === "person" ? seated : null;
   // The same subscription useCallSync holds while seated.
   const live = useQueryNoThrow(api.transcripts.getLive, roomKey ? { room_key: roomKey, tail: 1 } : "skip").data as ScribeLive;
-  const on = useHuddleSetting("huddleAutoScribe", huddleWorkspaceKey(live?.team_id));
+  const on = useHuddleSetting("huddleAutoScribe", huddleWorkspace(roomKey, live, me)?.key ?? null);
   const scribe = useScribe(roomKey, live, onError);
   const callId = live?.transcript_id ?? null;
   useWatchEffect(() => {
