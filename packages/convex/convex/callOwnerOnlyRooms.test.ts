@@ -235,3 +235,32 @@ describe("rooms that stay open", () => {
     expect((await w.as(w.ids.cy).query(api.callChat.list, { room_key: room }))?.map((m: any) => m.text)).toContain("a note to self");
   });
 });
+
+describe("handing the scribe seat back", () => {
+  test("only the scribe may release; after a release another seat's start takes the run", async () => {
+    const w = await world();
+    const { t, as, ids } = w;
+    const room = dmRoomKey(ids.ana, ids.ben);
+    const transcriptId = await startHuddle(w, room);
+    await as(ids.ben).mutation(api.calls.joinRoom, { room_key: room, deliberate: true });
+
+    await expect(as(ids.ben).mutation(api.transcripts.releaseScribe, { room_key: room })).rejects.toThrow("Only the scribe can release");
+    // While Ana scribes from her seat, Ben's start only observes.
+    expect((await as(ids.ben).mutation(api.transcripts.start, { room_key: room, auto: true })).role).toBe("observer");
+
+    expect(await as(ids.ana).mutation(api.transcripts.releaseScribe, { room_key: room })).toEqual({ released: true });
+    expect((await as(ids.ana).query(api.transcripts.getLive, { room_key: room }))?.started_by).toBeNull();
+    // A second release has nothing to hand back.
+    expect(await as(ids.ana).mutation(api.transcripts.releaseScribe, { room_key: room })).toEqual({ released: false });
+
+    const taken = await as(ids.ben).mutation(api.transcripts.start, { room_key: room, auto: true });
+    expect(taken).toMatchObject({ transcript_id: transcriptId, existing: true, role: "scribe" });
+    const record = await t.run(async (ctx) => ctx.db.get(transcriptId));
+    expect([String(record?.started_by), record?.scribe_open]).toEqual([String(ids.ben), undefined]);
+  });
+
+  test("a room with no live record releases nothing", async () => {
+    const w = await world();
+    expect(await w.as(w.ids.ana).mutation(api.transcripts.releaseScribe, { room_key: dmRoomKey(w.ids.ana) })).toEqual({ released: false });
+  });
+});
