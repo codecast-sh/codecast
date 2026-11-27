@@ -371,14 +371,14 @@ test("a session's ⋯: Not this milestone, Move to… and Not this priority pain
   }
 }, 60_000);
 
-test("a teammate's priority is not on the list, nor a set-aside one until Past opens", async () => {
+test("a teammate's priority is on the list under their name, with no drag handle; a set-aside one only once its fold opens", async () => {
   const page = await mount(<Live />);
   try {
-    expect(block("pri-4")).toBeNull();
+    expect(block("pri-4")).not.toBeNull();
+    expect(block("pri-4")!.querySelector("[data-rank-handle]")).toBeNull();
     expect(block("pri-5")).toBeNull();
     await openPast();
     expect(block("pri-5")).not.toBeNull();
-    expect(block("pri-4")).toBeNull();
   } finally {
     await page.unmount();
   }

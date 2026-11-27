@@ -121,13 +121,13 @@ test("the sidebar's verdict is final: a teammate's session it holds under Needs 
   } finally {
     unseed();
   }
-  // Not in the store: the server's needs_you alone is someone else's to answer, so the milestone reads idle and so does the row.
+  // Not in the store: the server's needs_you is the teammate's own ask, and their milestone reads it as it would the viewer's.
   const page = await mount(view({ rows: [r] }));
   try {
     const b = block(page.container, "pri-30");
-    expect(states(b)).toEqual({ s1: "working" });
+    expect(states(b)).toEqual({ s1: "needs_you" });
     await act(async () => { (b.querySelector('[data-milestone="s1"] [role=button]') as HTMLElement).click(); });
-    expect(b.querySelector(`[data-session-row="${fixtureId("mate1")}"]`)!.getAttribute("data-state")).toBe("idle");
+    expect(b.querySelector(`[data-session-row="${fixtureId("mate1")}"]`)!.getAttribute("data-state")).toBe("needs_you");
   } finally {
     await page.unmount();
   }
@@ -319,20 +319,23 @@ test("a polish milestone that needs you sits with the open ones, never behind PO
   }
 }, 60_000);
 
-test("only the viewer's own priorities; the past ones fold into one line at the bottom, offering no New session", async () => {
-  const theirs = row(20, "A teammate's priority", 1, [step("s1", "Their milestone", "critical")], { mine: false, user_id: "someone-else", owner: "Sam Teammate", links: [] });
+test("a teammate's priorities follow the viewer's own under their name; each person's past ones fold into one line, offering no New session", async () => {
+  const theirs = row(20, "A teammate's priority", 1, [step("s1", "Their milestone", "critical")], { mine: false, user_id: "someone-else", owner: "Sam Teammate", person_pos: null, ai_rank: null, rank_source: null, links: [] });
   const page = await mount(view({ rows: [...ROWS, theirs] }));
   const { act } = React as any;
   try {
-    expect(order(page.container)).toEqual(["pri-1", "pri-2", "pri-3", "pri-4", "pri-5"]);
+    expect(order(page.container)).toEqual(["pri-1", "pri-2", "pri-3", "pri-4", "pri-5", "pri-20"]);
+    // One workspace: no chips and no section heading; each person gets their label.
+    expect(page.container.querySelector("[data-workspace-chips], [data-section-heading]")).toBeNull();
+    expect([...page.container.querySelectorAll("[data-person-label] [data-heading-name]")].map((h) => h.textContent)).toEqual(["You", "Sam Teammate"]);
     const past = page.container.querySelector("[data-past-toggle]") as HTMLElement;
-    expect(past.textContent).toBe("Past 1");
+    expect(past.textContent).toBe("Done and set aside 1");
     await act(async () => { past.click(); });
-    expect(order(page.container)).toEqual(["pri-1", "pri-2", "pri-3", "pri-4", "pri-5", "pri-6"]);
+    expect(order(page.container)).toEqual(["pri-1", "pri-2", "pri-3", "pri-4", "pri-5", "pri-6", "pri-20"]);
     expect(block(page.container, "pri-6").querySelector("[data-past]")!.textContent).toMatch(/^✓ Done/);
-    // No filter bar, Waiting on you, stats line, column heads or Compact.
-    expect(page.container.querySelector("[data-filters], [data-waiting], [data-stats], [data-compact-toggle], h2")).toBeNull();
-    expect(page.text()).not.toMatch(/Critical|landed|Today|Compact/);
+    // No filter bar, Waiting on you, stats line or column heads.
+    expect(page.container.querySelector("[data-filters], [data-waiting], [data-stats], h2")).toBeNull();
+    expect(page.text()).not.toMatch(/Critical|landed|Today/);
   } finally {
     await page.unmount();
   }

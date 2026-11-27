@@ -39,12 +39,13 @@ const lowerHalf = (e: DragEvent<HTMLElement>) => {
   return e.clientY > r.top + r.height / 2;
 };
 
-const C_RANK = "text-right text-ui tabular-nums text-sol-text-dim";
+const C_RANK = "text-center text-ui tabular-nums text-sol-text-dim";
+
 /** A title on one line on a mouse; under a coarse pointer it wraps onto a second, since nothing there hovers for the rest. */
 const COARSE_WRAP = "[@media(pointer:coarse)]:line-clamp-2 [@media(pointer:coarse)]:whitespace-normal";
 const LABEL = "text-mark font-semibold uppercase tracking-wide tabular-nums text-sol-text-dim";
 
-export function PriorityBlock({ model, layout, days, todayIndex, peak, typingPending, now, lookups, drag }: {
+export function PriorityBlock({ model, layout, days, todayIndex, peak, typingPending, now, lookups, drag, compact, face }: {
   model: PriorityModel;
   layout: ListLayout;
   days: readonly string[];
@@ -57,6 +58,10 @@ export function PriorityBlock({ model, layout, days, todayIndex, peak, typingPen
   lookups: LinkLookups;
   /** Set on the owner's own active rows of a desktop list. */
   drag?: RankDrag;
+  /** One line: the head alone, no milestones. */
+  compact?: boolean;
+  /** The owner's face after the rank (Workspace grouping), in the column the milestones' state marks use. */
+  face?: ReactNode;
 }) {
   const { row } = model;
   const wide = layout === "wide";
@@ -71,11 +76,14 @@ export function PriorityBlock({ model, layout, days, todayIndex, peak, typingPen
       data-dragging={drag?.dragging || undefined}
       onDragOver={drag?.accepts ? (e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; drag.hover(lowerHalf(e)); } : undefined}
       onDrop={drag?.accepts ? (e) => { e.preventDefault(); drag.drop(lowerHalf(e)); } : undefined}
-      className={cn("relative border-b border-sol-border/50 pb-2 pt-3 last:border-b-0", drag?.dragging && "opacity-40")}
+      className={cn("relative border-b border-sol-border/50 last:border-b-0", compact ? "py-1" : "pb-2 pt-3", drag?.dragging && "opacity-40")}
     >
       {drag?.over && <span aria-hidden data-drop-at={drag.over} className={cn("pointer-events-none absolute inset-x-0 z-10 h-0.5 rounded-full bg-sol-blue", drag.over === "before" ? "-top-px" : "-bottom-px")} />}
-      <div data-priority-head className={cn("grid items-center gap-x-2", wide ? "grid-cols-[20px_minmax(0,1fr)_auto]" : "grid-cols-[16px_minmax(0,1fr)_auto]")}>
+      <div data-priority-head className={cn("grid items-center gap-x-2", face
+        ? (wide ? "grid-cols-[20px_24px_minmax(0,1fr)_auto]" : "grid-cols-[16px_24px_minmax(0,1fr)_auto]")
+        : (wide ? "grid-cols-[20px_minmax(0,1fr)_auto]" : "grid-cols-[16px_minmax(0,1fr)_auto]"))}>
         <Rank row={row} drag={drag} />
+        {face && <span data-priority-face className="flex justify-center">{face}</span>}
         <span className="group/head flex min-w-0 items-center gap-1">
           {renaming ? (
             <PriorityTitleInput row={row} onDone={() => setRenaming(false)} className={wide ? "font-semibold sm:text-body" : "font-semibold"} />
@@ -93,9 +101,11 @@ export function PriorityBlock({ model, layout, days, todayIndex, peak, typingPen
         </span>
         <DayStrip counts={model.counts} days={days} todayIndex={todayIndex} peak={peak} pending={typingPending} />
       </div>
-      <div className={wide ? "ml-[28px] mt-1" : "ml-[24px] mt-1"}>
-        <Milestones model={model} layout={layout} now={now} lookups={lookups} />
-      </div>
+      {!compact && (
+        <div className={wide ? "ml-[28px] mt-1" : "ml-[24px] mt-1"}>
+          <Milestones model={model} layout={layout} now={now} lookups={lookups} />
+        </div>
+      )}
     </li>
   );
 }
@@ -116,12 +126,13 @@ function Rank({ row, drag }: { row: PriorityRow; drag?: RankDrag }) {
   }, [row.rank, row.short_id]);
   const why = rankProvenance(row);
   const said = row.rank == null ? undefined : `#${row.rank}${why ? ` · ${why}` : ""}`;
-  if (!drag || row.rank == null) return <span className={C_RANK} title={said} data-rank-source={row.rank == null ? undefined : row.rank_source}>{row.rank ?? ""}</span>;
+  if (!drag || row.rank == null) return <span className={C_RANK} title={said} data-rank={row.rank ?? undefined} data-rank-source={row.rank == null ? undefined : row.rank_source}>{row.rank ?? ""}</span>;
   return (
     <button
       type="button"
       draggable
       data-rank-handle={row.short_id}
+      data-rank={row.rank}
       data-rank-source={row.rank_source}
       title={`${said}. Drag to move, or use the arrow keys.`}
       aria-label={`Rank ${row.rank}, ${why}: drag to move, or use the arrow keys`}
