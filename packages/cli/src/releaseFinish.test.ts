@@ -83,7 +83,7 @@ describe("waiting for the fleet", () => {
 });
 
 describe("the finish", () => {
-  function server(deploy: Record<string, unknown>, o: { forced?: unknown; set?: () => unknown; fleet?: Fleet; laterNote?: string } = {}) {
+  function server(deploy: Record<string, unknown>, o: { forced?: unknown; set?: () => unknown; fleet?: Fleet; laterNote?: string; otherTeams?: number } = {}) {
     const calls: Array<{ path: string; body: any }> = [];
     let gets = 0;
     const post = async (path: string, body: Record<string, unknown>) => {
@@ -93,6 +93,7 @@ describe("the finish", () => {
       if (path === "/cli/team-cli-floor/set") return o.set ? o.set() : { team: "Acme", version: body.version, changed: true };
       if (path === "/cli/team-cli-floor/fleet") return o.fleet ?? fleet([]);
       if (path === "/cli/team-cli-floor/tell-release") return { told: "release" };
+      if (path === "/cli/team-cli-floor/tell-other-teams") return { told: o.otherTeams ?? 0 };
       return { short_id: "dp-9", status: "live" };
     };
     return { calls, post };
@@ -102,12 +103,12 @@ describe("the finish", () => {
   test("a daemon change raises the deploy's team floor, waits for the fleet and records both", async () => {
     const s = server({});
     const note = await finishCliRelease({ root: "/x", deploy: "dp-9", version: "1.1.306", waitMs: 0, post: s.post, buildIdAt: ids(true), log: () => {} });
-    expect(s.calls.map((c) => c.path)).toEqual(["/cli/deploys/get", "/cli/team-cli-floor/forced", "/cli/team-cli-floor/set", "/cli/team-cli-floor/fleet", "/cli/deploys/get", "/cli/line/deploy/report"]);
-    expect(s.calls[2]!.body).toEqual({ team_id: "team_1", version: "1.1.306" });
+    expect(s.calls.map((c) => c.path)).toEqual(["/cli/deploys/get", "/cli/team-cli-floor/forced", "/cli/team-cli-floor/tell-other-teams", "/cli/team-cli-floor/set", "/cli/team-cli-floor/fleet", "/cli/deploys/get", "/cli/line/deploy/report"]);
+    expect(s.calls[3]!.body).toEqual({ team_id: "team_1", version: "1.1.306" });
     expect(note).toContain("daemon changed since 1.1.305 (aaaaaaaaaa) (build old-build -> new-build)");
     expect(note).toContain("Forced: Acme's floor is now 1.1.306.");
     expect(note).toContain("Fleet on 1.1.306 (Acme): 1 took it, 0 lagging");
-    expect(s.calls[5]!.body).toEqual({ deploy: "dp-9", status: "live", note });
+    expect(s.calls[6]!.body).toEqual({ deploy: "dp-9", status: "live", note });
   });
 
   test("staff running it raise the global floor too, so other teams' machines take a daemon change", async () => {
@@ -117,16 +118,23 @@ describe("the finish", () => {
     expect(global).toEqual(["1.1.306"]);
     expect(note).toContain("Forced everywhere: the global floor is now 1.1.306.");
     expect(note).toContain("Forced: Acme's floor is now 1.1.306.");
+    // Every team is held to the global floor: no other team's Captain needs telling.
+    expect(s.calls.some((c) => c.path === "/cli/team-cli-floor/tell-other-teams")).toBe(false);
   });
 
-  test("a non-staff finish forces only its own team, and an unchanged daemon never asks for the global floor", async () => {
+  test("a non-staff finish forces only its own team and has the server tell other teams' Release Captains; an unchanged daemon asks for neither", async () => {
     const asked: string[] = [];
     const setGlobal = async (v: string) => { asked.push(v); return false; };
-    const forced = await finishCliRelease({ root: "/x", deploy: "dp-9", version: "1.1.306", waitMs: 0, post: server({}).post, buildIdAt: ids(true), log: () => {}, setGlobal });
+    const s = server({}, { otherTeams: 2 });
+    const forced = await finishCliRelease({ root: "/x", deploy: "dp-9", version: "1.1.306", waitMs: 0, post: s.post, buildIdAt: ids(true), log: () => {}, setGlobal });
     expect(forced).not.toContain("Forced everywhere");
     expect(forced).toContain("Forced: Acme's floor is now 1.1.306.");
-    await finishCliRelease({ root: "/x", deploy: "dp-9", version: "1.1.307", waitMs: 0, post: server({}).post, buildIdAt: ids(false), log: () => {}, setGlobal });
+    expect(s.calls.find((c) => c.path === "/cli/team-cli-floor/tell-other-teams")!.body).toEqual({ deploy: "dp-9", version: "1.1.306" });
+    expect(forced).toContain("Told 2 other teams' Release Captains.");
+    const unchanged = server({});
+    await finishCliRelease({ root: "/x", deploy: "dp-9", version: "1.1.307", waitMs: 0, post: unchanged.post, buildIdAt: ids(false), log: () => {}, setGlobal });
     expect(asked).toEqual(["1.1.306"]);
+    expect(unchanged.calls.some((c) => c.path === "/cli/team-cli-floor/tell-other-teams")).toBe(false);
   });
 
   test("an unchanged daemon forces nothing and says so on the deploy, after the note it had", async () => {

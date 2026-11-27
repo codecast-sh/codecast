@@ -127,8 +127,18 @@ export async function finishCliRelease(deps: FinishDeps): Promise<string> {
   };
   // A daemon change reaches every team's machines (Union's included) when staff
   // run the finish; anyone else forces only the deploy's own team, and other
-  // teams' Release Captains raise theirs.
-  if (decision.force && deps.setGlobal && (await deps.setGlobal(deps.version))) say(`Forced everywhere: the global floor is now ${deps.version}.`);
+  // teams' Release Captains raise theirs: the server tells each one whose
+  // machines run older (this caller cannot read other teams).
+  const global = decision.force && !!deps.setGlobal && (await deps.setGlobal(deps.version));
+  if (global) say(`Forced everywhere: the global floor is now ${deps.version}.`);
+  if (decision.force && !global) {
+    try {
+      const r = await deps.post("/cli/team-cli-floor/tell-other-teams", { deploy: deps.deploy, version: deps.version });
+      if (r?.told) say(r.told === 1 ? "Told 1 other team's Release Captain." : `Told ${r.told} other teams' Release Captains.`);
+    } catch (err) {
+      say(`Could not tell other teams' Release Captains: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
   if (decision.force && !d.team_id) lines.push("No team fleet to watch: the deploy belongs to no team.");
   if (decision.force && d.team_id) {
     let set: any = null;

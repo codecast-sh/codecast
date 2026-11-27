@@ -91,8 +91,9 @@ function UpdatesSection({ d, panel }: { d: Device; panel: ReturnType<typeof useD
   const auto = forced ? forced.on : d.settings?.auto_update !== false;
   const blocked = selfUpdateBlocked(d);
   // The release the manifest names now; the device's own update_available is a check up to a day old.
+  // Update waits for the read, so a press names the release; a failed read falls back to the device's own check.
   const latest = useLatestCliRelease();
-  const behind = behindRelease(d.cli_version, latest);
+  const behind = behindRelease(d.cli_version, latest ?? null);
   const target = latest ? `v${latest}` : d.update_available ? `v${d.update_available}` : "the latest release";
   const held =
     d.update_state === "installing" ||
@@ -140,7 +141,7 @@ function UpdatesSection({ d, panel }: { d: Device; panel: ReturnType<typeof useD
           <Button
             size="sm"
             variant="cyan"
-            disabled={!!blocked || held || pending.has("update")}
+            disabled={!!blocked || held || latest === undefined || pending.has("update")}
             onClick={() => run("update", () => requestUpdate(d.device_id, latest ?? undefined))}
           >
             {d.update_state === "failed" ? "Retry" : "Update"}

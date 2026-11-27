@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { LeaseLineWait, holdRepoLease, leaseRouteMissing } from "./repoLease";
+import { LeaseLineWait, holdRepoLease, leaseAccessRefused, leaseRouteMissing } from "./repoLease";
 
 // The client side of the repository's lease: a holder that lost it (the server
 // says another holds it, or it has not renewed for half the lease) knows, and
@@ -103,5 +103,14 @@ describe("holdRepoLease", () => {
     const refused = server([new Error("Run r1 cannot lease o/r: neither its workspace nor any of your teams works on it.")]);
     await expect(holdRepoLease(refused.post, { repository: "o/r", holder: "x", log: () => {}, pollMs: 1 })).rejects.toThrow("cannot lease o/r");
     expect(refused.ops).toEqual(["take"]);
+  });
+
+  test("an access refusal is told apart by the server's own words, for this repository only", () => {
+    // Both refusals convex repoLeases.ts leaseWorkspace throws, word for word (pinned in repoLeases.test.ts).
+    expect(leaseAccessRefused(new Error("Run r1 cannot lease o/r: neither its workspace nor any of your teams works on it."), "o/r")).toBe(true);
+    expect(leaseAccessRefused(new Error("Team t1 cannot lease o/r: it does not work on it."), "o/r")).toBe(true);
+    expect(leaseAccessRefused(new Error("Run r1 cannot lease o/r2: neither its workspace nor any of your teams works on it."), "o/r")).toBe(false);
+    expect(leaseAccessRefused(new Error("No run r1 you can lease a repository for."), "o/r")).toBe(false);
+    expect(leaseAccessRefused(new Error("this codecast server has no /cli/repo-lease route — it needs a newer deployment."), "o/r")).toBe(false);
   });
 });
