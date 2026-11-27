@@ -1,4 +1,35 @@
+import {
+  BellRing, Bug, FileText, Film, Flag, Folder, GitCommitHorizontal, GitPullRequest, Hexagon, KeyRound, Map as MapIcon,
+  MessageSquare, Network, Phone, Radio, Rocket, Signpost, Target, UserRound, Workflow, Zap, type LucideIcon,
+} from "lucide-react";
 import type { EntityType } from "./entityLinks";
+
+/** Each kind's glyph, drawn in its accent (ACCENT[type].text): the card, every
+ *  list of a kind, and the phone's pills and rows draw these. */
+export const TYPE_ICON: Record<EntityType, LucideIcon> = {
+  session: MessageSquare,
+  task: Target, // replaced by the status disc at render time
+  plan: MapIcon,
+  doc: FileText,
+  trigger: Zap,
+  project: Folder,
+  initiative: Flag,
+  proposal: Network,
+  decision: Signpost,
+  pr: GitPullRequest,
+  commit: GitCommitHorizontal,
+  call: Phone,
+  replay: Film,
+  issue: Bug,
+  metric: BellRing,
+  deploy: Rocket,
+  source: Radio,
+  role: Hexagon,
+  person: UserRound,
+  secret: KeyRound,
+  flow: Workflow,
+  priority: Target,
+};
 
 // Every class literal in full — Tailwind's scanner never sees a composed
 // string like `hover:${accent.text}`, so composition would silently produce
