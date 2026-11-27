@@ -78,6 +78,10 @@ export const create = mutation({
     messaging_policy: v.optional(messagingPolicyValidator),
     // `cast plan create --from-call cl-42`: the call this plan came out of.
     from_call: v.optional(v.string()),
+    // `cast plan create --team <name>|personal`: an explicit workspace wins
+    // over the session's team and the directory rule, as for tasks.
+    workspace: v.optional(v.union(v.literal("personal"), v.literal("team"))),
+    team_id: v.optional(v.id("teams")),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
@@ -98,11 +102,13 @@ export const create = mutation({
       }
     }
 
-    const db = await createDataContext(ctx, {
-      userId: auth.userId,
-      project_path: args.project_path,
-      ...(convTeamId ? { workspace: "team" as const, team_id: convTeamId } : {}),
-    });
+    const db = await createDataContext(ctx, args.workspace
+      ? { userId: auth.userId, workspace: args.workspace, team_id: args.team_id }
+      : {
+          userId: auth.userId,
+          project_path: args.project_path,
+          ...(convTeamId ? { workspace: "team" as const, team_id: convTeamId } : {}),
+        });
     let project_id: Id<"projects"> | undefined;
     if (args.project_id) {
       const pid = ctx.db.normalizeId("projects", args.project_id);

@@ -89,7 +89,8 @@ import { StagePinButton } from "./StagePinPicker";
 import { StageShareButton } from "./StageShareButton";
 import { useScribe, type ScribeLive } from "./useScribe";
 import { BoardBanner, BoardStage, ScribeChip } from "./HuddleBoard";
-import { huddleWorkspaceKey, readHuddleSetting } from "../../lib/calls/huddleSettings";
+import { huddleWorkspace, huddleWorkspaceName } from "../../lib/calls/huddleSettings";
+import { useBoardViewDefault } from "../../hooks/useBoardViewDefault";
 
 /** How long a speaker holds the floor before a follower's app moves to them. */
 const STAGE_FOLLOW_SETTLE_MS = 1500;
@@ -251,6 +252,7 @@ export function CallStage({
         team_id: string;
         routes: Array<{ kind: string; target: string; mode: string; added_by: string; role?: string }>;
         short_id: string | null;
+        personal?: boolean;
         scribe_claim: { by: string; at: number } | null;
         tail: Array<{ seq: number; speaker_name: string; text: string; at: number }>;
       }
@@ -289,17 +291,12 @@ export function CallStage({
 
   const [view, setView] = useState<StageView>("auto");
   const scribe = useScribe(call.roomKey, live);
-  const workspace = huddleWorkspaceKey(live?.team_id);
-  const workspaceName = useInboxStore((st: any) => (st.teams ?? []).find((t: any) => String(t?._id) === live?.team_id)?.name ?? "this workspace");
-  // A huddle opens on the board where the person asked for that
-  // (lib/calls/huddleSettings), once its workspace is known, unless they
-  // already picked a view.
-  const viewDefaulted = useRef(false);
-  useWatchEffect(() => {
-    if (viewDefaulted.current || !workspace) return;
-    viewDefaulted.current = true;
-    if (readHuddleSetting(useInboxStore.getState().clientState?.ui, "huddleBoardView", workspace)) setView((v) => (v === "auto" ? "board" : v));
-  }, [workspace]);
+  const ws = huddleWorkspace(call.roomKey, live, myUserId);
+  const workspace = ws?.key ?? null;
+  const workspaceName = useInboxStore((st: any) => huddleWorkspaceName(ws, st.teams));
+  // A huddle opens on the board where the person asked for that, unless
+  // they already picked a view.
+  useBoardViewDefault(workspace, () => setView((v) => (v === "auto" ? "board" : v)));
   const [threadOpen, setThreadOpen] = useState(takeCallThreadRequest);
   // The rail leaves with motion: it stays mounted through a 150ms exit and
   // goes on the animation's end. Exits are shorter than entrances (200ms in).

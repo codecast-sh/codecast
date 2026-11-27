@@ -24,6 +24,8 @@ export type ScribeLive = {
   transcript_id: string;
   team_id: string;
   short_id?: string | null;
+  /** One person's own huddle (transcripts.getLive): Scribe works in their personal workspace. */
+  personal?: boolean;
   routes: Array<{ kind: string; target: string; added_by: string; role?: string }>;
   scribe_claim?: { by: string; at: number; removed?: boolean } | null;
 } | null | undefined;

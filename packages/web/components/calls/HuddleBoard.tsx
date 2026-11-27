@@ -6,6 +6,7 @@ import { useState, useSyncExternalStore } from "react";
 import { ChevronDown, PenLine, SquareKanban, SquareArrowOutUpRight, X } from "lucide-react";
 import { useInboxStore } from "../../store/inboxStore";
 import { useMountEffect } from "../../hooks/useMountEffect";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { boardBannerState, markNextTimeSeen, SCRIBE_INVITE_WORDS, setHuddleSettings, useHuddleSetting, useNextTimeSeen, type BannerMemo } from "../../lib/calls/huddleSettings";
 import type { ParticipantTile } from "../../lib/calls/callMedia";
 import { pinShare } from "../../lib/calls/stagePins";
@@ -70,9 +71,12 @@ export function BoardStage({
   const key = `${roomKey}|${callKey ?? ""}`;
   const [docId, setDocId] = useState<string | null>(() => boards.get(key) ?? null);
   const [error, setError] = useState<string | null>(null);
-  useMountEffect(() => {
+  // Asked again when the call's record appears: board view opened before
+  // transcription started has nothing to hang the board on yet.
+  useWatchEffect(() => {
     if (docId) return;
     let gone = false;
+    setError(null);
     useInboxStore
       .getState()
       .openCallBoard(roomKey)
@@ -85,7 +89,7 @@ export function BoardStage({
     return () => {
       gone = true;
     };
-  });
+  }, [roomKey, callKey]);
   return (
     <div className="relative flex min-h-0 min-w-0 flex-1" data-stage-view="board">
       {docId ? (

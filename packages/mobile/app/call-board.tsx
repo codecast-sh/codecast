@@ -9,11 +9,12 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { api } from '@codecast/convex/convex/_generated/api';
-import { useInboxStore } from '@codecast/web/store/inboxStore';
+import { useInboxStore, useMyUserId } from '@codecast/web/store/inboxStore';
 import { useQueryNoThrow } from '@codecast/web/hooks/useQueryNoThrow';
 import { useMountEffect } from '@codecast/web/hooks/useMountEffect';
+import { useWatchEffect } from '@codecast/web/hooks/useWatchEffect';
 import { useLiveArtifact } from '@codecast/web/components/live/useLiveArtifact';
-import { boardBannerState, huddleWorkspaceKey, markNextTimeSeen, SCRIBE_INVITE_WORDS, setHuddleSettings, useHuddleSetting, useNextTimeSeen, type BannerMemo } from '@codecast/web/lib/calls/huddleSettings';
+import { boardBannerState, huddleWorkspace, huddleWorkspaceName, markNextTimeSeen, SCRIBE_INVITE_WORDS, setHuddleSettings, useHuddleSetting, useNextTimeSeen, type BannerMemo } from '@codecast/web/lib/calls/huddleSettings';
 import { useScribe, type ScribeLive } from '@codecast/web/components/calls/useScribe';
 import { autoScribeLedger } from '@codecast/web/components/consequential/ledgers';
 import { ledgerLines } from '@codecast/web/components/consequential/roleOnline';
@@ -36,9 +37,13 @@ export default function CallBoardScreen() {
   const [canvas, setCanvas] = useState(false);
   const scribe = useScribe(roomKey, live, appAlert);
 
-  useMountEffect(() => {
-    if (!roomKey) return;
+  // Asked again when the call's record appears: opened before transcription
+  // started, the board has nothing to hang on yet.
+  const callId = live?.transcript_id ?? null;
+  useWatchEffect(() => {
+    if (!roomKey || docId) return;
     let gone = false;
+    setError(null);
     useInboxStore
       .getState()
       .openCallBoard(roomKey)
@@ -49,10 +54,11 @@ export default function CallBoardScreen() {
     return () => {
       gone = true;
     };
-  });
+  }, [roomKey, callId]);
 
-  const workspace = huddleWorkspaceKey(live?.team_id);
-  const workspaceName = useInboxStore((s: any) => (s.teams ?? []).find((t: any) => String(t?._id) === live?.team_id)?.name ?? 'this workspace');
+  const ws = huddleWorkspace(roomKey, live, useMyUserId());
+  const workspace = ws?.key ?? null;
+  const workspaceName = useInboxStore((s: any) => huddleWorkspaceName(ws, s.teams));
   const banner = roomKey && live ? <BoardBanner callKey={key} workspace={workspace} workspaceName={workspaceName} scribe={scribe} /> : null;
 
   return (

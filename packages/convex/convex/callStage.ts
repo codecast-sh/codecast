@@ -156,11 +156,12 @@ export async function ensureCallBoard(
 
 /** The board for a call an agent just joined (transcripts.syncAgentFeeds). */
 export const ensureBoardForFeed = internalMutation({
-  args: { transcript_id: v.id("transcripts"), user_id: v.id("users"), conversation_id: v.id("conversations") },
+  // `pin: false`: Scribe's arrival makes the board without putting it on the stage.
+  args: { transcript_id: v.id("transcripts"), user_id: v.id("users"), conversation_id: v.id("conversations"), pin: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
     const t = await ctx.db.get(args.transcript_id);
     if (!t) return null;
-    return await ensureCallBoard(ctx, t, args.user_id, args.conversation_id);
+    return await ensureCallBoard(ctx, t, args.user_id, args.conversation_id, args.pin !== false);
   },
 });
 

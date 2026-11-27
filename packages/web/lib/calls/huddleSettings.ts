@@ -1,7 +1,8 @@
 // How a person's huddles start in each workspace: on the board, and with
 // Scribe invited. Per person (the clientState.ui bag, so it follows them to
-// every device) and per workspace (keyed by workspace key, "team:<id>": a
-// huddle always belongs to a team). Absent means off.
+// every device) and per workspace (keyed by workspace key: "team:<id>", or
+// "user:<id>" for the person's own huddles). Absent means off.
+import { parseRoomKey } from "@codecast/shared/contracts";
 import { useInboxStore } from "../../store/inboxStore";
 
 /** The invite banner's words, on web and the phone. */
@@ -9,8 +10,29 @@ export const SCRIBE_INVITE_WORDS = "Scribe can diagram your huddles as you talk"
 
 export type HuddleSettingKey = "huddleBoardView" | "huddleAutoScribe";
 
-/** A huddle's workspace key, from its team. */
-export const huddleWorkspaceKey = (teamId: string | null | undefined): string | null => (teamId ? `team:${teamId}` : null);
+/** A huddle's workspace. One person's own huddle (a solo huddle, a private
+ *  session's room: the server's `personal`, or a room of only `me` before the
+ *  record loads) is their personal workspace, though it bills to a team it
+ *  borrowed; any other huddle is its team's. Null until it can be told. */
+export type HuddleWorkspace = { key: string; teamId: string | null; personal: boolean };
+
+export function huddleWorkspace(
+  roomKey: string | null | undefined,
+  live: { team_id?: string | null; personal?: boolean } | null | undefined,
+  me: string | null | undefined,
+): HuddleWorkspace | null {
+  if (!me) return null;
+  const room = roomKey ? parseRoomKey(roomKey) : null;
+  const mine = room?.kind === "dm" && room.users.length === 1 && room.users[0] === me;
+  if (live?.personal || mine) return { key: `user:${me}`, teamId: null, personal: true };
+  return live?.team_id ? { key: `team:${live.team_id}`, teamId: live.team_id, personal: false } : null;
+}
+
+/** What the person calls a huddle's workspace: Personal, or its team's name. */
+export function huddleWorkspaceName(ws: HuddleWorkspace | null, teams: ReadonlyArray<{ _id?: unknown; name?: string }> | null | undefined): string {
+  if (ws?.personal) return "Personal";
+  return (teams ?? []).find((t) => String(t?._id) === ws?.teamId)?.name ?? "this workspace";
+}
 
 export function readHuddleSetting(ui: unknown, key: HuddleSettingKey, workspace: string | null): boolean {
   return !!workspace && (ui as { [k in HuddleSettingKey]?: Record<string, boolean> } | undefined)?.[key]?.[workspace] === true;

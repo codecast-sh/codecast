@@ -13,7 +13,7 @@
 import { useRef, useState } from "react";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { Mic, Radio, SquareKanban, Video, Volume2, X } from "lucide-react";
-import { useInboxStore } from "../../store/inboxStore";
+import { useInboxStore, useMyUserId } from "../../store/inboxStore";
 import { rememberCamera, rememberMic, rememberDeviceCheck, rememberMicAutoOpen } from "../../lib/calls/joinPrefs";
 import { setNoiseCancellation } from "../../lib/calls/callManager";
 import { useWalkieDoor } from "../../hooks/useWalkie";
@@ -23,7 +23,7 @@ import { MeetingDetectSection } from "../settings/MeetingDetectSection";
 import { WalkieCuesBlock } from "../settings/WalkieCuesBlock";
 import { DeviceRows } from "./DeviceRows";
 import { SelectBox } from "../ui/select-box";
-import { huddleWorkspaceKey, setHuddleSettings, useHuddleSetting } from "../../lib/calls/huddleSettings";
+import { setHuddleSettings, useHuddleSetting } from "../../lib/calls/huddleSettings";
 import { ConsequentialSwitch } from "../consequential/ConsequentialSwitch";
 import { autoScribeLedger } from "../consequential/ledgers";
 
@@ -141,13 +141,16 @@ export function CallSettings({ compact = false }: { compact?: boolean }) {
  *  person's own, chosen per workspace, the active one first. */
 export function HuddlesSection({ pad }: { pad?: string }) {
   const teams = useInboxStore((s: any) => s.teams as Array<{ _id: string; name?: string }> | undefined) ?? [];
+  const me = useMyUserId();
   const activeTeam = useInboxStore((s) => s.clientState?.ui?.active_team_id ?? null);
+  // Personal (the person's own huddles: solo, a private session's room) or a
+  // team, keyed as huddleWorkspace keys a huddle. Starts on the active workspace.
   const [picked, setPicked] = useState<string | null>(null);
-  const teamId = picked ?? activeTeam ?? teams[0]?._id ?? null;
-  const workspace = huddleWorkspaceKey(teamId);
+  const choice = picked ?? activeTeam ?? "personal";
+  const workspace = choice === "personal" ? (me ? `user:${me}` : null) : `team:${choice}`;
+  const workspaceName = choice === "personal" ? "Personal" : teams.find((t) => t._id === choice)?.name ?? "this workspace";
   const boardView = useHuddleSetting("huddleBoardView", workspace);
   const autoScribe = useHuddleSetting("huddleAutoScribe", workspace);
-  // A huddle belongs to a team: with none, there is nothing to set.
   if (!workspace) return null;
   return (
     <SettingsSection
@@ -156,11 +159,12 @@ export function HuddlesSection({ pad }: { pad?: string }) {
           Huddles in
           <SelectBox
             variant="bare"
-            value={teamId ?? ""}
+            value={choice}
             onChange={(e) => setPicked(e.target.value)}
             aria-label="Workspace"
             className="normal-case tracking-normal"
           >
+            <option value="personal">Personal</option>
             {teams.map((t) => (
               <option key={t._id} value={t._id}>
                 {t.name ?? "Team"}
@@ -179,7 +183,7 @@ export function HuddlesSection({ pad }: { pad?: string }) {
         {/* An agent on the person's account in every huddle: on goes through the review, off is one press. */}
         <ConsequentialSwitch
           on={autoScribe}
-          ledger={autoScribeLedger({ workspace: teams.find((t) => t._id === teamId)?.name ?? "this workspace" })}
+          ledger={autoScribeLedger({ workspace: workspaceName })}
           onTurnOn={() => setHuddleSettings(workspace, { huddleAutoScribe: true })}
           onTurnOff={() => setHuddleSettings(workspace, { huddleAutoScribe: false })}
           trigger={({ on, press }) => <Switch checked={on} onCheckedChange={press} aria-label="Invite Scribe to every huddle" />}
