@@ -1465,9 +1465,10 @@ export function NewSessionView({ conversation, agentControls, slots, role }: {
         {slots.below && !hosted && createPortal(
           <>
             {/* The strip tucked under the composer: which machine, what
-                context rides along, and the label. */}
+                context rides along, and the label. Its tint is opaque, so it
+                reads the same over a picture's dark backdrop. */}
             <div className="mx-auto conv-col px-2 sm:px-4">
-              <div className="mx-4 flex flex-wrap items-start gap-x-3 gap-y-1 rounded-b-xl border border-t-0 border-sol-border/50 bg-sol-bg-alt/40 px-3 pt-1.5 pb-1.5">
+              <div className="mx-4 flex flex-wrap items-start gap-x-3 gap-y-1 rounded-b-xl border border-t-0 border-sol-border/50 bg-[color-mix(in_srgb,var(--sol-bg-alt)_40%,var(--sol-bg))] px-3 pt-1.5 pb-1.5">
                 <div ref={setMachineSlot} className="shrink-0 min-w-0 max-w-full" />
                 <ErrorBoundary name="StableContextPicker" level="inline">
                   {/* 10rem is as narrow as the context line gets beside the
