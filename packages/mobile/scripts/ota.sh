@@ -16,10 +16,12 @@ SHA="${1:?usage: ota.sh <sha>}"
 EAS="${EAS:-npx -y eas-cli@latest}"
 EXPO_SECRET=expo-publish-token
 if [ -z "${EXPO_TOKEN:-}" ]; then
-  if cast vault run "$EXPO_SECRET" -- true 2>/dev/null; then
+  # Keep why the Vault read failed (no value yet, an ask-first secret, another workspace, the network): the stop says it.
+  if VAULT_WHY="$(cast vault run "$EXPO_SECRET" -- true 2>&1 >/dev/null)"; then
     EAS="cast vault run $EXPO_SECRET -- $EAS"
   elif ! $EAS whoami >/dev/null 2>&1; then
-    echo "Expo sign-in required on $(hostname -s): no EXPO_TOKEN here, no value for $EXPO_SECRET in the Vault, and no eas login on this machine" >&2
+    VAULT_WHY="$(printf '%s' "$VAULT_WHY" | tr '\n' ' ' | sed 's/  */ /g; s/ $//' | cut -c1-300)"
+    echo "Expo sign-in required on $(hostname -s): no EXPO_TOKEN here, the Vault's $EXPO_SECRET could not be used (${VAULT_WHY:-no reason given}), and no eas login on this machine" >&2
     exit 1
   fi
 fi

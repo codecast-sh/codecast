@@ -93,7 +93,7 @@ describe('ota.sh signs in to Expo', () => {
   test('stops before any worktree or upload, naming the machine, when nothing signs it in', () => {
     const r = ota({ WHOAMI_EXIT: '1' });
     expect(r.code).toBe(1);
-    expect(r.stderr).toBe(`Expo sign-in required on ${spawnSync('hostname', ['-s'], { encoding: 'utf-8' }).stdout.trim()}: no EXPO_TOKEN here, no value for expo-publish-token in the Vault, and no eas login on this machine`);
+    expect(r.stderr).toBe(`Expo sign-in required on ${spawnSync('hostname', ['-s'], { encoding: 'utf-8' }).stdout.trim()}: no EXPO_TOKEN here, the Vault's expo-publish-token could not be used (Error: expo-publish-token has no value yet), and no eas login on this machine`);
     expect(r.log.filter((l) => l.startsWith('eas ')).map((l) => l.split(' ')[2])).toEqual(['whoami']);
     expect(git(clone, 'worktree', 'list').split('\n')).toHaveLength(1);
   });

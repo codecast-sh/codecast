@@ -371,7 +371,7 @@ describe("awaitDeploy", () => {
   test("a Send failure that may have sent part of it is the deploy that carried it", () => {
     expect(sentNothing({ note: "Stopped at Send: An Expo user account is required to proceed.\nlog" })).toBe(true);
     // ota.sh's own stop when the sending machine has no Expo sign-in.
-    expect(sentNothing({ note: "Stopped at Send.\nnpm warn deprecated glob@10.5.0\nExpo sign-in required on nose: no EXPO_TOKEN here, no value for expo-publish-token in the Vault, and no eas login on this machine\nexited 1" })).toBe(true);
+    expect(sentNothing({ note: "Stopped at Send.\nnpm warn deprecated glob@10.5.0\nExpo sign-in required on nose: no EXPO_TOKEN here, the Vault's expo-publish-token could not be used (Error: this secret asks first), and no eas login on this machine\nexited 1" })).toBe(true);
     expect(sentNothing({ note: "Stopped at Send.\nStill waiting for the CLI release in flight (runs 9) after 4800s\nexited 1" })).toBe(true);
     expect(sentNothing({ note: "Stopped at CI.\nred" })).toBe(true);
     for (const note of ["Stopped at Send: Error: update to channel production failed", "Stopped at Send.", "Stopped at Gate: refused"]) expect(sentNothing({ note })).toBe(false);
