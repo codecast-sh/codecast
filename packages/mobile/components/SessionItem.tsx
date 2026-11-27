@@ -3,7 +3,9 @@ import { probeGesture, probeRender, PERF_PROBE } from '@/lib/perfProbe';
 import { Text as RNText } from '@/components/Themed';
 import { createContext, memo, useContext, useRef, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { cleanUserMessage } from '@codecast/web/components/sessionMessage';
-import { showsBlockedBadge, useInboxStore } from '@codecast/web/store/inboxStore';
+import { railRowPlacement, showsBlockedBadge, useInboxStore } from '@codecast/web/store/inboxStore';
+import { sessionStatusOf } from '@codecast/web/lib/sessionStatus';
+import { pendingDecisionConvIds } from '@codecast/web/lib/decisionQueue';
 import { apiErrorBadge } from '@codecast/web/lib/apiErrorBadge';
 import { resolveImageThumbs } from '@codecast/web/lib/uiPrefDefaults';
 import { useAckAssignment } from '@codecast/web/hooks/useAckAssignment';
@@ -27,6 +29,7 @@ import { teamMembersOf } from '@codecast/web/lib/activeTeam';
 import { isConvexId } from '@codecast/web/lib/entityLinks';
 import { useWatchEffect } from '@codecast/web/hooks/useWatchEffect';
 import { CoOwnerFaces } from '@/components/owners/OwnerFace';
+import { SessionStatusMark } from '@/components/marks';
 import { SubagentLine } from '@/components/inbox/SubagentLine';
 import type { SubagentStateGroup } from '@codecast/web/lib/subagentRows';
 
@@ -132,10 +135,29 @@ export function PulsingDot({ color }: { color: string }) {
   return <RNAnimated.View style={[styles.statusDot, { backgroundColor: color, opacity }]} />;
 }
 
-// Rows hold still (web's listRowsHoldStill): the colour says the agent is
-// working.
-function StatusDot({ session }: { session: SessionData }) {
-  return <RNView style={[styles.statusDot, { backgroundColor: statusColor(session) }]} />;
+// Rows hold still (web's listRowsHoldStill). The row wears web's status mark
+// (lib/sessionStatus): the state web's card reads from where the list placed
+// it, or from the row's own placement when the list places nothing, lifted to
+// Needs you by a decision pending for you, as the inbox's placement lifts it.
+// A subagent drawn under its parent reads as web's nested card does.
+function RowStatusMark({ session, blocked, placedBucket, placedState, pendingSend, underParent }: { session: SessionData; blocked: boolean } & RowPlacementProps) {
+  const asking = useInboxStore((s) => !placedBucket && askingConvIds(s).has(session._id));
+  const now = Date.now();
+  const placement = placedBucket ? { bucket: placedBucket, state: placedState } : railRowPlacement(session as any, now);
+  return <SessionStatusMark status={sessionStatusOf({ row: session as any, placement: placement as never, now, live: { pendingSend, blocked, asking }, nested: underParent })} />;
+}
+
+// The conversations a decision waits on you in, once per decisions snapshot:
+// every row's selector runs on every store write, so each is a set lookup.
+const askingCache = new WeakMap<object, { me: string | null; ids: Set<string> }>();
+function askingConvIds(s: ReturnType<typeof useInboxStore.getState>): Set<string> {
+  const decisions = s.sessionDecisions as never as object;
+  const me = s.currentUser?._id ? String(s.currentUser._id) : null;
+  const hit = askingCache.get(decisions);
+  if (hit && hit.me === me) return hit.ids;
+  const ids = pendingDecisionConvIds(decisions as never, me);
+  askingCache.set(decisions, { me, ids });
+  return ids;
 }
 
 // What every row of a list reads from the store, read once by the list and
@@ -264,7 +286,7 @@ export function SessionItem({ session, isUnread, selected, onPress, onLongPress,
       <RNView style={styles.conversationHeader}>
         <RNView style={styles.titleRow}>
           <RNView style={styles.iconWithStatus}>
-            <StatusDot session={session} />
+            <RowStatusMark session={session} blocked={!!blockedBadge} {...place} />
           </RNView>
           {session.is_favorite && (
             <Feather name="star" size={11} color={Theme.accent} style={{ marginRight: 3 }} />
@@ -621,10 +643,13 @@ export const styles = themedStyles((Theme) => StyleSheet.create({
     flex: 1,
     marginRight: Spacing.md,
   },
+  // The 10pt status mark and its gap take 14pt, the indent of every line under
+  // the title (marginLeft: 14), so those lines start in the title's column.
   iconWithStatus: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginRight: Spacing.sm,
+    width: 10,
+    marginRight: 4,
   },
   statusDot: MOBILE_SESSION_STYLE.dot,
   conversationTitle: {
