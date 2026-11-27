@@ -1,9 +1,11 @@
-// The priority a session serves, as the Deploys page names it beside the session (deploys.md DP12): read only for a team
+// The priority a session serves, as the Deploys page names it beside the session (deploys.md DP12), with its owner and
+// the owner's rank (lib/priorityGroup positionOf, the same for every reader): read only for a team
 // with the priorities feature on, and only a priority the viewer may read (lib/priorityAccess), the rule priorities.ts
 // reads by.
 import type { Doc, Id } from "../_generated/dataModel";
 import { FEATURE, featureCheck, readerFor, type Reader } from "./priorityAccess";
 import { teamHasFeature } from "./teamFeatureGuard";
+import { positionOf } from "./priorityGroup";
 import type { SessionPriorityRef } from "@codecast/shared/contracts/priorities";
 
 type Ctx = { db: any };
@@ -24,7 +26,8 @@ export async function sessionPriorityReader(ctx: Ctx, viewer: Id<"users">, teamI
         const p: Doc<"priorities"> | null = await ctx.db.get(id);
         if (!p || !(await featureOn(p.workspace))) return null;
         reader ??= readerFor(ctx, viewer);
-        return (await (await reader).canRead(p)) ? { id: p.short_id, title: p.title ?? null } : null;
+        if (!(await (await reader).canRead(p))) return null;
+        return { id: p.short_id, title: p.title ?? null, rank: await positionOf(ctx, p), user_id: String(p.user_id) };
       })());
     }
     return seen.get(key)!;

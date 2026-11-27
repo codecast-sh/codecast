@@ -1,11 +1,12 @@
 // The one read every rank comes from: a person's active priorities in one
 // workspace, most recently active first, whole up to ACTIVE_GROUP_READ. A
-// position (priorities.ts positionOf, the pin line, a list) and a move
+// position (positionOf below, the pin line, a list) and a move
 // (doMove) both order this same group (shared/contracts/priorities
 // effectivePriorityOrder), so neither disagrees with the other however big
 // the group is.
 
 import type { Doc, Id } from "../_generated/dataModel";
+import { priorityPositions } from "@codecast/shared/contracts/priorities";
 import { stepKeyMax } from "./priorityPassSteps";
 
 /** The most of one person's active priorities in one workspace a rank reads; past it the oldest are left out, the same way for every read. */
@@ -17,6 +18,23 @@ export function activeGroup(ctx: { db: any }, userId: Id<"users">, workspace: st
     .withIndex("by_user_workspace_status_active", (q: any) => q.eq("user_id", userId).eq("workspace", workspace).eq("status", "active"))
     .order("desc")
     .take(ACTIVE_GROUP_READ);
+}
+
+/**
+ * Each active priority's position among its owner's active ones in its
+ * workspace (shared/contracts/priorities effectivePriorityOrder). `rows` must
+ * hold every active priority of each owner and workspace it covers.
+ */
+export const positionsOf = (rows: Doc<"priorities">[]): Map<string, number> => priorityPositions(rows, (r) => String(r._id));
+
+/**
+ * One priority's position in its owner's whole active group, the same for
+ * whoever reads it (null when not active): a teammate sees the owner's real
+ * rank, counting priorities the teammate cannot see.
+ */
+export async function positionOf(ctx: { db: any }, p: Doc<"priorities">): Promise<number | null> {
+  if (p.status !== "active") return null;
+  return positionsOf(await activeGroup(ctx, p.user_id, p.workspace)).get(String(p._id)) ?? null;
 }
 
 /** The most sessions any one transaction reads off one priority; the rest is paged by scheduled runs (priorityPassRun SESSION_PAGE). */

@@ -17,12 +17,13 @@ import { internalQuery, mutation, query } from "./functions";
 import { internal } from "./_generated/api";
 import { accessStampFromDoc, authorizedFor, heldKeysFor, parseWorkspaceKey } from "./lib/accessKeys";
 import { teamFeatureOffMessage } from "./lib/teamFeatureGuard";
+import { positionOf } from "./lib/priorityGroup";
 import { FEATURE, featureCheck, readerFor, type Reader } from "./lib/priorityAccess";
 import { hasOkRun, runBlocker } from "./priorityPassRun";
 import { sessionVisibility } from "./lib/prioritySessionVisibility";
 import type { PriorityDetail, PriorityHistory, PriorityList, PriorityPinLine } from "@codecast/shared/contracts/priorities";
 import type { Doc, Id } from "./_generated/dataModel";
-import { type Priority, type Result, cliWorkspace, criticalCounts, isOwner, listFor, positionOf, showFor, tokenUser } from "./priorityRead";
+import { type Priority, type Result, cliWorkspace, criticalCounts, isOwner, listFor, showFor, tokenUser } from "./priorityRead";
 import { historyFor } from "./priorityHistory";
 import { type MilestoneChange, doCorrect, doCorrectionDelete, doMerge, doMilestone, doMove, doPriorityDone, doSessionMove, doSessionNotThis, doSetAside, doUndoPriorityDone } from "./priorityWrite";
 
@@ -103,7 +104,7 @@ export const pinLine = query({
     return {
       short_id: p.short_id,
       title: p.title,
-      rank: await positionOf(ctx, viewer, p),
+      rank: await positionOf(ctx, p),
       ...criticalCounts(p),
       ...(step ? { step_title: step.title } : {}),
     };
