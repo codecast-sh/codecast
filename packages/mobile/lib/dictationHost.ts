@@ -5,7 +5,7 @@
 // the one line the mic shows.
 
 import type { ConvexReactClient } from 'convex/react';
-import type { DictationHost } from '@codecast/shared/contracts/dictation';
+import { DICTATION_CALL_BUSY, DICTATION_RECORDING_BUSY, type DictationHost } from '@codecast/shared/contracts/dictation';
 import { micTapSupported, startAsrCapture } from './asrCapture';
 import { getCallSnapshot } from './calls/callManager';
 import { getRecorderSnapshot } from './recorder';
@@ -25,11 +25,8 @@ function getAudio() {
   return audio;
 }
 
-/** A huddle holds the microphone (the web says the same). Each line fits the
- *  one-line notice bar: under 40 characters. */
-export const DICTATION_CALL_BUSY = 'A huddle is using the mic';
-/** The room recorder holds the microphone. */
-export const DICTATION_RECORDING_BUSY = 'A recording is using the mic';
+/** A huddle or the room recorder holds the microphone (the web's words). */
+export { DICTATION_CALL_BUSY, DICTATION_RECORDING_BUSY };
 /** The OS refused a microphone the person already granted (an interruption). */
 export const DICTATION_MIC_UNAVAILABLE = 'Mic unavailable. Try again.';
 

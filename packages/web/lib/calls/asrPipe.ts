@@ -51,9 +51,9 @@ import {
   type SharedCaptureContext,
 } from "./asrCapture";
 
-/** A dictation pipe's line for a start that failed before its words (the
- *  server's DICTATION_START_FAILED, said the same way). */
-const DICTATION_START_FAILED = "Dictation couldn't start. Try again.";
+// A dictation pipe's start that failed before its words says what the
+// server says when it refuses a mint.
+import { DICTATION_START_FAILED } from "@codecast/shared/contracts/dictation";
 
 type AsrConvexHandle = {
   action: (fn: any, args: any) => Promise<any>;

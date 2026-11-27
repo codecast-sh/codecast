@@ -49,8 +49,9 @@ export type DictationControls = {
   start(): void;
   /** Keep the words; true when they were kept (not cancelled meanwhile). */
   finish(): Promise<boolean>;
-  /** Run `then` (a send, a create) once the last words are in, only if they
-   *  were kept; a second press replaces the first. Now, when idle. */
+  /** Run `then` (a send, a create) once the recording ends, however it ends;
+   *  Cancel, unmount or detach drop it. A second press replaces the first.
+   *  Now, when idle. */
   finishThen(then: () => void): void;
   cancel(): void;
   /** Stop at once and never write to the box again (it now writes for

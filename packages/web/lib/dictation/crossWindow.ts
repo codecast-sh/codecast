@@ -2,15 +2,13 @@
 // them stops dictation in all. Inside one window the shared controller holds
 // both rules (finishRunningDictation); this carries them to the other windows
 // over a BroadcastChannel. Where there is none, each window keeps its own.
-import { finishRunningDictation } from "@codecast/shared/contracts/dictation";
+import { DICTATION_CALL_BUSY, DICTATION_RECORDING_BUSY, finishRunningDictation } from "@codecast/shared/contracts/dictation";
 import { useInboxStore } from "../../store/inboxStore";
 
-/** What the mic says when a live, unmuted call holds the microphone, in this
- *  window or another (the phone's words, lib/dictationHost). A muted seat is
- *  not using it: unmuting finishes the recording (callManager.setMuted). */
-export const DICTATION_CALL_BUSY = "A huddle is using the mic";
-/** The same while a room recording (lib/calls/recorder) holds it. */
-export const DICTATION_RECORDING_BUSY = "A recording is using the mic";
+/** What the mic says while a huddle or a recording holds the microphone, in
+ *  this window or another. A muted call seat is not using it: unmuting
+ *  finishes the recording (callManager.setMuted). */
+export { DICTATION_CALL_BUSY, DICTATION_RECORDING_BUSY };
 
 /** What else in this window may hold the microphone, each saying why while it
  *  does. The room recorder registers itself; a call is read off the store. */

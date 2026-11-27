@@ -13,9 +13,10 @@ import { workspaceKey } from "./lib/access";
 import { requireUser } from "./lib/requireUser";
 import { vendorRefusalFromDb } from "./lib/vendorGuard";
 import { mintRealtimeSecret } from "./lib/realtimeMint";
+import { DICTATION_START_FAILED } from "@codecast/shared/contracts/dictation";
 
-/** What the mic says when OpenAI refuses or fails a mint (< 40 characters). */
-export const DICTATION_START_FAILED = "Dictation couldn't start. Try again.";
+/** What the mic says when OpenAI refuses or fails a mint. */
+export { DICTATION_START_FAILED };
 
 type DictationGrant = { enabled: boolean; workspace: string; refusal: string | null };
 type DictationToken = { client_secret: string; model: string; languages: string[] } | { error: string };

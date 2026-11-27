@@ -209,6 +209,15 @@ export type DictationHost = {
   clearTimer?: (handle: unknown) => void;
 };
 
+/** The mic's lines that more than one package says: the server's refused
+ *  mint, and the two holders of the microphone (each under 40 characters, to
+ *  fit the phone's one-line notice bar). */
+export const DICTATION_START_FAILED = "Dictation couldn't start. Try again.";
+/** A live, unmuted huddle holds the microphone. */
+export const DICTATION_CALL_BUSY = "A huddle is using the mic";
+/** A room recording holds the microphone. */
+export const DICTATION_RECORDING_BUSY = "A recording is using the mic";
+
 export type Dictation = {
   readonly state: DictationState;
   start(): void;
@@ -216,9 +225,11 @@ export type Dictation = {
    *  the recording ended by finishing, false when it was cancelled, disposed or
    *  started over before its words came back. */
   finish(): Promise<boolean>;
-  /** Finish, then run `then` (a send, a create) only if the words were kept.
-   *  One slot: a second press replaces the first rather than running twice,
-   *  and Cancel or unmount while finishing runs nothing. Idle runs `then` now. */
+  /** Finish, then run `then` (a send, a create) once the recording ends,
+   *  however it ends (finished, a failed recognizer, an edit mid-finish):
+   *  only Cancel, unmount or detach while finishing drop it. One slot: a
+   *  second press replaces the first rather than running twice. Idle runs
+   *  `then` now. */
   finishThen(then: () => void): void;
   /** Put the field back as it was before the press. */
   cancel(): void;

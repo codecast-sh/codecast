@@ -17,6 +17,9 @@ mock.module("../../../hooks/useJumpToDecisionAsk", () => ({ useJumpToDecisionAsk
 
 import { useInboxStore } from "../../../store/inboxStore";
 import { DecisionCompactCard } from "../DecisionCompactCard";
+// The card loads its thread beside itself and only the first paint waits on
+// it; load it here so a slow module graph never races the first mount.
+await import("../../comments/CommentThread");
 import { closeDomWindow } from "../../../test-helpers/domGlobals";
 
 const dom = new JSDOM("<!doctype html><html><body></body></html>", { pretendToBeVisual: true, url: "https://codecast.sh/questions" });
