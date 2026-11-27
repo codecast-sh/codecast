@@ -31,7 +31,9 @@ test("with every kind shown, each link is a chip of its own shape, labelled by i
     // count per other kind (its words in the tooltip), the plan.
     const s1 = b.querySelector('[data-milestone="s1"]')!;
     expect(partsOf(s1.querySelector("[data-line-chips]")!)).toEqual(["action", "in Kinds driver", "+1", "task 1", "pr 1", "branch 1", "deploy 1", "plan"]);
-    expect(s1.querySelector('[data-chip-count="pr"]')!.getAttribute("title")).toBe("1 pull request");
+    // Its glyph names the kind on hover (a registered mark); the count's words are its accessible name.
+    expect(s1.querySelector('[data-chip-count="pr"]')!.getAttribute("aria-label")).toBe("1 pull request");
+    expect(s1.querySelector('[data-chip-count="pr"] [data-mark]')!.getAttribute("data-mark")).toBe("priority.pr_count");
     // Open, the line lists each one as its own chip.
     await act(async () => { (b.querySelector('[data-milestone="s1"] [role=button]') as HTMLElement).click(); });
     for (const kind of CHIP_KINDS) expect(b.querySelector(`[data-chip="${kind}"]`)).not.toBeNull();
@@ -119,6 +121,30 @@ test("an open milestone shows every kind of link whatever Show says, and its who
     }
     expect(title().className).not.toContain("truncate");
     expect(title().className).toContain("whitespace-normal");
+  } finally {
+    await page.unmount();
+  }
+}, 60_000);
+
+test("its marks are registered: bare on the closed line, labeled where the open line's headings or a state's word name them", async () => {
+  seedKinds();
+  const { MARK_BY_ID } = await import("../../lib/marks");
+  const page = await mount(view({ rows: [KINDS], filters: ALL_KINDS }));
+  const { act } = React as any;
+  const marks = (el: Element) => [...el.querySelectorAll<HTMLElement>("[data-mark]")].map((m) => `${m.dataset.mark}${m.hasAttribute("data-mark-labeled") ? " labeled" : ""}`);
+  try {
+    const b = block(page.container, "pri-9");
+    for (const m of b.querySelectorAll<HTMLElement>("[data-mark]")) expect(MARK_BY_ID.has(m.dataset.mark!)).toBe(true);
+    expect(marks(b.querySelector("[data-priority-head]")!)).toEqual(["priority.critical", "priority.ten_days"]);
+    expect(marks(b.querySelector('[data-milestone="s1"] [data-line-chips]')!)).toEqual(
+      expect.arrayContaining(["work.tasks", "priority.pr_count", "priority.branch_count", "priority.deploy_count", "entity.plan"]),
+    );
+    expect(marks(b.querySelector('[data-milestone="s2"] [data-line-chips]')!)).toEqual(["session.working"]);
+    await act(async () => { (b.querySelector('[data-milestone="s1"] [role=button]') as HTMLElement).click(); });
+    const detail = b.querySelector("[data-milestone-detail]")!;
+    // Each kind's heading names its glyph; a session's state word follows its chip; a task's state has no word.
+    expect(marks(detail)).toEqual(expect.arrayContaining(["entity.plan labeled", "priority.branch labeled", "priority.deploy labeled", "session.dormant labeled", "task.open"]));
+    expect(marks(detail)).not.toContain("session.dormant");
   } finally {
     await page.unmount();
   }

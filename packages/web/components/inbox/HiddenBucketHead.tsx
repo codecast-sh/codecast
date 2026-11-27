@@ -28,7 +28,7 @@ export function HiddenBucketHead({ modern, label, count, variant, expanded, onTo
         sectionKey={`hidden_${variant}`}
         collapsed={!expanded}
         onToggle={onToggle}
-        icon={<SessionStatusMark status={variant === "dismissed" ? "killed" : variant === "stashed" ? "stashed" : "dormant"} labeled />}
+        icon={<SessionStatusMark status={variant === "dismissed" ? "killed" : variant === "stashed" ? "stashed" : "dormant"} markId={variant === "snoozed" ? "inbox.snoozed" : undefined} labeled />}
         facts={liveCount > 0 && (
           <span className="flex shrink-0 items-center gap-1 text-mark tabular-nums text-sol-green">
             <SessionStatusMark status="working" size={8} labeled />

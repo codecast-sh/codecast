@@ -10,4 +10,6 @@ export type MarkDef = {
   /** What it means, in a few words. */
   meaning: string;
   group: MarkGroup;
+  /** Drawn from data, so every instance differs; the legend shows the first one seen. */
+  oneGlyph?: true;
 };

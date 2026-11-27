@@ -3,7 +3,7 @@
 // glance. Its colour is the session's workspace (the same swatch as that
 // workspace's row in the sidebar), and the glyph inside is the agent running
 // it, drawn in the same ink.
-import { AgentTypeIcon, formatAgentType } from "../AgentTypeIcon";
+import { AgentTypeIcon } from "../AgentTypeIcon";
 import { workspaceNameOf, workspaceColorOf } from "../../lib/projectColors";
 import { useWorkspaceColor } from "../../lib/labelColors";
 
@@ -20,11 +20,11 @@ export function WorkspaceTile({ row, size = 20, showAgent = true, className = ""
   const color = workspaceColorOf(workspace, colorOf);
   const agent = str(row.agent_type) || "claude_code";
   const glyph = showAgent ? AgentTypeIcon({ agentType: agent, mono: true, className: "h-[58%] w-[58%]" }) : null;
-  const label = [showAgent ? formatAgentType(agent) : null, workspace].filter(Boolean).join(" · ");
   return (
     <span
       data-cc-mark
-      title={label || undefined}
+      // The agent glyph names itself (its mark); the title names the workspace.
+      title={workspace ?? undefined}
       className={`inline-flex shrink-0 select-none items-center justify-center rounded-[5px] ${color.text} ${className}`}
       style={{ width: size, height: size, backgroundColor: "color-mix(in srgb, currentColor 14%, transparent)" }}
     >

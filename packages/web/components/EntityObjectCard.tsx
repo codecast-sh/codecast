@@ -26,6 +26,8 @@ import {
   BellRing,
 } from "lucide-react";
 import { taskVisual } from "./TaskStatusBadge";
+import { Mark } from "./Mark";
+import { taskStatusMarkId } from "../lib/marks/work";
 import { stripMarkdown, docContentPreview, docBodyMarkdown } from "../lib/notificationText";
 import { flowSlugOf, parseCallRef, parseReplayRef, replayRefStart, type EntityType } from "../lib/entityLinks";
 import { renderFlowCard } from "../lib/fenceRenderers";
@@ -123,11 +125,14 @@ export function EntityKindIcon({ type, entity, className = "h-3.5 w-3.5" }: { ty
   }
   if (type === "task") {
     const v = taskVisual(entity?.status);
-    return <v.icon className={`${className} ${v.color}`} />;
+    return <Mark id={taskStatusMarkId(entity?.status)}><v.icon className={`${className} ${v.color}`} /></Mark>;
   }
   const Icon = TYPE_ICON[type];
-  if (type === "pr") return <Icon className={className} style={{ color: accentVar(PR_STATE_META[prStateKey(entity ?? {})].accent) }} />;
-  return <Icon className={`${className} ${ACCENT[type].text}`} />;
+  if (type === "pr") {
+    const state = prStateKey(entity ?? {});
+    return <Mark id={`pr.${state}`}><Icon className={className} style={{ color: accentVar(PR_STATE_META[state].accent) }} /></Mark>;
+  }
+  return <Mark id={`entity.${type === "initiative" ? "goal" : type}`}><Icon className={`${className} ${ACCENT[type].text}`} /></Mark>;
 }
 
 /** The words a call reference names (`cl-42:15-25`), as turns; null for a whole call. */
@@ -172,7 +177,7 @@ export function CardMetaLine({ type, entity }: { type: EntityType; entity: any }
     if (priority) {
       push(
         <span className={`inline-flex items-center gap-0.5 whitespace-nowrap ${priority.color}`}>
-          <priority.icon className="h-2.5 w-2.5" />
+          <Mark id={`task.priority.${entity.priority}`} labeled><priority.icon className="h-2.5 w-2.5" /></Mark>
           {priority.label}
         </span>,
         "priority",
@@ -181,7 +186,7 @@ export function CardMetaLine({ type, entity }: { type: EntityType; entity: any }
     if (entity.plan?.title) {
       push(
         <span className="inline-flex min-w-0 items-center gap-1 text-sol-cyan">
-          <MapIcon className="h-2.5 w-2.5 flex-shrink-0" />
+          <Mark id="entity.plan"><MapIcon className="h-2.5 w-2.5 flex-shrink-0" /></Mark>
           <span className="truncate">{entity.plan.title}</span>
         </span>,
         "plan",
@@ -816,7 +821,7 @@ function ProposalEntityCard({ rawId, entity, served, count, href }: { rawId: str
       resolved={!!entity}
       served={served}
       header={{
-        icon: <Icon className={`h-3.5 w-3.5 ${ACCENT.proposal.text}`} />,
+        icon: <Mark id="entity.proposal"><Icon className={`h-3.5 w-3.5 ${ACCENT.proposal.text}`} /></Mark>,
         title: entity?.title ?? <span className="font-mono text-sol-text-dim">{rawId}</span>,
         meta: entity ? <ProposalMeta proposal={entity} changes={changes} /> : undefined,
         // No age: what waits is the meta line's, and a narrow pane needs the width for the title.

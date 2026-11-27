@@ -14,6 +14,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { deviceDisplayName, deviceKindLabel, distinctDeviceNames } from "@codecast/shared/contracts";
 import { useInboxStore } from "../store/inboxStore";
+import { Mark } from "./Mark";
 import { localDeviceIdOf } from "../hooks/useLocalDeviceId";
 import { wakesOnUse } from "../lib/machinePicker";
 import { useSyncDevices } from "../hooks/useSyncDevices";
@@ -99,40 +100,50 @@ export function relativeSeen(lastSeen: number, now = Date.now()): string {
   return `${Math.round(h / 24)}d ago`;
 }
 
-export function DeviceIcon({ d, className = "w-3 h-3" }: { d: Pick<Device, "platform"> & { is_remote?: boolean; icon?: string | null; icon_color?: string | null }; className?: string }) {
+/** The machine's glyph, named on hover. `labeled` when its name sits beside
+ *  it. The caller's className sizes and places the mark's box; the glyph fills it. */
+export function DeviceIcon({ d, className = "w-3 h-3", labeled }: { d: Pick<Device, "platform"> & { is_remote?: boolean; icon?: string | null; icon_color?: string | null }; className?: string; labeled?: boolean }) {
   if (d.icon && (TEAM_ICONS as readonly string[]).includes(d.icon)) {
-    return <TeamIcon icon={d.icon} color={d.icon_color} className={className} />;
+    return <Mark id="device.custom" labeled={labeled} className={className}><TeamIcon icon={d.icon} color={d.icon_color} className="size-full" /></Mark>;
   }
   if (d.is_remote) {
     // cloud / remote box
     return (
-      <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M3 15a4 4 0 004 4h11a3 3 0 000-6 5 5 0 00-9.584-1.5A3.5 3.5 0 003 15z" />
-      </svg>
+      <Mark id="device.cloud" labeled={labeled} className={className}>
+        <svg className="size-full" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M3 15a4 4 0 004 4h11a3 3 0 000-6 5 5 0 00-9.584-1.5A3.5 3.5 0 003 15z" />
+        </svg>
+      </Mark>
     );
   }
   if (/linux/i.test(d.platform)) {
     return (
-      <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-      </svg>
+      <Mark id="device.linux" labeled={labeled} className={className}>
+        <svg className="size-full" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+        </svg>
+      </Mark>
     );
   }
   // laptop / desktop
   return (
-    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-    </svg>
+    <Mark id="device.computer" labeled={labeled} className={className}>
+      <svg className="size-full" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+      </svg>
+    </Mark>
   );
 }
 
 /** Live online/offline dot. */
-export function DeviceDot({ online, className = "" }: { online: boolean; className?: string }) {
+export function DeviceDot({ online, className = "", labeled }: { online: boolean; className?: string; labeled?: boolean }) {
   return (
     // Still, never a ping: the dot is drawn once per machine row.
-    <span className={`relative inline-flex h-1.5 w-1.5 flex-shrink-0 ${className}`}>
-      <span className={`relative inline-flex h-1.5 w-1.5 rounded-full ${online ? "bg-sol-green ring-2 ring-sol-green/30" : "bg-sol-text-dim"}`} />
-    </span>
+    <Mark id={online ? "device.online" : "device.offline"} labeled={labeled} className={className}>
+      <span className="relative inline-flex h-1.5 w-1.5 flex-shrink-0">
+        <span className={`relative inline-flex h-1.5 w-1.5 rounded-full ${online ? "bg-sol-green ring-2 ring-sol-green/30" : "bg-sol-text-dim"}`} />
+      </span>
+    </Mark>
   );
 }
 
@@ -257,7 +268,7 @@ export function DeviceBadge({
         className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-meta bg-sol-text-dim/10 text-sol-text-muted border border-sol-text-dim/25 ${className}`}
         title="No device assigned yet — the next message routes to your most-recently-active machine."
       >
-        <DeviceDot online={false} />
+        <DeviceDot online={false} labeled />
         Unassigned
       </span>
     );
@@ -268,7 +279,7 @@ export function DeviceBadge({
       className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-meta border ${deviceAccentClasses(d)} max-w-[160px] ${className}`}
       title={`Runs on ${deviceDisplayName(d)} (${deviceKindLabel(d)}) — ${d.online ? "online" : `last seen ${relativeSeen(d.last_seen)}`}`}
     >
-      <DeviceIcon d={d} />
+      <DeviceIcon d={d} labeled />
       <span className="truncate">{deviceDisplayName(d)}</span>
       <DeviceDot online={d.online} />
     </span>
@@ -334,7 +345,7 @@ export function RunOnDeviceItems({
         onSelect={() => offered && move(d, isRemote)}
         className={isOwner ? RUNNING_HERE_ROW : isDest ? MOVING_HERE_ROW : undefined}
       >
-        <DeviceIcon d={d} className="w-3 h-3 mr-1.5" />
+        <DeviceIcon d={d} labeled className="size-4 modern:size-3.5 mr-1.5" />
         <span className="flex-1 truncate">
           {offered ? `Move to ${name}` : name}
           {host && <span className="ml-1.5 text-sol-text-dim">{host}</span>}
@@ -362,7 +373,7 @@ export function RunOnDeviceItems({
       <DropdownMenuLabel className="text-mark uppercase tracking-wide text-sol-text-dim">Run on device · which machine</DropdownMenuLabel>
       {foreignOwner && (
         <DropdownMenuItem disabled className={RUNNING_HERE_ROW}>
-          <DeviceIcon d={foreignOwner} className="w-3 h-3 mr-1.5" />
+          <DeviceIcon d={foreignOwner} labeled className="size-4 modern:size-3.5 mr-1.5" />
           <span className="flex-1 truncate">{deviceDisplayName(foreignOwner)}</span>
           <RunningHereTag
             online={foreignOwner.online}

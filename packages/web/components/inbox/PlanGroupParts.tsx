@@ -1,3 +1,4 @@
+import type { PlanState } from "@codecast/shared/tasks";
 import { planTierOf, type PlanGroup, type PlanTier, type RestingPlan } from "../../store/inboxStore";
 import { PLAN_STATE_STATUS, SESSION_STATUS } from "../../lib/sessionStatus";
 import { compactAge } from "../../lib/threadState";
@@ -16,10 +17,10 @@ const STALE_ASK_MS = 7 * 24 * 3600_000;
 // The plan's id ahead of its title. Its state mark shows only where the band
 // above it does not already say it (the quiet band mixes states).
 export function PlanGroupMark({ group }: { group: PlanGroup }) {
-  const { status, word } = PLAN_STATE_STATUS[group.standing.state];
+  const { state } = group.standing;
   return (
-    <span title={word} className="flex shrink-0 items-center gap-1.5">
-      {planTierOf(group.standing.state) === "quiet" && <SessionStatusMark status={status} />}
+    <span className="flex shrink-0 items-center gap-1.5">
+      {planTierOf(state) === "quiet" && <SessionStatusMark status={PLAN_STATE_STATUS[state].status} markId={`plan.${state}`} />}
       <span className="font-mono text-meta font-normal text-sol-text-dim">{group.key}</span>
     </span>
   );
@@ -39,17 +40,19 @@ function TaskProgress({ done, total, column }: { done: number; total: number; co
   );
 }
 
-const TIER_META: Record<PlanTier, { status: Parameters<typeof SessionStatusMark>[0]["status"]; word: string }> = {
-  needs_you: { status: "needs_you", word: "Waiting on you" },
-  moving: { status: "working", word: "Moving" },
-  parked: { status: "dormant", word: "Parked" },
-  quiet: { status: "idle", word: "Quiet" },
+// A quiet band mixes stalled, finished and closed plans: stalled's mark, its own meaning.
+const TIER_META: Record<PlanTier, { state: PlanState; word: string; markId: string }> = {
+  needs_you: { state: "needs_you", word: "Waiting on you", markId: "plan.needs_you" },
+  moving: { state: "moving", word: "Moving", markId: "plan.moving" },
+  parked: { state: "parked", word: "Parked", markId: "plan.parked" },
+  quiet: { state: "stalled", word: "Quiet", markId: "plan.quiet" },
 };
 
 // The band over a run of plans: its word, how many, and a toggle between
 // their cards and a line each. Every band in the lens draws through this.
-function PlanBand({ status, word, count, note, collapsed, onToggle, attrs }: {
-  status: Parameters<typeof SessionStatusMark>[0]["status"];
+function PlanBand({ state, markId = `plan.${state}`, word, count, note, collapsed, onToggle, attrs }: {
+  state: PlanState;
+  markId?: string;
   word: string;
   count: number;
   note?: string;
@@ -63,9 +66,9 @@ function PlanBand({ status, word, count, note, collapsed, onToggle, attrs }: {
       aria-expanded={!collapsed}
       onClick={onToggle}
       {...attrs}
-      className={`flex w-full items-center gap-2 px-3 pt-3 pb-1 text-left ${SESSION_STATUS[status].text}`}
+      className={`flex w-full items-center gap-2 px-3 pt-3 pb-1 text-left ${SESSION_STATUS[PLAN_STATE_STATUS[state].status].text}`}
     >
-      <SessionStatusMark status={status} labeled />
+      <SessionStatusMark status={PLAN_STATE_STATUS[state].status} markId={markId} labeled />
       <span className="text-mark font-semibold uppercase tracking-[0.08em]">{word}</span>
       <span className="text-mark tabular-nums opacity-70">{count}</span>
       {note && <span className="text-mark text-sol-text-dim">{note}</span>}
@@ -76,20 +79,20 @@ function PlanBand({ status, word, count, note, collapsed, onToggle, attrs }: {
 }
 
 export function PlanTierHeader({ tier, count, collapsed, onToggle }: { tier: PlanTier; count: number; collapsed: boolean; onToggle: () => void }) {
-  const { status, word } = TIER_META[tier];
-  return <PlanBand status={status} word={word} count={count} collapsed={collapsed} onToggle={onToggle} attrs={{ "data-inbox-plan-tier": tier }} />;
+  const { state, word, markId } = TIER_META[tier];
+  return <PlanBand state={state} markId={markId} word={word} count={count} collapsed={collapsed} onToggle={onToggle} attrs={{ "data-inbox-plan-tier": tier }} />;
 }
 
 // One plan on one line: its id, title, tasks done and how long ago it moved.
 // A folded band lists its plans this way, and so does "Nobody on it".
-export function CompactPlanRow({ id, title, progress, movedAt, now, status, active, onClick }: {
+export function CompactPlanRow({ id, title, progress, movedAt, now, state, active, onClick }: {
   id: string;
   title: string;
   progress?: { done?: number; total?: number } | null;
   movedAt: number | null;
   now: number;
-  /** A state mark, for a list that mixes states. */
-  status?: Parameters<typeof SessionStatusMark>[0]["status"];
+  /** The plan's state as a mark, for a list that mixes states. */
+  state?: PlanState;
   /** One of the plan's threads is the one open. */
   active?: boolean;
   onClick: () => void;
@@ -102,7 +105,7 @@ export function CompactPlanRow({ id, title, progress, movedAt, now, status, acti
       aria-current={active || undefined}
       className={`flex w-full items-center gap-2 border-b border-l-2 border-b-sol-border/30 px-3 py-1.5 text-left ${active ? "border-l-sol-cyan bg-sol-cyan/[0.06]" : "border-l-transparent hover:bg-sol-bg-alt/60"}`}
     >
-      <span className="flex w-2 shrink-0">{status && <SessionStatusMark status={status} size={8} />}</span>
+      <span className="flex w-2 shrink-0">{state && <SessionStatusMark status={PLAN_STATE_STATUS[state].status} markId={`plan.${state}`} size={8} />}</span>
       <span className="w-[7.5ch] shrink-0 font-mono text-meta text-sol-text-dim">{id}</span>
       <span className="min-w-0 flex-1 truncate text-sm text-sol-text">{title}</span>
       <span className="flex shrink-0 items-center gap-2 font-mono text-meta tabular-nums text-sol-text-dim">
@@ -162,7 +165,7 @@ export function RestingPlans({
   return (
     <div data-inbox-resting-plans>
       <PlanBand
-        status="idle"
+        state="stalled"
         word="Nobody on it"
         count={plans.length}
         note={stalled < plans.length ? `· ${plans.length - stalled} finished` : undefined}
@@ -179,7 +182,7 @@ export function RestingPlans({
           movedAt={plan.updated_at ?? null}
           now={now}
           // Every row here is stalled unless it says otherwise.
-          status={state === "finished" ? PLAN_STATE_STATUS.finished.status : undefined}
+          state={state === "finished" ? "finished" : undefined}
           onClick={() => onOpen(plan)}
         />
       ))}

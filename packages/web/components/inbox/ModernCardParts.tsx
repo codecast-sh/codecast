@@ -5,6 +5,7 @@ import { runHref } from "../../lib/decisionLinks";
 import { badgeVariants } from "../ui/badge";
 import { Button } from "../ui/button";
 import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
+import { Mark } from "../Mark";
 import { useLabelColor, useWorkspaceColor } from "../../lib/labelColors";
 import { projectDotClass, workspaceColorOf } from "../../lib/projectColors";
 import { WORK_PROJECT_SEP } from "../../lib/workProjectSig";
@@ -17,6 +18,7 @@ import { repoTreeHref } from "../../lib/repoView";
 import { cleanTitle } from "../../lib/conversationProcessor";
 import { AvatarImg } from "../../lib/avatarCache";
 import { RoleFace } from "../org/RoleFace";
+import { DeviceIcon } from "../DeviceBadge";
 import { SessionCloseTip } from "./SessionCloseTip";
 import type { IdentityPrefs } from "../../lib/sessionIdentity";
 import type { InboxSession, SessionRoleSnapshot } from "../../store/inboxStore";
@@ -44,7 +46,7 @@ export function ModernProjectChip({ project, label, directory, workProject, onFi
   onFilterProject?: (e: React.MouseEvent) => void;
   onFilterLabel?: (e: React.MouseEvent) => void;
   /** Where it runs, when that is worth saying: a glyph and the machine's name. */
-  device?: { icon: React.ReactNode; title: string; name: string } | null;
+  device?: { d: Parameters<typeof DeviceIcon>[0]["d"]; title: string; name: string } | null;
   className?: string;
 }) {
   const getLabelColor = useLabelColor();
@@ -54,16 +56,16 @@ export function ModernProjectChip({ project, label, directory, workProject, onFi
   const name = title || label || (known ? project : "");
   if (!name && !device) return null;
   const dot = title
-    ? <span aria-hidden className={`w-1.5 h-1.5 rotate-45 rounded-[1px] shrink-0 ${projectDotClass({ color: color || undefined, title })}`} />
+    ? <Mark id="inbox.project"><span aria-hidden className={`w-1.5 h-1.5 rotate-45 rounded-[1px] shrink-0 ${projectDotClass({ color: color || undefined, title })}`} /></Mark>
     // A label keeps its label colour; a repository wears its workspace
     // colour, the one the card's lead tile is drawn in (WorkspaceTile).
-    : name ? <span aria-hidden className={`w-1.5 h-1.5 rounded-full shrink-0 ${label ? getLabelColor(name).dot : workspaceColorOf(name, workspaceColor).dot}`} /> : null;
+    : name ? <Mark id={label ? "inbox.label" : "inbox.repo"}><span aria-hidden className={`w-1.5 h-1.5 rounded-full shrink-0 ${label ? getLabelColor(name).dot : workspaceColorOf(name, workspaceColor).dot}`} /></Mark> : null;
   const where = [title && `In ${title}`, label && `Label ${label}`, known && `${project} · ${directory || "no directory"}`, device?.title].filter(Boolean).join("\n");
   const onPress = title
     ? (e: React.MouseEvent) => clickProjectChip(workProjectChipKey(pid), null, e.altKey, e.shiftKey)
     : label ? onFilterLabel : onFilterProject;
   // With no project to name, the chip names the machine its glyph stands for.
-  const body = <>{device?.icon}{dot}<span className="truncate">{name || device?.name}</span></>;
+  const body = <>{device && <DeviceIcon d={device.d} labeled={!name} className="w-3 h-3" />}{dot}<span className="truncate">{name || device?.name}</span></>;
   return onPress && name ? (
     <button type="button" data-mc-chip="project" title={where} className={`${CHIP} ${PRESS} ${className}`} onClick={(e) => { stop(e); onPress(e); }}>
       {body}
@@ -79,7 +81,7 @@ export function ModernFlowChip({ runId, name, className = "" }: { runId: string 
   name ||= "Flow";
   return (
     <Link href={runHref(runId)} data-mc-chip="flow" data-flow-chip title={name} onClick={stop} className={`${CHIP_ACCENT} ${PRESS} ${className}`}>
-      <Workflow aria-hidden className="w-3 h-3 shrink-0" /><span className="truncate">{name}</span>
+      <Mark id="inbox.flow"><Workflow aria-hidden className="w-3 h-3 shrink-0" /></Mark><span className="truncate">{name}</span>
     </Link>
   );
 }
@@ -98,9 +100,9 @@ export function ModernBranchChip({ session, showBranch, className = "" }: { sess
     const After = glyph.after;
     const body = (
       <>
-        <Pr aria-hidden className="w-3 h-3 shrink-0" />
+        <Mark id={glyph.pr ? `pr.${pr.state}` : "pr.open"}><Pr aria-hidden className="w-3 h-3 shrink-0" /></Mark>
         <span className="tabular-nums shrink-0">#{pr.number}</span>
-        {After ? <After aria-hidden data-pr-state={pr.state} className="w-3 h-3 shrink-0" style={{ color: accentVar(style.accent) }} /> : null}
+        {After ? <Mark id={pr.state === "ci_red" ? "pr.failing" : `pr.${pr.state}`}><After aria-hidden data-pr-state={pr.state} className="w-3 h-3 shrink-0" style={{ color: accentVar(style.accent) }} /></Mark> : null}
         <span className="sr-only">{style.phrase}</span>
       </>
     );
@@ -119,7 +121,7 @@ export function ModernBranchChip({ session, showBranch, className = "" }: { sess
       : `Worktree ${name}${branch ? ` (${branch})` : ""}`;
     return (
       <span data-mc-chip="worktree" title={title} className={`${CHIP} ${className}`}>
-        <GitBranch aria-hidden className="w-3 h-3 shrink-0" /><span className="truncate font-mono">{name}</span>
+        <Mark id="inbox.worktree"><GitBranch aria-hidden className="w-3 h-3 shrink-0" /></Mark><span className="truncate font-mono">{name}</span>
       </span>
     );
   }
@@ -128,7 +130,7 @@ export function ModernBranchChip({ session, showBranch, className = "" }: { sess
   if (!repository || !branch || isDefaultBranch(branch)) return null;
   return (
     <Link href={repoTreeHref(repository, branch)} data-mc-chip="branch" title={`${repository} at ${branch}`} onClick={stop} className={`${CHIP} ${PRESS} ${className}`}>
-      <GitBranch aria-hidden className="w-3 h-3 shrink-0" /><span className="truncate font-mono">{branch}</span>
+      <Mark id="git.branch"><GitBranch aria-hidden className="w-3 h-3 shrink-0" /></Mark><span className="truncate font-mono">{branch}</span>
     </Link>
   );
 }
@@ -172,7 +174,7 @@ export function ModernCommentsChip({ session, viewerId, onOpenComments }: { sess
       onClick={(e) => { stop(e); onOpenComments?.(session._id); }}
       className={`${yours ? CHIP_ACCENT : CHIP} ${PRESS} shrink-0`}
     >
-      <MessageSquare aria-hidden className="w-3 h-3 shrink-0" />
+      <Mark id="inbox.comments"><MessageSquare aria-hidden className="w-3 h-3 shrink-0" /></Mark>
       <span className="tabular-nums">{n}</span>
     </button>
   );
@@ -188,9 +190,9 @@ export function ModernLinkChip({ kind, label, title, onOpen, href, className = "
   href?: string;
   className?: string;
 }) {
-  const icon = kind === "parent" ? <CornerUpLeft aria-hidden className="w-3 h-3 shrink-0" />
-    : kind === "implementation" ? <ArrowRight aria-hidden className="w-3 h-3 shrink-0" />
-    : <Users aria-hidden className="w-3 h-3 shrink-0" />;
+  const icon = kind === "parent" ? <Mark id="inbox.parent"><CornerUpLeft aria-hidden className="w-3 h-3 shrink-0" /></Mark>
+    : kind === "implementation" ? <Mark id="inbox.implementation"><ArrowRight aria-hidden className="w-3 h-3 shrink-0" /></Mark>
+    : <Mark id="inbox.role_sessions"><Users aria-hidden className="w-3 h-3 shrink-0" /></Mark>;
   const body = <>{icon}<span className="truncate">{kind === "role" ? label : cleanTitle(label)}</span></>;
   if (href) return <Link href={href} data-mc-chip={kind} title={title} onClick={stop} className={`${CHIP} ${PRESS} ${className}`}>{body}</Link>;
   return (

@@ -2,57 +2,69 @@ import { ANTIGRAVITY_MARK_PATH, MUSE_MARK_PATH } from "@codecast/shared/render/m
 import { CodexIcon, GrokIcon } from "./BrandIcons";
 import { LogoMark } from "./Logo";
 import { agentDisplayName, isHostedAgentType } from "@codecast/shared/contracts";
+import { Mark } from "./Mark";
+import { agentMarkId } from "../lib/marks/inbox";
 
-/** `mono` drops the brand colour so the glyph takes the colour around it
- *  (currentColor): the session mark draws it in its workspace's ink. */
-export function AgentTypeIcon({ agentType, className = "w-3 h-3", mono = false }: { agentType: string; className?: string; mono?: boolean }) {
+/** The agent's glyph, named on hover (lib/marks, agent.*). `mono` drops the
+ *  brand colour so the glyph takes the colour around it (currentColor): the
+ *  session mark draws it in its workspace's ink. `labeled` when the agent's
+ *  name sits beside it. The caller's className sizes and places the mark's
+ *  box; the glyph fills it. */
+export function AgentTypeIcon({ agentType, className = "w-3 h-3", mono = false, labeled }: { agentType: string; className?: string; mono?: boolean; labeled?: boolean }) {
+  const glyph = agentGlyph(agentType, mono);
+  if (!glyph) return null;
+  return <Mark id={agentMarkId(agentType, isHostedAgentType(agentType))} labeled={labeled} className={className}>{glyph}</Mark>;
+}
+
+function agentGlyph(agentType: string, mono: boolean) {
   const tone = (brand: string) => (mono ? "" : ` ${brand}`);
+  const fill = "size-full";
   if (agentType === "claude_code") {
     return (
-      <svg className={`${className}${tone("text-amber-400")}`} viewBox="0 0 24 24" fill="currentColor">
+      <svg className={`${fill}${tone("text-amber-400")}`} viewBox="0 0 24 24" fill="currentColor">
         <path d="M17.3041 3.541h-3.6718l6.696 16.918H24L17.3041 3.541Zm-10.6082 0L0 20.459h3.7442l1.3693-3.5527h7.0052l1.3693 3.5528h3.7442L10.5363 3.5409H6.696Zm-.3712 10.2232 2.2914-5.9456 2.2914 5.9456H6.3247Z" />
       </svg>
     );
   } else if (agentType === "codex" || agentType === "codex_cli") {
     // The Codex mark is an image; mono paints it through a mask instead.
-    if (mono) return <span aria-hidden className={`${className} inline-block shrink-0 bg-current [mask:url(/agents/codex.svg)_center/contain_no-repeat]`} />;
-    return <CodexIcon className={className} />;
+    if (mono) return <span aria-hidden className={`${fill} inline-block shrink-0 bg-current [mask:url(/agents/codex.svg)_center/contain_no-repeat]`} />;
+    return <CodexIcon className={fill} />;
   } else if (agentType === "cursor") {
     return (
-      <svg className={`${className}${tone("text-blue-400")}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <svg className={`${fill}${tone("text-blue-400")}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
         <path d="M4 4l16 6-8 2-2 8z"/>
       </svg>
     );
   } else if (agentType === "gemini") {
     return (
-      <svg className={`${className}${tone("text-blue-400")}`} viewBox="0 0 28 28" fill="currentColor">
+      <svg className={`${fill}${tone("text-blue-400")}`} viewBox="0 0 28 28" fill="currentColor">
         <path d="M12 0C12 0 12 6.268 8.134 10.134C4.268 14 0 14 0 14C0 14 6.268 14 10.134 17.866C14 21.732 14 28 14 28C14 28 14 21.732 17.866 17.866C21.732 14 28 14 28 14C28 14 21.732 14 17.866 10.134C14 6.268 14 0 14 0" />
       </svg>
     );
   } else if (agentType === "opencode") {
     return (
-      <svg className={`${className}${tone("text-orange-400")}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <svg className={`${fill}${tone("text-orange-400")}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <polyline points="8 6 3 12 8 18" />
         <polyline points="16 6 21 12 16 18" />
       </svg>
     );
   } else if (agentType === "pi") {
     return (
-      <span className={`${className} inline-flex items-center justify-center shrink-0 font-semibold${tone("text-teal-400")} leading-none`}>
+      <span className={`${fill} inline-flex items-center justify-center shrink-0 font-semibold${tone("text-teal-400")} leading-none`}>
         π
       </span>
     );
   } else if (agentType === "grok") {
-    return <GrokIcon className={`${className}${tone("text-sol-text")}`} />;
+    return <GrokIcon className={`${fill}${tone("text-sol-text")}`} />;
   } else if (agentType === "muse") {
     return (
-      <svg className={`${className}${tone("text-blue-500")}`} viewBox="0 0 24 24" fill="currentColor" fillRule="evenodd">
+      <svg className={`${fill}${tone("text-blue-500")}`} viewBox="0 0 24 24" fill="currentColor" fillRule="evenodd">
         <path d={MUSE_MARK_PATH} />
       </svg>
     );
   } else if (agentType === "antigravity") {
     return (
-      <svg className={`${className}${tone("text-indigo-400")}`} viewBox="0 0 24 24" fill="currentColor">
+      <svg className={`${fill}${tone("text-indigo-400")}`} viewBox="0 0 24 24" fill="currentColor">
         <path d={ANTIGRAVITY_MARK_PATH} />
       </svg>
     );
@@ -61,7 +73,7 @@ export function AgentTypeIcon({ agentType, className = "w-3 h-3", mono = false }
     // solid disc: the bare mark's open ring read as a loading spinner at row
     // size, so an idle conversation looked busy.
     return (
-      <span aria-hidden className={`${className} inline-flex shrink-0 items-center justify-center rounded-full bg-sol-text text-sol-bg`}>
+      <span aria-hidden className={`${fill} inline-flex shrink-0 items-center justify-center rounded-full bg-sol-text text-sol-bg`}>
         <LogoMark monochrome className="h-[64%] w-[64%]" />
       </span>
     );

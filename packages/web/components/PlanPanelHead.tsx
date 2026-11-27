@@ -13,10 +13,12 @@ import { policyTeamOf } from "@codecast/shared/contracts";
 import { Badge } from "./ui/badge";
 import { ShareControl } from "./ShareControl";
 import { PageHeader } from "./ui/page-header";
+import { Mark } from "./Mark";
+import { PLAN_STATUS_CONFIG } from "../lib/planStatus";
 import { useNavClose, useNavCloseTarget } from "../hooks/useNavTrail";
 
 type PlanHeadProps = {
-  plan: { _id: string; short_id?: string; title: string; share_token?: string | null };
+  plan: { _id: string; short_id?: string; title: string; status?: string; share_token?: string | null };
   status: { icon: LucideIcon; color: string; label: string };
   /** The share token as the store holds it (`undefined`: no store row). */
   storeShareToken: string | null | undefined;
@@ -33,13 +35,16 @@ function PlanShare({ plan, storeShareToken }: Pick<PlanHeadProps, "plan" | "stor
   );
 }
 
+/** The head draws a status the config lacks as draft (PlanDetailPanel). */
+const planStatusMarkId = (status: string | undefined) => `plan.${status && PLAN_STATUS_CONFIG[status] ? status : "draft"}`;
+
 /** Classic: the status icon, the title, the status, then share and close. */
 export function PlanPanelTitleRow({ plan, status, storeShareToken, closeHref }: PlanHeadProps) {
   const StatusIcon = status.icon;
   const close = useNavCloseTarget(closeHref ?? "/plans");
   return (
         <div className="flex items-center gap-2.5 mb-2">
-          <StatusIcon className={`w-5 h-5 flex-shrink-0 ${status.color}`} />
+          <Mark id={planStatusMarkId(plan.status)} labeled><StatusIcon className={`w-5 h-5 flex-shrink-0 ${status.color}`} /></Mark>
           <h1 className="min-w-0 break-words text-xl font-semibold text-sol-text">{plan.title}</h1>
           <Badge variant="outline" className={`flex-shrink-0 text-meta px-1.5 py-0 ${status.color} border-current/30`}>
             {status.label}
@@ -78,7 +83,7 @@ export function PlanPanelBar({ plan, status, storeShareToken, closeHref }: PlanH
       className="!sticky top-0"
       data-page-head
       title={plan.title}
-      glyph={<StatusIcon className={`size-4 ${status.color}`} aria-hidden />}
+      glyph={<Mark id={planStatusMarkId(plan.status)} labeled><StatusIcon className={`size-4 ${status.color}`} aria-hidden /></Mark>}
       status={<span className={`text-meta font-medium ${status.color}`}>{status.label}</span>}
       share={<>
         <PlanShare plan={plan} storeShareToken={storeShareToken} />

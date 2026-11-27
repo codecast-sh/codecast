@@ -6,6 +6,7 @@ import { rowPinPredatesTurn, rowVerifiedWake } from "@codecast/shared/contracts/
 import { WAKE_BADGE } from "../../lib/triggerBadges";
 import type { TriggerRow } from "../triggerTasks";
 import { SchedChildArrow, SchedFireBadge } from "../TriggerRow";
+import { Mark } from "../Mark";
 import { useDormantWake } from "../../hooks/useDormantWake";
 import { dormantWakeLabel, isLivePark, serverParkOf, type DormantWakeLabel } from "./dormantWake";
 
@@ -45,7 +46,7 @@ export function DormantWakeRow({ session, rows, isActive, onOpen, onOpenSchedule
         onClick={() => (wake.kind === "trigger" ? onOpenSchedule(wake.row) : onOpen(session))}
         title={warn ?? "Open"}
       >
-        <SchedChildArrow label="What wakes this session" className="text-sol-text-dim/70" />
+        <Mark id="inbox.sub_row" className="self-start"><SchedChildArrow label="What wakes this session" className="text-sol-text-dim/70" /></Mark>
         <span className={`text-meta truncate min-w-0 ${warn ? "text-sol-yellow/90" : "text-sol-text-dim"}`}>{what}</span>
         <span className={`ml-auto shrink-0 whitespace-nowrap text-meta tabular-nums ${warn ? "text-sol-yellow/90" : "text-sol-text-dim"}`}><WakeWhen when={when} /></span>
       </button>

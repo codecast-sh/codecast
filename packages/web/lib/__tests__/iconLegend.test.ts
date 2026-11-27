@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { JSDOM } from "jsdom";
 import { GROUP_ORDER, MARKS, MARK_BY_ID, type MarkDef } from "../marks";
 import { SESSION_STATUS, SESSION_STATUSES } from "../sessionStatus";
-import { glyphKey, legendGroups, readMarks } from "../iconLegend";
+import { glyphKey, legendBox, legendGroups, readMarks } from "../iconLegend";
 import { closeDomWindow } from "../../test-helpers/domGlobals";
 
 describe("mark registry", () => {
@@ -50,7 +50,13 @@ describe("legend rows", () => {
     ]);
     expect(groups).toHaveLength(1);
     expect(groups[0].rows).toHaveLength(1);
-    expect(groups[0].rows[0].glyphs).toEqual([dot(10), ring]);
+    expect(groups[0].rows[0].glyphs.map((g) => g.markup)).toEqual([dot(10), ring]);
+  });
+
+  test("a mark drawn from data (oneGlyph) keeps only the first glyph seen", () => {
+    const marks: MarkDef[] = [{ id: "test.strip", name: "S", meaning: "s", group: "Priorities", oneGlyph: true }];
+    const groups = legendGroups([{ id: "test.strip", markup: "a" }, { id: "test.strip", markup: "b" }], undefined, marks);
+    expect(groups[0].rows[0].glyphs.map((g) => g.markup)).toEqual(["a"]);
   });
 
   test("rows follow registry order inside a group; unknown ids are dropped", () => {
@@ -73,6 +79,14 @@ describe("legend rows", () => {
     const seen = [{ id: "test.work", markup: "w" }, { id: "session.idle", markup: "i" }, { id: "test.pass", markup: "p" }];
     expect(legendGroups(seen, undefined, marks).map((g) => g.group)).toEqual(["Priorities pass", "Sessions", "Work"]);
     expect(legendGroups(seen, "Work", marks).map((g) => g.group)).toEqual(["Work", "Priorities pass", "Sessions"]);
+  });
+
+  test("a glyph keeps the box the page drew it in, scaled to fit 20px and at least 8px a side", () => {
+    const groups = legendGroups([{ id: "session.working", markup: "<svg class=\"size-full\"></svg>", box: { w: 12, h: 12 } }]);
+    expect(groups[0].rows[0].glyphs[0].box).toEqual({ w: 12, h: 12 });
+    expect(legendBox({ w: 300, h: 150 })).toEqual({ w: 20, h: 10 });
+    expect(legendBox({ w: 6, h: 6 })).toEqual({ w: 8, h: 8 });
+    expect(legendBox({ w: 40, h: 2 })).toEqual({ w: 20, h: 8 });
   });
 
   test("nothing seen is no groups", () => {

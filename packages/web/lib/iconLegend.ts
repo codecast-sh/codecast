@@ -33,8 +33,13 @@ export function useLegendState() {
   );
 }
 
-/** A registered mark found on the page: its id and the glyph inside it. */
-export type SeenMark = { id: string; markup: string };
+/** A mark's box as drawn on the page, in px. */
+export type GlyphBox = { w: number; h: number };
+
+/** A registered mark found on the page: its id, the glyph inside it, and the
+ *  box the page drew it in (a glyph that fills its mark, an agent or device
+ *  glyph, carries no size of its own). */
+export type SeenMark = { id: string; markup: string; box?: GlyphBox };
 
 /** The bare registered marks under `root` that `isSeen` passes: not drawn with
  *  their word (`data-mark-labeled`), and not the legend's own copies. */
@@ -43,7 +48,10 @@ export function readMarks(root: ParentNode, isSeen: (el: HTMLElement) => boolean
   for (const el of root.querySelectorAll<HTMLElement>("[data-mark]")) {
     if (el.hasAttribute("data-mark-labeled") || el.closest("[data-icon-legend]")) continue;
     if (!isSeen(el)) continue;
-    out.push({ id: el.dataset.mark!, markup: el.innerHTML });
+    const r = el.getBoundingClientRect();
+    out.push(r.width && r.height
+      ? { id: el.dataset.mark!, markup: el.innerHTML, box: { w: Math.round(r.width), h: Math.round(r.height) } }
+      : { id: el.dataset.mark!, markup: el.innerHTML });
   }
   return out;
 }
@@ -72,24 +80,35 @@ export function glyphKey(markup: string): string {
     });
 }
 
-export type LegendRow = { def: MarkDef; glyphs: string[] };
+/** The box a glyph gets in the legend: its size on the page, scaled down to
+ *  fit 20px and no smaller than 8px a side. */
+export function legendBox({ w, h }: GlyphBox): GlyphBox {
+  const scale = Math.min(1, 20 / Math.max(w, h));
+  return { w: Math.max(8, Math.round(w * scale)), h: Math.max(8, Math.round(h * scale)) };
+}
+
+export type LegendGlyph = { markup: string; box?: GlyphBox };
+export type LegendRow = { def: MarkDef; glyphs: LegendGlyph[] };
 export type LegendGroup = { group: MarkGroup; rows: LegendRow[] };
 
 /** One row per meaning, each with its distinct glyphs in the order seen;
  *  `lead`'s group first, then GROUP_ORDER, and registry order inside a group. */
 export function legendGroups(seen: readonly SeenMark[], lead?: MarkGroup, marks: readonly MarkDef[] = MARKS): LegendGroup[] {
-  const glyphs = new Map<string, Map<string, string>>();
-  for (const { id, markup } of seen) {
-    const variants = glyphs.get(id) ?? new Map<string, string>();
+  const glyphs = new Map<string, Map<string, LegendGlyph>>();
+  for (const { id, markup, box } of seen) {
+    const variants = glyphs.get(id) ?? new Map<string, LegendGlyph>();
     const key = glyphKey(markup);
-    if (!variants.has(key)) variants.set(key, markup);
+    if (!variants.has(key)) variants.set(key, box ? { markup, box: legendBox(box) } : { markup });
     glyphs.set(id, variants);
   }
   const order = lead ? [lead, ...GROUP_ORDER.filter((g) => g !== lead)] : GROUP_ORDER;
   return order
     .map((group) => ({
       group,
-      rows: marks.filter((m) => m.group === group && glyphs.has(m.id)).map((def) => ({ def, glyphs: [...glyphs.get(def.id)!.values()] })),
+      rows: marks.filter((m) => m.group === group && glyphs.has(m.id)).map((def) => {
+        const all = [...glyphs.get(def.id)!.values()];
+        return { def, glyphs: def.oneGlyph ? all.slice(0, 1) : all };
+      }),
     }))
     .filter((g) => g.rows.length > 0);
 }

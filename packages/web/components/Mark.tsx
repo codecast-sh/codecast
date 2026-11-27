@@ -11,9 +11,11 @@ import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 const warned = new Set<string>();
 
 /** `labeled`: its word sits beside it here, so the legend leaves it out. */
-export function Mark({ id, labeled, side = "top", children }: {
+export function Mark({ id, labeled, side = "top", className = "", children }: {
   id: string;
   labeled?: boolean;
+  /** Layout for the mark's box (a percent size, a margin), which the glyph inside cannot take. */
+  className?: string;
   side?: "top" | "bottom" | "left" | "right";
   children: ReactNode;
 }) {
@@ -27,7 +29,7 @@ export function Mark({ id, labeled, side = "top", children }: {
   }
   return (
     <ShortcutTooltip side={side} label={<><span className="font-medium">{def.name}</span><span className="text-sol-text-muted"> · {def.meaning}</span></>}>
-      <span data-mark={id} data-mark-labeled={labeled || undefined} className="inline-flex shrink-0 items-center justify-center">{children}</span>
+      <span data-mark={id} data-mark-labeled={labeled || undefined} className={`inline-flex shrink-0 items-center justify-center${className && ` ${className}`}`}>{children}</span>
     </ShortcutTooltip>
   );
 }

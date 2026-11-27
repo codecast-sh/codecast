@@ -31,7 +31,9 @@ import {
   CornerDownRight,
   Copy,
 } from "lucide-react";
-import { taskPriority } from "../../lib/taskPriority";
+import { TASK_PRIORITY, taskPriorityLevel } from "../../lib/taskPriority";
+import { Mark } from "../Mark";
+import { taskStatusMarkId } from "../../lib/marks/work";
 import { useTaskActiveSession } from "./taskActiveSession";
 import { withShortcut } from "../../shortcuts";
 import { useIsModernStyle } from "../../hooks/useVisualStyle";
@@ -88,9 +90,11 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
   const teamStatuses = useTeamTaskStatusList((task as any).team_id);
   const resolvedStatus = taskStatusOf(task as any, teamStatuses);
   const status = statusVisual(resolvedStatus, teamStatuses);
-  const priority = taskPriority(task.priority);
+  const priorityLevel = taskPriorityLevel(task.priority);
+  const priority = TASK_PRIORITY[priorityLevel];
   const StatusIcon = status.icon;
   const PriorityIcon = priority.icon;
+  const statusMark = taskStatusMarkId(resolvedStatus.category);
   const [editValue, setEditValue] = useState(task.title);
 
   useWatchEffect(() => { setEditValue(task.title); }, [task.title]);
@@ -122,12 +126,12 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
       <button
         onClick={(e) => { e.stopPropagation(); state.onOpenPalette("status"); }}
         className="flex-shrink-0 hover:scale-125 transition-transform"
-        title={withShortcut("Change status", "task.status")}
+        aria-label={withShortcut("Change status", "task.status")}
       >
         {activeSession && taskLivenessState(task.status, activeSession) === "active" ? (
-          <LivePulseHalo><StatusIcon className={`w-4 h-4 ${status.color}`} /></LivePulseHalo>
+          <LivePulseHalo><Mark id={statusMark}><StatusIcon className={`w-4 h-4 ${status.color}`} /></Mark></LivePulseHalo>
         ) : (
-          <StatusIcon className={`w-4 h-4 ${status.color}`} />
+          <Mark id={statusMark}><StatusIcon className={`w-4 h-4 ${status.color}`} /></Mark>
         )}
       </button>
       {<ShortId id={task.short_id} className="text-xs text-sol-text-dim w-16 cq-hide-compact" />}
@@ -161,7 +165,7 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
           className={`flex items-center gap-1 text-meta px-1.5 py-0 rounded border border-sol-border/40 text-sol-text-dim hover:text-sol-cyan hover:border-sol-cyan/40 flex-shrink-0 font-mono cq-hide-compact transition-colors max-w-[10rem]${m ? ` ${modernPill({}, "modern:font-mono modern:font-normal modern:hover:text-sol-cyan")}` : ""}`}
           title={`Subtask of ${parentChip.short_id}: ${parentChip.title}`}
         >
-          <CornerDownRight className="w-3 h-3 flex-shrink-0" />
+          <Mark id="task.parent"><CornerDownRight className="w-3 h-3 flex-shrink-0" /></Mark>
           <span className="truncate">{parentChip.short_id}</span>
         </button>
       )}
@@ -170,9 +174,8 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
       {task.duplicate_of && (
         <span
           className="flex items-center gap-1 text-meta px-1.5 py-0 rounded border border-sol-border/40 text-sol-text-dim flex-shrink-0 font-mono cq-hide-compact"
-          title={`Duplicate of ${task.duplicate_of}`}
         >
-          <Copy className="w-3 h-3" />
+          <Mark id="task.duplicate"><Copy className="w-3 h-3" /></Mark>
           {task.duplicate_of}
         </span>
       )}
@@ -188,9 +191,9 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
         const body = (
           <>
             {onToggleCollapse ? (collapsed ? <ChevronRight className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />) : null}
-            <SubtaskRing done={progress.done} total={progress.total} />
+            <Mark id="task.subtasks"><SubtaskRing done={progress.done} total={progress.total} /></Mark>
             {progress.done}/{progress.total}
-            {hiddenDescendantCount > 0 && <Bot className="w-3 h-3" />}
+            {hiddenDescendantCount > 0 && <Mark id="task.hidden_subtasks"><Bot className="w-3 h-3" /></Mark>}
           </>
         );
         const cls = `flex items-center gap-1 text-meta px-1.5 py-0 rounded border flex-shrink-0 font-mono cq-hide-compact ${
@@ -224,7 +227,7 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
             <AgentTypeIcon agentType={task.source_agent_type} className="w-3.5 h-3.5" />
           </span>
         ) : (
-          <span className="flex-shrink-0 cq-hide-compact" title={`${task.source} created`}><Bot className="w-3.5 h-3.5 text-sol-text-dim/60" /></span>
+          <span className="flex-shrink-0 cq-hide-compact"><Mark id="task.agent_made"><Bot className="w-3.5 h-3.5 text-sol-text-dim/60" /></Mark></span>
         )
       )}
       {activeSession ? (
@@ -233,14 +236,14 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
         <span className="flex items-center gap-1 flex-shrink-0 cq-hide-compact">
           <TaskSessionBadge task={task} />
           {task.session_count && task.session_count > 1 ? (
-            <span className="text-meta text-sol-text-dim font-mono" title={`${task.session_count} sessions`}>
-              <Link2 className="w-3 h-3 inline mr-0.5" />{task.session_count}
+            <span className="text-meta text-sol-text-dim font-mono">
+              <Mark id="work.sessions"><Link2 className="w-3 h-3 inline mr-0.5" /></Mark>{task.session_count}
             </span>
           ) : null}
         </span>
       ) : task.session_count && task.session_count > 0 ? (
-        <span className="text-meta text-sol-text-dim flex-shrink-0 font-mono cq-hide-compact" title={`${task.session_count} session${task.session_count > 1 ? "s" : ""}`}>
-          <Link2 className="w-3 h-3 inline mr-0.5" />{task.session_count}
+        <span className="text-meta text-sol-text-dim flex-shrink-0 font-mono cq-hide-compact">
+          <Mark id="work.sessions"><Link2 className="w-3 h-3 inline mr-0.5" /></Mark>{task.session_count}
         </span>
       ) : null}
       {(task as any).plan && (
@@ -298,9 +301,9 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
         <button
           onClick={(e) => { e.stopPropagation(); state.onOpenPalette("priority"); }}
           className="flex-shrink-0 hover:scale-125 transition-transform cq-hide-compact"
-          title={withShortcut("Set priority", "task.priority")}
+          aria-label={withShortcut("Set priority", "task.priority")}
         >
-          <PriorityIcon className={`w-3.5 h-3.5 ${priority.color}`} />
+          <Mark id={`task.priority.${priorityLevel}`}><PriorityIcon className={`w-3.5 h-3.5 ${priority.color}`} /></Mark>
         </button>
       )}
       <span className="text-xs text-sol-text-dim w-8 text-right tabular-nums cq-hide-compact">{ageStr}</span>
@@ -343,7 +346,8 @@ export function KanbanCard({
   onAssign?: () => void;
 }) {
   const m = useIsModernStyle();
-  const priority = taskPriority(task.priority, "none");
+  const priorityLevel = taskPriorityLevel(task.priority, "none");
+  const priority = TASK_PRIORITY[priorityLevel];
   const PriorityIcon = priority.icon;
   const assignee = task.assignee_info;
   const firstLabel = task.labels?.[0];
@@ -365,7 +369,7 @@ export function KanbanCard({
           {task.external && <IssueLink external={task.external} className="max-w-[9rem]" />}
           {parentChip && (
             <span className="flex items-center gap-0.5 min-w-0 opacity-80" title={`Subtask of ${parentChip.short_id}: ${parentChip.title}`}>
-              <CornerDownRight className="w-2.5 h-2.5 flex-shrink-0" />
+              <Mark id="task.parent"><CornerDownRight className="w-2.5 h-2.5 flex-shrink-0" /></Mark>
               <span className="truncate max-w-[7rem]">{parentChip.short_id}</span>
             </span>
           )}
@@ -391,7 +395,7 @@ export function KanbanCard({
       <p className={`text-[13px] text-sol-text leading-snug mb-3 line-clamp-3 font-medium${m ? " modern:text-ui" : ""}`}>{task.title}</p>
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-1.5">
-          <PriorityIcon className={`w-3 h-3 flex-shrink-0 ${priority.color}`} />
+          <Mark id={`task.priority.${priorityLevel}`}><PriorityIcon className={`w-3 h-3 flex-shrink-0 ${priority.color}`} /></Mark>
           <TaskBlockedMark task={task} small />
           <TaskLineChip task={task as any} />
           {firstLabel && (() => {

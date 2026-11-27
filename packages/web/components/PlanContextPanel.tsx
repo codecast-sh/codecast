@@ -7,6 +7,8 @@ import { useMemo, useState } from "react";
 import { useInboxStore } from "../store/inboxStore";
 import { computePlanProgress } from "../lib/liveEntities";
 import { RailChip, RailDetail, RailProgress } from "./ContextRail";
+import { Mark } from "./Mark";
+import { taskStatusMarkId } from "../lib/marks/work";
 import {
   Circle,
   CircleDot,
@@ -81,7 +83,7 @@ export function PlanContextPanel({ planId }: { planId: Id<"plans"> }) {
   return (
     <div data-cc-context-panel className="contents">
       <RailChip data-cc-rail-item="plan" open={expanded} onToggle={() => setExpanded(!expanded)} title={`${plan.title} · ${plan.short_id ?? ""}`}>
-        <MapIcon className="w-3.5 h-3.5 text-sol-cyan flex-shrink-0" />
+        <Mark id="entity.plan"><MapIcon className="w-3.5 h-3.5 text-sol-cyan flex-shrink-0" /></Mark>
         <span className="min-w-0 truncate font-medium text-sol-cyan">{plan.title}</span>
         <span data-rail-full className="flex-shrink-0"><ShortId id={plan.short_id} className="text-sol-text-dim" /></span>
         <span className="ml-auto" />
@@ -112,12 +114,12 @@ export function PlanContextPanel({ planId }: { planId: Id<"plans"> }) {
                   href={`/tasks/${task._id}`}
                   className="flex items-center gap-2 py-1 px-1.5 rounded text-xs hover:bg-sol-bg-alt/50 transition-colors group"
                 >
-                  <Icon className={`w-3 h-3 flex-shrink-0 ${color}`} />
+                  <Mark id={taskStatusMarkId(task.status)}><Icon className={`w-3 h-3 flex-shrink-0 ${color}`} /></Mark>
                   <span className={`truncate ${task.status === "done" ? "line-through text-sol-text-dim" : "text-sol-text-muted group-hover:text-sol-text"}`}>
                     {task.title}
                   </span>
                   {PIcon && pColor && (
-                    <PIcon className={`w-3 h-3 ml-auto flex-shrink-0 ${pColor}`} />
+                    <span className="ml-auto flex-shrink-0"><Mark id={`task.priority.${task.priority}`}><PIcon className={`w-3 h-3 ${pColor}`} /></Mark></span>
                   )}
                 </Link>
               );

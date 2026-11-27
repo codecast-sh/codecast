@@ -64,7 +64,10 @@ export function IconLegend() {
             {rows.map(({ def, glyphs }) => (
               <div key={def.id} data-legend-row={def.id} className="flex items-baseline gap-2 py-1">
                 <span className="flex min-w-9 shrink-0 items-center gap-1.5 self-center">
-                  {glyphs.map((markup) => <span key={markup} className="inline-flex" dangerouslySetInnerHTML={{ __html: markup }} />)}
+                  {glyphs.map(({ markup, box }) => (
+                    // The page's box for the glyph, so one that fills its mark is drawn at its own size.
+                    <span key={markup} className="inline-flex items-center justify-center [&>*]:max-h-full [&>*]:max-w-full" style={box && { width: box.w, height: box.h }} dangerouslySetInnerHTML={{ __html: markup }} />
+                  ))}
                 </span>
                 <span className="min-w-0 text-xs leading-snug text-sol-text">
                   {def.name}<span className="text-sol-text-dim"> · {def.meaning}</span>

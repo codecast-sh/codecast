@@ -30,11 +30,12 @@ const SHAPES: Record<StatusMarkShape, ReactNode> = {
 };
 
 /** A state's mark, in its colour, named on hover. `labeled` when the state's
- *  word sits beside it, so the icon legend leaves it out. */
-export function SessionStatusMark({ status, size = 10, className = "", labeled }: { status: SessionStatus; size?: number; className?: string; labeled?: boolean }) {
+ *  word sits beside it, so the icon legend leaves it out. `markId` names
+ *  another meaning drawn in a session's mark (a plan's state). */
+export function SessionStatusMark({ status, size = 10, className = "", labeled, markId }: { status: SessionStatus; size?: number; className?: string; labeled?: boolean; markId?: string }) {
   const meta = SESSION_STATUS[status];
   return (
-    <Mark id={`session.${status}`} labeled={labeled}>
+    <Mark id={markId ?? `session.${status}`} labeled={labeled}>
       <svg data-status-mark={status} viewBox="0 0 10 10" width={size} height={size} aria-hidden className={`shrink-0 ${meta.text} ${className}`}>
         {SHAPES[meta.mark]}
       </svg>

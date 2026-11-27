@@ -41,6 +41,8 @@ import {
   UserRound,
 } from "lucide-react";
 import { taskVisual } from "./TaskStatusBadge";
+import { Mark } from "./Mark";
+import { taskStatusMarkId } from "../lib/marks/work";
 import { GoalHoverContent } from "./initiatives/GoalHoverContent";
 import { Popover, PopoverContent, PopoverAnchor } from "./ui/popover";
 import { useHoverCard } from "../hooks/useHoverCard";
@@ -130,6 +132,9 @@ import { deployLook } from "../lib/deploys/deployLook";
 import { deployPillSuffix, runRefKey } from "../lib/deploys/deployPill";
 
 export { SessionHoverContent };
+
+/** Kinds whose pill draws the kind's own glyph. */
+const PILL_KINDS = new Set<string>(["session", "plan", "trigger", "doc", "project", "role", "person", "proposal", "call", "source", "replay", "flow", "priority", "commit"]);
 
 const PR_GLYPH_ICON: Record<PrGlyph, typeof GitPullRequest> = { open: GitPullRequest, draft: GitPullRequestDraft, merged: GitMerge, closed: GitPullRequestClosed };
 
@@ -1202,6 +1207,21 @@ export function EntityIdPill({
               : isCommit
                 ? GitCommitHorizontal
                 : taskV.icon;
+  const glyph = <Icon className={`w-[1em] h-[1em] block ${isTask ? taskV.color : type === "source" && status === "error" ? "text-sol-red" : deployV?.iconClass ?? ""}`} />;
+  // The glyph's registered mark: a pill shows its object's title, never its
+  // kind, so the kind's glyph (or its state's) is bare. Kinds the chain above
+  // has no glyph for fall through to the task disc and stay unregistered.
+  const markId = isTask
+    ? taskStatusMarkId(status)
+    : type === "decision"
+      ? `decision.${status === "answered" ? "answered" : status === "dismissed" || status === "withdrawn" ? "dismissed" : "pending"}`
+      : isPr
+        ? `pr.${prLook?.glyph ?? "open"}`
+        : type === "initiative"
+          ? "entity.goal"
+          : type && type !== "deploy" && PILL_KINDS.has(type)
+            ? `entity.${type}`
+            : null;
 
   const colors = isSession
     ? "bg-sol-blue/[0.08] text-sol-blue hover:bg-sol-blue/[0.16]"
@@ -1358,7 +1378,7 @@ export function EntityIdPill({
             ) : isSession && (entity?.author_name || entity?.author_avatar) ? (
               <AuthorAvatar name={entity.author_name} avatar={entity.author_avatar} size="1em" />
             ) : (
-              <Icon className={`w-[1em] h-[1em] block ${isTask ? taskV.color : type === "source" && status === "error" ? "text-sol-red" : deployV?.iconClass ?? ""}`} />
+              markId ? <Mark id={markId} side="bottom">{glyph}</Mark> : glyph
             )}
             {((isSession && status === "active") || (isTrigger && status === "running")) && (
               <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-sol-green" />
