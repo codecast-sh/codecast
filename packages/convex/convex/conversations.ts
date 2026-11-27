@@ -11215,6 +11215,8 @@ export function tallyInboxRows(
     agent_type?: string;
     agent_status?: string;
     hibernated_at?: number | null;
+    // A person's newest turn (see schema), on rows named by id only (inboxForCLI).
+    last_person_turn_at?: number | null;
     work_state: WorkState;
     // The projection placement (shared placeInboxRow) and the fold flag, next
     // to the verdict the CLI has always tallied.
@@ -11486,6 +11488,15 @@ export const inboxForCLI = query({
       requestedIds,
       now: Date.now(),
     });
+    // A person's newest turn (schema last_person_turn_at) on the rows named by
+    // id: a Ship run reads it off its subject's row to see a person take the
+    // subject over (cli workflow/subjectPark.ts). It stays off the inbox row,
+    // which every window syncs (INBOX_ROW_FIELDS).
+    for (const r of rows) {
+      if (!requestedIds.has(String(r.id))) continue;
+      const conv = await ctx.db.get(r.id as Id<"conversations">);
+      r.last_person_turn_at = conv?.last_person_turn_at ?? null;
+    }
     // Rows under the cluster cut: listed (and tallied above) under -a, omitted
     // otherwise — either way the figure is the same fold count.
     if (!args.show_all) counts.below_fold = hidden_count;

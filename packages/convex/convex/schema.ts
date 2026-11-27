@@ -1209,6 +1209,11 @@ export default defineSchema({
     // is not the agent's word on that turn, so the inbox does not park on it
     // (inboxPlacement rowPinPredatesTurn).
     last_turn_at: v.optional(v.number()),
+    // When a person last sent the session something that starts a turn, a bare
+    // "yes" included (lib/userSend.pinTurnKind; last_turn_origin skips those).
+    // A Ship run reads it to see a person take its subject over (cli
+    // workflow/subjectPark.ts).
+    last_person_turn_at: v.optional(v.number()),
     is_subagent: v.optional(v.boolean()),
     // Started with nobody watching (`cast spawn --unattended`, a role's hand).
     // Read through isUnattendedConversation (@codecast/shared), which also
