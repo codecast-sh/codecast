@@ -91,8 +91,8 @@ export function PriorityBlock({ model, layout, days, todayIndex, peak, typingPen
             <PriorityTitleLink
               row={row}
               onRename={() => setRenaming(true)}
-              // Under a coarse pointer 13px above and below an 18px line make it a 44px target, and never less.
-              className={cn("min-w-0 font-semibold text-sol-text decoration-sol-text-dim/50 hover:underline [@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:py-[13px]", wide ? cn("truncate text-body", COARSE_WRAP) : "line-clamp-2 text-ui", past && "text-sol-text-muted")}
+              // Under a coarse pointer 13px above and below an 18px line make it a 44px target, and never less. Compact keeps every title to one line.
+              className={cn("min-w-0 font-semibold text-sol-text decoration-sol-text-dim/50 hover:underline [@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:py-[13px]", wide ? cn("truncate text-body", !compact && COARSE_WRAP) : cn(compact ? "truncate" : "line-clamp-2", "text-ui"), past && "text-sol-text-muted")}
             />
           )}
           {!renaming && <PriorityMenu row={row} reveal="group-hover/head:opacity-100" onRename={() => setRenaming(true)} />}

@@ -174,6 +174,8 @@ test("the Group by field offers Person then workspace only with more than one wo
   }
 }, 60_000);
 
+const oneLine = (root: Element) => [...root.querySelectorAll("[data-priority-title]")].every((t) => t.className.split(" ").includes("truncate") && !t.className.includes("line-clamp"));
+
 test("Compact folds every priority to one line, in every grouping", async () => {
   const page = await mount(view({ rows: ROWS }));
   const c = page.container;
@@ -184,14 +186,25 @@ test("Compact folds every priority to one line, in every grouping", async () => 
     expect(useInboxStore.getState().clientState.ui?.priorities_view).toEqual({ compact: true });
     expect(c.querySelectorAll("li[data-milestone]")).toHaveLength(0);
     expect(order(c)).toHaveLength(7);
+    // One line per title at every width and pointer: truncated, never wrapping to two.
+    expect(oneLine(c)).toBe(true);
     for (const g of ["workspace", "person_workspace"]) {
       setView({ compact: true, group_by: g });
       await act(async () => {});
       expect(c.querySelectorAll("li[data-milestone]")).toHaveLength(0);
       expect(order(c)).toHaveLength(7);
+      expect(oneLine(c)).toBe(true);
     }
   } finally {
     await page.unmount();
+  }
+  setView({ compact: true });
+  const phone = await mount(view({ rows: ROWS, layout: "phone" }));
+  try {
+    expect(phone.container.querySelectorAll("[data-priority-title]").length).toBeGreaterThan(0);
+    expect(oneLine(phone.container)).toBe(true);
+  } finally {
+    await phone.unmount();
   }
 }, 60_000);
 
