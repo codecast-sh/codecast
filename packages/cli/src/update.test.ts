@@ -9,7 +9,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { generateKeyPairSync } from "node:crypto";
 import { publicKeyToBase64, sha256Hex, signManifest, type UpdaterFs } from "@platform/cli-kit/update";
-import { DARWIN_SIGNING_TEAM, RELEASE_BASE_URL, RELEASE_MANIFEST_SIGNING, createCodecastUpdater, makeCurlDownload, makeDarwinSignatureCheck, UPDATE_IN_PROGRESS, UPDATE_DEFER_RETRIES, UPDATE_DEFER_RETRY_MS, forcedUpdateWaits, selfUpdateOutcome } from "./update";
+import { DARWIN_SIGNING_TEAM, RELEASE_BASE_URL, RELEASE_MANIFEST_SIGNING, createCodecastUpdater, makeCurlDownload, makeDarwinSignatureCheck, UPDATE_IN_PROGRESS } from "./update";
+import { UPDATE_DEFER_RETRIES, UPDATE_DEFER_RETRY_MS, forcedUpdateWaits, selfUpdateOutcome } from "./daemonSelfUpdate";
 import { exclusiveUpdate, isReleaseRace, updateWithRetry } from "./updateRetry";
 
 const enc = new TextEncoder();

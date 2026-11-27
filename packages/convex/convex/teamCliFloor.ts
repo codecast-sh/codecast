@@ -119,10 +119,12 @@ const FORCED_RELEASE_READ = 200;
  * member may: the finish runs as whoever shipped. The message lands in the
  * captain's session labelled as codecast, so it carries only what the server
  * read itself: the deploy must be a live `cli` deploy in this team's workspace
- * that the caller can read, its version and id come from that row, and a
- * refused force says only that the floor was not raised and by whose finish
- * (`not_forced`'s text, the CLI's refusal, is not repeated). Sent as the
- * caller, once per deploy and kind. `told` is the role's handle, or null when
+ * that the caller can read, its version and id come from that row, a refused
+ * force says only that the floor was not raised (`not_forced`'s text, the
+ * CLI's refusal, is not repeated), and laggards are counted and named by
+ * their device rows' ids, never by the labels, owners' names, versions or
+ * errors members' machines wrote. Sent as the caller (from_user_id says who),
+ * once per deploy and kind. `told` is the role's handle, or null when
  * no @release can be reached or there is nothing to say.
  */
 export const tellRelease = mutation({
@@ -142,21 +144,26 @@ export const tellRelease = mutation({
     if (!role) return { told: null };
     const version = d.version;
     let content: string;
+    // The caller is named by from_user_id, never by a name in the text.
     if (args.not_forced !== undefined) {
-      const caller: Doc<"users"> | null = await ctx.db.get(userId);
-      const by = (caller?.name ?? caller?.github_username ?? "someone").replace(/[\r\n]+/g, " ").slice(0, 80);
-      content = `${d.short_id}: release ${version} changed the daemon, but ${team.name}'s machines were not forced onto it: ${by}'s finish could not raise the floor. Raise it with cast force-update ${version} --team ${team.name}.`;
+      content = `${d.short_id}: release ${version} changed the daemon, but ${team.name}'s machines were not forced onto it: the finish its sender ran could not raise the floor. Raise it with cast force-update ${version} --team ${teamArg(team.name)}.`;
     } else {
       const lagging = (await teamFleet(ctx, team, version, Date.now())).lagging;
       if (!lagging.length) return { told: null };
-      const named = lagging.slice(0, 20).map((d) => `${d.label} (${d.owner}, ${d.cli_version ?? "?"}${d.error ? `: ${d.error.slice(0, 120)}` : ""})`).join(", ");
-      content = `${d.short_id}: ${lagging.length} of ${team.name}'s machines are online and still below ${version} after the release's wait: ${named}.`;
+      // Device rows' ids and checked versions only: labels, owners' names and update errors are what members' machines wrote.
+      const ids = lagging.slice(0, 20).map((m) => `${m.id} (${shownVersion(m.cli_version)})`).join(", ");
+      content = `${d.short_id}: ${lagging.length} of ${team.name}'s machines are online and still below ${version} after the release's wait: ${ids}${lagging.length > 20 ? ", ..." : ""}. The deploy's note names them: cast line deploy show ${d.short_id}`;
     }
     const sent = await tellRole(ctx, role._id, { content, from_user_id: userId, client_id: `team-cli-floor:${d.short_id}:${args.not_forced !== undefined ? "not-forced" : "lagging"}` });
     return { told: sent ? role.handle : null };
   },
 });
 const RELEASE_HANDLE = "release";
+
+/** A version a message to a role may carry: x.y.z, else "unknown" (a heartbeat's cli_version is the machine's own string). */
+const shownVersion = (v: string | null | undefined) => (v && RELEASE_VERSION.test(v) ? v : "unknown");
+/** The team's name as a --team argument: quoted unless it is one plain word. */
+const teamArg = (name: string) => (/^[\w.-]+$/.test(name) ? name : JSON.stringify(name));
 
 /**
  * A release that changes the daemon, finished without raising the global
@@ -220,8 +227,7 @@ export const tellOtherTeam = internalMutation({
     const f = await teamFleet(ctx, team, args.version, Date.now());
     const older = f.lagging.length + f.offline.length;
     if (!older) return;
-    const name = /^[\w.-]+$/.test(team.name) ? team.name : JSON.stringify(team.name);
-    const content = `CLI release ${args.version} (${args.deploy}) changes the running daemon. ${team.name}'s floor is ${floor ?? "unset"}, and ${older} of its machines seen in the last day run older. Forcing them restarts each daemon and is your call: cast force-update ${args.version} --team ${name}`;
+    const content = `CLI release ${args.version} (${args.deploy}) changes the running daemon. ${team.name}'s floor is ${floor ? shownVersion(floor) : "unset"}, and ${older} of its machines seen in the last day run older. Forcing them restarts each daemon and is your call: cast force-update ${args.version} --team ${teamArg(team.name)}`;
     await tellRole(ctx, role._id, { content, client_id: `team-cli-floor:${args.deploy}:${team._id}` });
   },
 });
@@ -237,7 +243,7 @@ async function isCodecastCliRelease(ctx: any, d: Doc<"deploys">): Promise<boolea
   return installs.some((i) => installationCoversRepo(i, CLI_RELEASE_REPOSITORY));
 }
 
-export type FleetDevice = { device_id: string; label: string; owner: string; user_id: Id<"users">; cli_version: string | null; online: boolean; error: string | null };
+export type FleetDevice = { id: Id<"devices">; device_id: string; label: string; owner: string; user_id: Id<"users">; cli_version: string | null; online: boolean; error: string | null };
 
 /**
  * Which of the team's machines run `version`: every member's device seen in
@@ -263,7 +269,7 @@ export async function teamFleet(ctx: any, team: Doc<"teams">, version: string, n
     const devices = await ctx.db.query("devices").withIndex("by_user_id", (q: any) => q.eq("user_id", m.user_id)).order("desc").take(FLEET_DEVICES_PER_MEMBER);
     for (const d of devices) {
       if (!d.cli_version || now - d.last_seen > FLEET_WINDOW_MS) continue;
-      const row: FleetDevice = { device_id: d.device_id, label: d.display_name ?? d.label, owner, user_id: m.user_id, cli_version: d.cli_version, online: now - d.last_seen < DEVICE_ONLINE_MS, error: d.update_error ?? null };
+      const row: FleetDevice = { id: d._id, device_id: d.device_id, label: d.display_name ?? d.label, owner, user_id: m.user_id, cli_version: d.cli_version, online: now - d.last_seen < DEVICE_ONLINE_MS, error: d.update_error ?? null };
       if (!isBelowMinimum(d.cli_version, version)) out.took.push(row);
       // Automatic update off: it waits for someone to press Update, so it is not lagging.
       else if (d.can_self_update === false || d.distribution === "source" || d.settings?.auto_update === false) out.cannot_update.push(row);

@@ -334,7 +334,9 @@ import {
   PERMISSION_HOOK_MAX_BODY,
   type PermissionHookInput,
 } from "./permissionHookWait.js";
-import { getVersion, performUpdate, ensureCastAlias, checkForUpdates, isDevMode, installChannel, updater, forcedUpdateWaits, selfUpdateOutcome } from "./update.js";
+import { getVersion, performUpdate, ensureCastAlias, checkForUpdates, isDevMode, installChannel, updater } from "./update.js";
+import { forcedUpdateWaits, selfUpdateOutcome } from "./daemonSelfUpdate.js";
+import { compareVersions } from "@platform/cli-kit/update";
 import { isManagedInstall } from "./managedInstall.js";
 import { readInventoryAsync, toInvocableList } from "./capabilities/inventory.js";
 import {
@@ -5749,10 +5751,7 @@ async function runSelfUpdate(why: string, at?: number): Promise<void> {
   void sendHeartbeat().catch(() => {});
   await flushRemoteLogs();
   // A round another updater deferred is tried again here, with the row still installing.
-  const failed = await selfUpdateOutcome(performUpdate, {
-    at,
-    onDeferred: (n) => logLifecycle("update_deferred", `Update deferred from v${currentVersion}: another updater holds the lock (try ${n})`),
-  });
+  const failed = await selfUpdateOutcome(performUpdate, { at, onDeferred: (n) => logLifecycle("update_deferred", `Update deferred from v${currentVersion}: another updater holds the lock (try ${n})`) });
   if (!failed) {
     // The refresh this daemon's successor runs on boot rewrites the
     // harness; someone asked for this update, so its changes are
@@ -30208,18 +30207,6 @@ interface WatchdogDependencies extends TranscriptSyncDeps {
   watcher: SessionWatcher;
 }
 
-function compareVersions(a: string, b: string): number {
-  const partsA = a.split(".").map(Number);
-  const partsB = b.split(".").map(Number);
-  for (let i = 0; i < Math.max(partsA.length, partsB.length); i++) {
-    const numA = partsA[i] || 0;
-    const numB = partsB[i] || 0;
-    if (numA > numB) return 1;
-    if (numA < numB) return -1;
-  }
-  return 0;
-}
-
 let forcedUpdateDeclinedFor: string | null = null;
 async function checkForForcedUpdate(syncService: SyncService): Promise<boolean> {
   try {
@@ -30242,10 +30229,8 @@ async function checkForForcedUpdate(syncService: SyncService): Promise<boolean> 
       // daemon into the same version, below the same floor, every check.
       const latest = (await updater.fetchManifest().catch(() => null))?.version ?? null;
       if (forcedUpdateWaits(currentVersion, latest)) {
-        if (forcedUpdateDeclinedFor !== `${minVersion}@${latest}`) {
-          log(`[UPDATE] v${currentVersion} is below the minimum v${minVersion}, but it is the newest release (latest.json names v${latest}); waiting for a newer one`);
-          forcedUpdateDeclinedFor = `${minVersion}@${latest}`;
-        }
+        if (forcedUpdateDeclinedFor !== `${minVersion}@${latest}`) log(`[UPDATE] v${currentVersion} is below the minimum v${minVersion}, but it is the newest release (latest.json names v${latest}); waiting for a newer one`);
+        forcedUpdateDeclinedFor = `${minVersion}@${latest}`;
         return false;
       }
       logLifecycle("forced_update_start", `current=${currentVersion} min=${minVersion}`);

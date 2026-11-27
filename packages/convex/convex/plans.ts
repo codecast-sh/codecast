@@ -37,7 +37,7 @@ import { renderFencedPlanRecord, renderFencedPlanTasks } from "@codecast/shared/
 import { inlineForeignText } from "@codecast/shared/contracts";
 import { listLiveManagedSessions, liveConversationIdSet } from "./lib/liveSessions";
 import { graphOutside, sortGraphRefs, stampGraphStatus } from "./lib/taskGraph";
-import { patchDepMirror } from "./tasks";
+import { patchDepMirror } from "./lib/taskEdges";
 import { fromCallWorkspace, resolveFromCall } from "./callReads";
 import { isTeamMember, teamVisibleConvTeam } from "./privacy";
 import { linkConversationToEntityBestEffort } from "./conversationLinks";
