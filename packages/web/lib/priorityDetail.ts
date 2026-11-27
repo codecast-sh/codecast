@@ -39,8 +39,8 @@ export function detailRowOf(show: PriorityDetail, listed: PriorityRow | undefine
     row.links = links;
     row.plan = plan ?? null;
   }
-  // `show`'s steps carry their sessions; the base keeps a list row's shape. A rank is the viewer's own order (withLiveRanks): a teammate's has none.
-  if (!listed) row.base = { ...rest, rank: rest.mine ? rest.rank : null, steps: steps.map(({ sessions: _s, ...step }) => step) } as PriorityRow;
+  // `show`'s steps carry their sessions; the base keeps a list row's shape.
+  if (!listed) row.base = { ...rest, steps: steps.map(({ sessions: _s, ...step }) => step) } as PriorityRow;
   return row;
 }
 
