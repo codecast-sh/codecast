@@ -3460,6 +3460,15 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   removeScribe: async (ctx, _userId, [roomKey, claim]: [string, number?]) => {
     return await ctx.runMutation!(api.transcripts.removeScribe, { room_key: roomKey, ...(claim !== undefined ? { claim } : {}) });
   },
+  // Point a live call's words at a session, doc or Slack thread (web useCallFeed),
+  // or seat the Scribe session a claimer spawned (lib/calls/scribeInvite).
+  addLiveRoute: async (
+    ctx,
+    _userId,
+    [transcriptId, route]: [string, { kind: "session" | "doc" | "slack"; target: string; mode: "live" | "after"; face?: boolean; role?: "scribe"; claim?: number }],
+  ) => {
+    return await ctx.runMutation!(api.transcripts.addRoute, { transcript_id: transcriptId as any, ...route });
+  },
   setRoomTranscribeOff: async (ctx, _userId, [roomKey, off]: [string, boolean]) => {
     return await ctx.runMutation!(api.calls.setRoomTranscribeOff, { room_key: roomKey, off: !!off });
   },

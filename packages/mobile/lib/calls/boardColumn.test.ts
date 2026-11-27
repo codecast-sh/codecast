@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { ArtifactElement } from "@codecast/shared/artifacts";
-import { buildBoardColumn, foldLabel, type ColumnGroup } from "./boardColumn";
+import { buildBoardColumn, foldLabel, imageThumb, pageRow, type ColumnGroup } from "./boardColumn";
 
 const el = (key: string, kind: string, box: [number, number, number, number], extra: Record<string, unknown> = {}) =>
   ({ key, kind, x: box[0], y: box[1], w: box[2], h: box[3], ...extra }) as unknown as ArtifactElement;
@@ -85,7 +85,45 @@ describe("buildBoardColumn", () => {
     expect((outer.items[0] as ColumnGroup).items.map((i) => i.key)).toEqual(["inside"]);
   });
 
+  test("two frames with the same box never hold each other: the earlier key holds the later", () => {
+    const cards = buildBoardColumn([
+      el("fb", "frame", [0, 0, 400, 400], { ref: "ct-2" }),
+      el("fa", "frame", [0, 0, 400, 400], { ref: "ct-1" }),
+      el("s", "sticky", [40, 40, 100, 100]),
+    ]);
+    expect(cards.map((c) => c.key)).toEqual(["fa"]);
+    const fa = cards[0] as ColumnGroup;
+    // The sticky sits in the smallest holder; at a tie, the earlier key.
+    expect(fa.items.map((i) => i.key)).toEqual(["fb", "s"]);
+    expect((fa.items[0] as ColumnGroup).items).toEqual([]);
+  });
+
+  test("pages and images are rows, in frames and loose", () => {
+    const cards = buildBoardColumn([
+      el("f", "frame", [0, 0, 800, 800]),
+      el("pg", "page", [40, 40, 640, 480], { slug: "Ab12Cd34Ef", caption: "Pricing model" }),
+      el("img", "image", [900, 0, 200, 100], { src: "https://convex.example/a.png" }),
+    ]);
+    expect((cards[0] as ColumnGroup).items.map((i) => i.key)).toEqual(["pg"]);
+    expect(cards[1].items.map((i) => i.key)).toEqual(["img"]);
+  });
+
   test("an empty board is no cards", () => {
     expect(buildBoardColumn([])).toEqual([]);
+  });
+});
+
+describe("page and image rows", () => {
+  test("a page opens the phone's own screen for it, never a web page", () => {
+    expect(pageRow(el("p", "page", [0, 0, 1, 1], { slug: "Ab12Cd34Ef", caption: " Pricing " }))).toEqual({ title: "Pricing", route: "/page/Ab12Cd34Ef" });
+    expect(pageRow(el("p", "page", [0, 0, 1, 1], { slug: "Ab12Cd34Ef" }))).toEqual({ title: "Published page", route: "/page/Ab12Cd34Ef" });
+    // No slug, or one that isn't a page id: a row that opens nothing.
+    expect(pageRow(el("p", "page", [0, 0, 1, 1], {})).route).toBeNull();
+    expect(pageRow(el("p", "page", [0, 0, 1, 1], { slug: "https://codecast.sh/a/x" })).route).toBeNull();
+  });
+
+  test("an image is a thumbnail when the phone can load it", () => {
+    expect(imageThumb(el("i", "image", [0, 0, 1, 1], { src: "https://x.test/a.png", alt: "chart" }))).toEqual({ uri: "https://x.test/a.png", alt: "chart" });
+    expect(imageThumb(el("i", "image", [0, 0, 1, 1], { src: "data:image/png;base64,AA" }))).toBeNull();
   });
 });

@@ -53,6 +53,7 @@ import { appAlert } from '@/lib/popups';
 setTaskErrorReporter((msg) => appAlert('Task', msg));
 
 const CallOverlay = lazy(() => import('@/components/calls/CallOverlay').then((m) => ({ default: m.CallOverlay })));
+const PhoneAutoScribe = lazy(() => import('@/components/calls/PhoneAutoScribe').then((m) => ({ default: m.PhoneAutoScribe })));
 
 class OverlayErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
   state = { failed: false };
@@ -345,6 +346,7 @@ function RootLayoutNav() {
                     <OverlayErrorBoundary>
                       <Suspense fallback={null}>
                         <CallOverlay />
+                        <PhoneAutoScribe />
                       </Suspense>
                     </OverlayErrorBoundary>
                   ) : null}
