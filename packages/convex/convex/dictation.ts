@@ -6,7 +6,7 @@
 // The switch is `users.dictation_enabled`, off until the person turns it on.
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { action, internalQuery, mutation } from "./functions";
+import { action, internalMutation, internalQuery, mutation } from "./functions";
 import { internal } from "./_generated/api";
 import { asrTranscriptionSession, LIVE_TRANSCRIBE_MODEL, normalizeTranscribeLanguages } from "@codecast/shared/contracts";
 import { workspaceKey } from "./lib/access";
@@ -27,6 +27,15 @@ export const setDictationEnabled = mutation({
   handler: async (ctx, args) => {
     const userId = await requireUser(ctx);
     await ctx.db.patch(userId, { dictation_enabled: args.enabled });
+  },
+});
+
+/** The same switch for one named person, run by hand to turn it on for them
+ *  (`run.sh dictation:setDictationEnabledFor`). */
+export const setDictationEnabledFor = internalMutation({
+  args: { user_id: v.id("users"), enabled: v.boolean() },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.user_id, { dictation_enabled: args.enabled });
   },
 });
 

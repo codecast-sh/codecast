@@ -67,7 +67,7 @@ test("a desktop voice host holding a live, unmuted call refuses dictation here; 
     mirror(true);
     await c.press(DICTATION_CALL_BUSY);
     expect(host.events).not.toBeNull();
-    expect(c.button("Finish dictation")).not.toBeNull();
+    expect(c.button("Cancel dictation")).not.toBeNull();
     await c.key("Escape");
     await c.unmount();
   } finally {
@@ -101,13 +101,13 @@ test("with no other window answering, the recognizer opens at once and dictation
   expect(other.heard.some((m) => m?.ask)).toBe(true);
   expect(host.events).not.toBeNull();
   expect(host.closed).toBe(0);
-  expect(c.button("Finish dictation")).not.toBeNull();
+  expect(c.button("Cancel dictation")).not.toBeNull();
   // Nothing is claimed from the other windows until the ask settles.
   expect(other.heard.filter((m) => m === "finish")).toEqual([]);
   await act(async () => { await new Promise((r) => setTimeout(r, 200)); });
   expect(other.heard.filter((m) => m === "finish")).toEqual(["finish"]);
   expect(host.closed).toBe(0);
-  expect(c.button("Finish dictation")).not.toBeNull();
+  expect(c.button("Cancel dictation")).not.toBeNull();
   await c.key("Escape");
   await c.unmount();
 });

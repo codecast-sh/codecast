@@ -171,7 +171,7 @@ test("a switch before the first words: words arriving after it never reach the n
   const c = await mountComposer();
   await act(async () => { c.textarea().focus(); });
   await c.press("Dictate");
-  expect(c.button("Finish dictation")).not.toBeNull();
+  expect(c.button("Cancel dictation")).not.toBeNull();
   await c.switchTo(OTHER);
   // The recognizer was still on its way with words meant for the old conversation.
   await say((e) => e.onUtterance({ text: "words meant for A" }));

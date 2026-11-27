@@ -1,5 +1,6 @@
 // The composer's dictation buttons, beside send: a mic and the small chevron
-// that picks the language; while recording, Cancel and Finish in their place.
+// that picks the language; while recording, Cancel in their place (Send finishes
+// the words and sends them).
 // The behavior is lib/dictation (the shared controller); this only draws it.
 //
 // - Hidden unless the person turned dictation on (Settings › Voice).
@@ -12,18 +13,18 @@
 // so a box already full of words still says the mic is on (still under
 // Reduce Motion; not shown while starting or finishing).
 //
-// Every target is 44pt and none overlaps another, send's included: the row is
-// 90pt wide in every state (blocked included) and ends in the gap before send, whose left slop
-// beside it is 0 (DICTATE_SEND_SLOP). Idle: mic [2,46], chevron [46,90].
-// Recording: the dot's slot [0,10] (no target; ✕ reaches over it),
-// ✕ [2,46], ✓ [46,90]. Send's own target then starts at 90.
+// Every target is 44pt and none overlaps another, send's included: the row
+// ends in the gap before send, whose left slop beside it is 0
+// (DICTATE_SEND_SLOP). Idle (blocked included), 90pt: mic [2,46], chevron
+// [46,90]. Recording, 50pt: the dot's slot [0,10] (no target; ✕ reaches over
+// it), ✕ [2,50]. Send's own target then starts at the row's end.
 //
-// ✕ and ✓ never outweigh send: beside a filled send (the session and chat
-// composers) they are quiet circles like attach; beside a bare send glyph
-// (the task comment box) they are bare glyphs too (`look="bare"`), drawn in
+// ✕ never outweighs send: beside a filled send (the session and chat
+// composers) it is a quiet circle like attach; beside a bare send glyph
+// (the task comment box) it is a bare glyph too (`look="bare"`), drawn in
 // the dim text token so the accent arrow stays the strongest mark.
 import { useEffect, useRef } from 'react';
-import { AccessibilityInfo, Animated, StyleSheet, TouchableOpacity, View as RNView, ActivityIndicator } from 'react-native';
+import { AccessibilityInfo, Animated, StyleSheet, TouchableOpacity, View as RNView } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
 import { DICTATION_LANGUAGES } from '@codecast/shared/contracts/dictation';
 import { MOBILE_SESSION_STYLE as S } from '@codecast/shared/render/mobileSessionStyle';
@@ -37,7 +38,8 @@ import { setDictationLanguage, useDictationLanguage } from '@/lib/dictationLangu
 // button sits 10pt into the row (the live dot's slot) and reaches 8pt left of
 // itself and 4pt right.
 const FIRST_SLOP = { top: 6, bottom: 6, left: 8, right: 4 };
-const FINISH_SLOP = { top: 6, bottom: 6, left: 4, right: 8 };
+/** ✕ while recording, alone: from over the dot to the gap before send. */
+const CANCEL_SLOP = { top: 6, bottom: 6, left: 8, right: 8 };
 /** The glyph size of the row's other icons (attach, @, emoji). */
 const ICON = 18;
 /** The live dot's faded floor: lower and it all but vanishes on a dark ground. */
@@ -48,8 +50,8 @@ export const DICTATE_SEND_SLOP = { top: 12, bottom: 12, left: 0, right: 12 };
 /** Whether a composer's send slot holds Stop: a turn can be stopped and the
  *  box has nothing to send. A recording into an empty box changes nothing
  *  (Stop still stops the agent; the first words make it Send). Stop is the
- *  same 32pt button as Send with the same slop, so ✕ and ✓ beside it keep
- *  their targets. */
+ *  same 32pt button as Send with the same slop, so ✕ beside it keeps its
+ *  target. */
 export function sendSlotIsStop(canSend: boolean, canStop: boolean): boolean {
   return !canSend && canStop;
 }
@@ -61,9 +63,6 @@ export function DictateControls({ dictation, look = 'quiet' }: { dictation: Phon
   if (!shown) return null;
 
   if (state.phase !== 'idle') {
-    // The spinner goes where the press was: on ✓ for a Finish, on Send (its
-    // composer draws it) for a send waiting on the last words.
-    const finishing = state.phase === 'finishing' && !dictation.sendWaiting;
     // Bare, they sit beside a bare accent arrow: the dim text token keeps them
     // behind it (3.4:1 or more on the page in every palette).
     const glyph = look === 'bare' ? Theme.textDim : Theme.textMuted;
@@ -73,30 +72,14 @@ export function DictateControls({ dictation, look = 'quiet' }: { dictation: Phon
           {state.phase === 'listening' && <LiveDot color={Theme.red} />}
         </RNView>
         <TouchableOpacity
-          style={[look === 'bare' ? styles.bare : styles.quiet, styles.cancel]}
+          style={look === 'bare' ? styles.bare : styles.quiet}
           onPress={dictation.cancel}
           activeOpacity={0.6}
-          hitSlop={FIRST_SLOP}
+          hitSlop={CANCEL_SLOP}
           accessibilityRole="button"
           accessibilityLabel="Cancel dictation"
         >
           <Feather name="x" size={ICON} color={glyph} />
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={look === 'bare' ? styles.bare : styles.quiet}
-          onPress={() => void dictation.finish()}
-          activeOpacity={0.6}
-          hitSlop={FINISH_SLOP}
-          disabled={finishing}
-          accessibilityRole="button"
-          accessibilityLabel="Finish dictation"
-          accessibilityState={{ busy: finishing, disabled: finishing }}
-        >
-          {finishing ? (
-            <ActivityIndicator size="small" color={glyph} />
-          ) : (
-            <Feather name="check" size={ICON} color={glyph} />
-          )}
         </TouchableOpacity>
       </RNView>
     );
@@ -197,12 +180,11 @@ function LiveDot({ color }: { color: string }) {
 }
 
 const styles = themedStyles((Theme) => StyleSheet.create({
-  // The same 90pt in every state, so nothing beside it moves.
   row: {
     flexDirection: 'row',
     alignItems: 'center',
   },
-  // Recording, ✓ and the gap after it end where the idle chevron's box does.
+  // Recording: ✕ and the 8pt gap before send.
   recording: {
     marginRight: 8,
   },
@@ -235,7 +217,7 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  // ✕ and ✓ are quiet, like attach: send stays the one primary button.
+  // ✕ is quiet, like attach: send stays the one primary button.
   quiet: {
     ...S.imageButton,
     borderRadius: 16,
@@ -246,8 +228,5 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   // Beside a bare send glyph: the same 32pt box, no fill or ring.
   bare: {
     ...S.imageButton,
-  },
-  cancel: {
-    marginRight: 8,
   },
 }));
