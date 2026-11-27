@@ -2,8 +2,9 @@
 
 /**
  * The owners menu's model under the session_owners model (components/OwnersMenu):
- * the owner rows, the candidates (suggested roles with a reason, the rest of
- * the roles, teammates), the staged change and its chips, the keyboard's
+ * the owner rows, the candidates (where it came from first: the session it
+ * worked for or that started it, the role it had, that session's role; then
+ * teammates, suggested roles with a reason, the rest of the roles), the staged change and its chips, the keyboard's
  * highlight, and Save, which sends the whole change in one store action
  * (applySessionOwners). Until the first edit the menu follows the live
  * owners; the first edit freezes what it started from, which Save diffs
@@ -22,16 +23,18 @@ import { useOwnerCandidates, pickRoster } from "./useOwners";
 import { useSessionRoleFacts } from "./useOwnersStoreEnv";
 import { isPerson } from "@codecast/shared/team/memberKind";
 import { teamMembersOf } from "../lib/activeTeam";
-import { addPeople, addPerson, diffOwners, releaseParent, removePerson, removeRole, setRole, type OwnersDraft } from "../lib/ownersDraft";
-import { ownersChangeRefusalIn, type OwnerRestoreRow, type SessionOwnersChange } from "../store/sessionOwnersSlice";
+import { addPeople, addPerson, diffOwners, releaseParent, removePerson, removeRole, setParent, setRole, type OwnersDraft } from "../lib/ownersDraft";
+import { mayHandToIn, ownersChangeRefusalIn, seatRoleOf, type OwnerRestoreRow, type SessionOwnersChange } from "../store/sessionOwnersSlice";
 import { memberName, roleOwnerOf, type OwnerPerson, type OwnerRoleFace, type SessionOwnersView } from "./useSessionOwners";
 import type { OrgRole } from "../components/org/orgTypes";
 
 const SUGGESTED_ROLES = 3;
 
+/** `origin`: why it is offered first, when it is where the session came from. */
 export type OwnerCandidate =
-  | { key: string; kind: "person"; person: OwnerPerson; member: any }
-  | { key: string; kind: "role"; role: OrgRole };
+  | { key: string; kind: "person"; person: OwnerPerson; member: any; origin?: undefined }
+  | { key: string; kind: "role"; role: OrgRole; origin?: string }
+  | { key: string; kind: "session"; id: string; title: string; adopt: boolean; origin: string };
 
 /** One owner row as the menu lists it. */
 export type OwnerMenuRow = {
@@ -59,6 +62,13 @@ export function useOwnersMenu(conversationId: string, view: SessionOwnersView, o
   });
   const [projectId, planId, planTitleRaw] = sessionWork.split("|");
   const projectTitle = useInboxStore((s: any) => (projectId ? ((s.projects?.[projectId]?.title as string | undefined) ?? null) : null));
+  // Where it came from (the owners read): the parent a person released it
+  // from, the session that spawned it, the role a change took off it.
+  const releasedParent = view.read?.released_parent ?? null;
+  const spawnedBy = view.read?.spawned_by ?? null;
+  const originSessionId = view.parent?.id ?? releasedParent?.conversation_id ?? spawnedBy?.conversation_id ?? null;
+  const originSeatRole = useInboxStore((s: any) => seatRoleOf(s, originSessionId));
+  const mayRestore = useInboxStore((s: any) => !view.parent || mayHandToIn(s, view.parent.id));
 
   const live = view.draft;
   const [edit, setEdit] = useState<{ initial: OwnersDraft; draft: OwnersDraft } | null>(null);
@@ -80,23 +90,50 @@ export function useOwnersMenu(conversationId: string, view: SessionOwnersView, o
   const q = query.trim().toLowerCase();
   const matches = (...texts: (string | undefined)[]) => !q || texts.some((t) => t?.toLowerCase().includes(q));
   const offerRoles = isStandingThread ? [] : liveRoles.filter((r) => r._id !== draft.role?.role_id && matches(r.name, r.handle));
+  const fromSession = view.parent || releasedParent ? "Role of the session it worked for" : "Role of the session that started it";
+  // The roles it came from lead, each with why; the rest follow as before.
+  const originRoleReasons = new Map<string, string>();
+  if (view.read?.released_role) originRoleReasons.set(view.read.released_role.role_id, "Owned it before");
+  const releasedTitle = releasedParent ? releasedParent.title ?? `Session ${releasedParent.short_id}` : null;
+  const spawnerTitle = spawnedBy ? spawnedBy.title ?? `Session ${spawnedBy.short_id}` : null;
+  const originSession: Extract<OwnerCandidate, { kind: "session" }> | null =
+    releasedParent && !initial.parent && draft.parent !== releasedParent.conversation_id && matches(releasedTitle!)
+      ? { key: `s:${releasedParent.conversation_id}`, kind: "session", id: releasedParent.conversation_id, title: releasedTitle!, adopt: false, origin: "Worked for it before" }
+      : spawnedBy?.adoptable && !initial.parent && !releasedParent && draft.parent !== spawnedBy.conversation_id && matches(spawnerTitle!)
+        ? { key: `s:${spawnedBy.conversation_id}`, kind: "session", id: spawnedBy.conversation_id, title: spawnerTitle!, adopt: true, origin: "Started it" }
+        : null;
+  // That session's role, unless that session (the role's own standing
+  // session, so the same agent) is offered above or already owns it.
+  const seatOffered = originSession?.id === originSessionId || draft.parent === originSessionId;
+  if (originSeatRole && !originRoleReasons.has(originSeatRole) && !seatOffered) originRoleReasons.set(originSeatRole, fromSession);
+  const originRoles = [...originRoleReasons.keys()].map((id) => offerRoles.find((r) => r._id === id)).filter((r): r is OrgRole => !!r);
+  const otherRoles = offerRoles.filter((r) => !originRoles.includes(r));
+  const sessionTitleOf = (id: string) =>
+    view.parent?.id === id ? view.parent.title
+      : releasedParent?.conversation_id === id ? releasedTitle!
+        : spawnedBy?.conversation_id === id ? spawnerTitle!
+          : "Session it works for";
   const planTitle = planTitleRaw || null;
   // Why a role is suggested: its area holds this session's project or plan.
   const reasonOf = (r: OrgRole): string | null =>
     projectId && r.scope?.project_ids?.includes(projectId) ? `This session is in ${projectTitle ?? "its project"}`
       : planId && r.scope?.plan_ids?.includes(planId) ? `This session works on ${planTitle ?? "its plan"}`
         : null;
-  const fits = offerRoles.filter((r) => reasonOf(r));
-  const suggested = (fits.length ? fits : offerRoles).slice(0, SUGGESTED_ROLES);
-  const restRoles = offerRoles.filter((r) => !suggested.includes(r));
+  const fits = otherRoles.filter((r) => reasonOf(r));
+  const suggested = (fits.length ? fits : otherRoles).slice(0, Math.max(0, SUGGESTED_ROLES - originRoles.length));
+  const restRoles = otherRoles.filter((r) => !suggested.includes(r));
   const shownRoles = q || moreRoles ? [...suggested, ...restRoles] : suggested;
   // While you are staged to leave you are not a candidate: listing you (and
   // Select all taking you) would quietly undo the leave. Remove the × instead.
   const leaving = !!meId && initial.people.includes(meId) && !draft.people.includes(meId);
   const unselected = people.filter((m) => !draft.people.includes(String(m._id)) && !(leaving && String(m._id) === meId));
   const teammates = unselected.filter((m) => matches(memberName(m), m.email));
-  // Teammates first: sharing with a person is the usual move, a role the rarer one.
+  // Where it came from first: handing it back is why a person comes here
+  // after taking it over. Then teammates: sharing with a person is the usual
+  // move, a role the rarer one.
   const candidates: OwnerCandidate[] = readOnly ? [] : [
+    ...(originSession ? [originSession] : []),
+    ...originRoles.map((r) => ({ key: `r:${r._id}`, kind: "role" as const, role: r, origin: originRoleReasons.get(r._id)! })),
     ...teammates.map((m) => ({ key: `p:${m._id}`, kind: "person" as const, person: personOf(String(m._id)), member: m })),
     ...shownRoles.map((r) => ({ key: `r:${r._id}`, kind: "role" as const, role: r })),
   ];
@@ -106,7 +143,11 @@ export function useOwnersMenu(conversationId: string, view: SessionOwnersView, o
     // Putting back the role whose seat started it puts its seat back too
     // (removing that role let both go).
     const seatBack = c.kind === "role" && !!initial.parent && view.parent?.seatRoleId === c.role._id;
-    setDraft((d) => (c.kind === "role" ? { ...setRole(d, roleOwnerOf(c.role)), ...(seatBack ? { parent: initial.parent } : {}) } : addPerson(d, c.person._id)));
+    setDraft((d) => (c.kind === "session" ? setParent(d, c.id, { adopt: c.adopt })
+      // A role and a newly adopted session cannot both own it (an adopt takes
+      // the role off): the role wins, and the staged adopt goes.
+      : c.kind === "role" ? { ...setRole(d, roleOwnerOf(c.role)), ...(seatBack || (d.parent && d.parent !== initial.parent && d.parent !== releasedParent?.conversation_id) ? { parent: initial.parent } : {}) }
+        : addPerson(d, c.person._id)));
   };
   const selectAllTeammates = () => setDraft((d) => addPeople(d, unselected.map((m) => String(m._id))));
 
@@ -114,11 +155,12 @@ export function useOwnersMenu(conversationId: string, view: SessionOwnersView, o
   const snapshots: OwnerRestoreRow[] = (view.read?.people_ids ?? []).map((id) => view.read!.people_info[id])
     .filter((p): p is NonNullable<typeof p> => !!p?.added_by && p.added_at != null)
     .map((p) => ({ user_id: String(p.user_id), added_by: String(p.added_by), added_at: p.added_at!, ...(p.seen_at != null ? { seen_at: p.seen_at } : {}), ...(p.note ? { note: p.note } : {}) }));
-  const diff = diffOwners(initial, draft, { meId: meId ?? undefined, snapshots, meRuns: !!meId && view.runnerId === meId });
+  const diff = diffOwners(initial, draft, { meId: meId ?? undefined, snapshots, meRuns: !!meId && view.runnerId === meId, releasedParent: releasedParent?.conversation_id ?? null, mayRestore });
 
   // A parent that is the role's own standing session is the same agent: the
   // role's row stands for both, and removing it releases both.
-  const parentIsRole = !!draft.parent && !!draft.role && view.parent?.seatRoleId === draft.role.role_id;
+  const draftSeatRole = draft.parent === view.parent?.id ? view.parent?.seatRoleId : draft.parent === originSessionId ? originSeatRole : null;
+  const parentIsRole = !!draft.parent && !!draft.role && draftSeatRole === draft.role.role_id;
   // The only owner left cannot go: the session must keep one.
   const ownerCount = draft.people.length + (draft.role ? 1 : 0) + (draft.parent && !parentIsRole ? 1 : 0);
   const solo = ownerCount <= 1;
@@ -144,8 +186,8 @@ export function useOwnersMenu(conversationId: string, view: SessionOwnersView, o
   }
   if (draft.parent && !parentIsRole) {
     rows.push({
-      key: `s:${draft.parent}`, kind: "session", name: view.parent?.title ?? "Session it works for",
-      sub: "Session it works for", mine: false,
+      key: `s:${draft.parent}`, kind: "session", name: sessionTitleOf(draft.parent),
+      sub: diff.parentRestored || diff.parentAdopted ? "Session it works for · new" : "Session it works for", mine: false,
       onRemove: solo ? null : () => setDraft(releaseParent), removeLabel: solo ? "The only owner" : "Remove the session it works for",
     });
   }
@@ -154,6 +196,7 @@ export function useOwnersMenu(conversationId: string, view: SessionOwnersView, o
   const chips: Array<{ key: string; label: string; face: { person?: OwnerPerson; role?: OwnerRoleFace; session?: boolean }; gone?: boolean }> = [
     ...diff.added.map((id) => ({ key: `+${id}`, label: `+ ${short(id)}`, face: { person: personOf(id) } })),
     ...(diff.roleAdded ? [{ key: "+role", label: `+ ${diff.roleAdded.name}`, face: { role: diff.roleAdded as OwnerRoleFace } }] : []),
+    ...(draft.parent && (diff.parentRestored || diff.parentAdopted) ? [{ key: "+parent", label: `+ ${sessionTitleOf(draft.parent)}`, face: { session: true } }] : []),
     ...diff.removed.map((id) => ({ key: `-${id}`, label: id === meId ? "You leave" : short(id), face: { person: personOf(id) }, gone: true })),
     ...(diff.roleRemoved ? [{ key: "-role", label: diff.roleRemoved.name, face: { role: diff.roleRemoved as OwnerRoleFace }, gone: true }] : []),
     ...(diff.parentReleased && !(diff.roleRemoved && view.parent?.seatRoleId === diff.roleRemoved.role_id) ? [{ key: "-parent", label: view.parent?.title ?? "Its session", face: { session: true }, gone: true }] : []),

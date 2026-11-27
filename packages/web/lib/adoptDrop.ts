@@ -103,7 +103,8 @@ export function rowDropZone(y: number, top: number, height: number, opts: { reor
 /**
  * The owners change a drop sends, and what puts it back, in order: the
  * parent that owned it again, when one did (live and unreleased: the owners
- * read names only that one), else no parent at all (a detach, so it leaves
+ * read names only that one), else the parent a person released it from,
+ * nested back released, else no parent at all (a detach, so it leaves
  * the new parent's band and close cascade; a released or dead parent owned
  * nothing) with its old role, and the viewer's row. A viewer who does not
  * run it may no longer edit its owners once their row is gone, so their undo
@@ -113,18 +114,29 @@ export function rowDropZone(y: number, top: number, height: number, opts: { reor
  * server would refuse putting it back). A role's start and its hold are not
  * put back.
  */
-export function adoptChange(facts: SessionOwnerFacts | null, read: SessionOwnersRow | null, meId: string, targetId: string, mayHandTo: (sessionId: string) => boolean): { change: SessionOwnersChange; inverse: SessionOwnersChange[] | null } {
+export function adoptChange(facts: SessionOwnerFacts | null, read: SessionOwnersRow | null, meId: string, targetId: string, mayHandTo: (sessionId: string) => boolean, releasedLink: string | null = null): { change: SessionOwnersChange; inverse: SessionOwnersChange[] | null } {
   const change: SessionOwnersChange = { adopt_parent: targetId };
   if (!facts) return { change, inverse: null };
   const was = ownersOf(facts);
   if (was.parentSession && was.role) return { change, inverse: null };
   if (was.parentSession && !mayHandTo(was.parentSession)) return { change, inverse: null };
+  // A parent a person released it from still links it: undo nests it back
+  // there released, so a later Put back can still find it, and its role
+  // returns in a step of its own (an adopt cannot carry one).
+  // The open conversation's read names it, or says none can take it back
+  // (null); without that read, a card's row keeps the link.
+  const released = was.parentSession ? null
+    : read && read.released_parent !== undefined ? read.released_parent?.conversation_id ?? null
+      : releasedLink;
+  const reNest = !!released && mayHandTo(released);
   const back: SessionOwnersChange = was.parentSession
     ? { adopt_parent: was.parentSession }
-    : { detach_parent: true, ...(was.role ? { role: was.role } : {}) };
+    : reNest ? { adopt_parent: released!, release_parent: true }
+      : { detach_parent: true, ...(was.role ? { role: was.role } : {}) };
+  const after: SessionOwnersChange[] = reNest && was.role ? [{ role: was.role }] : [];
   const rejoin: SessionOwnersChange[] = String(facts.user_id ?? "") === meId ? [] : [{ add: [meId] }];
   const held = facts.rows.find((r) => r.user_id === meId);
-  if (!held) return { change, inverse: [...rejoin, back] };
+  if (!held) return { change, inverse: [...rejoin, back, ...after] };
   const info = read?.people_info[meId];
   const row: OwnerRestoreRow = {
     user_id: meId,
@@ -133,5 +145,5 @@ export function adoptChange(facts: SessionOwnerFacts | null, read: SessionOwners
     ...(typeof info?.seen_at === "number" ? { seen_at: info.seen_at } : {}),
     ...(typeof info?.note === "string" ? { note: info.note } : {}),
   };
-  return { change, inverse: [...rejoin, { ...back, restore: [row] }] };
+  return { change, inverse: [...rejoin, { ...back, restore: [row] }, ...after] };
 }

@@ -223,6 +223,14 @@ export function OwnersMenuBody({ conversationId, view, onClose, onDirty, touch =
       <div className={LABEL}>Owners · whose inbox</div>
       {rows.map(ownerRow)}
       {m.notice && <div className="px-2 py-1 text-meta text-sol-yellow" role="status" data-owners-notice>{m.notice}</div>}
+      {/* Not created yet: the add field is there, off, until it is. */}
+      {view.pending && <>
+        <div className={SEP} />
+        <label className="flex h-8 items-center gap-2 px-2 text-sol-text-dim opacity-60">
+          <Search className="w-3.5 h-3.5" />
+          <input disabled placeholder="Add owners once it starts" aria-label="Add owners once it starts" data-owners-pending className="min-w-0 flex-1 bg-transparent text-ui placeholder:text-sol-text-dim outline-none" />
+        </label>
+      </>}
       {m.readOnly ? (
         !view.mine && m.meId && (
           <>
@@ -241,14 +249,17 @@ export function OwnersMenuBody({ conversationId, view, onClose, onDirty, touch =
         <div className="max-h-[320px] overflow-y-auto" data-owner-candidates>
           {candidates.map((c, i) => {
             const isRole = c.kind === "role";
-            const name = isRole ? c.role.name : c.person.name;
-            const reason = isRole ? (!q && !m.moreRoles ? m.reasonOf(c.role) : null) ?? charterLine(c.role.charter) : null;
-            const member = isRole ? null : liveMember(c.person._id) ?? c.member;
+            const name = c.kind === "role" ? c.role.name : c.kind === "session" ? c.title : c.person.name;
+            const reason = c.origin ?? (c.kind === "role" ? (!q && !m.moreRoles ? m.reasonOf(c.role) : null) ?? charterLine(c.role.charter) : null);
+            const member = c.kind === "person" ? liveMember(c.person._id) ?? c.member : null;
             const presence = member ? presenceOf(member) : null;
-            const firstTeammate = !isRole && i === 0;
-            const firstRole = isRole && (i === 0 || candidates[i - 1].kind === "person");
+            const prev = candidates[i - 1];
+            const firstOrigin = !!c.origin && i === 0;
+            const firstTeammate = c.kind === "person" && prev?.kind !== "person";
+            const firstRole = isRole && !c.origin && (!prev || prev.kind !== "role" || !!prev.origin);
             return (
               <div key={c.key}>
+                {firstOrigin && <div className={LABEL}>Where it came from</div>}
                 {firstRole && <div className={LABEL}>{q || m.moreRoles ? "Roles" : "Suggested roles"}</div>}
                 {firstTeammate && (
                   <>
@@ -270,11 +281,11 @@ export function OwnersMenuBody({ conversationId, view, onClose, onDirty, touch =
                   onPointerEnter={hover(rows.length + i)}
                   onClick={() => m.add(c)}
                 >
-                  {isRole ? <OwnerFace role={roleOwnerOf(c.role)} size={20} /> : <OwnerFace person={c.person} size={20} />}
+                  {c.kind === "role" ? <OwnerFace role={roleOwnerOf(c.role)} size={20} /> : c.kind === "session" ? <ParentSessionFace sessionId={c.id} title={c.title} size={20} /> : <OwnerFace person={c.person} size={20} />}
                   <span className="flex min-w-0 flex-1 flex-col leading-tight">
                     <span className="flex min-w-0 items-baseline gap-1.5">
                       <span className="truncate">{name}</span>
-                      {isRole && <span className="truncate font-mono text-meta text-sol-text-dim">@{c.role.handle}</span>}
+                      {c.kind === "role" && <span className="truncate font-mono text-meta text-sol-text-dim">@{c.role.handle}</span>}
                     </span>
                     {reason && <span className="truncate text-meta text-sol-text-dim" data-role-reason>{reason}</span>}
                     {presence && (

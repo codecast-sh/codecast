@@ -11,7 +11,7 @@ import { Text } from '@/components/Themed';
 import { themedStyles } from '@/constants/Theme';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { useSessionOwners } from '@codecast/web/hooks/useSessionOwners';
-import { ownersModelOnFor } from '@codecast/web/store/sessionOwnersSlice';
+import { mayHandToIn, ownersModelOnFor } from '@codecast/web/store/sessionOwnersSlice';
 import { takeOverChange } from '@codecast/web/lib/ownersDraft';
 import { applyOwnersWithUndo } from '@/lib/ownersGestures';
 import { OwnerFace, ParentSessionFace } from '@/components/owners/OwnerFace';
@@ -32,7 +32,8 @@ function OwnerStrip({ conversationId }: Props) {
   const name = agent.kind === 'role' ? agent.role.name : agent.title;
   const takeOver = () => {
     tap();
-    const { change, inverse } = takeOverChange(view.draft, view.meId!);
+    const parent = view.draft.parent;
+    const { change, inverse } = takeOverChange(view.draft, view.meId!, { mayRestore: !parent || mayHandToIn(useInboxStore.getState() as never, parent) });
     applyOwnersWithUndo(conversationId, change, inverse, `${name} removed`);
   };
   return (

@@ -2,8 +2,8 @@
 // a row would take the dragged card as its worker, what its hover says, and
 // the drop itself with its toast and Undo.
 import { useInboxStore } from "../store/inboxStore";
-import { ownerFactsOf, ownersReadOf } from "../store/sessionOwnersSlice";
-import { adoptChange, adoptDropRefusal, mayEdit, viewerOwns } from "./adoptDrop";
+import { mayHandToIn, ownerFactsOf, ownersReadOf } from "../store/sessionOwnersSlice";
+import { adoptChange, adoptDropRefusal, viewerOwns } from "./adoptDrop";
 import { selectionIdsFor } from "./inboxSelection";
 import { applyOwnersWithToast } from "./ownersGestures";
 
@@ -41,7 +41,10 @@ export function adoptHintNow(draggedId: string): { title: string; leaves: boolea
 export function adoptSessionNow(draggedId: string, targetId: string): void {
   const st = useInboxStore.getState() as any;
   const meId = meOf(st);
-  const mayHandTo = (id: string) => !!st.sessions?.[id] && mayEdit(st.sessions[id], ownersKnownOf(st, id), meId);
-  const { change, inverse } = adoptChange(ownerFactsOf(st, draggedId), ownersReadOf(st, draggedId), meId, targetId, mayHandTo);
+  // Alive, on the model, and owned or run by the viewer: the server's take-back rules.
+  const mayHandTo = (id: string) => mayHandToIn(st, id);
+  const dragged = st.sessions?.[draggedId];
+  const releasedLink = dragged?.parent_released_at != null && dragged?.parent_conversation_id ? String(dragged.parent_conversation_id) : null;
+  const { change, inverse } = adoptChange(ownerFactsOf(st, draggedId), ownersReadOf(st, draggedId), meId, targetId, mayHandTo, releasedLink);
   applyOwnersWithToast(draggedId, change, inverse, `“${titleOf(st, draggedId)}” now works for “${titleOf(st, targetId)}”`);
 }

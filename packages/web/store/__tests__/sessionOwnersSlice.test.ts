@@ -130,6 +130,67 @@ describe("applySessionOwners", () => {
     expect(facts().parent_conversation_id).toBeNull();
   });
 
+  test("a take-over remembers where it came from, and its undo puts the parent and the role back", async () => {
+    const P = "p".repeat(32);
+    const evals = { role_id: ROLE, short_id: "or-1", handle: "evals", name: "Eval Suite lead" };
+    // The parent is the viewer's own (they run it), so they may take it back.
+    useInboxStore.setState((st: any) => ({ sessions: { ...st.sessions, [P]: { _id: P, user_id: ME, owners_model: true } } }));
+    applySessionOwnersRead(S, read({ people: [], role: evals, parent_session: { conversation_id: P, short_id: "p1", title: "Parent" } }));
+    useInboxStore.getState().applySessionOwners(S, { take_over: true }, { role: ROLE, restore_parent: true, remove: [ME] });
+    const taken = (useInboxStore.getState() as any).sessionOwners[S];
+    expect(taken.released_parent).toEqual({ conversation_id: P, short_id: "p1", title: "Parent" });
+    expect(taken.released_role).toEqual(evals);
+    expect(performUndo()).toBe(true);
+    expect(facts().parent_conversation_id).toBe(P);
+    expect(facts().org_role_id).toBe(ROLE);
+    expect(owners()).toEqual([]);
+    const back = (useInboxStore.getState() as any).sessionOwners[S];
+    expect(back.released_parent ?? null).toBeNull();
+    expect(back.released_role ?? null).toBeNull();
+  });
+
+  test("release and Put back stamp the inbox row's release as the server will", () => {
+    const P = "p".repeat(32);
+    useInboxStore.setState((st: any) => ({ sessions: { ...st.sessions, [P]: { _id: P, user_id: ME, owners_model: true }, [S]: { ...st.sessions[S], parent_conversation_id: P } } }));
+    applySessionOwnersRead(S, read({ parent_session: { conversation_id: P, short_id: "p1", title: "Parent" } }));
+    useInboxStore.getState().applySessionOwners(S, { release_parent: true }, null);
+    expect(row().parent_released_at).toBeGreaterThan(0);
+    useInboxStore.getState().applySessionOwners(S, { restore_parent: true }, null);
+    expect(row().parent_released_at ?? null).toBeNull();
+    expect(row().owner_session_id).toBe(P);
+  });
+
+  test("a take-over from a closed parent offers no Put back, as the server would refuse it", () => {
+    const P = "p".repeat(32);
+    useInboxStore.setState((st: any) => ({ sessions: { ...st.sessions, [P]: { _id: P, user_id: ME, owners_model: true, inbox_closed_at: 5, inbox_dismissed_at: 5 } } }));
+    applySessionOwnersRead(S, read({ people: [], parent_session: { conversation_id: P, short_id: "p1", title: "Parent" } }));
+    useInboxStore.getState().applySessionOwners(S, { take_over: true }, null);
+    expect((useInboxStore.getState() as any).sessionOwners[S].released_parent ?? null).toBeNull();
+  });
+
+  test("a drag of a released session and its undo keep where it came from: the old parent, never the drop target", () => {
+    const O = "o".repeat(32);
+    const T = "t".repeat(32);
+    useInboxStore.setState((st: any) => ({ sessions: { ...st.sessions, [O]: { _id: O, user_id: ME, owners_model: true, title: "Old" }, [T]: { _id: T, user_id: ME, owners_model: true, title: "Target" } } }));
+    applySessionOwnersRead(S, read({ released_parent: { conversation_id: O, short_id: "o1", title: "Old" } }));
+    useInboxStore.getState().applySessionOwners(S, { adopt_parent: T, add: [ME] }, null);
+    expect((useInboxStore.getState() as any).sessionOwners[S].released_parent).toBeNull();
+    expect(facts().parent_conversation_id).toBe(T);
+    useInboxStore.getState().applySessionOwners(S, { adopt_parent: O, release_parent: true }, null);
+    expect((useInboxStore.getState() as any).sessionOwners[S].released_parent?.conversation_id).toBe(O);
+    expect(facts().parent_conversation_id).toBeNull();
+  });
+
+  test("put back from the read alone: the released parent owns it again and you stay", () => {
+    const P = "p".repeat(32);
+    applySessionOwnersRead(S, read({ released_parent: { conversation_id: P, short_id: "p1", title: "Parent" } }));
+    expect(facts().parent_conversation_id).toBeNull();
+    useInboxStore.getState().applySessionOwners(S, { restore_parent: true }, { release_parent: true });
+    expect(facts().parent_conversation_id).toBe(P);
+    expect(owners()).toEqual([ME]);
+    expect((useInboxStore.getState() as any).sessionOwners[S].released_parent).toBeNull();
+  });
+
   test("removing the only agent brings the implicit starter back, as the server does", () => {
     applySessionOwnersRead(S, read({ people: [], role: { role_id: ROLE, short_id: "or-1", handle: "evals", name: "Eval Suite lead" } }));
     expect(owners()).toEqual([]);
@@ -248,5 +309,26 @@ describe("applySessionOwners", () => {
     useInboxStore.getState().applySessionOwners(CHILD, { add: [ME] }, { remove: [ME] });
     for (let i = 0; i < 100 && (useInboxStore.getState() as any).sessionOwners[CHILD]; i++) await new Promise((r) => setTimeout(r, 10));
     expect((useInboxStore.getState() as any).sessionOwners[CHILD]).toBeUndefined();
+  });
+});
+
+describe("a session not created yet (a local stub)", () => {
+  const STUB = "localstub123";
+  const state = (features: Record<string, unknown> | null) => ({
+    sessions: { [STUB]: { _id: STUB, session_id: STUB } },
+    sessionOwners: {},
+    teams: [{ _id: "t1", features }],
+    clientState: { ui: { active_team_id: "t1" } },
+  });
+
+  test("follows the owners model of the workspace it is created in", () => {
+    expect(ownersModelOnFor(state({ session_owners: true }) as any, STUB)).toBe(true);
+    expect(ownersModelOnFor(state({ session_owners: false }) as any, STUB)).toBe(false);
+  });
+
+  test("a server row without the stamp does not borrow the workspace's flag", () => {
+    const s = state({ session_owners: true }) as any;
+    s.sessions = { [S]: { _id: S } };
+    expect(ownersModelOnFor(s, S)).toBe(false);
   });
 });

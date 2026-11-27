@@ -798,14 +798,15 @@ export const WORK_UNDO_POLICY: UndoPolicy = {
   // An owners change under the session_owners model (sessionOwnersSlice) carries
   // the change(s) that put it back (args[2]; an adopt's may be several, sent in
   // order as one entry): undo replays them, and its own inverse is the change
-  // again. A take-over or a released parent has none: nothing puts a parent back.
+  // again. A release or take-over is undone by putting the parent back.
   applySessionOwners: {
     spec: {
       label: (ctx) => {
-        const change = ctx.args[1] as { take_over?: boolean; add?: string[]; remove?: string[]; adopt_parent?: string } | undefined;
+        const change = ctx.args[1] as { take_over?: boolean; add?: string[]; remove?: string[]; adopt_parent?: string; restore_parent?: boolean } | undefined;
         const title = sessionTitle(ctx.before, ctx.args[0] as string);
         const me = String(ctx.before?.currentUser?._id ?? "");
         if (change?.take_over) return `Took over ${title}`;
+        if (change?.restore_parent && !change.add?.length && !change.remove?.length) return `Put ${title} back`;
         if (change?.adopt_parent) return `Made ${title} a worker of ${sessionTitle(ctx.before, change.adopt_parent)}`;
         if (me && change?.remove?.length === 1 && change.remove[0] === me && !change.add?.length) return `Left ${title}`;
         if (me && change?.add?.length === 1 && change.add[0] === me && !change.remove?.length) return `Added you to ${title}`;

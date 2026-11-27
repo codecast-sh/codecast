@@ -21,8 +21,10 @@
 //
 // Spread into the store (inboxStore), so it gains these without a line of its own.
 import { windowOrgTree } from "./orgSlice";
-import { underOwnersModel } from "@codecast/shared/contracts";
+import { isClosedSession, underOwnersModel, workspaceFeatureEnabled } from "@codecast/shared/contracts";
+import { isConvexId } from "@codecast/shared/entities";
 import { action } from "./mutativeMiddleware";
+import { mayEdit } from "../lib/adoptDrop";
 import {
   applyOwnersChangeTo,
   ownersChangeRefusal,
@@ -44,6 +46,8 @@ export type OwnerPersonInfo = {
   note?: string | null;
 };
 
+export type SessionRef = { conversation_id: string; short_id: string; title: string | null };
+
 /** One `sessionOwners` row: the owners read (listOwners with session_owners:
  *  true), keyed by the conversation's id. */
 export type SessionOwnersRow = {
@@ -54,7 +58,13 @@ export type SessionOwnersRow = {
    *  never enumerated to say who owns it (people_ids does). */
   people_info: Record<string, OwnerPersonInfo>;
   role: { role_id: string; short_id: string | null; handle: string; name: string } | null;
-  parent_session: { conversation_id: string; short_id: string; title: string | null } | null;
+  parent_session: SessionRef | null;
+  /** Where it came from (sessionOwnership OwnersModelRead): the parent a
+   *  person released it from, the role a change took off it, the session
+   *  that spawned it. Absent on a read from before these fields. */
+  released_parent?: SessionRef | null;
+  released_role?: { role_id: string; short_id: string | null; handle: string; name: string } | null;
+  spawned_by?: (SessionRef & { adoptable: boolean }) | null;
   implicit_starter: OwnerPersonInfo | null;
   starter_id: string | null;
   role_started: boolean;
@@ -73,6 +83,8 @@ export type SessionOwnersChange = {
   /** A role id replaces the role; null removes it; absent leaves it. */
   role?: string | null;
   release_parent?: boolean;
+  /** Put back the parent a release or take-over let go. */
+  restore_parent?: boolean;
   take_over?: boolean;
   /** Make it the worker of this session (a conversation id); the viewer's own row comes off. */
   adopt_parent?: string;
@@ -80,7 +92,13 @@ export type SessionOwnersChange = {
   detach_parent?: boolean;
 };
 
-type OwnersState = { sessions?: Record<string, any>; conversations?: Record<string, any>; sessionOwners?: Record<string, SessionOwnersRow> };
+type OwnersState = {
+  sessions?: Record<string, any>;
+  conversations?: Record<string, any>;
+  sessionOwners?: Record<string, SessionOwnersRow>;
+  teams?: any[];
+  clientState?: { ui?: { active_team_id?: string | null } | null };
+};
 
 /** The row a session's owners are read from: its inbox row, else the
  *  conversation it was opened from. */
@@ -103,7 +121,15 @@ export function ownersReadOf(s: OwnersState, conversationId: string): SessionOwn
 export function ownersModelOnFor(s: OwnersState, conversationId: string): boolean {
   if (ownersReadOf(s, conversationId)) return true;
   const inbox = s.sessions?.[conversationId];
-  return inbox ? underOwnersModel(inbox) : ownersHomeOf(s, conversationId)?.owners_model === true;
+  if (inbox ? underOwnersModel(inbox) : ownersHomeOf(s, conversationId)?.owners_model === true) return true;
+  return isLocalStubSession(s, conversationId) && workspaceFeatureEnabled(s.teams ?? [], s.clientState?.ui?.active_team_id, "session_owners");
+}
+
+/** A session not created on the server yet (beginOptimisticSession's stub):
+ *  no stamp, no read. It follows the model of the workspace it is created
+ *  in, and nobody can change its owners until it exists. */
+export function isLocalStubSession(s: OwnersState, conversationId: string): boolean {
+  return !!conversationId && !isConvexId(conversationId) && !!ownersHomeOf(s, conversationId);
 }
 
 const sameIds = (a: unknown, b: readonly string[]) => Array.isArray(a) && a.length === b.length && a.every((id, i) => String(id) === b[i]);
@@ -160,6 +186,26 @@ export function ownerFactsOf(s: OwnersState, conversationId: string): SessionOwn
   return facts;
 }
 
+/** The facts an owners change starts from: ownerFactsOf, plus the parent a
+ *  person released it from, which only a restore reads (every other reader
+ *  of ownerFactsOf takes its parent link as the parent that owns it). */
+function changeFactsOf(s: OwnersState, conversationId: string): SessionOwnerFacts | null {
+  const facts = ownerFactsOf(s, conversationId);
+  const released = ownersReadOf(s, conversationId)?.released_parent?.conversation_id;
+  if (!facts || facts.parent_conversation_id || !released) return facts;
+  return { ...facts, parent_conversation_id: released, parent_released_at: 0 };
+}
+
+/** The viewer may hand work to this session (it owns or runs it), so it may
+ *  take a worker back: what the server's takeBackRefusal asks, as far as the
+ *  store can tell. An undo that would put a parent back is offered only then. */
+export function mayHandToIn(s: OwnersState & { currentUser?: any }, sessionId: string): boolean {
+  const meId = String(s.currentUser?._id ?? "");
+  const row = s.sessions?.[sessionId] ?? s.conversations?.[sessionId];
+  if (!meId || !row || row.inbox_killed_at || isClosedSession(row) || !ownersModelOnFor(s, sessionId)) return false;
+  return mayEdit(row, { facts: ownerFactsOf(s, sessionId), canEdit: !!ownersReadOf(s, sessionId)?.can_edit }, meId);
+}
+
 /** Who owns the session as the store shows it: its people, then its implicit starter. */
 export function ownerIdsOf(s: OwnersState, conversationId: string): string[] | null {
   const facts = ownerFactsOf(s, conversationId);
@@ -176,6 +222,7 @@ export function sharedChangeOf(change: SessionOwnersChange): OwnersChange {
     ...(change.restore ? { restore: change.restore.map((r) => ({ user_id: r.user_id, added_at: r.added_at })) } : {}),
     ...(change.role !== undefined ? { role: change.role } : {}),
     ...(change.release_parent ? { releaseParent: true } : {}),
+    ...(change.restore_parent ? { restoreParent: true } : {}),
     ...(change.take_over ? { takeOver: true } : {}),
     ...(change.adopt_parent ? { adoptParent: change.adopt_parent } : {}),
     ...(change.detach_parent ? { detachParent: true } : {}),
@@ -184,7 +231,7 @@ export function sharedChangeOf(change: SessionOwnersChange): OwnersChange {
 
 /** Why the viewer may not make this change (shared ownersChangeRefusal), or null. */
 export function ownersChangeRefusalIn(s: OwnersState & { currentUser?: any }, conversationId: string, change: SessionOwnersChange): string | null {
-  const facts = ownerFactsOf(s, conversationId);
+  const facts = changeFactsOf(s, conversationId);
   const actor = String(s.currentUser?._id ?? "");
   if (!facts || !actor) return null;
   const ctx = { actor, now: Date.now() };
@@ -212,7 +259,7 @@ export function createSessionOwnersSlice(): SessionOwnersSliceActions {
     applySessionOwners: action(function (this: any, conversationId: string, change: SessionOwnersChange, _inverse?: SessionOwnersChange | SessionOwnersChange[] | null) {
       const actor = String(this.currentUser?._id ?? "");
       if (!actor) return;
-      const facts = ownerFactsOf(this, conversationId);
+      const facts = changeFactsOf(this, conversationId);
       if (!facts) {
         // Add me on a session whose read has not arrived (an agent not yet
         // read): a new read row holding only you, which the server's read
@@ -228,11 +275,32 @@ export function createSessionOwnersSlice(): SessionOwnersSliceActions {
       const next = ownersOf(applyOwnersChangeTo(facts, sharedChangeOf(change), { actor, now: Date.now() }));
       const read = this.sessionOwners[conversationId];
       if (!sameIds(read.people_ids, next.people)) read.people_ids = next.people;
+      const roleBefore = read.role ? { ...read.role } : null;
+      const parentBefore = read.parent_session?.conversation_id ?? null;
       if ((read.role?.role_id ?? null) !== next.role) read.role = next.role ? roleRefOf(this, next.role) : null;
-      if (!next.parentSession && read.parent_session) read.parent_session = null;
-      if (change.adopt_parent && next.parentSession === change.adopt_parent && read.parent_session?.conversation_id !== next.parentSession) {
-        const home = ownersHomeOf(this, next.parentSession);
-        read.parent_session = { conversation_id: next.parentSession, short_id: home?.short_id ?? next.parentSession.slice(0, 7), title: home?.title ?? null };
+      if (!next.parentSession && read.parent_session) {
+        // Released, it is where the session came from: the menu offers it back.
+        // Offered back only when the viewer may put it back, as the server reads it.
+        if (!change.adopt_parent && (change.release_parent || change.take_over) && mayHandToIn(this, read.parent_session.conversation_id)) read.released_parent = { ...read.parent_session };
+        read.parent_session = null;
+      }
+      if (change.restore_parent && next.parentSession && read.released_parent?.conversation_id === next.parentSession) {
+        read.parent_session = { ...read.released_parent };
+        read.released_parent = null;
+      }
+      // The role a change took off is the one the menu offers back first.
+      if (roleBefore && roleBefore.role_id !== next.role) read.released_role = roleBefore;
+      else if (next.role && read.released_role?.role_id === next.role) read.released_role = null;
+      if (change.adopt_parent) {
+        const target = change.adopt_parent;
+        const home = ownersHomeOf(this, target);
+        const ref = { conversation_id: target, short_id: home?.short_id ?? target.slice(0, 7), title: home?.title ?? null };
+        if (next.parentSession === target && read.parent_session?.conversation_id !== target) read.parent_session = ref;
+        // Nested there already released (an undo putting a released link
+        // back): that session is where it came from. Otherwise it has a
+        // parent again and came from nowhere else.
+        const released = change.release_parent && mayHandToIn(this, target) ? ref : null;
+        if ((read.released_parent?.conversation_id ?? null) !== (released?.conversation_id ?? null)) read.released_parent = released;
       }
       // The inbox row's stamps, as the server will stamp them for the viewer:
       // the row moves in or out of the inbox, and its agent stops or starts
@@ -253,9 +321,19 @@ export function createSessionOwnersSlice(): SessionOwnersSliceActions {
           stamps.parent_conversation_id = change.adopt_parent;
           stamps.adopted_at = row.adopted_at ?? Date.now();
           stamps.parent_released_at = null;
+        } else if (change.adopt_parent && change.release_parent) {
+          // Nested there already released (an undo putting a released link back).
+          stamps.parent_conversation_id = change.adopt_parent;
+          stamps.adopted_at = row.adopted_at ?? Date.now();
+          stamps.parent_released_at = row.parent_released_at ?? Date.now();
         } else if (change.detach_parent) {
           stamps.parent_conversation_id = null;
           stamps.adopted_at = null;
+        } else if (change.restore_parent && next.parentSession) {
+          stamps.parent_released_at = null;
+        } else if (parentBefore && !next.parentSession) {
+          // Released, or taken over: the link stays, stamped released.
+          stamps.parent_released_at = row.parent_released_at ?? Date.now();
         }
         for (const [field, value] of Object.entries(stamps)) if ((row[field] ?? null) !== (value ?? null)) row[field] = value;
       }

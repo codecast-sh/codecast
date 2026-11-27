@@ -70,6 +70,13 @@ test("a worktree does not make a first-class session look like a nested child", 
   expect(drawsNested({ ...worktree, is_subagent: true } as InboxSession)).toBe(false);
 });
 
+test("a taken-over child standing as its own card draws as a full card; under its parent's card it nests", () => {
+  const child = { is_subagent: true, parent_conversation_id: "p1", owners_model: true, parent_released_at: 1 } as unknown as InboxSession;
+  expect(drawsNested(child)).toBe(false);
+  expect(drawsNested(child, undefined, true)).toBe(true);
+  expect(drawsNested(child, "worker")).toBe(true);
+});
+
 test("a placed cloud row says what it started from: `<name> @<base7>` and a 'Started from' title line, still no nested control (ct-49433)", () => {
   const base = "abc1234def0000000000000000000000000000000";
   const seeded = renderToStaticMarkup(<div role="button"><SessionWorktreeChip name="cloud-bc9163" branch="feat/x" hostName="Cloud Linux" seed={{ source: "checkout", base, branch: "feat/x", dirty: true }} /></div>);

@@ -8,7 +8,8 @@
 //   - at most one role: conversations.org_role_id;
 //   - its parent session, while not released: the session it is nested under
 //     as a worker (parent_conversation_id), until a person takes it over
-//     (parent_released_at). A session another one only spawned
+//     (parent_released_at), and again once a person puts it back
+//     (restoreParent). A session another one only spawned
 //     (spawned_by_conversation_id alone: a plain `cast spawn`, an agent-team
 //     teammate) is its peer, never its child, so its spawner never owns it;
 //   - its starter, the human who started it, only while it has none of the
@@ -71,6 +72,10 @@ export type OwnersChange = {
   role?: string | null;
   /** Release the parent session: it stops owning the session. */
   releaseParent?: boolean;
+  /** Put the released parent back: the session it was nested under owns it
+   *  again (the undo of a release or a take-over, or a person handing it
+   *  back). The role and the people stay. */
+  restoreParent?: boolean;
   /** Take it over: every agent owner comes off (the role, the parent), the
    *  actor becomes an owner, and the session is no longer a role's start. */
   takeOver?: boolean;
@@ -95,6 +100,11 @@ function sortedRows(rows: OwnerRowFact[]): OwnerRowFact[] {
 /** The session it is nested under as a worker, released or not. A spawner is no parent. */
 export function parentLinkOf(row: Pick<SessionOwnerFacts, "parent_conversation_id">): string | null {
   return str(row.parent_conversation_id);
+}
+
+/** The parent a person released it from, which a restore puts back, or null. */
+export function releasedParentOf(f: Pick<SessionOwnerFacts, "parent_conversation_id" | "parent_released_at">): string | null {
+  return f.parent_released_at != null ? parentLinkOf(f) : null;
 }
 
 export function ownersOf(f: SessionOwnerFacts): SessionOwners {
@@ -160,8 +170,8 @@ export function removesAgentOwner(f: SessionOwnerFacts, change: OwnersChange): b
 
 /**
  * The facts after one change, in the order the server writes it: the role,
- * the parent's release, the implicit starter's own row (written first when
- * the change would otherwise leave them out), the people added, rows
+ * the parent's release or its restore, the implicit starter's own row
+ * (written first when the change would otherwise leave them out), the people added, rows
  * restored, then the people removed. A take-over takes every agent owner
  * off and adds the actor unless the change removes them; removing the role
  * or releasing the parent alone adds nobody. `now` stamps new rows and the
@@ -176,12 +186,13 @@ export function applyOwnersChangeTo(f: SessionOwnerFacts, change: OwnersChange, 
   const detach = !adopt && !!change.detachParent;
   const role = takeOver || adopt ? null : change.role === undefined ? str(f.org_role_id) : str(change.role);
   const release = !adopt && (takeOver || !!change.releaseParent) && !!before.parentSession;
+  const restore = !adopt && !detach && !release && !!change.restoreParent && !!releasedParentOf(f);
   const add = (change.add ?? []).map(String);
   if (takeOver && !removed.has(actor)) add.push(actor);
 
   let rows = sortedRows(f.rows);
   const starter = before.implicitStarter;
-  if (starter && !removed.has(starter) && (add.length > 0 || !!change.restore?.length || !!role)) rows = [{ user_id: starter, added_at: ctx.now }];
+  if (starter && !removed.has(starter) && (add.length > 0 || !!change.restore?.length || !!role || restore)) rows = [{ user_id: starter, added_at: ctx.now }];
   for (const id of add) if (!rows.some((r) => r.user_id === id)) rows = [...rows, { user_id: id, added_at: ctx.now }];
   for (const r of change.restore ?? []) if (!rows.some((x) => x.user_id === String(r.user_id))) rows = [...rows, { user_id: String(r.user_id), added_at: r.added_at }];
   const keepsActor = add.includes(actor) || (change.restore ?? []).some((r) => String(r.user_id) === actor);
@@ -192,7 +203,7 @@ export function applyOwnersChangeTo(f: SessionOwnerFacts, change: OwnersChange, 
     rows,
     org_role_id: role,
     ...(adopt ? { parent_conversation_id: adopt } : detach ? { parent_conversation_id: null } : {}),
-    parent_released_at: adopt ? (change.releaseParent ? ctx.now : null) : detach ? null : release ? ctx.now : f.parent_released_at ?? null,
+    parent_released_at: adopt ? (change.releaseParent ? ctx.now : null) : detach || restore ? null : release ? ctx.now : f.parent_released_at ?? null,
     role_started: takeOver || adopt ? null : f.role_started ?? null,
   };
 }
@@ -201,7 +212,7 @@ export function applyOwnersChangeTo(f: SessionOwnerFacts, change: OwnersChange, 
 function addsOnlySelf(change: OwnersChange, actor: string): boolean {
   const add = (change.add ?? []).map(String);
   return add.length > 0 && add.every((id) => id === actor) && !change.remove?.length && !change.restore?.length
-    && change.role === undefined && !change.releaseParent && !change.takeOver && !change.adoptParent && !change.detachParent;
+    && change.role === undefined && !change.releaseParent && !change.restoreParent && !change.takeOver && !change.adoptParent && !change.detachParent;
 }
 
 /**
@@ -222,6 +233,7 @@ export function ownersLeftRefusal(f: SessionOwnerFacts, change: OwnersChange, ct
   const actor = String(ctx.actor);
   const adopt = adoptParentRefusal(f, change);
   if (adopt) return adopt;
+  if (change.restoreParent && !change.adoptParent && !change.detachParent && !releasedParentOf(f)) return "It has no session to go back to";
   const after = ownersOf(applyOwnersChangeTo(f, change, ctx));
   if (!after.people.length && !after.role && !after.parentSession && !after.implicitStarter) return "Nobody would own it: add someone first";
   if ((change.remove ?? []).map(String).includes(actor) && after.implicitStarter === actor) {
