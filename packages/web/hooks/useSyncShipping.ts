@@ -44,7 +44,7 @@ const shipperSig = (s: ShippingShipperRow) => `${s.merged_sha ?? ""}|${s.spawner
  * Reader: a team's Ship runs and shippers from the store, with the feeder mounted. `shipping` is null only while
  * nothing is stored and the first answer has not come; `error` only when the read failed with nothing stored.
  */
-export function useShipping(teamId: string | null | undefined): { shipping: { runs: ShippingRunRow[]; shippers: ShippingShipperRow[] } | null; error: boolean } {
+export function useShipping(teamId: string | null | undefined): { shipping: { runs: ShippingRunRow[]; shippers: ShippingShipperRow[] } | null; error: boolean; live: boolean; failed: boolean } {
   const { ready, error } = useSyncShipping(teamId);
   const workspace = teamId ? `team:${teamId}` : null;
   const runs = useWorkspaceCollection<ShippingRunRow>("shippingRuns", runSig, workspace);
@@ -53,5 +53,9 @@ export function useShipping(teamId: string | null | undefined): { shipping: { ru
   return useMemo(() => ({
     shipping: ready || stored ? { runs, shippers } : null,
     error: !!error && !stored,
+    // This window's own answer has come (the rows are not only what the cache held).
+    live: ready,
+    // This window's read failed, whatever the cache holds (`error` stays quiet while a cache stands in).
+    failed: !ready && !!error,
   }), [ready, stored, runs, shippers, error]);
 }

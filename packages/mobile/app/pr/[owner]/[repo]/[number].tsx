@@ -32,7 +32,9 @@ import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
 import { repoObjectId } from '@codecast/web/lib/entityLinks';
 import { REACH_LOOK, deployAgo } from '@codecast/web/lib/deploys/deployPill';
 import { prDeployRows, prReachHeadline, prRowLine, prRowParts } from '@codecast/web/lib/deploys/prDeploy';
-import { REACH_ICON, toneColor, type FeatherName } from '@/components/EntityPill';
+import { toneColor } from '@/components/EntityPill';
+import { WebIcon } from '@/components/marks';
+import { REACH_ICON } from '@codecast/web/lib/deploys/deployLook';
 
 const color = (accent: ExternalEventAccent | undefined, Theme: Palette) => solColor(accentVar(accent), Theme);
 
@@ -121,7 +123,7 @@ export default function PullRequestScreen() {
               return (
                 <TouchableOpacity key={`${row.target}#${i}`} style={styles.prodRow} disabled={!to} onPress={() => to && router.push(`/deploy/${to.short_id}`)}>
                   <RNView style={styles.row}>
-                    <Feather name={REACH_ICON[row.state]} size={15} color={tint} />
+                    <WebIcon icon={REACH_ICON[row.state]} size={15} color={tint} />
                     <RNText style={styles.rowTitle} numberOfLines={1}>{row.target}</RNText>
                     <RNText style={[styles.rowMeta, { color: tint }]}>{REACH_LOOK[row.state].word}</RNText>
                   </RNView>
@@ -200,10 +202,11 @@ export default function PullRequestScreen() {
   );
 }
 
-function Chip({ label, color, icon }: { label: string; color: string; icon?: FeatherName }) {
+/** `icon`: a web glyph (lucide), drawn natively. */
+function Chip({ label, color, icon }: { label: string; color: string; icon?: unknown }) {
   return (
     <RNView style={[styles.chip, { borderColor: color + '66', backgroundColor: color + '1a' }]}>
-      {icon ? <Feather name={icon} size={11} color={color} /> : null}
+      {icon ? <WebIcon icon={icon} size={11} color={color} /> : null}
       <RNText style={[styles.chipText, { color }]}>{label}</RNText>
     </RNView>
   );
