@@ -414,7 +414,7 @@ export function prioritySig(r: PriorityRow): string {
   const planSig = (p: PriorityPlanRef | null | undefined) => (p ? `${p.short_id}.${p.title}.${p.done}/${p.total}/${p.size}` : "");
   const links = milestoneLinksOf(r).map((l) => [
     l.key, l.correction_pending ? 1 : 0, l.looks_done ? 1 : 0, l.sessions_more, planSig(l.plan), l.part_of.map(planSig).join("+"),
-    l.sessions.map((x) => `${x.conversation_id}.${x.short_id}.${x.state}.${x.mine ? 1 : 0}.${x.workflow ? 1 : 0}.${x.title}.${x.last_active_at}`).join(";"),
+    l.sessions.map((x) => `${x.conversation_id}.${x.short_id}.${x.state}.${x.mine ? 1 : 0}.${x.started_by_viewer ? 1 : 0}.${x.workflow ? 1 : 0}.${x.title}.${x.last_active_at}`).join(";"),
   ].join(":")).join(",");
   const plan = planSig(r.plan);
   return [r.rank, r.person_pos, r.ai_rank, r.status, r.title, r.summary, r.serves, r.done_at, r.last_active_at, r.owner, r.owner_image, r.correction_pending, steps, sessions, r.links ? "full" : "mapped", links, plan].join("|");

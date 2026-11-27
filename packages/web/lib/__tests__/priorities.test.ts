@@ -305,6 +305,7 @@ describe("prioritySig", () => {
     expect(changed([link({ sessions: [sess({ conversation_id: "conv-b" })] })])).toBe(true);
     expect(changed([link({ sessions: [sess({ mine: false })] })])).toBe(true);
     expect(changed([link({ sessions: [sess({ workflow: true })] })])).toBe(true);
+    expect(changed([link({ sessions: [sess({ started_by_viewer: true })] })])).toBe(true);
     expect(changed([link({ plan: plan("pl-1", "The plan, renamed") })])).toBe(true);
     expect(changed([link({ part_of: [plan("pl-2", "Another program")] })])).toBe(true);
     expect(changed([link()], { plan: plan("pl-3", "Priority plan, renamed") as any })).toBe(true);
