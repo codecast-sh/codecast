@@ -120,7 +120,7 @@ export function ModernSessionCardView({
   const hosted = isHostedAgentType(session.agent_type);
   const spawnedById = session.spawned_by_conversation_id || null;
   const project = getProjectName(session.git_root, session.project_path);
-  const isStashed = variant === "stashed" || variant === "snoozed";
+  const isStashed = variant === "stashed";
   const isSetAside = isStashed || variant === "dismissed";
   const nested = drawsNested(session, subRow, underParent);
   const identity = identityProp ?? session;
@@ -401,7 +401,7 @@ export function ModernSessionCardView({
           <ModernCardToolbar
             session={session}
             onRestore={onRestore && (() => onRestore(session._id))}
-            restoreLabel={variant === "snoozed" ? "Move to Needs You now" : "Restore"}
+            restoreLabel="Restore"
             onKill={onKill && (() => onKill(session._id))}
             killLabel={isStashed || isClosedSession(session) ? "Kill" : "Remove from list"}
           />

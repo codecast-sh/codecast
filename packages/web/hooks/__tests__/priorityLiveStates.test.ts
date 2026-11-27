@@ -172,7 +172,8 @@ test("an ask queued for the viewer in Decisions needs you wherever its session s
     const id = fixtureId(`dq${name}`);
     put({ [id]: row });
     decide(id);
-    expect([name, drawn(id)]).toEqual([name, { mark: "needs_you", asks: true, target: id }]);
+    // A snoozed row is drawn in Sleeping, its card's own mark; the ask still needs you.
+    expect([name, drawn(id)]).toEqual([name, { mark: name === "snoozed" ? "dormant" : "needs_you", asks: true, target: id }]);
     expect([name, milestone(id, { server: "idle" })]).toEqual([name, "needs_you"]);
     // Without the ask, the same row does not need you.
     useInboxStore.setState({ sessionDecisions: {} } as any);

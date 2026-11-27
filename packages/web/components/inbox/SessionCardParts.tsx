@@ -417,9 +417,9 @@ export function CardRestoreCluster({
             </ShortcutTooltip>
           )}
           {onRestore && (
-            <ShortcutTooltip label={variant === "snoozed" ? "Move to Needs You now" : "Restore"} side="left">
+            <ShortcutTooltip label="Restore" side="left">
               <button
-                aria-label={variant === "snoozed" ? "Move to Needs You now" : "Restore"}
+                aria-label="Restore"
                 onClick={(e) => { e.stopPropagation(); onRestore(session._id); }}
                 className="p-1 rounded-md text-sol-text-dim hover:text-sol-cyan bg-sol-bg/95 shadow-sm border border-sol-border/30"
               >
