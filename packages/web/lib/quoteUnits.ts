@@ -10,6 +10,11 @@
 // toolbar — must resolve indices against this single source of truth, or their
 // indices would disagree and a comment would anchor to the wrong line.
 
+/** Marks a canvas's shadow host (components/HtmlSnippet): a selection inside
+ *  one is found through it (lib/quoteSelection), and it stands in for that
+ *  selection when the quote unit is resolved. */
+export const CANVAS_HOST_CLASS = "cc-canvas-host";
+
 // Ordered quote units for a content column. A top-level <ul>/<ol> contributes its
 // direct <li> children; every other top-level block contributes itself. A doc
 // transclusion ([data-doc-embed], see DocEmbed) contributes the blocks of its

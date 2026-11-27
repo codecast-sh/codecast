@@ -7,6 +7,7 @@ import { hasCharts, hydrateCharts } from "../lib/castChart";
 import { hydrateWidgets, WIDGET_BASE_CSS } from "../lib/castWidgets";
 import { canvasHrefToRoute } from "../lib/canvasLinks";
 import { useRouter } from "next/navigation";
+import { CANVAS_HOST_CLASS } from "../lib/quoteUnits";
 
 // Inline visual canvas. The agent emits a ```cast-canvas fenced block holding
 // static HTML/CSS/SVG; we sanitize it (DOMPurify strips scripts, event handlers,
@@ -145,7 +146,7 @@ export function ShadowCanvas({ html, className = "", onEvent }: { html: string; 
     }
   }, [html]);
 
-  return <div className={className} style={{ contain: "layout paint", isolation: "isolate", position: "relative" }}><div ref={hostRef} /></div>;
+  return <div className={className} style={{ contain: "layout paint", isolation: "isolate", position: "relative" }}><div ref={hostRef} className={CANVAS_HOST_CLASS} /></div>;
 }
 
 // The fence language the canvas claims. Owned here so every markdown dispatcher

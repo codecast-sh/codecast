@@ -10,7 +10,7 @@
 
 import React, { useContext, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { resolveQuoteSelection, quoteSelectionIntoReply, type QuoteSelection } from "../lib/quoteSelection";
+import { liveSelectionRange, resolveQuoteSelection, quoteSelectionIntoReply, type QuoteSelection } from "../lib/quoteSelection";
 import { MenuKeyCaps } from "./KeyboardShortcutsHelp";
 import { FilePathContext, filePathHref, filePathMention } from "../lib/filePathLinks";
 import { openFiles } from "../lib/filesPane";
@@ -38,8 +38,7 @@ export function SelectionQuoteToolbar({ conversationId }: { conversationId: stri
       timer.current = setTimeout(() => setAnchor(resolveQuoteSelection()), 120);
     };
     const onSelChange = () => {
-      const sel = window.getSelection();
-      if (!sel || sel.isCollapsed) {
+      if (!liveSelectionRange()) {
         if (timer.current) clearTimeout(timer.current);
         setAnchor(null);
       } else {
