@@ -8,6 +8,7 @@ import {
   Hash,
   Image as ImageIcon,
   Layers,
+  LayoutGrid,
   MoreHorizontal,
   Lock,
   LockOpen,
@@ -49,6 +50,8 @@ type Props = {
   /** The tool stays on after each placement instead of returning to Select. */
   locked: boolean;
   setLocked(on: boolean): void;
+  /** Lay the whole board out as a grid of frames, in one undo step. */
+  onOrganize(): void;
   readOnly: boolean;
 };
 
@@ -105,6 +108,7 @@ export const BoardToolbar = memo(function BoardToolbar(p: Props) {
       <ToolButton active={p.tool === "comment"} label="Comment" accel="C" onClick={() => pick("comment")}><MessageCircle size={17} strokeWidth={1.75} /></ToolButton>
       <ToolButton active={p.tool === "card"} label="Codecast object" accel="O" onClick={() => pick("card")}><Layers size={17} strokeWidth={1.75} /></ToolButton>
       <ToolButton active={false} label="Image" onClick={() => { setOpen(null); fileRef.current?.click(); }}><ImageIcon size={17} strokeWidth={1.75} /></ToolButton>
+      <ToolButton active={false} label="Organize: lay the board out in frames" onClick={() => { setOpen(null); p.onOrganize(); }}><LayoutGrid size={17} strokeWidth={1.75} /></ToolButton>
       <ShortcutTooltip label={p.locked ? "Unlock tool" : "Keep tool on after each use"} accel="Q" side="top">
         <button type="button" className={`board-tool${p.locked ? " is-active" : ""}`} aria-label="Lock tool" aria-pressed={p.locked} onClick={() => p.setLocked(!p.locked)}>
           {p.locked ? <Lock size={15} strokeWidth={1.75} /> : <LockOpen size={15} strokeWidth={1.75} />}
@@ -151,6 +155,7 @@ export const BoardToolbar = memo(function BoardToolbar(p: Props) {
       <ToolButton active={p.tool === "card"} label="Codecast object" accel="O" onClick={() => pick("card")}><Layers size={17} strokeWidth={1.75} /></ToolButton>
       <ToolButton active={false} label="Image" onClick={() => { setOpen(null); fileRef.current?.click(); }}><ImageIcon size={17} strokeWidth={1.75} /></ToolButton>
           <span className="board-toolbar-sep" />
+      <ToolButton active={false} label="Organize: lay the board out in frames" onClick={() => { setOpen(null); p.onOrganize(); }}><LayoutGrid size={17} strokeWidth={1.75} /></ToolButton>
       <ShortcutTooltip label={p.locked ? "Unlock tool" : "Keep tool on after each use"} accel="Q" side="top">
         <button type="button" className={`board-tool${p.locked ? " is-active" : ""}`} aria-label="Lock tool" aria-pressed={p.locked} onClick={() => p.setLocked(!p.locked)}>
           {p.locked ? <Lock size={15} strokeWidth={1.75} /> : <LockOpen size={15} strokeWidth={1.75} />}

@@ -152,6 +152,8 @@ export type PriorityRow = {
   links?: PriorityMilestoneLinks[];
   /** The plan holding tasks from at least half the task-bearing steps (attributePlans); absent as above. */
   plan?: PriorityPlanRef | null;
+  /** The call it was made in (a transcript id), present only when it was: a board marks frames of that call's objects "new". */
+  from_call?: string;
 };
 
 /** A correction the person wrote on a priority or one of its milestones: every later pass reads it until it is deleted. */

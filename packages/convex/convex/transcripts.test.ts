@@ -1958,6 +1958,12 @@ describe("call references (cl-N)", () => {
     expect(out?._id).toBe("tr_rec");
     expect(out?.title).toBe("Pricing sync");
     expect(out?.turns).toBeNull();
+    expect(out?.board).toBeNull();
+  });
+
+  test("names the call's board, so a board can tell the objects its call made", async () => {
+    const out = await call(webGetCallRef, ctxFor("ua", [{ ...row(), board_doc_id: "doc_board" }]), { ref: "cl-7" });
+    expect(out?.board).toBe("doc_board");
   });
 
   test("a line range carries the attributed words", async () => {

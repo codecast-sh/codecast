@@ -2141,6 +2141,8 @@ async function callRefCore(
     title: row.title,
     participants: row.participants,
     summary: row.summary,
+    // The call's board: a board marks the objects this call made "new" on its frames.
+    board: t.board_doc_id ? String(t.board_doc_id) : null,
   };
   // A moment (`cl-42@12:34`) carries the line said then, its card's caption.
   if (args.at_ms !== undefined) return { ...lean, turns: null, line: await lineAtMoment(ctx, t, args.at_ms) };

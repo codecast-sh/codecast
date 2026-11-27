@@ -1,13 +1,14 @@
 // How each board element draws. Every element is one absolutely placed node
 // in world coordinates, in z order, memoized on its own row so a drag
 // re-renders only what moved (and the connectors attached to it).
-import { memo, useLayoutEffect, useRef, useState } from "react";
-import { ArrowUpRight } from "lucide-react";
+import { memo, useContext, useLayoutEffect, useRef, useState } from "react";
+import { ArrowUpRight, ChevronRight } from "lucide-react";
 import {
   boardArtFor,
   connectorGeometry,
   labelSpot,
   elementBox,
+  frameCollapsed,
   shapeFontSize,
   shapeOutline,
   smoothPath,
@@ -28,6 +29,7 @@ import { pageShareUrl } from "../../lib/publishedPageUrls";
 import { PAGE_ESCAPE_MESSAGE } from "../../../shared/render/pageTheme";
 import { colorToken, shapeFill, stickyFill, tint } from "./boardColors";
 import type { BoardEl } from "./boardTypes";
+import { BoardFrameContext, FrameTitle, FrameTools } from "./BoardFrameParts";
 
 export type EditProps = {
   /** This element's text is being edited in place. */
@@ -201,11 +203,31 @@ const ShapeView = memo(function ShapeView({ el, editing, onEditInput, onEditDone
 
 const FrameView = memo(function FrameView({ el, editing, onEditInput, onEditDone }: ViewProps) {
   const title = typeof el.title === "string" ? el.title : "";
+  const folded = frameCollapsed(el);
+  const actions = useContext(BoardFrameContext);
+  const color = el.color ? colorToken(el.color) : "var(--sol-text-muted)";
+  const label = editing ? <InlineEditor value={title} className="board-frame-title-edit" onInput={onEditInput} onDone={onEditDone} selectAll singleLine /> : <FrameTitle el={el} title={title} />;
+  if (folded) {
+    // A folded frame is a pill, pressed and dragged as a whole (no data-frame: its body is not canvas).
+    const n = folded.holds.filter((k) => actions.kindOf(k) !== "connector").length;
+    return (
+      <div data-key={el.key} data-folded className="board-el board-frame board-frame-pill" style={boxStyle(el, { background: tint(el.color ?? "gray", 10), borderColor: tint(el.color ?? "gray", 34), color })}>
+        {actions.readOnly ? (
+          <span className="board-frame-pill-chev" aria-hidden><ChevronRight size={16} strokeWidth={1.75} /></span>
+        ) : (
+          <button type="button" data-board-ui className="board-frame-pill-chev" aria-label="Expand frame" title="Expand" onClick={() => actions.toggleFold(el.key)}>
+            <ChevronRight size={16} strokeWidth={1.75} />
+          </button>
+        )}
+        <span className="board-frame-pill-title">{label}</span>
+        <span className="board-frame-pill-count">({n})</span>
+      </div>
+    );
+  }
   return (
     <div data-key={el.key} data-frame className="board-el board-frame" style={boxStyle(el, { background: tint(el.color ?? "gray", 7), borderColor: tint(el.color ?? "gray", 34) })}>
-      <div className="board-frame-title" data-part="frame-title" style={{ color: el.color ? colorToken(el.color) : "var(--sol-text-muted)" }}>
-        {editing ? <InlineEditor value={title} className="board-frame-title-edit" onInput={onEditInput} onDone={onEditDone} selectAll singleLine /> : title || "Frame"}
-      </div>
+      <div className="board-frame-title" data-part="frame-title" style={{ color }}>{label}</div>
+      {!editing && <FrameTools el={el} />}
     </div>
   );
 });
