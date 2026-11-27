@@ -1,12 +1,12 @@
 // A theme frame's title band and hover tools (pl-1145): the live chip of the
-// object it is about, its discussion status, a "new" mark for objects this
-// board's call made, and the Reflow and Collapse controls. The board passes
+// object it is about, a "new" mark for objects this board's call made, and
+// the Reflow and Collapse controls. The board passes
 // what a frame may do through BoardFrameContext, so each memoized FrameView
 // re-renders only when its own row changes.
 import { createContext, useContext } from "react";
 import { ChevronsDownUp, LayoutDashboard } from "lucide-react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { frameRef, frameStatus } from "@codecast/shared/artifacts/board";
+import { frameRef } from "@codecast/shared/artifacts/board";
 import { EntityIdPill } from "../EntityIdPill";
 import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
 import { useEntityResolution } from "../../lib/entityDisplay";
@@ -49,16 +49,10 @@ function FrameChip({ refId, title }: { refId: string; title: string }) {
   );
 }
 
-/** What a frame's title reads: status tag, then the object's chip (or the title). */
+/** What a frame's title reads: the object's chip, or the title. A frame shows where it stands by being folded with a deliverable, not by a tag. */
 export function FrameTitle({ el, title }: { el: BoardEl; title: string }) {
   const ref = frameRef(el);
-  const status = frameStatus(el);
-  return (
-    <>
-      {status && <span className={`board-frame-status is-${status}`}>{status}</span>}
-      {ref ? <FrameChip refId={ref} title={title} /> : title || "Frame"}
-    </>
-  );
+  return ref ? <FrameChip refId={ref} title={title} /> : <>{title || "Frame"}</>;
 }
 
 /** Reflow and Collapse, shown while the frame is hovered. */
