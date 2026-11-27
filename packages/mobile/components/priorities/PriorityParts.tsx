@@ -379,13 +379,13 @@ function SessionRow({ s, now, onPress, menu }: { s: SessionLine; now: number; on
   const refTitle = useInboxStore((st) => (ref ? (lookup(ref.startsWith('pl-') ? (st as any).plans : st.tasks, ref)?.title as string | undefined) ?? '' : ''));
   const mark = sessionRowMark(s);
   const asks = mark === 'needs_you';
-  const icon = s.workflow && !asks ? <Feather name={KIND_ICON.workflow} size={13} color={Theme.textDim} accessibilityLabel="Workflow run" /> : <SessionStatusMark status={mark} size={12} />;
+  // Every row draws its inbox's mark; a workflow run says what it is with a small glyph beside its word (web Connected).
   return (
     <Item
       testID={`priorities-session-${s.short_id}`}
-      icon={icon}
+      icon={<SessionStatusMark status={mark} size={12} />}
       title={sessionLabel(s, () => refTitle || undefined)}
-      meta={<><RNText style={asks ? { color: Theme.yellow, fontWeight: '600' } : undefined}>{SESSION_STATUS[mark].word}</RNText> · {age(s.last_active_at, now)}</>}
+      meta={<>{s.workflow ? <><Feather name={KIND_ICON.workflow} size={11} color={Theme.textDim} accessibilityLabel="Workflow run" /> </> : null}<RNText style={asks ? { color: Theme.yellow, fontWeight: '600' } : undefined}>{SESSION_STATUS[mark].word}</RNText> · {age(s.last_active_at, now)}</>}
       onPress={onPress}
       menu={menu ? <More label={`Fix the link to ${sessionLabel(s)}`} onPress={menu} testID={`priorities-session-menu-${s.short_id}`} /> : undefined}
     />

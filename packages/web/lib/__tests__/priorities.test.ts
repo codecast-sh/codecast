@@ -37,6 +37,8 @@ describe("buildModels: each milestone's state", () => {
     expect(model({ mine: false }).kind).toBe("none");
     expect(model({ status: "set_aside" }).kind).toBe("none");
     expect(model({}, [sess("needs_you", false)]).kind).toBe("idle");
+    // Not drawn by the inbox, its own needs_you reads idle whoever owns it, never asleep.
+    expect(model({}, [sess("needs_you")]).kind).toBe("idle");
   });
 });
 

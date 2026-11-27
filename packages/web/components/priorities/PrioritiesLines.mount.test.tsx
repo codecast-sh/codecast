@@ -194,6 +194,29 @@ test("a milestone's deploys come only from its priority's own workspace; with no
   }
 }, 60_000);
 
+test("a workflow run's row draws its inbox's mark, an error in Needs You included, its workflow glyph only a hint beside the word", async () => {
+  const id = fixtureId("wferror");
+  useInboxStore.setState((s: any) => ({ sessions: { ...s.sessions, [id]: { _id: id, title: "Review · ct-9001 tidy", message_count: 4, status: "completed", updated_at: NOW - 10 * 60_000, last_turn_at: NOW - 11 * 60_000, user_id: VIEWER_ID, thread_state_status: "blocked", thread_state_at: NOW - 10 * 60_000, pending_api_error: "rate limited", pending_api_error_kind: "usage_limit" } } }));
+  const r = row(16, "Runs", 1, [step("s1", "Has a failing run", "critical")], { links: [links("s1", [sess("wferror", "Review · ct-9001 tidy", "idle", 1, { workflow: true })])] });
+  const page = await mount(view({ rows: [r] }));
+  try {
+    const b = block(page.container, "pri-16");
+    expect(b.querySelector('[data-milestone="s1"]')!.getAttribute("data-state")).toBe("needs_you");
+    const c = await openLine(b, "s1");
+    const item = c.querySelector(`[data-session-row="${id}"]`)!;
+    expect(item.getAttribute("data-mark")).toBe("error");
+    expect(item.querySelector('[data-status-mark="error"]')).not.toBeNull();
+    expect(item.querySelector("[data-workflow-hint]")).not.toBeNull();
+    expect(item.textContent).toContain("Error");
+  } finally {
+    await page.unmount();
+    useInboxStore.setState((s: any) => {
+      const { [id]: _, ...rest } = s.sessions;
+      return { sessions: rest };
+    });
+  }
+}, 60_000);
+
 test("a dropped task is struck through; a done one is quiet", async () => {
   useInboxStore.setState({ tasks: {
     tk1: { _id: "tk1", short_id: "ct-8101", title: "Dropped idea", status: "dropped" },

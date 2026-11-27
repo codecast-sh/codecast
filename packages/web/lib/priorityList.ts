@@ -80,22 +80,24 @@ export const MILESTONE_STATE_WORD: Record<Exclude<MilestoneStateKind, "none">, s
  *
  * `live` answers what the inbox draws (hooks/usePriorityModels liveMarkOf
  * over store/inboxMark inboxMarkOf), or undefined when it draws nothing: then
- * the server's state stands, a needs_you there demoted (sleeping if yours,
- * idle if someone else's). A session riding its role's lead opens at the
+ * the server's state stands, a needs_you there read as idle whoever owns it
+ * (nothing asks through a session the inbox does not draw, and it is not
+ * asleep either). A session riding its role's lead opens at the
  * lead (`target`), where the answer is.
  */
 const lineOf = (s: PriorityLinkedSession, live: (conversationId: string) => DrawnMark | undefined): SessionLine => {
   const drawn = live(s.conversation_id);
-  if (drawn) return { ...s, state: drawn.asks ? "needs_you" : stateOfMark(drawn.mark), mark: drawn.mark, href: `/conversation/${drawn.target}` };
-  return { ...s, state: s.state !== "needs_you" ? s.state : s.mine === false ? "idle" : "dormant", href: `/conversation/${s.conversation_id}` };
+  if (drawn) return { ...s, state: drawn.asks ? "needs_you" : stateOfMark(drawn.mark), mark: drawn.mark, target: drawn.target, href: `/conversation/${drawn.target}` };
+  return { ...s, state: s.state === "needs_you" ? "idle" : s.state, target: s.conversation_id, href: `/conversation/${s.conversation_id}` };
 };
 
 /**
  * A linked session as the list draws it: its state in the milestone
  * vocabulary, the mark its inbox draws when it draws one (its row shows that
- * mark), and where it opens (its own conversation, or the lead it rides).
+ * mark), and the conversation it opens (`target`: its own, or the lead it
+ * rides, where the answer is; `href` is web's route to it).
  */
-export type SessionLine = PriorityLinkedSession & { href: string; mark?: SessionStatus };
+export type SessionLine = PriorityLinkedSession & { target: string; href: string; mark?: SessionStatus };
 
 /** The mark a session's row draws (both apps): its inbox's mark (Done's check, the stash tray, an error), else its own state's. */
 export const sessionRowMark = (s: Pick<SessionLine, "mark" | "state">): SessionStatus => s.mark ?? s.state;
@@ -194,5 +196,5 @@ const WIDE_MIN_LIST_WIDTH = 520;
 export const TABLET_QUERY = "(pointer: coarse) and (min-width: 900px)";
 export const layoutForWidth = (width: number, tablet = false): ListLayout => (tablet || width >= WIDE_MIN_LIST_WIDTH ? "wide" : "phone");
 
-/** A deploy a milestone reached, as its chip draws it (components/priorities/parts DeployChip). */
+/** A deploy a milestone reached, as its row draws it (Connected, with components/priorities/parts DeployMark). */
 export type DeployInfo = { id: string; short_id: string; target: string; status: string; at: number };

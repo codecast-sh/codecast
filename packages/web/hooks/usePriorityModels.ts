@@ -8,10 +8,11 @@ import { buildModels, type MilestoneModel, type PriorityModel } from "../lib/pri
 import type { TeamDeployRow } from "../lib/deploys/targets";
 import { hostedStopsSig } from "../lib/hostedNotice";
 import {
-  pendingSendWakeSig, placementDecisionsSig, resolveShowOld, sessionsWakeSig, teamInboxIdsOf, useInboxStore, useTrackedStore,
+  pendingSendWakeSig, placementDecisionsSig, resolveShowOld, sessionStructuralSig, sessionsWakeSig, teamInboxIdsOf, useInboxStore, useTrackedStore,
+  type InboxSession, type SessionDecisionItem,
 } from "../store/inboxStore";
+import { makeCollectionSig } from "../store/wakeSig";
 import { inboxMarkOf, type DrawnMark, type MarkInbox } from "../store/inboxMark";
-import { rowSigExcluding } from "../store/wakeSig";
 import { useWorkspacesCollection } from "./useWorkspaceCollection";
 import { INBOX_CLOCK_MS, useCoarseNow } from "./useCoarseNow";
 import type { DeployInfo } from "../lib/priorityList";
@@ -36,8 +37,64 @@ export function liveMarkOf(s: Parameters<typeof inboxMarkOf>[0] & { currentSessi
 }
 
 /** A row's liveness stamps: a heartbeat moves them and nothing a card draws. */
-const LIVENESS_FIELDS: ReadonlySet<string> = new Set(["updated_at", "last_heartbeat", "last_metrics_at", "last_active_at", "last_message_at", "daemon_alive_until"]);
-const linkedRowsSig = (sessions: Record<string, any>, ids: readonly string[]) => ids.map((id) => (sessions[id] ? rowSigExcluding(sessions[id], LIVENESS_FIELDS) : "")).join("|");
+/**
+ * What a linked row's card reads for its mark beyond the inbox's structural
+ * signature (sessionStatusOf, subagentStatusOf, the asks rule): its turn
+ * state, an ask or a prompt, a failure, the agent's status, a hosted stop.
+ * Counts and stamps only as the bits a mark branches on, so a streamed
+ * message or a heartbeat signs the same.
+ */
+const markFactsOf = (r: InboxSession): string => [
+  sessionStructuralSig(r), r.thread_state_status ?? "", r.awaiting_input ? 1 : 0,
+  r.pending_api_error ? 1 : 0, r.pending_api_error_kind ?? "", r.session_error ? 1 : 0, r.agent_status ?? "", r.status ?? "",
+  r.hosted_stop ?? "", (r.message_count ?? 0) > 0 ? 1 : 0, r.is_connected ? 1 : 0, r.tool_call_open_at ? 1 : 0, r.agent_type ?? "",
+].join(":");
+const markFactsByRow = new WeakMap<object, number>();
+/** FNV-1a over a row's mark facts, kept per row object: a row the store did not touch is not signed again. */
+function markFactsHash(r: InboxSession): number {
+  let h = markFactsByRow.get(r);
+  if (h === undefined) {
+    h = 0x811c9dc5;
+    for (const ch of markFactsOf(r)) h = Math.imul(h ^ ch.charCodeAt(0), 0x01000193);
+    markFactsByRow.set(r, h);
+  }
+  return h;
+}
+/** What the sidebar's Decisions queue reads off a decision (lib/decisionQueue queuesDecision): who it is asked of, and whether it stands. */
+const queuedDecisionsSig = makeCollectionSig((d: SessionDecisionItem) =>
+  `${d.conversation_id}|${d.status}|${d.blocking ? 1 : 0}|${d.stack_id ?? ""}|${d.in_queue === false ? 0 : 1}|${(d.asked_user_ids ?? []).join(",")}`);
+
+/** The rows that stand as roles' leads, by role, per structural state of the sessions (a lead is a structural fact). */
+let leadsMemo: { sig: string; leads: Map<string, string> } | null = null;
+function roleLeadsOf(sessions: Record<string, InboxSession>): Map<string, string> {
+  const sig = sessionsWakeSig(sessions);
+  if (leadsMemo?.sig !== sig) {
+    const leads = new Map<string, string>();
+    for (const id in sessions) if (sessions[id]?.standing_role_id) leads.set(String(sessions[id].standing_role_id), id);
+    leadsMemo = { sig, leads };
+  }
+  return leadsMemo.leads;
+}
+/**
+ * A digest of the linked rows' mark facts and, for a role's session, its
+ * lead's: what the marks read beyond the inbox's own wake signatures. Short
+ * and numeric, never the rows spelled out.
+ */
+function linkedRowsSig(sessions: Record<string, InboxSession>, ids: readonly string[]): string {
+  let leads: Map<string, string> | null = null;
+  const out: number[] = [];
+  for (const id of ids) {
+    const r = sessions[id];
+    if (!r) { out.push(0); continue; }
+    out.push(markFactsHash(r));
+    if (r.org_role_id) {
+      leads ??= roleLeadsOf(sessions);
+      const lead = sessions[leads.get(String(r.org_role_id)) ?? ""];
+      if (lead) out.push(markFactsHash(lead));
+    }
+  }
+  return out.map((h) => (h >>> 0).toString(36)).join(".");
+}
 
 /**
  * What each linked session's inbox draws for it, by conversation id
@@ -60,18 +117,19 @@ export function usePriorityLiveStates(ids: readonly string[], now: number, inbox
     (st) => resolveShowOld(st.clientState.ui),
     (st) => teamInboxIdsOf(st),
     (st) => placementDecisionsSig(st.sessionDecisions),
+    (st) => queuedDecisionsSig(st.sessionDecisions),
     (st) => st.questionResolutions,
     (st) => st.newSessionHolds,
     (st) => st.killedShelf?.ids,
     (st) => st.livenessHeldAt,
     (st) => hostedStopsSig(st.sessions, st.messages),
     (st) => st.currentSessionId,
-    // Each linked row's own facts its card reads (an ask, an error, a stop), its liveness stamps left out.
-    (st) => linkedRowsSig(st.sessions as Record<string, any>, ids),
+    // Each linked row's own facts its card reads (an ask, an error, a stop), and its role lead's: a digest.
+    (st) => linkedRowsSig(st.sessions, ids),
   ]);
   const coarseNow = useCoarseNow(INBOX_CLOCK_MS);
   const key = ids.join(",");
-  const rowsSig = linkedRowsSig(s.sessions as Record<string, any>, ids);
+  const rowsSig = linkedRowsSig(s.sessions, ids);
   const focus = focusOf(s, focusedId);
   return useMemo(() => {
     const at = Math.max(now, coarseNow);
@@ -82,7 +140,7 @@ export function usePriorityLiveStates(ids: readonly string[], now: number, inbox
     }
     return (id: string) => marks.get(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the wake signatures stand in for the churny refs placement reads
-  }, [key, rowsSig, inbox, focus, now, coarseNow, sessionsWakeSig(s.sessions), s.sessionsWithQueuedMessages, s.blockedReviveRequestedAt, pendingSendWakeSig(s.pendingMessages), s.pendingSessionCreates, s.currentUser?._id, s.clientState.ui?.inbox_scope, resolveShowOld(s.clientState.ui), teamInboxIdsOf(s), placementDecisionsSig(s.sessionDecisions), s.questionResolutions, s.newSessionHolds, s.killedShelf?.ids, s.livenessHeldAt, hostedStopsSig(s.sessions, s.messages)]);
+  }, [key, rowsSig, inbox, focus, now, coarseNow, sessionsWakeSig(s.sessions), s.sessionsWithQueuedMessages, s.blockedReviveRequestedAt, pendingSendWakeSig(s.pendingMessages), s.pendingSessionCreates, s.currentUser?._id, s.clientState.ui?.inbox_scope, resolveShowOld(s.clientState.ui), teamInboxIdsOf(s), placementDecisionsSig(s.sessionDecisions), queuedDecisionsSig(s.sessionDecisions), s.questionResolutions, s.newSessionHolds, s.killedShelf?.ids, s.livenessHeldAt, hostedStopsSig(s.sessions, s.messages)]);
 }
 
 /** Every linked session's conversation id across `rows`, sorted, once each. */

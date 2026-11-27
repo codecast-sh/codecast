@@ -30,7 +30,7 @@
 // whatever its score, so blocked-and-reachable always leads (sd-3584).
 // Among equal scores the oldest leads: a parked agent's cost grows with its
 // age, so oldest-first minimizes fleet idle time.
-import { BLOCKED_BANNER_KINDS, escalatedAsks, isHostedAgentType, isStackedAsk, liftsAskingSession } from "@codecast/shared/contracts";
+import { BLOCKED_BANNER_KINDS, agentAnswersRow, escalatedAsks, isHostedAgentType, isStackedAsk, liftsAskingSession } from "@codecast/shared/contracts";
 import { APPROVAL_ANSWERS } from "@codecast/shared/contracts/assistant";
 import { byImpact } from "@codecast/shared/contracts/decisionImpact";
 import { nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
@@ -267,6 +267,16 @@ export function optionPageSlugs(options: ReadonlyArray<Pick<DecisionOption, "pag
  *  queue on the draft, before the server drops it from their feed. */
 export function askedOfViewer(d: { asked_user_ids?: string[]; in_queue?: boolean }, meId: string | undefined): boolean {
   return inViewerQueue(d) && (!d.asked_user_ids || !meId || d.asked_user_ids.includes(meId));
+}
+
+/** Whether an authored decision stands in the viewer's Decisions queue (hooks/useDecisionQueue buildDecisionQueue): a stacked ask asked of them, wherever its session sits. */
+export function queuesDecision(d: SessionDecisionItem, meId: string | undefined): boolean {
+  return isStackedAsk(d) && askedOfViewer(d, meId);
+}
+
+/** Whether a session in the viewer's own scope stands in their Decisions queue by its own open question or permission prompt (no authored row covering it): one its agent owner answers is the agent's until passed up. */
+export function queuesOwnAsk(row: InboxSession, resolutions: Parameters<typeof sessionHasOpenQuestion>[1]): boolean {
+  return !agentAnswersRow(row as any) && sessionHasOpenQuestion(row, resolutions);
 }
 
 /** Whether a decision is the viewer's own, in or out of the queue: one their Close of its session took out of the queue

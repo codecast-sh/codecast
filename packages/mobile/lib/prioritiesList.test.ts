@@ -135,6 +135,22 @@ describe('an open milestone', () => {
     expect(sessionRowMark(m.sessions[0])).toBe('error');
   });
 
+  it("a session riding its role's lead opens the lead: the Needs you mark and its row both carry the lead as their target", () => {
+    const r = row({ links: [link('s1'), link('s2', [session('r', 'working')]), link('s3'), link('s4'), link('p1'), link('p2')] });
+    const m = buildModels([r], undefined, (id) => (id === 'conv-r' ? { mark: 'needs_you' as const, asks: true, target: 'conv-lead' } : undefined), lastDays(10, NOW))[0].milestones.find((x) => x.key === 's2')!;
+    const mark = milestoneMark(m);
+    expect(mark).toMatchObject({ kind: 'needs_you', session: { short_id: 'r', target: 'conv-lead' } });
+    expect(m.sessions[0].target).toBe('conv-lead');
+    // Not drawn: its own conversation.
+    expect(ms(row(), 's3').sessions[0].target).toBe('conv-b');
+  });
+
+  it("a session the phone does not draw whose own state asks reads idle, never sleeping", () => {
+    const m = ms(row(), 's2');
+    expect(m.sessions.find((x) => x.short_id === 'a')!.state).toBe('idle');
+    expect(milestoneMark(m).kind).not.toBe('dormant');
+  });
+
   it("names its own plan, else the priority's on the list; the priority's screen shows that once and passes none", () => {
     const r = row({ plan: PLAN, links: [link('s1'), link('s2', [], { part_of: [BIG] }), link('s3', [], { plan: { ...PLAN, short_id: 'pl-61' } }), link('s4'), link('p1'), link('p2')] });
     const m = model(r);

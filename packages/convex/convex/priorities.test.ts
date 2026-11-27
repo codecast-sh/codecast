@@ -310,6 +310,24 @@ describe("reads", () => {
     expect(s2.sessions_more).toBe(1);
   });
 
+  test("a session settled done reads closed only while the verdict is current: once it works again it is live", async () => {
+    const { t, as, ada, acme, ws, p1 } = await world();
+    await t.run(async (ctx) => {
+      const conv = (short_id: string, fields: Record<string, unknown>) => ctx.db.insert("conversations", {
+        user_id: ada, team_id: acme, agent_type: "claude_code", session_id: short_id, short_id, title: `Session ${short_id}`,
+        started_at: NOW, message_count: 3, is_private: false, team_visibility: "full", status: "active",
+        priority_id: p1, priority_step_key: "s2", ...fields,
+      } as any);
+      // Settled done, nothing since; and settled done a day ago, working again now.
+      await conv("jx7setl", { settle_verdict: "done", settle_verdict_at: NOW, updated_at: NOW - 1000 });
+      await conv("jx7agan", { settle_verdict: "done", settle_verdict_at: NOW - DAY, updated_at: NOW });
+    });
+    const [row] = await rowsOf(as(ada), { workspace: ws });
+    const states = Object.fromEntries(row.links.find((l: any) => l.key === "s2").sessions.map((s: any) => [s.short_id, s.state]));
+    expect(states.jx7setl).toBe("done");
+    expect(states.jx7agan).toBe("idle");
+  });
+
   test("history names today's sessions no priority holds, for the No priority share", async () => {
     const { as, ada, ws } = await world();
     const res = await as(ada).query(pri.history, { days: 10, workspace: ws });

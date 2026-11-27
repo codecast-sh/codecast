@@ -6,7 +6,7 @@
 // the milestone's brief.
 import type { ReactNode } from "react";
 import Link from "next/link";
-import { SquarePen } from "lucide-react";
+import { Rocket, SquarePen } from "lucide-react";
 import type { PriorityRow } from "@codecast/shared/contracts/priorities";
 import type { MilestoneStateKind } from "@codecast/shared/contracts/priorityDerive";
 import { SessionStatusMark } from "../inbox/SessionStatusMark";
@@ -142,6 +142,16 @@ export function NeedsYouMark({ href, label }: { href?: string; label?: string })
       <SessionStatusMark status="needs_you" size={13} />
     </Link>
   );
+}
+
+/** A deploy in an open milestone's list (and the legend): green once live, red when it failed, grey on its way. */
+export function DeployMark({ status }: { status: string }) {
+  return <Rocket className={cn("size-3.5", status === "live" ? "text-sol-green" : status === "failed" ? "text-sol-red" : "text-sol-text-dim")} />;
+}
+
+/** A task whose row has not loaded has no status to draw: a neutral dot, never Open. */
+export function UnknownTaskMark() {
+  return <span data-task-status="unknown" aria-hidden className="block size-1.5 rounded-full bg-sol-text-dim/50" />;
 }
 
 /** The filled primary pen, the New session button's icon. `href`: the composer to open; without one it is the mark alone (the legend). */

@@ -11,6 +11,7 @@ import { activeGroup, positionOf, positionsOf } from "./lib/priorityGroup";
 import { passTiming } from "./priorityPassSweep";
 import { isSessionOwner } from "./sessionOwners";
 import { rowPinPredatesTurn } from "@codecast/shared/contracts/inboxPlacement";
+import { isSettleVerdictCurrent } from "@codecast/shared/contracts";
 import { attributePlans, isClosedSession, isWorkflowSession, orderSessions, type PlanFacts } from "@codecast/shared/contracts/priorityDerive";
 import type { PriorityCorrection, PriorityDetail, PriorityLinkedSession, PriorityLinkWhy, PriorityList, PriorityMilestoneLinks, PriorityPlanRef, PriorityRow, PrioritySession, PrioritySessionState, PriorityStatus, PriorityStep } from "@codecast/shared/contracts/priorities";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -190,7 +191,8 @@ export function linkedSessionState(c: Doc<"conversations">, now: number): Priori
   const pin = rowPinPredatesTurn(c as any) ? undefined : c.thread_state_status;
   if (pin === "blocked" || c.pending_api_error || c.session_error) return "needs_you";
   if (pin === "dormant" || (c.inbox_snoozed_until ?? 0) > now || c.parked_wake_kind || c.armed_trigger_kind) return "dormant";
-  if (pin === "done" || c.settle_verdict === "done") return "done";
+  // A settle verdict holds only while no activity followed it (a session settled done that started working again is live).
+  if (pin === "done" || (c.settle_verdict === "done" && isSettleVerdictCurrent(c))) return "done";
   return "idle";
 }
 

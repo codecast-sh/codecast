@@ -1690,8 +1690,6 @@ function SessionBeacon({
 // Memoized (see the export at the bottom of the file): the layout re-renders
 // often with identical props, and every un-memoized pass here rebuilt ~100
 // cards' worth of elements.
-// The declared status a status section's header already says, so a card under
-// it does not repeat it as a chip.
 
 function SessionListPanelImpl({
   onSessionSelect,
