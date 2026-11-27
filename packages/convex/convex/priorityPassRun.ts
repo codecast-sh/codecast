@@ -15,6 +15,12 @@ import { v } from "convex/values";
 import { internalAction, internalMutation, internalQuery } from "./functions";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
+import type { MutationCtx } from "./_generated/server";
+import { PRIORITY_CARDS_EXPERIMENT } from "@codecast/shared/contracts/priorityCard";
+import { hasExperiment } from "./lib/experiments";
+import { splitPlan } from "./lib/priorityCard";
+import { cardDraft, type CardDraft } from "./lib/priorityCardPass";
+import { postPriorityCard } from "./priorityCardPost";
 import { nextShortId } from "./counters";
 import { runModelCall, type CallScope } from "./modelCalls";
 import { modelCallProblem } from "@codecast/shared/contracts/modelCall";
@@ -166,15 +172,16 @@ export const reserve = internalMutation({
   },
 });
 
-type Gate = { on: boolean; cursor_at: number; budgeted: boolean };
+type Gate = { on: boolean; cursor_at: number; budgeted: boolean; cards?: boolean };
 
-/** Whether the pass may write here (passOn), the cursor, and whether the workspace pays for model calls. */
+/** Whether the pass may write here (passOn), the cursor, whether the workspace pays for model calls, and whether the person's changes go on a card (the priority_cards experiment). */
 export const passGate = internalQuery({
   args: { user_id: v.id("users"), workspace: v.string() },
   handler: async (ctx, args): Promise<Gate> => {
     const on = await passOn(ctx, args.user_id, args.workspace);
     const budget = await ctx.db.query("team_budgets").withIndex("by_workspace", (q: any) => q.eq("workspace", args.workspace)).first();
-    return { on, cursor_at: await cursorFor(ctx, args.user_id, args.workspace, Date.now()), budgeted: (budget?.cap_usd ?? 0) > 0 };
+    const cards = await hasExperiment(ctx, args.user_id, PRIORITY_CARDS_EXPERIMENT);
+    return { on, cursor_at: await cursorFor(ctx, args.user_id, args.workspace, Date.now()), budgeted: (budget?.cap_usd ?? 0) > 0, ...(cards ? { cards } : {}) };
   },
 });
 
@@ -307,16 +314,50 @@ export const releaseStrays = internalMutation({
  * its plan was made from what that run has since changed.
  */
 export const applyPlan = internalMutation({
-  args: { ...runRowArgs, from_cursor: v.number(), plan: v.any(), conversations: v.optional(v.record(v.string(), v.id("conversations"))), strays: v.optional(v.array(v.id("conversations"))), corrections: v.optional(v.array(v.id("priority_corrections"))), superseded: v.optional(v.array(v.id("priority_corrections"))) },
+  args: {
+    ...runRowArgs, from_cursor: v.number(), plan: v.any(), conversations: v.optional(v.record(v.string(), v.id("conversations"))), strays: v.optional(v.array(v.id("conversations"))), corrections: v.optional(v.array(v.id("priority_corrections"))), superseded: v.optional(v.array(v.id("priority_corrections"))),
+    /** Behind the priority cards experiment: `plan` is the run's direct part, and this the card for the rest (lib/priorityCardPass CardDraft), posted in this same write. */
+    card: v.optional(v.any()),
+  },
   handler: async (ctx, args): Promise<Counts | null> => {
-    const { plan: raw, from_cursor, conversations, strays, corrections, superseded, ...run } = args;
-    const vis = sessionVisibility(ctx);
+    const { plan, from_cursor, conversations, strays, corrections, superseded, card, ...run } = args;
     const recent = await recentRuns(ctx, args.user_id, args.workspace);
     if (recent.some((r) => r.status === "ok" && r.finished_at > args.started_at)) {
       await settleRun(ctx, { ...run, cursor_at: from_cursor, status: "skipped", error: "superseded" });
       return null;
     }
-    const plan = raw as MergePlan;
+    const counts = await writePlan(ctx, { user_id: args.user_id, workspace: args.workspace }, plan as MergePlan, { conversations, strays });
+    const now = Date.now();
+
+    for (const id of [...(corrections ?? []), ...(superseded ?? [])]) {
+      const c: Doc<"priority_corrections"> | null = await ctx.db.get(id);
+      if (c?.status === "pending" && !c.deleted_at && String(c.user_id) === String(args.user_id) && c.workspace === args.workspace) {
+        await ctx.db.patch(id, { status: "applied", applied_at: now, applied_window: { from: from_cursor, to: args.cursor_at }, ...((superseded ?? []).includes(id) ? { superseded: true } : {}) });
+      }
+    }
+
+    const run_id = await settleRun(ctx, { ...run, status: "ok", counts });
+    if (card) {
+      const posted = await postPriorityCard(ctx, { user_id: args.user_id, workspace: args.workspace, run_id, cost_usd: args.cost_usd, from: from_cursor, to: args.cursor_at, conversations }, card as CardDraft, now);
+      if (posted && "skipped" in posted) await ctx.db.patch(run_id, { error: posted.skipped });
+    }
+    return counts;
+  },
+});
+
+/**
+ * A plan's writes (applyPlan's, and an answered priority card's through
+ * lib/priorityCardApply), with no run bookkeeping: the checks against the rows
+ * as they are now, as applyPlan describes them. `conversations` resolves the
+ * session names the plan uses; `strays` are sessions that left the workspace.
+ */
+export async function writePlan(
+  ctx: MutationCtx,
+  args: { user_id: Id<"users">; workspace: string },
+  plan: MergePlan,
+  { conversations, strays }: { conversations?: Record<string, Id<"conversations">>; strays?: Id<"conversations">[] } = {},
+): Promise<Counts> {
+    const vis = sessionVisibility(ctx);
     const now = Date.now();
     const counts: Counts = { ...NO_COUNTS };
     const ids = new Map<string, Id<"priorities">>();
@@ -526,18 +567,8 @@ export const applyPlan = internalMutation({
     await recount(args.user_id);
     // A new priority or milestone: the classifier asks again about the sessions it left unassigned.
     if (counts.created || newMilestone) await askRerun(ctx, args.user_id, args.workspace);
-
-    for (const id of [...(corrections ?? []), ...(superseded ?? [])]) {
-      const c: Doc<"priority_corrections"> | null = await ctx.db.get(id);
-      if (c?.status === "pending" && !c.deleted_at && String(c.user_id) === String(args.user_id) && c.workspace === args.workspace) {
-        await ctx.db.patch(id, { status: "applied", applied_at: now, applied_window: { from: from_cursor, to: args.cursor_at }, ...((superseded ?? []).includes(id) ? { superseded: true } : {}) });
-      }
-    }
-
-    await settleRun(ctx, { ...run, status: "ok", counts });
     return counts;
-  },
-});
+}
 
 export function callScope(workspace: string): CallScope {
   const ws = parseWorkspaceKey(workspace);
@@ -620,7 +651,7 @@ async function pass(ctx: any, args: PassArgs): Promise<PassResult> {
     return { status: "skipped", reason: "nothing_new", ...(chained ? { chained } : {}) };
   }
   const { input, readTo, left } = runShare(read, read.input, fittingPrefix(read.input));
-  const { req } = priorityPassRequest(input);
+  const { req } = priorityPassRequest(input, gate.cards ? { why: true } : {});
   const spec = { model: req.model, max_tokens: req.max_tokens, system: req.system, prompt: req.prompt, output: "json" as const, output_schema: req.output_schema };
   const reply = await runModelCall(
     ctx,
@@ -642,10 +673,13 @@ async function pass(ctx: any, args: PassArgs): Promise<PassResult> {
   const { output, dropped } = parsePriorityPassOutput(reply.json, input);
   if (!output) return fail(`unreadable reply: ${dropped.join("; ")}`, true);
   const plan = mergePriorities(input, output);
+  // Behind the priority cards experiment only the direct part is written; every other change goes on the card, posted in the same write.
+  const split = gate.cards ? splitPlan(plan, input, output) : null;
+  const card = split ? { card: cardDraft(split, plan, input, output) } : {};
   // A plan that fails to land still cost the call: record it (the day's ceiling counts it), and a repeat failure steps the cursor past after FAILURES_BEFORE_STEP.
   let counts: Counts | null;
   try {
-    counts = await ctx.runMutation(self.applyPlan, { ...base, run_id, cursor_at: readTo, from_cursor: cursor_at, cost_usd: reply.cost_usd, plan, conversations: read.conversations, strays: read.strays, corrections: read.corrections, superseded: read.superseded });
+    counts = await ctx.runMutation(self.applyPlan, { ...base, run_id, cursor_at: readTo, from_cursor: cursor_at, cost_usd: reply.cost_usd, plan: split ? split.direct : plan, conversations: read.conversations, strays: read.strays, corrections: read.corrections, superseded: read.superseded, ...card });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     return fail(`applying the plan failed: ${message}`.slice(0, 500), !TRANSIENT_APPLY_ERRORS.test(message));

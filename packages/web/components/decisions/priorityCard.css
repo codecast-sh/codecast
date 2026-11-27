@@ -1,0 +1,128 @@
+/* The priority change card (PriorityChangeCard, plan pl-1131). One grid for
+   every line: rank gutter | icon | text | checkbox, shared by a priority's
+   header and its change rows. Themed only with --sol-* tokens (and the change
+   card's ink mixes from changeCard.css). The card sizes itself to its own
+   width: two columns when there is room, the list alone on a phone. */
+
+.pcc {
+  --pcc-teal: color-mix(in oklab, var(--sol-cyan) 72%, var(--sol-text));
+  --pcc-g: 40px; --pcc-ic: 20px; --pcc-gap: 12px; --pcc-cb: 22px;
+  container: pcc / inline-size;
+  color: var(--sol-text);
+  font-size: 14px;
+  line-height: 1.5;
+}
+.pcc-page { display: grid; grid-template-columns: minmax(0, 680px) minmax(240px, 300px); gap: 40px; align-items: start; }
+.pcc-main { min-width: 0; }
+
+/* Top: what asked, when, and the Quotes switch. */
+.pcc-topline { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; font-size: 13px; color: var(--sol-text-muted); white-space: nowrap; min-width: 0; }
+.pcc-kind { display: inline-flex; align-items: center; gap: 6px; color: var(--pcc-teal); font-weight: 600; flex: none; }
+.pcc-kind svg { width: 14px; height: 14px; }
+.pcc-when { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.pcc-spacer { flex: 1; }
+.pcc-quotes { flex: none; display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: 7px; border: 1px solid var(--sol-border); background: var(--sol-card); font-size: 13px; font-weight: 500; color: var(--sol-text-muted); cursor: pointer; transition: background-color 120ms, border-color 120ms, color 120ms; }
+.pcc-quotes:hover { color: var(--sol-text); }
+.pcc-quotes.is-on { color: var(--pcc-teal); background: color-mix(in srgb, var(--pcc-teal) 12%, var(--sol-card)); border-color: color-mix(in srgb, var(--pcc-teal) 45%, transparent); }
+.pcc-quotes svg { width: 14px; height: 14px; }
+
+.pcc-headline { margin: 0 0 6px; font-family: var(--font-serif); font-size: 32px; line-height: 1.18; font-weight: 600; letter-spacing: -0.01em; color: var(--sol-text); text-wrap: balance; }
+.pcc-case { margin: 0 0 20px; font-size: 15px; line-height: 1.6; color: var(--sol-text); max-width: 62ch; }
+.is-answered { margin-top: 12px; }
+
+/* The list: a hairline between priorities, none above the first. */
+.pcc-group { padding: 14px 0 10px; border-top: 1px solid color-mix(in srgb, var(--sol-border) 80%, transparent); }
+.pcc-group:first-child { border-top: 0; padding-top: 4px; }
+.pcc-head, .pcc-row { display: grid; grid-template-columns: var(--pcc-g) var(--pcc-ic) minmax(0, 1fr) var(--pcc-cb); column-gap: var(--pcc-gap); align-items: baseline; }
+.pcc-head { padding: 4px 0 6px; }
+.pcc-rank { text-align: right; font-size: 15px; color: var(--sol-text-muted); font-variant-numeric: tabular-nums; }
+.pcc-rank.is-new { font-size: 11px; font-weight: 700; letter-spacing: 0.05em; color: var(--pcc-teal); }
+.pcc-title { grid-column: 2 / 4; font-size: 16px; font-weight: 650; color: var(--sol-text); }
+
+.pcc-row { padding: 6px 0; border-radius: 6px; }
+.pcc-row[role="checkbox"] { cursor: pointer; }
+.pcc-row[role="checkbox"]:focus-visible { outline: 2px solid color-mix(in srgb, var(--pcc-teal) 60%, transparent); outline-offset: 2px; }
+.pcc-icon { grid-column: 2; align-self: start; display: flex; width: var(--pcc-ic); height: var(--pcc-ic); padding-top: 2px; }
+.pcc-icon svg { width: 18px; height: 18px; }
+.pcc-text { grid-column: 3; min-width: 0; font-size: 15px; }
+.pcc-line { overflow-wrap: anywhere; }
+.pcc-prefix { font-weight: 600; color: var(--sol-text); }
+
+.pcc-tone-up { color: var(--cc-green-ink); }
+.pcc-tone-down { color: var(--cc-yellow-ink); }
+.pcc-tone-new { color: var(--pcc-teal); }
+.pcc-tone-edit { color: var(--sol-violet); }
+.pcc-tone-red { color: var(--cc-red-ink); }
+.pcc-tone-blue { color: var(--cc-blue-ink); }
+.pcc-tone-mute { color: var(--sol-text-muted); }
+
+/* The checkbox: a filled teal square with a check, or an empty outline. */
+.pcc-box { grid-column: 4; align-self: start; margin-top: 1px; width: 20px; height: 20px; border-radius: 5px; background: var(--pcc-teal); display: grid; place-items: center; }
+.pcc-box::after { content: ""; width: 9px; height: 5px; border: 2px solid var(--sol-bg); border-top: 0; border-right: 0; transform: rotate(-45deg) translate(1px, -1px); }
+.pcc-row.is-off .pcc-box { background: transparent; border: 1.5px solid var(--sol-border); }
+.pcc-row.is-off .pcc-box::after { display: none; }
+.pcc-row[role="checkbox"]:hover .pcc-box { box-shadow: 0 0 0 3px color-mix(in srgb, var(--pcc-teal) 18%, transparent); }
+
+/* An unticked or declined row fades and its line is struck. */
+.pcc-row.is-off .pcc-icon, .pcc-row.is-off .pcc-line { opacity: 0.4; }
+.pcc-row.is-off .pcc-ev { opacity: 0.45; }
+.pcc-row.is-off .pcc-line { text-decoration: line-through; text-decoration-color: var(--sol-text-dim); }
+.is-answered .pcc-row.is-off .pcc-line { opacity: 1; color: var(--sol-text-dim); }
+.is-answered .pcc-row.is-off .pcc-line .pcc-prefix { color: var(--sol-text-dim); }
+/* The person's own words under a change they declined read at full strength. */
+.is-answered .pcc-row.is-off .pcc-ev { opacity: 1; }
+
+/* An existing milestone, priority or goal the row names. */
+.pcc-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 0 7px 0 5px; border: 1px solid var(--sol-border); border-radius: 5px; background: var(--sol-card); font-size: 14px; line-height: 20px; vertical-align: baseline; }
+.pcc-chip-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Evidence: a quote (italic, quoted, then who, where and when) or an event (upright), on one left bar. */
+.pcc-ev { margin-top: 4px; padding-left: 10px; border-left: 2px solid color-mix(in srgb, var(--sol-text-muted) 30%, transparent); font-size: 14px; line-height: 1.45; color: var(--sol-text-muted); }
+.pcc-ev em.pcc-ev-text { font-style: italic; color: var(--sol-text); }
+.pcc-ev.is-event .pcc-ev-text { color: var(--sol-text); }
+.pcc-ev-at, .pcc-ev-ref { font-family: var(--font-mono, ui-monospace), monospace; font-size: 12px; color: var(--sol-text-dim); }
+.pcc-loose { display: grid; grid-template-columns: var(--pcc-g) var(--pcc-ic) minmax(0, 1fr); column-gap: var(--pcc-gap); padding: 10px 0 2px; border-top: 1px solid color-mix(in srgb, var(--sol-border) 80%, transparent); }
+.pcc-loose > * { grid-column: 3; }
+
+/* The answers. */
+.pcc-answers { margin-top: 22px; }
+.pcc-write { margin-top: 8px; display: flex; flex-direction: column; gap: 8px; }
+.pcc-write-actions { display: flex; justify-content: flex-end; gap: 6px; }
+
+/* Right column: where the words went, and the run's facts. */
+.pcc-side { padding-top: 44px; font-size: 13.5px; display: flex; flex-direction: column; gap: 14px; }
+.pcc-panel { border: 1px solid color-mix(in srgb, var(--sol-border) 80%, transparent); border-radius: 8px; background: color-mix(in srgb, var(--sol-card) 60%, transparent); padding: 10px 14px 12px; }
+.pcc-panel-label { color: var(--sol-text-muted); font-size: 12.5px; margin-bottom: 6px; }
+.pcc-words { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.pcc-words th { text-align: left; padding: 4px 0 6px; white-space: nowrap; }
+.pcc-words th:first-child { width: 30px; }
+.pcc-words th:last-child { width: 92px; }
+.pcc-words th button { font-size: 11px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--sol-text-dim); cursor: pointer; }
+.pcc-words th.is-on button { color: var(--sol-text); }
+.pcc-words .is-r { text-align: right; }
+.pcc-words td { padding: 5px 0; vertical-align: middle; font-variant-numeric: tabular-nums; }
+.pcc-words-rank { color: var(--sol-text-muted); }
+.pcc-words-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-right: 10px; }
+.pcc-bar { display: inline-block; width: 38px; height: 5px; margin-right: 6px; border-radius: 2px; background: color-mix(in srgb, var(--sol-border) 70%, transparent); vertical-align: middle; overflow: hidden; }
+.pcc-bar i { display: block; height: 100%; background: var(--cc-green-fill); }
+.pcc-bar i.is-none { background: var(--sol-text-dim); opacity: 0.5; }
+.pcc-words tr.is-warn td { color: var(--cc-yellow-ink); }
+.pcc-facts { margin: 0; display: grid; gap: 4px; padding: 0 14px; font-size: 12.5px; }
+.pcc-facts > div { display: flex; justify-content: space-between; gap: 12px; }
+.pcc-facts dt { color: var(--sol-text-dim); }
+.pcc-facts dd { margin: 0; color: var(--sol-text); font-variant-numeric: tabular-nums; }
+
+/* Medium: the side column moves under the list; a phone hides it. */
+@container pcc (max-width: 820px) {
+  .pcc-page { grid-template-columns: minmax(0, 1fr); gap: 24px; }
+  .pcc-side { padding-top: 0; max-width: 420px; }
+}
+@container pcc (max-width: 520px) {
+  .pcc-page { --pcc-g: 26px; --pcc-gap: 10px; --pcc-cb: 28px; }
+  .pcc-side { display: none; }
+  .pcc-headline { font-size: 25px; }
+  .pcc-case { font-size: 14.5px; }
+  .pcc-box { width: 24px; height: 24px; }
+  .pcc-row { padding: 8px 0; }
+  .pcc-answers .decision-option { min-height: 52px; align-items: center; }
+}

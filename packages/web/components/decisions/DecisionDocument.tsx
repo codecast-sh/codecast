@@ -26,6 +26,7 @@ import { useDecisionStep, type DecisionStep } from "../../hooks/useDecisionStep"
 import { useDecisionQueue } from "../../hooks/useDecisionQueue";
 import { HandoffNote } from "./DecisionParties";
 import { ChangeCardHeadline, ChangeCardVerdictBar, ChangeCardView } from "./ChangeCardView";
+import { PriorityCardDecision } from "./PriorityCardDecision";
 import { ShareControl } from "../ShareControl";
 import { decisionWaitLabel, ladderRecommenders, waitsOnViewer } from "../../lib/decisionLinks";
 import { DecisionAnswerPanel, restatesCard, useDecisionAnswering, useDecisionPage } from "./DecisionAnswering";
@@ -59,7 +60,12 @@ function Empty({ text }: { text: string }) {
 function DocumentBody({ decision, detail, answerable, pager, nav }: { decision: SessionDecisionItem; detail: DecisionDetailItem; answerable: boolean; pager: boolean; nav?: ReactNode }) {
   const a = useDecisionAnswering(decision, detail, answerable);
   const meId = useInboxStore((st) => st.currentUser?._id as string | undefined);
-  const { now, pending, rec, answerInOptions, verdictBar, chosen, onAnswer, onDismiss, heldNote, outcome, closed, banner, doubt } = a;
+  const { now, pending, rec, answerInOptions, verdictBar, chosen, onAnswer, onDismiss, heldNote, outcome, closed, doubt } = a;
+  // A priorities pass's proposal is drawn as its own card: headline, changes,
+  // answers and record. Its Accept none settles as a dismissal, which the card
+  // itself records, so no closed banner says it again.
+  const priorityCard = decision.priority_card;
+  const banner = priorityCard && decision.status === "dismissed" ? null : a.banner;
   // A card's cause task may carry the author's change guide; its evidence row holds it.
   useSyncTaskEvidence(a.cardTask);
   const guide = useTaskEvidenceByShortId(a.cardTask)?.change_guide ?? null;
@@ -87,7 +93,8 @@ function DocumentBody({ decision, detail, answerable, pager, nav }: { decision: 
   return (
     <div className={`h-full overflow-y-auto decision-doc${pager ? " decision-doc-nav" : ""}`} data-main-scroll>
       {/* One measure for every decision: a change card stacks its proof over its examples, so it needs no wider page. */}
-      <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 pb-16">
+      {/* A priority card sets its changes beside where your words went, so it takes a wider page. */}
+      <div className={`${priorityCard ? "max-w-6xl" : "max-w-4xl"} mx-auto px-4 sm:px-6 lg:px-8 pt-6 pb-16`}>
         {nav ?? (pager && (
           <nav className="decision-nav flex items-center gap-3" data-decision-nav>
             <Link href="/decisions" className="inline-flex items-center gap-1 text-meta text-sol-text-dim hover:text-sol-text transition-colors no-underline">
@@ -122,7 +129,7 @@ function DocumentBody({ decision, detail, answerable, pager, nav }: { decision: 
           {decision.workflow_run_id && <FlowContext runId={decision.workflow_run_id} focus={{ decisionId: decision._id, nodeId: decision.gate_node_id }} className="mt-3" />}
           {/* A change card leads with what changed, and its cause and goal under
               it, so the first line says what and the second says why. */}
-          {decision.card ? <ChangeCardHeadline card={decision.card} question={decision.question} questionFirst className="mt-3" /> : (
+          {decision.card ? <ChangeCardHeadline card={decision.card} question={decision.question} questionFirst className="mt-3" /> : priorityCard ? null : (
             <>
               <h1 className="mt-3 decision-question text-sol-text">{decision.question}</h1>
               {meta}
@@ -132,7 +139,10 @@ function DocumentBody({ decision, detail, answerable, pager, nav }: { decision: 
         </header>
 
         {/* What the question is about, straight under the question. */}
-        {!decision.card && body && <section className="mt-6">{body}</section>}
+        {!decision.card && !priorityCard && body && <section className="mt-6">{body}</section>}
+
+        {/* The card asks, answers and records in one place: no option list or answer footer beside it. */}
+        {priorityCard && <section className="mt-5" data-decision-priority-card><PriorityCardDecision decision={decision} card={priorityCard} onAnswer={onAnswer} /></section>}
 
         {/* Two ways to discuss, each saying where the words go: into the
             session that asked (its transcript, where a message brings it to
@@ -197,12 +207,12 @@ function DocumentBody({ decision, detail, answerable, pager, nav }: { decision: 
           </section>
         )}
 
-        {!decision.card && <LeadRecommendation decision={decision} detail={detail} className="mt-8" />}
+        {!decision.card && !priorityCard && <LeadRecommendation decision={decision} detail={detail} className="mt-8" />}
 
 
         {/* ── Options ── */}
         {/* A settled card's options collapse into its outcome line. */}
-        {!verdictBar && !outcome && <section className="mt-8">
+        {!verdictBar && !outcome && !priorityCard && <section className="mt-8">
           <h2 className="decision-kicker">{!pending && a.changeable ? "Change your answer" : decision.card ? "Your call" : "Options"}{decision.kind && decision.kind !== "single" ? ` · ${decision.kind === "multi" ? "pick several" : decision.kind === "rank" ? "rank them" : "a form"}` : ""}</h2>
           {/* Option pages (L6) compare side by side above the list; a card's
               number answers on a single kind, where one option is the answer. */}
@@ -250,7 +260,7 @@ function DocumentBody({ decision, detail, answerable, pager, nav }: { decision: 
         </section>}
 
         {/* ── Answer ── */}
-        {a.answerSection && <section className="mt-8 decision-footer rounded-xl border border-sol-border/70 bg-sol-card/50 p-4 sm:p-5">
+        {a.answerSection && !priorityCard && <section className="mt-8 decision-footer rounded-xl border border-sol-border/70 bg-sol-card/50 p-4 sm:p-5">
           <DecisionAnswerPanel decision={decision} detail={detail} answerable={answerable} a={a} />
         </section>}
 

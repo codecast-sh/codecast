@@ -203,6 +203,10 @@ export default defineSchema({
     // refuses a bot as the owner value (bots may still CALL it to park
     // sessions on humans).
     is_bot: v.optional(v.boolean()),
+    // Experiments switched on for this one person by hand (internal mutation
+    // experiments:set); the names live in shared contracts, e.g.
+    // PRIORITY_CARDS_EXPERIMENT in packages/shared/contracts/priorityCard.ts.
+    experiments: v.optional(v.array(v.string())),
     // Whether this person may be recognized by voice in voice notes
     // (voiceprints.ts). Absent is off: consent comes before collection, so
     // with it off nothing about their voice is stored and they are never
@@ -5686,6 +5690,11 @@ export default defineSchema({
     // A change card (the-line-end-to-end.md LE10, shared/contracts/changeCard.ts):
     // the web renders it natively in place of a report. Validated on ask.
     card: v.optional(v.any()),
+    // A priority change card (shared/contracts/priorityCard.ts PriorityCard):
+    // the changes a priorities pass run proposes, with what answering writes
+    // from (its held plan) and, once answered, its outcome. The decision row
+    // is the proposal's one home (priorityCardPost.ts, lib/priorityCardApply.ts).
+    priority_card: v.optional(v.any()),
     // A command the asker wants a person to run (`cast decide --run`,
     // shared/contracts/commandRun.ts): the card shows it, a person's Run
     // executes it on the session's machine (daemon run_cast) and the result

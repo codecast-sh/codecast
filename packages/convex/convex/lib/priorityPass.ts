@@ -241,6 +241,39 @@ export const PRIORITY_PASS_SCHEMA = {
   additionalProperties: false,
 } as const;
 
+/**
+ * Behind the priority cards experiment (shared/contracts/priorityCard.ts) the
+ * pass's changes are proposed on a card, each with its evidence: the prompt
+ * asks for `why` on each priority and step, and the schema allows it. Without
+ * the experiment the system prompt and schema above are sent unchanged.
+ */
+export const PRIORITY_PASS_WHY_SYSTEM = `
+
+Evidence: the person reviews every change you make to their list. On each priority you return, and on each of its steps, give why: at most 3 short excerpts that justify the change, each copied verbatim, character for character, from a line under "What they typed" or from a call's action item. Copy a phrase, not a whole message. Leave why empty when nothing the person typed or took on says it. Never paraphrase or combine lines: an excerpt not found word for word in the input is thrown away.`;
+
+const WHY = { type: "array", items: STRING } as const;
+const PROPOSAL = PRIORITY_PASS_SCHEMA.properties.priorities.items;
+export const PRIORITY_PASS_SCHEMA_WHY = {
+  ...PRIORITY_PASS_SCHEMA,
+  properties: {
+    ...PRIORITY_PASS_SCHEMA.properties,
+    priorities: {
+      ...PRIORITY_PASS_SCHEMA.properties.priorities,
+      items: {
+        ...PROPOSAL,
+        properties: {
+          ...PROPOSAL.properties,
+          why: WHY,
+          steps: { ...PROPOSAL.properties.steps, items: { ...PROPOSAL.properties.steps.items, properties: { ...PROPOSAL.properties.steps.items.properties, why: WHY } } },
+        },
+      },
+    },
+  },
+} as const;
+
+/** `why`: ask for the evidence a priority card shows (the experiment's prompt and schema). */
+export type PassPromptOpts = { why?: boolean };
+
 /** The newest messages that fit the session's budget, kept oldest first. */
 function newestWithin<T extends { text: string }>(items: T[], each: number, total: number): T[] {
   const kept: T[] = [];
@@ -322,7 +355,7 @@ function callBlock(call: PassCall): string {
   return lines.join("\n");
 }
 
-export function buildPriorityPassPrompt(input: PriorityPassInput): { system: string; prompt: string; omitted: string[] } {
+export function buildPriorityPassPrompt(input: PriorityPassInput, opts: PassPromptOpts = {}): { system: string; prompt: string; omitted: string[] } {
   const taskStatus = taskStatusMap(input);
   const goals = input.initiatives.length ? input.initiatives.map((i) => `- ${i.short_id} ${i.title}`).join("\n") : "(none)";
   const finishedBefore = input.now - PRIORITY_PASS_CAPS.finished_days * DAY;
@@ -344,18 +377,18 @@ export function buildPriorityPassPrompt(input: PriorityPassInput): { system: str
     `# Sessions they worked in since the last pass\n${kept.length ? kept.map(sessionBlock).join("\n\n") : "(none)"}`,
     ...(calls ? [`# Calls they were in since the last pass\n${calls}`] : []),
   ].join("\n\n");
-  return { system: PRIORITY_PASS_SYSTEM, prompt, omitted };
+  return { system: opts.why ? PRIORITY_PASS_SYSTEM + PRIORITY_PASS_WHY_SYSTEM : PRIORITY_PASS_SYSTEM, prompt, omitted };
 }
 
-export function priorityPassRequest(input: PriorityPassInput): { req: SurfaceRequest; omitted: string[] } {
-  const { system, prompt, omitted } = buildPriorityPassPrompt(input);
+export function priorityPassRequest(input: PriorityPassInput, opts: PassPromptOpts = {}): { req: SurfaceRequest; omitted: string[] } {
+  const { system, prompt, omitted } = buildPriorityPassPrompt(input, opts);
   return {
     req: {
       model: PRIORITY_PASS_MODEL,
       max_tokens: PRIORITY_PASS_CAPS.max_tokens,
       system,
       prompt,
-      output_schema: PRIORITY_PASS_SCHEMA as unknown as Record<string, unknown>,
+      output_schema: (opts.why ? PRIORITY_PASS_SCHEMA_WHY : PRIORITY_PASS_SCHEMA) as unknown as Record<string, unknown>,
     },
     omitted,
   };

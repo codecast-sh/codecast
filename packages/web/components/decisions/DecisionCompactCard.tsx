@@ -27,6 +27,7 @@ import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import { hasCanvasFence } from "../HtmlSnippet";
 import { plainParagraphs } from "@codecast/shared/contracts/plainText";
 import { decisionWords } from "@codecast/shared/contracts/changeCard";
+import { priorityCardAnswerWord, priorityCardAsk } from "../../lib/priorityCardDecision";
 import "./decisions.css";
 import { useIsModernStyle } from "../../hooks/useVisualStyle";
 import { modernButton, modernPill } from "../ui/modernLook";
@@ -309,7 +310,7 @@ export function DecisionCompactCardView({
               </div>
             ) : (
               <Link href={decisionHref(decision)} className="decision-question block mt-2 text-sol-text hover:text-sol-blue transition-colors">
-                {decision.question}
+                {decision.priority_card ? priorityCardAsk(decision.priority_card) : decision.question}
               </Link>
             )}
           </>
@@ -335,8 +336,11 @@ export function DecisionCompactCardView({
         {pageCount > 0 && (
           <div className="mt-2"><OptionPages decision={decision} answerable={pending && kind === "single"} onAnswer={(i) => onAnswer({ index: i })} /></div>
         )}
-        {decision.status === "answered" && !decision.card && (
+        {decision.status === "answered" && !decision.card && !decision.priority_card && (
           <div className="mt-2.5 border-t border-sol-border/50 pt-2" data-decision-answer><DecisionRecordedAnswer decision={decision} /></div>
+        )}
+        {decision.priority_card && !pending && (
+          <div className="mt-2.5 border-t border-sol-border/50 pt-2 text-[13px] text-sol-text-muted" data-decision-answer>{priorityCardAnswerWord(decision)}</div>
         )}
         {rec !== undefined && (
           <div className="mt-2 text-[12px] text-sol-cyan">a lead recommends: {decision.options[rec]?.label}</div>
@@ -348,7 +352,7 @@ export function DecisionCompactCardView({
             <DecisionAnswerControls decision={decision} onAnswer={onAnswer} onDismiss={onDismiss} keys={keys} size="compact" recommendation={rec} />
           ) : (
             <Link href={decisionHref(decision)} className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded border border-sol-yellow/40 text-[12px] text-sol-text hover:bg-sol-yellow hover:text-sol-bg transition-colors${m ? ` ${modernButton({ variant: "outline", size: "sm" })}` : ""}`}>
-              {kind === "multi" ? "Pick several" : kind === "rank" ? "Rank the options" : "Fill in the form"}<ArrowUpRight className="w-3 h-3" />
+              {decision.priority_card ? "Review the changes" : kind === "multi" ? "Pick several" : kind === "rank" ? "Rank the options" : "Fill in the form"}<ArrowUpRight className="w-3 h-3" />
             </Link>
           )}
         </div>

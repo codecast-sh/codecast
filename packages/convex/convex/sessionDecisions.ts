@@ -50,6 +50,7 @@ import { learnFromCardGate } from "./lineLearn";
 import { settleCardWaiting } from "./lineNotices";
 import { gateTrialPages, runOfStation, settleTrialCard, trialDeciderOf, trialProjectOf, trialStackOf, trialStationOf } from "./lib/trialDecision";
 import { linkProposalDecision, proposalToAsk, settleExpectationCard } from "./lib/expectationsApply";
+import { settlePriorityCard } from "./lib/priorityCardApply";
 import { pendingApproval, secretApprovalRefusal, settleSecretApproval } from "./lib/secretApprovals";
 import { applyCommandRunReport, commandRunRefusal, settleCommandRun } from "./lib/commandRuns";
 import { RUN_OPTION, RUN_OPTIONS, parseRunCommand, type CommandRun } from "@codecast/shared/contracts/commandRun";
@@ -861,6 +862,8 @@ async function settleResolution(ctx: Ctx, row: DecisionRow, verdict: Verdict, by
   await noticeAnsweredForPeople(ctx, row, verdict, by);
   // An expectations proposal's card applies or drops it (LM5).
   await settleExpectationCard(ctx, row, verdict, by, now);
+  // A priority change card writes the changes its person ticked (lib/priorityCardApply.ts).
+  await settlePriorityCard(ctx, row, verdict, by, now);
   // The admins' "Who decides for which areas?" card applies its answer (decisionAreas.ts).
   await settleAreasCard(ctx, row, verdict, by, now);
   // A Vault Ask first read's decision grants or denies that session (vault.md).
@@ -2333,6 +2336,7 @@ function answerBubbleShape(row: Doc<"session_decisions">) {
     form: row.form,
     report_slug: row.report_slug,
     card: row.card,
+    priority_card: row.priority_card,
     run: row.run,
     touch_id: row.touch_id,
     doc_id: row.doc_id,
