@@ -51,7 +51,7 @@ import { settleCardWaiting } from "./lineNotices";
 import { gateTrialPages, runOfStation, settleTrialCard, trialDeciderOf, trialProjectOf, trialStackOf, trialStationOf } from "./lib/trialDecision";
 import { linkProposalDecision, proposalToAsk, settleExpectationCard } from "./lib/expectationsApply";
 import { settlePriorityCard } from "./lib/priorityCardApply";
-import { isPriorityCard, priorityCardForViewer, priorityCardRefusal } from "./lib/priorityCardAccess";
+import { isPriorityCard, priorityCardRefusal, priorityCardVisibleTo } from "./lib/priorityCardAccess";
 import { pendingApproval, secretApprovalRefusal, settleSecretApproval } from "./lib/secretApprovals";
 import { applyCommandRunReport, commandRunRefusal, settleCommandRun } from "./lib/commandRuns";
 import { RUN_OPTION, RUN_OPTIONS, parseRunCommand, type CommandRun } from "@codecast/shared/contracts/commandRun";
@@ -2329,7 +2329,7 @@ async function readableDecision(ctx: any, decisionId: any): Promise<DecisionRow 
 // chosen one, and the agent's reasoning. Shared by the by-id and by-answer
 // lookups so both return the identical shape. The Doc parameter type is what
 // keeps the query return types (and so the web bubble) fully typed.
-function answerBubbleShape(row: Doc<"session_decisions">, viewerId: Id<"users">) {
+function answerBubbleShape(row: Doc<"session_decisions">) {
   return {
     _id: row._id,
     short_id: row.short_id,
@@ -2342,8 +2342,8 @@ function answerBubbleShape(row: Doc<"session_decisions">, viewerId: Id<"users">)
     form: row.form,
     report_slug: row.report_slug,
     card: row.card,
-    // Its person's alone (lib/priorityCardAccess).
-    priority_card: priorityCardForViewer(row, viewerId).priority_card,
+    // Every caller has checked the viewer may receive the row: a card's row reaches its person only (lib/priorityCardAccess).
+    priority_card: row.priority_card,
     run: row.run,
     touch_id: row.touch_id,
     doc_id: row.doc_id,
@@ -2373,7 +2373,7 @@ export const get = query({
     if (!userId) return null;
     const row = await findDecision(ctx, args.decision_id);
     if (!row || !(await userMayRead(ctx, userId, row))) return null;
-    return answerBubbleShape(row, userId);
+    return answerBubbleShape(row);
   },
 });
 
@@ -2454,7 +2454,7 @@ async function decisionContext(ctx: Ctx, row: DecisionRow, viewerId: Id<"users">
 // and says what replaced it (line-versions.md LV3).
 async function decisionDetail(ctx: Ctx, row: DecisionRow, viewerId: Id<"users">, memo?: LineMemo) {
   const [live] = await withLiveSession(ctx, [row]);
-  return { decision: priorityCardForViewer(live, viewerId), ...(await decisionContext(ctx, row, viewerId)), superseded: await decisionSuperseded(ctx, row, memo) };
+  return { decision: live, ...(await decisionContext(ctx, row, viewerId)), superseded: await decisionSuperseded(ctx, row, memo) };
 }
 
 // The document page (D4): the decision, its doc body, task title, stack,
@@ -2513,8 +2513,9 @@ export const findByAnswer = query({
       .query("session_decisions")
       .withIndex("by_conversation_status", (q) => q.eq("conversation_id", args.conversation_id).eq("status", "answered"))
       .collect();
-    const row = pickAnsweredDecision(rows, args.answer, args.near);
-    return row ? answerBubbleShape(row, userId) : null;
+    // A priority card in this session is its person's alone (lib/priorityCardAccess).
+    const row = pickAnsweredDecision(rows.filter((r) => priorityCardVisibleTo(r, userId)), args.answer, args.near);
+    return row ? answerBubbleShape(row) : null;
   },
 });
 
@@ -2650,7 +2651,8 @@ const OPEN_PROBLEM_STATUSES = ["backlog", "open", "in_progress", "in_review"] as
  * per row, so a feed runs it once.
  */
 export async function decisionRowsForViewer(ctx: Ctx, viewerId: Id<"users">, given: DecisionRow[], inQueue: (row: DecisionRow) => boolean | Promise<boolean>, extra: Record<string, unknown> = {}) {
-  const rows = await withDecisionFacts(ctx, given);
+  // A priority card's row reaches its person and nobody else, whichever feed read it (lib/priorityCardAccess).
+  const rows = await withDecisionFacts(ctx, given.filter((r) => priorityCardVisibleTo(r, viewerId)));
   const severity = new Map<string, number | null>();
   const ended = new Map<string, Promise<boolean>>();
   const out = [];
@@ -2669,8 +2671,7 @@ export async function decisionRowsForViewer(ctx: Ctx, viewerId: Id<"users">, giv
     // which sent it, still answers for it in the web's prune and lets it go once it leaves the viewer's list.
     const queued = await inQueue(r);
     const askerGone = queued && (await askerEnded(ctx, viewerId, r, ended));
-    // A priority card reaches its person only (lib/priorityCardAccess): it quotes what they typed.
-    out.push({ ...priorityCardForViewer(r, viewerId), ...extra, passed_to: r.passed_to ? { by: r.passed_to.by, id: r.passed_to.id, kind: r.passed_to.kind, ...(r.passed_to.note ? { note: r.passed_to.note } : {}) } : null, in_queue: queued && !askerGone, ...(askerGone ? { asker_ended: true } : {}), problem_severity: worst });
+    out.push({ ...r, ...extra, passed_to: r.passed_to ? { by: r.passed_to.by, id: r.passed_to.id, kind: r.passed_to.kind, ...(r.passed_to.note ? { note: r.passed_to.note } : {}) } : null, in_queue: queued && !askerGone, ...(askerGone ? { asker_ended: true } : {}), problem_severity: worst });
   }
   return out;
 }
@@ -2816,7 +2817,7 @@ export const listForRole = query({
     // decisions do not show to the whole team through the role.
     const visible: DecisionRow[] = [];
     for (const r of rows) if (await userMayRead(ctx, userId, r)) visible.push(r);
-    return visible.map((r) => ({ ...priorityCardForViewer(r, userId), held_by_role: r.holder_key === `role:${args.role_id}` }));
+    return visible.map((r) => ({ ...r, held_by_role: r.holder_key === `role:${args.role_id}` }));
   },
 });
 
@@ -2836,9 +2837,9 @@ export const listHandledByRoles = query({
     const out = [];
     for (const r of inbox) {
       const d = await ctx.db.get(r.decision_id);
-      if (!d || d.status !== "answered" || d.answered_by?.kind !== "role" || (d.resolved_at ?? 0) < cutoff) continue;
+      if (!d || d.status !== "answered" || d.answered_by?.kind !== "role" || (d.resolved_at ?? 0) < cutoff || !priorityCardVisibleTo(d, userId)) continue;
       out.push({
-        ...priorityCardForViewer(d, userId),
+        ...d,
         role: await roleSummary(ctx, d.answered_by.id as Id<"org_roles">),
         grant: d.grant_id ? await ctx.db.get(d.grant_id) : null,
       });

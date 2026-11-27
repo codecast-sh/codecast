@@ -9,7 +9,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { changeLine, type PriorityCard, type PriorityWordsRow } from "@codecast/shared/contracts/priorityCard";
 import { effectivePriorityOrder } from "@codecast/shared/contracts/priorities";
 import { wallClock, wallTimeIn } from "@codecast/shared/time";
-import { isClosedSession, isHostedAgentType, isRunLog } from "@codecast/shared/contracts";
+import { isClosedSession, isHostedAgentType, isNestedIdentity, isRunLog } from "@codecast/shared/contracts";
 import { nextShortId } from "./counters";
 import { syncDecisionInbox } from "./lib/decisionInbox";
 import { parseWorkspaceKey } from "./lib/accessKeys";
@@ -31,9 +31,9 @@ const CONVERSATIONS_READ = 100;
 
 const isCardOf = (d: Doc<"session_decisions">, workspace: string) => (d.priority_card as PriorityCard | undefined)?.workspace === workspace;
 
-/** The person's priority cards in this workspace still waiting on an answer. */
+/** The person's priority cards in this workspace still waiting on an answer, read from their newest open decisions. applyPlan reads them once per run. */
 export async function openCards(ctx: Ctx, userId: Id<"users">, workspace: string): Promise<Doc<"session_decisions">[]> {
-  const pending: Doc<"session_decisions">[] = await ctx.db.query("session_decisions").withIndex("by_user_status", (q: any) => q.eq("user_id", userId).eq("status", "pending")).take(OPEN_READ);
+  const pending: Doc<"session_decisions">[] = await ctx.db.query("session_decisions").withIndex("by_user_status_created", (q: any) => q.eq("user_id", userId).eq("status", "pending")).order("desc").take(OPEN_READ);
   return pending.filter((d) => isCardOf(d, workspace));
 }
 
@@ -49,10 +49,10 @@ export async function cardAnsweredSince(ctx: Ctx, userId: Id<"users">, workspace
   return answered.some((d) => isCardOf(d, workspace));
 }
 
-/** The corrections the person's open cards in this workspace hold: each waits on its card's answer, whatever later runs read. */
-export async function correctionsOnOpenCards(ctx: Ctx, userId: Id<"users">, workspace: string): Promise<Set<string>> {
+/** The corrections `open` (the person's open cards, openCards) hold: each waits on its card's answer, whatever later runs read. */
+export function correctionsOnOpenCards(open: ReadonlyArray<Doc<"session_decisions">>): Set<string> {
   const held = new Set<string>();
-  for (const d of await openCards(ctx, userId, workspace)) for (const id of ((d.priority_card as PriorityCard).held as { corrections?: string[] }).corrections ?? []) held.add(String(id));
+  for (const d of open) for (const id of ((d.priority_card as PriorityCard).held as { corrections?: string[] }).corrections ?? []) held.add(String(id));
   return held;
 }
 
@@ -93,14 +93,16 @@ function startOfToday(now: number, timeZone: string | undefined): number {
  * passInputs read them). Never another person's (a team agent's session is
  * its teammates' to read too), and never one whose decisions draw as
  * something else or reach nobody: a hosted assistant's (its asks are
- * approvals, and a dismissal wakes it), a run's own (its log or a station),
- * or a killed or closed one. The card is not that session's question: it
- * lifts nothing and its agent neither lists nor takes it back.
+ * approvals, and a dismissal wakes it), a run's own (its log, or a station
+ * or subagent nested under another session), or a killed or closed one. A
+ * session the person launched a run from keeps that run's pointer
+ * (workflow_run_id) but stays theirs, so it qualifies. The card is not that
+ * session's question: it lifts nothing and its agent neither lists nor takes it back.
  */
 async function askingConversation(ctx: Ctx, userId: Id<"users">, workspace: string, read: Record<string, Id<"conversations">> = {}): Promise<Doc<"conversations"> | null> {
   const vis = sessionVisibility(ctx);
   const fits = async (c: Doc<"conversations"> | null): Promise<boolean> =>
-    !!c && !isHostedAgentType(c.agent_type) && !isRunLog(c) && !c.workflow_run_id && !c.inbox_killed_at && !isClosedSession(c) && (await inWorkspace(vis, c, userId, workspace));
+    !!c && !isHostedAgentType(c.agent_type) && !isRunLog(c) && !isNestedIdentity(c) && !c.inbox_killed_at && !isClosedSession(c) && (await inWorkspace(vis, c, userId, workspace));
   const recent: Doc<"conversations">[] = await ctx.db.query("conversations").withIndex("by_user_updated", (q: any) => q.eq("user_id", userId)).order("desc").take(CONVERSATIONS_READ);
   for (const c of recent) if (await fits(c)) return c;
   for (const id of Object.values(read)) {
@@ -119,14 +121,15 @@ export type PostedCard = { posted: Id<"session_decisions"> } | { skipped: string
  * session in the workspace to ask from, the changes stay unwritten and the
  * reason comes back for the run's record. The card holds the corrections the
  * run read (`corrections`): they stay pending until the person answers it.
+ * `open` is the person's open cards here (openCards, read once by applyPlan).
  */
 export async function postPriorityCard(
   ctx: Ctx,
   run: { user_id: Id<"users">; workspace: string; run_id: Id<"priority_pass_runs">; cost_usd?: number; from: number; to: number; conversations?: Record<string, Id<"conversations">>; corrections?: Id<"priority_corrections">[] },
   raw: CardDraft,
   now: number,
+  open: ReadonlyArray<Doc<"session_decisions">>,
 ): Promise<PostedCard> {
-  const open = await openCards(ctx, run.user_id, run.workspace);
   const draft = dropRepeats(raw, open.map((d) => d.priority_card as PriorityCard));
   if (!draft.changes.length) return null;
   const asker = await askingConversation(ctx, run.user_id, run.workspace, run.conversations);

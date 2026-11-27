@@ -199,19 +199,21 @@ function PriorityCardStep({ decision, stepper }: { decision: SessionDecisionItem
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onPrev, onSkip, onExit]);
-  const btn = "inline-flex items-center gap-1.5 rounded px-1.5 py-0.5 text-sol-text-dim hover:text-sol-text hover:bg-sol-card disabled:opacity-30 disabled:hover:bg-transparent";
+  // Touch targets on a phone: each control at least 44px, and no key caps where there are no keys.
+  const btn = "inline-flex items-center justify-center gap-1.5 rounded px-1.5 py-0.5 text-sol-text-dim hover:text-sol-text hover:bg-sol-card disabled:opacity-30 disabled:hover:bg-transparent max-[520px]:min-h-11 max-[520px]:min-w-11 [@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:min-w-11";
+  const cap = "max-[520px]:hidden [@media(pointer:coarse)]:hidden";
   return (
     <div className="h-full overflow-y-auto bg-sol-bg" data-decision-queue-card={decision.short_id ?? decision._id}>
       <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 pb-16">
         <div className="flex items-center gap-2 text-meta" data-decision-queue-step={`${position}/${total}`}>
           <button type="button" className={btn} disabled={!onPrev} onClick={onPrev} aria-label="Previous decision">
-            <ChevronLeft className="w-3.5 h-3.5" /><KeyCap size="xs">←</KeyCap>
+            <ChevronLeft className="w-3.5 h-3.5" /><span className={cap}><KeyCap size="xs">←</KeyCap></span>
           </button>
           <span className="tabular-nums text-sol-text-dim">{position} of {total}</span>
           <button type="button" className={btn} onClick={onSkip} aria-label="Skip to the next decision" data-decision-queue-skip>
-            <KeyCap size="xs">→</KeyCap><ChevronRight className="w-3.5 h-3.5" />
+            <span className={cap}><KeyCap size="xs">→</KeyCap></span><ChevronRight className="w-3.5 h-3.5" />
           </button>
-          {onExit && <button type="button" className={`${btn} ml-auto`} onClick={onExit}><KeyCap size="xs">esc</KeyCap><span>Leave</span></button>}
+          {onExit && <button type="button" className={`${btn} ml-auto`} onClick={onExit} data-decision-queue-leave><span className={cap}><KeyCap size="xs">esc</KeyCap></span><span>Leave</span></button>}
         </div>
         <div className="mt-5"><PriorityCardDecision decision={decision} card={decision.priority_card!} onAnswer={onAnswer} /></div>
       </div>

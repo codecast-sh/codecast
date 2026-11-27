@@ -19,7 +19,7 @@ const ROOT = import.meta.dir;
 const PACKAGES = join(ROOT, "../..");
 
 /** What names the rule in a function body. */
-const PREDICATE = /\b(isPriorityCard|notPriorityCard|liftsAskingSession|priorityCardForViewer|priorityCardRefusal|openForHandoff|sessionAsk|handable)\b/;
+const PREDICATE = /\b(isPriorityCard|notPriorityCard|liftsAskingSession|priorityCardVisibleTo|priorityCardRefusal|openForHandoff|sessionAsk|handable)\b/;
 
 /** `via`: the function it hands the row to, which names the rule (it must call it, and that one must name the rule). */
 type Kind = { handles: string; via?: string } | { ignores: string };
@@ -30,7 +30,7 @@ const CLASSIFIED: Record<string, Kind> = {
   "sessionDecisions.ts:askCore": { handles: "a re-ask never reuses the card and other_open never lists it" },
   "sessionDecisions.ts:listForSessionCore": { handles: "`cast decide ls` never lists it" },
   "sessionDecisions.ts:reroutePendingDecisionsForConversation": { handles: "rerouteRow skips it", via: "rerouteRow" },
-  "sessionDecisions.ts:findByAnswer": { handles: "answerBubbleShape strips the card for anyone but its person", via: "answerBubbleShape" },
+  "sessionDecisions.ts:findByAnswer": { handles: "a card's row is never anyone's but its person's to find" },
   "sessionDecisions.ts:carriedHops": { ignores: "reads withdrawn rows of one task; a card has no task" },
   "agentTasks.ts:routeUpWaitingSession": { handles: "a card in the session does not count as its open question" },
   "lib/agentOwnerWaits.ts:routeWaitToAgentOwner": { handles: "a card in the session does not count as its open question" },
@@ -60,9 +60,8 @@ const CHOKEPOINTS: Array<[string, string]> = [
   ["convex/convex/sessionDecisions.ts", "answerRefusal"],
   ["convex/convex/sessionDecisions.ts", "ownedDecision"],
   ["convex/convex/sessionDecisions.ts", "decisionRowsForViewer"],
-  ["convex/convex/sessionDecisions.ts", "decisionDetail"],
-  ["convex/convex/sessionDecisions.ts", "answerBubbleShape"],
-  ["convex/convex/sessionDecisions.ts", "listForRole"],
+  // Every read path that gates on userMayRead (get, getWithDoc, getWithDocMany, showForCli, listForRole, the team list, threads, discussions) gets this.
+  ["convex/convex/lib/decisionAccess.ts", "userMayRead"],
   ["convex/convex/sessionDecisions.ts", "listHandledByRoles"],
   ["convex/convex/decisionStacks.ts", "getStackCore"],
   ["convex/convex/decisionHandoff.ts", "openForHandoff"],

@@ -34,6 +34,20 @@ export function priorityCardAnswered(row: Row): PriorityCardAnswered | null {
   return { kind: kindOf(ids), ids, text, at: row.resolved_at };
 }
 
+/** An answered card's headline: how many landed, none, or that the person answered in their own words. */
+export function priorityCardHeadline(a: PriorityCardAnswered, total: number): string {
+  if (a.kind === "text") return "You sent a correction";
+  if (a.kind === "none") return "Accepted none";
+  return `Accepted ${a.ids.length} of ${total}`;
+}
+
+/** A settled card's record, as a feed draws it: its headline and the person's words, if any. Null while it waits. */
+export function priorityCardRecord(row: Row): { headline: string; text?: string } | null {
+  const answered = priorityCardAnswered(row);
+  if (!answered || !row.priority_card) return null;
+  return { headline: priorityCardHeadline(answered, row.priority_card.changes.length), text: answered.text };
+}
+
 /** A compact row's one-line ask: how many changes the card proposes. */
 export function priorityCardAsk(card: PriorityCard): string {
   const n = card.changes.length;

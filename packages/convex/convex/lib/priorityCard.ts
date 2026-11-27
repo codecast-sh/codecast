@@ -63,7 +63,7 @@ export type CardRow = PriorityOrderRow & {
 // ---------------------------------------------------------------- order
 
 /** A priority's place on the one scale, as shared/contracts/priorities reads it. */
-const orderKey = (r: PriorityOrderRow): number | null => r.person_pos ?? (r.rank_set_by === "person" ? r.rank : null) ?? r.ai_rank ?? r.rank ?? null;
+const orderKey = (r: PriorityOrderRow): number | null => r.person_pos ?? r.ai_rank ?? null;
 
 /**
  * Where `id` goes in `order` (which lacks it): the index that agrees with
@@ -96,9 +96,6 @@ function keyBetween(lo: number | null | undefined, hi: number | null | undefined
   const mid = (lo + hi) / 2;
   return lo < mid && mid < hi ? mid : null;
 }
-
-/** The group still has rows the rank backfill has not rewritten: their keys do not say their order, so no key is chosen between them. */
-const legacyGroup = (rows: readonly PriorityOrderRow[]) => rows.some((r) => r.status === "active" && r.rank_set_by != null);
 
 /**
  * Indexes of a longest increasing subsequence of `seq`. Among the longest,
@@ -272,7 +269,7 @@ export function splitPlan(plan: MergePlan, input: PriorityPassInput, output: Pri
     // Where the plan put it among the ones there now; last when no key fits there (the next card can move it).
     const ordered = effectivePriorityOrder(sims);
     const at = bestSlot(ordered.map((s) => s.id), id, after);
-    const key = (legacyGroup(sims) ? null : keyBetween(at > 0 ? orderKey(ordered[at - 1]) : undefined, at < ordered.length ? orderKey(ordered[at]) : undefined)) ?? lastPriorityKey(sims);
+    const key = keyBetween(at > 0 ? orderKey(ordered[at - 1]) : undefined, at < ordered.length ? orderKey(ordered[at]) : undefined) ?? lastPriorityKey(sims);
     Object.assign(sims.find((s) => s.id === id)!, { status: "active", ai_rank: key });
     flips.get(id)!.ai_rank = key;
   }
@@ -657,11 +654,10 @@ export function planForAccepted(held: HeldPlan, accepted: ReadonlySet<string>, r
   for (const id of [...movers, ...entering].sort((a, b) => planned(a) - planned(b))) final.splice(bestSlot(final, id, held.order), 0, id);
 
   // Keys for the entering ones: each run of them between two that stay spread between their keys, which moves no other.
-  // Where no key fits (equal keys, a neighbour without one, a group the rank backfill has not reached), it goes last and
-  // the person's own move puts it in its place, with the movers.
+  // Where no key fits (equal keys, a neighbour without one), it goes last and the person's own move puts it in its
+  // place, with the movers.
   const keyed = final.filter((id) => !movers.has(id));
   const keyOf = (id: string) => orderKey(sims.find((s) => s.id === id)!);
-  const legacy = legacyGroup(sims);
   const placeBy = new Set<string>();
   const keyFor = new Map<string, number>();
   for (let k = 0; k < keyed.length;) {
@@ -671,7 +667,7 @@ export function planForAccepted(held: HeldPlan, accepted: ReadonlySet<string>, r
     const lo = k > 0 ? keyOf(keyed[k - 1]) : undefined;
     const hi = end < keyed.length ? keyOf(keyed[end]) : undefined;
     const run = keyed.slice(k, end);
-    const fits = !legacy && keyBetween(lo, hi) !== null;
+    const fits = keyBetween(lo, hi) !== null;
     run.forEach((id, t) => {
       if (!fits) { placeBy.add(id); return; }
       const key = lo !== undefined && hi !== undefined ? lo! + ((hi! - lo!) * (t + 1)) / (run.length + 1) : hi !== undefined ? hi! - (run.length - t) : (lo ?? 0) + t + 1;

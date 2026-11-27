@@ -17,6 +17,7 @@ import {
 import type { DecisionOption } from "../../store/inboxStore";
 import { DecisionOptionList } from "./DecisionOptionList";
 import { acceptLabel, toggleTicked } from "../../lib/priorityCardTicks";
+import { priorityCardHeadline } from "../../lib/priorityCardDecision";
 import { MilestoneMark } from "../priorities/parts";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
 import { Button } from "../ui/button";
@@ -274,12 +275,6 @@ function Correction({ text, at, now }: { text: string; at?: number; now: number 
   );
 }
 
-/** The answered card's headline: how many landed, none, or that the person answered in their own words. */
-function answeredHeadline(a: PriorityCardAnswered, total: number) {
-  if (a.kind === "text") return "You sent a correction";
-  if (a.kind === "none") return "Accepted none";
-  return `Accepted ${a.ids.length} of ${total}`;
-}
 
 export function PriorityChangeCard({ card, ticked, onToggle, answered, onAnswer, question, context, keys = false, now = Date.now() }: {
   card: PriorityCard;
@@ -354,7 +349,7 @@ export function PriorityChangeCard({ card, ticked, onToggle, answered, onAnswer,
             </div>
             {answered ? (
               <>
-                <h1 className="pcc-headline" data-card-headline>{answeredHeadline(answered, total)}</h1>
+                <h1 className="pcc-headline" data-card-headline>{priorityCardHeadline(answered, total)}</h1>
                 {corrected && answered.text && <p className="pcc-case pcc-correction" data-pcc-correction>{answered.text}</p>}
               </>
             ) : (

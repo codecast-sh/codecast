@@ -18,6 +18,7 @@ import { formatTimeAgo } from "../../lib/messageNavigator";
 import { chosenOptions } from "../../lib/decisionLinks";
 import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import { ChangeCardHeadline } from "./ChangeCardView";
+import { priorityCardAsk, priorityCardRecord } from "../../lib/priorityCardDecision";
 import "./decisions.css";
 
 /** How many entries draw at first, and how many more each time the reader nears the end. */
@@ -108,6 +109,7 @@ function FeedEntry({ d, now, answerer }: { d: SessionDecisionItem; now: number; 
         <Link href={href} className="ml-auto shrink-0 font-mono opacity-70 hover:opacity-100 no-underline text-sol-text-dim">{d.short_id ?? "open"}</Link>
       </header>
 
+      {d.priority_card ? <PriorityCardRecord d={d} href={href} /> : <>
       <Link href={href} className="block mt-2.5 no-underline text-sol-text hover:text-sol-blue transition-colors">
         {d.card ? <ChangeCardHeadline card={d.card} question={d.question} size="card" questionFirst /> : <h3 className="decision-question">{d.question}</h3>}
       </Link>
@@ -149,7 +151,21 @@ function FeedEntry({ d, now, answerer }: { d: SessionDecisionItem; now: number; 
           <FileText className="w-3 h-3" />{d.report_slug ? "Its report" : "Its document"}
         </Link>
       )}
+      </>}
     </article>
+  );
+}
+
+// A priority card's record, not its sixteen options: what was accepted, or the
+// person's words in place of an answer. The whole record opens the card.
+function PriorityCardRecord({ d, href }: { d: SessionDecisionItem; href: string }) {
+  const record = priorityCardRecord(d);
+  return (
+    <Link href={href} className="block mt-2.5 no-underline text-sol-text hover:text-sol-blue transition-colors" data-answered-feed-priority-card>
+      <h3 className="decision-question">{record?.headline ?? priorityCardAsk(d.priority_card!)}</h3>
+      {record?.text && <p className="mt-1.5 pl-3 border-l-2 border-sol-cyan/50 italic text-sol-text [overflow-wrap:anywhere]" data-answered-feed-words>{record.text}</p>}
+      <div className="mt-1.5 text-meta text-sol-text-dim">{priorityCardAsk(d.priority_card!)}</div>
+    </Link>
   );
 }
 

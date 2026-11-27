@@ -13,6 +13,7 @@ import { askingSessionDeps } from "./askingSessionDeps";
 import { askingSessionName } from "../../lib/decisionLinks";
 import { objectHref } from "../../lib/entityLinks";
 import { teamMembersOf } from "../../lib/activeTeam";
+import { isPriorityCard } from "@codecast/shared/contracts/priorityCard";
 
 // Who is in a decision: the session that asked, the person who holds it, and
 // what its category means. One rendering for the queue card and the document
@@ -21,7 +22,7 @@ import { teamMembersOf } from "../../lib/activeTeam";
 /** The asking session's store row, as far as the line draws it. */
 export type AskingSessionRow = { _id?: string; title?: string; project_path?: string; status?: string; [key: string]: unknown };
 
-type AskingDecision = Pick<SessionDecisionItem, "conversation_id" | "_id" | "question" | "session_title" | "project_path">;
+type AskingDecision = Pick<SessionDecisionItem, "conversation_id" | "_id" | "question" | "session_title" | "project_path" | "priority_card">;
 
 /** The asking session as one line: a live dot, its name, its project. The
  *  name comes from the store row when the session is cached, else the row's
@@ -66,6 +67,8 @@ export function AskingSessionView({
   wrap?: boolean;
   className?: string;
 }) {
+  // A priority card is its person's, not the question of the session it sits in (isPriorityCard): no session, no link to it.
+  if (isPriorityCard(decision)) return null;
   const fullTitle = session?.title || decision.session_title;
   const title = askingSessionName(fullTitle, omitRef);
   const project = session?.project_path || decision.project_path;

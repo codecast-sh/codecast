@@ -23,9 +23,13 @@ export function priorityCardRefusal(row: { priority_card?: unknown; user_id: Id<
   return by.kind === "user" && String(by.user_id) === String(row.user_id) && !by.via ? null : PRIORITY_CARD_REFUSED;
 }
 
-/** The row as `viewerId` may read it: anyone but the card's person gets it without the card. */
-export function priorityCardForViewer<T extends { priority_card?: unknown; user_id: unknown }>(row: T, viewerId: unknown): T {
-  if (!isPriorityCard(row) || String(row.user_id) === String(viewerId)) return row;
-  const { priority_card: _, ...rest } = row;
-  return rest as T;
+/**
+ * Whether `viewerId` may receive the row at all: a priority card reaches its
+ * person and nobody else, not even without its card (a bare pending row in
+ * their session would read as that session's question to a teammate, and
+ * its question and options are the person's). Every read path that returns
+ * decision rows filters by it; lib/decisionAccess userMayRead answers it first.
+ */
+export function priorityCardVisibleTo(row: { priority_card?: unknown; user_id: unknown }, viewerId: unknown): boolean {
+  return !isPriorityCard(row) || String(row.user_id) === String(viewerId);
 }

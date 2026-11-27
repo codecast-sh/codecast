@@ -13,10 +13,11 @@ import { PRIORITY_CARD_HANDOFF_REFUSED, PRIORITY_CARD_REFUSED } from "./lib/prio
 import { escalateCore, passCore } from "./decisionHandoff";
 import { addToStackCore, createStackCore } from "./decisionStacks";
 import { hashToken } from "./apiTokens";
+import { userMayRead } from "./lib/decisionAccess";
 import { api } from "./_generated/api";
 import { loadPendingDecisionConvIds } from "./conversations";
 import { ringsPhone } from "./lib/decisionRing";
-import { H, pass, stubModel, world } from "./priorityPassRun.testkit";
+import { DAY, H, pass, stubModel, world } from "./priorityPassRun.testkit";
 import type { Doc, Id } from "./_generated/dataModel";
 
 setDefaultTimeout(60_000);
@@ -277,9 +278,10 @@ describe("the card stays the person's (the rule on isPriorityCard)", () => {
 
   test("nobody passes, escalates or stacks it, the person included; the person's answer still writes", async () => {
     const { w, d } = await posted();
-    for (const by of [w.ana, w.ben]) {
-      expect(await w.t.run((ctx) => passCore(ctx as any, by, d.short_id!, { kind: "user", id: String(w.ben) }, "yours"))).toEqual({ error: PRIORITY_CARD_HANDOFF_REFUSED });
-      expect(await w.t.run((ctx) => escalateCore(ctx as any, by, d.short_id!, "up it goes"))).toEqual({ error: PRIORITY_CARD_HANDOFF_REFUSED });
+    // Ana is refused the hand-off; Ben, who reads her session, cannot even read the card.
+    for (const [by, error] of [[w.ana, PRIORITY_CARD_HANDOFF_REFUSED], [w.ben, "Unauthorized: not your decision"]] as const) {
+      expect(await w.t.run((ctx) => passCore(ctx as any, by, d.short_id!, { kind: "user", id: String(w.ben) }, "yours"))).toEqual({ error });
+      expect(await w.t.run((ctx) => escalateCore(ctx as any, by, d.short_id!, "up it goes"))).toEqual({ error });
     }
     const stack = await w.t.run((ctx) => createStackCore(ctx as any, w.ana, { title: "Morning" }));
     expect(await w.t.run((ctx) => addToStackCore(ctx as any, w.ana, (stack as any).short_id ?? String((stack as any).id ?? (stack as any)._id), d.short_id!))).toEqual({ error: PRIORITY_CARD_HANDOFF_REFUSED });
@@ -321,6 +323,38 @@ describe("the card stays the person's (the rule on isPriorityCard)", () => {
     expect(d.session_title).toBe("Session jx7open");
   });
 
+  test("a session the person launched a run from still takes the card; the run's own log and stations never do", async () => {
+    const w = await graderWorld();
+    await cardsOn(w);
+    await w.t.run(async (ctx) => {
+      // Both of Ana's team sessions launched a run, so each carries its pointer.
+      await ctx.db.patch(w.teamConv, { workflow_run_id: "run-1" as any, updated_at: w.now });
+      await ctx.db.patch(w.oldConv, { workflow_run_id: "run-2" as any });
+      // The run's log and one of its stations are newer still.
+      await ctx.db.insert("conversations", { user_id: w.ana, agent_type: "claude_code", session_id: "jx7runl", short_id: "jx7runl", title: "Run log", team_id: w.acme, is_private: false, team_visibility: "full", started_at: w.now, updated_at: w.now + 2, message_count: 1, status: "active", is_workflow_primary: true, workflow_run_id: "run-1" } as any);
+      await ctx.db.insert("conversations", { user_id: w.ana, agent_type: "claude_code", session_id: "jx7stat", short_id: "jx7stat", title: "Station", team_id: w.acme, is_private: false, team_visibility: "full", started_at: w.now, updated_at: w.now + 1, message_count: 1, status: "active", is_workflow_sub: true, parent_conversation_id: w.teamConv, workflow_run_id: "run-1" } as any);
+    });
+    model.reply = () => graderReply();
+    await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team });
+    const [d] = await cards(w);
+    expect(d?.conversation_id).toBe(w.teamConv);
+  });
+
+  test("an open card is found among the person's newest open decisions, however many older ones they hold", async () => {
+    const w = await graderWorld();
+    await cardsOn(w);
+    // A thousand older open decisions, written before the card.
+    await w.t.run(async (ctx) => {
+      for (let i = 0; i < 1000; i++) {
+        await ctx.db.insert("session_decisions", { conversation_id: w.oldConv, session_id: "jx7old", user_id: w.ana, question: `q${i}`, options: [{ label: "A" }], blocking: false, status: "pending", created_at: w.now - 2 * DAY + i } as any);
+      }
+    });
+    model.reply = () => graderReply();
+    await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team });
+    await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team, force: true });
+    expect(await cards(w)).toHaveLength(1);
+  });
+
   test("the next card counts the runs since the last one, however many other decisions the person answered between", async () => {
     const w = await graderWorld();
     await cardsOn(w);
@@ -356,29 +390,34 @@ describe("who may answer and read the card", () => {
     expect((await rows(w))[0].title).toBe("Trusted evals");
   });
 
-  test("a teammate who can read the session reads the decision without the card; its person reads it whole", async () => {
+  test("a teammate who can read the session does not receive the decision at all; its person reads it whole", async () => {
     const w = await graderWorld();
     await cardsOn(w);
-    await w.t.run((ctx) => ctx.db.patch(w.teamConv, { updated_at: w.now }));
+    await w.t.run(async (ctx) => {
+      await ctx.db.patch(w.teamConv, { updated_at: w.now });
+      await ctx.db.insert("api_tokens", { user_id: w.ben, token_hash: await hashToken(TOKEN), name: "cli", created_at: 1, last_used_at: 1 } as any);
+    });
     model.reply = () => graderReply();
     await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team });
     const [d] = await cards(w);
     const ana = w.t.withIdentity({ subject: w.ana });
     const ben = w.t.withIdentity({ subject: w.ben });
     expect((await ana.query(api.sessionDecisions.get, { decision_id: d.short_id! }))?.priority_card).toBeDefined();
-    const benGet = await ben.query(api.sessionDecisions.get, { decision_id: d.short_id! });
-    expect(benGet?._id).toBe(d._id);
-    expect(benGet?.priority_card).toBeUndefined();
     expect((await ana.query(api.sessionDecisions.getWithDoc, { decision_id: d.short_id! }))?.decision).toHaveProperty("priority_card");
-    const benDoc = await ben.query(api.sessionDecisions.getWithDoc, { decision_id: d.short_id! });
-    expect(benDoc?.decision._id).toBe(d._id);
-    expect(benDoc?.decision).not.toHaveProperty("priority_card");
-    const benMany = await ben.query(api.sessionDecisions.getWithDocMany, { decision_ids: [String(d._id)] });
-    expect(benMany.map((x: any) => "priority_card" in x.decision)).toEqual([false]);
-    // The team's decision list, which every teammate's app syncs.
-    const team = await ben.query(api.decisionTeamList.listForTeam, { workspace: w.team });
-    expect(team.filter((x: any) => x._id === d._id).map((x: any) => "priority_card" in x)).toEqual([false]);
     expect((await ana.query(api.sessionDecisions.listForUser, {})).find((x: any) => x._id === d._id)?.priority_card).toBeDefined();
+    // Ben reads Ana's session, and gets nothing of the card: no row, no question, no count.
+    expect(await ben.query(api.sessionDecisions.get, { decision_id: d.short_id! })).toBeNull();
+    expect(await ben.query(api.sessionDecisions.getWithDoc, { decision_id: d.short_id! })).toBeNull();
+    expect(await ben.query(api.sessionDecisions.getWithDocMany, { decision_ids: [String(d._id)] })).toEqual([]);
+    expect((await ben.query(api.decisionTeamList.listForTeam, { workspace: w.team })).some((x: any) => x._id === d._id)).toBe(false);
+    expect((await ben.query(api.sessionDecisions.listForUser, {})).some((x: any) => x._id === d._id)).toBe(false);
+    expect(await ben.query(api.sessionDecisions.findAskMessage, { decision_id: d._id })).toBeNull();
+    expect(await w.t.query(api.sessionDecisions.showForCli, { api_token: TOKEN, decision_id: d.short_id! })).toEqual({ error: "Unauthorized: not your decision" });
+    expect(await w.t.run((ctx) => userMayRead(ctx as any, w.ben, d))).toBe(false);
+    // Answered, it is no bubble of Ana's session for Ben either.
+    await w.t.run((ctx) => finalizeAnswer(ctx as any, d, { status: "answered", answer_json: [0], answer_index: 0 }, ANA(w), { deliver: false }));
+    expect((await ana.query(api.sessionDecisions.findByAnswer, { conversation_id: w.teamConv, answer: d.options[0].label }))?._id).toBe(d._id);
+    expect(await ben.query(api.sessionDecisions.findByAnswer, { conversation_id: w.teamConv, answer: d.options[0].label })).toBeNull();
   });
 });
 

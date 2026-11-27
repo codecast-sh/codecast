@@ -654,17 +654,12 @@ describe("answering puts priorities where the card showed them", () => {
     expect(failures).toEqual([]);
   });
 
-  test("a new priority between two that share a key, or in a group the rank backfill has not reached, is put in place by a move", () => {
+  test("a new priority between two that share a key is put in place by a move", () => {
     const tied = input({ priorities: [priority("pri-1", { ai_rank: 1 }), priority("pri-2", { ai_rank: 1, last_active_at: NOW - 5 * H }), priority("pri-3", { ai_rank: 2 })] });
     const t = split(tied, out([proposal({ title: "Fresh", rank: 2 })]));
     const res = planForAccepted(t.held, new Set(["c1"]), rowsOf(tied), NOW);
     expect(res.moves).toEqual([{ short_id: "new-1", to: 2 }]);
     expect(orderAfterAnswer(rowsOf(tied), res)).toEqual(t.held.order);
-    const legacy = input({ priorities: [priority("pri-1", { rank: 1, rank_set_by: "person" } as Partial<PassPriority>), priority("pri-2", { ai_rank: 2 })] });
-    const l = split(legacy, out([proposal({ title: "Fresh", rank: 1 })]));
-    const lr = planForAccepted(l.held, new Set(["c1"]), rowsOf(legacy), NOW);
-    expect(lr.moves).toEqual([{ short_id: "new-1", to: 1 }]);
-    expect(lr.plan.creates[0].ai_rank).toBeGreaterThan(2);
   });
 
   test("a ticked move the person already made is reported, and no move is made for it", () => {

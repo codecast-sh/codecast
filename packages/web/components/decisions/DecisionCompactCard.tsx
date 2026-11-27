@@ -231,11 +231,13 @@ export function DecisionCompactCardView({
               className: "items-center gap-2",
               node: (
                 <>
-                  {onToggleSelect && (
+                  {/* A priority card never joins a stack (its delegate and defaults would answer it). */}
+                  {onToggleSelect && !decision.priority_card && (
                     <input type="checkbox" checked={!!selected} onChange={onToggleSelect} className="accent-[var(--sol-violet)]" aria-label="Select for a stack" />
                   )}
                   {decision.blocking && <span className="w-1.5 h-1.5 shrink-0 rounded-full bg-sol-yellow" title="Blocking: the session is parked" aria-label="blocking" />}
-                  <AskingSessionView decision={decision} session={session} onJumpToAsk={onJumpToAsk} className="max-w-[22rem]" />
+                  {/* A priority card names the pass that made it, never the session it sits in. */}
+                  {decision.priority_card ? <span className="text-sol-text-muted" data-decision-card-source>Priorities pass</span> : <AskingSessionView decision={decision} session={session} onJumpToAsk={onJumpToAsk} className="max-w-[22rem]" />}
                 </>
               ),
             },

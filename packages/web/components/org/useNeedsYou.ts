@@ -4,6 +4,7 @@
 import { useMemo } from "react";
 import { useInboxStore } from "../../store/inboxStore";
 import { useDecisionQueue } from "../../hooks/useDecisionQueue";
+import { usePriorityCardIds } from "../../hooks/usePriorityCardIds";
 import type { NeedsYouItem } from "./staffingModel";
 import type { OrgTree } from "./orgTypes";
 import { canAnswerInPlace, orgDecisions } from "./orgDecisions";
@@ -11,9 +12,11 @@ import { canAnswerInPlace, orgDecisions } from "./orgDecisions";
 /** The org's decisions as NeedsYouItems, for the Now block. */
 export function useOrgAsks(tree: OrgTree | null): NeedsYouItem[] {
   const queue = useDecisionQueue();
+  // A priority card is its person's, never its session's or that session's role's ask.
+  const cardIds = usePriorityCardIds();
   return useMemo(
-    () => orgDecisions(tree, queue).map(({ item, role }) => ({ kind: "decision" as const, key: item.key, role, item, canAnswerInPlace: canAnswerInPlace(item) })),
-    [tree, queue],
+    () => orgDecisions(tree, queue.filter((i) => !(i.decisionId && cardIds.has(i.decisionId)))).map(({ item, role }) => ({ kind: "decision" as const, key: item.key, role, item, canAnswerInPlace: canAnswerInPlace(item) })),
+    [tree, queue, cardIds],
   );
 }
 

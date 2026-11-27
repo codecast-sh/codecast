@@ -4,6 +4,7 @@
 // the renderers to these kinds; this half stays free of components so the
 // rules are testable without the React tree behind them.
 
+import { isPriorityCard } from "@codecast/shared/contracts/priorityCard";
 import type { LucideIcon } from "lucide-react";
 import { CircleHelp, GitCommitHorizontal, Globe, Hash, ListChecks, MessageSquare, Terminal, Users } from "lucide-react";
 import { parseCodeThreadRootKey } from "@codecast/shared/comments";
@@ -321,6 +322,8 @@ export function questionCards(decisions: SessionDecisionItem[]): ThreadCardModel
   const out: ThreadCardModel[] = [];
   for (const d of decisions) {
     if (d.status !== "pending" || d.in_queue === false) continue;
+    // A priority card is answered only on its card, never as a session's question thread.
+    if (isPriorityCard(d)) continue;
     out.push({
       id: `question:${d._id}`,
       kind: "question",

@@ -21,7 +21,7 @@ import { liveRoleByHandle, userCanAccessRole, userCanAdminRole, type ScopedSeat 
 import { OPEN_CATEGORIES } from "./lib/decisionCategory";
 import { findDecision, findStack, finalizeAnswer, answerRefusal, refreshHolder, activeGrantFor, GRANT_TTL_MS } from "./sessionDecisions";
 import { currentDecisions } from "./lib/superseded";
-import { isPriorityCard, priorityCardForViewer, PRIORITY_CARD_HANDOFF_REFUSED } from "./lib/priorityCardAccess";
+import { isPriorityCard, priorityCardVisibleTo, PRIORITY_CARD_HANDOFF_REFUSED } from "./lib/priorityCardAccess";
 
 type Ctx = { db: any };
 type StackRow = Doc<"decision_stacks">;
@@ -408,7 +408,7 @@ async function getStackCore(ctx: Ctx, userId: Id<"users">, ref: string) {
   return {
     stack: await listRow(ctx, found.stack),
     // Members in stack order, full rows: the checklist renders each as a card (a priority card's only to its person).
-    decisions: members.map((d) => priorityCardForViewer(d, userId)),
+    decisions: members.filter((d) => priorityCardVisibleTo(d, userId)),
     delegate_role: delegate ? { _id: delegate._id, short_id: delegate.short_id, name: delegate.name, handle: delegate.handle } : null,
   };
 }

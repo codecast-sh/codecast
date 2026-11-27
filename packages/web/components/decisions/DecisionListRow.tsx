@@ -59,11 +59,12 @@ export const DecisionListRow = memo(function DecisionListRow({ d, state, ctx }: 
         {!ctx.compact && !ctx.grouped.has("source") && source !== SESSION_SOURCE && <span className="max-w-[9rem] truncate cq-hide-compact">{source}</span>}
         {!ctx.compact && !ctx.grouped.has("area") && d.area_project_id && <span className="max-w-[9rem] truncate cq-hide-compact">{ctx.areaName(d.area_project_id)}</span>}
         <span className="tabular-nums w-8 text-right" title={new Date(d.created_at).toLocaleString()}>{ageShort(ctx.now - d.created_at)}</span>
-        <button type="button" onClick={(e) => { e.stopPropagation(); if (open) state.onOpenPalette("assign"); }}
+        {/* A priority card is its person's alone: it has no owner to change and nobody to assign it to. */}
+        {!d.priority_card && <button type="button" onClick={(e) => { e.stopPropagation(); if (open) state.onOpenPalette("assign"); }}
           className="flex items-center gap-1.5 min-w-0 max-w-[9rem] hover:text-sol-text" title={who ? `Owner: ${who.label}` : "Assign"} aria-label={who ? `Owner ${who.label}; reassign` : "Assign"} data-decision-assign>
           {who ? <span className="w-4 h-4 flex items-center justify-center flex-shrink-0">{who.face}</span> : <UserRoundPlus className="w-3.5 h-3.5 flex-shrink-0" />}
           {who && !ctx.compact && !ctx.grouped.has("owner") && <span className="truncate cq-hide-compact">{who.label}</span>}
-        </button>
+        </button>}
       </span>
     </div>
   );

@@ -9,6 +9,7 @@
 // Pure so the order is testable: the queue's order silently becomes the
 // reader's priorities, and a grouping that shifts under them is unusable.
 import type { SessionDecisionItem, DecisionStackItem } from "../store/inboxStore";
+import { isPriorityCard } from "@codecast/shared/contracts/priorityCard";
 
 export type DecisionGroup =
   | { kind: "stack"; key: string; stack: DecisionStackItem; items: SessionDecisionItem[] }
@@ -21,8 +22,11 @@ export const STACK_GROUP_MIN = 2;
 
 // The scope a decision files under when it is in no stack and no role holds
 // it: the task's project, else its plan, else the asking role, else the
-// session it came from ("session:<conversation id>").
-export function decisionScopeKey(d: Pick<SessionDecisionItem, "scope_keys" | "conversation_id">): string {
+// session it came from ("session:<conversation id>"). A priority card files
+// under "priorities": it is its person's, never its session's (isPriorityCard).
+export const PRIORITIES_SCOPE = "priorities";
+export function decisionScopeKey(d: Pick<SessionDecisionItem, "scope_keys" | "conversation_id" | "priority_card">): string {
+  if (isPriorityCard(d)) return PRIORITIES_SCOPE;
   const keys = d.scope_keys ?? [];
   const pick = (prefix: string) => keys.find((k) => k.startsWith(prefix));
   return pick("project:") ?? pick("plan:") ?? pick("role:") ?? `session:${d.conversation_id}`;

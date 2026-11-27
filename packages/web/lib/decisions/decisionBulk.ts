@@ -11,9 +11,12 @@ import { isOpen, type DecisionOwner } from "./decisionRows";
 
 type Rows = ReadonlyArray<SessionDecisionItem>;
 
-const open = (rows: Rows) => rows.filter(isOpen);
-/** Open ones that may be handed on: a priority card stays with its person (THE RULE on isPriorityCard). */
-const handable = (rows: Rows) => open(rows).filter((d) => !isPriorityCard(d));
+/**
+ * The open rows a bulk verb may act on. A priority card is its person's alone
+ * and is acted on only through the card (THE RULE on isPriorityCard): no
+ * selection assigns, passes, escalates, answers or dismisses it.
+ */
+const handable = (rows: Rows) => rows.filter((d) => isOpen(d) && !isPriorityCard(d));
 
 export function assignDecisions(rows: Rows, to: DecisionOwner): number {
   const { passDecision } = useInboxStore.getState();
@@ -24,7 +27,7 @@ export function assignDecisions(rows: Rows, to: DecisionOwner): number {
 
 export function unassignDecisions(rows: Rows): number {
   const { unassignDecision } = useInboxStore.getState();
-  const targets = open(rows).filter((d) => !!d.passed_to);
+  const targets = handable(rows).filter((d) => !!d.passed_to);
   for (const d of targets) unassignDecision(d._id);
   return targets.length;
 }
@@ -35,7 +38,7 @@ export function unassignDecisions(rows: Rows): number {
  * its own card, so it is left out), in the first decision's order.
  */
 export function sharedAnswers(rows: Rows): string[] {
-  const targets = open(rows);
+  const targets = handable(rows);
   if (targets.length === 0 || targets.some((d) => d.kind && d.kind !== "single")) return [];
   const pickable = (d: SessionDecisionItem) => new Set(d.options.filter((_, i) => !approvesPersonsAct(d, i)).map((o) => o.label));
   const [first, ...rest] = targets.map(pickable);
@@ -45,7 +48,7 @@ export function sharedAnswers(rows: Rows): string[] {
 export function answerDecisions(rows: Rows, label: string): number {
   const { answerDecision } = useInboxStore.getState();
   let n = 0;
-  for (const d of open(rows)) {
+  for (const d of handable(rows)) {
     const index = d.options.findIndex((o) => o.label === label);
     if (index < 0 || approvesPersonsAct(d, index)) continue;
     void answerDecision(d._id, { index });
@@ -56,7 +59,7 @@ export function answerDecisions(rows: Rows, label: string): number {
 
 export function dismissDecisions(rows: Rows): number {
   const { answerDecision } = useInboxStore.getState();
-  const targets = open(rows);
+  const targets = handable(rows);
   for (const d of targets) void answerDecision(d._id, { dismiss: true });
   return targets.length;
 }

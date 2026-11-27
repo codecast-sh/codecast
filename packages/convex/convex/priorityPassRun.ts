@@ -20,7 +20,7 @@ import { PRIORITY_CARDS_EXPERIMENT } from "@codecast/shared/contracts/priorityCa
 import { hasExperiment } from "./lib/experiments";
 import { splitPlan } from "./lib/priorityCard";
 import { cardDraft, type CardDraft } from "./lib/priorityCardPass";
-import { cardAnsweredSince, correctionsOnOpenCards, postPriorityCard } from "./priorityCardPost";
+import { cardAnsweredSince, correctionsOnOpenCards, openCards, postPriorityCard } from "./priorityCardPost";
 import { nextShortId } from "./counters";
 import { runModelCall, type CallScope } from "./modelCalls";
 import { modelCallProblem } from "@codecast/shared/contracts/modelCall";
@@ -332,10 +332,12 @@ export const applyPlan = internalMutation({
 
     const run_id = await settleRun(ctx, { ...run, status: "ok", counts });
     // A card posted (or one that could not be) holds the corrections the run read: they wait on the person's answer.
-    const posted = card ? await postPriorityCard(ctx, { user_id: args.user_id, workspace: args.workspace, run_id, cost_usd: args.cost_usd, from: from_cursor, to: args.cursor_at, conversations, corrections }, card as CardDraft, now) : null;
+    // The person's open cards here, read once: what the new card leaves off, and the corrections they hold.
+    const open = card ? await openCards(ctx, args.user_id, args.workspace) : [];
+    const posted = card ? await postPriorityCard(ctx, { user_id: args.user_id, workspace: args.workspace, run_id, cost_usd: args.cost_usd, from: from_cursor, to: args.cursor_at, conversations, corrections }, card as CardDraft, now, open) : null;
     if (posted && "skipped" in posted) await ctx.db.patch(run_id, { error: posted.skipped });
     // Nor does a run apply a correction an open card holds, though it proposed nothing new: that card's answer does.
-    const onCards = card && !posted ? await correctionsOnOpenCards(ctx, args.user_id, args.workspace) : new Set<string>();
+    const onCards = correctionsOnOpenCards(open);
 
     for (const id of [...(posted ? [] : (corrections ?? []).filter((c) => !onCards.has(String(c)))), ...(superseded ?? [])]) {
       const c: Doc<"priority_corrections"> | null = await ctx.db.get(id);
