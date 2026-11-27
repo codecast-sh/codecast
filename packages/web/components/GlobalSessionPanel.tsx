@@ -23,7 +23,7 @@ import { StatusDot } from "./StatusDot";
 import type { WorkState } from "@codecast/shared/contracts";
 import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, chipFilterSection, computeManualSortKey, isConvexId, placeInboxRows, placementDecisionsSig, getProjectName, pendingSendWakeSig, isSessionHidden, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipFilterOpts, chipProjectFilters, passesFilterTerms, priorityRankOfFromState, cardPriorityRankOf, priorityChipRows, projectAxisKeys, projectOfFromState, groupSessionsForLabelView, groupSessionsByPlan, groupSessionsByMachine, groupSessionsForOrgLens, isOrgLensMode, orgLensAvailable, orgLensSourcesOf, orgLensWakeSig, ORG_LENS_MODES, sessionWorkState, personSessionWorkState, selectFavoriteSessions, isFavoriteInStore, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
 import { hiddenBucketTree, killAllIds } from "../store/hiddenBucketTree";
-import { sessionsWakeSig, teamInboxIdsOf, resolveInboxViewMode, resolveInboxOldestFirst, manualOrderKeysForDrop, resolveShowOld, classifySession, inboxNestParentOf, drawnUnderParentIds, flatHeaderCount, cardOfNested, isSpawnedWorker, nestsWorkers, NEW_SESSION_HOLD_MS, ensureHydrated } from "../store/inboxStore";
+import { sessionsWakeSig, teamInboxIdsOf, resolveInboxViewMode, resolveInboxOldestFirst, manualOrderKeysForDrop, resolveShowOld, classifySession, inboxNestParentOf, drawnUnderParentIds, flatHeaderCount, isSpawnedWorker, nestsWorkers, NEW_SESSION_HOLD_MS, ensureHydrated } from "../store/inboxStore";
 import { loadMoreKilledSessions } from "../hooks/killedShelf";
 import { makeCollectionSig } from "../store/wakeSig";
 import { INBOX_CLOCK_MS, useCoarseNow } from "../hooks/useCoarseNow";
@@ -2734,7 +2734,9 @@ function SessionListPanelImpl({
     scrollContainerRef.current?.scrollTo({ top: 0 });
   }, [viewMode, oldestFirst]);
 
-  // Auto-scroll to active session, retrying when sessions load and revealing hidden sections
+  // Auto-scroll to the active session, retrying as sessions load. A collapsed
+  // section or bucket never opens for it: it peeks the open card instead
+  // (renderSection, renderHiddenBucket).
   useWatchEffect(() => {
     if (!activeSessionId || !scrollContainerRef.current) {
       scrolledToRef.current = null;
@@ -2747,22 +2749,6 @@ function SessionListPanelImpl({
     if (el) {
       scrollRowIntoView(container, el);
       scrolledToRef.current = activeSessionId;
-      return;
-    }
-
-    // Card not rendered. A collapsed section already peeks the open card
-    // (renderSection), so only the hidden buckets at the bottom can still be
-    // hiding it. A subagent (or nested teammate) renders under its parent's
-    // card, so the parent's membership decides which bucket hosts the row.
-    const activeRow = s.sessions[activeSessionId];
-    const parentId = activeRow ? inboxNestParentOf(sortedSessions, nestWorkers)(activeRow) ?? cardOfNested(globalSubByParent, activeSessionId) : null;
-    const inList = (items: InboxSession[]) => items.some(i => i._id === activeSessionId || (!!parentId && i._id === parentId));
-    if (inList(filteredStashed) && !openBuckets.stashed) {
-      setOpenBuckets((o) => ({ ...o, stashed: true }));
-      return;
-    }
-    if (inList(filteredDismissed) && !openBuckets.dismissed) {
-      setOpenBuckets((o) => ({ ...o, dismissed: true }));
     }
   }, [activeSessionId, sortedSessions, globalSubByParent, s.collapsedSections, openBuckets, viewMode]);
 
@@ -2772,8 +2758,8 @@ function SessionListPanelImpl({
   // server's kill transition additionally stamps inbox_killed_at).
   // Identical chrome; they differ only in the destructive slot: a stashed card
   // kills (moves down a bucket), a killed card's X removes the row outright.
-  // Both hide entirely when empty and render COLLAPSED by default — the
-  // auto-reveal effect above opens one only when the active session is inside.
+  // Both hide entirely when empty and render COLLAPSED by default; a closed
+  // one still peeks the active session's card when it holds it.
   const renderHiddenBucket = (opts: {
     label: string;
     items: InboxSession[];
@@ -2819,21 +2805,27 @@ function SessionListPanelImpl({
     const rowLive = (sess: InboxSession) =>
       isBucketLive(sess) || (subMap.get(sess._id) ?? []).some(isBucketLive);
     topLevel.sort((a, b) => Number(rowLive(b)) - Number(rowLive(a)));
+    // Closed, the bucket still draws the open session's card (or the card
+    // hosting it) under its head, as a collapsed section does (renderSection).
+    const peek = !expanded && activeSessionId
+      ? topLevel.filter((sess) => sess._id === activeSessionId
+        || [...(subMap.get(sess._id) ?? []), ...(globalSubByParent.get(sess._id) ?? [])].some((sub) => sub._id === activeSessionId))
+      : [];
     return (
       <div className={modern ? undefined : "border-t border-sol-border/30"}>
         <HiddenBucketHead modern={modern} label={label} count={showSubagents ? items.length : topLevel.length} variant={variant} expanded={expanded} onToggle={onToggle} liveCount={killLiveButton ? 0 : liveCount} action={killLiveButton ?? headerAction} />
-        {expanded && topLevel.length > 0 && (() => {
+        {(expanded || peek.length > 0) && topLevel.length > 0 && (() => {
           // Cap the hidden bucket too — KILLED/STASHED can hold hundreds of rows
           // when expanded ("show killed/stashed" on). Same per-bucket cap + show-more
           // as renderSection; keeps the active row mounted past the cap.
           const hkey = `hidden_${variant}`;
           const hlimit = sectionLimits[hkey] ?? SECTION_RENDER_CAP;
-          let visibleTop = topLevel.length > hlimit ? topLevel.slice(0, hlimit) : topLevel;
+          let visibleTop = !expanded ? peek : topLevel.length > hlimit ? topLevel.slice(0, hlimit) : topLevel;
           if (visibleTop.length < topLevel.length && activeSessionId) {
             const active = topLevel.find((sess) => sess._id === activeSessionId);
             if (active && !visibleTop.includes(active)) visibleTop = [...visibleTop, active];
           }
-          const hHidden = topLevel.length - visibleTop.length;
+          const hHidden = expanded ? topLevel.length - visibleTop.length : 0;
           globalRenderedCards += visibleTop.length;
           return (
           <div>
@@ -2841,7 +2833,7 @@ function SessionListPanelImpl({
               const bucketSubs = subMap.get(session._id) ?? [];
               const rows = rowsUnder(session, [...bucketSubs, ...(workersNeedingYouByParent.get(session._id) ?? [])]);
               return (
-              <div key={session._id} className="border-b border-sol-border/30">
+              <div key={session._id} className={expanded ? "border-b border-sol-border/30" : "relative border-b border-sol-border/30 inbox-peek"}>
                 <SessionCard
                   session={session}
                   isSelected={selectedSet.has(session._id)}
@@ -2917,7 +2909,7 @@ function SessionListPanelImpl({
                 Show {Math.min(hHidden, SECTION_RENDER_STEP)} more · {hHidden} hidden
               </button>
             )}
-            {hHidden === 0 && footer}
+            {expanded && hHidden === 0 && footer}
           </div>
           );
         })()}
