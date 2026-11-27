@@ -198,14 +198,15 @@ export function stepper(run: Pick<ShippingRun, "status" | "node_statuses" | "cur
     return states;
   }
   if (run.status === "running") {
-    // A running run is at the step its station belongs to: a later step holds only what an earlier round left (Merge's
-    // conflict, while the fixed change goes through Local CI again), unless one of its stations runs now.
+    // A running run is at the step its station belongs to: a later step's trouble is what an earlier round left (Merge's
+    // conflict, while the fixed change goes through Local CI again) and reads idle unless one of its stations runs now.
+    // A later step already done keeps it: Review answers beside CI, so its verdict on this head stands while CI runs.
     const stations = stationStatuses(run);
     const now = run.current_node_id && stations.has(run.current_node_id) ? at(run.current_node_id) : -1;
     if (now < 0) return states;
     const running = steps.map(() => false);
     for (const [id, status] of stations) if (status === "running" && at(id) >= 0) running[at(id)] = true;
-    return states.map((x, j) => (j < now ? x : running[j] ? "active" : j === now ? x : "idle"));
+    return states.map((x, j) => (j < now ? x : running[j] ? "active" : j === now || x === "done" ? x : "idle"));
   }
   if (run.status !== "failed") return states;
   let i = read.indexOf("trouble");

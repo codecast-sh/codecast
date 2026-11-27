@@ -335,6 +335,16 @@ describe("a running run's track is at its station (pl-1077 polish 3)", () => {
     // The session's conflict fix lands nothing: the run is still on its way to main.
     expect(isMerged(r)).toBe(false);
   });
+
+  test("CI still running while Review already answered on this head: Review stays done", () => {
+    // CI and review run side by side; the run's station is CI while the reviewer's ship on the PR's head stands.
+    const r = run("cr", {
+      current_node_id: "ci", current_node_label: "CI and review",
+      review_verdict: { verdict: "ship", at: 1, head_sha: "aaa" }, pr: { repository: "o/r", number: 319, head_sha: "aaa", first_head_sha: "aaa", at: 1 },
+      node_statuses: [["pr", "completed"], ["checks", "running"], ["ci", "running"], ["review", "completed"]].map(([node_id, status]) => ({ node_id, status })),
+    });
+    expect(stepper(r)).toEqual(["done", "active", "done", "idle"]);
+  });
 });
 
 describe("what a card carried", () => {
