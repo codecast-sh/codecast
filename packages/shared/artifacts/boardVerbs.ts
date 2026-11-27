@@ -12,6 +12,7 @@ import {
   elementBounds,
   alignBoxes,
   center,
+  contains,
   distributeBoxes,
   elementBox,
   stickyFitHeight,
@@ -47,6 +48,7 @@ import {
   collapseFrameOps,
   expandFrameOps,
   frameCollapsed,
+  hiddenKeys,
   moveFrameOps,
   organizeOps,
   personTouched,
@@ -148,6 +150,26 @@ function refuseForPeople(view: ArtifactView, ops: readonly ArtifactOp[], asked: 
   const touched = personTouched(view, ops, asked);
   if (!touched.length) return;
   throw new Error(`left the board as it was: this would move or enclose a person's work (${touched.join(", ")}). A person can press Reflow or Organize on the board.`);
+}
+
+/**
+ * The padding for a new frame around `els`: `pad`, or less when they all sit
+ * inside one frame, so the new frame lands strictly inside it (8px clear of
+ * its edge) and never ties with it for containment.
+ */
+function insetPad(view: ArtifactView, els: readonly ArtifactElement[], pad: number): number {
+  const u = unionBox(els.map(elementBounds));
+  if (!u) return pad;
+  const hidden = hiddenKeys(view);
+  const keys = new Set(els.map((e) => e.key));
+  const around = view.elements
+    .filter((f) => f.kind === "frame" && !keys.has(f.key) && !hidden.has(f.key) && !frameCollapsed(f) && contains(elementBounds(f), u))
+    .map(elementBounds)
+    .sort((a, b) => a.w * a.h - b.w * b.h)[0];
+  if (!around) return pad;
+  // frameAround puts the title band (24) above the padding.
+  const gap = Math.min(u.x - around.x, u.y - around.y - 24, around.x + around.w - u.x - u.w, around.y + around.h - u.y - u.h);
+  return Math.max(0, Math.min(pad, gap - 8));
 }
 
 /** The frame's box after `ops`, from its put or its old box with the set fields. */
@@ -429,7 +451,7 @@ const frame: ArtifactVerb = {
     const [title, ...keys] = str(flags.title) ? [str(flags.title)!, ...pos] : ref && pos[0] && view.get(pos[0]) ? [ref, ...pos] : pos;
     if (!title) throw new Error("give the frame a title");
     const els = requireKeys(view, keys);
-    const op = frameAround(els.map(elementBox), title, bottomZ(view), count(flags.pad, "--pad", 40))!;
+    const op = frameAround(els.map(elementBox), title, bottomZ(view), insetPad(view, els, count(flags.pad, "--pad", 40)))!;
     if ("put" in op) {
       if (str(flags.color)) op.put.color = str(flags.color)!;
       if (ref) op.put.ref = ref;

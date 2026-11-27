@@ -219,6 +219,17 @@ describe("collapse and expand", () => {
     expect(pos(v1, "el_s2")).toEqual({ x: 700, y: 128 });
   });
 
+  test("two frames with the same box are siblings: neither fold ever holds the other frame", () => {
+    const v0 = board([frame("el_a", 0, 0, 520, 464), frame("el_z", 0, 0, 520, 464), sticky("el_s1", 40, 64), sticky("el_s2", 280, 64)]);
+    expect(enclosingFrameKeys(v0, "el_a")).toEqual([]);
+    expect(enclosingFrameKeys(v0, "el_z")).toEqual([]);
+    // The stickies belong to one of them by the plant rule (the earlier key on a tie).
+    expect(enclosingFrameKeys(v0, "el_s1")).toEqual(["el_a"]);
+    const holds = (k: string) => (collapseFrameOps(v0, k).find((o) => o.k === k) as any).set.collapsed.holds.sort();
+    expect(holds("el_a")).toEqual(["el_s1", "el_s2"]);
+    expect(holds("el_z")).toEqual([]);
+  });
+
   test("refuses frames in the wrong state", () => {
     const v0 = themeBoard();
     expect(() => expandFrameOps(v0, "el_f")).toThrow(/not collapsed/);
