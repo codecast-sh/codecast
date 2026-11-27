@@ -375,14 +375,19 @@ export function readFilters(params: URLSearchParams | null | undefined): ListFil
   };
 }
 
+/** The address parameters the filters own (lib/rememberedFilters restores them when an address names none). */
+export const FILTER_PARAMS = ["mine", "done", "show"] as const;
+
+/** `f` as address parameters, a default as null. */
+export function filterParams(f: ListFilters): Record<(typeof FILTER_PARAMS)[number], string | null> {
+  const kinds = SHOW_KINDS.filter((k) => f.show[k]).join(",");
+  return { mine: f.mine ? null : "0", done: f.hideDone ? null : "1", show: kinds === DEFAULT_SHOW ? null : kinds || "none" };
+}
+
 /** The address for `f`, keeping the address's other parameters. */
 export function filtersHref(f: ListFilters, params: URLSearchParams | null | undefined): string {
   const next = new URLSearchParams(params?.toString() ?? "");
-  const set = (k: string, v: string | null) => (v === null ? next.delete(k) : next.set(k, v));
-  set("mine", f.mine ? null : "0");
-  set("done", f.hideDone ? null : "1");
-  const kinds = SHOW_KINDS.filter((k) => f.show[k]).join(",");
-  set("show", kinds === DEFAULT_SHOW ? null : kinds || "none");
+  for (const [k, v] of Object.entries(filterParams(f))) v === null ? next.delete(k) : next.set(k, v);
   const qs = next.toString();
   return qs ? `/priorities?${qs}` : "/priorities";
 }
