@@ -171,18 +171,10 @@ jobs:
             exit 1
           fi
 
-          git show "$SOURCE_COMMIT:packages/cli/package.json" |
-            jq -S 'del(.version)' > /tmp/source-cli-package.json
-          jq -S 'del(.version)' packages/cli/package.json > /tmp/head-cli-package.json
-          diff -u /tmp/source-cli-package.json /tmp/head-cli-package.json
-          source_changes=$(git diff --name-only "$SOURCE_COMMIT"..HEAD -- \
-            packages/cli packages/shared bun.lock package.json |
-            grep -v '^packages/cli/package.json$' || true)
-          if [[ -n "$source_changes" ]]; then
-            echo "::error::CLI/shared build inputs changed after the binary build commit"
-            printf '%s\n' "$source_changes"
-            exit 1
-          fi
+          # The release is the build it made: latest.json names SOURCE_COMMIT and the
+          # binaries are checked against that commit's manifest, CI and fallback build.
+          # CLI commits that landed on main after it are not carried; they go out with
+          # the next release, cut at the new head (ct-102056).
 
           current=$(jq -r '.version' packages/cli/package.json)
           if [[ "$current" != "$PREVIOUS_VERSION" && "$current" != "$RELEASE_VERSION" ]]; then
@@ -198,6 +190,11 @@ jobs:
           if [[ "$public_version" != "$PREVIOUS_VERSION" &&
             "$public_version" != "$RELEASE_VERSION" ]]; then
             echo "::error::public latest.json is neither the predecessor nor the recovery target"
+            exit 1
+          fi
+          public_source=$(jq -r '.sourceCommit // ""' <<<"$public_latest")
+          if [[ "$public_version" == "$RELEASE_VERSION" && "$public_source" != "$SOURCE_COMMIT" ]]; then
+            echo "::error::$RELEASE_VERSION is already public from $public_source, not $SOURCE_COMMIT"
             exit 1
           fi
 
@@ -606,74 +603,60 @@ jobs:
           git checkout main
           git pull --ff-only origin main
           git merge-base --is-ancestor "$SOURCE_COMMIT" HEAD
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git show "$SOURCE_COMMIT:packages/cli/package.json" |
-            jq -S 'del(.version)' > /tmp/source-cli-package.json
-          jq -S 'del(.version)' packages/cli/package.json > /tmp/head-cli-package.json
-          diff -u /tmp/source-cli-package.json /tmp/head-cli-package.json
-          source_changes=$(git diff --name-only "$SOURCE_COMMIT"..HEAD -- \
-            packages/cli packages/shared bun.lock package.json |
-            grep -v '^packages/cli/package.json$' || true)
-          if [[ -n "$source_changes" ]]; then
-            echo "::error::CLI/shared build inputs changed while the release was staging"
-            printf '%s\n' "$source_changes"
-            exit 1
+          # The tag names exactly what the binaries hold: SOURCE_COMMIT plus the
+          # version bump, as a commit whose parent is SOURCE_COMMIT. Main's head may
+          # carry later CLI commits the release does not, so main gets its own bump
+          # commit and the tag never points at it (ct-102056).
+          tag="v$RELEASE_VERSION"
+          created_tag=false
+          if git rev-parse "$tag^{commit}" >/dev/null 2>&1; then
+            release_sha=$(git rev-parse "$tag^{commit}")
+            tag_version=$(git show "$release_sha:packages/cli/package.json" | jq -r '.version')
+            tag_changes=$(git diff --name-only "$SOURCE_COMMIT" "$release_sha")
+            if [[ "$(git rev-parse "$release_sha^")" != "$SOURCE_COMMIT" ||
+              "$tag_version" != "$RELEASE_VERSION" ||
+              "$tag_changes" != "packages/cli/package.json" ]]; then
+              echo "::error::$tag at $release_sha is not $SOURCE_COMMIT plus the $RELEASE_VERSION bump"
+              exit 1
+            fi
+          else
+            mode=$(git ls-tree "$SOURCE_COMMIT" packages/cli/package.json | awk '{print $1}')
+            blob=$(git show "$SOURCE_COMMIT:packages/cli/package.json" |
+              jq --arg version "$RELEASE_VERSION" '.version = $version' |
+              git hash-object -w --stdin)
+            export GIT_INDEX_FILE=/tmp/release-index
+            git read-tree "$SOURCE_COMMIT"
+            git update-index --cacheinfo "$mode,$blob,packages/cli/package.json"
+            tree=$(git write-tree)
+            unset GIT_INDEX_FILE
+            release_sha=$(git commit-tree "$tree" -p "$SOURCE_COMMIT" \
+              -m "chore(cli): release $RELEASE_VERSION")
+            git tag -a "$tag" "$release_sha" -m "Codecast CLI $RELEASE_VERSION"
+            created_tag=true
           fi
 
           current=$(jq -r '.version' packages/cli/package.json)
-          created_commit=false
+          refs=()
           if [[ "$current" == "$PREVIOUS_VERSION" ]]; then
             jq --arg version "$RELEASE_VERSION" '.version = $version' \
               packages/cli/package.json > /tmp/cli-package.json
             mv /tmp/cli-package.json packages/cli/package.json
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git add packages/cli/package.json
             git commit -m "chore(cli): bump version to $RELEASE_VERSION"
-            release_sha=$(git rev-parse HEAD)
-            created_commit=true
-          elif [[ "$current" == "$RELEASE_VERSION" ]]; then
-            release_sha=""
-            while read -r candidate; do
-              candidate_version=$(git show "$candidate:packages/cli/package.json" | jq -r '.version')
-              parent_version=$(git show "$candidate^:packages/cli/package.json" 2>/dev/null |
-                jq -r '.version' 2>/dev/null || true)
-              if [[ "$candidate_version" == "$RELEASE_VERSION" &&
-                "$parent_version" != "$RELEASE_VERSION" ]]; then
-                release_sha="$candidate"
-                break
-              fi
-            done < <(git rev-list --reverse "$SOURCE_COMMIT"..HEAD -- packages/cli/package.json)
-            if [[ -z "$release_sha" ]]; then
-              echo "::error::could not identify the existing version bump commit"
-              exit 1
-            fi
-          else
+            refs+=(HEAD:main)
+          elif [[ "$current" != "$RELEASE_VERSION" ]]; then
             echo "::error::main package version changed to unexpected $current"
             exit 1
           fi
-
-          tag="v$RELEASE_VERSION"
-          if git rev-parse "$tag^{commit}" >/dev/null 2>&1; then
-            tag_sha=$(git rev-parse "$tag^{commit}")
-            if [[ "$tag_sha" != "$release_sha" ]]; then
-              echo "::error::$tag points to $tag_sha instead of $release_sha"
-              exit 1
-            fi
-            if [[ "$created_commit" == true ]]; then
-              echo "::error::tag already existed before the new version commit"
-              exit 1
-            fi
-          else
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git tag -a "$tag" "$release_sha" -m "Codecast CLI $RELEASE_VERSION"
+          if [[ "$created_tag" == true ]] ||
+            ! git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            refs+=("refs/tags/$tag")
           fi
-
-          if [[ "$created_commit" == true ]]; then
-            git push --atomic origin HEAD:main "refs/tags/$tag"
-          elif ! git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
-            git push origin "refs/tags/$tag"
+          if (( ${#refs[@]} )); then
+            git push --atomic origin "${refs[@]}"
           fi
           echo "release_sha=$release_sha" >> "$GITHUB_OUTPUT"
           echo "Release commit: \`$release_sha\`" >> "$GITHUB_STEP_SUMMARY"
