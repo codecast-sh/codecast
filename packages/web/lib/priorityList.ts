@@ -219,6 +219,8 @@ export const layoutForWidth = (width: number, tablet = false): ListLayout => (ta
 export const RANK_COLUMN = { wide: "grid grid-cols-[20px_minmax(0,1fr)] gap-x-2", phone: "grid grid-cols-[16px_minmax(0,1fr)] gap-x-2" } as const;
 /** The text edge as a left padding: the rank column and its gap. */
 export const TEXT_EDGE = { wide: "pl-[28px]", phone: "pl-[24px]" } as const;
+/** The title edge in Workspace grouping, past the face column (24px) and its gap: where its rows' titles start. */
+export const FACE_TEXT_EDGE = { wide: "pl-[60px]", phone: "pl-[56px]" } as const;
 
 /** A deploy a milestone reached, as its row draws it (Connected, with components/priorities/parts DeployMark). */
 export type DeployInfo = { id: string; short_id: string; target: string; status: string; at: number };

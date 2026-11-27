@@ -129,6 +129,8 @@ test("Group by: Workspace interleaves by rank with each owner's face; Person the
     expect(block(c, "pri-5").querySelector("[data-priority-face] [data-face]")!.getAttribute("data-face")).toBe("Sam Teammate");
     expect(block(c, "pri-1").querySelector("[data-priority-face] [data-face]")!.getAttribute("data-face")).toBe("You");
     expect(c.querySelector("[data-rank-handle]")).toBeNull();
+    // Its fold starts at the title edge, past the face column.
+    expect(c.querySelector("[data-past-toggle]")!.parentElement!.className).toContain("pl-[60px]");
 
     setView({ group_by: "person_workspace" });
     await act(async () => {});

@@ -89,10 +89,11 @@ export default function PrioritiesPage() {
     body = <PrioritiesView rows={rows} history={history} now={now} layout={layout} />;
   }
 
-  // The header's row sits in the list's column: the same max width, centred, its edges on the list's.
+  // The header's row sits in the list's column: the same max width, centred, its edges on the list's; the glyph centred in a
+  // 20px box (the rank column) and the 8px gap after it put the title on the text edge.
   return (
     <PageFrame
-      header={<PageHeader legacy={legacy} title="Priorities" glyph={<Mark id="entity.priority" labeled><Target className="size-4 shrink-0 text-sol-text-muted" aria-hidden /></Mark>} count={rows.length ? listed : null} status={behindChip} actions={<LegendButton lead="Priorities" />} className={HEAD_IN_COLUMN} />}
+      header={<PageHeader legacy={legacy} title="Priorities" glyph={<span className="flex w-5 justify-center"><Mark id="entity.priority" labeled><Target className="size-4 shrink-0 text-sol-text-muted" aria-hidden /></Mark></span>} count={rows.length ? listed : null} status={behindChip} actions={<LegendButton lead="Priorities" />} className={HEAD_IN_COLUMN} />}
       legacyColumn={LIST_COLUMN}
       column="w-full pb-16 [container-type:inline-size]"
     >

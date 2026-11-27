@@ -7,7 +7,7 @@
 import { useState, type ReactNode } from "react";
 import { ChevronRight } from "lucide-react";
 import type { PriorityRow } from "../../lib/priorities";
-import { RANK_COLUMN, TEXT_EDGE, type ListLayout } from "../../lib/priorityList";
+import { FACE_TEXT_EDGE, RANK_COLUMN, TEXT_EDGE, type ListLayout } from "../../lib/priorityList";
 import type { Sections } from "../../lib/prioritySections";
 import { AvatarImg } from "../../lib/avatarCache";
 import { cn } from "../../lib/utils";
@@ -57,13 +57,13 @@ function Heading({ mark, name, count, top, layout, ...data }: { mark: ReactNode;
   );
 }
 
-/** The last row of a group: its done and set-aside priorities, folded, starting at the text edge. */
+/** The last row of a group: its done and set-aside priorities, folded, starting at the title edge (past the face column in Workspace grouping). */
 function PastFold({ rows, block, layout, face }: { rows: PriorityRow[]; block: BlockOf; layout: ListLayout; face?: boolean }) {
   const [open, setOpen] = useState(false);
   if (!rows.length) return null;
   return (
     <div data-past-priorities>
-      <div className={cn(TEXT_EDGE[layout], "py-1")}>
+      <div className={cn(face ? FACE_TEXT_EDGE[layout] : TEXT_EDGE[layout], "py-1")}>
         <button
           type="button"
           data-past-toggle

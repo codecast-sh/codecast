@@ -198,7 +198,7 @@ function PriorityBlock({ model, days, todayIndex, peak, now, lookups, own, compa
         {face && <RNView style={styles.face}><OwnerFace row={row} /></RNView>}
         <RNView style={styles.headTitle}>
           <TouchableOpacity style={styles.titlePress} onPress={openPriority} accessibilityRole="link" testID={`priorities-open-${row.short_id}`}>
-            <RNText style={[styles.title, past && styles.pastTitle]} numberOfLines={2}>{row.title}</RNText>
+            <RNText style={[styles.title, past && styles.pastTitle]} numberOfLines={compact ? 1 : 2}>{row.title}</RNText>
           </TouchableOpacity>
           <More label={`More for ${row.title}`} onPress={menu} testID={`priorities-menu-${row.short_id}`} />
         </RNView>
