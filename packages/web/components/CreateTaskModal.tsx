@@ -294,7 +294,7 @@ export function CreateTaskModal({ onClose, teamMembers, currentUser, defaults }:
     void handleSubmitRef.current();
   };
   const submit = () => {
-    if (dictation.running()) void dictation.finish().then(submitNow);
+    if (dictation.running()) dictation.finishThen(submitNow);
     else submitNow();
   };
   const focusDescription = useCallback(() => editorRef.current?.commands.focus(), []);

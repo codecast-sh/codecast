@@ -62,9 +62,10 @@ export type PhoneDictation = {
   /** Recording, starting or finishing: the box belongs to the recording. */
   active: boolean;
   start(): void;
-  finish(): Promise<void>;
+  finish(): Promise<boolean>;
   cancel(): void;
-  /** Send through `fn` once the last words are in the box (now, when idle). */
+  /** Send through `fn` once the last words are in the box (now, when idle);
+   *  nothing when cancelled meanwhile, once when pressed twice. */
   send(fn: () => void): void;
   onSelectionChange(e: NativeSyntheticEvent<TextInputSelectionChangeEventData>): void;
   /** The placeholder the box shows: "Listening…" while recording into an empty box. */
@@ -111,7 +112,7 @@ export function useDictation(target: DictationTarget): PhoneDictation {
       },
     };
     const host: DictationHost = {
-      open: (events) => (devHost() ?? phoneDictationHost(convex.current, dictationLanguages(getDictationLanguage()))).open(events),
+      open: (events, signal) => (devHost() ?? phoneDictationHost(convex.current, dictationLanguages(getDictationLanguage()))).open(events, signal),
     };
     const d = createDictation(field, host, setState);
     ctl.current = d;
@@ -121,16 +122,16 @@ export function useDictation(target: DictationTarget): PhoneDictation {
     };
   }, []);
 
-  // A send pressed mid-recording waits here for the recording to settle; it
-  // runs after the render that put the last words in the composer's state,
-  // so the composer's send reads them.
-  const pendingSend = useRef<(() => void) | null>(null);
+  // A send pressed mid-recording goes through the controller's finishThen
+  // (one slot, nothing on Cancel). That runs as the last words reach the
+  // composer's setter, before React has rendered them, so the send it hands
+  // over waits here for the next render, whose state holds those words.
+  const [queuedSend, setQueuedSend] = useState<{ fn: () => void } | null>(null);
   useEffect(() => {
-    if (state.phase !== 'idle' || !pendingSend.current) return;
-    const fn = pendingSend.current;
-    pendingSend.current = null;
-    fn();
-  }, [state.phase]);
+    if (!queuedSend) return;
+    setQueuedSend(null);
+    queuedSend.fn();
+  }, [queuedSend]);
 
   // A recording that ended by itself says why, once.
   useEffect(() => {
@@ -163,16 +164,12 @@ export function useDictation(target: DictationTarget): PhoneDictation {
   }, [shown, blocked]);
 
   const start = useCallback(() => ctl.current?.start(), []);
-  const finish = useCallback(() => ctl.current?.finish() ?? Promise.resolve(), []);
-  const cancel = useCallback(() => {
-    pendingSend.current = null;
-    ctl.current?.cancel();
-  }, []);
+  const finish = useCallback(() => ctl.current?.finish() ?? Promise.resolve(true), []);
+  const cancel = useCallback(() => ctl.current?.cancel(), []);
   const send = useCallback((fn: () => void) => {
     const d = ctl.current;
     if (!d?.active) return fn();
-    pendingSend.current = fn;
-    void d.finish();
+    d.finishThen(() => setQueuedSend({ fn }));
   }, []);
   const onSelectionChange = useCallback((e: NativeSyntheticEvent<TextInputSelectionChangeEventData>) => {
     const sel = e?.nativeEvent?.selection;
