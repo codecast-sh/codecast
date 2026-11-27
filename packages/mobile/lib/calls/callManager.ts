@@ -33,7 +33,7 @@ const MOBILE_AUDIO_CAPTURE = {
 const audioSession = () => getLivekit()?.AudioSession ?? null;
 import { api } from "@codecast/convex/convex/_generated/api";
 import { convex } from "../convex";
-import { CALL_HEARTBEAT_MS, humanizeConvexError, isRoomMachineryKind, localTranscribeLanguages } from "@codecast/shared/contracts";
+import { CALL_HEARTBEAT_MS, finishRunningDictation, humanizeConvexError, isRoomMachineryKind, localTranscribeLanguages } from "@codecast/shared/contracts";
 
 export type CallPhase = "idle" | "connecting" | "connected" | "error";
 
@@ -253,6 +253,9 @@ export async function joinCall(roomKey: string, opts: JoinOpts = {}): Promise<vo
     participants: [],
     ...(opts.muted !== undefined ? { muted: opts.muted } : {}),
   });
+  // A dictation still recording keeps its words and lets go of the microphone
+  // before the call takes it, so the huddle's audio never lands in a text box.
+  const dictationDone = finishRunningDictation();
   try {
     await convex.mutation(api.calls.joinRoom, {
       room_key: roomKey,
@@ -262,6 +265,8 @@ export async function joinCall(roomKey: string, opts: JoinOpts = {}): Promise<vo
     if (superseded()) return;
     // `client`: this seat hears only its own mic (phoneScribeRule reads it).
     const { url, token } = await convex.action(api.calls.mintAccessToken, { room_key: roomKey, client: "phone" });
+    if (superseded()) return;
+    await dictationDone;
     if (superseded()) return;
     if (!opts.callKitManaged) {
       const lk = getLivekit();
