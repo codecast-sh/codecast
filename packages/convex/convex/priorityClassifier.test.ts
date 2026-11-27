@@ -541,6 +541,21 @@ describe('"new" and the re-run', () => {
     expect(await classifications(w)).toHaveLength(0);
   });
 
+  test("measuring a cadence, the replay's facts ask at each typed message in the window and none after it, each seeing the pin as of then", async () => {
+    const w = await classifierWorld();
+    await w.send(w.ana, w.teamConv, w.now - 3 * H, "retry the flaky grader calls");
+    await w.t.run((ctx) => ctx.db.insert("thread_state_events", { conversation_id: w.teamConv, user_id: w.ana, at: w.now - 2.5 * H, text: "Grader retries landed", status: "working" }));
+    await w.send(w.ana, w.teamConv, w.now - 2 * H, "now the timeout path");
+    await w.send(w.ana, w.teamConv, w.now - H, "after the window");
+    const facts = await w.t.query(fn.priorityClassifierEval.evalFacts, { workspace: w.team, sessions: [{ conversation_id: w.teamConv, first_at: w.now - 4 * H }], tasks: [], every_message: true, until: w.now - 1.5 * H });
+    const asks = facts.sessions[0].asks;
+    expect(asks.map((a: any) => [a.trigger, a.at, a.chars])).toEqual([["message", w.now - 3 * H, 28], ["message", w.now - 2 * H, 20]]);
+    expect(asks[0].session.pin).toBeNull();
+    expect(asks[0].session.typed).toEqual(["retry the flaky grader calls"]);
+    expect(asks[1].session.pin).toMatchObject({ text: "Grader retries landed" });
+    expect(asks[1].session.typed).toEqual(["retry the flaky grader calls", "now the timeout path"]);
+  });
+
   test("a plan with no new priority or milestone asks for no re-run", async () => {
     const w = await classifierWorld();
     await w.t.mutation(pass.applyPlan, {
