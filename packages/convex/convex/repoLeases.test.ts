@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb, schemaIndexes } from "./testDb";
 import schema from "./schema";
-import { LEASE_MS, leaseCore } from "./repoLeases";
+import { LEASE_MS, WAITER_STALE_MS, leaseCore } from "./repoLeases";
 
 // The lease on a repository's before-merge deploys through the landing push:
 // one holder at a time across machines, named to whoever waits, freed by
@@ -20,7 +20,7 @@ function world() {
     ],
     repo_leases: [],
   };
-  const ctx: any = { db: makeFakeDb(tables, { indexes: schemaIndexes(schema as any) }) };
+  const ctx: any = { db: makeFakeDb(tables, { indexes: schemaIndexes(schema as any), strictPatch: true }) };
   const call = (user: string, op: "take" | "renew" | "release", token: string, at = NOW, holder?: string) =>
     leaseCore(ctx, user as any, { repository: "Codecast-sh/Codecast", op, token, team_id: TEAM, ...(holder ? { holder } : {}) }, at);
   return { tables, call };
@@ -31,13 +31,48 @@ describe("repo leases", () => {
     const w = world();
     expect(await w.call(ME, "take", "t1", NOW, "the merge of PR #7 on laptop")).toEqual({ held: true, expires_at: NOW + LEASE_MS });
     expect(w.tables.repo_leases[0]).toMatchObject({ workspace: `team:${TEAM}`, repository: "codecast-sh/codecast", holder: "the merge of PR #7 on laptop", holder_user_id: ME });
-    expect(await w.call(YOU, "take", "t2", NOW + 1000, "cast ship checkout on host")).toEqual({ held: false, holder: "the merge of PR #7 on laptop", since: NOW, expires_at: NOW + LEASE_MS });
+    expect(await w.call(YOU, "take", "t2", NOW + 1000, "cast ship checkout on host")).toEqual({ held: false, holder: "the merge of PR #7 on laptop", since: NOW, expires_at: NOW + LEASE_MS, position: 2 });
     // The holder taking again (a retry) keeps it.
     expect(await w.call(ME, "take", "t1", NOW + 2000)).toEqual({ held: true, expires_at: NOW + 2000 + LEASE_MS });
     // A release by anyone but the holder frees nothing.
     expect(await w.call(YOU, "release", "t2")).toEqual({ released: false });
     expect(await w.call(ME, "release", "t1")).toEqual({ released: true });
     expect(await w.call(YOU, "take", "t2", NOW + 3000, "cast ship checkout on host")).toEqual({ held: true, expires_at: NOW + 3000 + LEASE_MS });
+  });
+
+  test("takers get it in the order they asked, whoever asks first once it is free; a waiter that stops asking drops out", async () => {
+    const w = world();
+    const USER3 = "users_3";
+    w.tables.team_memberships.push({ _id: "m3", user_id: USER3, team_id: TEAM, role: "member", joined_at: 1 }, { _id: "m4", user_id: "users_4", team_id: TEAM, role: "member", joined_at: 1 });
+    expect(await w.call(ME, "take", "a", NOW, "merge A")).toMatchObject({ held: true });
+    // Three wait, in this order, each told its place and who holds it.
+    expect(await w.call(YOU, "take", "b", NOW + 1000, "merge B")).toMatchObject({ held: false, holder: "merge A", position: 2 });
+    expect(await w.call(USER3, "take", "c", NOW + 2000, "merge C")).toMatchObject({ held: false, holder: "merge A", position: 3 });
+    expect(await w.call("users_4", "take", "d", NOW + 3000, "merge D")).toMatchObject({ held: false, holder: "merge A", position: 4 });
+    // Asking again keeps a waiter's place.
+    expect(await w.call(YOU, "take", "b", NOW + 4000)).toMatchObject({ held: false, position: 2 });
+    expect(await w.call(ME, "release", "a", NOW + 5000)).toEqual({ released: true });
+    // Free, but D (last in line) polls first: it waits behind B, who is next.
+    expect(await w.call("users_4", "take", "d", NOW + 6000)).toEqual({ held: false, holder: "merge B (next in line)", since: NOW + 1000, expires_at: NOW + 5000, position: 3 });
+    expect(await w.call(USER3, "take", "c", NOW + 6500)).toMatchObject({ held: false, position: 2 });
+    expect(await w.call(YOU, "take", "b", NOW + 7000, "merge B")).toEqual({ held: true, expires_at: NOW + 7000 + LEASE_MS });
+    expect(w.tables.repo_leases[0]).toMatchObject({ token: "b", holder: "merge B", holder_user_id: YOU, acquired_at: NOW + 7000 });
+    expect(w.tables.repo_leases[0].waiters.map((x: any) => x.token)).toEqual(["c", "d"]);
+    // C dies (stops asking); D keeps asking. When B releases, C has dropped out and D is first.
+    const later = NOW + 7000 + WAITER_STALE_MS;
+    expect(await w.call("users_4", "take", "d", later - 1000)).toMatchObject({ held: false, holder: "merge B", position: 3 });
+    expect(await w.call(YOU, "release", "b", later + 1000)).toEqual({ released: true });
+    expect(await w.call("users_4", "take", "d", later + 2000, "merge D")).toEqual({ held: true, expires_at: later + 2000 + LEASE_MS });
+    expect(w.tables.repo_leases).toHaveLength(1);
+    expect(w.tables.repo_leases[0]).toMatchObject({ token: "d", holder: "merge D" });
+    expect(w.tables.repo_leases[0].waiters).toBeUndefined();
+    // C coming back joins the back of the line; a waiter that gives up (release) leaves it.
+    expect(await w.call(USER3, "take", "c", later + 3000)).toMatchObject({ held: false, position: 2 });
+    expect(await w.call(USER3, "release", "c", later + 4000)).toEqual({ released: false });
+    expect(w.tables.repo_leases[0].waiters).toBeUndefined();
+    // With no line, a release deletes the row.
+    expect(await w.call("users_4", "release", "d", later + 5000)).toEqual({ released: true });
+    expect(w.tables.repo_leases).toEqual([]);
   });
 
   test("a renewal keeps a live lease; a lapsed one goes to the next taker, and its old holder's renewal is refused", async () => {
@@ -107,11 +142,11 @@ describe("repo leases", () => {
       leaseCore(ctx, user as any, { repository: "codecast-sh/codecast", op, token, ...extra }, at);
     expect(await call(ME, "take", "run", { run_id: "workflow_runs_mine", holder: "the merge of PR #7" })).toEqual({ held: true, expires_at: NOW + LEASE_MS });
     expect(tables.repo_leases[0]).toMatchObject({ workspace: `user:${ME}`, repository: "codecast-sh/codecast", holder_user_id: ME });
-    expect(await call(YOU, "take", "checkout", { holder: "cast ship checkout" }, NOW + 1000)).toEqual({ held: false, holder: "the merge of PR #7", since: NOW, expires_at: NOW + LEASE_MS });
+    expect(await call(YOU, "take", "checkout", { holder: "cast ship checkout" }, NOW + 1000)).toEqual({ held: false, holder: "the merge of PR #7", since: NOW, expires_at: NOW + LEASE_MS, position: 2 });
     expect(await call(ME, "release", "run", { run_id: "workflow_runs_mine" })).toEqual({ released: true });
     expect(await call(YOU, "take", "checkout", { holder: "cast ship checkout" }, NOW + 2000)).toEqual({ held: true, expires_at: NOW + 2000 + LEASE_MS });
     expect(tables.repo_leases[0]).toMatchObject({ workspace: `team:${TEAM}`, team_id: TEAM });
-    expect(await call(ME, "take", "run", { run_id: "workflow_runs_mine" }, NOW + 3000)).toEqual({ held: false, holder: "cast ship checkout", since: NOW + 2000, expires_at: NOW + 2000 + LEASE_MS });
+    expect(await call(ME, "take", "run", { run_id: "workflow_runs_mine" }, NOW + 3000)).toEqual({ held: false, holder: "cast ship checkout", since: NOW + 2000, expires_at: NOW + 2000 + LEASE_MS, position: 2 });
     // Someone with neither the run's workspace nor a team on the repository takes nothing.
     await expect(call(STRANGER, "take", "x", { run_id: "workflow_runs_mine" })).rejects.toThrow("No run workflow_runs_mine you can lease a repository for.");
     await expect(call(STRANGER, "take", "x")).rejects.toThrow("None of your teams has codecast-sh/codecast connected");

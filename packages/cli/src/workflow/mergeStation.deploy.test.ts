@@ -116,7 +116,7 @@ describe("cast flow merge: before-merge steps", () => {
       const order: string[] = [];
       const r = await s.run({ runStep: async () => { order.push("step"); return { code: 0, output: "" }; } });
       expect(r.code).toBe(0);
-      expect(s.logged).toContain("waiting for cast ship checkout on host-2 to finish its deploys and merge in o/r (holding it 2m)");
+      expect(s.logged).toContain("waiting for the lease on o/r: behind cast ship checkout on host-2 (2m)");
       const leases = s.posts.filter((p) => p.path === "/cli/repo-lease");
       // Taken (after one wait), asked outright before the step and again before the merge, released at the end.
       expect(leases.map((p) => p.body.op)).toEqual(["take", "take", "renew", "renew", "release"]);
@@ -127,6 +127,31 @@ describe("cast flow merge: before-merge steps", () => {
       const at = (path: string) => s.posts.findIndex((p) => p.path === path);
       expect(s.posts.length - 1).toBe(s.posts.map((p) => p.body.op).lastIndexOf("release"));
       expect(at("/cli/line/merge/record")).toBeLessThan(s.posts.length - 1);
+    } finally { s.done(); }
+  }, T);
+
+  test("a merge with no before-merge step still takes its turn: the lease is held from before the rebase to the landed sha", async () => {
+    const s = setup();
+    try {
+      const head = s.branch("web/page.ts", "page\n");
+      s.advanceMain("other.txt", "other\n");
+      s.ci(head);
+      const order: string[] = [];
+      let takes = 0;
+      s.answers["/cli/repo-lease"] = (body) => {
+        order.push(`lease ${body.op}`);
+        return body.op === "release" ? { released: true }
+          : body.op === "take" && ++takes === 1 ? { held: false, holder: "the merge of PR #9 (run r9) on host-2", since: Date.now(), expires_at: Date.now() + 600_000, position: 2 }
+          : { held: true, expires_at: Date.now() + 600_000 };
+      };
+      const record = s.answers["/cli/line/merge/record"];
+      s.answers["/cli/line/merge/record"] = (body) => { order.push("merge recorded"); return record(body); };
+      const r = await s.run({ scratch: async (repo, at) => { order.push("scratch tree"); return s.scratch(repo, at); } });
+      expect(r.code).toBe(0);
+      expect(s.git(s.work, "rev-parse", "origin/main")).toBe(r.line);
+      expect(s.logged).toContain("waiting for the lease on o/r: 2nd in line behind the merge of PR #9 (run r9) on host-2 (0m)");
+      // Waited in line before the worktree the rebase runs in, held to the merge, released after it was recorded.
+      expect(order).toEqual(["lease take", "lease take", "scratch tree", "lease renew", "merge recorded", "lease release"]);
     } finally { s.done(); }
   }, T);
 
