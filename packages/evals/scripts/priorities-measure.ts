@@ -53,7 +53,8 @@ export const BAR = { recall: 0.75, precision: 0.75, sessions: 0.75, false_done: 
 
 export type GoldenStep = { title: string; done: boolean; task: string | null };
 export type GoldenPriority = { id: string; title: string; short?: string; workspace: string | null; status: string; critical?: GoldenStep[]; sessions: string[] };
-export type Golden = { person: string; window: [string, string]; priorities: GoldenPriority[]; session_labels: Record<string, string>; standing_sessions: string[] };
+/** one_off_sessions: work the person called a task, not a priority: it may sit under a real priority or nowhere, never in one of its own. */
+export type Golden = { person: string; window: [string, string]; priorities: GoldenPriority[]; session_labels: Record<string, string>; standing_sessions: string[]; one_off_sessions?: string[] };
 
 /** A priority the pass produced, keyed across workspaces. */
 export type Produced = { key: string; workspace: string; title: string; summary: string; status: string; steps: Array<{ title: string; tier: string; done: boolean }>; sessions: string[] };
@@ -96,17 +97,18 @@ export type TaskStatus = (ids: string[]) => Promise<Map<string, string>>;
  * precision counts each match. A produced priority none of whose sessions the
  * golden set labels (and it holds at least one) is out of its scope (the author never looked at that
  * work): it is listed as unlabeled, not counted for or against precision. One
- * whose sessions are mostly standing-role sessions is a false positive and is
+ * whose sessions are mostly standing-role or one-off sessions is a false positive and is
  * not offered to the judge. A step falsely done is one marked done whose golden
  * step is not, unless it is only a narrower part of that step; it is real unless
  * its golden step's task is done now (the golden set is stale there).
  */
 export async function score(golden: Golden, produced: Produced[], read: Map<string, string>, judge: Judge, taskStatus: TaskStatus) {
   const standing = new Set(golden.standing_sessions);
-  const labeled = new Set([...Object.keys(golden.session_labels), ...golden.standing_sessions]);
+  const oneOff = new Set(golden.one_off_sessions ?? []);
+  const labeled = new Set([...Object.keys(golden.session_labels), ...standing, ...oneOff]);
   // Out of scope only when it has sessions and the golden set labels none of them; a sessionless one (from calls, or emptied) is scored.
   const unlabeled = produced.filter((p) => p.sessions.length > 0 && !p.sessions.some((s) => labeled.has(labelId(s)))).map((p) => p.key);
-  const standingLike = produced.filter((p) => p.sessions.length && p.sessions.filter((s) => standing.has(labelId(s))).length / p.sessions.length > 0.5).map((p) => p.key);
+  const standingLike = produced.filter((p) => p.sessions.length && p.sessions.filter((s) => standing.has(labelId(s)) || oneOff.has(labelId(s))).length / p.sessions.length > 0.5).map((p) => p.key);
   // Out of the golden set's scope: never offered to the judge, so one cannot take a labeled priority's slot.
   const candidates = produced.filter((p) => !standingLike.includes(p.key) && !unlabeled.includes(p.key));
 
@@ -133,10 +135,10 @@ export async function score(golden: Golden, produced: Produced[], read: Map<stri
   read = byLabelId(read);
   const holder = new Map<string, string>();
   for (const p of produced) for (const s of p.sessions) holder.set(labelId(s), p.key);
-  const labels: Array<[string, string]> = [...Object.entries(golden.session_labels), ...golden.standing_sessions.map((s) => [s, 'standing'] as [string, string])];
+  const labels: Array<[string, string]> = [...Object.entries(golden.session_labels), ...golden.standing_sessions.map((s) => [s, 'standing'] as [string, string]), ...[...oneOff].map((s) => [s, 'one_off'] as [string, string])];
   const sessionResults = labels.filter(([s]) => read.has(s)).map(([session, label]) => {
     const by = holder.get(session) ?? null;
-    const correct = label === 'standing' ? by === null : by !== null && goldenOf.get(by) === label;
+    const correct = label === 'standing' ? by === null : label === 'one_off' ? by === null || goldenOf.has(by) : by !== null && goldenOf.get(by) === label;
     return { session, title: read.get(session) ?? '', label, produced: by, correct };
   });
   const notRead = labels.filter(([s]) => !read.has(s)).map(([s]) => s);
