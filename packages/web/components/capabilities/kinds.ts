@@ -11,7 +11,7 @@ import {
 } from "@codecast/shared/contracts";
 
 /**
- * The view models for /capabilities, and the catalog card that renders one entry.
+ * The view models for /capabilities.
  *
  * This file is the type home for the surface: the matrix, the library and the
  * page all speak these shapes, so there is exactly one definition of "a
@@ -133,8 +133,7 @@ export function kindMeta(kind: string): KindMeta | undefined {
  * contract's alone.
  *
  * `confidenceFromSurfaces` derives it from real findings; `confidenceFromKind`
- * is the floor used when nothing has looked. Nothing else may produce one — see
- * `CatalogEntry.surfaces`.
+ * is the floor used when nothing has looked. Nothing else may produce one.
  */
 export type ExecutionConfidence = "prose" | "code" | "unknown";
 

@@ -33,7 +33,7 @@ import {
   capabilityRowKey,
   type CapabilityStateRow,
 } from "../../../store/capabilities";
-import { type CapabilityDevice, type CatalogEntry } from "../CapabilityCard";
+import { type CapabilityDevice } from "../kinds";
 
 // ---------------------------------------------------------------- fixtures
 
