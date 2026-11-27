@@ -2,10 +2,10 @@
 // one text box and the web's microphone. The composer hands in a field
 // adapter (textareaField, editorField) that writes through its own setter, so
 // drafts, autosave and send see dictated words as typed ones.
-import { useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useMemo, useRef, useState, type KeyboardEvent, type MutableRefObject, type RefObject } from "react";
 import { flushSync } from "react-dom";
 import { useConvex } from "convex/react";
-import { createDictation, dictationRunning, DICTATION_IDLE, type Dictation, type DictationField, type DictationState } from "@codecast/shared/contracts";
+import { createDictation, dictationRunning, DICTATION_IDLE, type Dictation, type DictationField, type DictationState } from "@codecast/shared/contracts/dictation";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { dictationHost } from "./host";
 
@@ -167,4 +167,50 @@ export function textareaField(
       ta.setSelectionRange(end, end);
     },
   };
+}
+
+/**
+ * Dictation for a textarea composer whose draft lives in `valueRef` and changes
+ * through `onChange`: the same setter a keystroke uses, so the draft, its
+ * autosave and send see the words. The field is made once and the controls
+ * stay put between keystrokes, so typing never draws the mic again.
+ */
+export function useComposerDictation(
+  boxRef: RefObject<HTMLTextAreaElement | null>,
+  valueRef: MutableRefObject<string>,
+  onChange: (value: string) => void,
+): { dictation: DictationControls; focusBox: () => void } {
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+  const [field] = useState(() =>
+    textareaField(
+      () => boxRef.current,
+      () => valueRef.current,
+      (val) => {
+        valueRef.current = val;
+        onChangeRef.current(val);
+      },
+    ),
+  );
+  const dictation = useDictation(field);
+  const focusBox = useCallback(() => boxRef.current?.focus(), [boxRef]);
+  return { dictation, focusBox };
+}
+
+/** The same key again, through the composer's current handler: an Enter held
+ *  while dictation finished is sent as the Enter it was, with the text as it
+ *  now stands. */
+export function replayKey(
+  e: KeyboardEvent<HTMLTextAreaElement>,
+  handler: MutableRefObject<((e: KeyboardEvent<HTMLTextAreaElement>) => void) | null>,
+) {
+  const { key, code, shiftKey, altKey, metaKey, ctrlKey, currentTarget, target } = e;
+  return () =>
+    handler.current?.({
+      key, code, shiftKey, altKey, metaKey, ctrlKey, currentTarget, target,
+      nativeEvent: { isComposing: false },
+      defaultPrevented: false,
+      preventDefault: () => {},
+      stopPropagation: () => {},
+    } as unknown as KeyboardEvent<HTMLTextAreaElement>);
 }

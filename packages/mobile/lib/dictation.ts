@@ -13,17 +13,8 @@ import { useCallback, useContext, useEffect, useRef, useState, type RefObject } 
 import { AppState, type NativeSyntheticEvent, type TextInput, type TextInputSelectionChangeEventData } from 'react-native';
 import { NavigationContext } from '@react-navigation/native';
 import { useConvex } from 'convex/react';
-import {
-  DICTATION_IDLE,
-  createDictation,
-  dictationLanguages,
-  dictationStopLine,
-  teamVendorBlock,
-  type Dictation,
-  type DictationField,
-  type DictationHost,
-  type DictationState,
-} from '@codecast/shared/contracts';
+import { teamVendorBlock } from '@codecast/shared/contracts';
+import { DICTATION_IDLE, createDictation, dictationLanguages, dictationStopLine, type Dictation, type DictationField, type DictationHost, type DictationState } from '@codecast/shared/contracts/dictation';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { phoneDictationHost } from './dictationHost';
 import { getDictationLanguage } from './dictationLanguage';
