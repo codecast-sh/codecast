@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { X } from "lucide-react";
 import { useConvex } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
@@ -77,6 +78,8 @@ export function CommentComposer({
     forceBroadcast: draft.trim().length > 0,
   });
   const typing = present.filter((p) => p.draft_text && p.draft_text.trim());
+  // While this box records, Esc cancels the recording, so the foot says so.
+  const [dictating, setDictating] = useState(false);
 
   if (!authed) return <div className="cc-cmt-signedout">Sign in to comment.</div>;
 
@@ -126,6 +129,7 @@ export function CommentComposer({
           autoFocusInput={autoFocus}
           mentionTeamId={mentionTeamId}
           chatMentionMode={chatMentionMode}
+          onDictatingChange={setDictating}
           onGateSend={async (text, images) => {
             const content = await withImages(text, images, (ids) => (convex ? convex.query(api.images.getImageUrls, { storageIds: ids }) : Promise.resolve({})));
             if (!content.trim()) return;
@@ -137,9 +141,16 @@ export function CommentComposer({
 
       {onClose && (
         <div className="cc-cmt-composer-foot">
-          <button type="button" className="cc-comment-btn" onMouseDown={(e) => e.preventDefault()} onClick={onClose}>
-            Cancel <KeyCap size="xs">Esc</KeyCap>
-          </button>
+          {dictating ? (
+            // Not a second Cancel beside the box's ✕: what Esc does now.
+            <span className="cc-comment-btn" data-dictation-esc-hint>
+              <KeyCap size="xs">Esc</KeyCap> cancels dictation
+            </span>
+          ) : (
+            <button type="button" className="cc-comment-btn" onMouseDown={(e) => e.preventDefault()} onClick={onClose}>
+              Cancel <KeyCap size="xs">Esc</KeyCap>
+            </button>
+          )}
         </div>
       )}
     </div>

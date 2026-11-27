@@ -304,6 +304,20 @@
 [data-owners-sheet] [data-owners-menu] [data-owners-foot] button { min-height: 44px; }
 [data-owners-sheet] [data-owners-menu] input { font-size: 16px; }
 .own-chip { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 7px 0 4px; border-radius: 6px; background: color-mix(in srgb, var(--sol-text) 6%, transparent); font-size: var(--fs-meta); color: var(--sol-text-muted); }
+/* Dictation's live dot (components/dictation/DictateControls): the microphone
+   is listening. A recording keeps 10px for it left of ✕ in every phase, so the
+   row does not move as the mic opens; on a touch screen it sits inside ✕'s
+   44px instead (below), so the row stays as wide as the idle mic and caret.
+   It fades in and out slowly, and holds still under reduced motion. Not a
+   list row: the composer has one of these, while it records. */
+[data-dictate-recording] { position: relative; padding-left: 10px; }
+[data-dictate-live] { position: absolute; left: 2px; top: 50%; width: 6px; height: 6px; margin-top: -3px; border-radius: 9999px; background: var(--sol-red); pointer-events: none; z-index: 1; }
+@media (prefers-reduced-motion: no-preference) {
+  [data-dictate-live] { animation: dictateLive 1.8s ease-in-out infinite; }
+}
+@keyframes dictateLive { 50% { opacity: 0.25; } }
+/* A comment box's foot while it records: a hint, not a button. */
+.cc-comment-btn[data-dictation-esc-hint], .cc-comment-btn[data-dictation-esc-hint]:hover { cursor: default; background: transparent; color: var(--sol-text-dim); }
 /* Touch: 44px rows and icon buttons; a framed button keeps its look and takes
    a 44px hit area around it. The terminal's copy title grows its bar to 44px. */
 @media (pointer: coarse) {
@@ -321,6 +335,7 @@
   [data-dictate-target] { position: relative; min-width: 44px; }
   [data-dictate-target]::after { content: ""; position: absolute; left: 0; right: 0; top: 50%; height: 44px; transform: translateY(-50%); }
   [data-dictation-menu] [role="menuitemcheckbox"] { min-height: 44px; }
+  [data-dictate-recording] { padding-left: 0; }
 }
 
 /* Status tabs swap a multi-pill segmented control for a single compact dropdown
