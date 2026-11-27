@@ -60,6 +60,17 @@ describe('priorityInboxView', () => {
     expect(view.rankOf(row('f'))).toBeNull();
   });
 
+  it("outside the Priorities view labels off the live ranks, never a cached row: no stale rank or title, no retired priority", () => {
+    // The phone feeds `priorities` only while the Priorities view is up, so elsewhere its rows can be old.
+    const live = { ...RANKS, p1: { _id: 'p1', workspace: 'team:t1', rank: 3, short_id: 'pri-p1', title: 'Renamed since' } };
+    const elsewhere = priorityInboxView({ ...state(), priorityRanks: live }, false);
+    expect(elsewhere.rankOf(row('a', 'p1', 's1'))).toEqual({ rank: 3, workspace: null, shortId: 'pri-p1', title: 'Renamed since' });
+    // p2 is cached but no longer among the live ranks (retired): no tag.
+    expect(elsewhere.rankOf(row('b', 'p2', 's1'))).toBeNull();
+    // In the Priorities view the fed rows win, so a move paints at once.
+    expect(priorityInboxView({ ...state(), priorityRanks: live }, true).rankOf(row('a', 'p1', 's1'))).toEqual({ rank: 1, workspace: null, shortId: 'pri-p1', title: 'p1 title' });
+  });
+
   it("names a team's workspace by the team and its icon", () => {
     expect(workspaceMarkOf('team:t2', [{ _id: 't2', name: 'Union', icon: 'flame', icon_color: 'orange' }], 'me')).toEqual({ personal: false, name: 'Union', icon: 'flame', color: 'orange' });
   });
@@ -79,7 +90,8 @@ describe('priorityInboxView', () => {
   });
 
   it('labels rows in every view but sorts only in the Priorities view', () => {
-    const labelsOnly = priorityInboxView(state(), false);
+    // Outside the Priorities view labels come off the live ranks (see the cached-row case above).
+    const labelsOnly = priorityInboxView({ ...state(), priorityRanks: { ...RANKS, p1: { _id: 'p1', workspace: 'team:t1', rank: 1, short_id: 'pri-p1', title: 'p1 title' } } }, false);
     const rows = [row('none'), row('p2-s1', 'p2', 's1'), row('p1-s1', 'p1', 's1')];
     expect(labelsOnly.sort(rows)).toBe(rows);
     expect(labelsOnly.rankOf(row('a', 'p1'))?.rank).toBe(1);

@@ -63,11 +63,14 @@ const stepOf = (row: RankedRow | undefined, stepKey: string | null) => {
 /**
  * The standing reader the Priorities view sorts and labels by. The active
  * workspace's ranks are read off its `priorities` rows, so a move paints at
- * once; another workspace's off `priorityRanks`. Links are read from the
+ * once, while those rows are fed (`activeRowsLive`: web feeds them in every
+ * view, the phone only in its Priorities view); else, and for another
+ * workspace, off `priorityRanks`, which holds only active priorities, so a
+ * cached row never labels a card with a stale rank or a retired priority. Links are read from the
  * state's current session rows by id: a placed row can be an older copy kept
  * while nothing it draws changed.
  */
-export function priorityPlaceReader(state: PriorityOrderState): (s: PriorityLinked & { _id?: string }) => PriorityStanding {
+export function priorityPlaceReader(state: PriorityOrderState, { activeRowsLive = true }: { activeRowsLive?: boolean } = {}): (s: PriorityLinked & { _id?: string }) => PriorityStanding {
   const viewer = state.currentUser?._id ? String(state.currentUser._id) : null;
   const active = activeWorkspaceKey(state.clientState?.ui?.active_team_id, viewer);
   const ranks = priorityRanks(state.priorities);
@@ -75,7 +78,7 @@ export function priorityPlaceReader(state: PriorityOrderState): (s: PriorityLink
     const link = sessionPriorityOf((s._id && state.sessions?.[s._id]) || s);
     if (!link || !viewer) return null;
     const row = state.priorities?.[link.priorityId];
-    if (row && row.workspace === active) {
+    if (row && row.workspace === active && activeRowsLive) {
       const rank = String(row.user_id) === viewer ? ranks.get(String(row._id)) : undefined;
       return rank == null ? null : { rank, step: stepOf(row, link.stepKey), workspace: null, shortId: row.short_id, title: row.title };
     }

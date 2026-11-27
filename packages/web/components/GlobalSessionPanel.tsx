@@ -2085,16 +2085,12 @@ function SessionListPanelImpl({
     return ids;
   }, [globalSubByParent]);
   const subRowOf = (sub: InboxSession) => (isUnderRole(sub) ? "role" : isSpawnedWorker(sub) ? "worker" : undefined);
-  // Every card filed under one of the viewer's priorities names its rank and
-  // title, in every view. The Priorities view also keeps the status sections
-  // and sorts each by that priority, as the keyboard walk does
-  // (visualOrderSessions); Pinned keeps the person's own order. Decisions
-  // sorts its own groups (InboxDecisionQueue).
+  // Every card names its priority's rank and title in every view (chipRankOf); the Priorities view also sorts each status
+  // section by it as the keyboard walk does (visualOrderSessions), Pinned keeps its order, Decisions sorts its own.
   const priorityKey = prioritiesAnywhere(s) ? priorityOrderSig(s) : "";
   // Links read off the live rows: the placed rows can be older copies of a session whose link just changed.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const priorityPlaceOf = useMemo(() => (priorityKey ? priorityPlaceReader(useInboxStore.getState()) : null), [priorityKey]);
-  // The label every card's priority chip shows (the filter's Top N reads priorityRankOf, a bare rank).
   const chipRankOf = (session: InboxSession) => (priorityPlaceOf ? rankLabelOf(priorityPlaceOf(session)) : undefined);
   const sortPlaceOf = resolveInboxViewMode(s) === "priorities" ? priorityPlaceOf : null;
   const byPriority = useCallback((rows: InboxSession[]) => (sortPlaceOf ? sortByPriority(rows, sortPlaceOf) : rows), [sortPlaceOf]);

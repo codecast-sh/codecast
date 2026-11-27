@@ -25,7 +25,8 @@ export const priorityInboxSig = priorityOrderSig;
 
 /** Over the store's state: its current session rows are where a session's link is read (a placed row can be an older copy). `sorts`: the Priorities view, else rows keep their order. */
 export function priorityInboxView(state: PriorityOrderState, sorts = true): PriorityInboxView {
-  const placeOf = priorityPlaceReader(state);
+  // The phone feeds the active workspace's `priorities` only while the Priorities view (`sorts`) is up: elsewhere its cached rows may be stale.
+  const placeOf = priorityPlaceReader(state, { activeRowsLive: sorts });
   return {
     sort: (rows) => (sorts ? sortByPriority(rows, placeOf) : rows),
     rankOf: (s) => rankLabelOf(placeOf(s)),
