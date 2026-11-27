@@ -15,6 +15,8 @@ mock.module("../../comments/CommentAvatar", () => ({ CommentAvatar: () => null }
 // The production band's hooks boot the store (localStorage, IndexedDB), which this DOM-less process has none of.
 mock.module("../../../hooks/usePrDeploy", () => ({ usePrDeploy: () => ({}) }));
 mock.module("../../pr/PRDeploy", () => ({ PRDeployBand: () => null, PRReachChip: () => null, PRShipsTo: () => null }));
+// An open PR's shepherd sits in its Shipping strip, whose run read needs Convex: the strip here is the shepherd it is handed.
+mock.module("../../pr/PRShipStrip", () => ({ PRShipStrip: ({ shepherd }: any) => <>{shepherd}</> }));
 // The session pill resolves titles from the live store; here it is the link
 // it becomes, named by the title the header hands it.
 mock.module("../../EntityIdPill", () => ({

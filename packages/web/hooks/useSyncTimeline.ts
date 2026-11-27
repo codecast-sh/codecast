@@ -12,11 +12,45 @@ import { activeWorkspaceKeyOf } from "../lib/workspaceScope";
 import { CARD_BUCKETS, cardBuckets, rankCardSessions, stableCardIds } from "../lib/sessionPullRequests";
 import { isFullPullRequest, overlayCardPullRequests } from "../lib/cardPullRequestRows";
 import { joinPullRequestDetail, pinDetailRows, pullRequestDetailRow, type PullRequestDetailRow } from "../lib/detailRows";
+import type { OpenPr } from "../lib/deploys/board";
 
 const api = _api as any;
 
 export function useSyncPullRequests(args: { repository?: string; limit?: number } | "skip" = {}) {
   return useSyncCollection("pullRequests", api.pull_requests.getPRsForTimeline, args);
+}
+
+/** What an open pull request's Deploys card draws: a change to any of it redraws the column. */
+const deployCardSig = (p: OpenPr) => `${p.state}|${p.title}|${p.created_at}|${p.author_github_username ?? ""}|${p.task_ids?.join(",") ?? ""}|${p.draft ? 1 : 0}|${p.checks_state ?? ""}|${p.review_decision ?? ""}|${p.mergeable_state ?? ""}|${p.behind_by ?? ""}|${p.head_ref ?? ""}`;
+
+/**
+ * Reader with its feeder: one repository's open pull requests (the Deploys page's Shipping column); null while nothing
+ * is held and unread. A repository's answer holds every open PR it read (pull_requests.getPRsForTimeline), in the
+ * order their rows were stored until its read budget runs out, so a row the store holds as open, stored no later than
+ * the last open one the answer holds, and missing from it, has closed out of sight: it leaves rather than stand as a
+ * card forever. One stored after that may only be past a cut, and stays; so does every row when the answer holds no
+ * open row (another team's rows of the repository can spend the budget before any of the viewer's). A drop never
+ * reaches IndexedDB (rows keyed by Convex ids are not deleted there), so the rows are drawn only once this window's
+ * feeder has answered: a cached copy of a PR that closed meanwhile is never shown as open. `failed`: the read failed.
+ */
+export function useOpenPullRequests(repository: string | null): { prs: OpenPr[] | null; failed: boolean } {
+  const repo = repository ? normalizeRepository(repository) : null;
+  const isOpenHere = useMemo(() => (p: OpenPr) => !!repo && p.state === "open" && typeof p.title === "string" && typeof p.created_at === "number" && normalizeRepository(p.repository) === repo, [repo]);
+  const feed = useMemo(() => {
+    const stored = (p: OpenPr) => (p as { _creationTime?: number })._creationTime ?? Infinity;
+    let lastSent = -Infinity;
+    return {
+      select: (rows: OpenPr[] | null | undefined) => {
+        const open = (rows ?? []).filter(isOpenHere).map(stored);
+        lastSent = open.length ? Math.max(...open) : -Infinity;
+        return rows;
+      },
+      dropAbsent: (p: OpenPr) => isOpenHere(p) && stored(p) <= lastSent,
+    };
+  }, [isOpenHere]);
+  const { ready, error } = useSyncCollection("pullRequests", api.pull_requests.getPRsForTimeline, repository ? { repository } : "skip", feed);
+  const rows = useCollectionRows<OpenPr>("pullRequests", { where: isOpenHere, sig: deployCardSig });
+  return useMemo(() => ({ prs: ready ? rows : null, failed: !ready && !!error }), [ready, rows, error]);
 }
 
 const commitSig = (c: any) => `${c.message}|${c.timestamp}|${c.pr_number ?? ""}|${c.conversation_id ?? ""}`;
