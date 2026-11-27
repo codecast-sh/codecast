@@ -89,3 +89,13 @@ test("a failed run's restart is the one its stop names in the graph's words, els
   expect(restartHint(change, rejected)).toBe("once the change is fixed, run it again: cast flow run change --task ct-9");
   expect(restartHint({ task_short_id: "ct-9", workflow_slug: "line" }, null)).toBe("try it again: cast workflow resume ct-9 --at <station>");
 });
+
+// A repo's own flow that shares the library's slug names the library's restart only when its graph is the library's.
+test("a run on a repo's own flow named change names no library restart", async () => {
+  const { BUILTIN_WORKFLOW_TEMPLATES } = await import("./templates.js");
+  const { parseWorkflowSource } = await import("./parser.js");
+  const shipped = [...parseWorkflowSource(BUILTIN_WORKFLOW_TEMPLATES.change).nodes.keys()].map((id) => ({ id }));
+  expect(await stopWords({ workflow_slug: "change", current_node_id: "noci" }, shipped)).toContain("--at pr");
+  expect(await stopWords({ workflow_slug: "change", current_node_id: "noci" }, [...shipped, { id: "lint" }])).toBeNull();
+  expect(await stopWords({ workflow_slug: "change", current_node_id: "noci" }, [{ id: "noci", stop: "Own words: `cast workflow resume x --at ci`" }])).toContain("--at ci");
+});

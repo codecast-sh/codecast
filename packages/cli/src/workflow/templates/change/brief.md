@@ -1,6 +1,6 @@
 CI and an independent reviewer read this session's change ($task_id) in its pull request, $pr.json.url, and it cannot merge yet: $verdicts.json.why. $human_message
 
-What CI found, as JSON. Each entry under `failing` is a failure on this change, with its job, test, assertion, file, line and excerpt; `failing_count` says how many there are, and only the first ones are shown here, each excerpt cut short. Every failure, in full, is in `$run_dir/ci.json`: read it before you start. Each entry under `preexisting` also fails on the default branch at `tested_main_sha`. Each entry under `unjudged` fails on this change too, but main's CI never reached a verdict on its job at `tested_main_sha`, so it may be main's: run it on the default branch before you change anything for it, and leave it alone if it fails there too.
+What CI found, as JSON. Each entry under `failing` is a failure on this change, with its job, test, assertion, file, line and excerpt; `failing_count` says how many there are, and only the first ones are shown here, each excerpt cut short. Every failure, in full, is in `$run_dir/ci.json`: read it before you start. Each entry under `preexisting` also fails on the default branch at `tested_main_sha`.
 
 $verdicts.json.ci_result
 

@@ -153,13 +153,25 @@ export function restartHint(run: { task_short_id?: string | null; workflow_slug?
   return `try it again: cast workflow resume ${task} --at <station>`;
 }
 
-/** The graph's own words for the stop a failed run ended at, when it ran a shipped flow (a stored row keeps no stop). */
-export async function stopWords(run: { workflow_slug?: string | null; current_node_id?: string | null }): Promise<string | null> {
+/**
+ * The graph's own words for the stop a failed run ended at: the run's own node when its graph keeps a stop, else the
+ * shipped template's, but only when the run's graph is that template as shipped (the same stations). A repo's own or
+ * edited flow that shares the slug names no restart rather than the library's (a stored row keeps no stop).
+ */
+export async function stopWords(run: { workflow_slug?: string | null; current_node_id?: string | null }, nodes?: Array<{ id: string; stop?: string | null }> | null): Promise<string | null> {
+  if (!run.current_node_id) return null;
+  const own = nodes?.find((n) => n.id === run.current_node_id);
+  if (own?.stop) return own.stop;
   const { BUILTIN_WORKFLOW_TEMPLATES } = await import("./templates.js");
   const src = run.workflow_slug ? (BUILTIN_WORKFLOW_TEMPLATES as Record<string, string>)[run.workflow_slug] : undefined;
-  if (!src || !run.current_node_id) return null;
+  if (!src) return null;
   try {
-    return (await import("./parser.js")).parseWorkflowSource(src).nodes.get(run.current_node_id)?.stop ?? null;
+    const shipped = (await import("./parser.js")).parseWorkflowSource(src);
+    if (nodes) {
+      const ids = new Set(nodes.map((n) => n.id));
+      if (ids.size !== shipped.nodes.size || [...shipped.nodes.keys()].some((id) => !ids.has(id))) return null;
+    }
+    return shipped.nodes.get(run.current_node_id)?.stop ?? null;
   } catch {
     return null;
   }
@@ -177,7 +189,7 @@ export async function showRun(deps: PublishDeps, ref: string, options: { session
   const got = await apiPost(deps, "/cli/workflow-runs/get", { run_id: run._id }, { read: true, exitOnError: false }).catch(() => null);
   const labels = new Map<string, string>((got?.workflow?.nodes ?? []).map((n: { id: string; label?: string }) => [n.id, n.label ?? n.id]));
   console.log(formatRunDetail(run, labels));
-  if (run.status === "failed") console.log(fmt.muted(`\n  ${restartHint(run, await stopWords(run))}`));
+  if (run.status === "failed") console.log(fmt.muted(`\n  ${restartHint(run, await stopWords(run, got?.workflow?.nodes ?? null))}`));
   else if (run.status === "running" || run.status === "paused" || run.status === "pending") console.log(fmt.muted(`\n  stop it: cast workflow cancel ${ref}`));
 }
 
