@@ -233,6 +233,46 @@ describe("cast board frame verbs (pl-1145)", () => {
     expect(board.hiddenKeys(v4).has(theme)).toBe(false);
   });
 
+  test("Scribe's resolve: fold the notes, add the summary, card --at inside the theme, reflow: the resolved shape, nothing overlapping", () => {
+    const placed = verbs.place.run(artifactView("board", "B", []), ["grid", "--frame-ref", "ct-5", "--at", "0,0"], "Budget caps\nAlert at 80%\nQuarterly review");
+    let v = apply(artifactView("board", "B", [sticky("el_below", 0, 600)]), placed.ops);
+    const theme = placed.ops.find((o: any) => o.put?.kind === "frame")!.k;
+    const stickies = placed.ops.filter((o: any) => o.put?.kind === "sticky").map((o) => o.k);
+    const folded = verbs.frame.run(v, ["Working notes", ...stickies, "--collapse"], undefined, AGENT);
+    const notes = folded.ops.find((o: any) => o.put?.kind === "frame")!.k;
+    v = apply(v, folded.ops);
+    const summary = verbs.add.run(v, ["text:16", "**To summarize:** cap each team's monthly spend and alert at eighty percent", "--at", "40,64"], undefined, AGENT);
+    const sumKey = summary.ops.find((o: any) => o.put?.kind === "text")!.k;
+    v = apply(v, summary.ops);
+    // The card runs past the folded theme's bottom edge: the theme grows to hold it, in the same batch, and pushes what it now covers.
+    const placedCard = verbs.card.run(v, ["ct-5", "--at", "40,120"], undefined, AGENT);
+    const cardKey = placedCard.ops.find((o: any) => o.put?.kind === "card")!.k;
+    expect(placedCard.ops.map((o) => o.k)).toContain(theme);
+    expect(placedCard.status).toMatch(/grew "ct-5" to hold it/);
+    v = apply(v, placedCard.ops);
+    const tb = board.elementBox(v.get(theme)!), cb = board.elementBox(v.get(cardKey)!);
+    expect(cb.y + cb.h + board.FRAME_PAD).toBeLessThanOrEqual(tb.y + tb.h);
+    expect(board.elementBox(v.get("el_below")!).y).toBeGreaterThanOrEqual(tb.y + tb.h);
+    expect(board.enclosingFrameKeys(v, cardKey)).toEqual([theme]);
+    // Reflow: narrow to the card, summary then card then pill, nothing overlapping.
+    v = apply(v, verbs.reflow.run(v, [theme], undefined, AGENT).ops);
+    const t = board.elementBox(v.get(theme)!), sum = board.elementBox(v.get(sumKey)!), card = board.elementBox(v.get(cardKey)!), pill = board.elementBox(v.get(notes)!);
+    expect(t.w).toBe(Math.max(320, pill.w) + 2 * board.FRAME_PAD);
+    expect(sum.w).toBe(t.w - 2 * board.FRAME_PAD);
+    expect(sum.y + sum.h).toBeLessThanOrEqual(card.y);
+    expect(card.y + card.h).toBeLessThanOrEqual(pill.y);
+    for (const b of [sum, card, pill]) expect(board.contains(t, b)).toBe(true);
+    expect(verbs.reflow.run(v, [theme]).ops).toEqual([]);
+    expect([...board.hiddenKeys(v)].sort()).toEqual([...stickies].sort());
+  });
+
+  test("a card --at a point outside every frame is placed alone", () => {
+    const v = artifactView("board", "B", [frameEl("el_f", 0, 0, 400, 300)]);
+    const r = verbs.card.run(v, ["ct-5", "--at", "600,0"]);
+    expect(r.ops).toHaveLength(1);
+    expect(r.status).not.toMatch(/grew/);
+  });
+
   test("move on a frame carries what it holds; on a folded pill, its hidden holds travel too", () => {
     const v0 = artifactView("board", "B", [frameEl("el_f", 0, 0, 400, 300), sticky("el_a", 40, 64), sticky("el_out", 600, 0)]);
     const r = verbs.move.run(v0, ["el_f", "--by", "100,50"]);
