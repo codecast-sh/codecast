@@ -177,6 +177,10 @@ export function createScribeEngine(): ScribeEngine {
   // stops the old track without an `ended` event) must reopen on the new
   // one, or the pipe hears silence for the rest of the huddle.
   const pipeSources = new Map<string, unknown>();
+  // Bumped when a caller finishes a key on purpose (finishPipe), so a reopen
+  // that a drop scheduled before then does not bring the pipe back.
+  const finishedAt = new Map<string, number>();
+  let finishes = 0;
   let lastSpeechEndMs = 0;
   let anySegmentsSinceFlush = false;
   let addressedSinceFlush = false;
@@ -274,8 +278,9 @@ export function createScribeEngine(): ScribeEngine {
           if (!status.active) return forget();
           // Token expiry or transient drop: reopen this pipe fresh.
           forget();
+          const finishedBefore = finishedAt.get(key);
           setTimeout(() => {
-            if (status.active && !pipes.has(key) && alive()) {
+            if (status.active && !pipes.has(key) && alive() && finishedAt.get(key) === finishedBefore) {
               attachSource(key, source, open, alive, speakerId, speakerName);
             }
           }, 1000);
@@ -298,6 +303,7 @@ export function createScribeEngine(): ScribeEngine {
     attachPcm: (key, open, speakerId, speakerName, alive = () => true) => attachSource(key, open, open, alive, speakerId, speakerName),
     detach,
     async finishPipe(key) {
+      finishedAt.set(key, ++finishes);
       const pipe = pipes.get(key);
       if (!pipe) return;
       await pipe.finish().catch(() => {});

@@ -116,4 +116,25 @@ test("attachPcm's alive gates the reopen after a drop", async () => {
   await engine.stop({ keepLive: true });
 });
 
+// The reviewer's repro, with no `alive` from the caller: a pipe finished on
+// purpose during its reopen wait stays finished.
+test("a pipe finished during its reopen wait is not reopened", async () => {
+  const c = { mutation: async () => ({ transcript_id: "t5", role: "scribe" }), action: async () => ({}) };
+  const engine = createScribeEngine();
+  await engine.start({ convex: c, roomKey: "dm:u1" });
+  let opens = 0;
+  let events: any = null;
+  engine.attachPcm("local:mic", (o: any) => {
+    opens++;
+    events = o.events;
+    return { speaking: false, finish: async () => {}, close: () => {} };
+  }, "u1", "Cam");
+  events.onDropped();
+  await engine.finishPipe("local:mic");
+  await new Promise((r) => setTimeout(r, 1_100));
+  expect(opens).toBe(1);
+  expect(engine.getStatus().trackCount).toBe(0);
+  await engine.stop({ keepLive: true });
+});
+
 afterAll(() => mock.restore());
