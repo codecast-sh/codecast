@@ -44,7 +44,7 @@ import type { ShipDeployStep } from "../workspace/types.js";
 import { keepEnds } from "./keepEnds";
 import { CI_APPROVAL_FILE } from "./changeVerdicts";
 import { LEASE_LINE_MS, LeaseLineWait, holdRepoLease, leaseAccessRefused, leaseHolder, leaseRouteMissing, type RepoLease } from "../land/repoLease.js";
-import { acquiredTree, holdExit, mainCheckout, noteLanded, noteRestoring, stopSteps, sweepScratchTrees, takeMergeLock, trackStep, type ScratchTree } from "./mergeScratch";
+import { acquiredTree, holdExit, landedAs, mainCheckout, noteLanded, treeOwnsExit, noteRestoring, stopSteps, sweepScratchTrees, takeMergeLock, trackStep, type ScratchTree } from "./mergeScratch";
 import { chainBetween, recordRebase, verifyRebaseChain, type RebaseLink, type RegeneratedRebase } from "./rebaseRecord";
 import { GENERATED_FILE, generatorsFor, readGenerators, writtenBy, type Generator } from "./generatedFiles";
 
@@ -107,6 +107,7 @@ function readJson(file: string): any {
 /** The station, with any crash turned into a refusal: the graph reads exit 1 as a rebase conflict, and bun exits 1
  *  on an uncaught error, which would brief the change's session to resolve a conflict that is not there. */
 export async function runMergeStation(args: MergeStationArgs): Promise<MergeStationResult> {
+  noteLanded(null);
   try {
     return await mergeStation(args);
   } catch (err) {
@@ -477,11 +478,11 @@ async function mergeStation(args: MergeStationArgs): Promise<MergeStationResult>
 
 /**
  * Until the returned off, SIGINT and SIGTERM end the station: its wait leaves the line, or its running step is stopped
- * and then its held lease released, and then it exits 128 + the signal. A station the runner ended (its timeout, a cancelled run) kept the lease for the
+ * and then its held lease released, and then it exits 128 + the signal (0, naming the sha, once merged). A station the runner ended (its timeout, a cancelled run) kept the lease for the
  * ten minutes it takes to lapse, and every merge behind it waited. The listeners stay on until the exit: a signal that
  * another handler raises again (lockFile.ts) must not take the default exit before the release has gone out.
  */
-function stopOnSignal(args: MergeStationArgs, stopping: AbortController, release: () => Promise<unknown>): () => void {
+export function stopOnSignal(args: MergeStationArgs, stopping: AbortController, release: () => Promise<unknown>): () => void {
   const signals: EventEmitter = args.signals ?? process;
   const exit = args.exit ?? ((code: number) => process.exit(code));
   const handlers = ([["SIGINT", 2], ["SIGTERM", 15]] as const).map(([sig, n]) => [sig, () => {
@@ -495,7 +496,13 @@ function stopOnSignal(args: MergeStationArgs, stopping: AbortController, release
       else args.log?.(`a before-merge step did not stop within ${STOP_BUDGET_MS / 1000}s; the lease stays held until it lapses`);
     });
     holdExit(ending);
-    void ending.finally(() => exit(128 + n));
+    // A held tree's own handler (mergeScratch) exits once the tree is released; exiting here first would cut that off.
+    // Past the merge the change is merged, and says so with exit 0, as that handler does.
+    void ending.finally(() => {
+      if (signals === process && treeOwnsExit()) return;
+      const sha = landedAs();
+      if (sha) { console.log(sha); exit(0); } else exit(128 + n);
+    });
   }] as const);
   for (const [sig, h] of handlers) signals.on(sig, h);
   return () => { for (const [sig, h] of handlers) signals.off(sig, h); };
