@@ -134,6 +134,7 @@ export function withCreatedIds(draft: CardDraft, created: Record<string, string>
     ...draft,
     changes: draft.changes.map((c) => ({ ...c, priority: real(c.priority) })),
     groups: draft.groups.map((g) => ({ ...g, priority: real(g.priority) })),
+    typed: draft.typed.map((t) => ({ ...t, priority: t.priority && real(t.priority) })),
   };
 }
 

@@ -225,6 +225,8 @@ describe("a pass run", () => {
     const [d] = await cards(w);
     expect((d.priority_card as PriorityCard).changes.map((c) => [c.kind, c.priority, c.target])).toEqual([["merge", grading.short_id, "pri-2"], ["merge", grading.short_id, "pri-3"]]);
     expect((d.priority_card as PriorityCard).groups.map((g) => [g.priority, g.title])).toEqual([[grading.short_id, "Grading"]]);
+    // The words its session typed count toward the priority it now sits on, not "Not on a priority".
+    expect((d.priority_card as PriorityCard).words.find((r) => r.priority === grading.short_id)?.title).toBe("Grading");
     await answer(w, d, [0, 1]);
     const after = await row(w, grading.short_id);
     expect([(await row(w, "pri-2")).status, (await row(w, "pri-3")).status, after.steps.map((s) => s.title)]).toEqual(["merged", "merged", ["Grade essays", "Calibrate the grader"]]);
