@@ -64,6 +64,11 @@ describe("phone scribe election", () => {
     expect(settle([PHONE]).scribes).toEqual([PHONE]);
   });
 
+  test("a phone alone in its room of one scribes; alone while a ring is unanswered, it waits", () => {
+    expect(decidePhoneScribe(input({ roomKey: `dm:${PHONE}` }))).toBe("start");
+    expect(decidePhoneScribe(input({ roomKey: `dm:${PHONE}:${WEB}` }))).toBe("hold");
+  });
+
   test("a phone and a web seat: the web seat scribes, exactly one", () => {
     expect(settle([PHONE, WEB]).scribes).toEqual([WEB]);
   });
