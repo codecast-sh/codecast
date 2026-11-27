@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { tallyInboxRows, placeConversationRow, ownAsk } from "./conversations";
+import { placeConversationRow, ownAsk } from "./conversations";
+import { dormantRailActivities, tallyInboxRows } from "./lib/sessionsTally";
 
 // The `cast sessions` tally. This logic has been wrong twice — a killed row
 // double-counted under a comment denying it, then `-a` zeroing the retirement
@@ -218,10 +219,10 @@ describe("tallyInboxRows — the activity line", () => {
   const working = (over: Record<string, any> = {}) =>
     session({ agent_status: "working", is_idle: false, is_connected: true, agent_status_updated_at: NOW, last_heartbeat: NOW, ...over });
 
-  test("a working row with a fresh stamp carries it", () => {
+  test("a working row with a fresh stamp carries it, as its under-line words", () => {
     const { rows } = tallyInboxRows([working({ activity })].map(stamped), { showAll: false, stateFilter: null, labelByConv, now: NOW });
     expect(rows[0].work_state).toBe("working");
-    expect(rows[0].activity).toEqual(activity);
+    expect(rows[0].activity).toEqual({ state: "working", flavor: null, words: "editing chat.ts", ...activity });
   });
 
   test("a stale stamp on a working row is hidden, never shown as current", () => {
@@ -235,5 +236,58 @@ describe("tallyInboxRows — the activity line", () => {
     const { rows } = tallyInboxRows([session({ activity })].map(stamped), { showAll: false, stateFilter: null, labelByConv, now: NOW });
     expect(rows[0].work_state).not.toBe("working");
     expect(rows[0].activity).toBeNull();
+  });
+});
+
+describe("dormantRailActivities — cast sessions splits Dormant as the rail does", () => {
+  const NOW = 1_800_000_000_000;
+  const HOUR = 3_600_000;
+  const dormant = (id: string, over: Record<string, any> = {}) => ({ _id: id, title: id, work_state: "dormant", updated_at: NOW, thread_state: "Parked", ...over });
+  // Only the reads a row with a trigger or a run makes.
+  const db = (triggers: any[], runs: any[] = []) => ({
+    query: (table: string) => ({
+      withIndex: (_: string, f: (q: any) => any) => {
+        const want: Record<string, any> = {};
+        const q = { eq: (k: string, v: any) => { want[k] = v; return q; } };
+        f(q);
+        const rows = (table === "agent_tasks" ? triggers : runs).filter((r) => Object.entries(want).every(([k, v]) => String(r[k]) === String(v)));
+        const page = { take: async (n: number) => rows.slice(0, n), first: async () => rows[0] ?? null };
+        return { ...page, order: () => page };
+      },
+    }),
+  });
+
+  test("each dormant row gets its section and words; other rows get none", async () => {
+    const sessions = [
+      dormant("waits", { waiting_on: { kind: "person", ref: "@ashot", at: NOW - HOUR } }),
+      dormant("scheduled", { armed_trigger_kind: "once" }),
+      dormant("lead"),
+      { _id: "child", title: "Review the sync fix", work_state: "working", agent_status: "working", agent_status_updated_at: NOW, updated_at: NOW, last_heartbeat: NOW, parent_conversation_id: "lead" },
+      dormant("ships", { last_heartbeat: NOW, open_tasks_at: NOW, open_tasks: [{ kind: "shell", command: "gh pr checks 263 --watch" }] }),
+      dormant("stalled", { updated_at: NOW - 30 * 60_000 }),
+      { _id: "busy", work_state: "working" },
+    ];
+    const triggers = [{ originating_conversation_id: "scheduled", status: "scheduled", run_at: NOW + 2 * HOUR, schedule_type: "once" }];
+    const rail = await dormantRailActivities({ db: db(triggers) }, sessions, NOW);
+    expect(Object.fromEntries(rail)).toEqual({
+      waits: { state: "sleeping", flavor: "waiting", words: "waiting on @ashot" },
+      scheduled: { state: "sleeping", flavor: "scheduled", words: "wakes in 2h" },
+      lead: { state: "working", flavor: null, words: "reviewing · 1 worker" },
+      ships: { state: "shipping", flavor: null, words: "CI running · #263" },
+      stalled: { state: "sleeping", flavor: "stalled", words: "nothing scheduled · back to you in 90m" },
+    });
+  });
+
+  test("a change run the session started reads Shipping at its station", async () => {
+    const sessions = [dormant("shipper", { parked_wake_kind: "run", last_heartbeat: NOW })];
+    const runs = [{ spawner_conversation_id: "shipper", status: "running", workflow_name: "change", current_node_id: "deploy", pr: { number: 263 } }];
+    const rail = await dormantRailActivities({ db: db([], runs) }, sessions, NOW);
+    expect(rail.get("shipper")).toEqual({ state: "shipping", flavor: null, words: "Deploying" });
+  });
+
+  test("the tally puts it on the row, and leaves work_state as it was", () => {
+    const rail = new Map([["conversations_1", { state: "sleeping" as const, flavor: "waiting", words: "waiting on @ashot" }]]);
+    const { rows } = tallyInboxRows([session()].map(stamped), { showAll: false, stateFilter: null, labelByConv, railActivity: rail });
+    expect(rows[0].activity).toEqual({ state: "sleeping", flavor: "waiting", words: "waiting on @ashot", text: "waiting on @ashot" });
   });
 });

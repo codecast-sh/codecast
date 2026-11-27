@@ -6,7 +6,7 @@
 
 import type { InboxSession, PlacedInbox } from "../store/inboxStore";
 import { placedRailPlacement, railRowPlacement, showsBlockedBadge, isAgentActive } from "../store/inboxStore";
-import { bandOfStatus, sessionStatusOf, STATUS_BANDS, type SessionStatus, type StatusBand } from "./sessionStatus";
+import { bandOfStatus, sessionStatusOf, STATUS_BANDS, type ActivityKind, type SessionStatus, type StatusBand } from "./sessionStatus";
 
 export type StatusTile = { session: InboxSession; status: SessionStatus };
 export type StatusBands = Record<StatusBand, StatusTile[]>;
@@ -22,6 +22,8 @@ export type StatusBandOpts = {
   stopped?: (s: InboxSession) => string | null;
   /** Coarse clock (useCoarseNow), never Date.now() in render. */
   now: number;
+  /** What a Dormant row is really doing (lib/railActivity), so its tile takes the band its rail row draws in. */
+  activityOf?: (s: InboxSession) => ActivityKind;
 };
 
 /**
@@ -38,9 +40,11 @@ export function splitStatusBands(
   const inFlight = (s: InboxSession) => opts.queued.has(s._id) || opts.pendingSendIds.has(s._id);
   const place = (s: InboxSession) => {
     const pendingSend = inFlight(s);
+    const placement = (placed.placements && placedRailPlacement(placed as Pick<PlacedInbox, "placements">, s._id)) ?? railRowPlacement(s, opts.now);
     const status = sessionStatusOf({
       row: s,
-      placement: (placed.placements && placedRailPlacement(placed as Pick<PlacedInbox, "placements">, s._id)) ?? railRowPlacement(s, opts.now),
+      placement,
+      activity: placement?.bucket === "dormant" ? opts.activityOf?.(s) : null,
       now: opts.now,
       live: {
         pendingSend,
@@ -59,6 +63,6 @@ export function splitStatusBands(
   // the rest newest first.
   out.needs_you.sort((a, b) => at(a) - at(b));
   out.working.sort((a, b) => ((b.session.started_at ?? at(b)) - (a.session.started_at ?? at(a))) || a.session._id.localeCompare(b.session._id));
-  for (const band of ["done", "dormant", "idle"] as const) out[band].sort((a, b) => at(b) - at(a));
+  for (const band of ["shipping", "done", "dormant", "idle"] as const) out[band].sort((a, b) => at(b) - at(a));
   return out;
 }

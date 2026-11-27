@@ -24,6 +24,7 @@ import { performSetThreadState } from "./conversations";
 import { runModelCall, sessionCallBudget, type SessionCallBudget } from "./modelCalls";
 import { parseJsonBlock } from "./lib/anthropic";
 import { ACTIVE_AGENT_STATUSES, clearedThreadStateFields } from "@codecast/shared/contracts";
+import { writeWaitingOn } from "./lib/waitingOn";
 import {
   GOAL_IDLE_LIMIT_MS,
   GOAL_MAX_ROUNDS,
@@ -93,7 +94,9 @@ async function cancelQueuedLoop(ctx: MutationCtx, goal: Goal) {
 
 /** The pin the loop left (met, blocked, paused) comes down when the person resumes or clears the goal. */
 async function takeDownGoalPin(ctx: MutationCtx, conv: Doc<"conversations">) {
-  if (isGoalOutcomeState(conv.thread_state)) await ctx.db.patch(conv._id, clearedThreadStateFields());
+  if (!isGoalOutcomeState(conv.thread_state)) return;
+  await ctx.db.patch(conv._id, clearedThreadStateFields());
+  await writeWaitingOn(ctx, conv, null);
 }
 
 /** Sets a goal on a session, replacing any it had, and sends the agent the start. */

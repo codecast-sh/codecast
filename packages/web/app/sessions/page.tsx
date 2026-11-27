@@ -9,6 +9,7 @@ import { killSessionsLedger } from "../../components/consequential/ledgers";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../../store/inboxStore";
+import { dormantActivityOf } from "../../lib/railActivity";
 import { useTriggerKillNotice } from "../../hooks/useTriggerKillNotice";
 import { useAggregateMetrics, useManagedSessions } from "../../hooks/useSyncManagedSessions";
 import { AuthGuard } from "../../components/AuthGuard";
@@ -408,6 +409,9 @@ export function SessionsView() {
         // the inbox sections do.
         // As a person reads it: a wait its agent owner answers is working.
         workState = personSessionWorkState(inbox, now);
+        // A Dormant row whose own work runs reads Working, as its row's word
+        // does (lib/railActivity, the rail's split), so the Working tab holds it.
+        if (workState === "dormant" && dormantActivityOf(useInboxStore.getState(), inbox, "dormant", now) === "working") workState = "working";
         needsInput = workState === "needs_input";
       } else if (s.agent_status) {
         // Fallback for rows with no inbox join (tmux-only / not in recent set).

@@ -1,7 +1,7 @@
 // A session row's status mark: web's mark (components/marks) for the state
 // web's card reads (lib/sessionStatus). Rows hold still (web's listRowsHoldStill).
 import { railRowPlacement, useInboxStore } from '@codecast/web/store/inboxStore';
-import { sessionStatusOf } from '@codecast/web/lib/sessionStatus';
+import { sessionStatusOf, type ActivityKind } from '@codecast/web/lib/sessionStatus';
 import { pendingDecisionConvIds } from '@codecast/web/lib/decisionQueue';
 import { SessionStatusMark } from '@/components/marks';
 import type { RowPlacementProps, SessionData } from '@/components/SessionItem';
@@ -9,12 +9,14 @@ import type { RowPlacementProps, SessionData } from '@/components/SessionItem';
 /** The state comes from where the list placed the row, or from the row's own
  *  placement when the list places nothing, lifted to Needs you by a decision
  *  pending for you, as the inbox's placement lifts it. A subagent drawn under
- *  its parent reads as web's nested card does. */
-export function RowStatusMark({ session, blocked, placedBucket, placedState, pendingSend, underParent }: { session: SessionData; blocked: boolean } & RowPlacementProps) {
+ *  its parent reads as web's nested card does. A Dormant row takes the
+ *  inbox's split (`activity`, lib/inboxActivity): Working by its own work,
+ *  Shipping, or Sleeping, as web's rail draws it. */
+export function RowStatusMark({ session, blocked, activity = null, placedBucket, placedState, pendingSend, underParent }: { session: SessionData; blocked: boolean; activity?: ActivityKind | null } & RowPlacementProps) {
   const asking = useInboxStore((s) => !placedBucket && askingConvIds(s).has(session._id));
   const now = Date.now();
   const placement = placedBucket ? { bucket: placedBucket, state: placedState } : railRowPlacement(session as any, now);
-  return <SessionStatusMark status={sessionStatusOf({ row: session as any, placement: placement as never, now, live: { pendingSend, blocked, asking }, nested: underParent })} />;
+  return <SessionStatusMark status={sessionStatusOf({ row: session as any, placement: placement as never, now, live: { pendingSend, blocked, asking }, nested: underParent, activity })} />;
 }
 
 // The conversations a decision waits on you in, once per decisions snapshot:

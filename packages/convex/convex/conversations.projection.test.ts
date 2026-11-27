@@ -4,12 +4,12 @@ import {
   computeSessionsLiveness,
   collectInboxSessionsByIds,
   collectInboxSessionsPaginated,
-  tallyInboxRows,
   INBOX_PROJECTION_FIELDS,
   INBOX_LIVENESS_FIELDS,
   INBOX_FAST_FIELDS,
   _resetChildAuqProbeCacheForTests,
 } from "./conversations";
+import { tallyInboxRows } from "./lib/sessionsTally";
 import { INBOX_PINNED_CAP } from "./inboxProjection";
 import {
   AGENT_IDLE_GRACE_MS,

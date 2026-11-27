@@ -690,3 +690,33 @@ describe("formatMonitor files an agent-answered wait under WORKING", () => {
     expect(plain).not.toContain("with @");
   });
 });
+
+// The rail splits Dormant into Working (its workers run), Shipping (its change
+// is between CI and live) and Sleeping (a wait), and says under each row what
+// that is. The snapshot splits the same way, from the server's `activity`.
+describe("formatMonitor splits DORMANT as the rail does", () => {
+  const dormant = (id: string, activity: any) => session({ id: `conversations_${id}`, title: id, work_state: "dormant", activity });
+
+  test("sub-groups in the rail's order, each row with its under-line", () => {
+    const out = strip(formatMonitor(result([
+      dormant("sleeper", { state: "sleeping", flavor: "waiting", words: "waiting on @ashot" }),
+      dormant("shipper", { state: "shipping", flavor: null, words: "CI running · #263" }),
+      dormant("lead", { state: "working", flavor: null, words: "3 subagents · reviewing" }),
+    ], { dormant: 3 })));
+    const at = (s: string) => out.indexOf(s);
+    expect(at("DORMANT (3)")).toBeGreaterThan(-1);
+    expect(at("WORKING (1)")).toBeGreaterThan(at("DORMANT (3)"));
+    expect(at("SHIPPING (1)")).toBeGreaterThan(at("WORKING (1)"));
+    expect(at("SLEEPING (1)")).toBeGreaterThan(at("SHIPPING (1)"));
+    expect(at("↳ 3 subagents · reviewing")).toBeGreaterThan(at("WORKING (1)"));
+    expect(at("↳ CI running · #263")).toBeGreaterThan(at("SHIPPING (1)"));
+    expect(at("↳ waiting on @ashot")).toBeGreaterThan(at("SLEEPING (1)"));
+  });
+
+  test("a server that sends no activity keeps one DORMANT list", () => {
+    const out = strip(formatMonitor(result([dormant("old", undefined)], { dormant: 1 })));
+    expect(out).toContain("DORMANT (1)");
+    expect(out).not.toContain("SLEEPING");
+    expect(out).not.toContain("↳");
+  });
+});

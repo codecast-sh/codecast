@@ -18,7 +18,7 @@ import { isRegisterOnly } from "./lib/registerOnly";
 import { performListActiveSessions } from "./managedSessionsList";
 import { scheduleLiveActivityRefresh } from "./lib/liveActivityRefresh";
 import { scheduleFedSessionSettle } from "./callChat";
-import { scheduleWorkerSettle } from "./lib/workerSettleTrigger";
+import { scheduleSessionWaiters, scheduleWorkerSettle } from "./lib/workerSettleTrigger";
 import { closeSessionRepliesAfterTurn } from "./chatSessionReplies";
 import { onRoundTurnEnded } from "./chatRounds";
 import { scheduleGoalJudge } from "./lib/sessionGoalTrigger";
@@ -45,8 +45,8 @@ async function scheduleNeedsInputCheck(
   // resume out of both (ct-49533).
   if (!ACTIVE_AGENT_STATUSES.has(agentStatus)) await releaseDecisionPushes(ctx, conversationId, Date.now()); // the turn's cards are all in: their grouped push goes out
   if (sessionBoundary) return;
-  // A spawned worker that settles tells the session it reports to.
-  if (!ACTIVE_AGENT_STATUSES.has(agentStatus)) await scheduleWorkerSettle(ctx, conversationId, statusTs);
+  // A spawned worker that settles tells the session it reports to, and the sessions waiting on it (cast state --on).
+  if (!ACTIVE_AGENT_STATUSES.has(agentStatus)) for (const schedule of [scheduleWorkerSettle, scheduleSessionWaiters]) await schedule(ctx, conversationId, statusTs);
   const delay =
     agentStatus === "idle"
       ? NEEDS_INPUT_IDLE_CHECK_DELAY_MS

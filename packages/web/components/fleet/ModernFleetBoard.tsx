@@ -19,7 +19,7 @@ import { ModernBranchChip, ModernProjectChip } from "../inbox/ModernCardParts";
 // The fleet board in the Modern style (FleetBoard chooses it by the person's
 // style). Its bands are the rail's sections and its tiles say the rail's words
 // (lib/statusBands, lib/sessionStatus): Needs you (with any Error), Working
-// (with Starting), Done, Dormant, Idle. A tile is the session card's anatomy
+// (with Starting), Shipping, Done, Dormant, Idle. A tile is the session card's anatomy
 // at board size, from the same parts: the agent mark and the title, the time,
 // the state's mark and word with the one line about the work, the project and
 // the branch or PR, laid out as one list row per session. Nothing on it moves;
@@ -28,6 +28,7 @@ import { ModernBranchChip, ModernProjectChip } from "../inbox/ModernCardParts";
 const BAND_STATUS: Record<StatusBand, SessionStatus> = {
   needs_you: "needs_you",
   working: "working",
+  shipping: "shipping",
   done: "done",
   dormant: "dormant",
   idle: "idle",
@@ -124,7 +125,7 @@ function Band({ band, tiles, now, stoppedOf, onOpen, onTileContextMenu }: {
   onTileContextMenu?: (e: ReactMouseEvent, session: InboxSession) => void;
 }) {
   const [showAll, setShowAll] = useState(false);
-  const quiet = band === "done" || band === "dormant" || band === "idle";
+  const quiet = band === "shipping" || band === "done" || band === "dormant" || band === "idle";
   if (tiles.length === 0 && band !== "needs_you") return null;
   const capped = quiet && !showAll && tiles.length > QUIET_TILE_CAP;
   const shown = capped ? tiles.slice(0, QUIET_TILE_CAP) : tiles;

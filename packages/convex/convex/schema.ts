@@ -1474,6 +1474,23 @@ export default defineSchema({
     // is a "wait" above; the recompute drops a task once nothing there is
     // owed, and the field with it.
     parked_on_task_ids: v.optional(v.array(v.id("tasks"))),
+    // What the session's dormant pin waits on (`cast state --status dormant
+    // --on <ref>`, contracts/waitingOn): a session's conversation id (a short
+    // id collides across workspaces; `label` holds it for display), a task's
+    // short id, a pull request's "owner/repo#N" or a person's "@handle".
+    // Cleared by any later pin without --on, and by the wake it waits for
+    // (lib/waitingOn.ts). Absent = no declared wait. A person's wait holds
+    // the card it asked them (decision_id), whose answer is the wake, and the
+    // card that went to the session's own person when it sat a day
+    // unanswered (escalation_id; lib/personWait.ts).
+    waiting_on: v.optional(v.object({
+      kind: v.union(v.literal("person"), v.literal("session"), v.literal("task"), v.literal("pr")),
+      ref: v.string(),
+      label: v.optional(v.string()),
+      at: v.number(),
+      decision_id: v.optional(v.id("session_decisions")),
+      escalation_id: v.optional(v.id("session_decisions")),
+    })),
     // The pull request this session shepherds, folded for the inbox card and
     // the thread state panel. Single writer: prShepherd.refreshConversationPrStatus.
     // state mirrors pull_requests.shepherd_state.
@@ -1779,6 +1796,9 @@ export default defineSchema({
     // Sparse: the sessions holding a task (active_task_id). Powers
     // parked_wake_kind's recompute when that task's blockers move (lib/parkedWake.ts).
     .index("by_active_task", ["active_task_id"])
+    // Sparse: the sessions a dormant pin parks on a session or task (waiting_on).
+    // A session settling or a task closing wakes only these (lib/waitingOn.ts).
+    .index("by_waiting_on", ["waiting_on.kind", "waiting_on.ref"])
     .searchIndex("search_title_v2", {
       searchField: "title",
       filterFields: ["user_id"],

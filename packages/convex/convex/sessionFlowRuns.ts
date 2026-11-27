@@ -8,6 +8,7 @@ import { query } from "./_generated/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { canReadRun, enrichRun, newRunReads, withAgentSessions } from "./workflow_runs";
 import { sourceTakesSessionChange } from "@codecast/shared/contracts/flowPool";
+import { LIVE_RUN_STATUSES, SHIPPING_FLOWS } from "@codecast/shared/contracts/shipRun";
 import { workspaceGrantsAccess } from "./lib/access";
 import { normalizeRepository } from "./lib/gitRefs";
 import { runWorkflowOf } from "./lib/runGraph";
@@ -22,6 +23,12 @@ async function takesSessionChange(ctx: any, run: any, cache: Map<string, boolean
 }
 
 const LIVE = ["pending", "running", "paused"] as const;
+
+/** A run a session's change feeds carry: its flow takes the change, or (a project flow that only extends the
+ *  library's change flow names no branch) it is a live run of a shipping flow, which the rail splits a session by. */
+async function countsAsChangeRun(ctx: any, run: any, cache: Map<string, boolean>): Promise<boolean> {
+  return (await takesSessionChange(ctx, run, cache)) || (LIVE_RUN_STATUSES.has(run.status) && SHIPPING_FLOWS.has(run.workflow_name ?? ""));
+}
 
 export const forConversation = query({
   args: { conversation_id: v.id("conversations") },
@@ -41,7 +48,7 @@ export const forConversation = query({
     const runs = [...live, ...ended].filter((r) => r.run_kind !== "workflow");
     const readable = [];
     const kinds = new Map<string, boolean>();
-    for (const r of runs) if ((await takesSessionChange(ctx, r, kinds)) && (await canReadRun(ctx, userId, r))) readable.push(r);
+    for (const r of runs) if ((await countsAsChangeRun(ctx, r, kinds)) && (await canReadRun(ctx, userId, r))) readable.push(r);
     const budget = { reads: 120 };
     const reads = newRunReads();
     const out = await Promise.all(readable.map(async (r) => enrichRun(ctx, await withAgentSessions(ctx, r, budget), reads)));
@@ -87,7 +94,7 @@ export const forTeam = query({
     const picked: any[] = [];
     for (const r of runs) {
       if (!r.spawner_conversation_id || r.run_kind === "workflow" || seen.has(String(r.spawner_conversation_id))) continue;
-      if (!(await takesSessionChange(ctx, r, kinds))) continue;
+      if (!(await countsAsChangeRun(ctx, r, kinds))) continue;
       seen.add(String(r.spawner_conversation_id));
       if (await canReadRun(ctx, userId, r)) picked.push(r);
     }

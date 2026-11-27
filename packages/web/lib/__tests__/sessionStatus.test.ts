@@ -144,10 +144,13 @@ describe("the fallback for a row the inbox does not place", () => {
 });
 
 describe("the status vocabulary", () => {
-  test("nine states, each with its own word, mark and theme colour", () => {
+  test("ten states, each with its own word, mark and theme colour", () => {
     const words = SESSION_STATUSES.map((s) => SESSION_STATUS[s].word);
     expect(new Set(words).size).toBe(SESSION_STATUSES.length);
-    expect(words).toEqual(["Needs you", "Error", "Working", "Starting", "Done", "Sleeping", "Idle", "Stashed", "Closed"]);
+    expect(words).toEqual(["Needs you", "Error", "Working", "Starting", "Done", "Shipping", "Sleeping", "Idle", "Stashed", "Closed"]);
+    // Shipping wears the Ship button's rocket, in a neutral grey: it asks nothing of the person.
+    expect(SESSION_STATUS.shipping.mark).toBe("rocket");
+    expect(SESSION_STATUS.shipping.text).toBe("text-sol-text-muted");
     expect(new Set(SESSION_STATUSES.map((s) => SESSION_STATUS[s].mark)).size).toBe(SESSION_STATUSES.length);
     for (const s of SESSION_STATUSES) {
       // Colours come from the sol-* theme tokens only.
@@ -236,6 +239,28 @@ describe("the status vocabulary", () => {
     // A banner the person already acted on (a revive or a send) is not an error.
     const limited = row({ agent_status: "idle", pending_api_error: true, pending_api_error_kind: "limit" });
     expect(sessionStatusOf({ row: limited, now: NOW, section: "needs_input", live: { blocked: false } })).toBe("needs_you");
+  });
+
+  test("a Dormant row reads what it is really doing: Working, Shipping or Sleeping, on every surface", () => {
+    const parked = row({ agent_status: "dormant" });
+    const placement = railRowPlacement(parked, NOW);
+    expect(placement?.bucket).toBe("dormant");
+    expect(sessionStatusOf({ row: parked, placement, now: NOW, activity: "working" })).toBe("working");
+    expect(sessionStatusOf({ row: parked, placement, now: NOW, activity: "shipping" })).toBe("shipping");
+    expect(sessionStatusOf({ row: parked, placement, now: NOW, activity: "sleeping" })).toBe("dormant");
+    expect(sessionStatusOf({ row: parked, placement, now: NOW })).toBe("dormant");
+    // A section, when given, decides: the rail hands the one it draws the row in.
+    expect(sessionStatusOf({ row: parked, section: "dormant", now: NOW, activity: "shipping" })).toBe("dormant");
+    expect(sessionStatusOf({ row: parked, section: "shipping", now: NOW })).toBe("shipping");
+    // A row in another bucket ignores it.
+    const done = row({ agent_status: "idle", user_rest: "done" });
+    expect(sessionStatusOf({ row: done, placement: railRowPlacement(done, NOW), now: NOW, activity: "shipping" })).toBe("done");
+    // The board takes the band the rail draws the row in.
+    const bands = splitStatusBands({ ...rail, dormant: [parked], placements: new Map([[parked._id, placement!]]) } as never, {
+      queued: new Set(), pendingSendIds: new Set(), now: NOW, activityOf: () => "shipping",
+    });
+    expect(bands.shipping.map((t) => t.session._id)).toContain(parked._id);
+    expect(bandOfStatus("shipping")).toBe("shipping");
   });
 
   test("every rail section key the header marks maps to a section the mapping knows", () => {

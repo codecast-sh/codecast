@@ -1,7 +1,7 @@
 
 ## Triggers
 
-Triggers run follow-up work later: checking CI, reviewing PRs, continuing a long refactor, reacting to events. Anything that should happen later, on a schedule or on an event goes through `cast trigger`, not a sleep loop, a background wait, or your harness's own wakeup, cron or loop tools: a trigger survives this process, shows on the dashboard, and wakes the right session.
+Triggers run follow-up work later: reviewing PRs, continuing a long refactor, reacting to events (CI, merges, deploys: `--on pr_checks_green|pr_merged|deploy_live`, not timed polls). Anything that should happen later, on a schedule or on an event goes through `cast trigger`, not a sleep loop, a background wait, or your harness's own wakeup, cron or loop tools: a trigger survives this process, shows on the dashboard, and wakes the right session.
 
 The prompt is the run's whole brief, shown as markdown. Use a line for a simple job, or a goal, steps and constraints. Pass `-` to read it from stdin.
 
@@ -10,9 +10,9 @@ The prompt is the run's whole brief, shown as markdown. Use a line for a simple 
 **Where results go.** `--spawn` runs are this session's workers, never independent inbox threads. You own their follow-up. Once runs post here quietly; repeating runs stay quiet unless they fail, die without reporting, or complete `--needs-attention`. Each run ends with `cast trigger complete <id> --summary -`. Keep findings on existing work, not new report-only tasks. `--needs-attention` wakes the parent for a required human action.
 
 ```bash
-cast trigger add "Check if CI is green on main" --in 30m
-cast trigger add "Respond to new PR review comments" --on pr_comment
-cast trigger add "Review open PRs and summarize findings" --every 4h --spawn
+cast trigger add "Merge it" --on pr_checks_green --pr 42
+cast trigger add "Answer review comments" --on pr_comment
+cast trigger add "Summarize open PRs" --every 4h --spawn
 cast trigger ls | show | update | pause | run | cancel | log <tr-id>
 ```
 

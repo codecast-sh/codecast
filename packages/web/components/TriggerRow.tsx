@@ -55,6 +55,8 @@ const SCHED_ACCENT: Record<SchedAccent, string> = {
   paused: "border-l-sol-border",
   normal: "border-l-sol-amber/50",
 };
+const QUIET_BADGE_TONE = "border-transparent bg-transparent text-sol-text-dim font-normal";
+
 function schedBadgeTone(task: { status: string; run_at?: number }, now: number): string {
   if (task.status === "paused" || task.status === "completed") return "bg-sol-bg-alt text-sol-text-dim border-sol-border/50";
   if (task.status === "failed") return "bg-sol-red/10 text-sol-red border-sol-red/30";
@@ -111,12 +113,16 @@ export function SchedHealthDot({ accent, task }: { accent: SchedAccent; task: { 
 // The next-fire badge — one tone function, one label function, so every
 // surface shows the same countdown for the same schedule. Memoized on its own
 // label-keyed clock: a badge re-renders only when its text would change.
-export const SchedFireBadge = memo(function SchedFireBadge({ task, className = "" }: { task: TaskRow; className?: string }) {
+/** `quiet`: an upcoming countdown in the line's own grey, for a row that asks
+ *  nothing of the eye (a Sleeping row's under-line); a failure or an overdue
+ *  fire keeps its red, since that needs a look. */
+export const SchedFireBadge = memo(function SchedFireBadge({ task, className = "", quiet = false }: { task: TaskRow; className?: string; quiet?: boolean }) {
   const now = useNowWhen((t) => taskStateLabel(task, t), 30_000);
+  const alert = task.status === "failed" || isTaskOverdue(task, now);
   const badge = (
     <span
-      data-sv-wake-badge={task.status === "failed" || isTaskOverdue(task, now) ? "alert" : ""}
-      className={`${className} ${WAKE_BADGE} transition-colors ${schedBadgeTone(task, now)}`}
+      data-sv-wake-badge={alert ? "alert" : ""}
+      className={`${className} ${WAKE_BADGE} transition-colors ${quiet && !alert && task.status === "scheduled" ? QUIET_BADGE_TONE : schedBadgeTone(task, now)}`}
     >
       {taskStateLabel(task, now)}
     </span>

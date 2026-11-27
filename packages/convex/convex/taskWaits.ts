@@ -54,6 +54,7 @@ import {
   type Skip,
 } from "./lib/waitSetters";
 import { emitNotification } from "./notificationRouter";
+import { tellTaskWaiters } from "./lib/waitingOn";
 import { insertTaskComment } from "./tasks";
 import { answerLabel, userMayRead, verdictOfRow, type Verdict } from "./sessionDecisions";
 import {
@@ -732,6 +733,7 @@ export async function releaseDependents(
 ): Promise<void> {
   if (!next || !isTerminalTaskStatus(next) || isTerminalTaskStatus(task.status)) return;
   await tellSettersClosed(ctx, task, next, by.conversationId);
+  await tellTaskWaiters(ctx, task, next);
   const self = new Set([task.short_id, String(task._id)]);
   const known = new Map<string, { short_id?: string; status: string }>([...self].map((r) => [r, { short_id: task.short_id, status: next }]));
   if (later) for (const r of [later.short_id, String(later._id)]) if (r) known.set(r, { short_id: later.short_id, status: later.status });

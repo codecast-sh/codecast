@@ -2,7 +2,8 @@ import { isClosedSession } from "@codecast/shared/contracts";
 import { internalMutation } from "./functions";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
-import { ACTIVE_AGENT_STATUSES, WORKER_SETTLE_WORDS, formatScheduledTask, isToolResultCarrier, parseUserMessage, threadStateFreshness, threadStateHeadline } from "@codecast/shared/contracts";
+import { WORKER_SETTLE_WORDS, formatScheduledTask, isToolResultCarrier, parseUserMessage, threadStateHeadline } from "@codecast/shared/contracts";
+import { workerSettleWhy } from "./lib/sessionSettle";
 import { isUserMessageNoise, stripMessageTags } from "./lib/userSend";
 import { enqueuePendingMessage } from "./pendingMessages";
 import { drainFleet } from "./subagentFleet";
@@ -32,20 +33,6 @@ const SIBLING_SCAN_LIMIT = 100;
 const TYPED_SCAN_LIMIT = 40;
 /** How long before a settle a `cast send` to the parent still counts as the report. */
 export const REPORT_COVERS_SETTLE_MS = 5 * 60_000;
-
-/** What the worker settled on (a WORKER_SETTLE_WORDS key); null while it is
- *  still its own business (producing, or parked on a wake of its own). The
- *  daemon re-derives dormant, done and waiting from the declaration at every
- *  turn end, so the status alone decides; the pinned line only words a plain
- *  settle. */
-export function workerSettleWhy(w: WorkerRow, agentStatus: string | undefined, now: number): string | null {
-  if (!agentStatus || ACTIVE_AGENT_STATUSES.has(agentStatus)) return null;
-  if (agentStatus === "dormant" || agentStatus === "waiting") return null;
-  if (agentStatus === "stopped" || agentStatus === "permission_blocked" || agentStatus === "done") return agentStatus;
-  const blocked = w.thread_state_status === "blocked" && !!w.thread_state &&
-    threadStateFreshness(w, w.message_count ?? 0, now).freshness !== "stale";
-  return blocked ? "blocked" : "ended";
-}
 
 /** The worker told its parent the result itself at the end of this turn. */
 function reportedItself(w: WorkerRow, why: string, settledAt: number): boolean {

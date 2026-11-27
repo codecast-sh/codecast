@@ -942,6 +942,10 @@ interface MonitorSession {
   owner?: { name: string | null; email: string | null } | null;
   owned_by_me?: boolean;
   role?: { handle: string; name: string } | null;
+  /** What the row is doing, for the line under it (inboxForCLI): a dormant
+   *  row's rail section (working, shipping, sleeping) and its words, or a
+   *  working row's live tool line. Absent from older servers. */
+  activity?: { state?: string; flavor?: string | null; words?: string } | null;
 }
 
 interface MonitorResult {
@@ -997,6 +1001,13 @@ export function formatSessionChangeLine(ch: {
     : `${c.cyan}(new)${c.reset}`;
   return `${c.dim}${time}${c.reset}  ${dot} ${colorForState(ch.to)}${toLabel}${c.reset}${pin}  ${c.magenta}${truncateId(ch.id)}${c.reset}  ${ch.title || "New Session"}  ${delta}`;
 }
+
+// The rail's three dormant sections, in its order.
+const DORMANT_SPLIT: Array<[string, string]> = [
+  ["working", `${c.green}WORKING${c.reset}`],
+  ["shipping", `${c.magenta}SHIPPING${c.reset}`],
+  ["sleeping", `${c.blue}SLEEPING${c.reset}`],
+];
 
 // The `cast sessions` snapshot: a per-user, most-actionable-first view of every
 // session's work state. Renders flat when a --state filter is set, otherwise
@@ -1100,6 +1111,11 @@ export function formatMonitor(result: MonitorResult, options: MonitorOptions = {
     // A pinned state is the agent's own account of where the row stands, so it
     // outranks the generated summary and the last user message. Marked with a
     // pin so a reader can tell the two apart at a glance.
+    // The under-line the rail draws: what its workers do, where its change
+    // ships, or what it sleeps on. A wake nothing will deliver warns.
+    const under = s.activity?.words?.replace(/\s+/g, " ").trim();
+    if (under) lines.push(`   ${s.activity?.flavor === "stalled" ? c.yellow : c.dim}↳ ${under.slice(0, 86)}${c.reset}`);
+
     const pinned = threadStateHeadline(s.thread_state || "");
     if (pinned) {
       // Marker color = the agent's declared status: cyan working, yellow
@@ -1149,6 +1165,18 @@ export function formatMonitor(result: MonitorResult, options: MonitorOptions = {
       if (group.length === 0) continue;
       lines.push(`${c.bold}${label}${c.reset} ${c.dim}(${group.length})${c.reset}`);
       lines.push("");
+      // DORMANT splits as the rail does: delegated work, a change shipping,
+      // a wait. Rows from a server that sends no activity stay one list.
+      if (ws === "dormant" && group.some((s) => s.activity?.state)) {
+        for (const [state, sub] of DORMANT_SPLIT) {
+          const part = group.filter((s) => (s.activity?.state ?? "sleeping") === state);
+          if (part.length === 0) continue;
+          lines.push(`  ${c.bold}${sub}${c.reset} ${c.dim}(${part.length})${c.reset}`);
+          lines.push("");
+          part.forEach(renderRow);
+        }
+        continue;
+      }
       group.forEach(renderRow);
     }
 

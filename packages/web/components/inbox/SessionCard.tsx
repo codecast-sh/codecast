@@ -15,6 +15,7 @@ import { identityPrefsOf, identityRowOf, identitySig, roleLookingAfter } from ".
 import { useLiveIdentityRow } from "../../hooks/useLiveIdentityRow";
 import { clickBucketChip, clickProjectChip } from "../../store/chipFilterClicks";
 import { workProjectSig } from "../../lib/workProjectSig";
+import { dormantActivityOf } from "../../lib/railActivity";
 import { useInboxStore, useTrackedStore, convHasPendingSend, isUnsentConversation, resolveSessionAuthor, showsBlockedBadge, convBucketMap, getProjectName, railRowPlacement, sidebarStatusOf, type InboxSession, type SessionRoleSnapshot } from "../../store/inboxStore";
 import { promptTitle } from "@codecast/shared/contracts/assistant";
 import { useNowWhen } from "../../hooks/useCoarseNow";
@@ -260,6 +261,12 @@ export const SessionCard = memo(function SessionCard({
   // needs-input. Past the trust TTL (keyed on updated_at, which a real working
   // agent bumps far more often) the pulse goes dark — the dot and the bucket now
   // read the SAME staleness check, so they can't disagree.
+  // Where no section decides the word (a flat view, a row nested under its
+  // card), a Dormant row reads the rail's split (lib/railActivity), so it says
+  // Working or Shipping as its grouped card would. A string, so the card wakes
+  // only when the split moves.
+  const splitHere = modern && (!!rest.underParent || (!rest.sectionStatus && (!rest.variant || rest.variant === "default")));
+  const activity = useInboxStore((s) => (splitHere ? dormantActivityOf(s, s.sessions[cardId] ?? session, railRowPlacement(session, coarseNow).bucket, coarseNow) : null));
   const isLive = sessionLiveAt(session, Date.now());
   // Clears when the daemon reports or the session is confirmed back; a command
   // nothing ever answers expires at its deadline (the coarse clock above).
@@ -382,6 +389,7 @@ export const SessionCard = memo(function SessionCard({
       liveTitle={draftTitle || liveTitle || undefined}
       roleAbove={roleAbove}
       placedStatus={rest.sectionStatus ? undefined : sidebarStatusOf(st, session, coarseNow)}
+      activity={activity}
       now={coarseNow}
       chrome={chrome}
       liveness={{

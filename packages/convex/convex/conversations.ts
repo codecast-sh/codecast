@@ -54,13 +54,10 @@ import {
   INBOX_PROJECTION_VERSION,
   INBOX_TRUNCATION_KINDS,
   INBOX_WINDOW_CAPS,
-  isSessionActivityFresh,
   isAssignedAwayFromViewer,
   underOwnersModel,
   isInboxMember,
   agentAnswersRow,
-  agentOwnerOfRow,
-  personWorkState,
   escalatedToViewer,
   escalatedAsks,
   type OwnersModelRow,
@@ -84,7 +81,7 @@ import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
 import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId, enqueueResumeSession, enqueueHibernateSession, requireSessionCommandTarget, findSessionCommandByRequest, recentConversationCommands, validateSessionCommandRequestId, stopAndSendForUser, insertEscapeCommand } from "./daemonCommandUtils";
 import { normalizePaneUrl } from "@codecast/shared/contracts/browserPaneOffer";
 import { AGENT_MODEL_CONFIG, AGENT_CLIENTS, modelAgentKey, fromConvexAgentType, localAgentTypeOf, toConvexAgentType, normalizeThreadState, parseThreadStateStatus, clearedThreadStateFields, THREAD_STATE_RESULT_MAX_CHARS, formatAgentSwitchNotice, findModelOption, canSessionBecomeAgent, agentForksFromAnyMessage, agentForksNatively, isHostedAgentType, computeConversationTaskStats, isTodoStatTool } from "@codecast/shared/contracts";
-import { shouldShowInInbox, isNoiseTitle, isOrphanOrSubagent, isAdoptedChild, isRunLog, isSessionIdle, deriveSessionActivity, lastRoleIsUserOf, classifyWorkState, classifyRetirement, normalizeWorkStateFilter, trustedAgentStatus, subagentIsProducing, openToolCallAt, userRestOf, userRestStampOf, isSettleVerdictCurrent, ACTIVE_AGENT_STATUSES, SUBAGENT_PRODUCING_GRACE_MS, SUBAGENT_TOOL_CALL_CAP_MS, HEARTBEAT_ALIVE_MS, STATUS_TRUST_TTL_MS, AGENT_IDLE_GRACE_MS, type WorkState } from "./inboxFilters";
+import { shouldShowInInbox, isNoiseTitle, isOrphanOrSubagent, isAdoptedChild, isRunLog, isSessionIdle, deriveSessionActivity, lastRoleIsUserOf, classifyWorkState, normalizeWorkStateFilter, trustedAgentStatus, subagentIsProducing, openToolCallAt, userRestOf, userRestStampOf, isSettleVerdictCurrent, ACTIVE_AGENT_STATUSES, SUBAGENT_PRODUCING_GRACE_MS, SUBAGENT_TOOL_CALL_CAP_MS, HEARTBEAT_ALIVE_MS, STATUS_TRUST_TTL_MS, AGENT_IDLE_GRACE_MS, type WorkState } from "./inboxFilters";
 import { scheduleLiveActivityRefresh } from "./lib/liveActivityRefresh";
 import { nestParentIdOf, subagentLinkFields } from "./ccAccountsShared";
 import { isSessionOwner, ownerRowsForUser, ownPeerByItsSpawnersHuman, sessionOwnerRow, teamOwnerRowsForUser } from "./sessionOwners";
@@ -118,6 +115,9 @@ import {
 } from "./privacy";
 import { currentMembershipVisibility, effectiveMembershipVisibility } from "./teamVisibility";
 import { activeTeamMembershipFor, canAccessConversation } from "./lib/access";
+import { resolveWaitingOn, writeWaitingOn, type WaitingOnTarget } from "./lib/waitingOn";
+import { dormantRailActivities, tallyInboxRows } from "./lib/sessionsTally";
+import { scheduleSessionWaiters } from "./lib/workerSettleTrigger";
 import { linkedPullRequestNumbers } from "./lib/prSessions";
 import { resolveSearchSelf, searchParentId, selfFamilyTest } from "./lib/searchSelf";
 import { patchConversationVisibility } from "./lib/conversationVisibility";
@@ -8947,6 +8947,8 @@ async function enrichInboxSessionRow(
     armed_trigger_kind: conv.armed_trigger_kind ?? null,
     // Denormalized run/blocker wake (see schema), read off the row the same way.
     parked_wake_kind: conv.parked_wake_kind ?? null,
+    // What the dormant pin waits on (see schema), for the row's under-line.
+    waiting_on: conv.waiting_on ?? null,
     // When the latest turn opened (see schema): a pin older than it parks nothing.
     last_turn_at: conv.last_turn_at ?? null,
     // The pin rule's fallback for a row with no last_turn_at, as its answer:
@@ -9107,6 +9109,7 @@ async function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: nu
     // the web from this row, so a missing one splits the two.
     armed_trigger_kind: child.armed_trigger_kind ?? null,
     parked_wake_kind: child.parked_wake_kind ?? null,
+    waiting_on: child.waiting_on ?? null,
     last_turn_at: child.last_turn_at ?? null,
     pin_predates_user_message: pinPredatesUserMessage(child),
     last_turn_origin: child.last_turn_origin ?? null,
@@ -11174,197 +11177,6 @@ export const teamSessionsLiveness = query({
   },
 });
 
-// The `cast sessions` tally + row filter, split out of inboxForCLI as a PURE
-// function over already-enriched rows. This logic has been wrong twice — a
-// killed row double-counted under a comment denying it, then `-a` zeroing the
-// retirement figures while listing the rows — and both times a test would have
-// caught it, so it gets a seam rather than living inside a db-heavy query.
-export function tallyInboxRows(
-  sessions: any[],
-  opts: {
-    showAll?: boolean;
-    stateFilter?: string | null;
-    labelByConv: Map<string, string>;
-    /**
-     * Conversation ids the caller named explicitly (`cast sessions <id>`).
-     * Subagent rows are hidden from the top-level monitor, but a row you ask
-     * for by id must answer — it is the wait signal an orchestrator watches
-     * for a `cast spawn --subagent` worker.
-     */
-    requestedIds?: Set<string>;
-    // The clock the activity freshness rule reads; a query passes its frozen
-    // Date.now(), a test passes a fixed instant.
-    now?: number;
-  },
-) {
-  const now = opts.now ?? Date.now();
-  // `unstamped` is a HEALTH figure, not a bucket: rows this tally had to drop
-  // because an upstream emitter skipped the projection. It should always read
-  // 0; a non-zero value names a gap in computeInboxSessions.
-  const counts = { working: 0, needs_input: 0, done: 0, dormant: 0, idle: 0, pinned: 0, live: 0, stashed: 0, dismissed: 0, killed: 0, below_fold: 0, total: 0, unstamped: 0 };
-  const rows: Array<{
-    id: string;
-    session_id: string;
-    title: string;
-    short_title: string | null;
-    project_path: string | null;
-    updated_at: string;
-    ts: number;
-    message_count: number;
-    agent_type?: string;
-    agent_status?: string;
-    hibernated_at?: number | null;
-    // A person's newest turn (see schema), on rows named by id only (inboxForCLI).
-    last_person_turn_at?: number | null;
-    work_state: WorkState;
-    // The projection placement (shared placeInboxRow) and the fold flag, next
-    // to the verdict the CLI has always tallied.
-    bucket: InboxBucket;
-    // Under the owners model, the agent owner a wait files under working for
-    // ("With <owner>": @role, or the owning session's id); null otherwise.
-    // work_state stays raw for the agents that watch it.
-    with_owner: string | null;
-    below_fold: boolean;
-    is_killed: boolean;
-    is_pinned: boolean;
-    is_live: boolean;
-    is_unresponsive: boolean;
-    awaiting_input: boolean;
-    // The park kind when the newest turn is an unresolved login / limit /
-    // connection banner ("limit", "auth", ...), else null: needs_input that
-    // is plumbing, not a question. The workflow runner waits out the kinds
-    // that recover on their own instead of reading the park as settled.
-    blocked_on: string | null;
-    // Why the row's start failed (a machine's refusal, a cloud host's failed
-    // preparation), else null: a hand that never started reads idle forever,
-    // and the workflow runner fails its station on this instead of a timeout.
-    session_error: string | null;
-    idle_summary: string | null;
-    thread_state: string | null;
-    thread_state_status: string | null;
-    last_user_message: string | null;
-    label: string | null;
-    active_plan: { short_id: string; title: string } | null;
-    active_task: { short_id: string; title: string } | null;
-    // Second-party ownership: run_by = the member whose account runs the
-    // session when that isn't the caller; owner = the assigned owner if any.
-    run_by: string | null;
-    role: { handle: string; name: string } | null;
-    owner: { name: string | null; email: string | null } | null;
-    owned_by_me: boolean;
-    // What the agent is doing now, only while the row is working and the
-    // stamp is fresh (shared isSessionActivityFresh); null otherwise.
-    activity: SessionActivity | null;
-  }> = [];
-
-  // A subagent row can arrive twice — the top-level recency scan and its
-  // parent's child enumeration both emit it (the web dedups by _id; this
-  // tally must too, or a requested subagent lists and counts double).
-  const seenSubagents = new Set<string>();
-  for (const s of sessions) {
-    // Keep the monitor to top-level sessions — unless this row was named. A
-    // subagent the viewer owns under the owners model is a top-level row.
-    if (s.is_subagent && !underOwnersModel(s)) {
-      const id = s._id.toString();
-      if (!opts.requestedIds?.has(id) || seenSubagents.has(id)) continue;
-      seenSubagents.add(id);
-    }
-    // The three retirement states are TALLIES, not buckets — the same shape as
-    // `pinned` and `live`, and deliberately NOT mutually exclusive with the
-    // work-state counts. A rendered row lands in both its work_state figure
-    // and its retirement figure (a pinned killed session is counted in `idle`,
-    // `pinned`, `killed` and `total`); a collapsed row appears only in its
-    // retirement figure. Counting is therefore unconditional — gating it on
-    // !show_all left every figure at 0 under `-a` while the rows were listed,
-    // which made `stashed` useless for its whole purpose (how many agents are
-    // still running). See classifyRetirement for why killed outranks the rest.
-    //
-    // Only the COLLAPSE is conditional. A killed row renders through: it only
-    // reaches here while pinned (shouldShowInInbox drops killed-and-unpinned),
-    // and pinning is how you hold onto a killed row — swallowing it was the
-    // CLI overriding a decision the server already made. Stashed and dismissed
-    // keep collapsing, mirroring the web's separate parked group, so
-    // already-triaged sessions don't inflate the active buckets; `-a` lists them.
-    const retired = classifyRetirement(s);
-    if (retired) counts[retired]++;
-    if (retired && retired !== "killed" && !opts.showAll) continue;
-    // The verdict is STAMPED upstream (computeInboxSessions with `projection`
-    // runs the shared placeInboxRow); this tally never classifies — one
-    // classifier, one alphabet (sync-convergence C3).
-    const work_state: WorkState = s.work_state;
-    const bucket: InboxBucket = s.bucket;
-    // A stampless row is a bug in whoever emitted it, but it must cost ONE
-    // ROW, not the inbox. Throwing here failed the whole query, so a single
-    // unstamped subagent turned `cast sessions` into "Internal error" and hid
-    // every other session the user has (ct-49761). Skip it, count it, and name
-    // it in the logs so the upstream gap stays visible instead of silent.
-    if (!work_state || !bucket) {
-      counts.unstamped++;
-      console.error(`tallyInboxRows: row ${s._id} is not stamped with a projection — skipped`);
-      continue;
-    }
-    const is_live = !!s.is_connected && s.agent_status !== "hibernated";
-    // A person's figures: a wait an agent owner answers counts as working
-    // (personWorkState), the way the inbox files it.
-    const shownState = personWorkState(s, { bucket, work_state });
-    const agent = shownState !== work_state ? agentOwnerOfRow(s) : null;
-
-    counts.total++;
-    counts[shownState]++;
-    if (s.is_pinned) counts.pinned++;
-    if (is_live) counts.live++;
-    if (s.below_fold) counts.below_fold++;
-    const rowLabel = opts.labelByConv.get(s._id.toString()) ?? null;
-
-    if (opts.stateFilter === "pinned" && !s.is_pinned) continue;
-    if (opts.stateFilter === "live" && !is_live) continue;
-    if (opts.stateFilter === "hibernated" && s.agent_status !== "hibernated") continue;
-    if (opts.stateFilter && opts.stateFilter !== "pinned" && opts.stateFilter !== "live" && opts.stateFilter !== "hibernated" && shownState !== opts.stateFilter) continue;
-
-    rows.push({
-      id: s._id,
-      session_id: s.session_id,
-      title: s.title || s.last_user_message || "New Session",
-      short_title: s.short_title || null,
-      project_path: s.project_path || null,
-      updated_at: new Date(s.updated_at).toISOString(),
-      ts: s.updated_at,
-      message_count: s.message_count || 0,
-      agent_type: s.agent_type,
-      agent_status: trustedStatusAt(s, now),
-      hibernated_at: s.hibernated_at ?? null,
-      work_state,
-      bucket,
-      with_owner: agent ? (agent.kind === "role" ? `@${s.role?.handle ?? "role"}` : agent.id.slice(0, 7)) : null,
-      below_fold: !!s.below_fold,
-      // A retired row (still listed while pinned, or under --all). The watch
-      // stream reads it to emit a kill as a departure, not a transition.
-      is_killed: !!s.inbox_killed_at,
-      is_pinned: !!s.is_pinned,
-      is_live,
-      is_unresponsive: !!s.is_unresponsive,
-      awaiting_input: !!s.awaiting_input,
-      blocked_on: s.pending_api_error ? (s.pending_api_error_kind ?? "error") : null,
-      session_error: s.session_error || null,
-      idle_summary: s.idle_summary || null,
-      // The agent's own pinned state beats the generated blurb when both exist:
-      // one is what the agent says is true now, the other is a description.
-      thread_state: s.thread_state || null,
-      thread_state_status: s.thread_state_status || null,
-      last_user_message: s.last_user_message || null,
-      label: rowLabel,
-      active_plan: s.active_plan ? { short_id: s.active_plan.short_id, title: s.active_plan.title } : null,
-      active_task: s.active_task ? { short_id: s.active_task.short_id, title: s.active_task.title } : null,
-      run_by: s.author_name ?? null,
-      role: s.role ? { handle: s.role.handle, name: s.role.name } : null,
-      owner: s.owner_user_id ? { name: s.owner_name ?? null, email: s.owner_email ?? null } : null,
-      owned_by_me: !!s.owned_by_me,
-      activity: isSessionActivityFresh(s.activity, work_state, now) ? s.activity : null,
-    });
-  }
-  return { counts, rows };
-}
-
 // CLI-facing inbox: the same fully-enriched, per-user session set the web inbox
 // renders (computeInboxSessions), collapsed to a single `work_state` per row via
 // the shared classifier and sorted most-actionable-first. Powers `cast monitor`
@@ -11480,12 +11292,15 @@ export const inboxForCLI = query({
     const stateFilter = normalizeWorkStateFilter(args.state);
     const ORDER: Record<WorkState, number> = { needs_input: 0, done: 1, working: 2, dormant: 3, idle: 4 };
 
+    const now = Date.now();
     const { counts, rows } = tallyInboxRows(sessions, {
       showAll: args.show_all,
       stateFilter,
       labelByConv,
       requestedIds,
-      now: Date.now(),
+      now,
+      // Only a view that lists dormant rows reads their wakes.
+      railActivity: !stateFilter || stateFilter === "dormant" ? await dormantRailActivities(ctx, sessions, now, String(userId)) : undefined,
     });
     // A person's newest turn (schema last_person_turn_at) on the rows named by
     // id: a Ship run reads it off its subject's row to see a person take the
@@ -12537,8 +12352,11 @@ export async function performSetThreadState(
   status: ThreadStateStatus,
   result?: string | null,
   serves?: string,
+  // What a dormant pin waits on (`--on`); every other pin clears the wait, since the words that declared it are gone.
+  waitingOn: WaitingOnTarget | null = null,
 ): Promise<{ at: number; resurfaced: boolean; serves_outcome?: ServesOutcome | null }> {
   const at = Date.now();
+  await writeWaitingOn(ctx, conv, waitingOn);
   await ctx.db.patch(conv._id, {
     thread_state: text,
     thread_state_at: at,
@@ -12610,6 +12428,14 @@ export const setThreadState = mutation({
     result: v.optional(v.string()),
     // `cast state --serves pri-N/sK`: a hint the priorities pass reads, never a link.
     serves: v.optional(v.string()),
+    // `cast state --status dormant --on <ref>`: what the session waits on
+    // (lib/waitingOn.ts). A pin without it clears the wait.
+    on: v.optional(v.string()),
+    // With `--on @person`: the question to ask them (`--ask`) and its choices
+    // (`-o`, none for a free answer). It goes to them as a decide card, whose
+    // answer wakes the session (lib/personWait.ts).
+    ask: v.optional(v.string()),
+    options: v.optional(v.array(v.object({ label: v.string(), description: v.optional(v.string()) }))),
     api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -12635,15 +12461,22 @@ export const setThreadState = mutation({
     const text = normalizeThreadState(args.text ?? "");
 
     if (!text) {
+      if (args.on !== undefined) throw new Error("--on goes with a dormant pin: cast state --status dormant --on <ref> \"<text>\"");
       await ctx.db.patch(conv._id, clearedThreadStateFields());
+      await writeWaitingOn(ctx, conv, null);
       await scheduleLiveActivityRefresh(ctx, conv.user_id, {});
       return { ok: true as const, short_id: shortId, cleared: true as const, state: null, previous_state: previous };
     }
 
     const status = parseThreadStateStatus(args.status) ?? "working";
+    if (args.on !== undefined && status !== "dormant") throw new Error(`--on names what a dormant session waits on: use --status dormant, not ${status}`);
+    // Resolved before anything is written, so a refused ref leaves the pin as it was.
+    if (args.ask !== undefined && args.on === undefined) throw new Error("--ask goes with a wait on a person: --on @handle --ask \"<question>\"");
+    const ask = args.ask !== undefined ? { question: args.ask, options: args.options ?? [] } : undefined;
+    const waitingOn = args.on !== undefined ? await resolveWaitingOn(ctx, userId, conv, args.on, ask) : null;
     // Only the session's runner speaks for its milestone: a co-owner's pin names none, closes none and is told of none.
     const runner = String(conv.user_id) === String(userId);
-    const { at, resurfaced, serves_outcome } = await performSetThreadState(ctx, conv, text, status, threadStateResultOf(args.result), runner ? serves : undefined);
+    const { at, resurfaced, serves_outcome } = await performSetThreadState(ctx, conv, text, status, threadStateResultOf(args.result), runner ? serves : undefined, waitingOn);
     // A done pin that names no milestone closes none: the CLI says which one this session works, and how to name it.
     // Milestone replies only where priorities is on: where the session's priority is, or, on none yet, where the session could count.
     const held = conv.priority_id ? ((await ctx.db.get(conv.priority_id as Id<"priorities">)) as Doc<"priorities"> | null) : null;
@@ -12656,6 +12489,9 @@ export const setThreadState = mutation({
     const serves_unlinked = priorities && serves && !mapped ? { serves } : null;
     return {
       ok: true as const, short_id: shortId, cleared: false as const, state: text, status, previous_state: previous, at, resurfaced,
+      ...(waitingOn ? { waiting_on: waitingOn } : {}),
+      // A person's wait: the card that went to them (`cast decide` short id).
+      ...(waitingOn?.decision_id ? { asked: { short_id: ((await ctx.db.get(waitingOn.decision_id)) as Doc<"session_decisions"> | null)?.short_id ?? null, person: waitingOn.ref } } : {}),
       ...(milestone ? { milestone } : {}), ...(serves_mismatch ? { serves_mismatch } : {}), ...(serves_unlinked ? { serves_unlinked } : {}),
       // A pin naming its milestone that closed nothing says why.
       ...(serves_outcome && "refused" in serves_outcome ? { serves_refused: { serves, reason: serves_outcome.refused } } : {}),
@@ -14312,6 +14148,8 @@ export async function killConversation(ctx: any, userId: Id<"users">, args: { co
       patch.status = "completed";
     }
     await ctx.db.patch(args.conversation_id, patch);
+    // Sessions waiting on this one (`cast state --on`) hear it stopped.
+    if (!conv.persistent) await scheduleSessionWaiters(ctx, conv._id);
     // A retired row leaves the Lock Screen strip with the next push. The org
     // cores that retire a seat run without a scheduler in their pure form.
     if (ctx.scheduler) await scheduleLiveActivityRefresh(ctx, conv.user_id, { urgent: true });

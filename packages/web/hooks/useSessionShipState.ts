@@ -67,7 +67,7 @@ export function useSyncLandedReach() {
   useWatchEffect(() => (refs.length ? pinDetailRows("deployReach", refs) : undefined), [key]);
 }
 
-type ShipState = {
+export type ShipState = {
   workflowRuns?: Record<string, any>;
   teamDeploys?: Record<string, TeamDeployRow>;
   deployReach?: Record<string, DeployReachRow>;
@@ -79,7 +79,8 @@ type ShipState = {
 
 let memo: { runs: unknown; deploys: unknown; reach: unknown; decisions: unknown; workspace: string | null; viewer: string | null; map: Map<string, SessionShip> } | null = null;
 
-function shipMap(s: ShipState): Map<string, SessionShip> {
+/** Every session's ship state, built once per change of the runs, deploys, reach or decisions: the ref holds still between. */
+export function sessionShipMap(s: ShipState): Map<string, SessionShip> {
   const workspace = activeWorkspaceKeyOf(s);
   const viewer = s.currentUser?._id ? String(s.currentUser._id) : null;
   if (memo && memo.runs === s.workflowRuns && memo.deploys === s.teamDeploys && memo.reach === s.deployReach && memo.decisions === s.sessionDecisions && memo.workspace === workspace && memo.viewer === viewer) return memo.map;
@@ -91,7 +92,7 @@ function shipMap(s: ShipState): Map<string, SessionShip> {
 
 /** One session's ship state as a string, "" when nothing of its work is on its way or out: a dep for the card's subscription, so it wakes only when the words change. */
 export function sessionShipSig(s: ShipState, conversationId: string | null | undefined): string {
-  const v = conversationId ? shipMap(s).get(conversationId) : undefined;
+  const v = conversationId ? sessionShipMap(s).get(conversationId) : undefined;
   return v ? `${v.tone}\u0000${v.words}\u0000${v.deploy ?? ""}\u0000${v.run ?? ""}\u0000${v.sha ?? ""}\u0000${v.team ?? ""}` : "";
 }
 

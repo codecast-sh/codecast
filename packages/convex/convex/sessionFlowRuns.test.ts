@@ -42,6 +42,21 @@ test("a session's own landing flow counts as its change run beside the pool's; a
   expect(team.map((r: any) => r._id)).toEqual(["run_own"]);
 });
 
+test("a live run of a project's change flow that only extends the library's counts, an ended one does not", async () => {
+  const ctx = world();
+  const t = (ctx.db as any);
+  await t.insert("workflows", { _id: "wf_ext", source: `digraph change {\n  graph [extends="change"]\n}`, slug: "change" });
+  const base = { workflow_id: "wf_ext", workflow_name: "change", user_id: ME, workspace: WS, team_id: TEAM, spawner_conversation_id: CONV, node_statuses: [] };
+  await t.insert("workflow_runs", { ...base, _id: "run_ext_live", status: "running", current_node_id: "deploy__wait", created_at: 5, updated_at: 5 });
+  await t.insert("workflow_runs", { ...base, _id: "run_ext_done", status: "failed", created_at: 4, updated_at: 4 });
+  const ids = (await (forConversation as any)._handler(ctx, { conversation_id: CONV })).map((r: any) => r._id);
+  expect(ids).toContain("run_ext_live");
+  expect(ids).not.toContain("run_ext_done");
+  // The team feed (the phone's) carries it too: it is the session's newest change run.
+  const team = (await (forTeam as any)._handler(ctx, { team_id: TEAM })).map((r: any) => r._id);
+  expect(team).toEqual(["run_ext_live"]);
+});
+
 test("every run row says whether it carries a change, whichever feed brought it", async () => {
   const ctx = world();
   // The team's run lists feed the same collection as the session's: a segment run there reads as no change.

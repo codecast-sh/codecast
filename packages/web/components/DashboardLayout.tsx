@@ -107,6 +107,7 @@ import { useThreadUnreadSync, useThreadUnreadByWorkspaceSync } from "../hooks/us
 import { ProfileSignInDialogHost } from "./ProfileSignInDialog";
 import { useChatToasts } from "../hooks/useChatToasts";
 import { ChatPrefetchFeeder } from "../hooks/useChatPrefetch";
+import { DormantRunFeeds } from "./inbox/DormantRunFeeds";
 import { useSyncLineDecisionsEverywhere } from "../hooks/useSyncSessionDecisions";
 import { useSyncOpenDecisionDetails } from "../hooks/useSyncDecisionDetail";
 import { DecisionPagesFeeder, DecisionFramesPreload } from "./decisions/DecisionPagePrefetch";
@@ -554,6 +555,8 @@ export function DashboardSyncEffects({ windowEffects = !PANE_EMBED }: { windowEf
     <LocalDeviceProbe />
     {isSyncHost ? <HostFeeders /> : null}
     {isSyncHost ? <ChatPrefetchFeeder /> : null}
+    {/* The runs of sessions parked on a run outside the team's run feed (components/inbox/DormantRunFeeds). */}
+    {isSyncHost ? <DormantRunFeeds /> : null}
   </>;
 }
 

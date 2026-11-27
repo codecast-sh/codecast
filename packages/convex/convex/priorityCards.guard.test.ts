@@ -53,6 +53,7 @@ const CLASSIFIED: Record<string, Kind> = {
   "sessionDecisions.ts:restoreAskedPeople": { ignores: "a by-hand repair, run on a named decision" },
   "decisionStacks.ts:addToStackCore": { handles: "a card never joins a stack (its delegate and defaults would take it)" },
   "decisionStacks.ts:removeFromStackCore": { ignores: "a card is never in a stack" },
+  "lib/personWait.ts:settlePersonWaitCard": { ignores: "hands on only the cards a person wait asked itself, named by the session's waiting_on; a priority card is never one" },
 };
 
 /** Named chokepoints that must still test the rule: [file under packages/, function or const]. */

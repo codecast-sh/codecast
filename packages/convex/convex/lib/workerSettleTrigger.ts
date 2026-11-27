@@ -47,3 +47,21 @@ export async function scheduleWorkerSettle(ctx: any, conversationId: Id<"convers
     status_ts: statusTs,
   });
 }
+
+// A session other sessions wait on (`cast state --status dormant --on <it>`,
+// lib/waitingOn.ts) tells them when it settles, one idle grace later as a
+// worker tells its lead, so its closing `cast state` has landed. One index
+// read per settle, on the conversation id; nothing is scheduled while nobody waits.
+// A kill passes no status time: the kill itself is the settle.
+export async function scheduleSessionWaiters(ctx: any, conversationId: Id<"conversations">, statusTs?: number): Promise<void> {
+  if (!ctx.scheduler) return;
+  const waiter = await ctx.db
+    .query("conversations")
+    .withIndex("by_waiting_on", (q: any) => q.eq("waiting_on.kind", "session").eq("waiting_on.ref", String(conversationId)))
+    .first();
+  if (!waiter) return;
+  await ctx.scheduler.runAfter(statusTs === undefined ? 0 : NEEDS_INPUT_IDLE_CHECK_DELAY_MS, internal.waitingOn.tellSessionWaiters, {
+    conversation_id: conversationId,
+    ...(statusTs !== undefined ? { status_ts: statusTs } : {}),
+  });
+}

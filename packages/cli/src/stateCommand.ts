@@ -26,6 +26,7 @@ import {
   type ThreadStateStatus,
 } from "@codecast/shared/contracts";
 import { parseServesHint } from "@codecast/shared/contracts/priorities";
+import { parseWaitingOnRef, personWaitNeedsAsk, prWaitingRef } from "@codecast/shared/contracts/waitingOn";
 import { clearThreadStatePulse, writeThreadStatePulse } from "./threadStateStamp.js";
 import { commandGroup } from "./commandGroupLookup.js";
 
@@ -34,18 +35,47 @@ import { commandGroup } from "./commandGroupLookup.js";
  * the state text, and silently clearing on it would be a surprise. */
 const CLEAR_WORDS = new Set(["clear", "rm", "unset", "none"]);
 
-/** What `cast state --status done` prints when the text carries an ask line. */
-export function doneWithAskRefusal(label: string): string {
+/** What `cast state --status done|dormant` prints when the text carries an ask line. */
+export function askRefusal(label: string): string {
   return `A ${label}: line means the person acts. Use --status blocked.`;
 }
 
-/** The label of the ask a Done pin would bury, or null. An ask is the line the
- * card shows as one (`You:`, or an older note's `Blocked:`), read with the
- * card's own parser so the two cannot disagree; the "." line stands in for a
- * headline so the first line is read as a row too. */
-export function doneAskLabel(status: ThreadStateStatus | null, text: string): string | null {
-  if (status !== "done") return null;
+/** The label of the ask a Done or Dormant pin would bury, or null: both file
+ * the session away from the person (Done, Sleeping), so the ask goes unseen.
+ * An ask is the line the card shows as one (`You:`, or an older note's
+ * `Blocked:`), read with the card's own parser so the two cannot disagree; the
+ * "." line stands in for a headline so the first line is read as a row too. */
+export function buriedAskLabel(status: ThreadStateStatus | null, text: string): string | null {
+  if (status !== "done" && status !== "dormant") return null;
   return threadStateAskRow(threadStateRows(`.\n${text}`))?.label ?? null;
+}
+
+/** The ref `--on` sends, or the refusal to print: it goes with a dormant pin
+ * only, and a bare #42 takes the checkout's repository. */
+export async function waitingOnArg(
+  on: string | undefined,
+  status: ThreadStateStatus | null,
+  checkoutRepository: () => Promise<string | undefined>,
+): Promise<{ on?: string; error?: string }> {
+  if (on === undefined) return {};
+  if (status !== "dormant") return { error: `--on names what a dormant session waits on: cast state --status dormant --on '${on}' "<text>"` };
+  const parsed = parseWaitingOnRef(on);
+  if (!parsed.ok) return { error: parsed.error };
+  if (parsed.kind !== "pr") return { on: parsed.ref };
+  const repository = parsed.repository ?? (await checkoutRepository());
+  if (!repository) return { error: `#${parsed.pr_number} names no repository and this is not a checkout: write owner/repo#${parsed.pr_number}` };
+  return { on: prWaitingRef(repository, parsed.pr_number) };
+}
+
+/** The question a wait on a person asks them, or the refusal to print:
+ * `--on @handle` needs `--ask`, and `--ask` and `-o` go with nothing else.
+ * `on` is waitingOnArg's stored ref. */
+export function personAskArg(on: string | undefined, ask: string | undefined, options: string[]): { ask?: string; error?: string } {
+  const person = !!on?.startsWith("@");
+  if (person && !ask?.trim()) return { error: personWaitNeedsAsk(on!) };
+  if (!person && (ask !== undefined || options.length > 0)) return { error: `--ask and -o go with a wait on a person: cast state --status dormant --on @handle --ask "<question>" "<text>"` };
+  if (options.length > 9) return { error: "At most nine options (they map to keys 1-9)" };
+  return person ? { ask: ask!.trim() } : {};
 }
 
 export type StateInvocation =
@@ -212,8 +242,22 @@ export function registerStateCommand(program: Command, deps: PublishDeps): void 
     )
     .option("--for <session>", "Target another session (default: the current one)")
     .option("--serves <pri-N/sK>", "The priority or milestone this session serves: a hint the priorities pass weighs, never a link")
+    .option("--on <ref>", "With --status dormant: what this session waits on, which wakes it when done: a session (jx7c6zk) settling, a task (ct-12) closing, a pull request ('#42' quoted, owner/repo#42 or its URL) merging or closing, or a person (@handle) answering --ask. The next pin without --on clears it")
+    .option("--ask <question>", "With --on @handle: the question their answer settles, sent to them now as a decision card; the answer wakes this session, and a day without one asks your person")
+    .option("-o, --option <label>", "With --ask: a choice for them, repeatable (\"Label :: what happens\"); none asks for a free answer", (v: string, all: string[]) => [...all, v], [] as string[])
     .option("--json", "Machine-readable output")
-    .action(async (rawArgs: string[], options: { for?: string; json?: boolean; status?: string; serves?: string }) => {
+    .addHelpText("after", `
+Examples:
+  cast state "Building the sync fix: tests next"
+  cast state --status blocked - <<'EOF'
+Release needs a signing key
+You: add SIGN_KEY to the repo secrets
+EOF
+  cast state --status dormant --on '#42' "Waiting for #42 to merge, then deploy"
+  cast state --status dormant --on jx7c6zk "Waiting on the builder's branch"
+  cast state --status dormant --on @ashot --ask "Which region do we launch in?" -o US -o EU "Waiting on Ashot's region call"
+  cast state --status done "Shipped: all four fixes verified"`)
+    .action(async (rawArgs: string[], options: { for?: string; json?: boolean; status?: string; serves?: string; on?: string; ask?: string; option?: string[] }) => {
       const args = rawArgs ?? [];
 
       const intent = parseStateArgs(args, options.for);
@@ -228,11 +272,23 @@ export function registerStateCommand(program: Command, deps: PublishDeps): void 
         console.error(`--status goes with a state to pin: cast state --status ${options.status} "<text>"`);
         process.exit(1);
       }
-      const askLabel = intent.mode === "set" ? doneAskLabel(status, intent.text) : null;
+      const askLabel = intent.mode === "set" ? buriedAskLabel(status, intent.text) : null;
       if (askLabel) {
-        console.error(doneWithAskRefusal(askLabel));
+        console.error(askRefusal(askLabel));
         process.exit(1);
       }
+      const waiting = await waitingOnArg(options.on, status, async () => (await import("./prCommand.js")).readLocalGitContext().repository ?? undefined);
+      if (waiting.error) {
+        console.error(waiting.error);
+        process.exit(1);
+      }
+      const person = personAskArg(waiting.on, options.ask, options.option ?? []);
+      if (person.error) {
+        console.error(person.error);
+        process.exit(1);
+      }
+      // Read like `cast decide -o`: "Label :: what happens".
+      const askOptions = person.ask && options.option?.length ? options.option.map((await import("./decideCommand.js")).parseDecideOption) : undefined;
       const serves = options.serves === undefined ? undefined : parseServesHint(options.serves);
       if (serves === null) {
         console.error(`"${options.serves}" is not a priority or milestone: --serves pri-N or pri-N/sK, like pri-3/s2`);
@@ -276,7 +332,7 @@ export function registerStateCommand(program: Command, deps: PublishDeps): void 
       // station's edges route on it.
       const stationResult = intent.mode === "set" ? threadStateResult(intent.text) : null;
       // Setting the pin is safe to repeat, so a gateway 5xx or a timeout is retried before it is reported.
-      const result = await apiPost(deps, "/cli/sessions/state/set", { session, text, status: status ?? undefined, result: stationResult ?? undefined, serves }, { retries: 2 });
+      const result = await apiPost(deps, "/cli/sessions/state/set", { session, text, status: status ?? undefined, result: stationResult ?? undefined, serves, on: waiting.on, ask: person.ask, options: askOptions }, { retries: 2 });
       // Keep the reminder hook's local stamp in step with the write — but only
       // for THIS session. `--for` writes to somebody else's thread, and their
       // agent's reminder is keyed to their own machine's stamp, not ours.
@@ -319,6 +375,10 @@ export function registerStateCommand(program: Command, deps: PublishDeps): void 
       // A blocked declaration from a hidden session (or done from one the
       // human closed) is a claim on the human's eyes — the server just honored
       // it; say so, since the agent may believe it is still out of sight.
+      const asked = (result as { asked?: { short_id: string | null; person: string } }).asked;
+      if (asked) {
+        console.log(fmt.muted(`asked ${asked.person}${asked.short_id ? ` (${asked.short_id})` : ""}: their answer wakes this session; a day without one asks your person`));
+      }
       if ((result as { resurfaced?: boolean }).resurfaced) {
         console.log(`${c.yellow}!${c.reset} this session was hidden; declaring ${result.status ?? status} returned it to the user's inbox`);
       }

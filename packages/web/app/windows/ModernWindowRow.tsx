@@ -1,6 +1,6 @@
 import { Plus } from "lucide-react";
-import { railRowPlacement, type InboxSession } from "../../store/inboxStore";
-import { sessionStatusOf } from "../../lib/sessionStatus";
+import { railRowPlacement, useInboxStore, type InboxSession } from "../../store/inboxStore";
+import { placedStatusOf } from "../../lib/railActivity";
 import { cleanTitle } from "../../lib/conversationProcessor";
 import { formatRowTime } from "../../lib/sessionCard";
 import { isHostedAgentType } from "@codecast/shared/contracts";
@@ -10,7 +10,7 @@ import { SessionStatusMark, SessionStatusWord } from "../../components/inbox/Ses
  *  mark and word from the status vocabulary (lib/sessionStatus), the title and
  *  the time, one line. */
 export function ModernWindowRow({ session, now, onOpen }: { session: InboxSession; now: number; onOpen: (id: string) => void }) {
-  const status = sessionStatusOf({ row: session, placement: railRowPlacement(session, now), now, hosted: isHostedAgentType(session.agent_type) });
+  const status = placedStatusOf(useInboxStore.getState(), { row: session, placement: railRowPlacement(session, now), now, hosted: isHostedAgentType(session.agent_type) });
   return (
     <button
       type="button"

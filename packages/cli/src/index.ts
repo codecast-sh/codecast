@@ -7171,7 +7171,8 @@ program
   .description(
     "Explore sessions — three independent axes:\n\n" +
     "  QUERY (which sessions): session ids, --state, --label, --team / -m … narrow the set\n" +
-    "  CONTENT: work state by default (grouped NEEDS YOU → DONE → WORKING → DORMANT → IDLE),\n" +
+    "  CONTENT: work state by default (grouped NEEDS YOU → DONE → WORKING → DORMANT → IDLE, DORMANT\n" +
+    "           split as the web rail: WORKING its workers, SHIPPING its change, SLEEPING a wait),\n" +
     "           or --messages for conversation messages\n" +
     "  LIVENESS: a one-shot snapshot, or -w to stream changes live\n\n" +
     "States answer WHO ACTS NEXT, matching the web inbox. NEEDS YOU = a human must unblock it\n" +
@@ -7187,8 +7188,10 @@ program
     "quiet, or at once if no daemon reports for it. IDLE = blank sessions.\n" +
     "Sessions you name are listed whatever their state.\n\n" +
     "--json prints {counts, sessions: [{id, short_id, work_state, title, message_count, updated_at,\n" +
-    "thread_state, thread_state_status, is_live, is_pinned, …}]}: the rows sit under .sessions,\n" +
-    "even for one id, and work_state is the field to read.\n\n" +
+    "thread_state, thread_state_status, is_live, is_pinned, activity, …}]}: the rows sit under .sessions,\n" +
+    "even for one id, and work_state is the field to read. activity is {state, flavor, words, text}: a dormant\n" +
+    "row's rail section (working | shipping | sleeping), its sleeping flavor (waiting, scheduled,\n" +
+    "stalled, …) and the line under it (also as text); a working row's is its live tool line.\n\n" +
     "Waiting for workers: --until exits once every named session (or every one under --label)\n" +
     "reaches one of the states (default settled: anything but working), printing one line as\n" +
     "each does; it gives up after --timeout (default 9m, exit 2). With -w it streams changes and\n" +
@@ -16184,7 +16187,10 @@ trigger
   .option("--wake", "With --spawn on a trigger that fires once: wake this session with the run's report even when it completes cleanly, so this session acts on it. Costs a turn over this session's whole context; without it a clean report is posted here without a wake.")
   .addHelpText("after", `
 Examples:
-  cast trigger add "Check if CI is green on main" --in 30m                 # once, into this session
+  cast trigger add "CI is green on #42: merge it" --on pr_checks_green --pr 42  # wait on CI, a merge or a deploy by its event, never a timed poll
+  cast trigger add "#42 merged: deploy it" --on pr_merged --pr 42
+  cast trigger add "A deploy went live: verify the fix" --on deploy_live
+  cast trigger add "Re-read the thread for answers" --in 30m                # once, into this session
   cast trigger add "Summarize open PRs" --every 1d --at "06:00 UTC" --spawn --safe  # daily at 06:00 UTC, a fresh read-only session
   cast trigger add "Answer the new review comment" --on pr_comment --pr 42
   cast trigger add "Review PRs" --every 6h --spawn --precheck "gh pr list --json number" --precheck-mode changes`)

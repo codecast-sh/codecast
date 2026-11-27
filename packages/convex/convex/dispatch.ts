@@ -10,6 +10,7 @@ import { relateCore } from "./taskLinks";
 import { normalizeCharacterFields } from "@codecast/shared/contracts/sessionCharacter";
 import type { CodeAnchorText } from "@codecast/shared/comments";
 import { answerRefusal, guardClientResolution, personMayResolve, reopenCore, settleClientResolution, userMayRead } from "./sessionDecisions";
+import { writeWaitingOn } from "./lib/waitingOn";
 import { escalateCore, passCore, type PassTarget, unassignCore } from "./decisionHandoff";
 import { applyAreasCore } from "./decisionAreas";
 import { shareOutCore } from "./decisionShareOut";
@@ -569,6 +570,11 @@ export async function applyPatches(
           await patchConversationThroughFavoriteView(ctx as any, doc as any, finalSafe as any, "advance");
         } else {
           await ctx.db.patch(documentId, finalSafe);
+        }
+        // A pin cleared from the web takes the wait it declared with it (its PR
+        // triggers, a person's card): the same writer `cast state clear` uses.
+        if (table === "conversations" && "thread_state" in finalSafe && !(finalSafe as any).thread_state && (doc as any).waiting_on) {
+          await writeWaitingOn(ctx as any, doc as any, null);
         }
         if (table === "inbox_buckets") bucketViewChanged = true;
         // A decision resolved from the web: the same side effects a server
