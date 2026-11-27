@@ -9,6 +9,7 @@
 
 import { defineTable } from "convex/server";
 import { v } from "convex/values";
+import { roleIconAccentValidator, roleIconValidator } from "./lib/roleIconValidator";
 
 const liveReader = v.union(
   v.object({ kind: v.literal("marker") }),
@@ -353,4 +354,17 @@ export const deployTables = {
   })
     .index("by_repository", ["repository"])
     .index("by_workspace_repository", ["workspace", "repository"]),
+
+  // A repository's drawn face in one workspace (repoIcons.ts): the role icon
+  // language, drawn from the repository's name the first time a face asks.
+  // `requested_at` holds off the next ask while a drawing runs or after one
+  // failed. `accent` is picked at the first ask and the drawing wears it, so
+  // the tile keeps its color when the drawing lands.
+  repo_icons: defineTable({
+    workspace: v.string(),
+    repository: v.string(),
+    accent: v.optional(roleIconAccentValidator),
+    icon: v.optional(roleIconValidator),
+    requested_at: v.optional(v.number()),
+  }).index("by_workspace_repository", ["workspace", "repository"]),
 };

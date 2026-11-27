@@ -3,6 +3,7 @@
 import { useMemo } from "react";
 import { useDeployReach } from "./useDeployReach";
 import { useDeployTargets } from "./useSyncDeployTargets";
+import { teamWorkspaceKey } from "../lib/workspaceScope";
 import { useDeployPress } from "./useDeployPress";
 import { useCoarseNow } from "./useCoarseNow";
 import { repoObjectId } from "../lib/entityLinks";
@@ -18,7 +19,7 @@ export function usePrDeploy(pr: any, repository: string, authed: boolean) {
   // The team's targets carry each one's queue and press. A closed pull request goes nowhere, and a public reader
   // reads no team.
   const teamId = authed && (merged || open) ? ((pr.team_id as string | undefined) ?? null) : null;
-  const { targets, deploys, productions } = useDeployTargets(teamId, repository);
+  const { targets, deploys, productions } = useDeployTargets(teamWorkspaceKey(teamId), repository);
   const now = useCoarseNow(30_000);
   const { rows, dormant } = useMemo(() => prDeployRows(reach, targets, deploys, repository, now), [reach, targets, deploys, repository, now]);
   const files: string[] | undefined = useMemo(() => pr.files?.map((f: { filename: string }) => f.filename), [pr.files]);

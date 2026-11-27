@@ -11,6 +11,9 @@ import { canAccessConversation, canAccessTask, workspaceGrantsAccess } from "./l
 import { commitBySha, commitFacts, pushSummary } from "./deployTargetsState";
 import { sessionPriorityReader } from "./lib/sessionPriority";
 import type { SessionPriorityRef } from "@codecast/shared/contracts/priorities";
+import { parseWorkspaceKey } from "./lib/accessKeys";
+import { workspaceOfArgs } from "./lib/workspaceArg";
+import { runShipperConversation } from "./lib/runDeploy";
 
 export const whereIs = query({
   args: { ref: v.string() },
@@ -29,17 +32,21 @@ const COMMIT_ROWS = 40;
 /** The sessions a deploy row names: every one its commits carry, up to this. */
 const SESSION_ROWS = 80;
 
-/** A team's newest deploys, every target, each with the sessions whose commits it carried and the tasks it took out. */
+/**
+ * A workspace's newest deploys (a team's, or a person's own), every target, each with the sessions whose commits it
+ * carried and the tasks it took out.
+ */
 export const recentForTeam = query({
-  args: { team_id: v.id("teams") },
+  args: { team_id: v.optional(v.id("teams")), workspace: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return [];
-    const workspace = `team:${args.team_id}`;
+    const workspace = workspaceOfArgs(args);
     if (!(await workspaceGrantsAccess(ctx, userId, workspace))) return [];
+    const ws = parseWorkspaceKey(workspace);
     const rows: Doc<"deploys">[] = await ctx.db.query("deploys").withIndex("by_workspace_created", (q) => q.eq("workspace", workspace)).order("desc").take(RECENT);
     // A session the viewer may read, with its owner and the priority it serves.
-    const priorityOf = await sessionPriorityReader(ctx, userId, args.team_id);
+    const priorityOf = await sessionPriorityReader(ctx, userId, ws?.type === "team" ? ws.teamId : null);
     const convs = new Map<string, { title: string | null; user_id: string; priority: SessionPriorityRef | null } | null>();
     const tasks = new Map<string, { short_id: string | null; title: string | null } | null>();
     const convOf = async (id: Id<"conversations">) => {
@@ -60,13 +67,19 @@ export const recentForTeam = query({
     const out = [];
     for (const d of rows) {
       const sessionIds = [...new Set((d.commits ?? []).flatMap((c) => (c.conversation_id ? [String(c.conversation_id)] : [])))];
+      // A flow run's deploy names its run's task, and, when it knew no commit, the session that shipped it.
+      const shipRun = d.ship_run ? await ctx.db.get(d.ship_run) : null;
+      const shipper = !sessionIds.length && shipRun ? await runShipperConversation(ctx, shipRun) : null;
+      if (shipper) sessionIds.push(String(shipper));
       const sessions = [];
       for (const id of sessionIds.slice(0, SESSION_ROWS)) {
         const c = await convOf(id as Id<"conversations">);
         if (!c) continue;
         // The tasks this session's commits in the deploy name, every commit counted (not only the listed rows): how the
         // page credits a flow's station session ("Review · ct-N") to the session that pressed Ship.
-        const taskIdsHere = [...new Set((d.commits ?? []).flatMap((x) => (String(x.conversation_id) === id ? (x.task_ids ?? []).map(String) : [])))];
+        const taskIdsHere = String(shipper) === id
+          ? (shipRun?.task_id ? [String(shipRun.task_id)] : [])
+          : [...new Set((d.commits ?? []).flatMap((x) => (String(x.conversation_id) === id ? (x.task_ids ?? []).map(String) : [])))];
         const task_short_ids: string[] = [];
         for (const t of taskIdsHere) {
           const short = (await taskOf(t as Id<"tasks">))?.short_id;
@@ -74,7 +87,11 @@ export const recentForTeam = query({
         }
         sessions.push({ conversation_id: id, short_id: id.slice(0, 7), title: c.title, user_id: c.user_id, priority: c.priority, task_short_ids });
       }
-      const taskIds = [...new Set([...d.carries.map((c) => String(c.task_id)), ...(d.commits ?? []).flatMap((c) => (c.task_ids ?? []).map(String))])];
+      const taskIds = [...new Set([
+        ...d.carries.map((c) => String(c.task_id)),
+        ...(d.commits ?? []).flatMap((c) => (c.task_ids ?? []).map(String)),
+        ...(shipRun?.task_id ? [String(shipRun.task_id)] : []),
+      ])];
       const taskRows = [];
       for (const id of taskIds.slice(0, 12)) {
         const t = await taskOf(id as Id<"tasks">);

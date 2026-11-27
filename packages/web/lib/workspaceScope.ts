@@ -110,3 +110,12 @@ export function workspaceRefOf(row: WorkspaceScoped): { kind: "team" | "user"; i
 export function scopeArgsOf(workspace: string | null | undefined): { workspace: "team"; team_id: Id<"teams"> } | { workspace: "personal" } {
   return workspace?.startsWith("team:") ? { workspace: "team", team_id: workspace.slice(5) as Id<"teams"> } : { workspace: "personal" };
 }
+
+/** A team's workspace key, or null without a team. */
+export const teamWorkspaceKey = (teamId: string | null | undefined): WorkspaceKey | null => (teamId ? `team:${teamId}` : null);
+
+/** A workspace key as the args a deploys read takes (deployTargets.view and its siblings): a team by `team_id`, as
+ *  those reads took it before personal deploys, and a person's own by its key. */
+export function deployScopeArgs(workspace: WorkspaceKey): { team_id: Id<"teams"> } | { workspace: WorkspaceKey } {
+  return workspace.startsWith("team:") ? { team_id: workspace.slice(5) as Id<"teams"> } : { workspace };
+}

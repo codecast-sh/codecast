@@ -60,7 +60,7 @@ import {
 
 /** A line deploy older than this, still waiting for its marker, no longer takes one. */
 const OPEN_DEPLOY_MAX_AGE_MS = DAY;
-const NOTE_MAX = 2000;
+export const NOTE_MAX = 2000;
 /** A role asks for a deploy only once the newest waiting fix has sat this long, so a burst of merges goes out as one deploy. */
 export const DEPLOY_SETTLE_MS = 30 * 60 * 1000;
 const COMMITS_MAX = 200;
@@ -113,7 +113,13 @@ export type DeployMarker = {
   event_id?: Id<"external_events">;
   url?: string;
   previous_sha?: string;
-  commits?: Array<{ sha: string; subject: string; author?: string }>;
+  commits?: NonNullable<Doc<"deploys">["commits"]>;
+  /** The fixes it carried, when the marker knows them (a flow run's own task); the history's rule adds the rest. */
+  carries?: Doc<"deploys">["carries"];
+  /** The personal flow run whose end recorded it (lib/runDeploy.ts): always a deploy of its own, one per run. */
+  ship_run?: Id<"workflow_runs">;
+  /** A deploy recorded after the fact (a backfill): no trigger fires for it. */
+  quiet?: true;
   started_by?: Doc<"deploys">["started_by"];
   /** What the marker says happened: live (the default), still running, failed, or cancelled before it went out. */
   status?: "live" | "running" | "failed" | "cancelled";
@@ -213,12 +219,15 @@ export async function recordDeployMarker(ctx: any, m: DeployMarker): Promise<str
   // A push carrying uncommitted files is that person's own deploy: it finishes a deploy only when it names it
   // (--deploy dp-N), never one somebody else asked for, or its work would be recorded as theirs.
   const uncommitted = push && !!m.dirty;
-  const same = ownNamed || ownRun || recent.find((d) =>
+  // A flow run's own deploy (ship_run) is one per run: two runs ending Live at one sha are two deploys, each carrying
+  // its task. It never lands on another deploy (the run's end updates its own, lib/runDeploy.ts).
+  const own = !!m.ship_run;
+  const same = ownNamed || ownRun || (own ? undefined : recent.find((d) =>
     d.target === target && (liveMatch(d) || (OPEN.has(d.status) && !uncommitted)) && runFree(d)
     && (!d.repository || !repository || d.repository === repository)
     && ((m.sha && sameSha(d.sha, m.sha)) || (!m.sha && m.version && d.version === m.version)),
-  );
-  const open = same ?? (uncommitted ? undefined : recent.find((d) =>
+  ));
+  const open = same ?? (uncommitted || own ? undefined : recent.find((d) =>
     d.target === target && OPEN.has(d.status) && now - d.created_at < OPEN_DEPLOY_MAX_AGE_MS && runFree(d)
     && (!d.repository || !repository || d.repository === repository)
     // A deploy asked for at an earlier sha (a redeploy, a rollback) is finished only by its own sha.
@@ -233,7 +242,7 @@ export async function recordDeployMarker(ctx: any, m: DeployMarker): Promise<str
   ));
 
   // The same failure reported again (a redelivery, a backfill) enriches the failed deploy it already recorded.
-  const failedBefore = !open && !m.workflow_run && status === "failed" && m.sha
+  const failedBefore = !open && !own && !m.workflow_run && status === "failed" && m.sha
     ? recent.find((d) => d.target === target && d.status === "failed" && sameSha(d.sha, m.sha) && (!d.repository || !repository || d.repository === repository))
     : null;
   if (failedBefore) {
@@ -272,7 +281,7 @@ export async function recordDeployMarker(ctx: any, m: DeployMarker): Promise<str
     if (m.changes_read_at != null) patch.changes_read_at = Math.max(open.changes_read_at ?? 0, m.changes_read_at);
     await ctx.db.patch(open._id, patch);
     await stampEvent(ctx, m.event_id, open.short_id);
-    if (patch.status && patch.status !== open.status) await onDeployStatus(ctx, open._id);
+    if (patch.status && patch.status !== open.status) await onDeployStatus(ctx, open._id, m.quiet);
     // Whoever pushed is the dropper, not whoever asked for the deploy the push finished (a role, another person).
     if (patch.drops && (patch.status ?? open.status) === "live") await scheduleDroppedWork(ctx, deployDropper({ ...open, ...patch }), newNames(patch.drops, open.drops), m.started_by);
     return open.short_id;
@@ -300,12 +309,13 @@ export async function recordDeployMarker(ctx: any, m: DeployMarker): Promise<str
     ...(m.note ? { note: m.note.slice(-NOTE_MAX) } : {}),
     ...(m.dirty ? { dirty: m.dirty } : {}),
     ...(m.ship_pass_id ? { ship_pass_id: m.ship_pass_id } : {}),
+    ...(m.ship_run ? { ship_run: m.ship_run } : {}),
     ...(machine ? { machine } : {}),
     ...(m.pushed_via ? { pushed_via: m.pushed_via } : {}),
     ...(adds ? { adds } : {}),
     ...(drops ? { drops } : {}),
     ...(m.changes_read_at != null ? { changes_read_at: m.changes_read_at } : {}),
-    carries: [],
+    carries: m.carries ?? [],
     created_at: Math.min(m.started_at ?? m.at, m.at),
     ...(status === "live" ? { live_at: m.at } : {}),
     ...(status !== "running" ? { finished_at: m.at } : {}),
@@ -314,11 +324,12 @@ export async function recordDeployMarker(ctx: any, m: DeployMarker): Promise<str
   const id = await ctx.db.insert("deploys", base);
   const row = (await ctx.db.get(id))!;
   if (status === "live") {
-    const carries = await carriesForMarker(ctx, row, now);
-    if (carries.length) await ctx.db.patch(id, { carries });
+    const held = new Set(row.carries.map((c: Doc<"deploys">["carries"][number]) => String(c.task_id)));
+    const carries = (await carriesForMarker(ctx, row, now)).filter((c) => !held.has(String(c.task_id)));
+    if (carries.length) await ctx.db.patch(id, { carries: [...row.carries, ...carries] });
   }
   await stampEvent(ctx, m.event_id, shortId);
-  await onDeployStatus(ctx, id);
+  await onDeployStatus(ctx, id, m.quiet);
   if (status === "live") await scheduleDroppedWork(ctx, deployDropper(row), drops ?? [], m.started_by);
   return shortId;
 }
@@ -353,7 +364,7 @@ export const tellDroppedWork = internalMutation({
  * (deployTargets.fillDeployRange), and either fires its trigger event
  * (deploy_live, deploy_failed) for the team's triggers.
  */
-async function onDeployStatus(ctx: any, id: Id<"deploys">): Promise<void> {
+export async function onDeployStatus(ctx: any, id: Id<"deploys">, quiet?: true): Promise<void> {
   const d: Doc<"deploys"> | null = await ctx.db.get(id);
   if (!d || (d.status !== "live" && d.status !== "failed")) return;
   if (d.status === "live") {
@@ -362,6 +373,7 @@ async function onDeployStatus(ctx: any, id: Id<"deploys">): Promise<void> {
     // Runs that stopped at Deploy before a later deploy took their change live end at Live (deployCarries.completeLiveRuns).
     await ctx.scheduler.runAfter(0, internal.deployCarries.completeRunsOnLive, { deploy: id });
   }
+  if (quiet) return;
   const sha = d.sha ? ` at ${d.sha.slice(0, 7)}` : d.version ? ` ${d.version}` : "";
   const title = d.status === "live" ? `${d.short_id} live on ${d.target}${sha}` : `${d.short_id} to ${d.target}${sha} failed`;
   await scheduleTriggerMatch(ctx, {

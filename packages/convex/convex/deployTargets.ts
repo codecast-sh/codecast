@@ -25,9 +25,9 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { requireUserOrToken } from "./lib/auth";
 import { requireTeamMembership } from "./lib/access";
-import { workspaceGrantsAccess } from "./lib/accessKeys";
+import { parseWorkspaceKey, workspaceGrantsAccess } from "./lib/accessKeys";
 import { normalizeRepository } from "./lib/gitRefs";
-import { deployTeamFor, findDeployTeam } from "./changesDeploy";
+import { deployTeamFor, deployWorkspaceFor, findDeployTeam } from "./changesDeploy";
 import { resolveTeamForRepository } from "./githubWebhooks";
 import { recordDeployMarker } from "./deploys";
 import { lineDeployTargets } from "./deployCarries";
@@ -164,24 +164,30 @@ export const ciForCommits = query({
   },
 });
 
-/** Every deploy target of a team: live, going out, history and the waiting queue grouped by session (DP12). */
+/**
+ * Every deploy target of a workspace (a team's, or a person's own): live, going out, history and the waiting queue
+ * grouped by session (DP12). Names a team, a workspace, or only a repository (its team's).
+ */
 export const view = query({
-  args: { api_token: v.optional(v.string()), team_id: v.optional(v.id("teams")), repository: v.optional(v.string()), target: v.optional(v.string()) },
+  args: { api_token: v.optional(v.string()), team_id: v.optional(v.id("teams")), workspace: v.optional(v.string()), repository: v.optional(v.string()), target: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const userId = await requireUserOrToken(ctx, args.api_token);
-    if (!args.team_id && !args.repository) throw new Error("Name a team or a repository");
+    if (args.team_id && args.workspace) throw new Error("Name a team or a workspace, not both");
+    if (!args.team_id && !args.workspace && !args.repository) throw new Error("Name a team, a workspace or a repository");
     // A repository none of the caller's teams works on has no targets they can see; a
     // flow's deploy wait polls this, so an empty answer lets it pass instead of retrying a throw.
-    const teamId = args.team_id ?? (await findDeployTeam(ctx, userId, repositoryArg(args.repository!)));
-    if (!teamId) return { targets: [] };
-    const workspace = teamKey(teamId);
-    if (!(await workspaceGrantsAccess(ctx, userId, workspace))) return { targets: [] };
+    const named = args.workspace ? null : args.team_id ?? (await findDeployTeam(ctx, userId, repositoryArg(args.repository!)));
+    const workspace = args.workspace ?? (named ? teamKey(named) : null);
+    if (!workspace || !(await workspaceGrantsAccess(ctx, userId, workspace))) return { targets: [] };
+    const ws = parseWorkspaceKey(workspace);
+    const teamId = ws?.type === "team" ? ws.teamId : null;
     const rows = (await targetRows(ctx, workspace, args.repository ? repositoryArg(args.repository) : undefined)).filter((r) => !args.target || r.name === args.target);
     const targets = [];
     for (const t of rows) targets.push(await targetState(ctx, t, userId));
     // Production's controls, once per repository (DP17): its standing pause and whether the viewer may pause, lift
     // and roll back.
-    const holder = await pauseHolderOf(ctx, userId, teamId);
+    // A personal workspace has no pause controls: pausing is a team's.
+    const holder = teamId ? await pauseHolderOf(ctx, userId, teamId) : null;
     const productions: Array<{ repository: string; pause: DeployPauseView | null; can_pause: boolean; can_lift: boolean }> = [];
     for (const repository of new Set(rows.map((t) => t.repository))) {
       const p = await activePauseOf(ctx, workspace, repository);
@@ -356,12 +362,11 @@ export const recordShipPass = mutation({
   handler: async (ctx, args) => {
     const userId = await requireUserOrToken(ctx, args.api_token);
     const repository = repositoryArg(args.repository);
-    const teamId = await teamFor(ctx, userId, repository, args.team_id);
-    const workspace = teamKey(teamId);
+    const { workspace, teamId } = await deployWorkspaceFor(ctx, userId, repository, args.team_id);
     const now = Date.now();
     const passId = await ctx.db.insert("ship_passes", {
       workspace,
-      team_id: teamId,
+      ...(teamId ? { team_id: teamId } : {}),
       repository,
       user_id: userId,
       ...(args.device_id ? { device_id: args.device_id } : {}),
@@ -389,7 +394,7 @@ export const recordShipPass = mutation({
       if (step.target && sha) {
         deploy = await recordDeployMarker(ctx, {
           workspace,
-          team_id: teamId,
+          ...(teamId ? { team_id: teamId } : {}),
           target: step.target,
           sha,
           repository,

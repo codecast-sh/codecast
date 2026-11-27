@@ -4625,6 +4625,8 @@ export default defineSchema({
     // The line-deploy run that carries it through its steps (DP8): each
     // step's state is that run's station, read from the run, never copied here.
     run_id: v.optional(v.id("workflow_runs")),
+    // The personal flow run whose end recorded it (lib/runDeploy.ts): one deploy per run.
+    ship_run: v.optional(v.id("workflow_runs")),
     // A deploy codecast sends through its GitHub app (deploys.md DP17): queued until nothing runs or waits for the
     // target's workflow, sending while it dispatches, sent once GitHub took it (the run's webhook then names it).
     dispatch: v.optional(v.object({
@@ -4648,7 +4650,8 @@ export default defineSchema({
     .index("by_source_created", ["source_id", "created_at"])
     .index("by_repository_created", ["repository", "created_at"])
     .index("by_workspace_target_created", ["workspace", "target", "created_at"])
-    .index("by_workflow_run", ["workflow_run"]),
+    .index("by_workflow_run", ["workflow_run"])
+    .index("by_ship_run", ["ship_run"]),
 
   // A dev watcher's push (scripts/gated-push.ts) of someone's working tree to a
   // target, which is not a deploy: nobody asked for it, it carries no fix and

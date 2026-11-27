@@ -14,6 +14,7 @@ import { useFlowMapRow } from "./useFlowMap";
 import { useOwnedFlows } from "./useOwnedFlows";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useSyncDeployTargets } from "./useSyncDeployTargets";
+import { teamWorkspaceKey } from "../lib/workspaceScope";
 import { useWorkspaceCollection } from "./useWorkspaceCollection";
 
 const RATES = makeFunctionReference<"query">("landedChanges:summary");
@@ -34,7 +35,7 @@ export function useFlowLoop(space: string | null | undefined, workspace: LineWor
   const { flows, runsOf, live } = useFlowLibrary(space);
   const map = useFlowMapRow(space);
   const owned = useOwnedFlows(workspace);
-  useSyncDeployTargets(team);
+  useSyncDeployTargets(teamWorkspaceKey(team));
   const deploys = useWorkspaceCollection<Deploy>("teamDeploys", deploySig, space ?? null);
   // The rates enrich two places (autonomy, each check); a backend without them answers nothing and the places stay empty.
   const { data } = useQueryNoThrow(RATES, team ? { team_id: team } : "skip");

@@ -186,11 +186,12 @@ describe("markDeploy", () => {
     expect((await mark(tables, { team_id: OTHER })).team_id).toBe(OTHER);
   });
 
-  test("a non-member is refused, for the derived team and for an explicit one", async () => {
-    const tables = await seed({ team_memberships: [] });
-    await expect(mark(tables, {})).rejects.toThrow("None of your teams");
+  test("a non-member is refused an explicit team, and records into their own workspace otherwise, with no team event", async () => {
+    const tables = await seed({ team_memberships: [], deploys: [], counters: [] });
     await expect(mark(tables, { team_id: TEAM })).rejects.toThrow("team membership required");
+    expect(await mark(tables, {})).toMatchObject({ team_id: null, workspace: `user:${ME}`, event_id: null });
     expect(tables.external_events).toHaveLength(0);
+    expect(tables.deploys.map((d) => d.workspace)).toEqual([`user:${ME}`]);
   });
 
   test("no token, a bad sha, a bad surface or a bad repository is refused", async () => {

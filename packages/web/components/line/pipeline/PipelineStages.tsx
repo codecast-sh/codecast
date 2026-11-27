@@ -9,6 +9,7 @@ import Link from "next/link";
 import { usePipelineModels } from "../../../hooks/usePipelines";
 import { usePipeline, useSyncPipelines } from "../../../hooks/useSyncPipelines";
 import { useCheckouts, useSyncCheckouts } from "../../../hooks/useSyncCheckouts";
+import { teamWorkspaceKey } from "../../../lib/workspaceScope";
 import { useInboxStore } from "../../../store/inboxStore";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { pipelineHref, type PipelineModel } from "../../../lib/line/pipelineModel";
@@ -37,8 +38,8 @@ function Figures({ model, stuckCheckouts }: { model: PipelineModel; stuckCheckou
 export const PipelinesStage = memo(function PipelinesStage({ workspace }: { workspace: string | null }) {
   const { models, pipelines, ready, failed } = usePipelineModels(workspace);
   // Each card counts its repo's stuck checkouts: the team's checkouts feed once here.
-  useSyncCheckouts(teamOf(workspace));
-  const checkouts = useCheckouts(teamOf(workspace));
+  useSyncCheckouts(teamWorkspaceKey(teamOf(workspace)));
+  const checkouts = useCheckouts(teamWorkspaceKey(teamOf(workspace)));
   const stuckIn = (repo: string) => checkouts.filter((c) => c.repository === repo.toLowerCase() && c.level.state === "stuck").length;
   if (!ready && !models.length) return <div className="lw-skeleton" aria-busy><i style={{ width: "70%" }} /><i style={{ width: "54%" }} /></div>;
   if (!models.length) return <div className="rpl-empty"><b>{failed ? `Pipelines ${failed}` : workspace?.startsWith("team:") ? "No pipelines published" : "Pipelines belong to a team"}</b></div>;

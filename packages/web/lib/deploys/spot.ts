@@ -5,7 +5,7 @@
 // a reason. Pure: no store, no React.
 import type { ShippingRun } from "@codecast/shared/contracts/deployTargets";
 import type { ReachState } from "@codecast/shared/contracts/deployReach";
-import { STEPS, prState, runState, stepper, type BoardQueueCommit, type OpenPr } from "./board";
+import { prState, runState, stepper, stepsFor, type BoardQueueCommit, type OpenPr } from "./board";
 import { commitMatches, deployMatches, prMatches, runMatches, type DeployFocus } from "./focus";
 import { isGoing, isOpen, openOf, supersededBy, type DeployTargetRow, type TeamDeployRow } from "./targets";
 
@@ -121,7 +121,7 @@ export function runWord(r: ShippingRun): string {
   const s = runState(r);
   if (r.status !== "failed") return s.word;
   const at = stepper(r).indexOf("failed");
-  return at >= 0 ? `Stopped at ${STEPS[at].word}` : s.word;
+  return at >= 0 ? `Stopped at ${stepsFor(r)[at].word}` : s.word;
 }
 
 /**

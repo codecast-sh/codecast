@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import {
   after, attemptGroups, branchHref, carriedOfAttempts, carriedOfDeploy, carriedOfQueue, fold, mineSessionIds, queueCommits, repositoryOfRun, rowsFor,
-  recordedOf, runOwner, runState, shipperOf, shippingRuns, splitQueue, stepper, tasksOnMain, upTo, withLines, yourSessions,
-  type BoardDeploy, type BoardQueueCommit,
+  recordedOf, runOwner, runState, shipperOf, shippingRuns, splitQueue, stepper, stepsFor, tasksOnMain, upTo, withLines, yourSessions,
+  isMerged, type BoardDeploy, type BoardQueueCommit,
 } from "../board";
+import { runWord } from "../spot";
 import type { ShippingRun, ShippingShipper } from "@codecast/shared/contracts/deployTargets";
+import { at, end, replay, stoppedAt, type ReplayedRun } from "../../ship/__tests__/replayReports";
 
 const DAY = 24 * 60 * 60_000;
 const NOW = 100 * DAY;
@@ -98,6 +100,114 @@ describe("the PR · CI · Review · Merge stepper", () => {
     expect(stepper(run("p", { status: "paused", node_statuses }))).toEqual(["done", "done", "waiting", "idle"]);
     expect(stepper(run("g", { status: "paused", current_node_id: "land__card__decide", gate_node_id: "land__merge", node_statuses }))).toEqual(["done", "done", "active", "waiting"]);
     expect(stepper(run("c", { status: "paused", current_node_id: "ci", node_statuses: ns(["pr", "completed"]) }))).toEqual(["done", "waiting", "idle", "idle"]);
+  });
+});
+
+describe("a run that goes straight onto main: Check · Review · Land", () => {
+  const words = (r: ShippingRun) => stepsFor(r).map((s) => s.word);
+  // The personal Ship as its runner reported it (lib/ship personalReports.json), as a Ship run row carries it.
+  const asRun = (r: ReplayedRun) => run("p", { ...r, pr: null, node_statuses: r.node_statuses.map(({ node_id, status }) => ({ node_id, status })) });
+  const PASS = replay("a passing check and a ship verdict land on origin's main");
+  // A repository's own build flow (sit build.cast: implement, then the library's check, review and ship segments), as real runs ended.
+  const ns = (...xs: Array<[string, string]>) => xs.map(([node_id, status]) => ({ node_id, status })) as ShippingRun["node_statuses"];
+  const BUILT = ns(["start", "completed"], ["implement", "completed"], ["check", "completed"], ["check__verify", "completed"], ["check__passed", "completed"], ["review", "completed"], ["review__review", "completed"], ["review__changes", "failed"], ["review__approved", "completed"]);
+  const build = (extra: Record<string, unknown>) => run("b", { pr: null, workflow_slug: "build", ...extra });
+
+  test("a run with a pull request, or a pr station, keeps PR · CI · Review · Merge; one with nothing to read yet too", () => {
+    expect(words(run("c"))).toEqual(["PR", "CI", "Review", "Merge"]);
+    expect(words(run("u", { pr: null, node_statuses: ns(["start", "completed"], ["land", "running"], ["land__pr", "running"]) }))).toEqual(["PR", "CI", "Review", "Merge"]);
+    expect(words(run("n", { pr: null, node_statuses: ns(["start", "completed"]) }))).toEqual(["PR", "CI", "Review", "Merge"]);
+    expect(words(asRun(at(PASS, { node: "round", status: "running" })))).toEqual(["Check", "Review", "Land"]);
+    expect(words(build({ node_statuses: ns(["start", "completed"], ["implement", "running"]) }))).toEqual(["Check", "Review", "Land"]);
+  });
+
+  test("running at Check: the check runs beside the review, and Check stays at work until the check has reported", () => {
+    expect(stepper(asRun(at(PASS, { node: "find_check", status: "running" })))).toEqual(["active", "idle", "idle"]);
+    expect(stepper(asRun(at(PASS, { node: "review", status: "running" })))).toEqual(["active", "active", "idle"]);
+    expect(stepper(asRun(at(PASS, { node: "review", status: "completed" })))).toEqual(["active", "done", "idle"]);
+    expect(stepper(asRun(at(PASS, { node: "checks", status: "completed" })))).toEqual(["done", "done", "idle"]);
+    expect(stepper(asRun(at(PASS, { node: "land", status: "running" })))).toEqual(["done", "done", "active"]);
+  });
+
+  test("stopped at Review: Review red, Land not reached, and the card says where", () => {
+    const stopped = asRun(stoppedAt(at(PASS, { node: "review", status: "running" })));
+    expect(stepper(stopped)).toEqual(["done", "failed", "idle"]);
+    expect(runWord(stopped)).toBe("Stopped at Review");
+    const rejected = asRun(end(replay("a rejection ends the run at Rejected")));
+    expect(stepper(rejected)).toEqual(["done", "failed", "idle"]);
+    // The build flow's reviewer that never finished.
+    expect(stepper(build({ status: "failed", current_node_id: "review__review", node_statuses: ns(["start", "completed"], ["implement", "completed"], ["check", "completed"], ["check__verify", "completed"], ["check__passed", "completed"], ["review", "completed"], ["review__review", "failed"]) }))).toEqual(["done", "failed", "idle"]);
+  });
+
+  test("landed is merged and leaves Shipping, as a merge does; a segment's own node completing lands nothing", () => {
+    const landed = asRun(at(PASS, { node: "land", status: "completed" }));
+    expect(stepper(landed)).toEqual(["done", "done", "done"]);
+    expect(isMerged(landed)).toBe(true);
+    expect(isMerged({ ...landed, merge: null })).toBe(true);
+    const shipped = build({ node_statuses: [...BUILT, ...ns(["ship", "completed"], ["ship__rebase", "completed"], ["ship__ship", "completed"], ["ship__shipped", "completed"])] });
+    expect(isMerged(shipped)).toBe(true);
+    expect(shippingRuns([shipped, landed], { repository: "o/r", checkouts: [], now: NOW }).moving).toEqual([]);
+    // The ship segment's node completes even when its rebase conflicted: Land is red, the run still Shipping.
+    const conflict = build({ status: "failed", current_node_id: "ship__conflict", node_statuses: [...BUILT, ...ns(["ship", "completed"], ["ship__rebase", "failed"], ["ship__conflict", "failed"])] });
+    expect(isMerged(conflict)).toBe(false);
+    expect(stepper(conflict)).toEqual(["done", "done", "failed"]);
+    expect(runWord(conflict)).toBe("Stopped at Land");
+    // A rebase alone only leads to Land.
+    expect(stepper(build({ node_statuses: [...BUILT, ...ns(["ship", "running"], ["ship__rebase", "completed"])] }))).toEqual(["done", "done", "active"]);
+  });
+
+  test("the server's track decides; without it a land segment's node alone keeps the pull request's track", () => {
+    // Every Union change opens on its land segment's node before land__pr starts.
+    const opening = ns(["start", "completed"], ["land", "running"]);
+    expect(words(run("u", { pr: null, current_node_id: "land", node_statuses: opening }))).toEqual(["PR", "CI", "Review", "Merge"]);
+    expect(words(run("u", { pr: null, track: "pr", current_node_id: "land", node_statuses: opening }))).toEqual(["PR", "CI", "Review", "Merge"]);
+    expect(stepper(run("u", { pr: null, current_node_id: "land", node_statuses: opening }))).toEqual(["idle", "idle", "idle", "idle"]);
+    // A direct-track run whose land segment has just opened: the bare node says nothing of Land.
+    const direct = run("d", { pr: null, track: "direct", current_node_id: "land", node_statuses: opening });
+    expect(words(direct)).toEqual(["Check", "Review", "Land"]);
+    expect(stepper(direct)).toEqual(["idle", "idle", "idle"]);
+    expect(isMerged({ ...direct, node_statuses: ns(["start", "completed"], ["land", "completed"]) })).toBe(false);
+    // The track outranks what the run did: a direct run is never read as a pull request's, nor the reverse.
+    expect(words(run("t", { track: "direct" }))).toEqual(["Check", "Review", "Land"]);
+    expect(words(build({ track: "pr", node_statuses: ns(["start", "completed"], ["implement", "running"]) }))).toEqual(["PR", "CI", "Review", "Merge"]);
+  });
+
+  test("a change already on main leaves Shipping: Left the run, and a Land cut off that landed", () => {
+    const left = asRun(end(replay("a briefed session that puts its change on main itself stops the run")));
+    expect(left.status).toBe("failed");
+    expect(left.node_statuses.find((n) => n.node_id === "leftrun")?.status).toBe("completed");
+    expect(isMerged({ ...left, merge: null })).toBe(true);
+    const cut = asRun(end(replay("cuts off during the catch-up says the change landed, and resuming it finishes and deploys (run 1)")));
+    expect(cut.node_statuses.some((n) => n.node_id === "cutlanded")).toBe(true);
+    expect(isMerged({ ...cut, merge: null })).toBe(true);
+    expect(shippingRuns([{ ...left, merge: null }, { ...cut, merge: null }], { repository: "o/r", checkouts: [], now: NOW }).moving).toEqual([]);
+  });
+
+  test("a build stopped at Implement, before any step started, is red nowhere", () => {
+    const stopped = build({ status: "failed", current_node_id: "implement", fail_reason: "Stopped: the builder could not finish", node_statuses: ns(["start", "completed"], ["implement", "failed"]) });
+    expect(stepper(stopped)).toEqual(["idle", "idle", "idle"]);
+    expect(runWord(stopped)).toBe("Stopped");
+  });
+
+  test("the check's own verdict decides Check, as CI's does: red is the run's to fix while it runs, red where it stopped", () => {
+    // The personal Ship's check station completes whatever it found; check.json's outcome rides on the run.
+    const red = { ...asRun(at(PASS, { node: "verdicts", status: "completed" })), check_verdict: { green: false, at: 1 }, review_verdict: null };
+    expect(stepper(red)).toEqual(["active", "done", "idle"]);
+    expect(runState({ ...red, current_node_label: "Fix findings" }).word).toBe("Fixing check failures");
+    expect(stepper({ ...red, status: "failed" })).toEqual(["failed", "idle", "idle"]);
+    expect(runWord({ ...red, status: "failed" })).toBe("Stopped at Check");
+    // A green verdict is done even while the fan-out still runs beside the review.
+    expect(stepper({ ...asRun(at(PASS, { node: "review", status: "running" })), check_verdict: { green: true, at: 1 } })).toEqual(["done", "active", "idle"]);
+  });
+
+  test("the build flow back at work after its reviewer asked for changes, and fixing a red check", () => {
+    // The review segment's node completes whichever way it ended: its exit says the reviewer asked for changes, the run's
+    // to fix while it runs; an approval in a later round settles it.
+    expect(stepper(build({ current_node_id: "implement", node_statuses: [...BUILT.slice(0, 7), ...ns(["review__changes", "failed"])] }))).toEqual(["done", "active", "idle"]);
+    expect(stepper(build({ current_node_id: "ship__rebase", node_statuses: [...BUILT, ...ns(["ship", "running"], ["ship__rebase", "running"])] }))).toEqual(["done", "done", "active"]);
+    expect(stepper(build({ current_node_id: "check__verify", node_statuses: [...BUILT.slice(0, 4), ...ns(["check__verify", "running"])] }))).toEqual(["active", "idle", "idle"]);
+    expect(runState(run("f", { pr: null, current_node_label: "Fix findings", node_statuses: ns(["check", "completed"], ["check__verify", "failed"], ["check__failed", "failed"]) })).word).toBe("Fixing check failures");
+    expect(runState(run("f", { pr: null, current_node_label: "Fix findings", review_verdict: { verdict: "changes", at: 1 }, node_statuses: ns(["round", "completed"], ["check", "completed"]) })).word).toBe("Fixing review findings");
   });
 });
 

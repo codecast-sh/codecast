@@ -5,6 +5,7 @@ import { convexTest } from "convex-test";
 import { anyApi } from "convex/server";
 import schema from "./schema";
 import { allModules } from "./testModules.testkit";
+import { checkVerdictOf, shipTrackOf } from "./workflow_runs";
 
 const api = anyApi as any;
 const NOW = Date.now();
@@ -105,9 +106,9 @@ describe("workflow_runs.shippingRuns", () => {
     expect(open.node_statuses).toEqual([{ node_id: "pr", status: "completed" }, { node_id: "review", status: "running" }]);
     expect(secret.spawner_conversation_id).toBe(ids.secret);
     expect(Object.keys(open).sort()).toEqual([
-      "_id", "ci_verdict", "created_at", "current_node_id", "current_node_label", "fail_reason", "gate_decision_short_id", "gate_decision_status", "gate_node_id", "gate_prompt",
+      "_id", "check_verdict", "ci_verdict", "created_at", "current_node_id", "current_node_label", "fail_reason", "gate_decision_short_id", "gate_decision_status", "gate_node_id", "gate_prompt",
       "merge", "node_statuses", "pr", "primary_conversation_id", "project_path", "review_verdict", "spawner_conversation_id", "stand_in", "status", "task_id",
-      "task_short_id", "task_title", "updated_at", "user_id", "workflow_label", "workflow_slug",
+      "task_short_id", "task_title", "track", "updated_at", "user_id", "workflow_label", "workflow_slug",
     ]);
   });
 
@@ -130,6 +131,59 @@ describe("workflow_runs.shippingRuns", () => {
     expect((await read(ids.ana))[0].gate_node_id).toBe("land");
     await run({ extra: { spawner_stand_in: true }, at: NOW + 1 });
     expect((await read(ids.ana))[0].stand_in).toBe(true);
+  });
+});
+
+describe("workflow_runs.shippingRuns track", () => {
+  const node = (id: string) => ({ id, label: id, shape: "box", type: "agent" });
+  test("a pr station or Union's land segment is the pr track; a personal or sit flow lands direct", async () => {
+    const { t, ids, run, read } = await setup();
+    const flow = (name: string, source: string, nodes: string[]) => t.run((ctx) => ctx.db.insert("workflows", { user_id: ids.ana, workspace: ids.ws, name, slug: name, source, nodes: nodes.map(node), edges: [], created_at: NOW, updated_at: NOW } as any));
+    const union = await flow("union-change", 'digraph union { graph [kind="line", takes="branch"]\n  start [shape=Mdiamond]\n  land [flow="land"]\n  start -> land\n}', ["start", "land"]);
+    const personal = await flow("personal", 'digraph personal { graph [kind="line", takes="task,branch"]\n  land [label="Land", script="@personal/land.sh"]\n  landed [label="Landed"]\n  deploy [label="Deploy"]\n  exit [shape=Msquare, label="Live"]\n}', ["round", "check", "review", "land", "landed", "deploy", "exit"]);
+    const sitBuild = await flow("ship-now", 'digraph build { graph [kind="line", takes="task,branch"]\n  check  [flow="check"]\n  review [flow="review"]\n  ship   [flow="ship"]\n  deploy [flow="deploy"]\n}', ["start", "check", "review", "ship", "deploy", "exit"]);
+    const change = await run({ status: "running" });
+    // A Union run still before its land segment's pr station: the graph already says pr.
+    const atLand = await run({ flow: union, status: "running", extra: { current_node_id: "land", node_statuses: [{ node_id: "start", status: "completed" }, { node_id: "land", status: "running" }] } });
+    const direct = await run({ flow: personal, status: "running" });
+    const shipNow = await run({ flow: sitBuild, status: "running" });
+    const rows = await read(ids.ana);
+    const trackOf = (id: any) => rows.find((r: any) => r._id === id).track;
+    expect([trackOf(change), trackOf(atLand), trackOf(direct), trackOf(shipNow)]).toEqual(["pr", "pr", "direct", "direct"]);
+  });
+
+  test("a nested pr station counts; a flow named like land does not", () => {
+    expect(shipTrackOf({ nodes: [{ id: "land__pr" }] })).toBe("pr");
+    expect(shipTrackOf({ source: 'digraph x { landing [flow="landing"] }' })).toBe("direct");
+    expect(shipTrackOf({ source: "digraph x { prep [label=\"Prep\"] }" })).toBe("direct");
+    expect(shipTrackOf(null)).toBe("direct");
+  });
+});
+
+describe("workflow_runs.shippingRuns check_verdict", () => {
+  // The personal flow's Check pins check.json ({outcome: pass|fail|skipped, note, results}, cli workflow/personalCheck.ts).
+  const check = (preview: string | undefined, status = "completed") => ({ node_statuses: [{ node_id: "check", status, completed_at: 42, ...(preview ? { result_preview: preview } : {}) }] }) as any;
+
+  test("pass and skipped are green, fail is not; nothing reported or no Check is null", () => {
+    expect(checkVerdictOf(check('{"outcome":"pass","note":".codecast/check.sh passed (.codecast/line.toml:10)","results":[]}'))).toEqual({ green: true, at: 42 });
+    expect(checkVerdictOf(check('{"outcome":"skipped","note":"no documented check","results":[]}'))).toEqual({ green: true, at: 42 });
+    expect(checkVerdictOf(check('{"outcome":"fail","note":"pytest exited 1","results":[]}'))).toEqual({ green: false, at: 42 });
+    // A long check.json is cut in the pinned result: its outcome still reads.
+    expect(checkVerdictOf(check('{"outcome":"fail","note":"pytest exited 1","results":[{"run":"pytest","exit_code":1,"output":"… 3225 characters cut …'))).toEqual({ green: false, at: 42 });
+    expect(checkVerdictOf(check(undefined))).toBeNull();
+    expect(checkVerdictOf(check('{"outcome":"pass"}', "running"))).toBeNull();
+    // A change flow's Check is a segment's empty parent.
+    expect(checkVerdictOf({ node_statuses: [{ node_id: "check", status: "completed" }, { node_id: "check__verify", status: "completed", result_preview: "ok" }] } as any)).toBeNull();
+    expect(checkVerdictOf({ node_statuses: [] } as any)).toBeNull();
+  });
+
+  test("each Shipping row carries it", async () => {
+    const { ids, run, read } = await setup();
+    const red = await run({ status: "running", extra: { node_statuses: [{ node_id: "check", status: "completed", completed_at: NOW - 10, result_preview: '{"outcome":"fail","note":"x","results":[]}' }] } });
+    const none = await run({ status: "running" });
+    const rows = await read(ids.ana);
+    expect(rows.find((r: any) => r._id === red).check_verdict).toEqual({ green: false, at: NOW - 10 });
+    expect(rows.find((r: any) => r._id === none).check_verdict).toBeNull();
   });
 });
 

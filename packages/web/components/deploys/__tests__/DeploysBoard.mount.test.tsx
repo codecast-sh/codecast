@@ -102,15 +102,15 @@ const runs = [
 // An open pull request no Ship run carries, opened by someone else: Shipping lists it under Open pull requests.
 const OPEN_PR = { _id: "pr900", repository: target.repository, number: 900, title: "Hand-opened fix", state: "open", created_at: NOW - 2 * H, author_github_username: "someone", checks_state: "failure" };
 
-function Board({ unavailable = false, prs = [OPEN_PR] }: { unavailable?: boolean; prs?: any[] | null }) {
+function Board({ unavailable = false, list = runs, prs = [OPEN_PR] }: { unavailable?: boolean; list?: ReadonlyArray<ReturnType<typeof run>>; prs?: any[] | null }) {
   const [show, setShow] = useState<any>("sessions");
   const [mine, setMine] = useState(false);
   return (
     <MemoryRouter>
       <DeploysBoard
-        target={target} production={undefined} deploys={[live]} shipping={unavailable ? null : { runs: runs as any, shippers: [] }} shippingError={unavailable}
+        target={target} production={undefined} deploys={[live]} shipping={unavailable ? null : { runs: list as any, shippers: [] }} shippingError={unavailable}
         prs={prs as any} meLogin="me"
-        linesByDeploy={lines} onLinesWanted={(ids) => wanted.push(ids)} checkouts={[]} me={ME} now={NOW}
+        linesByDeploy={lines} onLinesWanted={(ids) => wanted.push(ids)} checkouts={[{ path: "/code/r", repository: "o/r" }]} me={ME} now={NOW}
         priorities={false} focus={null} reach={null} openDeploy={null} show={show} mine={mine} onShow={setShow} onMine={setMine}
         onClearFocus={() => {}} onPress={() => {}} onRollback={() => {}} onPause={() => {}} onLift={() => {}}
       />
@@ -118,11 +118,11 @@ function Board({ unavailable = false, prs = [OPEN_PR] }: { unavailable?: boolean
   );
 }
 
-function mount(unavailable = false) {
+function mount(unavailable = false, list = runs) {
   const host = document.createElement("div");
   document.body.appendChild(host);
   const root = createRoot(host);
-  act(() => root.render(<Board unavailable={unavailable} />));
+  act(() => root.render(<Board unavailable={unavailable} list={list} />));
   return { host, unmount: () => act(() => root.unmount()) };
 }
 
@@ -148,6 +148,19 @@ test("a Shipping card shows its stepper and where the run stands, stopped runs f
   expect(pr.querySelector("[data-deploy-run-state]")!.textContent).toBe("CI failing");
   expect(pr.querySelector(".dpp-run-title")!.getAttribute("href")).toBe(`/pr/${target.repository}/900`);
   expect(host.querySelector("[data-deploy-shipping-count]")!.textContent).toBe("3 changes");
+  unmount();
+});
+
+test("a run with no pull request draws Check · Review · Land", () => {
+  // The personal Ship stopped where its reviewer never finished (its stations as the runner reports them).
+  const personal = run("r-personal", {
+    status: "failed", task_short_id: "ct-52", task_title: "Straight to main", project_path: "/code/r", workflow_slug: "personal", fail_reason: "Stopped: Review never finished",
+    node_statuses: [{ node_id: "start", status: "completed" }, { node_id: "round", status: "completed" }, { node_id: "find_check", status: "completed" }, { node_id: "checks", status: "failed" }, { node_id: "review", status: "failed" }, { node_id: "check", status: "completed" }],
+    current_node_id: "checks",
+  });
+  const { host, unmount } = mount(false, [...runs, personal]);
+  const steps = [...host.querySelector('[data-deploy-run="r-personal"]')!.querySelectorAll(".dpp-step")].map((s) => `${s.textContent}:${s.getAttribute("data-state")}`);
+  expect(steps).toEqual(["Check:done", "Review:failed", "Land:idle"]);
   unmount();
 });
 

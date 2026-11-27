@@ -47,93 +47,183 @@ export function repositoryOfRun(run: Pick<ShippingRun, "pr" | "project_path">, c
 
 
 /**
- * The four steps before main and their stations, by the last part of a station's id: codecast's change flow names
- * them plainly (`pr`, `ci`), Union's land segment inside a segment (`land__pr`, `land__ci_alone`).
+ * One step of a Ship run's track: its word, the stations it reads (by the last part of a station's id), and the words
+ * for a run fixing what it found there. `forks`: a fan-out that runs this step beside another, whose running says this
+ * step runs and whose end says nothing of it. `passes`: a segment's exit that settles the step, outranking an earlier
+ * round's red (an approval after changes were asked). `landedIf`: stations whose mere presence says the change is on
+ * main, however they ended. `lands`: on a last step whose stations include some that only
+ * lead there (a rebase, a conflict fixed), the ones that put the change on main; the step is done only then.
  */
-export const STEPS = [
+export type Step = { word: string; stations: readonly string[]; forks?: readonly string[]; passes?: readonly string[]; fixing?: string; lands?: readonly string[]; landedIf?: readonly string[] };
+
+/**
+ * A change that goes up as a pull request: PR · CI · Review · Merge. Codecast's change flow names its stations
+ * plainly (`pr`, `ci`), Union's land segment inside a segment (`land__pr`, `land__ci_alone`).
+ */
+export const CHANGE_STEPS: readonly Step[] = [
   { word: "PR", stations: ["pr"] },
-  { word: "CI", stations: ["checks", "ci", "ci_alone", "retest"] },
-  { word: "Review", stations: ["review", "changes"] },
+  { word: "CI", stations: ["checks", "ci", "ci_alone", "retest"], fixing: "Fixing CI failures" },
+  { word: "Review", stations: ["review", "changes"], fixing: "Fixing review findings" },
   { word: "Merge", stations: ["merge", "landed"] },
-] as const;
+];
+
+/**
+ * A change that goes straight onto main with no pull request: Check · Review · Land. A personal workspace's Ship
+ * (`personal`), a repository's own flows built of the library's check, review and ship segments (`check__verify`,
+ * `review__review`, `ship__rebase`), and the change flow's direct mode (`direct_check`, `land`). A segment's own node
+ * (`ship` beside `ship__ship`) completes however the segment ended, so its stations speak for it (segmentNodes); the
+ * review's exits say what it found (`review__changes` red until `review__approved`). A round's start (`round`) and the
+ * join of a check beside a review (`joined`) belong to no step; the fan-out (`checks`) says Check runs, since the
+ * personal Ship reports its check only when it ends.
+ */
+export const PERSONAL_STEPS: readonly Step[] = [
+  { word: "Check", stations: ["find_check", "check", "verify", "fix_check", "direct_check", "direct_fix"], forks: ["checks"], fixing: "Fixing check failures" },
+  { word: "Review", stations: ["review", "changes", "rejected", "verdicts", "brief", "fix", "fix_review", "direct_review", "direct_revise"], passes: ["approved"], fixing: "Fixing review findings" },
+  // A ship command's own station (`ship__ship`) is followed by its segment's exit (`shipped`, `landed` when already
+  // merged); `ship` alone also names the Ship a person picks on a decision card (`decide__ship`), so it lands nothing.
+  // The personal Ship's Left the run (`leftrun`, always completes) means the change is on main already, put there
+  // another way; Land cut off (`landcut`) completes however it ended, and its `cutlanded` exit means it landed.
+  {
+    word: "Land", stations: ["rebase", "fix_conflict", "direct_conflict", "land", "landed", "ship", "shipped", "landcut", "leftrun", "cutlanded"],
+    lands: ["land", "landed", "shipped", "leftrun"], landedIf: ["cutlanded"],
+  },
+];
 export type StepState = "done" | "active" | "waiting" | "failed" | "idle";
 
-/** The step a station belongs to, -1 for one outside the four. */
-export function stepOfStation(id: string | null | undefined): number {
-  const leaf = id?.split("__").pop();
-  return leaf ? STEPS.findIndex((s) => (s.stations as readonly string[]).includes(leaf)) : -1;
-}
+const leafOf = (id: string | null | undefined) => id?.split("__").pop() ?? "";
 
-/** What each step's facts say, else its stations: done, in trouble (red verdict, failed station), running, or not reached. */
-type Read = "done" | "trouble" | "active" | "idle";
-function readSteps(run: Pick<ShippingRun, "node_statuses" | "pr" | "ci_verdict" | "review_verdict" | "merge">): Read[] {
-  const byStep: string[][] = STEPS.map(() => []);
-  for (const [id, status] of new Map(run.node_statuses.map((n) => [n.node_id, n.status]))) {
-    const i = stepOfStation(id);
-    if (i >= 0) byStep[i].push(status);
+/** The nodes that hold a segment's stations (`ship` for `ship__rebase`): they speak for nothing of their own. */
+function segmentNodes(statuses: ShippingRun["node_statuses"]): Set<string> {
+  const out = new Set<string>();
+  for (const { node_id } of statuses) {
+    const parts = node_id.split("__");
+    for (let i = 1; i < parts.length; i++) out.add(parts.slice(0, i).join("__"));
   }
-  const facts: Array<Read | null> = [
-    run.pr ? "done" : null,
-    run.ci_verdict ? (run.ci_verdict.green ? "done" : "trouble") : null,
-    run.review_verdict ? (run.review_verdict.verdict === "ship" ? "done" : "trouble") : null,
-    run.merge ? "done" : null,
-  ];
-  // A station's status says it ran, not what it found: a completed CI station without a verdict counts as done.
-  return facts.map((fact, i) => {
-    if (fact) return fact;
-    const st = byStep[i];
-    if (st.includes("failed")) return "trouble";
-    if (st.includes("running")) return "active";
-    return st.length && st.every((x) => x === "completed" || x === "skipped") ? "done" : "idle";
-  });
-}
-
-/** Merged: the run recorded a merge, a merge station passed, or it moved on to deploying. Its work then waits on the right. */
-export function isMerged(run: Pick<ShippingRun, "node_statuses" | "current_node_id" | "merge">): boolean {
-  return !!run.merge || run.node_statuses.some((n) => stepOfStation(n.node_id) === 3 && n.status === "completed") || (run.current_node_id ?? "").startsWith("deploy");
+  return out;
 }
 
 /**
- * PR · CI · Review · Merge. Trouble is the run's to fix while it runs (active); a paused run is blue on the step it
- * waits at; a stopped run is red on exactly one step, the one where it stopped, with everything after it not reached.
+ * Each node's latest status, segments' own nodes left out. A bare `land` is the personal Ship's own Land station only
+ * in a run that went through a round; anywhere else it is a land segment's node before its first station has started
+ * (Union's change opens on it), and says nothing.
  */
-export function stepper(run: Pick<ShippingRun, "status" | "node_statuses" | "current_node_id" | "gate_node_id" | "pr" | "ci_verdict" | "review_verdict" | "merge">): StepState[] {
-  const read = readSteps(run);
-  const steps: StepState[] = read.map((x) => (x === "trouble" ? "active" : x));
+function stationStatuses(run: Pick<ShippingRun, "node_statuses">): Map<string, string> {
+  const segments = segmentNodes(run.node_statuses);
+  const rounds = run.node_statuses.some((n) => n.node_id === "round");
+  return new Map(run.node_statuses.filter((n) => !segments.has(n.node_id) && (n.node_id !== "land" || rounds)).map((n) => [n.node_id, n.status]));
+}
+
+/**
+ * The steps a run's track draws: the flow's own track when the server names it. An older server's run is read from
+ * itself: a pull request, or a `pr` station anywhere, makes it a change that goes up as one; a run that has done
+ * anything past its start other than open a land segment (Union's change opens on `land`, before `land__pr`) goes
+ * straight onto main. A run with nothing to read yet keeps the pull request's track.
+ */
+export function stepsFor(run: Pick<ShippingRun, "pr" | "node_statuses" | "current_node_id" | "track">): readonly Step[] {
+  if (run.track) return run.track === "direct" ? PERSONAL_STEPS : CHANGE_STEPS;
+  const ids = [...run.node_statuses.map((n) => n.node_id), ...(run.current_node_id ? [run.current_node_id] : [])];
+  if (run.pr || ids.some((id) => leafOf(id) === "pr")) return CHANGE_STEPS;
+  return ids.some((id) => id !== "start" && id !== "land") ? PERSONAL_STEPS : CHANGE_STEPS;
+}
+
+/** The step a station belongs to among `steps`, -1 for one outside them. */
+export function stepOfStation(id: string | null | undefined, steps: readonly Step[] = CHANGE_STEPS): number {
+  const leaf = leafOf(id);
+  return leaf ? steps.findIndex((s) => s.stations.includes(leaf)) : -1;
+}
+
+type RunFacts = Pick<ShippingRun, "node_statuses" | "current_node_id" | "pr" | "ci_verdict" | "check_verdict" | "review_verdict" | "merge" | "track">;
+
+/** What each step's facts say, else its stations: done, in trouble (red verdict, failed station), running, or not reached. */
+type Read = "done" | "trouble" | "active" | "idle";
+function readSteps(run: RunFacts, steps: readonly Step[] = stepsFor(run)): Read[] {
+  const byStep: string[][] = steps.map(() => []);
+  const forked = steps.map(() => false);
+  const passed = steps.map(() => false);
+  for (const [id, status] of stationStatuses(run)) {
+    const i = stepOfStation(id, steps);
+    if (i >= 0) byStep[i].push(status);
+    steps.forEach((s, j) => {
+      if (status === "running" && s.forks?.includes(leafOf(id))) forked[j] = true;
+      if (status === "completed" && s.passes?.includes(leafOf(id))) passed[j] = true;
+    });
+  }
+  const review: Read | null = run.review_verdict ? (run.review_verdict.verdict === "ship" ? "done" : "trouble") : null;
+  const facts: Array<Read | null> = steps === CHANGE_STEPS
+    ? [run.pr ? "done" : null, run.ci_verdict ? (run.ci_verdict.green ? "done" : "trouble") : null, review, run.merge ? "done" : null]
+    : [run.check_verdict ? (run.check_verdict.green ? "done" : "trouble") : null, review, isMerged(run) ? "done" : null];
+  // A station's status says it ran, not what it found: a completed CI station without a verdict counts as done.
+  return facts.map((fact, i) => {
+    if (fact) return fact;
+    const st = passed[i] ? byStep[i].filter((x) => x !== "failed") : byStep[i];
+    if (st.includes("failed")) return "trouble";
+    if (st.includes("running") || forked[i]) return "active";
+    if (!st.length || !st.every((x) => x === "completed" || x === "skipped")) return "idle";
+    // A step that lands is done only once a landing station passed (its fact): a rebase alone only leads there.
+    return steps[i].lands ? "active" : "done";
+  });
+}
+
+/** Merged: the run recorded a merge, a landing station passed, or it moved on to deploying. Its work then waits on the right. */
+export function isMerged(run: Pick<ShippingRun, "node_statuses" | "current_node_id" | "merge" | "pr" | "track">): boolean {
+  const last = stepsFor(run).at(-1)!;
+  const lands = last.lands ?? last.stations;
+  const landed = ([id, status]: [string, string]) => (status === "completed" && lands.includes(leafOf(id))) || !!last.landedIf?.includes(leafOf(id));
+  return !!run.merge || [...stationStatuses(run)].some(landed) || (run.current_node_id ?? "").startsWith("deploy");
+}
+
+/**
+ * The run's track (stepsFor): PR · CI · Review · Merge, or Check · Review · Land. Trouble is the run's to fix while it
+ * runs (active); a paused run is blue on the step it waits at; a stopped run is red on exactly one step, the one where
+ * it stopped, with everything after it not reached.
+ */
+export function stepper(run: Pick<ShippingRun, "status" | "node_statuses" | "current_node_id" | "gate_node_id" | "pr" | "ci_verdict" | "check_verdict" | "review_verdict" | "merge" | "track">): StepState[] {
+  const steps = stepsFor(run);
+  const at = (id: string | null | undefined) => stepOfStation(id, steps);
+  const read = readSteps(run, steps);
+  const states: StepState[] = read.map((x) => (x === "trouble" ? "active" : x));
   const firstNotDone = () => read.findIndex((x) => x !== "done");
   if (run.status === "paused") {
-    let at = stepOfStation(run.current_node_id);
-    if (at < 0) at = stepOfStation(run.gate_node_id);
-    if (at < 0) at = firstNotDone();
-    if (at >= 0) steps[at] = "waiting";
-    return steps;
+    let i = at(run.current_node_id);
+    if (i < 0) i = at(run.gate_node_id);
+    if (i < 0) i = firstNotDone();
+    if (i >= 0) states[i] = "waiting";
+    return states;
   }
-  if (run.status !== "failed") return steps;
-  let at = read.indexOf("trouble");
-  if (at < 0) at = stepOfStation(run.current_node_id);
-  if (at < 0) at = [...run.node_statuses].reverse().map((n) => stepOfStation(n.node_id)).find((i) => i >= 0) ?? -1;
-  if (at < 0) at = firstNotDone();
-  if (at < 0) return steps;
-  return steps.map((x, i) => (i < at ? "done" : i === at ? "failed" : "idle"));
+  if (run.status !== "failed") return states;
+  let i = read.indexOf("trouble");
+  if (i < 0) i = at(run.current_node_id);
+  if (i < 0) i = [...run.node_statuses].reverse().map((n) => at(n.node_id)).find((x) => x >= 0) ?? -1;
+  // Stopped at a station outside every step before any step started (a build stopped at Implement): nothing is red.
+  if (i < 0 && read.every((x) => x === "idle") && run.node_statuses.some((n) => n.node_id !== "start")) return states;
+  if (i < 0) i = firstNotDone();
+  if (i < 0) return states;
+  return states.map((x, j) => (j < i ? "done" : j === i ? "failed" : "idle"));
 }
 
 export type RunState = { word: string; tone: "yellow" | "blue" | "red"; detail?: string };
 
 /** What the run is doing now, in words a person reads at a glance. */
-export function runState(run: Pick<ShippingRun, "status" | "fail_reason" | "gate_prompt" | "gate_decision_short_id" | "current_node_label" | "node_statuses" | "pr" | "ci_verdict" | "review_verdict" | "merge">): RunState {
+export function runState(run: Pick<ShippingRun, "status" | "fail_reason" | "gate_prompt" | "gate_decision_short_id" | "current_node_label" | "current_node_id" | "node_statuses" | "pr" | "ci_verdict" | "check_verdict" | "review_verdict" | "merge" | "track">): RunState {
   if (run.status === "failed") {
     const detail = run.fail_reason?.replace(/^Stopped:\s*/i, "").trim();
     return detail ? { word: "Stopped", tone: "red", detail } : { word: "Stopped", tone: "red" };
   }
   if (run.status === "paused") return { word: run.gate_prompt || run.gate_decision_short_id ? "Waiting on a decision" : "Paused", tone: "blue" };
   const node = run.current_node_label;
-  if (node === "Fix findings") return { word: readSteps(run)[1] === "trouble" ? "Fixing CI failures" : "Fixing review findings", tone: "yellow" };
+  if (node === "Fix findings") {
+    // What it fixes: the first step in trouble that names its fixing, else what the reviewer found.
+    const steps = stepsFor(run);
+    const read = readSteps(run, steps);
+    return { word: steps.find((s, i) => s.fixing && read[i] === "trouble")?.fixing ?? "Fixing review findings", tone: "yellow" };
+  }
   if (node === "CI and review") return { word: "CI and review running", tone: "yellow" };
   return { word: node || "Starting", tone: "yellow" };
 }
 
 const RANK: Record<ShippingRun["status"], number> = { failed: 0, paused: 1, running: 2, pending: 2 };
-const byUrgency = (a: ShippingRun, b: ShippingRun) => RANK[a.status] - RANK[b.status] || b.updated_at - a.updated_at;
+/** Shipping's order: stopped runs first, then paused, then moving, each newest first. */
+export const byUrgency = (a: ShippingRun, b: ShippingRun) => RANK[a.status] - RANK[b.status] || b.updated_at - a.updated_at;
 
 /**
  * Whose a run is, as Mine reads it: the owner of the session that pressed Ship (the same person the deploy column

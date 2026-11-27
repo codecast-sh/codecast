@@ -1,6 +1,7 @@
 import { mutation, query, internalMutation } from "./functions";
 import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
+import { internal } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { isTeamAdmin, resolveCreationPrivacy } from "./privacy";
@@ -44,6 +45,7 @@ import { closeRunningStations, endRunFields } from "./lib/runEnd";
 import { graphOfVersion, pinnedVersionOf, repinToReported, rowAtVersion, runWorkflowOf, versionToPin } from "./lib/runGraph";
 import { claimPress, scheduleRunApprovalPost } from "./lib/changeApprovalRows";
 import { isPriorityCard } from "./lib/priorityCardAccess";
+import { workspaceOfArgs } from "./lib/workspaceArg";
 
 export { withAgentSessions };
 
@@ -1342,6 +1344,8 @@ export const updateProgress = mutation({
     // so the withdraw keeps this report's fail_reason.
     if (args.run_status === "completed" || args.run_status === "failed") await withdrawOpenGate(ctx, { ...run, node_statuses: nodeStatuses, status: args.run_status, fail_reason: args.fail_reason ?? run.fail_reason }, now);
     const endsRun = args.run_status === "completed" || args.run_status === "failed";
+    // A personal run's end is the only witness of its deploy (lib/runDeploy.ts), recorded apart from this report.
+    if (endsRun && run.workspace?.startsWith("user:")) await ctx.scheduler.runAfter(0, internal.runDeploys.record, { run_id: args.run_id });
     if (endsRun || (nodeEntry && args.node_status !== "running")) {
       await stopStationHands(ctx, { ...run, node_statuses: nodeStatuses }, endsRun ? undefined : [args.node_id!]);
     }
@@ -2117,17 +2121,40 @@ const TASK_RUNS_SCAN = 50;
 /** Merged change runs read for who pressed Ship, the most recently merged first. */
 const SHIPPERS_MERGED_READ = 200;
 
+/**
+ * The personal flow's Check verdict (cli workflow/personalCheck.ts, check.json): pass or skipped is green, fail is not.
+ * Read from the `check` station's pinned result once it completed; a long result is cut, so its outcome is read by
+ * pattern. Null when the run has no such station or no result yet.
+ */
+export function checkVerdictOf(run: Pick<Doc<"workflow_runs">, "node_statuses">): { green: boolean; at: number } | null {
+  const n = run.node_statuses.find((x) => x.node_id === "check");
+  if (!n || n.status !== "completed" || !n.result_preview) return null;
+  let outcome: unknown;
+  try { outcome = JSON.parse(n.result_preview)?.outcome; } catch { outcome = n.result_preview.match(/"outcome"\s*:\s*"(pass|fail|skipped)"/)?.[1]; }
+  if (outcome !== "pass" && outcome !== "fail" && outcome !== "skipped") return null;
+  return { green: outcome !== "fail", at: n.completed_at ?? 0 };
+}
+
+/**
+ * How a flow lands a change, from its graph alone (so a run reads it before it reaches the station): "pr" when the
+ * graph has a `pr` station at any depth (`pr`, `land__pr`) or a segment that is the `land` flow (Union's), else "direct".
+ */
+export function shipTrackOf(wf: { nodes?: Array<{ id: string }>; source?: string } | null | undefined): "pr" | "direct" {
+  if ((wf?.nodes ?? []).some((n) => n.id === "pr" || n.id.endsWith("__pr"))) return "pr";
+  const source = wf?.source ?? "";
+  return /(^|[\s;{])pr\s*\[/m.test(source) || /\bflow\s*=\s*"?land"?(?![\w-])/.test(source) ? "pr" : "direct";
+}
+
 /** Whether a run's change reached main: its merge step recorded the landing, or its Merged station completed. */
 const runMerged = (run: Doc<"workflow_runs">): boolean => !!run.merge || run.node_statuses.some((n) => n.node_id === "land__landed" && n.status === "completed");
 
 /**
- * A team's Ship runs still on their way to main (deploys.md, the Shipping column): runs of a flow that takes a change,
+ * A workspace's Ship runs (a team's, or a person's own) still on their way to main (deploys.md, the Shipping column): runs of a flow that takes a change,
  * not merged, not superseded, on a task still open, and only the newest run of each task (a task's later round
  * replaces its earlier ones, merged ones included). A run with no task stands alone. Slim rows: no station sessions.
  * With them, `shippers`: the change runs of the window, unmerged and merged, with the session that pressed Ship on each.
  */
-export async function shippingRunsCore(ctx: Ctx, userId: Id<"users">, teamId: Id<"teams">, now = Date.now()): Promise<ShippingRuns> {
-  const workspace = `team:${teamId}`;
+export async function shippingRunsCore(ctx: Ctx, userId: Id<"users">, workspace: string, now = Date.now()): Promise<ShippingRuns> {
   if (!(await workspaceGrantsAccess(ctx, userId, workspace))) return { runs: [], shippers: [] };
   const since = now - SHIPPING_WINDOW_MS;
   const reads = newRunReads();
@@ -2192,6 +2219,8 @@ export async function shippingRunsCore(ctx: Ctx, userId: Id<"users">, teamId: Id
       // The stations' own verdicts, which the stepper reads before the station statuses.
       ci_verdict: run.ci_verdict ? { green: run.ci_verdict.green, head_sha: run.ci_verdict.head_sha, at: run.ci_verdict.at } : null,
       review_verdict: run.review_verdict ? { verdict: run.review_verdict.verdict, at: run.review_verdict.at } : null,
+      check_verdict: checkVerdictOf(run),
+      track: shipTrackOf(await feedWorkflowOf(ctx, run, reads)),
       merge: run.merge ? { sha: run.merge.sha, branch: run.merge.branch, into: run.merge.into, at: run.merge.at, ...(run.merge.pr_url ? { pr_url: run.merge.pr_url } : {}) } : null,
       gate_prompt: run.gate_prompt ?? null,
       gate_node_id: run.gate_node_id ?? null,
@@ -2258,11 +2287,11 @@ export async function shippingRunsCore(ctx: Ctx, userId: Id<"users">, teamId: Id
 }
 
 export const shippingRuns = query({
-  args: { team_id: v.id("teams") },
+  args: { team_id: v.optional(v.id("teams")), workspace: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return { runs: [], shippers: [] };
-    return shippingRunsCore(ctx, userId, args.team_id);
+    return shippingRunsCore(ctx, userId, workspaceOfArgs(args));
   },
 });
 

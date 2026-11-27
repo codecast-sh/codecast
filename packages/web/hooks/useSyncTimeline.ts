@@ -34,8 +34,23 @@ const deployCardSig = (p: OpenPr) => `${p.state}|${p.title}|${p.created_at}|${p.
  * feeder has answered: a cached copy of a PR that closed meanwhile is never shown as open. `failed`: the read failed.
  */
 export function useOpenPullRequests(repository: string | null): { prs: OpenPr[] | null; failed: boolean } {
+  const { live, failed } = useSyncOpenPullRequests(repository);
   const repo = repository ? normalizeRepository(repository) : null;
-  const isOpenHere = useMemo(() => (p: OpenPr) => !!repo && p.state === "open" && typeof p.title === "string" && typeof p.created_at === "number" && normalizeRepository(p.repository) === repo, [repo]);
+  const rows = useCollectionRows<OpenPr>("pullRequests", { where: useMemo(() => openIn(repo ? [repo] : []), [repo]), sig: deployCardSig });
+  return useMemo(() => ({ prs: live ? rows : null, failed }), [live, rows, failed]);
+}
+
+/** Whether a stored row is an open pull request of one of `repos` (normalized), whole enough to draw. */
+const openIn = (repos: ReadonlyArray<string>) => {
+  const set = new Set(repos);
+  return (p: OpenPr) => p.state === "open" && typeof p.title === "string" && typeof p.created_at === "number" && set.has(normalizeRepository(p.repository));
+};
+
+/** Feeder of useOpenPullRequests: one repository's open pull requests into the store. `live` once this window's answer
+ *  for that repository is applied; `failed`: the read failed. */
+export function useSyncOpenPullRequests(repository: string | null): { live: boolean; failed: boolean } {
+  const repo = repository ? normalizeRepository(repository) : null;
+  const isOpenHere = useMemo(() => openIn(repo ? [repo] : []), [repo]);
   // Which repository's answer the store holds: set as the answer is applied (select runs inside the apply), so the rows
   // turn on in the same render the store changes, never a frame early on what the cache held.
   const [applied, setApplied] = useState<string | null>(null);
@@ -53,9 +68,15 @@ export function useOpenPullRequests(repository: string | null): { prs: OpenPr[] 
     };
   }, [isOpenHere, repo]);
   const { ready, error } = useSyncCollection("pullRequests", api.pull_requests.getPRsForTimeline, repository ? { repository } : "skip", feed);
-  const rows = useCollectionRows<OpenPr>("pullRequests", { where: isOpenHere, sig: deployCardSig });
-  const live = !!repo && applied === repo;
-  return useMemo(() => ({ prs: live ? rows : null, failed: !ready && !!error }), [live, rows, ready, error]);
+  return useMemo(() => ({ live: !!repo && applied === repo, failed: !ready && !!error }), [repo, applied, ready, error]);
+}
+
+/** Reader: several repositories' open pull requests (a personal Deploys page drawing projects together), each fed by
+ *  useSyncOpenPullRequests; null until every one has answered in this window, as useOpenPullRequests reads one. */
+export function useOpenPullRequestsIn(repositories: ReadonlyArray<string>, live: boolean): OpenPr[] | null {
+  const key = repositories.map(normalizeRepository).sort().join(",");
+  const rows = useCollectionRows<OpenPr>("pullRequests", { where: useMemo(() => openIn(key ? key.split(",") : []), [key]), sig: deployCardSig });
+  return live ? rows : null;
 }
 
 const commitSig = (c: any) => `${c.message}|${c.timestamp}|${c.pr_number ?? ""}|${c.conversation_id ?? ""}`;

@@ -16,6 +16,7 @@ import { assemble, findChange, withReach, type AssembledChange, type ChangePullR
 import { changeLifecycle, type Lifecycle } from "../lib/changes/lifecycle";
 import { useCheckouts, useSyncCheckouts } from "./useSyncCheckouts";
 import { useDeployTargets } from "./useSyncDeployTargets";
+import { teamWorkspaceKey } from "../lib/workspaceScope";
 import { useSyncPullRequests } from "./useSyncTimeline";
 import { useCollectionRows } from "./useCollectionRows";
 import { useCoarseNow } from "./useCoarseNow";
@@ -71,9 +72,9 @@ export function useRepoChanges(repository: string | null | undefined, teamId?: s
   const team = teamId === undefined ? activeTeam : teamId;
   const repo = repository?.toLowerCase() ?? null;
 
-  const checkoutsFeed = useSyncCheckouts(team);
-  const checkouts = useCheckouts(team, repo);
-  const { targets, ready: targetsReady } = useDeployTargets(team);
+  const checkoutsFeed = useSyncCheckouts(teamWorkspaceKey(team));
+  const checkouts = useCheckouts(teamWorkspaceKey(team), repo);
+  const { targets, ready: targetsReady } = useDeployTargets(teamWorkspaceKey(team));
   const prsFeed = useSyncPullRequests(repo ? { repository: repo, limit: PR_LIMIT } : "skip");
 
   const prWhere = useMemo(() => (p: ChangePullRequest) => !!repo && p.repository?.toLowerCase() === repo, [repo]);
