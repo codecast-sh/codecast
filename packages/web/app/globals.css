@@ -2216,13 +2216,6 @@ diffs-container {
 .inbox-compact [data-sv-rail] [data-session-id] > [role="button"] {
   padding-block: 6px;
 }
-/* A card's Compact subagent rows keep their marks under the card's mark. In
-   the Sleeping section of a card list the one line card drops the card's 6px
-   margin while the bar under it keeps its footer inset, so the rows move back
-   by the 6px that leaves them right of the card's mark. */
-:root:not(.minimal-style) .simple-view:not(.inbox-compact) .inbox-compact [data-sv-rail] [data-sv-subagent-row] {
-  padding-left: 2px;
-}
 /* A one line row is a line of text, not a card. A box around every line makes
    the list read as a stack of rectangles, so the row takes the rail's own
    ground and shows no edge. A fill that runs edge to edge, like the section
@@ -2247,6 +2240,12 @@ diffs-container {
   border-color: transparent !important;
   border-radius: 0;
   background: var(--sv-card-bg) !important;
+}
+/* Shipping and Sleeping are compact sections inside a floating-card list:
+   their rows keep the cards' 6px inset, so the icon and title columns run
+   straight down the rail. */
+:root:not(.minimal-style) .simple-view:not(.inbox-compact) .inbox-compact [data-sv-rail] [data-session-id] {
+  margin-inline: 6px;
 }
 :root .inbox-compact [data-sv-rail] [data-session-id]:hover {
   --sv-card-bg: var(--sv-row-hover-bg);

@@ -24,7 +24,7 @@ const PANEL_KEY_OF_SECTION: Record<InboxSectionKey, string> = {
 };
 
 /** The hidden buckets the inbox draws behind their headers (renderHiddenBucket), each as its cards' variant. */
-const HIDDEN_BUCKETS = ["snoozed", "stashed", "dismissed"] as const;
+const HIDDEN_BUCKETS = ["stashed", "dismissed"] as const;
 const _drawnHidden = new WeakMap<PlacedInbox, Map<string, (typeof HIDDEN_BUCKETS)[number]>>();
 function drawnHiddenOf(placed: PlacedInbox, id: string): (typeof HIDDEN_BUCKETS)[number] | null {
   let map = _drawnHidden.get(placed);
@@ -34,6 +34,13 @@ function drawnHiddenOf(placed: PlacedInbox, id: string): (typeof HIDDEN_BUCKETS)
     _drawnHidden.set(placed, map);
   }
   return map.get(id) ?? null;
+}
+
+const _snoozedIds = new WeakMap<PlacedInbox, Set<string>>();
+function snoozedIdsOf(placed: PlacedInbox): Set<string> {
+  let ids = _snoozedIds.get(placed);
+  if (!ids) _snoozedIds.set(placed, (ids = new Set(placed.snoozed.map((r) => r._id))));
+  return ids;
 }
 
 /** Each row the inbox draws nested under a drawn card (its subsByParent) → that card's id, per placed inbox. */
@@ -78,8 +85,8 @@ const ASKING_SECTIONS: ReadonlySet<InboxSectionKey> = new Set(["questions", "nee
  * What `inbox` draws for one session, or null when it does not draw it (not
  * in the store, outside the scope, or folded below the old-session fold). It
  * follows the inbox's status view (the sections Questions, Pinned, New, Needs
- * You, Couldn't finish, Done, Working, Sleeping, and Snoozed, Stashed and
- * Dismissed behind their headers); the other views (Recent, by label, by
+ * You, Couldn't finish, Done, Working, Sleeping (snoozed rows included), and
+ * Stashed and Dismissed behind their headers); the other views (Recent, by label, by
  * plan…) group the same rows differently, and a view filter (a project or
  * label chip) narrows what is on screen, not what the inbox holds, so neither
  * is read.
@@ -128,7 +135,8 @@ export function inboxMarkOf(
   if (inbox === "phone") live.stopped = false;
   const stopped = inbox === "sidebar" && !!hostedStopOf(row as any, state.messages?.[id] as any);
   const hosted = isHostedAgentType(row.agent_type);
-  const section = drawnSectionOf(placed, id);
+  // A snoozed row sleeps in Sleeping, drawn there like the section's own rows.
+  const section = drawnSectionOf(placed, id) ?? (snoozedIdsOf(placed).has(id) ? "dormant" : null);
   // A row the inbox lifts into Questions (an ask on a stashed or snoozed session) is drawn there, whatever bucket also holds it.
   const hidden = section === "questions" ? null : drawnHiddenOf(placed, id);
   if (queued && (hidden || (!section && !drawnParentOf(placed, id)))) return asked;

@@ -4,10 +4,8 @@
 /* The ↳ sits in the card's status-mark column and the words in its text
    column. The line's own pl-3 matches the card's pl-3 when the two share a
    left edge. In the floating-card rail (globals.css, the bars under a card)
-   the bar adds 4px of padding of its own, and inside a compact section
-   (Shipping, Sleeping) the card drops its 6px inset while the bar keeps it. */
+   the bar adds 4px of padding of its own. */
 :root:not(.minimal-style) .simple-view:not(.inbox-compact) [data-sv-rail] [data-activity-line] > div { padding-left: 8px; }
-:root:not(.minimal-style) .simple-view:not(.inbox-compact) .inbox-compact [data-sv-rail] [data-activity-line] > div { padding-left: 2px; }
 
 /* A pill on the line keeps to one line and to the line's vertical centre. */
 .al-pill { display: flex; align-items: center; min-width: 0; }

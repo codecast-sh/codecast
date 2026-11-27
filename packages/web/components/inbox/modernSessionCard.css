@@ -61,14 +61,19 @@
 .modern-style .inbox-compact [data-sv-rail] [data-mc] [data-mc-compact-rank] {
   display: inline-flex;
 }
+/* In Shipping and Sleeping the line under the row says what wakes it, so the
+   reason ("Until Fri 5 PM", "Parked by you") would say it twice. */
+.modern-style [data-dormant-section] [data-sv-rail] [data-mc] [data-mc-compact-reason] {
+  display: none;
+}
 
 /* The section header's mark and label line up with the cards' icon column and
    title edge: the floating cards sit 6px in behind a 1px border with 12px of
-   padding, the compact list's rows 1px in. */
+   padding, the compact list's rows 1px in. Shipping and Sleeping are compact
+   inside a floating list, and their rows keep the 6px inset (globals.css). */
 :root.modern-style .simple-view [data-mc-sec] {
   padding-left: 18.5px;
 }
-:root.modern-style .simple-view.inbox-compact [data-mc-sec],
-:root.modern-style .simple-view .inbox-compact [data-mc-sec] {
+:root.modern-style .simple-view.inbox-compact [data-mc-sec] {
   padding-left: 12.5px;
 }

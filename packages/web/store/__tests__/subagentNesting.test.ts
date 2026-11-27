@@ -63,9 +63,10 @@ describe("linked subagent nesting", () => {
     const until = now + 60_000;
     const rows = [{ ...parent, inbox_snoozed_until: until }, { ...child, inbox_snoozed_until: until }];
     const placed = place(rows);
+    // The parent sleeps in Sleeping as one card, and the child rides it.
     expect(ids(placed.snoozed)).toEqual(["parent"]);
     expect(placed.working).toEqual([]);
-    expect(placed.subsByParent.size).toBe(0);
+    expect(ids(placed.subsByParent.get("parent") ?? [])).toEqual(["child"]);
     const awake = placeSections(Object.fromEntries(rows.map(row => [row._id, row])), new Set(), undefined, { now: until + 60_000 });
     expect(ids(awake.subsByParent.get("parent") ?? [])).toEqual(["child"]);
     expect(awake.snoozed).toEqual([]);

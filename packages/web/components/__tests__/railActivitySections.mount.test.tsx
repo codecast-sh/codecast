@@ -10,7 +10,7 @@
 //   sleeping  each flavor's line: waiting on a person (coloured pill), a
 //             session, a task ("landing") or a PR ("to merge") with neutral
 //             pills, a trigger's countdown, and the stalled warning line
-//   snoozed   a snoozed row stays in Snoozed, whatever its work
+//   snoozed   a snoozed row sleeps in Sleeping, whatever its work, saying until when
 //   walk      the keyboard walk visits the rows in the order they draw
 //
 // Run: bun test components/__tests__/railActivitySections.mount.test.tsx
@@ -244,7 +244,7 @@ test("a row whose change is in CI draws in Shipping, compact, with the rocket, n
 
 test("each Sleeping flavor says what wakes it", async () => {
   const { host, unmount } = await mountInbox();
-  expect(sectionIds(host, "dormant").sort()).toEqual([ON_PERSON, ON_SESSION, ON_TASK, ON_PR, SCHEDULED, STALLED].sort());
+  expect(sectionIds(host, "dormant").sort()).toEqual([ON_PERSON, ON_SESSION, ON_TASK, ON_PR, SCHEDULED, STALLED, SNOOZED].sort());
 
   const person = lineOf(host, ON_PERSON)!;
   expect(person.getAttribute("data-activity-line")).toBe("waiting");
@@ -292,11 +292,35 @@ test("the under-line's arrow sits in the card's mark column and its words in the
   await unmount();
 });
 
-test("a snoozed row stays in Snoozed, whatever its work", async () => {
+test("a snoozed row sleeps in Sleeping, whatever its work, saying until when", async () => {
   const { host, unmount } = await mountInbox();
-  for (const key of ["working", "shipping", "dormant"]) expect(sectionIds(host, key)).not.toContain(SNOOZED);
+  for (const key of ["working", "shipping"]) expect(sectionIds(host, key)).not.toContain(SNOOZED);
+  expect(sectionIds(host, "dormant")).toContain(SNOOZED);
   expect(useInboxStore.getState().dormantSplitNav?.working.has(SNOOZED)).toBeFalsy();
+  expect(lineOf(host, SNOOZED)!.textContent).toContain("snoozed until");
   await unmount();
+});
+
+test("a subagent snoozed with its parent rides the parent's card in Sleeping, as the subagent rows setting says", async () => {
+  const CHILD = id("snoozedchild");
+  const helper = parked(CHILD, "Snoozed helper", { is_subagent: true, parent_conversation_id: SNOOZED, inbox_snoozed_until: NOW + 3 * HOUR });
+  seed({ rows: [helper], ui: { subagent_rows: "full", subagent_filter: "all" } });
+  const shown = await mountInbox();
+  // One card in Sleeping, the helper drawn under it, never a card of its own.
+  const card = shown.host.querySelector(`[data-session-id="${SNOOZED}"]`)!.closest(".relative.border-b")!;
+  expect(card.querySelector(`[data-session-id="${CHILD}"]`)).not.toBeNull();
+  expect(sectionIds(shown.host, "dormant").filter((sid) => sid === CHILD)).toHaveLength(1);
+  // The header counts the rows drawn, the helper included.
+  const count = (host: HTMLElement) => Number(host.querySelector('[data-inbox-section="dormant"]')!.getAttribute("data-inbox-section-count"));
+  expect(count(shown.host)).toBe(sectionIds(shown.host, "dormant").length);
+  await shown.unmount();
+  // Folded rows with the default filter hide an idle helper, as under any card.
+  seed({ rows: [helper] });
+  const folded = await mountInbox();
+  expect(sectionIds(folded.host, "dormant")).toContain(SNOOZED);
+  expect(sectionIds(folded.host, "dormant")).not.toContain(CHILD);
+  expect(count(folded.host)).toBe(sectionIds(folded.host, "dormant").length);
+  await folded.unmount();
 });
 
 test("the conversation header's chip says what the row says", async () => {

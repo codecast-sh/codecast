@@ -1,10 +1,10 @@
 import { useState } from "react";
 
-const CLOSED_BUCKETS = { snoozed: false, stashed: false, dismissed: false };
+const CLOSED_BUCKETS = { stashed: false, dismissed: false };
 export type HiddenBucketsOpen = typeof CLOSED_BUCKETS;
 
 /**
- * Open state of the sidebar's Snoozed / Stashed / Killed buckets. Ephemeral and
+ * Open state of the sidebar's Stashed / Closed buckets. Ephemeral and
  * CLOSED by default: closed on every load, and re-closed whenever `filterKey`
  * (the chip filter's value) changes. Callers pass the filter's VALUE, never a
  * function's identity: the panel's filter callback turns over on every

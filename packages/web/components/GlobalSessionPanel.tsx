@@ -2194,10 +2194,16 @@ function SessionListPanelImpl({
     }
     return out;
   }, []);
-  const dormantSplit = useRailDormantSplit(statusDormant, coarseNow, scheduleBarRowsFor);
+  // Snoozed rows sleep in Sleeping, after its own rows: their line says until when. A row snoozed with
+  // its card rides that card (placeInboxRows nests it in subsByParent), drawn as the subagent rows setting says.
+  const filteredSnoozed = useMemo(() => filterByChip(snoozedList), [filterByChip, snoozedList]);
+  const statusSleeping = useMemo(() => byPriority([...filteredDormant, ...filteredSnoozed]), [byPriority, filteredDormant, filteredSnoozed]);
+  const dormantSplit = useRailDormantSplit(statusSleeping, coarseNow, scheduleBarRowsFor);
   const railWorking = useMemo(() => (dormantSplit.working.length ? byPriority([...filteredWorking, ...dormantSplit.working]) : statusWorking), [dormantSplit.working, byPriority, filteredWorking, statusWorking]);
   const movedWeight = (rows: InboxSession[]) => movedWeightOf(rows, showSubagents ? (sub) => sub._id === activeSessionId || keptSubIds.has(sub._id) : null, globalSubByParent, placed.nestedSectionOf);
   const plus = (base: number | undefined, n: number) => (base === undefined ? undefined : base + n);
+  // Snoozed cards weigh in Sleeping's number with, as Full rows, the rows drawn under them that no other section counts.
+  const snoozedWeight = filteredSnoozed.reduce((n, r) => n + 1 + (!showSubagents ? 0 : (globalSubByParent.get(r._id) ?? []).filter((sub) => !placed.nestedSectionOf.has(sub._id) && (sub._id === activeSessionId || keptSubIds.has(sub._id))).length), 0);
   const filteredDismissed = useMemo(() => {
     // Only surface dismissed sessions ACTIVE within the window — keyed on last
     // activity (updated_at), NOT when they were dismissed. A bulk cleanup dismisses
@@ -2214,7 +2220,6 @@ function SessionListPanelImpl({
     const retiredAt = (sess: InboxSession) => sess.inbox_dismissed_at || sess.inbox_killed_at || sess.dismissed_at || sess.updated_at || 0;
     return filtered.sort((a, b) => retiredAt(b) - retiredAt(a));
   }, [filterByChip, dismissedList]);
-  const filteredSnoozed = useMemo(() => filterByChip(snoozedList), [filterByChip, snoozedList]);
   const filteredStashed = useMemo(() => {
     // Same recency window as Dismissed for the same noise reason.
     const cutoff = Date.now() - DISMISSED_VISIBLE_MS;
@@ -2689,7 +2694,7 @@ function SessionListPanelImpl({
   // its triggers and queue (store closeSession). Undoable via the toast.
   const handleAnimatedClose = useCallback((id: string) => { void animatedCloseSessions([id]); }, []);
   const handleAnimatedCloseMany = useCallback((ids: string[]) => { void animatedCloseSessions(ids); }, []);
-  // On a stashed or snoozed card the destructive slot is a Kill (server tears
+  // On a stashed card the destructive slot is a Kill (server tears
   // the agent down on the transition; the row moves down into Closed). It is
   // the same reviewed Kill as everywhere: a session Close set aside mid-turn
   // sits here, so a bare press would cut that turn off and cancel triggers.
@@ -2752,10 +2757,6 @@ function SessionListPanelImpl({
     const activeRow = s.sessions[activeSessionId];
     const parentId = activeRow ? inboxNestParentOf(sortedSessions, nestWorkers)(activeRow) ?? cardOfNested(globalSubByParent, activeSessionId) : null;
     const inList = (items: InboxSession[]) => items.some(i => i._id === activeSessionId || (!!parentId && i._id === parentId));
-    if (inList(filteredSnoozed) && !openBuckets.snoozed) {
-      setOpenBuckets((o) => ({ ...o, snoozed: true }));
-      return;
-    }
     if (inList(filteredStashed) && !openBuckets.stashed) {
       setOpenBuckets((o) => ({ ...o, stashed: true }));
       return;
@@ -2778,7 +2779,7 @@ function SessionListPanelImpl({
     items: InboxSession[];
     expanded: boolean;
     onToggle: () => void;
-    variant: "stashed" | "dismissed" | "snoozed";
+    variant: "stashed" | "dismissed";
     onKill: (id: string) => void;
     headerAction?: React.ReactNode;
     /** The head says "Kill N" for the bucket's running agents instead of
@@ -2817,7 +2818,7 @@ function SessionListPanelImpl({
     // existing newest-first order within each half.
     const rowLive = (sess: InboxSession) =>
       isBucketLive(sess) || (subMap.get(sess._id) ?? []).some(isBucketLive);
-    if (variant !== "snoozed") topLevel.sort((a, b) => Number(rowLive(b)) - Number(rowLive(a)));
+    topLevel.sort((a, b) => Number(rowLive(b)) - Number(rowLive(a)));
     return (
       <div className={modern ? undefined : "border-t border-sol-border/30"}>
         <HiddenBucketHead modern={modern} label={label} count={showSubagents ? items.length : topLevel.length} variant={variant} expanded={expanded} onToggle={onToggle} liveCount={killLiveButton ? 0 : liveCount} action={killLiveButton ?? headerAction} />
@@ -2849,7 +2850,7 @@ function SessionListPanelImpl({
                   onSelect={handleSelect}
                   onCardContextMenu={handleCardContextMenu}
                   onPickCharacter={handlePickCharacter}
-                  onRestore={variant === "snoozed" ? s.wakeSnoozedSession : restoreWithNotice}
+                  onRestore={restoreWithNotice}
                   onKill={onKill}
                   variant={variant}
                   forkColorKey={forkColorKeyOf(session)}
@@ -2894,7 +2895,7 @@ function SessionListPanelImpl({
                     onSelect={handleSelect}
                   onCardContextMenu={handleCardContextMenu}
                   onPickCharacter={handlePickCharacter}
-                    onRestore={variant === "snoozed" ? s.wakeSnoozedSession : restoreWithNotice}
+                    onRestore={restoreWithNotice}
                     onKill={onKill}
                     variant={variant}
                     subRow={subRowOf(sub)}
@@ -3670,7 +3671,7 @@ function SessionListPanelImpl({
         </div>
         <div className="inbox-compact" data-dormant-section>
           <div data-sv-rail>
-            {renderSection("Sleeping", dormantSplit.sleeping, "text-sol-text-dim", undefined, undefined, { key: "dormant", floor: true, count: plus(countOf(statusDormant, dormant, "dormant"), -movedWeight([...dormantSplit.working, ...dormantSplit.shipping])), onDropSession: dropSessionOnRest.dormant })}
+            {renderSection("Sleeping", dormantSplit.sleeping, "text-sol-text-dim", undefined, undefined, { key: "dormant", floor: true, count: plus(countOf(statusDormant, dormant, "dormant"), snoozedWeight - movedWeight([...dormantSplit.working, ...dormantSplit.shipping])), onDropSession: dropSessionOnRest.dormant })}
           </div>
         </div>
         </>
@@ -3680,14 +3681,6 @@ function SessionListPanelImpl({
             No active sessions
           </div>
         )}
-        {renderHiddenBucket({
-          label: "Snoozed",
-          items: filteredSnoozed,
-          expanded: openBuckets.snoozed,
-          onToggle: () => setOpenBuckets((o) => ({ ...o, snoozed: !o.snoozed })),
-          variant: "snoozed",
-          onKill: handleKillStashed,
-        })}
         {renderHiddenBucket({
           label: "Stashed",
           items: filteredStashed,

@@ -4679,6 +4679,7 @@ export function placeInboxRows(
     const hidden = ridesStash || !!s.inbox_killed_at || !!s.inbox_stashed_at || (s.inbox_snoozed_until ?? 0) > now;
     if (!hidden) activeKeyed.push({ s, rank: sessionSortRank(s, null), key: sessionSortKey(s, null, now) });
     if (root !== null && (ridesStash || isSessionStashed(s))) stashed.push(s);
+    else if (root !== null && !s.inbox_killed_at && (s.inbox_snoozed_until ?? 0) > now) snoozed.push(s); // a snoozed child sleeps in Sleeping
   }
   activeKeyed.sort(compareRankedSessions);
   const sorted = activeKeyed.map((x) => x.s);
@@ -4822,6 +4823,8 @@ export function placeInboxRows(
     if (!workersNeedingYouByParent.has(top)) workersNeedingYouByParent.set(top, []);
     workersNeedingYouByParent.get(top)!.push(w.s);
   }
+  const { topLevel: snoozedCards, subsByTop } = hiddenBucketTree(snoozed); // a row snoozed with its card rides it in Sleeping
+  for (const [top, subs] of subsByTop) subsByParent.set(top, [...(subsByParent.get(top) ?? []), ...subs]);
   for (const subs of subsByParent.values()) {
     subs.sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
   }
@@ -5021,7 +5024,7 @@ export function placeInboxRows(
     dormant: reuseArray(prev?.dormant, dormant),
     working: reuseArray(prev?.working, working),
     stashed: reuseArray(prev?.stashed, stashed),
-    snoozed: reuseArray(prev?.snoozed, snoozed),
+    snoozed: reuseArray(prev?.snoozed, snoozedCards),
     dismissed: reuseArray(prev?.dismissed, dismissed),
     subsByParent: reuseArrayMap(prev?.subsByParent, subsByParent),
     forksByParent: reuseArrayMap(prev?.forksByParent, forksByParent),
@@ -5213,7 +5216,7 @@ export function visualOrderSessions(
   const needs = splitHostedStops(chipped(placed.needsInput), (id) => opts.messagesOf?.(id));
   // The status view's order (questions … working, shipping, dormant split as the rail
   // draws it): the chokepoint's own sections, so the walk and the render agree.
-  const [working, shipping, sleeping] = splitDormantWalk(chipped(placed.working), chipped(placed.dormant), opts.dormantSplit);
+  const [working, shipping, sleeping] = splitDormantWalk(chipped(placed.working), [...chipped(placed.dormant), ...chipped(placed.snoozed)], opts.dormantSplit);
   const sections: Array<[InboxSession[], string]> = [
     [chipped(placed.questions), "questions"], [chipped(placed.pinned), "pinned"], [chipped(placed.newSessions), "new"],
     [needs.asks, "needs_input"], [needs.stopped, "hosted_stopped"], [chipped(placed.done), "done"],
@@ -5731,6 +5734,7 @@ import type { SubagentActivityOf } from "../lib/railActivity";
 import { nestOwnedChildren, ownedChildrenOf, resolveShowSubagents, resolveSubagentFilter, subagentKept, withOpenOwnedChild, type SubagentFilter, type SubagentRow, type SubagentRowsMode } from "./subagentCards";
 export { cardOfNested, drawnUnderParentIds, flatHeaderCount, fullRowsCounts, isOwnedChildRow, resolveShowSubagents, resolveSubagentFilter, resolveSubagentRows, SUBAGENT_FILTER_STATES, subagentKept, subagentPasses, type SubagentFilter, type SubagentRow, type SubagentRowsMode } from "./subagentCards";
 import { dropOrphanSubagents, hoistNestedUnderParent, inboxNestParentOf, isSpawnedWorker, nestedSessionIds } from "./inboxNesting";
+import { hiddenBucketTree } from "./hiddenBucketTree";
 export { inboxNestParentOf, isSpawnedWorker } from "./inboxNesting";
 import type { PriorityRow } from "@codecast/shared/contracts/priorities";
 import { teamMembersOf } from "../lib/activeTeam";
