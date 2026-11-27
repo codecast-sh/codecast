@@ -122,29 +122,24 @@ describe("cast board frame verbs (pl-1145)", () => {
 
   test("frame --ref with keys only is titled by the id, refuses a mistyped key, and --collapse folds it in the same batch", () => {
     const view = artifactView("board", "B", [sticky("el_a", 0, 0), sticky("el_b", 240, 0)]);
-    const r = verbs.frame.run(view, ["el_a", "el_b", "--ref", "pl-9", "--status", "leaning", "--collapse"], undefined, AGENT);
+    const r = verbs.frame.run(view, ["el_a", "el_b", "--ref", "pl-9", "--collapse"], undefined, AGENT);
     const fk = r.ops.find((o: any) => o.put?.kind === "frame")!.k;
     // One put for the frame, already folded: no separate set op for it.
     expect(r.ops.filter((o) => o.k === fk)).toHaveLength(1);
-    expect(put(r, fk)).toMatchObject({ ref: "pl-9", title: "pl-9", status: "leaning", h: 48 });
+    expect(put(r, fk)).toMatchObject({ ref: "pl-9", title: "pl-9", h: 48 });
     expect(put(r, fk).collapsed.holds.sort()).toEqual(["el_a", "el_b"]);
     expect((verbs.frame.run(view, ["Mine", "el_a", "--ref", "pl-9"]).ops[0] as any).put).toMatchObject({ title: "Mine", ref: "pl-9" });
     expect(() => verbs.frame.run(view, ["el_typo", "el_a", "--ref", "ct-1"])).toThrow("no element el_typo on this board");
-    expect(() => verbs.frame.run(view, ["T", "el_a", "--status", "maybe"])).toThrow(/open, leaning, decided, parked/);
   });
 
-  test("edit --status and --ref write only what changes and keep the title unless new words are given", () => {
-    const view = artifactView("board", "B", [frameEl("el_f", 0, 0, 400, 300, { title: "Budget caps", ref: "ct-1", status: "open" }), frameEl("el_g", 0, 400, 400, 300, { title: "" }), sticky("el_a", 40, 64)]);
-    expect(set(verbs.edit.run(view, ["el_f", "--status", "decided"]), "el_f")).toEqual({ status: "decided" });
-    expect(set(verbs.edit.run(view, ["el_f", "--status", "none"]), "el_f")).toEqual({ status: null });
+  test("edit --ref writes only what changes and keep the title unless new words are given", () => {
+    const view = artifactView("board", "B", [frameEl("el_f", 0, 0, 400, 300, { title: "Budget caps", ref: "ct-1" }), frameEl("el_g", 0, 400, 400, 300, { title: "" }), sticky("el_a", 40, 64)]);
     expect(set(verbs.edit.run(view, ["el_f", "--ref", "in-4"]), "el_f")).toEqual({ ref: "in-4" });
     expect(set(verbs.edit.run(view, ["el_f", "New", "words", "--ref", "in-4"]), "el_f")).toEqual({ title: "New words", ref: "in-4" });
     expect(set(verbs.edit.run(view, ["el_g", "--ref", "in-4"]), "el_g")).toEqual({ ref: "in-4", title: "in-4" });
     expect(set(verbs.edit.run(view, ["el_f", "--ref", "none"]), "el_f")).toEqual({ ref: null });
     expect(verbs.edit.run(view, ["el_f", "--ref", "ct-1"])).toEqual({ ops: [], status: "el_f already has that ref: nothing to write" });
-    expect(verbs.edit.run(view, ["el_f", "--status", "open"]).ops).toEqual([]);
-    expect(() => verbs.edit.run(view, ["el_f", "--status", "done"])).toThrow(/--status is/);
-    expect(() => verbs.edit.run(view, ["el_a", "--status", "open"])).toThrow(/frame's/);
+    expect(() => verbs.edit.run(view, ["el_a", "--ref", "ct-1"])).toThrow(/--ref is a frame's/);
   });
 
   test("collapse and expand fold a frame in one batch; with no person's work about, the enclosing frame reflows", () => {
@@ -161,10 +156,11 @@ describe("cast board frame verbs (pl-1145)", () => {
   });
 
   test("courtesy: an agent's expand that would swallow a person's sticky is refused; a person's own run goes ahead", () => {
-    // A person folded the notes and the theme shrank around the pill, their sticky beside it.
+    // A person folded the notes and the theme shrank around the pill.
     const v0 = artifactView("board", "B", [frameEl("el_t", 0, 0, 1200, 900), frameEl("el_n", 40, 64, 500, 400), sticky("el_s", 80, 128), sticky("el_p", 640, 64, "u:jason")]);
     const v1 = apply(v0, verbs.collapse.run(v0, ["el_n"]).ops);
-    expect(v1.get("el_p")).toMatchObject({ x: 324, y: 64 });
+    // The theme narrowed to the pill (it holds a folded frame now), so the sticky sits under it, where the open notes would cover it.
+    expect(v1.get("el_p")).toMatchObject({ x: 40, y: 136 });
     expect(() => verbs.expand.run(v1, ["el_n"], undefined, AGENT)).toThrow("left the board as it was: this would move or enclose a person's work (el_p). A person can press Reflow or Organize on the board.");
     expect(verbs.expand.run(v1, ["el_n"]).ops.length).toBeGreaterThan(0);
     // At the top level an expand that pushes a person's sticky down is refused the same way.
