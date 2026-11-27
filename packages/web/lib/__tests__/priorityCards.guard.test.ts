@@ -30,6 +30,7 @@ type Kind = { handles: string; via?: string } | { ignores: string };
 /** "file:function" (from packages/web) -> how it treats a priority card. */
 const CLASSIFIED: Record<string, Kind> = {
   // Where a card is drawn, listed or answered.
+  "hooks/usePriorityModels.ts:queuedDecisionsSig": { handles: "a priority card wakes no milestone: it is never its session's ask (store/inboxMark applies the same rule)" },
   "components/DecisionQueue.tsx:DecisionQueue": { handles: "the stepper draws the card itself, never the session it sits in" },
   "components/SessionDecisionCard.tsx:SessionDecisionCard": { handles: "a session's docked card never shows a priority card" },
   "components/decisions/AnsweredFeed.tsx:FeedEntry": { handles: "draws the card's record and no link to its session" },

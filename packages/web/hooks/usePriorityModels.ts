@@ -2,6 +2,7 @@
 // priority page) reads beside its rows: the inbox's live verdict for each
 // linked session, and the store's lookups for a milestone's branches, pull
 // requests and deploys (lib/priorityList builds the models from them).
+import { isPriorityCard } from "@codecast/shared/contracts/priorityCard";
 import { useMemo } from "react";
 import type { PriorityHistory, PriorityRow } from "@codecast/shared/contracts/priorities";
 import { buildModels, type MilestoneModel, type PriorityModel } from "../lib/priorityList";
@@ -61,7 +62,8 @@ function markFactsHash(r: InboxSession): number {
   return h;
 }
 /** What the Decisions queue (the sidebar's section, the phone's screen) reads off a decision (lib/decisionQueue queuesDecision): who it is asked of, and whether it stands. */
-const queuedDecisionsSig = makeCollectionSig((d: SessionDecisionItem) =>
+// A priority card is its person's, never its session's ask (isPriorityCard), so it wakes no milestone.
+const queuedDecisionsSig = makeCollectionSig((d: SessionDecisionItem) => isPriorityCard(d) ? "" :
   `${d.conversation_id}|${d.status}|${d.blocking ? 1 : 0}|${d.stack_id ?? ""}|${d.in_queue === false ? 0 : 1}|${(d.asked_user_ids ?? []).join(",")}`);
 
 /** The rows that stand as roles' leads, by role, per structural state of the sessions (a lead is a structural fact). */
