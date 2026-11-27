@@ -98,7 +98,9 @@ export const MILESTONE_STATE_WORD: Record<Exclude<MilestoneStateKind, "none">, s
  */
 const lineOf = (s: PriorityLinkedSession, live: (conversationId: string) => DrawnMark | undefined): SessionLine => {
   const drawn = live(s.conversation_id);
-  if (drawn) return { ...s, state: drawn.asks ? "needs_you" : stateOfMark(drawn.mark), mark: drawn.mark, target: drawn.target, href: `/conversation/${drawn.target}` };
+  // A teammate's session the inbox draws asking is their own ask (it does not ask the viewer): their milestone still reads Needs you.
+  const asks = drawn && (drawn.asks || (s.mine === false && drawn.mark === "needs_you"));
+  if (drawn) return { ...s, state: asks ? "needs_you" : stateOfMark(drawn.mark), mark: drawn.mark, target: drawn.target, href: `/conversation/${drawn.target}` };
   // Undrawn: the viewer's own needs_you is idle; a teammate's is their own ask, and their milestone reads it as yours would.
   return { ...s, state: s.state === "needs_you" && s.mine !== false ? "idle" : s.state, target: s.conversation_id, href: `/conversation/${s.conversation_id}` };
 };

@@ -37,6 +37,10 @@ describe("buildModels: each milestone's state", () => {
     expect(model({ mine: false }).kind).toBe("start");
     expect(model({ status: "set_aside" }).kind).toBe("none");
     expect(model({}, [sess("needs_you", false)]).kind).toBe("needs_you");
+    // Drawn by the viewer's inbox as asking, though not asking the viewer: a teammate's own ask still reads needs you, never asleep.
+    expect(model({}, [sess("needs_you", false)], () => ({ mark: "needs_you", asks: false, target: "c-needs_you" })).kind).toBe("needs_you");
+    // The viewer's own drawn the same way is the inbox's verdict: asleep.
+    expect(model({}, [sess("needs_you")], () => ({ mark: "needs_you", asks: false, target: "c-needs_you" })).kind).toBe("dormant");
     // Not drawn by the inbox, the viewer's own needs_you reads idle, never asleep.
     expect(model({}, [sess("needs_you")]).kind).toBe("idle");
   });
