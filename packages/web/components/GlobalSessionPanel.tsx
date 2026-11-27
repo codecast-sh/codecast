@@ -49,7 +49,10 @@ import { scrollRowIntoView } from "../lib/scrollRowIntoView";
 import { useTriggers, fetchTriggerRuns } from "../hooks/useSyncTriggers";
 import { TriggerRunList, useTriggerRuns, openRunInStore, type TriggerRun } from "./TriggerRunHistory";
 import { TriggerRowItem, TriggerHomeHeader, SchedChildArrow, SchedHealthDot, SchedFireBadge } from "./TriggerRow";
-import { DormantClaimRow, DormantWakeRow } from "./inbox/DormantWakeRows";
+import { DormantClaimRow } from "./inbox/DormantWakeRows";
+import { ActivityUnderLine, type RowActivity } from "./inbox/ActivityLine";
+import { movedWeight as movedWeightOf } from "../lib/railActivity";
+import { useRailDormantSplit } from "../hooks/useRailDormantSplit";
 import { WAKE_BADGE, RUNNING_BADGE_TONE } from "../lib/triggerBadges";
 import { schedAccent, type SchedAccent } from "../lib/triggerAccent";
 // Who is speaking on each row (docs/architecture/session-characters.md S3).
@@ -1247,26 +1250,25 @@ function RetryStoppedButton({ rows }: { rows: InboxSession[] }) {
   );
 }
 
-function CardBars({ session, mode, scheduleRows, activeSessionId, wake, onOpen, onOpenSchedule }: {
+function CardBars({ session, mode, scheduleRows, activeSessionId, wake, activity, now, onOpen, onOpenSchedule }: {
   session: InboxSession;
   mode: CardBarsMode;
   scheduleRows: TriggerRow[];
   activeSessionId?: string | null;
-  // "parked": the card sits in the Dormant bucket, so it wears one wake line
-  // (DormantWakeRow) in place of every other bar, in every mode.
   // "claim": the card sits in Needs You while its pinned state declares
   // dormant — the row renders the claimed wake as unverified so the
   // contradiction explains itself.
-  wake?: "parked" | "claim";
+  wake?: "claim";
+  activity?: RowActivity; // A Dormant-bucket card's one line saying what it is really doing, in place of every bar.
+  now: number;
   onOpen: (session: InboxSession) => void;
   onOpenSchedule: (row: TriggerRow) => void;
 }) {
   const isActive = session._id === activeSessionId;
-  const bound = scheduleRows.map((r) => ({ ...r, openId: session._id }));
-  // A parked card always says what wakes it, in one line, whatever the mode.
-  if (wake === "parked") {
-    return <DormantWakeRow session={session} rows={bound} isActive={isActive} onOpen={onOpen} onOpenSchedule={onOpenSchedule} />;
+  if (activity) {
+    return <ActivityUnderLine session={session} activity={activity} now={now} isActive={isActive} onOpen={onOpen} onOpenSchedule={onOpenSchedule} />;
   }
+  const bound = scheduleRows.map((r) => ({ ...r, openId: session._id }));
   if (mode === "hidden") return null;
   const dormantRow = wake === "claim" ? (
     <DormantClaimRow
@@ -2192,6 +2194,10 @@ function SessionListPanelImpl({
     }
     return out;
   }, []);
+  const dormantSplit = useRailDormantSplit(statusDormant, coarseNow, scheduleBarRowsFor);
+  const railWorking = useMemo(() => (dormantSplit.working.length ? byPriority([...filteredWorking, ...dormantSplit.working]) : statusWorking), [dormantSplit.working, byPriority, filteredWorking, statusWorking]);
+  const movedWeight = (rows: InboxSession[]) => movedWeightOf(rows, showSubagents ? (sub) => sub._id === activeSessionId || keptSubIds.has(sub._id) : null, globalSubByParent, placed.nestedSectionOf);
+  const plus = (base: number | undefined, n: number) => (base === undefined ? undefined : base + n);
   const filteredDismissed = useMemo(() => {
     // Only surface dismissed sessions ACTIVE within the window — keyed on last
     // activity (updated_at), NOT when they were dismissed. A bulk cleanup dismisses
@@ -2776,7 +2782,7 @@ function SessionListPanelImpl({
         : [
             [statusQuestions, "questions"],
             [statusPinned, "pinned"], [statusNew, "new"], [statusNeedsInput, "needs_input"],
-            [statusDone, "done"], [statusWorking, "working"], [statusDormant, "dormant"],
+            [statusDone, "done"], [railWorking, "working"], [dormantSplit.shipping, "shipping"], [dormantSplit.sleeping, "dormant"],
           ];
     for (const [items, key] of sections) {
       if (inList(items) && s.collapsedSections[key]) {
@@ -2911,6 +2917,7 @@ function SessionListPanelImpl({
                   mode={cardBars}
                   scheduleRows={scheduleBarRowsFor(session)}
                   activeSessionId={activeSessionId}
+                  now={coarseNow}
                   onOpen={handleSelect}
                   onOpenSchedule={openScheduleTarget}
                 />
@@ -2960,7 +2967,7 @@ function SessionListPanelImpl({
     label: string,
     items: InboxSession[],
     color: string,
-    sectionVariant?: "working",
+    sectionVariant?: "working" | "shipping",
     flat?: boolean,
     opts?: {
       // Label/project sections pass an id-based key so a label named e.g.
@@ -3193,7 +3200,9 @@ function SessionListPanelImpl({
                   mode={cardBars}
                   scheduleRows={viewMode !== "trigger" || key === "dormant" ? scheduleBarRowsFor(session) : []}
                   activeSessionId={activeSessionId}
-                  wake={key === "dormant" ? "parked" : key === "needs_input" ? "claim" : undefined}
+                  wake={key === "needs_input" ? "claim" : undefined}
+                  activity={key === "working" || key === "shipping" || key === "dormant" ? dormantSplit.activity.get(session._id) : undefined}
+                  now={coarseNow}
                   onOpen={handleSelect}
                   onOpenSchedule={openScheduleTarget}
                 />
@@ -3686,13 +3695,15 @@ function SessionListPanelImpl({
             Input, Done to review), the agent right now (Working), then a
             machine event (Dormant). Nothing below Dormant is anyone's move. */}
         {renderSection("Done", statusDone, "text-sol-cyan", undefined, undefined, { floor: true, count: countOf(statusDone, done, "done"), onDropSession: dropSessionOnRest.done })}
-        {renderSection("Working", statusWorking, "text-sol-green", "working", undefined, { floor: true, count: countOf(statusWorking, working, "working") })}
-        {/* Dormant is the section nobody needs to watch: one quiet line per
-            session (the compact list's layout, whatever the person's own
-            setting) plus the line saying what wakes it and when. */}
+        {renderSection("Working", railWorking, "text-sol-green", "working", undefined, { floor: true, count: plus(countOf(statusWorking, working, "working"), movedWeight(dormantSplit.working)) })}
+        <div className="inbox-compact" data-dormant-section>{/* Shipping and Sleeping: one quiet compact line per session, whatever the layout. */}
+          <div data-sv-rail>
+            {renderSection("Shipping", dormantSplit.shipping, "text-sol-text-muted", "shipping", undefined, { key: "shipping", floor: true, count: countOf(statusDormant, dormant, "dormant") === undefined ? undefined : movedWeight(dormantSplit.shipping) })}
+          </div>
+        </div>
         <div className="inbox-compact" data-dormant-section>
           <div data-sv-rail>
-            {renderSection("Sleeping", statusDormant, "text-sol-text-dim", undefined, undefined, { key: "dormant", floor: true, count: countOf(statusDormant, dormant, "dormant"), onDropSession: dropSessionOnRest.dormant })}
+            {renderSection("Sleeping", dormantSplit.sleeping, "text-sol-text-dim", undefined, undefined, { key: "dormant", floor: true, count: plus(countOf(statusDormant, dormant, "dormant"), -movedWeight([...dormantSplit.working, ...dormantSplit.shipping])), onDropSession: dropSessionOnRest.dormant })}
           </div>
         </div>
         </>

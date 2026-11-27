@@ -1,6 +1,7 @@
 import { useInboxStore } from "../../store/inboxStore";
 import { useInterruptVerdict } from "../../hooks/useSessionCommands";
 import { AgentStatusPill } from "./ConversationHeaderBar";
+import { useDrawnInSplit } from "../../hooks/useDrawnInSplit";
 
 /**
  * The header's status slot. Normally the agent's status; when this window's
@@ -23,7 +24,12 @@ export function SessionStatusSlot({
   onRestart: () => void;
 }) {
   const { row, verdict } = useInterruptVerdict(conversationId);
-  if (!verdict || !row || !conversationId) return <AgentStatusPill agentStatus={agentStatus} disconnected={disconnected} live={live} />;
+  // A row the rail draws under Working by its own work, Shipping or Sleeping
+  // has the activity chip beside this slot saying its state (DormantWakeChip),
+  // so the agent's raw status ("Sleeping" while its workers run) would
+  // contradict it: the header says the state once.
+  const chipSays = useDrawnInSplit(conversationId);
+  if (!verdict || !row || !conversationId) return chipSays ? null : <AgentStatusPill agentStatus={agentStatus} disconnected={disconnected} live={live} />;
   const failed = verdict === "failed";
   const act = () => {
     const store = useInboxStore.getState();

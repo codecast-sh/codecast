@@ -4,22 +4,18 @@ import { useLiveWatchRows } from "../../hooks/useLiveWatchRows";
 import { threadStateView } from "../../lib/threadState";
 import { rowPinPredatesTurn, rowVerifiedWake } from "@codecast/shared/contracts/inboxPlacement";
 import { WAKE_BADGE } from "../../lib/triggerBadges";
-import type { TriggerRow } from "../triggerTasks";
 import { SchedChildArrow, SchedFireBadge } from "../TriggerRow";
-import { useDormantWake } from "../../hooks/useDormantWake";
 import { dormantWakeLabel, isLivePark, serverParkOf, type DormantWakeLabel } from "./dormantWake";
 
+/** When a Sleeping row wakes: a trigger's countdown in the line's grey, red only once overdue or failed. */
 export function WakeWhen({ when }: { when: DormantWakeLabel["when"] }) {
-  return typeof when === "string" ? <>{when}</> : <SchedFireBadge task={when.task} />;
+  return typeof when === "string" ? <>{when}</> : <SchedFireBadge task={when.task} quiet />;
 }
 
 // -- Wake rows --
-// DormantWakeRow: every card in the DORMANT section carries one line saying
-// what wakes it and when (dormantWakeOf), whatever the card-bar mode, because
-// a parked card is only safe to ignore when its wake is visible. Nothing
-// verifiable scheduled reads as a claim with the time it returns to the person.
-//
-// DormantClaimRow is the inverse, for a card filed under NEEDS INPUT whose
+// A card from the DORMANT bucket carries one line saying what it is really
+// doing or what wakes it (ActivityLine). DormantClaimRow is the inverse, for a
+// card filed under NEEDS INPUT whose
 // pinned state still declares dormant: the agent SAYS a machine wakes it, but
 // the system verifies no wake (rowVerifiedWake: the wake already
 // landed and the agent never re-declared, the wake lives somewhere the daemon
@@ -30,28 +26,6 @@ export function WakeWhen({ when }: { when: DormantWakeLabel["when"] }) {
 // pin itself is too old to show (its stamp outlives the pin's 48h), and a pin
 // older than the session's last turn says so: that, not the wake, is why it
 // asks.
-export function DormantWakeRow({ session, rows, isActive, onOpen, onOpenSchedule }: {
-  session: InboxSession;
-  rows: TriggerRow[];
-  isActive: boolean;
-  onOpen: (session: InboxSession) => void;
-  onOpenSchedule: (row: TriggerRow) => void;
-}) {
-  const { wake, label: { what, when, warn } } = useDormantWake(session, rows);
-  return (
-    <div data-cc-tech data-card-bar data-dormant-wake={wake.kind} className={`relative transition-colors ${isActive ? "bg-sol-cyan/[0.10]" : ""}`}>
-      <button
-        className="w-full flex items-center gap-1.5 text-left cursor-pointer pl-2 pr-3 py-[3px] hover:bg-sol-blue/[0.05] transition-colors"
-        onClick={() => (wake.kind === "trigger" ? onOpenSchedule(wake.row) : onOpen(session))}
-      >
-        <SchedChildArrow slot label="What wakes this session" className="text-sol-text-dim/70" />
-        <span title={warn ?? undefined} className={`text-meta truncate min-w-0 ${warn ? "text-sol-yellow/90" : "text-sol-text-dim"}`}>{what}</span>
-        <span className={`ml-auto shrink-0 whitespace-nowrap text-meta tabular-nums ${warn ? "text-sol-yellow/90" : "text-sol-text-dim"}`}><WakeWhen when={when} /></span>
-      </button>
-    </div>
-  );
-}
-
 export function DormantClaimRow({ session, isActive, hasOtherRows, onOpen }: {
   session: InboxSession;
   isActive: boolean;

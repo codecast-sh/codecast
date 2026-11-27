@@ -5,7 +5,8 @@
 // it. "run": a live routine run the session spawned, on its own machine.
 // "wait": only waits stand, a waiting wait on its active task (a failed wait
 // never clears, so it wakes nothing) or a wait it set on another task
-// (parked_on_task_ids) that still owes it a wake; a wait rests on a
+// (parked_on_task_ids) that still owes it a wake, or a dormant pin's wait on
+// an open task, a live session or a person's open card (waiting_on); a wait rests on a
 // webhook or a job that can be lost, so the classifier trusts it for 72h.
 // Blocker beats run beats wait.
 // Kept true by makeParkedWakeDb, which every wrapped mutation's db passes
@@ -16,6 +17,7 @@ import type { Doc, Id } from "../_generated/dataModel";
 import { blockersHoldingBack, isTerminalTaskStatus, type TaskWait } from "@codecast/shared/tasks";
 import { taskByRef, taskLookups } from "./taskGraph";
 import { holdsTask } from "./taskHolder";
+import { sessionSettledWhy } from "./sessionSettle";
 
 export type ParkedWakeKind = "none" | "run" | "blocker" | "wait";
 
@@ -24,7 +26,7 @@ export type ParkedWakeKind = "none" | "run" | "blocker" | "wait";
 export const LIVE_RUN_STATUSES = ["pending", "running", "paused"] as const;
 const RUNS_PER_STATUS = 50;
 
-type Conv = Pick<Doc<"conversations">, "_id" | "active_task_id" | "review_of_task_id" | "parked_on_task_ids" | "owner_device_id"> & { parked_wake_kind?: ParkedWakeKind };
+type Conv = Pick<Doc<"conversations">, "_id" | "active_task_id" | "review_of_task_id" | "parked_on_task_ids" | "owner_device_id" | "waiting_on"> & { parked_wake_kind?: ParkedWakeKind };
 
 /** How many tasks a session's waits elsewhere are remembered on, newest last. */
 export const PARKED_ON_CAP = 10;
@@ -82,7 +84,32 @@ export async function parkedWakeOf(ctx: { db: any }, conv: Conv): Promise<{ kind
       .take(RUNS_PER_STATUS);
     if (runs.some((r) => runParksSpawner(r, conv))) return { kind: "run", repairs: held?.repairs ?? [], parkedOn };
   }
-  return { kind: held || parkedOn.length ? "wait" : "none", repairs: held?.repairs ?? [], parkedOn };
+  return { kind: held || parkedOn.length || (await waitingOnOpen(ctx, conv)) ? "wait" : "none", repairs: held?.repairs ?? [], parkedOn };
+}
+
+/** A dormant pin's wait on a task still open or a session not yet settled
+ *  (conversations.waiting_on, lib/waitingOn.ts): the task closing or the
+ *  session settling wakes it and clears the wait, and a target that settled
+ *  without telling holds nothing. A PR wait parks through its armed triggers
+ *  instead; a person's through its open card. */
+async function waitingOnOpen(ctx: { db: any }, conv: Conv): Promise<boolean> {
+  const w = conv.waiting_on;
+  if (w?.kind === "task") {
+    const task: Doc<"tasks"> | null = await taskByRef(ctx, w.ref);
+    return !!task && !isTerminalTaskStatus(task.status);
+  }
+  if (w?.kind === "session") {
+    const id = ctx.db.normalizeId("conversations", w.ref);
+    const target: Doc<"conversations"> | null = id ? await ctx.db.get(id) : null;
+    return !!target && !(await sessionSettledWhy(ctx, target, Date.now()));
+  }
+  // A person's wait holds while the card asked of them is open: its answer
+  // wakes the session (lib/personWait.ts).
+  if (w?.kind === "person" && w.decision_id) {
+    const card: Doc<"session_decisions"> | null = await ctx.db.get(w.decision_id);
+    return card?.status === "pending";
+  }
+  return false;
 }
 
 /** What parks the held task's session: "blocker" (an open task in its
@@ -154,7 +181,7 @@ const BOUND_CAP = 20;
 
 const RUN_FIELDS = ["status", "spawner_conversation_id", "waiting_on_session", "run_kind", "gate_decision_id", "runner_device"] as const;
 const TASK_FIELDS = ["status", "blocked_by", "waits"] as const;
-const CONV_FIELDS = ["active_task_id", "review_of_task_id", "parked_on_task_ids", "owner_device_id"] as const;
+const CONV_FIELDS = ["active_task_id", "review_of_task_id", "parked_on_task_ids", "owner_device_id", "waiting_on"] as const;
 // What makes a session stop holding its task (holdsTask): leaving it, being
 // killed, or turning to review it. Completing does not: a wake resumes it.
 const HOLDER_FIELDS = ["active_task_id", "inbox_killed_at", "review_of_task_id"] as const;

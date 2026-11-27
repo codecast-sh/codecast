@@ -59,6 +59,7 @@ import { proposalAnswersError } from "@codecast/shared/contracts/expectations";
 import { roleManagers } from "@codecast/shared/contracts/orgLead";
 import { invalidImpact } from "@codecast/shared/contracts/decisionImpact";
 import { reopenTaskWaits, scheduleDecisionSettle } from "./taskWaits";
+import { settlePersonWaitCard } from "./lib/personWait";
 import { currentDecisions, decisionSuperseded, newLineMemo, type LineMemo } from "./lib/superseded";
 import { endRunFields } from "./lib/runEnd";
 import { CARD_GATE_NODE_ID, validateChangeCard, type ChangeCard } from "@codecast/shared/contracts/changeCard";
@@ -873,6 +874,8 @@ async function settleResolution(ctx: Ctx, row: DecisionRow, verdict: Verdict, by
   await settleCardApproval(ctx as any, row as any, verdict, by, now);
   // Tasks waiting on this decision settle (task-graph.md TG2).
   await scheduleDecisionSettle(ctx as any, row, by);
+  // A dormant pin waiting on a person ends with its card, or acts on the card that asked its own person about it (lib/personWait.ts).
+  await settlePersonWaitCard(ctx as any, row, verdict, by, now);
   // The owner's own answer asks for their priorities pass, unless a machine's session asked it. It closes no milestone: a card is a question asked mid-work.
   if (verdict.status === "answered") await answerAsksForPass(ctx, row, by);
   // A dismissal delivers no message, so a hosted turn parked on this

@@ -10,6 +10,7 @@ import type { SessionShip } from "../../lib/ship/sessionShip";
 import type { LinkedPr } from "../../lib/sessionPullRequests";
 import type { CoOwners } from "../../lib/coOwners";
 import type { PriorityRankLabel } from "../../store/priorityOrder";
+import type { ActivityKind } from "../../lib/sessionStatus";
 
 // The props of the inbox session card (SessionCardView): the row, its chrome
 // toggles, its live facts and the handlers every gesture leaves through.
@@ -81,7 +82,7 @@ export type SessionCardViewProps = {
   /** The Priorities view only: the rank of the viewer's priority this session serves and its workspace when
    *  not the active one, null for none (no chip) (store/priorityOrder rankLabelOf). Absent in every other view. */
   priorityRank?: PriorityRankLabel;
-  variant?: "default" | "working" | "dismissed" | "stashed" | "snoozed";
+  variant?: "default" | "working" | "shipping" | "dismissed" | "stashed" | "snoozed";
   /** The declared status the row's section header already says (Needs you
    *  under NEEDS YOU): the card leaves that chip off rather than repeat it. */
   sectionStatus?: ThreadStateStatus;
@@ -89,6 +90,8 @@ export type SessionCardViewProps = {
    *  drawn outside a status section. The pin's declared
    *  status shows only where it agrees. Omitted: the declared status stands. */
   placedStatus?: ThreadStateStatus | null;
+  /** Where no section decides the word: a Dormant row's split (lib/railActivity dormantActivityOf). */
+  activity?: ActivityKind | null;
   forkColorKey?: string;
   // Force the compact child-row look for a session that isn't itself a
   // subagent — the trigger view renders a trigger's sessions as sub rows under

@@ -2,7 +2,8 @@
 // a wait waits on, and why a run stopped, read from the journey a run made. Pure, with relative imports only: the web's
 // Ship panel and run card, the inbox card and the phone's run card all say a run with these.
 import { jsonOf } from "./personalRound";
-import type { DeployHold, Journey, JourneyStage, JourneyWait, StageWho } from "./journey";
+import type { Journey, JourneyStage, JourneyWait, StageWho } from "./journey";
+import { holdWords, whoWords } from "@codecast/shared/contracts/shipRun";
 import type { SessionAsk } from "./sessionAsk";
 
 /** A run that stopped on its session's ask, in the past tense: the run ended, so nobody waits on it any more. Older
@@ -67,16 +68,8 @@ const phrase = (labels: string[]) => labels.map((l) => (l !== l.toUpperCase() ? 
 export type JourneyTone = "idle" | "working" | "agent" | "session" | "you" | "wait" | "ok" | "bad";
 
 /** The words for a card nobody the viewer is may answer. */
-/**
- * Who a handle is, as a person reads it: a role (`@handle`) by its title from the roster when the caller has it, the
- * Release Captain's (pl-1075 Words) when it does not; anyone else as named.
- */
-export function whoWords(by: string | null | undefined, roles?: ReadonlyArray<{ handle?: string; name?: string }>): string | null {
-  if (!by) return null;
-  if (!by.startsWith("@")) return by;
-  const title = roles?.find((r) => `@${r.handle}` === by)?.name;
-  return title ?? (by === "@release" ? "Release Captain" : by);
-}
+// Who a handle is, and a Deploy hold's words: the shared ship-run rules (contracts/shipRun).
+export { whoWords, holdWords };
 
 /** A run waiting on its approval card, naming who answers it when the card says (never "paused": production's pause owns that word). */
 export const gateWaitWords = (holder: "person" | "role", who?: string | null) => (who ? `Waiting for approval from ${whoWords(who)}` : "Waiting for approval");
@@ -98,14 +91,6 @@ export const plainNote = (note: string) => note.replace(/^#{1,6}\s+/gm, "").repl
 export const sentBackWords = (n: { stage: string; by: string | null; blocked?: boolean; ask?: SessionAsk | null; what?: string }) =>
   (n.blocked ? (n.ask?.mine ? "Waiting on you" : "Waiting for a person") : n.what ? n.what : n.by ? `Sent back by ${n.by}` : `${n.stage} sent it back`);
 
-/** A landed change's Deploy in a pill's words: "Deploying" only while a deploy carries it. */
-export function holdWords(hold: DeployHold, roles?: ReadonlyArray<{ handle?: string; name?: string }>): { words: string; tone: "working" | "wait" } {
-  if (hold.kind === "out") return { words: "Deploying", tone: "working" };
-  if (hold.kind === "red") return { words: "Waiting for green main", tone: "wait" };
-  if (hold.kind === "ci") return { words: "Waiting on main CI", tone: "wait" };
-  if (hold.kind === "press") return { words: `Waiting for ${whoWords(hold.by, roles) ?? "a person"} to deploy`, tone: "wait" };
-  return { words: "Waiting to deploy", tone: "wait" };
-}
 
 /** Where a session's change is, in the words and tone its Ship control and a run's row both show. */
 export function journeyWords(j: Journey | null): { words: string; tone: JourneyTone } {

@@ -10,7 +10,9 @@ import {
   staleStateNotice,
   statusTag,
   servesHint,
-  doneAskLabel,
+  buriedAskLabel,
+  waitingOnArg,
+  personAskArg,
   registerStateCommand,
 } from "./stateCommand.js";
 import { threadStateStampPath } from "./threadStateStamp.js";
@@ -42,24 +44,24 @@ describe("servesHint", () => {
 });
 
 describe("a Done pin that hands the person something", () => {
-  test("doneAskLabel: a Done pin with an ask line the card would show", () => {
+  test("buriedAskLabel: a Done pin with an ask line the card would show", () => {
     const withYou = "Shipped the fix\nYou: pick the rollout day";
-    expect(doneAskLabel("done", withYou)).toBe("You");
-    expect(doneAskLabel("done", "Shipped\n   You: reopen Chrome")).toBe("You");
-    expect(doneAskLabel("done", "Shipped\n- You: pick a day")).toBe("You");
-    expect(doneAskLabel("done", "Shipped\n* You: pick a day")).toBe("You");
-    expect(doneAskLabel("done", "Shipped\n• You: pick a day")).toBe("You");
-    expect(doneAskLabel("done", "Shipped\nBlocked: needs your key")).toBe("Blocked");
-    expect(doneAskLabel("done", "You: pick the rollout day")).toBe("You");
-    expect(doneAskLabel("blocked", withYou)).toBeNull();
-    expect(doneAskLabel("dormant", withYou)).toBeNull();
-    expect(doneAskLabel("working", withYou)).toBeNull();
-    expect(doneAskLabel("done", "Shipped\nDone: tests green")).toBeNull();
-    expect(doneAskLabel("done", "Shipped\nDone: wrote the You: line guidance")).toBeNull();
+    expect(buriedAskLabel("done", withYou)).toBe("You");
+    expect(buriedAskLabel("done", "Shipped\n   You: reopen Chrome")).toBe("You");
+    expect(buriedAskLabel("done", "Shipped\n- You: pick a day")).toBe("You");
+    expect(buriedAskLabel("done", "Shipped\n* You: pick a day")).toBe("You");
+    expect(buriedAskLabel("done", "Shipped\n• You: pick a day")).toBe("You");
+    expect(buriedAskLabel("done", "Shipped\nBlocked: needs your key")).toBe("Blocked");
+    expect(buriedAskLabel("done", "You: pick the rollout day")).toBe("You");
+    expect(buriedAskLabel("blocked", withYou)).toBeNull();
+    expect(buriedAskLabel("dormant", withYou)).toBe("You");
+    expect(buriedAskLabel("working", withYou)).toBeNull();
+    expect(buriedAskLabel("done", "Shipped\nDone: tests green")).toBeNull();
+    expect(buriedAskLabel("done", "Shipped\nDone: wrote the You: line guidance")).toBeNull();
   });
 
-  test("doneAskLabel: a station's fenced json report is not an ask, as on the card", () => {
-    expect(doneAskLabel("done", 'Proven\n```json\n{\n"note": "x"\n}\nYou: not a row\n```')).toBeNull();
+  test("buriedAskLabel: a station's fenced json report is not an ask, as on the card", () => {
+    expect(buriedAskLabel("done", 'Proven\n```json\n{\n"note": "x"\n}\nYou: not a row\n```')).toBeNull();
   });
 
   // Drive the real command: fake endpoint, fetch recorded, exit trapped, and
@@ -67,6 +69,7 @@ describe("a Done pin that hands the person something", () => {
   const session = "fixturesessionaaaa";
   let dir: string;
   let posts: string[];
+  let bodies: any[];
   let errors: string[];
   const saved = { fetch: globalThis.fetch, exit: process.exit, error: console.error, log: console.log, dir: process.env.CODECAST_DIR };
 
@@ -74,9 +77,11 @@ describe("a Done pin that hands the person something", () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), "state-refusal-"));
     process.env.CODECAST_DIR = dir;
     posts = [];
+    bodies = [];
     errors = [];
-    globalThis.fetch = (async (url: string) => {
+    globalThis.fetch = (async (url: string, init?: { body?: string }) => {
       posts.push(String(url));
+      bodies.push(init?.body ? JSON.parse(init.body) : null);
       return new Response(JSON.stringify({ short_id: "jxfixt1", status: "blocked" }), { status: 200 });
     }) as unknown as typeof fetch;
     process.exit = ((code?: number) => { throw new Error(`exit ${code}`); }) as typeof process.exit;
@@ -130,11 +135,82 @@ describe("a Done pin that hands the person something", () => {
     expect(fs.existsSync(threadStateStampPath(session))).toBe(true);
   });
 
+  test("dormant with a You: line is refused the same way: Sleeping would bury the ask", async () => {
+    expect(await runState("--status", "dormant", "Waiting on CI\nYou: approve the deploy")).toBe("exit 1");
+    expect(errors).toEqual(["A You: line means the person acts. Use --status blocked."]);
+    expect(posts).toEqual([]);
+  });
+
+  test("--on sends what the dormant pin waits on, in its stored form", async () => {
+    expect(await runState("--status", "dormant", "--on", "CT-012", "Waiting on the builder")).toBeNull();
+    expect(await runState("--status", "dormant", "--on", "JX7c6zk", "Waiting on the builder")).toBeNull();
+    expect(await runState("--status", "dormant", "--on", "https://github.com/Codecast-SH/codecast/pull/42", "Waiting on the merge")).toBeNull();
+    expect(await runState("--status", "dormant", "--on", "@Ashot", "--ask", "Which region?", "Waiting on Ashot")).toBeNull();
+    expect(bodies.map((b) => b.on)).toEqual(["ct-12", "jx7c6zk", "codecast-sh/codecast#42", "@ashot"]);
+    expect(errors).toEqual([]);
+  });
+
+  test("--on @person asks them: without --ask it is refused before any write", async () => {
+    expect(await runState("--status", "dormant", "--on", "@ashot", "Waiting on Ashot")).toBe("exit 1");
+    expect(errors[0]).toContain('--on @ashot asks them a question');
+    expect(errors[0]).toContain('--ask "<question>"');
+    expect(await runState("--status", "dormant", "--on", "ct-12", "--ask", "Which?", "Waiting")).toBe("exit 1");
+    expect(errors[1]).toContain("--ask and -o go with a wait on a person");
+    expect(await runState("--status", "dormant", "-o", "US", "Waiting")).toBe("exit 1");
+    expect(posts).toEqual([]);
+  });
+
+  test("--ask and its options ride the pin, read like cast decide -o", async () => {
+    expect(await runState("--status", "dormant", "--on", "@ashot", "--ask", "Which region?", "-o", "US", "-o", "EU :: closer to the customer", "Waiting on Ashot")).toBeNull();
+    expect(bodies[0]).toMatchObject({ on: "@ashot", ask: "Which region?", options: [{ label: "US" }, { label: "EU", description: "closer to the customer" }] });
+    expect(await runState("--status", "dormant", "--on", "@ashot", "--ask", "Which region?", "Waiting on Ashot")).toBeNull();
+    expect(bodies[1].options).toBeUndefined();
+  });
+
+  test("a pin without --on sends none, which clears the wait", async () => {
+    expect(await runState("--status", "dormant", "Waiting on CI")).toBeNull();
+    expect(bodies[0].on).toBeUndefined();
+  });
+
+  test("--on with any status but dormant, or a ref that waits on nothing, is refused before any write", async () => {
+    expect(await runState("--status", "done", "--on", "ct-12", "Shipped")).toBe("exit 1");
+    expect(await runState("--on", "ct-12", "Building")).toBe("exit 1");
+    expect(await runState("--status", "dormant", "--on", "2h", "Later")).toBe("exit 1");
+    expect(await runState("--status", "dormant", "--on", "#42:checks", "CI")).toBe("exit 1");
+    expect(await runState("--status", "dormant", "--on", "sd-4", "A card")).toBe("exit 1");
+    expect(errors[0]).toContain("--on names what a dormant session waits on");
+    expect(errors[1]).toContain("--status dormant");
+    expect(errors[3]).toContain("pr_checks_green");
+    expect(errors[4]).toContain("no --on needed");
+    expect(posts).toEqual([]);
+  });
+
   test("done without a You: line is pinned, even with You: mid-line", async () => {
     expect(await runState("--status", "done", "Shipped\nDone: reworded the You: guidance")).toBeNull();
     expect(errors).toEqual([]);
     expect(posts).toEqual(["https://fixture.invalid/cli/sessions/state/set"]);
     expect(fs.existsSync(threadStateStampPath(session))).toBe(true);
+  });
+});
+
+describe("waitingOnArg", () => {
+  test("a bare #42 takes the checkout's repository, and is refused outside one", async () => {
+    expect(await waitingOnArg("#42", "dormant", async () => "Codecast-SH/codecast")).toEqual({ on: "codecast-sh/codecast#42" });
+    expect((await waitingOnArg("#42", "dormant", async () => undefined)).error).toContain("owner/repo#42");
+  });
+
+  test("no --on, nothing sent", async () => {
+    expect(await waitingOnArg(undefined, "dormant", async () => undefined)).toEqual({});
+  });
+});
+
+describe("personAskArg", () => {
+  test("a person needs the question; nothing else takes one", async () => {
+    expect(await personAskArg("@ashot", "  Which?  ", [])).toEqual({ ask: "Which?" });
+    expect((await personAskArg("@ashot", "  ", [])).error).toContain("--ask");
+    expect(await personAskArg("ct-12", undefined, [])).toEqual({});
+    expect((await personAskArg(undefined, "Q", [])).error).toContain("go with a wait on a person");
+    expect((await personAskArg("@ashot", "Q", Array.from({ length: 10 }, (_, i) => `o${i}`))).error).toContain("nine");
   });
 });
 

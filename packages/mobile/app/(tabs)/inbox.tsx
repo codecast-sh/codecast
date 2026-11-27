@@ -47,6 +47,8 @@ import { SECTION_HEADER_STATUS } from '@codecast/web/lib/sessionStatus';
 import { useInboxPriorityView, usePrioritySections } from '@/hooks/useInboxPriorityView';
 import { useSubagentLines } from '@/hooks/useSubagentLines';
 import { flatAllItems, sectionItems, type InboxListItem } from '@/lib/inboxListItems';
+import { movedWeight } from '@codecast/web/lib/railActivity';
+import { useDormantSplit } from '@/hooks/useDormantSplit';
 
 // A thrown Convex query error (e.g. searchConversations timing out on a
 // multi-word query) must cost the user the RESULTS LIST, not the whole inbox —
@@ -81,7 +83,7 @@ const FIRST_PAINT_ROWS = 14;
 
 /** The web rail section each status heading is (its collapse key), whose mark
  *  the heading wears (web SECTION_HEADER_STATUS). */
-const WEB_SECTION: Record<string, string> = { questions: 'questions', New: 'new', 'Needs You': 'needs_input', Done: 'done', Working: 'working', Dormant: 'dormant' };
+const WEB_SECTION: Record<string, string> = { questions: 'questions', New: 'new', 'Needs You': 'needs_input', Done: 'done', Working: 'working', shipping: 'shipping', Dormant: 'dormant' };
 
 const inboxItemKey = (item: InboxListItem) => item.key;
 
@@ -355,6 +357,10 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit, onO
   // minute; placement itself re-runs on the finer clock.
   const rowMinute = Math.floor(coarseNow / 60_000);
 
+  const dormantSplit = useDormantSplit(dormant, coarseNow, chipFilter);
+  // The split's under-lines belong to the status sections; other lenses draw rows as before.
+  const statusLens = viewMode !== 'recent' && viewMode !== 'time' && viewMode !== 'bucket' && viewMode !== 'plan';
+
   // Read here once for every row (components/SessionItem InboxRowEnv).
   const reviveByConv = useInboxStore((s) => s.blockedReviveRequestedAt);
 
@@ -380,12 +386,13 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit, onO
       underParent={underParent}
       priorityRank={priorityView ? priorityView.rankOf(s) : undefined}
       subagents={subagentLinesByParent?.get(s._id)}
+      activity={statusLens && !underParent ? dormantSplit.activity.get(s._id) : undefined}
     />
     );
     return s._id === heldKillId
       ? <RNView key={s._id} style={styles.heldKill} pointerEvents="none">{row}</RNView>
       : row;
-  }, [openSession, currentId, handleClose, handleSessionLongPress, openRole, rowMinute, reviveByConv, unreadByConv, roleSessionsByLead, heldKillId, placed, pendingSendIds, priorityView, subagentLinesByParent]);
+  }, [openSession, currentId, handleClose, handleSessionLongPress, openRole, rowMinute, reviveByConv, unreadByConv, roleSessionsByLead, heldKillId, placed, pendingSendIds, priorityView, subagentLinesByParent, statusLens, dormantSplit]);
 
   // Collapsible section — collapse state lives in the shared store's
   // collapsedSections. Grouped-view sections keep their historical label keys;
@@ -430,6 +437,8 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit, onO
   const filteredDone = useMemo(() => chipFilter(done), [chipFilter, done]);
   const filteredDormant = useMemo(() => chipFilter(dormant), [chipFilter, dormant]);
   const filteredWorking = useMemo(() => chipFilter(working), [chipFilter, working]);
+  const { working: filteredDormantWorking, shipping: filteredShipping, sleeping: filteredSleeping } = dormantSplit;
+  const railWorking = useMemo(() => (filteredDormantWorking.length ? [...filteredWorking, ...filteredDormantWorking] : filteredWorking), [filteredWorking, filteredDormantWorking]);
   const filteredStashed = useMemo(() => chipFilter(stashedSessions), [chipFilter, stashedSessions]);
   // A stashed card's subagents ride it: they open from its conversation, and
   // "Kill all" names only the rows a kill does not already take down.
@@ -461,8 +470,9 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit, onO
   // chokepoint), identically on web, mobile and the server. QUESTIONS renders
   // ahead of Needs You — same lift web ships; it was missing here.
   // The Priorities view sorts each section by rank; Pinned keeps the person's own order in every view.
-  const { questions: filteredQuestions, newRows: statusNew, needsInput: statusNeedsInput, done: statusDone, dormant: statusDormant, working: statusWorking } =
-    usePrioritySections(priorityView, useMemo(() => chipFilter(questions), [chipFilter, questions]), filteredNew, filteredNeedsInput, filteredDone, filteredDormant, filteredWorking);
+  const { questions: filteredQuestions, newRows: statusNew, needsInput: statusNeedsInput, done: statusDone, dormant: statusSleeping, working: statusWorking } =
+    usePrioritySections(priorityView, useMemo(() => chipFilter(questions), [chipFilter, questions]), filteredNew, filteredNeedsInput, filteredDone, filteredSleeping, railWorking);
+  const statusShipping = useMemo(() => (priorityView ? priorityView.sort(filteredShipping) : filteredShipping), [priorityView, filteredShipping]);
 
   const listData = useMemo((): InboxListItem[] => {
     const sections: InboxListItem[][] = [];
@@ -515,7 +525,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit, onO
     // not theme); the active set regroups by label or plan, with unfiled
     // sessions falling to auto-derived project groups — exactly web's layout.
     if (viewMode === "bucket" || viewMode === "plan") {
-      const active = [...filteredQuestions, ...filteredNew, ...statusNeedsInput, ...statusDone, ...filteredDormant, ...statusWorking];
+      const active = [...filteredQuestions, ...filteredNew, ...statusNeedsInput, ...statusDone, ...filteredDormant, ...filteredWorking];
     sections.push(renderSection("Pinned", filteredPinned, Theme.magenta));
       if (viewMode === "bucket") {
         const { labelGroups, projectGroups } = groupSessionsForLabelView(active, buckets, bucketByConv);
@@ -545,11 +555,17 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit, onO
     // (Working), a machine (Sleeping) — same order as the web panel.
     sections.push(renderSection('Needs You', statusNeedsInput, Theme.accent, "Needs You", countOf(statusNeedsInput, needsInput, sectionCounts.needsInput)));
     sections.push(renderSection("Done", statusDone, Theme.cyan, undefined, countOf(statusDone, done, sectionCounts.done)));
-    sections.push(renderSection("Working", statusWorking, Theme.greenBright, undefined, countOf(statusWorking, working, sectionCounts.working)));
-    sections.push(renderSection('Sleeping', statusDormant, Theme.blue, "Dormant", countOf(statusDormant, dormant, sectionCounts.dormant)));
+    // A card moved out of Dormant takes its nested rows' count along, as web's rail does.
+    const keep = showSubagents ? subagentKeepOf(subagentFilter, coarseNow, currentSessionId) : null;
+    const moved = (rows: InboxSession[]) => movedWeight(rows, keep, subsByParent, placed.nestedSectionOf);
+    const plus = (base: number | undefined, n: number) => (base === undefined ? undefined : base + n);
+    sections.push(renderSection("Working", statusWorking, Theme.greenBright, undefined, plus(countOf(filteredWorking, working, sectionCounts.working), moved(filteredDormantWorking))));
+    const dormantCount = countOf(filteredDormant, dormant, sectionCounts.dormant);
+    sections.push(renderSection('Shipping', statusShipping, Theme.textMuted, "shipping", dormantCount === undefined ? undefined : moved(statusShipping)));
+    sections.push(renderSection('Sleeping', statusSleeping, Theme.blue, "Dormant", plus(dormantCount, -moved([...filteredDormantWorking, ...filteredShipping]))));
     return sections.flat();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sessionsSig gates the sessions map; manualOrderKey gates the getState() manual-order read
-  }, [activeSessions, sessionsSig, sessionsFirstLoad, hydrated, filteredQuestions, filteredPinned, statusWorking, statusNeedsInput, statusDone, statusDormant, filteredNew, statusNew, renderSection, viewMode, sortedAll, subsByParent, showSubagents, subagentFilter, oldestFirst, manualOrderKey, currentSessionId, chipMatches, buckets, bucketByConv, sectionCounts, pinned, newSessions, needsInput, done, dormant, working, appearance, unreadByConv, coarseNow, planRows, placed]);
+  }, [activeSessions, sessionsSig, sessionsFirstLoad, hydrated, filteredQuestions, filteredPinned, statusWorking, statusNeedsInput, statusDone, statusSleeping, statusShipping, filteredWorking, filteredDormant, filteredDormantWorking, filteredShipping, filteredNew, statusNew, renderSection, viewMode, sortedAll, subsByParent, showSubagents, subagentFilter, oldestFirst, manualOrderKey, currentSessionId, chipMatches, buckets, bucketByConv, sectionCounts, pinned, newSessions, needsInput, done, dormant, working, appearance, unreadByConv, coarseNow, planRows, placed]);
 
   // Stashed (agent alive, kill-all) and Closed buckets — the web panel's two
   // hidden sections, collapsed by default behind count toggles.

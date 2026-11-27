@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { _resetChildAuqProbeCacheForTests, collectInboxSessionsByIds, collectInboxSessionsPaginated, computeInboxSessions, computeSessionsLiveness, listClosedSessions, listFavoriteSessions, listKilledSessions, tallyInboxRows } from "./conversations";
+import { _resetChildAuqProbeCacheForTests, collectInboxSessionsByIds, collectInboxSessionsPaginated, computeInboxSessions, computeSessionsLiveness, listClosedSessions, listFavoriteSessions, listKilledSessions } from "./conversations";
+import { tallyInboxRows } from "./lib/sessionsTally";
 import { INBOX_FACT_FIELDS, INBOX_MODEL_ONLY_ROW_FIELDS, INBOX_WINDOW_CAPS, inboxEpoch, isInboxMember, selectWorkingSet, trustedStatusAt, type ProjectableInboxRow } from "@codecast/shared/contracts";
 import { projectInbox } from "@codecast/shared/contracts/inboxPlacement";
 import { GEN_HOUR, genWorld, makeRng } from "@codecast/shared/contracts/__fixtures__/inboxProjectionGen";

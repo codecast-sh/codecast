@@ -93,7 +93,7 @@ function entityQueryArgs(type: EntityType, id: string): { short_id?: string; id?
  * not a bare id. Text-based so it sits inline in markdown prose as well as in
  * header rows. Tap navigates to the object's screen.
  */
-export function EntityPill({ shortId, type: typeProp, id: idProp, fallback, to }: {
+export function EntityPill({ shortId, type: typeProp, id: idProp, fallback, to, neutral = false }: {
   shortId?: string;
   type?: EntityType;
   id?: string;
@@ -101,6 +101,9 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback, to }
   /** The link the pill was drawn from, when it carries more than the id (a
    *  share token): the tap opens through it, so the token reaches the screen. */
   to?: string;
+  /** A reference nothing asks to act on (a Sleeping row's wait): grey, its
+   *  kind's colour, status glyph and change track all in the line's ink. */
+  neutral?: boolean;
 }) {
   const Theme = useTheme();
   const router = useRouter();
@@ -183,7 +186,7 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback, to }
   // A GitHub Actions run is a deploy only once codecast says so; until then, and for every CI run, it stays its link.
   if (type === 'deploy' && !entity && runRefKey(rawId)) return <>{fallback}</>;
 
-  const color = deployState ? toneColor(Theme, deployTone(entity, Date.now())) : webColor(ACCENT[type].text, Theme);
+  const color = neutral ? Theme.textMuted : deployState ? toneColor(Theme, deployTone(entity, Date.now())) : webColor(ACCENT[type].text, Theme);
 
   // One label rule for every type, shared with web: the pill reads as the
   // object's NAME.
@@ -219,14 +222,14 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback, to }
 
   return (
     <RNText
-      style={[styles.pill, { backgroundColor: color + (deployState === 'failed' ? FAILED_TINT : '1a'), color }]}
+      style={[styles.pill, { backgroundColor: neutral ? Theme.textDim + '1f' : color + (deployState === 'failed' ? FAILED_TINT : '1a'), color }]}
       accessibilityLabel={deployState ? `${label}, ${deployPillSuffix(entity, now)}` : prLook?.word ? `${label}, ${prLook.word}` : type === 'priority' && entity ? [label, entity.owner, entity.rank != null ? `rank ${entity.rank}` : null].filter(Boolean).join(', ') : undefined}
       onPress={to ? () => void openLink(to) : route ? () => router.push(route as any) : undefined}
       onLongPress={messageLongPress ? () => messageLongPress([{ label: 'Copy ID', text: entity?.short_id ?? rawId }]) : undefined}
       suppressHighlighting
     >
       {type === 'task' ? (
-        <TaskStatusMark status={entity?.status} size={PILL_GLYPH} />
+        <TaskStatusMark status={entity?.status} size={PILL_GLYPH} color={neutral ? Theme.textDim : undefined} />
       ) : type === 'decision' ? (
         <WebIcon icon={(DECISION_STATE[entity?.status ?? 'pending'] ?? DECISION_STATE.pending).icon} color={color} size={PILL_GLYPH} />
       ) : prLook ? (
@@ -242,12 +245,12 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback, to }
       ) : (
         <MobileIdentityFace row={identityRow} size={12} fallback={<EntityKindIcon type={type} size={PILL_GLYPH} color={color} />} />
       )}
-      {isSession && entity?.status === 'active' && <RNText style={{ color: Theme.greenBright, fontSize: 8 }}>{' '}●</RNText>}
+      {isSession && entity?.status === 'active' && <RNText style={{ color: neutral ? Theme.textDim : Theme.greenBright, fontSize: 8 }}>{' '}●</RNText>}
       {/* NBSP so the icon never strands on the previous line when the pill wraps */}
       {' '}{label}
       {/* The glyph and tone carry a deploy's state; only how long one still waits or goes out follows its name. */}
       {ticks && ` ${deployPillElapsed(entity, now) ?? ''}`}
-      {change && <ChangeWords lifecycle={change} />}
+      {change && <ChangeWords lifecycle={neutral ? { ...change, now: { ...change.now, tone: 'muted' } } : change} />}
     </RNText>
   );
 }

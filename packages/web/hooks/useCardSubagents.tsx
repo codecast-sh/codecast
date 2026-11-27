@@ -1,5 +1,6 @@
 import React, { useCallback, useMemo } from "react";
-import { freshReviveRequestIds, fullRowsCounts, isOwnedChildRow, isSessionHidden, resolveSubagentFilter, resolveSubagentRows, sectionHeaderCount, subagentRowsOf, type ClientUI, type InboxSectionKey, type InboxSession, type PlacedInbox, type SessionDecisionItem, type SubagentRow } from "../store/inboxStore";
+import { freshReviveRequestIds, fullRowsCounts, isOwnedChildRow, isSessionHidden, resolveSubagentFilter, resolveSubagentRows, sectionHeaderCount, subagentRowsOf, useInboxStore, type ClientUI, type InboxSectionKey, type InboxSession, type PlacedInbox, type SessionDecisionItem, type SubagentRow } from "../store/inboxStore";
+import { dormantActivityOf, type SubagentActivityOf } from "../lib/railActivity";
 import { awaitingOkIds } from "../lib/decisionQueue";
 import { withSafetyBlock } from "@codecast/shared/contracts";
 import { isBlockedConversation, isCurrentBlock } from "@codecast/convex/convex/ccAccountsShared";
@@ -12,6 +13,9 @@ import { CardSubagentRows, CardSubagentsLine } from "../components/inbox/Session
 // what the section headers count for them.
 
 const EMPTY_SUBAGENT_ROWS: readonly SubagentRow[] = [];
+
+/** A nested row filed Dormant reads the rail's split, as a card of its own would (lib/railActivity). */
+const nestedActivityOf = (now: number): SubagentActivityOf => (session, bucket) => dormantActivityOf(useInboxStore.getState(), session, bucket, now);
 
 /** What the rail's stale sweep would dismiss: EVERY non-hidden session
  *  untouched since `cutoff`, minus pinned (explicit keep), snoozed or stashed
@@ -92,7 +96,7 @@ export function useCardSubagents({ ui, decisions, liveKeys, placed, now, activeS
     const out = new Map<string, SubagentRow[]>();
     if (hidden) return out;
     for (const id of new Set([...subsByParent.keys(), ...workersNeedingYouByParent.keys()])) {
-      out.set(id, subagentRowsOf([...(subsByParent.get(id) ?? []), ...(workersNeedingYouByParent.get(id) ?? [])], now, filter, activeSessionId));
+      out.set(id, subagentRowsOf([...(subsByParent.get(id) ?? []), ...(workersNeedingYouByParent.get(id) ?? [])], now, filter, activeSessionId, nestedActivityOf(now)));
     }
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -106,7 +110,7 @@ export function useCardSubagents({ ui, decisions, liveKeys, placed, now, activeS
   // A set-aside bucket's cards nest their own rows (hiddenBucketTree), so
   // their rows are worked out where the open bucket draws them.
   const rowsUnder = (parent: InboxSession, bucketSubs?: readonly InboxSession[]): readonly SubagentRow[] =>
-    hidden ? EMPTY_SUBAGENT_ROWS : bucketSubs ? subagentRowsOf(bucketSubs, now, filter, activeSessionId) : (rowsByParent.get(parent._id) ?? EMPTY_SUBAGENT_ROWS);
+    hidden ? EMPTY_SUBAGENT_ROWS : bucketSubs ? subagentRowsOf(bucketSubs, now, filter, activeSessionId, nestedActivityOf(now)) : (rowsByParent.get(parent._id) ?? EMPTY_SUBAGENT_ROWS);
   // Whether the open session is one of these rows in Compact: its row stands
   // in for its card. A role lead's card draws no rows, so there it keeps its card.
   const openIsCompactRow = (parent: InboxSession, rows: readonly SubagentRow[]) =>

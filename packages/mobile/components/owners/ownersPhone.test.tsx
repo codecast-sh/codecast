@@ -31,6 +31,7 @@ mock.module('@/components/Themed', () => ({ Text: host('Text'), TextInput: host(
 mock.module('@/components/org/RoleFace', () => ({ RoleFace: host('RoleFace') }));
 mock.module('@/components/AgentLogo', () => ({ AgentLogoSvg: host('AgentLogoSvg') }));
 mock.module('@/components/chat/ImageViewer', () => ({ ImageViewer: host('ImageViewer') }));
+mock.module('@/components/EntityPill', () => ({ EntityPill: host('EntityPill') }));
 mock.module('@/lib/gestureHandler', () => ({ gestureHandler: () => null }));
 mock.module('@/components/identity', () => ({
   MobileSessionFace: host('MobileSessionFace'), MobileIdentityFace: host('MobileIdentityFace'),

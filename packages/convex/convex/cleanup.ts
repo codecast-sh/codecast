@@ -11,6 +11,7 @@ import { releaseSubagentSlot, subagentEnded } from "./subagentFleet";
 import { cascadeTakesDown, finishedByRow, holdFactsOnServer, nestedGroupOf } from "./lib/closeAside";
 import { leadStillInClose, standsApartFromLead, stillHolds } from "@codecast/shared/contracts/closeCascade";
 import { releaseDeadParentChildrenLater } from "./lib/agentOwnerWaits";
+import { scheduleSessionWaiters } from "./lib/workerSettleTrigger";
 
 // ---------------------------------------------------------------------------
 // Abandoned empty-conversation GC.
@@ -407,6 +408,8 @@ export async function applyHideTransition(
     // settle note would revive the lead the person just closed).
     if (opts?.close) await releaseSubagentSlot(ctx, doc);
     else if (!doc?.persistent) await subagentEnded(ctx, doc, "killed");
+    // Sessions waiting on this one (`cast state --on`) hear it stopped.
+    if (!opts?.close && !doc?.persistent) await scheduleSessionWaiters(ctx, doc._id);
     // Dismiss retires the session — a standing schedule that injects
     // into it must die with it, or its next fire would silently
     // resurrect a session the user just retired. User gestures only:

@@ -100,6 +100,7 @@ test("a Modern card holds still in every state, mid-send, mid-restart and nested
     ["starting", modernCard(settled({ message_count: 0, is_connected: false, started_at: Date.now(), updated_at: Date.now() }))],
     ["done", modernCard(settled(), { sectionStatus: "done" })],
     ["dormant", modernCard(settled(), { sectionStatus: "dormant" })],
+    ["shipping", modernCard(settled(), { variant: "shipping", sectionStatus: "dormant" })],
     ["idle", modernCard(settled({ message_count: 0, started_at: Date.now() - 600_000, updated_at: Date.now() - 600_000 }))],
     ["stashed", modernCard(settled(), { variant: "stashed", ...aside })],
     ["killed", modernCard(settled(), { variant: "dismissed", ...aside })],

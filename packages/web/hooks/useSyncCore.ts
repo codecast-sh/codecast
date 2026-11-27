@@ -11,6 +11,7 @@ import { useSyncMentionTasks } from "./useSyncTasks";
 import { useSyncMentionDocs } from "./useSyncDocs";
 import { useSyncMentionPlans } from "./useSyncPlans";
 import { useSyncTeamShipFeeds } from "./useSessionShipState";
+import { useSyncDormantRunFeeds } from "./useSyncDormantRunFeeds";
 
 export type SyncCoreProfile = "web" | "mobile";
 
@@ -58,6 +59,8 @@ export function useSyncCore(profile: SyncCoreProfile): void {
   useSyncMentionPlans();
   // Where each session's work is on its way to production: the team's change runs and deploy records every inbox card reads.
   useSyncTeamShipFeeds();
+  // The runs of sessions shipping outside the active team's run feed, so the rail's split reads their stage on every platform.
+  useSyncDormantRunFeeds();
 
   // eslint-disable-next-line no-restricted-syntax -- platform wake-source wiring
   useEffect(() => {

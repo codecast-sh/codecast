@@ -984,6 +984,7 @@ export type InboxSession = {
   // holds, or only waits (on that task, or set elsewhere). A verified wake in
   // placeProjectableRow (rowParkedWakeLive). Absent reads as "none".
   parked_wake_kind?: string | null;
+  waiting_on?: WaitingOn | null; // What the dormant pin waits on (`cast state --on`, contracts/waitingOn).
   // When the latest turn of any origin opened (conversations.last_turn_at). A
   // pin older than it parks nothing (rowPinPredatesTurn).
   last_turn_at?: number | null;
@@ -5179,6 +5180,7 @@ export function visualOrderSessions(
     // A conversation's loaded transcript, for the hosted stop rule's fallback
     // (lib/hostedNotice hostedStopOf).
     messagesOf?: (id: string) => readonly any[] | undefined;
+    dormantSplit?: DormantSplitNav | null; // The rail's split of Dormant: those rows walk where they draw.
   } = {},
 ): InboxSession[] {
   const collapsed = opts.collapsedSections;
@@ -5197,13 +5199,13 @@ export function visualOrderSessions(
   // Needs You splits as the panel draws it: the person's real turns, then the
   // hosted conversations that ended on a stop ("Couldn't finish").
   const needs = splitHostedStops(chipped(placed.needsInput), (id) => opts.messagesOf?.(id));
-  // Same order the status view renders: questions, pinned, new, needs input,
-  // couldn't finish, done, working, dormant — the chokepoint's own sections,
-  // so the walk and the render can never disagree.
+  // The status view's order (questions … working, shipping, dormant split as the rail
+  // draws it): the chokepoint's own sections, so the walk and the render agree.
+  const [working, shipping, sleeping] = splitDormantWalk(chipped(placed.working), chipped(placed.dormant), opts.dormantSplit);
   const sections: Array<[InboxSession[], string]> = [
     [chipped(placed.questions), "questions"], [chipped(placed.pinned), "pinned"], [chipped(placed.newSessions), "new"],
     [needs.asks, "needs_input"], [needs.stopped, "hosted_stopped"], [chipped(placed.done), "done"],
-    [chipped(placed.working), "working"], [chipped(placed.dormant), "dormant"],
+    [working, "working"], [shipping, "shipping"], [sleeping, "dormant"],
   ];
   const result: InboxSession[] = [];
   for (const [rows, key] of sections) {
@@ -5710,7 +5712,10 @@ export { ORG_LENS_MODES, groupSessionsForOrgLens, isOrgLensMode, orgLensAvailabl
 import { ORG_LENS_MODES, isOrgLensMode, groupSessionsForOrgLens, orgLensAvailable, orgLensSourcesOf, type OrgLensMode, type OrgLensSources, type OrgLensState } from "./orgLens";
 import { priorityPlaceReader, sortByPriority, type PriorityOrderState, type PriorityRankEntry, type PriorityStanding } from "./priorityOrder";
 import { hostedStopOf, splitHostedStops } from "../lib/hostedNotice";
+import { splitDormantWalk, type DormantSplitNav, type ScheduleNavSets } from "./panelNavSets";
+import type { WaitingOn } from "@codecast/shared/contracts/waitingOn";
 import { SESSION_STATUSES, sessionStatusOf, type SessionStatus, type StatusLive } from "../lib/sessionStatus";
+import type { SubagentActivityOf } from "../lib/railActivity";
 import { nestOwnedChildren, ownedChildrenOf, resolveShowSubagents, resolveSubagentFilter, subagentKept, withOpenOwnedChild, type SubagentFilter, type SubagentRow, type SubagentRowsMode } from "./subagentCards";
 export { cardOfNested, drawnUnderParentIds, flatHeaderCount, fullRowsCounts, isOwnedChildRow, resolveShowSubagents, resolveSubagentFilter, resolveSubagentRows, SUBAGENT_FILTER_STATES, subagentKept, subagentPasses, type SubagentFilter, type SubagentRow, type SubagentRowsMode } from "./subagentCards";
 import { dropOrphanSubagents, hoistNestedUnderParent, inboxNestParentOf, isSpawnedWorker, nestedSessionIds } from "./inboxNesting";
@@ -5834,15 +5839,6 @@ export function favoritesVisualOrder(
   return [...pinned, ...projectGroups.flatMap((g) => g.items)];
 }
 
-// The panel→store bridge for schedule-derived nav data. Trigger rows live in a
-// per-component Convex subscription (agentTasks.webList), so the panel
-// publishes the projections nav needs: the absorbed set (status view) and the
-// trigger view's ordered groups (session ids per trigger, roster order).
-export type ScheduleNavSets = {
-  absorbed: ReadonlySet<string>;
-  triggerOrder?: Array<{ key: string; ids: string[] }>;
-};
-
 // The style on screen, the viewer's own pick. Every reader of the style goes
 // through here, so the shell, the layout defaults and the feed agree.
 export function resolveVisualStyle(ui: { visual_style?: "classic" | "minimal" } | undefined): "classic" | "minimal" {
@@ -5922,8 +5918,8 @@ export function subagentLiveOf(session: InboxSession, now: number, state: Subage
 /** A subagent's state: the verdict its own card shows nested (the rail's
  *  per-row placement, no section, the card's live facts), so Folded, Compact
  *  and Full rows agree. */
-export function subagentStatusOf(session: InboxSession, now: number, live: StatusLive = subagentLiveOf(session, now)): SessionStatus {
-  return sessionStatusOf({ row: session, section: null, placement: railRowPlacement(session, now), now, live, nested: true });
+export function subagentStatusOf(session: InboxSession, now: number, live: StatusLive = subagentLiveOf(session, now), activityOf?: SubagentActivityOf): SessionStatus {
+  const placement = railRowPlacement(session, now); return sessionStatusOf({ row: session, section: null, placement, now, live, nested: true, activity: activityOf?.(session, placement.bucket) });
 }
 
 /** The filter as a test on one nested row, the open one always kept: what
@@ -5935,14 +5931,14 @@ export function subagentKeepOf(filter: SubagentFilter, now: number, focusedId?: 
 /** A card's children with their states: each once, only those the filter
  *  keeps (and `keepId`, the open one, whatever its state), most urgent state
  *  first and newest first within a state. */
-export function subagentRowsOf(children: readonly InboxSession[], now: number, filter: SubagentFilter, keepId?: string | null): SubagentRow[] {
+export function subagentRowsOf(children: readonly InboxSession[], now: number, filter: SubagentFilter, keepId?: string | null, activityOf?: SubagentActivityOf): SubagentRow[] {
   const seen = new Set<string>();
   const rows: SubagentRow[] = [];
   for (const session of children) {
     const id = String(session._id);
     if (seen.has(id)) continue;
     seen.add(id);
-    const status = subagentStatusOf(session, now);
+    const status = subagentStatusOf(session, now, undefined, activityOf);
     if (id !== keepId && !subagentKept(session, status, now, filter)) continue;
     rows.push({ session, status });
   }
@@ -6372,6 +6368,7 @@ function visualOrderOf(state: {
   // order (trigger data lives in a component Convex subscription, never the
   // store). Null until the panel has schedule data.
   scheduleNavSets?: ScheduleNavSets | null;
+  dormantSplitNav?: DormantSplitNav | null;
   // Pending `cast decide` rows — with the viewer's own sessions they define the
   // status view's QUESTIONS section (the questions bucket). Optional for callers
   // (tests) that model no questions.
@@ -6440,6 +6437,7 @@ function visualOrderOf(state: {
     priorityRankOf: priorityRankOfForFilters(state, chipProjectFilters(state)),
     priorityPlaceOf: mode === "priorities" ? priorityPlaceReader(state) : undefined,
     messagesOf: (id) => state.messages?.[id],
+    dormantSplit: mode === "grouped" || mode === "priorities" ? state.dormantSplitNav : null, // the lenses regroup Dormant whole
   });
   if (mode === "bucket") {
     const { labelGroups, projectGroups } = groupSessionsForLabelView(base, state.buckets, bucketByConv);
@@ -6618,6 +6616,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // by GlobalSessionPanel from its agentTasks.webList subscription. Ephemeral:
   // never persisted or synced.
   scheduleNavSets: ScheduleNavSets | null;
+  dormantSplitNav: DormantSplitNav | null; // The rail's split of Dormant for keyboard nav. Ephemeral.
   // The groupings the inbox panel offers as tabs, published by
   // GlobalSessionPanel so Ctrl+, cycles exactly the tabs on screen. Null
   // while no panel shows them. Ephemeral: never persisted or synced.
@@ -7204,6 +7203,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // schedule row) for keyboard nav. Ephemeral raw-set state — the schedule data
   // itself lives in the agentTasks.webList Convex subscription, never the store.
   setScheduleNavSets: (sets: ScheduleNavSets | null) => void;
+  setDormantSplitNav: (split: DormantSplitNav | null) => void;
   setInboxViewModesShown: (modes: readonly InboxViewMode[] | null) => void;
   setTriggerStripRequest: (req: TriggerStripRequest | null) => void;
   setComposerPrefill: (req: { convId: string; fill: string; add: string } | null) => void;
@@ -10593,6 +10593,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   lastFocusedConversationId: null,
   collapsedSections: {},
   scheduleNavSets: null,
+  dormantSplitNav: null,
   inboxViewModesShown: null,
   triggerStripRequest: null,
   composerPrefill: null,
@@ -14055,6 +14056,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   setScheduleNavSets: (sets: ScheduleNavSets | null) =>
     set({ scheduleNavSets: sets }),
 
+  setDormantSplitNav: (split: DormantSplitNav | null) => set({ dormantSplitNav: split }), // Raw set: ephemeral, like the schedule sets.
   // Raw set: ephemeral, like the nav sets above.
   setInboxViewModesShown: (modes: readonly InboxViewMode[] | null) =>
     set({ inboxViewModesShown: modes }),

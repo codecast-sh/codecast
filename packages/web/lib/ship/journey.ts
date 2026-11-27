@@ -20,6 +20,7 @@ import { askStopWhy, readableWhy, stopWhy } from "./journeyWords";
 import { resumeOf, type ResumeAt } from "./resumeAt";
 import { roundsOnOwnResults } from "./ownRound";
 import type { SessionAsk } from "./sessionAsk";
+import { canAnswer, deployHold, gateOpen, type DeployHold, type GateDecision } from "@codecast/shared/contracts/shipRun";
 
 export { insideWords, type InsideRoute, type StageInside } from "./segmentInside";
 
@@ -143,37 +144,18 @@ export type JourneyRun = {
   node_statuses?: ReadonlyArray<NodeStatus> | null;
 };
 
-/** The parts of a decision row that say who may answer it (convex session_decisions). */
-export type GateDecision = {
-  user_id?: string | null;
-  holder?: { kind: "user" | "role"; id: string } | null;
-  passed_to?: { kind: "user" | "role"; id: string } | null;
-  asked_user_ids?: ReadonlyArray<string> | null;
-};
+// Who may answer a decision, whether a gate holds a run, and where a Deploy
+// stands are the shared ship-run rules (contracts/shipRun), which the server's
+// `cast sessions` split reads too.
+export { canAnswer, gateOpen, deployHold, type GateDecision, type DeployHold };
 
 /** Who looks at the run, and the run's open card when the store holds it. */
 /** `holder_name`: who answers the open card, by name, when the store knows them. `ask`: what the session the run waits
  *  on asks a person, when it pinned blocked. */
 export type JourneyViewer = { id: string | null; decision?: GateDecision | null; holder_name?: string | null; ask?: SessionAsk | null };
 
-/**
- * Whether the viewer may answer a decision: the person it was passed to, else its user holder and the people it was
- * asked of. A role's decision is the role's to answer. Unknown (no row, no viewer) is never yes.
- */
-export function canAnswer(d: GateDecision | null | undefined, viewer: string | null | undefined): boolean {
-  if (!d || !viewer) return false;
-  const to = d.passed_to ?? d.holder ?? null;
-  if (to?.kind === "role") return false;
-  const people = d.passed_to ? [d.passed_to.id] : [...(to ? [to.id] : []), ...(d.asked_user_ids ?? (d.user_id ? [d.user_id] : []))];
-  return people.some((p) => String(p) === viewer);
-}
-
 /** Whether a decision waits on a role or on people. */
 export const holderOf = (d: GateDecision | null | undefined): "person" | "role" => ((d?.passed_to ?? d?.holder)?.kind === "role" ? "role" : "person");
-
-/** Whether a gate holds the run for an answer: paused on a card nobody has answered. */
-export const gateOpen = (run: Pick<JourneyRun, "status" | "gate_decision_id" | "gate_prompt" | "gate_decision_status">) =>
-  run.status === "paused" && !!(run.gate_decision_id || run.gate_prompt) && (run.gate_decision_status ?? "pending") === "pending";
 
 /** A step's report that carries the reviewer's ship into its round (the change flow's PR station, prStation.ts). */
 const KEPT_SHIP = /"reviewed"\s*:\s*\{[^{}]*"verdict"\s*:\s*"ship"/;
@@ -306,23 +288,6 @@ export function verdictsOf(said: string | null | undefined): Verdicts | null {
   return ci || review ? { ci, review } : null;
 }
 
-/**
- * Where a landed change's Deploy stands, read from its line (`cast flow await-deploy`): going out, held on main's CI
- * that is red (the line's own "(red …)"), waiting on main's CI that is still running or not there yet, waiting for a
- * person or a named role to send it (`by`), or waiting on targets that go out by themselves.
- */
-export type DeployHold = { kind: "out" | "red" | "ci" | "press" | "wait"; by: string | null };
-export function deployHold(line: string | null | undefined): DeployHold {
-  const hold = (kind: DeployHold["kind"], by: string | null = null): DeployHold => ({ kind, by });
-  if (!line) return hold("wait");
-  if (/\bdp-\d+ sending\b|going out in dp-/.test(line)) return hold("out");
-  if (/waiting on main CI at \w+ \(red\b/.test(line)) return hold("red");
-  if (/waiting on main CI|once main CI is green|waiting for main CI/.test(line)) return hold("ci");
-  const named = line.match(/waiting for (.+?) to send it/)?.[1];
-  if (named) return hold("press", named);
-  if (/waiting for (a press|a person)|on a press/.test(line)) return hold("press");
-  return hold("wait");
-}
 
 /**
  * Whether a landing step that passed put the change on main when no sha was recorded (`ship__shipped` reports only its

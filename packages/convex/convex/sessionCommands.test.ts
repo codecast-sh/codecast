@@ -3,7 +3,8 @@ import { hibernate, results, rewindFiles } from "./sessionCommands";
 import { enqueueHibernateSession, enqueueResumeSession } from "./daemonCommandUtils";
 import { makeFakeDb } from "./testDb";
 import { normalizeWorkStateFilter } from "./inboxFilters";
-import { tallyInboxRows, computeInboxSessions, computeSessionsLiveness, sendEscapeToSession } from "./conversations";
+import { computeInboxSessions, computeSessionsLiveness, sendEscapeToSession } from "./conversations";
+import { tallyInboxRows } from "./lib/sessionsTally";
 
 function fixture() {
   const db = makeFakeDb({

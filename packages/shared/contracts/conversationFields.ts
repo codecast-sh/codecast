@@ -98,6 +98,8 @@ export const CONVERSATION_FIELDS = {
   // The priority this session serves and its milestone, as the pass mapped them (convex/priorityPassRun). The inbox's Priorities order reads them.
   priority_id: { send: true },
   priority_step_key: { send: true },
+  // What a dormant pin waits on (`cast state --on`, contracts/waitingOn): server-written, read by the rows' under-lines.
+  waiting_on: { send: true },
 } as const satisfies Record<string, ConversationFieldSpec>;
 
 export type ConversationField = keyof typeof CONVERSATION_FIELDS;

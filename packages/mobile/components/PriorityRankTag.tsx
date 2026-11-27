@@ -11,7 +11,10 @@ import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { rankTitle, workspaceMarkOf, type PriorityRankLabel } from '@codecast/web/store/priorityOrder';
 import { TEAM_ICON_EMOJI } from '@/lib/teamIconEmoji';
 
-export function PriorityRankTag({ rank }: { rank: NonNullable<PriorityRankLabel> }) {
+/** `neutral`: grey, on a row that asks nothing of the eye (Shipping,
+ *  Sleeping); `workspaceMark` false leaves the workspace's mark off, as on a
+ *  Shipping row, where a rocket mark would read as the section's own. */
+export function PriorityRankTag({ rank, neutral = false, workspaceMark = true }: { rank: NonNullable<PriorityRankLabel>; neutral?: boolean; workspaceMark?: boolean }) {
   const Theme = useTheme();
   const teams = useInboxStore((s) => (rank.workspace ? s.teams : null));
   const viewerId = useInboxStore((s) => (s.currentUser?._id ? String(s.currentUser._id) : null));
@@ -24,11 +27,11 @@ export function PriorityRankTag({ rank }: { rank: NonNullable<PriorityRankLabel>
       accessibilityRole="link"
       accessibilityLabel={rankTitle(rank, mark)}
     >
-      <Feather name="target" size={10} color={Theme.cyan} />
-      <Text style={styles.text} numberOfLines={1}>
+      <Feather name="target" size={10} color={neutral ? Theme.textMuted : Theme.cyan} />
+      <Text style={[styles.text, neutral && { color: Theme.textMuted }]} numberOfLines={1}>
         #{rank.rank}{rank.title ? <Text style={styles.title}> {rank.title}</Text> : null}
       </Text>
-      {mark && (mark.personal
+      {mark && workspaceMark && (mark.personal
         ? <Feather name="user" size={10} color={Theme.textMuted0} />
         : mark.icon && TEAM_ICON_EMOJI[mark.icon]
           ? <Text style={styles.emoji}>{TEAM_ICON_EMOJI[mark.icon]}</Text>

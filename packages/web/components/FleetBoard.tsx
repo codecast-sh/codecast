@@ -39,6 +39,7 @@ import { useIsModernStyle } from "../hooks/useVisualStyle";
 import { isModernStyle } from "../lib/visualStyle";
 import { ModernFleetBody } from "./fleet/ModernFleetBoard";
 import { hostedStopOf } from "../lib/hostedNotice";
+import { dormantSplitSig, rowActivity } from "../lib/railActivity";
 import { isHostedAgentType } from "@codecast/shared/contracts";
 import { modernDialog, modernScrim } from "./ui/modernLook";
 import { lazyNamed } from "../lib/lazyNamed";
@@ -452,13 +453,19 @@ export function FleetBoard() {
   // Modern bands the rail's own sections in the status vocabulary
   // (fleet/ModernFleetBoard); Classic and Minimal keep the bands above.
   const modern = useIsModernStyle();
+  // What splits the Dormant band into Working, Shipping and Sleeping
+  // (lib/railActivity), as one signature over just those rows: the board
+  // wakes when a tile's split moves, never on a run or deploy that leaves it.
+  const splitSig = useInboxStore((st) => (modern ? dormantSplitSig(st, categorized.dormant, coarseNow) : ""));
   const modernOpts = useMemo(() => ({
     queued: s.sessionsWithQueuedMessages,
     pendingSendIds,
     reviveAt: s.blockedReviveRequestedAt,
     now: coarseNow,
     stopped: (row: InboxSession) => (isHostedAgentType(row.agent_type) ? hostedStopOf(row, useInboxStore.getState().messages[row._id]) : null),
-  }), [s.sessionsWithQueuedMessages, pendingSendIds, s.blockedReviveRequestedAt, coarseNow]);
+    activityOf: (row: InboxSession) => rowActivity(useInboxStore.getState(), row, coarseNow).state,
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- splitSig is the split's dep
+  }), [s.sessionsWithQueuedMessages, pendingSendIds, s.blockedReviveRequestedAt, coarseNow, splitSig]);
 
   const total = bands.needsYou.length + bands.running.length + bands.finished.length;
 
