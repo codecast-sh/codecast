@@ -44,8 +44,8 @@ async function world(features: Record<string, boolean> = { retire_on_live: true 
       node_statuses: [{ node_id: "land__ci", status: "failed", completed_at: NOW - 20 * MIN }, { node_id: "stopped", status: "failed", completed_at: NOW - 19 * MIN }],
       fail_reason: "Stopped: CI failed", created_at: NOW - HOUR, updated_at: NOW - 10 * MIN, ...fields,
     });
-  const target = (name: string, paths: string[]) =>
-    insert("deploy_targets", { workspace: ids.ws, team_id: ids.team, repository: REPO, name, runs: "push", live: { kind: "marker" }, policy: "press", paths, publisher_user_id: ids.me, published_at: 1, updated_at: 1 });
+  const target = (name: string, paths: string[], unless?: string[]) =>
+    insert("deploy_targets", { workspace: ids.ws, team_id: ids.team, repository: REPO, name, runs: "push", live: { kind: "marker" }, policy: "press", paths, ...(unless ? { unless } : {}), publisher_user_id: ids.me, published_at: 1, updated_at: 1 });
   /** A commit on main at `mainAt`, made by the session `conv` (its trailer names it) when given. */
   const commitRow = (n: number, files: string[], mainAt: number, conv?: any, patch?: string) =>
     ({ sha: sha(n), message: conv ? `change ${n}\n\nCodecast-Session: https://codecast.sh/conversation/${conv}` : `change ${n}`, author_name: "Ana", author_email: "a@x", timestamp: mainAt, files_changed: files.length, insertions: 1, deletions: 0, repository: REPO, team_id: ids.team, branch: "main", files: files.map((f) => ({ ...file(f), ...(patch ? { patch } : {}) })), main_at: mainAt, ...(conv ? { conversation_id: conv } : {}) });
@@ -119,6 +119,17 @@ describe("cast release sweep's read", () => {
     await w.commit(4, ["api/d.ts"], NOW - 3 * HOUR);
     const s: any = await w.sweep();
     expect(s.late_targets).toEqual([{ target: "web", repository: REPO, commits: 1, oldest_sha: sha(2), waiting_since: NOW - 2 * HOUR, deadline_ms: 30 * MIN, open: null }]);
+  });
+
+  test("a commit that touches only what a target exempts (its unless) never makes it late", async () => {
+    const w = await world();
+    await w.target("web", ["web/**"], ["**/*.test.tsx"]);
+    await w.commit(1, ["web/a.tsx"], NOW - 5 * HOUR);
+    await w.live("web", 1);
+    await w.commit(2, ["web/a.test.tsx"], NOW - 2 * HOUR);
+    expect((await w.sweep() as any).late_targets).toEqual([]);
+    await w.commit(3, ["web/b.tsx", "web/b.test.tsx"], NOW - HOUR);
+    expect((await w.sweep() as any).late_targets.map((t: any) => [t.target, t.oldest_sha])).toEqual([["web", sha(3)]]);
   });
 
   test("a busy repository whose commits carry large patches still answers: 200 late commits of 100 KB each, past one query's 16 MiB", async () => {
