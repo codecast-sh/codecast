@@ -7255,6 +7255,9 @@ export default defineSchema({
     current_session_id: v.optional(v.id("conversations")),
     created_from_conversation_id: v.optional(v.id("conversations")),
     created_from_insight_id: v.optional(v.id("session_insights")),
+    // The call this plan was pulled from (a transcripts row). Set by `cast
+    // plan create --from-call`.
+    from_call: v.optional(v.id("transcripts")),
     doc_id: v.optional(v.id("docs")),
     plan_version: v.optional(v.number()),
     drive_state: v.optional(

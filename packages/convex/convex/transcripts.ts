@@ -79,6 +79,7 @@ import {
 import { characterOf } from "@codecast/shared/contracts/sessionCharacter";
 import { canAccessConversation, requireAccessibleDoc } from "./lib/access";
 import { verifyApiToken } from "./apiTokens";
+import { notFound } from "./lib/auth";
 import { nextShortId } from "./counters";
 import { enqueuePush } from "./pushRouter";
 import { claimRoomRows, liveTranscriptFor, postEvent } from "./callChat";
@@ -1972,6 +1973,17 @@ export async function resolveCallRef(
     t = id ? await ctx.db.get(id) : null;
   }
   return t && (await canReadCall(ctx, userId, t, opts)) ? t : null;
+}
+
+/** A `from_call` write: the call a task, plan or priority was pulled from,
+ *  named as prose names it (`cl-42` or a full id) and readable by the writer.
+ *  Undefined writes nothing; "" clears the link. */
+export async function resolveFromCall(ctx: any, userId: Id<"users">, ref: string | undefined): Promise<Id<"transcripts"> | null | undefined> {
+  if (ref === undefined) return undefined;
+  if (!ref.trim()) return null;
+  const call = await resolveCallRef(ctx, userId, ref);
+  if (!call) notFound(`Call not found: ${ref}`);
+  return call._id;
 }
 
 /** The most turns one embedded excerpt carries; a longer range shows its

@@ -38,6 +38,7 @@ import { inlineForeignText } from "@codecast/shared/contracts";
 import { listLiveManagedSessions, liveConversationIdSet } from "./lib/liveSessions";
 import { graphOutside, sortGraphRefs, stampGraphStatus } from "./lib/taskGraph";
 import { patchDepMirror } from "./tasks";
+import { resolveFromCall } from "./transcripts";
 import { isTeamMember, teamVisibleConvTeam } from "./privacy";
 import { linkConversationToEntityBestEffort } from "./conversationLinks";
 import { cliDocWriter, docLiveState, docRevision, writeDocBody } from "./lib/docBody";
@@ -75,6 +76,8 @@ export const create = mutation({
     join_policy: v.optional(v.string()),
     join_k: v.optional(v.number()),
     messaging_policy: v.optional(messagingPolicyValidator),
+    // `cast plan create --from-call cl-42`: the call this plan came out of.
+    from_call: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
@@ -109,6 +112,7 @@ export const create = mutation({
       project_id = pid;
     }
 
+    const from_call = (await resolveFromCall(ctx, auth.userId, args.from_call)) ?? undefined;
     const short_id = await nextShortId(ctx.db, "pl");
 
     const id = await db.insert("plans", {
@@ -129,6 +133,7 @@ export const create = mutation({
       entries: [],
       session_ids: [],
       created_from_conversation_id,
+      from_call,
       model_stylesheet: args.model_stylesheet,
       fidelity: args.fidelity as any,
       join_policy: args.join_policy as any,
