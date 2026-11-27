@@ -168,11 +168,26 @@ export function callFilmed(t: Pick<Doc<"transcripts">, "video_runs">): boolean {
  *  walking its whole history. */
 const CALL_LIST_SCAN_CAP = 400;
 
-export async function listCallsCore(ctx: any, userId: Id<"users">, limit: number) {
-  const memberships = await ctx.db
-    .query("team_memberships")
-    .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
-    .collect();
+/** A call the Personal workspace may list, from the record alone: the
+ *  viewer's room of one, a private session huddle, or a recording not shared
+ *  into a team. Personal walks only the calls the viewer started, so this
+ *  keeps the team's out of its page; the client narrows it the rest of the
+ *  way (web lib/calls/personalCalls callOnlyMine). */
+function personalCandidate(t: Doc<"transcripts">, userId: Id<"users">): boolean {
+  if (isRoomlessKey(t.room_key)) return !t.rec_shared;
+  if (t.room_key === `dm:${userId}`) return true;
+  return !!t.private && parseRoomKey(t.room_key)?.kind === "session";
+}
+
+export async function listCallsCore(ctx: any, userId: Id<"users">, limit: number, opts: { personal?: boolean } = {}) {
+  // Personal: only the viewer's own shelf below, so 100 newer team calls
+  // never push their own calls off the page.
+  const memberships = opts.personal
+    ? []
+    : await ctx.db
+        .query("team_memberships")
+        .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+        .collect();
   // Each source keeps its own newest `limit` calls the viewer would see,
   // filtering WHILE it walks. Taking `limit` rows and filtering afterwards
   // let a team whose newest rows are silent huddles contribute nothing, so
@@ -213,7 +228,7 @@ export async function listCallsCore(ctx: any, userId: Id<"users">, limit: number
         .query("transcripts")
         .withIndex("by_creator_started", (q: any) => q.eq("started_by", userId))
         .order("desc"),
-      (t) => isRoomlessKey(t.room_key),
+      opts.personal ? (t) => personalCandidate(t, userId) : (t) => isRoomlessKey(t.room_key),
     )),
   );
   rows.sort((a, b) => b.started_at - a.started_at);

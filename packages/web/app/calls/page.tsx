@@ -1077,11 +1077,12 @@ export default function CallsPage() {
   // Local first: the history paints from the cached list on the first frame
   // and the live answer only keeps it current. A skeleton is honest only
   // while nothing is cached and nothing has answered.
-  const { calls: readable, ready: callsReady, error: callsError, retry: retryCalls } = useCallList(100);
-  // Personal lists only the calls nobody else can read (callOnlyMine); a team
-  // workspace lists everything the viewer may read. A link to any readable
-  // call still opens, whichever list it is in.
+  // Personal lists only the calls nobody else can read (callOnlyMine), its
+  // page walked from the viewer's own calls; a team workspace lists
+  // everything the viewer may read. A link to any readable call still opens,
+  // whichever list it is in.
   const personalViewer = useInboxStore(personalViewerOf);
+  const { calls: readable, ready: callsReady, error: callsError, retry: retryCalls } = useCallList(100, personalViewer);
   const calls = useMemo(
     () => (personalViewer === null ? readable : readable.filter((r) => callOnlyMine(r, personalViewer))),
     [readable, personalViewer],
@@ -1161,7 +1162,11 @@ export default function CallsPage() {
     <button
       type="button"
       onClick={() => useInboxStore.getState().openSettingsModal("team")}
-      title="Huddles are off for this team. A team admin turns them on in Settings › Team. Your voice notes stay here either way."
+      title={
+        personalViewer === null
+          ? "Huddles are off for this team. A team admin turns them on in Settings › Team. Your voice notes stay here either way."
+          : "Huddles are off in every team of yours, and Personal borrows them from one. A team admin turns them on in Settings › Team. Your voice notes stay here either way."
+      }
       className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-sol-yellow/40 px-2 py-0.5 text-meta text-sol-yellow transition-colors hover:bg-sol-yellow/10"
     >
       Huddles off · Settings

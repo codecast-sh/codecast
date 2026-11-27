@@ -7,6 +7,7 @@ import { useCollectionRows } from "./useCollectionRows";
 import { isConvexId, useInboxStore } from "../store/inboxStore";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { callNeedsPlace, type CallPlace } from "../lib/calls/roomLabels";
+import { callOnlyMine } from "../lib/calls/personalCalls";
 
 // The viewer's calls and recordings, local first: transcripts.webListCalls
 // feeds `callList` and transcripts.webGetCall feeds `callDetails` (both
@@ -15,8 +16,10 @@ import { callNeedsPlace, type CallPlace } from "../lib/calls/roomLabels";
 
 // Every field a list row draws: the web's history row also shows who spoke,
 // whether the huddle is waiting out its idle grace, and a recording's scope.
+// Who spoke by id and the record's privacy too: Personal's filter reads them
+// (lib/calls/personalCalls).
 const listSig = (c: any) =>
-  `${c.title ?? ""}|${c.status}|${c.idle_since ?? ""}|${c.ended_at ?? ""}|${c.summary_status ?? ""}|${c.transcribe_status ?? ""}|${c.last_seq ?? ""}|${(c.participants ?? []).map((p: any) => p.name).join(",")}|${c.rec_shared ? 1 : 0}|${c.team_id ?? ""}`;
+  `${c.title ?? ""}|${c.status}|${c.idle_since ?? ""}|${c.ended_at ?? ""}|${c.summary_status ?? ""}|${c.transcribe_status ?? ""}|${c.last_seq ?? ""}|${(c.participants ?? []).map((p: any) => `${p.id}:${p.name}`).join(",")}|${c.rec_shared ? 1 : 0}|${c.private ? 1 : 0}|${c.team_id ?? ""}`;
 const newestFirst = (a: any, b: any) => (b.started_at ?? 0) - (a.started_at ?? 0);
 
 /** What one answer of the list is the whole truth about. The list is a delta
@@ -26,20 +29,30 @@ const newestFirst = (a: any, b: any) => (b.started_at ?? 0) - (a.started_at ?? 0
  *  unshared recording would never leave. A full page vouches for everything
  *  back to its oldest call; a short one is everything the server would list.
  *  Older cached calls are outside the window and kept. */
-export function callListPruneScope(rows: any[] | null | undefined, limit: number) {
+export function callListPruneScope(rows: any[] | null | undefined, limit: number, personalViewer: string | null = null) {
   if (!Array.isArray(rows)) return undefined;
   const floor = rows.length >= limit ? Math.min(...rows.map((r) => r.started_at ?? 0)) : -Infinity;
   return {
-    pruneAbsentScope: (row: any) => isConvexId(String(row?._id ?? "")) && (row.started_at ?? 0) >= floor,
+    // Personal's page vouches only for the viewer's own calls; the team's
+    // cached calls are outside what it answers for.
+    pruneAbsentScope: (row: any) =>
+      isConvexId(String(row?._id ?? "")) && (row.started_at ?? 0) >= floor && (personalViewer === null || callOnlyMine(row, personalViewer)),
   };
 }
 
 /** The newest page of calls, newest first. `ready` is the first live answer;
  *  before it the cached rows stand in. `error` (with `retry`) is a feed that
  *  failed, for a surface with nothing cached to show instead. */
-export function useCallList(limit = 50): { calls: any[]; ready: boolean; error?: Error; retry: () => void } {
-  const syncOpts = useMemo(() => (data: any) => callListPruneScope(data, limit), [limit]);
-  const { ready, error, retry } = useSyncCollection("callList", api.transcripts.webListCalls, { limit }, { syncOpts });
+export function useCallList(
+  limit = 50,
+  /** The Personal workspace's viewer: the page is walked from their own calls
+   *  (transcripts.webListCalls `personal`). */
+  personalViewer: string | null = null,
+): { calls: any[]; ready: boolean; error?: Error; retry: () => void } {
+  const personal = personalViewer !== null;
+  const syncOpts = useMemo(() => (data: any) => callListPruneScope(data, limit, personalViewer), [limit, personalViewer]);
+  const args = useMemo(() => (personal ? { limit, personal: true } : { limit }), [limit, personal]);
+  const { ready, error, retry } = useSyncCollection("callList", api.transcripts.webListCalls, args, { syncOpts });
   const calls = useCollectionRows("callList", { sig: listSig, sort: newestFirst });
   return { calls, ready: ready || !!error, error, retry };
 }

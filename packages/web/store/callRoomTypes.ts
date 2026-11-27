@@ -13,6 +13,9 @@ export type CallRoomFlags = {
    *  locked; opening the door clears it), or a room only its owner may enter
    *  (unlocked, and no door opens it). Absent on rows from an older server. */
   private?: boolean;
+  /** Only its owner may enter (calls.getLiveRooms `owner_only`): private
+   *  whatever its lock says, and no door opens it. */
+  owner_only?: boolean;
   /** The huddle turned transcription off (calls.setRoomTranscribeOff) — what
    *  keeps every seated client's auto-scribe from starting it again. */
   transcribe_off: boolean;

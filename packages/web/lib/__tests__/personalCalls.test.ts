@@ -71,14 +71,17 @@ describe("the calls only the viewer can read", () => {
 });
 
 describe("Personal's Live now", () => {
-  const room = (over: Record<string, unknown>) => ({ roomKey: "", private: false, members: [{ user_id: ME }], ...over });
-  test("your room of one and a private room you sit in alone", () => {
-    expect(liveRoomOnlyMine(room({ roomKey: `dm:${ME}` }), ME)).toBe(true);
-    expect(liveRoomOnlyMine(room({ roomKey: "session:c1", private: true }), ME)).toBe(true);
+  const owners: Record<string, string> = { mine: ME, anns: ANN };
+  const ownerOf = (id: string) => owners[id] ?? null;
+  const room = (over: Record<string, unknown>) => ({ roomKey: "", ownerOnly: false, ...over });
+  test("your room of one, and an owner-only room on your own session", () => {
+    expect(liveRoomOnlyMine(room({ roomKey: `dm:${ME}` }), ME, ownerOf)).toBe(true);
+    expect(liveRoomOnlyMine(room({ roomKey: "session:mine", ownerOnly: true }), ME, ownerOf)).toBe(true);
   });
-  test("not a team room, nor a private room with somebody else in it", () => {
-    expect(liveRoomOnlyMine(room({ roomKey: "session:c1" }), ME)).toBe(false);
-    expect(liveRoomOnlyMine(room({ roomKey: "session:c1", private: true, members: [{ user_id: ME }, { user_id: ANN }] }), ME)).toBe(false);
+  test("not a private people room you wait in alone, nor a teammate's owner-only room you were rung into", () => {
+    expect(liveRoomOnlyMine(room({ roomKey: `dm:${ANN}:${ME}` }), ME, ownerOf)).toBe(false);
+    expect(liveRoomOnlyMine(room({ roomKey: "session:anns", ownerOnly: true }), ME, ownerOf)).toBe(false);
+    expect(liveRoomOnlyMine(room({ roomKey: "session:mine" }), ME, ownerOf)).toBe(false);
   });
 });
 
@@ -87,16 +90,20 @@ describe("a room only its owner may enter", () => {
   // getLiveRooms' flags, as applyLiveRoomsPush files them in callRooms.
   const st = (over: Record<string, unknown> = {}) => ({
     currentUser: { _id: ME },
-    callRooms: { [SOLO]: { private: true, locked: false } },
+    callRooms: { [SOLO]: { private: true, locked: false, owner_only: true } },
     sessions: { c1: { _id: "c1", user_id: ME } },
     ...over,
   });
 
-  test("private with no lock: only its owner's, and its door is fixed", () => {
+  test("the server's owner_only says so, whether or not the owner also started it private", () => {
     expect(roomIsOwnerOnly(st(), SOLO)).toBe(true);
     expect(roomIsPrivate(st(), SOLO)).toBe(true);
+    // Started with the dialog's Private option: locked as well, still owner-only.
+    const startedPrivate = st({ callRooms: { [SOLO]: { private: true, locked: true, owner_only: true } } });
+    expect(roomIsOwnerOnly(startedPrivate, SOLO)).toBe(true);
+    expect(ownRouteHeldFrom({ ...startedPrivate, currentUser: { _id: ANN } }, SOLO)).toBe("c1");
   });
-  test("a huddle started private is locked, so never owner-only; opened, it is ordinary", () => {
+  test("a huddle somebody started private is private, not owner-only; opened, it is ordinary", () => {
     expect(roomIsOwnerOnly(st({ callRooms: { [SOLO]: { private: true, locked: true } } }), SOLO)).toBe(false);
     expect(roomIsPrivate(st({ callRooms: { [SOLO]: { private: true, locked: true } } }), SOLO)).toBe(true);
     expect(roomIsPrivate(st({ callRooms: { [SOLO]: { private: false, locked: false } } }), SOLO)).toBe(false);

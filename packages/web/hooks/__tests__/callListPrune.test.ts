@@ -50,6 +50,16 @@ describe("callList pruning", () => {
     expect(s.pending[`callList:${id("r")}`]).toBeUndefined();
   });
 
+  it("Personal's page prunes only the viewer's own calls; the team's cached calls stay", () => {
+    const me = "u-me";
+    sync([call("team", 200, { started_by: "u-ann", team_id: "t1" }), call("mine", 100, { room_key: `dm:${me}`, started_by: me })], 100);
+    const personal = [] as any[];
+    useInboxStore.getState().syncTable("callList", personal, callListPruneScope(personal, 100, me));
+    const s = useInboxStore.getState();
+    expect(s.callList[id("team")]).toBeDefined();
+    expect(s.callList[id("mine")]).toBeUndefined();
+  });
+
   it("never prunes a row without a server id", () => {
     useInboxStore.setState({ callList: { stub: { _id: "stub", started_at: 999 } } } as any);
     sync([], 100);

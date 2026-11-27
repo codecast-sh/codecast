@@ -2,7 +2,7 @@
 // Personal workspace, and where a task made from a call is filed. Read off the
 // call list's rows (convex callReads.shapeCallRow) and the live rooms, so the
 // page answers from the store on its first frame.
-import { callParticipantKind, dmRoomKey, isRoomlessKey, parseRoomKey } from "@codecast/shared/contracts";
+import { callParticipantKind, dmRoomKey, isRoomlessKey, parseRoomKey, sessionRoomConversationId } from "@codecast/shared/contracts";
 import { activeTeamIdOf } from "../activeTeam";
 
 /** The viewer's id while the Personal workspace is active ("" before the
@@ -52,13 +52,16 @@ export function callOnlyMine(call: CallPrivacyRow, viewerId: string): boolean {
   );
 }
 
-/** A live room only the viewer is in and only they may enter: their room of
- *  one, or a private room with nobody else seated. Personal's Live now. */
+/** A live room that is the viewer's alone: their room of one, or a room only
+ *  its owner may enter whose session is theirs. The same calls callOnlyMine
+ *  lists once they end. Personal's Live now. */
 export function liveRoomOnlyMine(
-  row: { roomKey: string; private?: boolean; members: { user_id: string }[] },
+  row: { roomKey: string; ownerOnly?: boolean },
   viewerId: string,
+  sessionOwnerOf: (conversationId: string) => string | null | undefined,
 ): boolean {
   if (!viewerId) return false;
   if (row.roomKey === dmRoomKey(viewerId)) return true;
-  return !!row.private && !isRoomlessKey(row.roomKey) && row.members.every((m) => String(m.user_id) === viewerId);
+  const conversationId = sessionRoomConversationId(row.roomKey);
+  return !!row.ownerOnly && !!conversationId && sessionOwnerOf(conversationId) === viewerId;
 }

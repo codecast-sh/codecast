@@ -2176,11 +2176,13 @@ export const backfillCallShortIds = internalMutation({
 });
 
 export const webListCalls = query({
-  args: { limit: v.optional(v.number()) },
+  // `personal`: the Personal workspace's page, walked from the viewer's own
+  // calls (callReads.listCallsCore).
+  args: { limit: v.optional(v.number()), personal: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return [];
-    return listCallsCore(ctx, userId, Math.min(args.limit ?? 50, 200));
+    return listCallsCore(ctx, userId, Math.min(args.limit ?? 50, 200), { personal: !!args.personal });
   },
 });
 

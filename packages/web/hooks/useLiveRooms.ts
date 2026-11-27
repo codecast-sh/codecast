@@ -7,6 +7,7 @@ import { useNowWhen } from "./useCoarseNow";
 import { useFaceRow } from "./useFaceRow";
 import { liveRoomOnlyMine, personalViewerOf } from "../lib/calls/personalCalls";
 import { roomIsOwnerOnly } from "../lib/faces/faceRowSigs";
+import { findSessionRow } from "../lib/calls/findSessionRow";
 
 // The live-rooms read layer lives in ./liveRoomRows (platform-neutral); this
 // file binds it to the face row, web's answer to "which room am I in".
@@ -22,7 +23,17 @@ export function useLiveNowRooms(): LiveRoomRow[] {
   const rows = useLiveRooms();
   const personalViewer = useInboxStore(personalViewerOf);
   return useMemo(
-    () => (personalViewer === null ? rows : rows.filter((r) => liveRoomOnlyMine(r, personalViewer))),
+    () => {
+      if (personalViewer === null) return rows;
+      // Whose session: read when the rooms change; an owner's own sessions
+      // are in their store.
+      const st = useInboxStore.getState();
+      const ownerOf = (id: string) => {
+        const row = findSessionRow(st, id);
+        return row?.user_id ? String(row.user_id) : null;
+      };
+      return rows.filter((r) => liveRoomOnlyMine(r, personalViewer, ownerOf));
+    },
     [rows, personalViewer],
   );
 }

@@ -49,7 +49,7 @@ function room(overrides: Partial<LiveRoomRow> = {}): LiveRoomRow {
     mine: false,
     knocked: false,
     recording: false,
-    private: false,
+    ownerOnly: false,
     ...overrides,
   };
 }

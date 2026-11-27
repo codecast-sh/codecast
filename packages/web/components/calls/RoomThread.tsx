@@ -15,7 +15,7 @@ import {
   type CallAnchor,
 } from "@codecast/shared/contracts";
 import { useInboxStore, useMyUserId } from "../../store/inboxStore";
-import { ownRouteHeldFrom } from "../../lib/calls/ownRoute";
+import { OWN_ROUTE_HELD, ownRouteHeldFrom } from "../../lib/calls/ownRoute";
 import { navigateMainWindow } from "../../lib/desktop";
 import { settleComposerAttachments } from "../../lib/draftImages";
 import { getRoom, startTranscribing } from "../../lib/calls/callManager";
@@ -593,8 +593,11 @@ export const RoomThread = memo(function RoomThread({
                 <FeedChip
                   route={r}
                   label={agent?.name}
-                  removable={canRemove && !(r.kind === "session" && r.target === heldRoute)}
-                  onRemove={() => void removeFeed(r.kind, r.target)}
+                  removable={canRemove}
+                  removeBlocked={r.kind === "session" && r.target === heldRoute ? OWN_ROUTE_HELD : null}
+                  onRemove={() =>
+                    void removeFeed(r.kind, r.target).catch((e) => toast.error(humanizeConvexError(e, "Could not take it out of the call")))
+                  }
                 />
                 {agent?.working && transcribing && (
                   <WorkingDots className="text-sol-violet" title={`${agent.name} is working`} />

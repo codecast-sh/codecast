@@ -43,12 +43,10 @@ export function roomIsPrivate(st: any, roomKey: string): boolean {
 }
 
 /** Only its owner may enter the room (a room of one, a session huddle the
- *  team cannot read): private with its door unlocked, which a room started
- *  private never is, since opening that door clears `private`. No gesture
- *  opens it. */
+ *  team cannot read), as the server says (getLiveRooms `owner_only`),
+ *  whether or not it was also started private. No gesture opens it. */
 export function roomIsOwnerOnly(st: any, roomKey: string): boolean {
-  const r = st.callRooms?.[roomKey];
-  return !!r?.private && !r?.locked;
+  return !!st.callRooms?.[roomKey]?.owner_only;
 }
 
 export function rosterFaceSig(members: FaceMember[] | undefined): string {

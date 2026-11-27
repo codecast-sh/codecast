@@ -1218,6 +1218,7 @@ export const getLiveRooms = query({
       // membership or the room's occupancy does, never with the clock.
       const canJoin = (await authorizeRoom(ctx, userId, roomKey)).ok;
       const state = await readRoomState(ctx, roomKey);
+      const ownerOnly = await isOwnerOnlyRoom(ctx, roomKey);
       // Burst or call, for the people outside the room (roomSeatClass). On
       // the room and on every seat, so a reader holding one row of either
       // shape has the answer without a second lookup.
@@ -1227,9 +1228,12 @@ export const getLiveRooms = query({
         room_key: roomKey,
         team_id: live[0].team_id,
         locked: !!state?.locked,
-        // Started private, or one person's alone (callRooms.isOwnerOnlyRoom):
-        // listed only to the people it admits.
-        private: !!state?.private || (await isOwnerOnlyRoom(ctx, roomKey)),
+        // Only its owner may enter (callRooms.isOwnerOnlyRoom): private
+        // whatever its door says, and no door opens it.
+        owner_only: ownerOnly,
+        // Started private, or one person's alone: listed only to the people
+        // it admits.
+        private: !!state?.private || ownerOnly,
         // The huddle said "don't transcribe": what keeps every seated client's
         // auto-scribe from starting it again.
         transcribe_off: !!state?.transcribe_off,
