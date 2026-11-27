@@ -57,6 +57,12 @@ test("private on the priority's team: it says so, and one press shares a summary
   expect(notice()?.getAttribute("data-start-link-notice")).toBe("private");
   const share = document.querySelector("[data-start-share]") as HTMLButtonElement;
   expect(share.textContent).toBe("Share summary with Codecast");
+  // On a phone the button wraps under the words, which wrap rather than shrink to an ellipsis.
+  expect(notice()!.className.split(" ")).toContain("flex-wrap");
+  const words = notice()!.querySelector("[data-start-link-words]")!;
+  expect(words.textContent).toBe("Private: not on pri-9");
+  expect(words.className).not.toContain("truncate");
+  expect(words.className.split(" ")).toContain("whitespace-normal");
   await act(async () => { share.click(); });
   expect(row()._visibility).toBe("summary");
   // The personal workspace is active, so the line now says where the session goes.

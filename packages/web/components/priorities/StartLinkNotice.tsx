@@ -35,8 +35,9 @@ export function StartLinkNotice({ conversationId }: { conversationId: string }) 
     ? `This folder belongs to ${forecast.team}: not on ${priority}`
     : forecast.kind === "locked" ? `This folder is private: not on ${priority}` : `Private: not on ${priority}`;
   return (
-    <span data-start-link-notice={forecast.kind} className="inline-flex min-w-0 items-center gap-2 text-meta text-sol-text-dim">
-      <span className="truncate">{words}</span>
+    // On a narrow composer the words keep their line and the button wraps under them, never squeezing them to an ellipsis.
+    <span data-start-link-notice={forecast.kind} className="inline-flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-meta text-sol-text-dim">
+      <span data-start-link-words className="min-w-0 whitespace-normal break-words">{words}</span>
       {forecast.kind === "private" && (
         <button
           type="button"
