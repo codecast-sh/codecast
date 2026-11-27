@@ -16,7 +16,8 @@
 import { useRecordCallRecordingOpen } from "../../lib/accessLogOpen";
 import { isCallLive } from "../../lib/calls/callStatus";
 import { DeleteCallButton } from "../../components/calls/DeleteCallButton";
-import { useTeamFeature } from "../../lib/teamFeatures";
+import { useWorkspaceCallsOn } from "../../lib/teamFeatures";
+import { callOnlyMine, personalViewerOf } from "../../lib/calls/personalCalls";
 import { useContext, useMemo, useRef, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
@@ -1066,7 +1067,7 @@ export default function CallsPage() {
   // reads it as it is and never rewrites the bar: the cached list answers it
   // on the first frame, the server for a call older than the cached page.
   const shortRef = selectedId && /^cl-\d+$/i.test(selectedId) ? selectedId.toLowerCase() : null;
-  const callsOn = useTeamFeature("calls");
+  const callsOn = useWorkspaceCallsOn();
   // Always asked, whatever the ACTIVE team's calls feature says: recordings
   // are personal — they land here from every team and from none — and the
   // server already answers with exactly what this viewer may read (a huddle
@@ -1076,9 +1077,18 @@ export default function CallsPage() {
   // Local first: the history paints from the cached list on the first frame
   // and the live answer only keeps it current. A skeleton is honest only
   // while nothing is cached and nothing has answered.
-  const { calls, ready: callsReady, error: callsError, retry: retryCalls } = useCallList(100);
+  // Personal lists only the calls nobody else can read (callOnlyMine), its
+  // page walked from the viewer's own calls; a team workspace lists
+  // everything the viewer may read. A link to any readable call still opens,
+  // whichever list it is in.
+  const personalViewer = useInboxStore(personalViewerOf);
+  const { calls: readable, ready: callsReady, error: callsError, retry: retryCalls } = useCallList(100, personalViewer);
+  const calls = useMemo(
+    () => (personalViewer === null ? readable : readable.filter((r) => callOnlyMine(r, personalViewer))),
+    [readable, personalViewer],
+  );
   const places = useCallPlaces(calls);
-  const cachedShort = shortRef ? calls.find((r) => r.short_id === shortRef)?._id : undefined;
+  const cachedShort = shortRef ? readable.find((r) => r.short_id === shortRef)?._id : undefined;
   const byShort = useQueryNoThrow(
     api.transcripts.webGetCallRef,
     shortRef && !cachedShort ? { ref: shortRef } : "skip",
@@ -1152,7 +1162,11 @@ export default function CallsPage() {
     <button
       type="button"
       onClick={() => useInboxStore.getState().openSettingsModal("team")}
-      title="Huddles are off for this team. A team admin turns them on in Settings › Team. Your voice notes stay here either way."
+      title={
+        personalViewer === null
+          ? "Huddles are off for this team. A team admin turns them on in Settings › Team. Your voice notes stay here either way."
+          : "Huddles are off in every team of yours, and Personal borrows them from one. A team admin turns them on in Settings › Team. Your voice notes stay here either way."
+      }
       className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-sol-yellow/40 px-2 py-0.5 text-meta text-sol-yellow transition-colors hover:bg-sol-yellow/10"
     >
       Huddles off · Settings
@@ -1279,7 +1293,7 @@ export default function CallsPage() {
             )}
             <div className="relative min-h-0 flex-1">
               {callId ? (
-                <CallDetail id={callId} preview={calls.find((r) => String(r._id) === callId)} lead={listToggle} />
+                <CallDetail id={callId} preview={readable.find((r) => String(r._id) === callId)} lead={listToggle} />
               ) : callId === undefined ? (
                 <CallDetailSkeleton lead={listToggle} />
               ) : selectedId ? (

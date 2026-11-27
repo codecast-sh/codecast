@@ -54,6 +54,9 @@ export type CallSnapshot = {
     identity: string;
     name: string;
     image?: string;
+    /** The seat is a phone (token metadata `client`), which can transcribe
+     *  only its own mic; any other person's seat can scribe the whole room. */
+    phone: boolean;
     isLocal: boolean;
     micMuted: boolean;
     hasCamera: boolean;
@@ -104,12 +107,13 @@ export function getRoom(): Room | null {
 
 // The avatar rides the LiveKit token: mintAccessToken stamps {image} into
 // participant metadata, so every seat carries its own picture and no roster
-// lookup is needed mid-call. Same contract web reads.
-function participantImage(p: Participant): string | undefined {
+// lookup is needed mid-call. Same contract web reads. A phone's token also
+// carries `client: "phone"`.
+function participantMeta(p: Participant): { image?: string; client?: string } {
   try {
-    return (p.metadata ? JSON.parse(p.metadata) : null)?.image ?? undefined;
+    return (p.metadata ? JSON.parse(p.metadata) : null) ?? {};
   } catch {
-    return undefined;
+    return {};
   }
 }
 
@@ -127,10 +131,12 @@ function rebuildParticipants() {
       const cam = p.getTrackPublication(Track.Source.Camera);
       const scr = p.getTrackPublication(Track.Source.ScreenShare);
       const subscribed = (pub: any) => !!pub && (p.isLocal || pub.isSubscribed) && !!pub.track;
+      const meta = participantMeta(p);
       return {
         identity: p.identity,
         name: p.name || p.identity,
-        image: participantImage(p),
+        image: meta.image ?? undefined,
+        phone: meta.client === "phone",
         isLocal: p === room!.localParticipant,
         micMuted: mic ? mic.isMuted : true,
         hasCamera: subscribed(cam) && !cam!.isMuted,
@@ -254,7 +260,8 @@ export async function joinCall(roomKey: string, opts: JoinOpts = {}): Promise<vo
       languages: localTranscribeLanguages(),
     });
     if (superseded()) return;
-    const { url, token } = await convex.action(api.calls.mintAccessToken, { room_key: roomKey });
+    // `client`: this seat hears only its own mic (phoneScribeRule reads it).
+    const { url, token } = await convex.action(api.calls.mintAccessToken, { room_key: roomKey, client: "phone" });
     if (superseded()) return;
     if (!opts.callKitManaged) {
       const lk = getLivekit();
@@ -339,6 +346,13 @@ export async function joinCall(roomKey: string, opts: JoinOpts = {}): Promise<vo
  *  says the call fell away under them: the server stops a recording the
  *  moment the last teammate hangs up, and gives a fall-away the time to come
  *  back (calls.leaveRoom). */
+// What must finish before the seat is given up: the phone scribe's last line
+// (phoneScribe registers it), since leaving the room ends its record.
+let beforeLeave: (() => Promise<void>) | null = null;
+export function setBeforeLeave(fn: (() => Promise<void>) | null): void {
+  beforeLeave = fn;
+}
+
 export async function leaveCall(opts?: { hangup?: boolean }): Promise<void> {
   const hangup = opts?.hangup !== false;
   const roomKey = currentRoomKey ?? snap.roomKey;
@@ -348,6 +362,7 @@ export async function leaveCall(opts?: { hangup?: boolean }): Promise<void> {
   // lease swept mid-call).
   emit({ ...IDLE });
   await teardownMedia();
+  await beforeLeave?.().catch(() => {});
   if (roomKey) {
     await convex.mutation(api.calls.leaveRoom, { room_key: roomKey, ...(hangup ? { hangup: true } : {}) }).catch(() => {});
   }

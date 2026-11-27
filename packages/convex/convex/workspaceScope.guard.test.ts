@@ -32,7 +32,6 @@ const PUBLIC_CROSS_TEAM = new Map<string, string>([
   ["teams.ts:getUserTeamsV2", "the caller's team list itself; every row is a team"],
   ["users.ts:getTeamsForCLI", "the caller's team list for the CLI; every row is a team"],
   ["threads.ts:unreadByWorkspace", "an unread badge per workspace; each row carries team_id"],
-  ["calls.ts:getCallConfig", "which of the caller's teams have calls on; keyed by team id"],
   ["calls.ts:getLiveRooms", "huddles the caller may join in any team; rooms are team-keyed, session titles gated per room"],
   ["anchors.ts:listAnchors", "the workspace agents the caller can reach; each row names its scope and team"],
   ["accountPool.ts:listPool", "shared Claude accounts across the caller's teams; each share carries its team"],

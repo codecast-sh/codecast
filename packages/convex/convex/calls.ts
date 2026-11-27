@@ -32,7 +32,7 @@ import {
   openRoomDoor,
   parseRoomKey,
 } from "./callRooms";
-import { featureVendorRefusal } from "./lib/vendorGuard";
+import { callTeamsOf, isOwnerOnlyRoom } from "./callRoomOwnership";
 import { isTeamMember } from "./privacy";
 import { requireUser } from "./lib/requireUser";
 import { channelMemberIds, isRestricted } from "./chatAccess";
@@ -76,19 +76,12 @@ export const getCallConfig = query({
     const configured = livekit !== null;
     const userId = await getAuthUserId(ctx);
     let teams: string[] = [];
-    const off: Record<string, string> = {};
+    let off: Record<string, string> = {};
     if (configured && userId) {
-      const memberships = await ctx.db
-        .query("team_memberships")
-        .withIndex("by_user_id", (q) => q.eq("user_id", userId))
-        .collect();
-      for (const m of memberships) {
-        if (!(await teamHasFeature(ctx, m.team_id, "calls"))) continue;
-        // A regulated team's calls stay off while LiveKit has no BAA; its line says so where the controls would be.
-        const vendorOff = await featureVendorRefusal(ctx, m.team_id, "calls");
-        if (vendorOff) off[String(m.team_id)] = vendorOff;
-        else teams.push(String(m.team_id));
-      }
+      // A regulated team's refusal says so where the controls would be.
+      const mine = await callTeamsOf(ctx, userId);
+      teams = mine.teams.map(String);
+      off = mine.off;
     }
     const enabled = configured && (userId ? teams.length > 0 : true);
     return { enabled, url: enabled ? livekit?.url : undefined, teams, off };
@@ -1224,6 +1217,7 @@ export const getLiveRooms = query({
       // membership or the room's occupancy does, never with the clock.
       const canJoin = (await authorizeRoom(ctx, userId, roomKey)).ok;
       const state = await readRoomState(ctx, roomKey);
+      const ownerOnly = await isOwnerOnlyRoom(ctx, roomKey);
       // Burst or call, for the people outside the room (roomSeatClass). On
       // the room and on every seat, so a reader holding one row of either
       // shape has the answer without a second lookup.
@@ -1233,8 +1227,12 @@ export const getLiveRooms = query({
         room_key: roomKey,
         team_id: live[0].team_id,
         locked: !!state?.locked,
-        // Started private: listed only to the people it admits.
-        private: !!state?.private,
+        // Only its owner may enter (callRoomOwnership.isOwnerOnlyRoom): private
+        // whatever its door says, and no door opens it.
+        owner_only: ownerOnly,
+        // Started private, or one person's alone: listed only to the people
+        // it admits.
+        private: !!state?.private || ownerOnly,
         // The huddle said "don't transcribe": what keeps every seated client's
         // auto-scribe from starting it again.
         transcribe_off: !!state?.transcribe_off,
@@ -1332,7 +1330,9 @@ export const putOutOfCall = action({
 });
 
 export const mintAccessToken = action({
-  args: { room_key: v.string() },
+  // `client: "phone"`: the seat transcribes only its own mic, so another phone
+  // in the room never hands its run to it (mobile phoneScribeRule).
+  args: { room_key: v.string(), client: v.optional(v.literal("phone")) },
   handler: async (ctx, args): Promise<{ url: string; token: string }> => {
     const livekit = livekitConfigFromEnv();
     if (!livekit) throw new Error("Calling is not configured");
@@ -1347,7 +1347,10 @@ export const mintAccessToken = action({
       identity: grant.user_id,
       name: grant.name,
       room: args.room_key,
-      metadata: grant.image ? JSON.stringify({ image: grant.image }) : undefined,
+      metadata:
+        grant.image || args.client
+          ? JSON.stringify({ ...(grant.image ? { image: grant.image } : {}), ...(args.client ? { client: args.client } : {}) })
+          : undefined,
       // Short-lived: the SFU trusts the JWT alone, so a long token would keep
       // working after team removal or the session going private. livekit-client
       // reconnects re-mint (callManager), so 15 minutes costs nothing.

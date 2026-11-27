@@ -7,7 +7,7 @@
 //
 // Pure on purpose: useCallSync feeds it the store and the scribe status, and
 // the tests feed it fixtures.
-import { isRecRoomKey, sessionRoomConversationId } from "@codecast/shared/contracts";
+import { dmRoomKey, isRecRoomKey, sessionRoomConversationId } from "@codecast/shared/contracts";
 
 export type AutoScribeInput = {
   roomKey: string | null;
@@ -57,8 +57,9 @@ export function decideAutoScribe(i: AutoScribeInput): AutoScribeVerdict {
   // A SESSION'S OWN ROOM is the exception, and it is the whole point of that
   // room: the second party is the agent, which never takes a seat. One person
   // in there is not waiting for anybody — they are talking to the session, and
-  // the transcript is how the words reach it.
-  if (i.rosterIds.length < 2 && !sessionRoomConversationId(i.roomKey)) return "hold";
+  // the transcript is how the words reach it. A ROOM OF ONE (`dm:<me>`, a
+  // huddle with yourself) is the same: talking out loud is the point.
+  if (i.rosterIds.length < 2 && !sessionRoomConversationId(i.roomKey) && i.roomKey !== dmRoomKey(i.meId)) return "hold";
   if (!i.live) return "start";
   // A live record with no scribe yet: take it, under the same roster rule a
   // fresh run follows.

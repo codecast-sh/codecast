@@ -28,17 +28,25 @@ export function liveRoomsSig(rooms: FaceLiveRoom[] | undefined): string {
   return s;
 }
 
-export function lockedRoomsSig(rooms: Record<string, { locked?: boolean }> | undefined): string {
+export function lockedRoomsSig(rooms: Record<string, { locked?: boolean; private?: boolean }> | undefined): string {
   let s = "";
-  for (const k in rooms ?? {}) if (rooms![k]?.locked) s += `${k},`;
+  for (const k in rooms ?? {}) if (rooms![k]?.locked || rooms![k]?.private) s += `${k}${rooms![k]?.private ? "!" : ""},`;
   return s;
 }
 
-/** A huddle that started private and is still locked. Private rides the live
- *  room from the server; the lock's home is `callRooms`, flipped locally, so
- *  opening the door (which makes the huddle ordinary) reads at once. */
+/** A huddle listed only to the people it admits: started private and still
+ *  shut, or a room only its owner may enter. The server's `private` lands on
+ *  the room's flags (applyLiveRoomsPush), whose home is `callRooms`, flipped
+ *  locally, so opening the door (which clears it) reads at once. */
 export function roomIsPrivate(st: any, roomKey: string): boolean {
-  return !!st.callRooms?.[roomKey]?.locked && !!(st.liveRooms ?? []).find((r: FaceLiveRoom) => r.room_key === roomKey)?.private;
+  return !!st.callRooms?.[roomKey]?.private;
+}
+
+/** Only its owner may enter the room (a room of one, a session huddle the
+ *  team cannot read), as the server says (getLiveRooms `owner_only`),
+ *  whether or not it was also started private. No gesture opens it. */
+export function roomIsOwnerOnly(st: any, roomKey: string): boolean {
+  return !!st.callRooms?.[roomKey]?.owner_only;
 }
 
 export function rosterFaceSig(members: FaceMember[] | undefined): string {

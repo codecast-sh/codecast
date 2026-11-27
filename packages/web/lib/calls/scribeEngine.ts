@@ -15,8 +15,10 @@
 //
 // The recognizer itself is lib/calls/asrPipe: one websocket per track, PCM in,
 // VAD boundaries and completed utterances out. Nothing here touches audio.
+// The phone, which has no AudioContext, hands the engine its own opener for a
+// PCM session it feeds from the native mic tap (attachPcm).
 import { api } from "@codecast/convex/convex/_generated/api";
-import { openAsrPipe, type AsrPipe } from "./asrPipe";
+import { openAsrPipe, type AsrPipe, type AsrPipeEvents } from "./asrPipe";
 
 export type ConvexHandle = {
   mutation: (fn: any, args: any) => Promise<any>;
@@ -93,6 +95,9 @@ export function settleFailedAppends<S>(
  *  caption strip or a recording pill, never the transcript itself. */
 const TAIL = 6;
 
+/** Opens one recognizer for one microphone, with the engine's clock and events. */
+export type AsrPipeOpener = (o: { convex: ConvexHandle; roomKey: string; clock: () => number; events: AsrPipeEvents }) => AsrPipe;
+
 /** Where a run's words go from its first line. `face: false` seats a fed
  *  agent without its video avatar (convex/callFace.ts). */
 export type ScribeRoute = { kind: "session" | "doc" | "slack"; target: string; mode: "live" | "after"; face?: boolean };
@@ -138,7 +143,14 @@ export type ScribeEngine = {
    *  ignored; with a different track it replaces the pipe, because a
    *  restarted microphone keeps its publication and stops its old track. */
   attach(key: string, track: MediaStreamTrack, speakerId: string, speakerName: string): void;
+  /** The same, for a microphone with no MediaStreamTrack to read (the phone):
+   *  `open` builds the pipe, and runs again when a dropped pipe reopens, as
+   *  long as `alive` says the mic it reads is still open. */
+  attachPcm(key: string, open: AsrPipeOpener, speakerId: string, speakerName: string, alive?: () => boolean): void;
   detach(key: string): void;
+  /** Detach after committing what the pipe heard and waiting (bounded) for
+   *  its last words, which are appended as usual. */
+  finishPipe(key: string): Promise<void>;
   /** Milliseconds since `start`, which is the clock every segment offset uses. */
   elapsed(): number;
   stop(opts?: { keepLive?: boolean; graceful?: boolean }): Promise<void>;
@@ -160,11 +172,15 @@ export function createScribeEngine(): ScribeEngine {
   // start, and one huddle is many runs (handoffs, adoptions, off and on).
   let epoch = 0;
   const pipes = new Map<string, AsrPipe>();
-  // The track each pipe reads. A key whose track changed under it (LiveKit
-  // restarts a mic on a device change and stops the old track without an
-  // `ended` event) must reopen on the new one, or the pipe hears silence for
-  // the rest of the huddle.
-  const pipeTracks = new Map<string, MediaStreamTrack>();
+  // The source each pipe reads (a track, or a phone's opener). A key whose
+  // track changed under it (LiveKit restarts a mic on a device change and
+  // stops the old track without an `ended` event) must reopen on the new
+  // one, or the pipe hears silence for the rest of the huddle.
+  const pipeSources = new Map<string, unknown>();
+  // Bumped when a caller finishes a key on purpose (finishPipe), so a reopen
+  // that a drop scheduled before then does not bring the pipe back.
+  const finishedAt = new Map<string, number>();
+  let finishes = 0;
   let lastSpeechEndMs = 0;
   let anySegmentsSinceFlush = false;
   let addressedSinceFlush = false;
@@ -201,7 +217,7 @@ export function createScribeEngine(): ScribeEngine {
     if (!pipe) return;
     pipe.close();
     pipes.delete(key);
-    pipeTracks.delete(key);
+    pipeSources.delete(key);
     emit({ trackCount: pipes.size });
   }
 
@@ -211,9 +227,20 @@ export function createScribeEngine(): ScribeEngine {
     speakerId: string,
     speakerName: string,
   ): void {
+    attachSource(key, mediaTrack, (o) => openAsrPipe({ ...o, track: mediaTrack }), () => mediaTrack.readyState === "live", speakerId, speakerName);
+  }
+
+  function attachSource(
+    key: string,
+    source: unknown,
+    open: AsrPipeOpener,
+    alive: () => boolean,
+    speakerId: string,
+    speakerName: string,
+  ): void {
     if (!convex) return;
     if (pipes.has(key)) {
-      if (pipeTracks.get(key) === mediaTrack) return;
+      if (pipeSources.get(key) === source) return;
       detach(key);
     }
     // Dropping a pipe from the map IS closing it — they were two functions
@@ -227,10 +254,9 @@ export function createScribeEngine(): ScribeEngine {
     const forget = () => {
       if (pipes.get(key) === pipe) detach(key);
     };
-    const pipe: AsrPipe = openAsrPipe({
+    const pipe: AsrPipe = open({
       convex,
       roomKey,
-      track: mediaTrack,
       clock: nowMs,
       events: {
         onSpeechStop: () => {
@@ -252,16 +278,17 @@ export function createScribeEngine(): ScribeEngine {
           if (!status.active) return forget();
           // Token expiry or transient drop: reopen this pipe fresh.
           forget();
+          const finishedBefore = finishedAt.get(key);
           setTimeout(() => {
-            if (status.active && !pipes.has(key) && mediaTrack.readyState === "live") {
-              attach(key, mediaTrack, speakerId, speakerName);
+            if (status.active && !pipes.has(key) && alive() && finishedAt.get(key) === finishedBefore) {
+              attachSource(key, source, open, alive, speakerId, speakerName);
             }
           }, 1000);
         },
       },
     });
     pipes.set(key, pipe);
-    pipeTracks.set(key, mediaTrack);
+    pipeSources.set(key, source);
     emit({ trackCount: pipes.size });
   }
 
@@ -273,7 +300,15 @@ export function createScribeEngine(): ScribeEngine {
     getStatus: () => status,
     elapsed: nowMs,
     attach,
+    attachPcm: (key, open, speakerId, speakerName, alive = () => true) => attachSource(key, open, open, alive, speakerId, speakerName),
     detach,
+    async finishPipe(key) {
+      finishedAt.set(key, ++finishes);
+      const pipe = pipes.get(key);
+      if (!pipe) return;
+      await pipe.finish().catch(() => {});
+      if (pipes.get(key) === pipe) detach(key);
+    },
 
     async start(opts) {
       if (status.active) return transcriptId;

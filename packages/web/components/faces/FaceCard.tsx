@@ -1,5 +1,6 @@
 import { FACE_CARD_WIDTH } from "../../lib/faces/layout";
 import { teamMembersOf } from "../../lib/activeTeam";
+import { selfMemberOf, selfMemberSig } from "../../lib/faces/selfMember";
 // THE ONE CARD UNDER A FACE (pl-756 F8).
 //
 // A face on the row is the picture; this card is everything else about the
@@ -61,13 +62,17 @@ export function FaceCard({
   onClose: () => void;
 }) {
   const rosterMember = useInboxStore((s) => teamMembersOf(s).find((m: any) => String(m?._id) === memberId) ?? null);
+  // Your own card in a workspace whose roster lacks you (Personal): your own
+  // user doc, read through a signature since it changes on every heartbeat.
+  const selfSig = useInboxStore((s) => (memberId === viewerId ? selfMemberSig(s.currentUser) : ""));
+  const selfMember = useMemo(() => (selfSig ? selfMemberOf(useInboxStore.getState().currentUser) : null), [selfSig]);
   // Before the roster loads (or when it lacks them) the row already knows
   // their name and face: draw the card from that, never an empty space.
   const fallback = useMemo(
     () => (entry && entry.id === memberId ? { _id: memberId, name: entry.name, image: entry.image, is_bot: entry.bot } : null),
     [entry, memberId],
   );
-  const member = rosterMember ?? fallback;
+  const member = rosterMember ?? selfMember ?? fallback;
   if (!member) return null;
   return (
     <ErrorBoundary name="member card" level="inline">
@@ -242,36 +247,41 @@ function FaceCardBody({
         // An agent: nothing here calls or messages it (the server refuses a
         // DM to a bot). Its profile is the door above.
         <div className="face-card-agent">Agent: talk to it in its session or a channel</div>
-      ) : !isSelf && !callsEnabled ? null : (
-      <div className="face-card-actions" data-switch={isSelf ? "1" : undefined}>
-        {isSelf ? (
-          // Your own card is the status switch: the one action that makes
-          // sense on yourself.
-          (["available", "busy", "away"] as const).map((st) => (
-            <button
-              key={st}
-              type="button"
-              onClick={() => setStatus(st)}
-              className="face-card-status"
-              data-on={(member.status ?? "available") === st ? st : undefined}
-            >
-              <span className="face-card-status-dot" data-status={st} aria-hidden="true" />
-              {st}
-            </button>
-          ))
-        ) : (
+      ) : isSelf ? (
+        // Your own card is the status switch, and beside it the same Huddle
+        // a teammate's card carries: yours starts a room of one.
+        <div className="face-card-self">
+          <div className="face-card-actions" data-switch="1">
+            {(["available", "busy", "away"] as const).map((st) => (
+              <button
+                key={st}
+                type="button"
+                onClick={() => setStatus(st)}
+                className="face-card-status"
+                data-on={(member.status ?? "available") === st ? st : undefined}
+              >
+                <span className="face-card-status-dot" data-status={st} aria-hidden="true" />
+                {st}
+              </button>
+            ))}
+          </div>
+          {callsEnabled && !huddle.hidden && (
+            <FaceActions ptt={IDLE_PTT} blocked={null} roomKey="" ringIds={[]} huddle={huddle} show={["ring"]} size="sm" />
+          )}
+        </div>
+      ) : !callsEnabled ? null : (
+        <div className="face-card-actions">
           <FaceActions
             ptt={faceKey?.ptt ?? IDLE_PTT}
-            blocked={faceKey?.blocked ?? (callsEnabled ? null : "Calls are off for this team")}
+            blocked={faceKey?.blocked ?? null}
             roomKey={faceKey?.roomKey ?? ""}
             ringIds={[memberId]}
-            huddle={callsEnabled ? huddle : undefined}
+            huddle={huddle}
             show={["talk", "ring"]}
             size="sm"
             className="face-actions-fill"
           />
-        )}
-      </div>
+        </div>
       )}
     </div>
   );

@@ -9,10 +9,13 @@ export type CallRoomFlags = {
   _id: string;
   /** The room's door, as a fact about the ROOM: what the lock glyph paints. */
   locked: boolean;
-  /** Started private (calls.joinRoom): locked, and listed only to the people
-   *  it admits. Set only at the start; opening the door clears it. Absent on
-   *  rows from an older server. */
+  /** Listed only to the people it admits: started private (calls.joinRoom,
+   *  locked; opening the door clears it), or a room only its owner may enter
+   *  (unlocked, and no door opens it). Absent on rows from an older server. */
   private?: boolean;
+  /** Only its owner may enter (calls.getLiveRooms `owner_only`): private
+   *  whatever its lock says, and no door opens it. */
+  owner_only?: boolean;
   /** The huddle turned transcription off (calls.setRoomTranscribeOff) — what
    *  keeps every seated client's auto-scribe from starting it again. */
   transcribe_off: boolean;

@@ -22,6 +22,7 @@ function row(overrides: Partial<LiveRoomRow> = {}): LiveRoomRow {
     mine: false,
     knocked: false,
     recording: false,
+    ownerOnly: false,
     ...overrides,
   };
 }

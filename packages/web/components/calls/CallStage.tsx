@@ -759,8 +759,10 @@ const DOOR_CHROME: Record<RoomDoor, { icon: typeof Users; label: string; hint: s
 };
 
 function DoorMenu({ roomKey }: { roomKey: string }) {
-  const { door, setDoor } = useRoomDoor(roomKey);
+  const { door, fixed, setDoor } = useRoomDoor(roomKey);
   const now = DOOR_CHROME[door];
+  const parsedRoom = parseRoomKey(roomKey);
+  const soloRoom = parsedRoom?.kind === "dm" && parsedRoom.users.length === 1;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -782,10 +784,13 @@ function DoorMenu({ roomKey }: { roomKey: string }) {
         collisionPadding={8}
         className="w-[200px] rounded-lg border-0 bg-sol-bg-alt p-1 shadow-2xl ring-1 ring-sol-text/[0.08]"
       >
-        {DOOR_ORDER.map((key) => {
+        {/* A room only its owner may enter stays private: nothing opens it. */}
+        {(fixed ? (["private"] as RoomDoor[]) : DOOR_ORDER).map((key) => {
           const chrome = DOOR_CHROME[key];
           const current = key === door;
           const reachable = current || key === "team" || (key === "locked" && door === "team");
+          // Nobody else to ring into a huddle with yourself.
+          const hint = key === "private" && soloRoom ? null : chrome.hint;
           return (
             <DropdownMenuItem
               key={key}
@@ -796,7 +801,7 @@ function DoorMenu({ roomKey }: { roomKey: string }) {
               <chrome.icon className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${current ? "text-sol-violet" : "text-sol-text-muted"}`} />
               <span className="min-w-0 flex-1">
                 <span className="block font-mono text-meta text-sol-text">{chrome.label}</span>
-                <span className="block text-meta leading-snug text-sol-text-muted">{chrome.hint}</span>
+                {hint && <span className="block text-meta leading-snug text-sol-text-muted">{hint}</span>}
               </span>
               {current && <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-sol-violet" />}
             </DropdownMenuItem>

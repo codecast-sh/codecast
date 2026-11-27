@@ -56,6 +56,7 @@ import { memberAvatarUrl, memberDisplayName } from "../liveEntities";
 import { describeRoomLive } from "../calls/roomLabels";
 import { useInboxStore } from "../../store/inboxStore";
 import { dmUnreadByMember, railUnreadSig } from "./faceDmUnread";
+import { selfMemberOf } from "./selfMember";
 import { subscribeCoarseTick } from "../../hooks/useCoarseNow";
 import {
   idOf,
@@ -715,6 +716,38 @@ export function deriveFaceRow(raw: FaceRowInput, prev: FaceRow | null): FaceRow 
   const card = cardOf(input, { room, mode, others: others.filter((e) => e.tier === "linked"), label });
   const entries = me ? [me, ...others] : others;
   return { entries, links, card, me, room };
+}
+
+/** What the idle self face draws, as one string: the bar's wake signature,
+ *  so a heartbeat that moves none of it re-renders nothing. */
+export function idleSelfFaceSig(st: any): string {
+  const f = idleSelfFaceOf(st);
+  return f ? `${f.id}|${f.name}|${f.image ?? ""}|${f.state}|${f.tier}` : "";
+}
+
+/** Your own face while nothing engages it (`row.me` is null outside a call
+ *  or a ring): the header leads with it in every workspace, so your own card,
+ *  with the status switch and Huddle, is one click away. Drawn from your
+ *  roster row, else your own user doc. Tiered by presence like any face, so
+ *  the call's track and strip never reach it. */
+export function idleSelfFaceOf(st: any): FaceEntry | null {
+  const meId = idOf(st.currentUser?._id);
+  if (!meId) return null;
+  const member = teamMembersOf(st).find((m: any) => idOf(m?._id) === meId) ?? selfMemberOf(st.currentUser)!;
+  return {
+    id: meId,
+    name: memberDisplayName(member as any),
+    image: memberAvatarUrl(member as any),
+    me: true,
+    tier: presenceTierOf(member),
+    state: presenceStateOf(member),
+    level: null,
+    video: null,
+    muted: false,
+    followed: false,
+    joinedAgo: null,
+    unread: 0,
+  };
 }
 
 // ── the shared derivation ───────────────────────────────────────────────────

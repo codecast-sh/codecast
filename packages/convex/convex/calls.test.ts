@@ -398,15 +398,18 @@ describe("invite fan-out", () => {
     expect(byUser.ud.refused).toBeTruthy();
   });
 
-  test("a session huddle's walk-in may ring too", async () => {
+  test("someone rung into a private session's huddle may ring too; a seat alone may not", async () => {
     const { ctx, rows, now } = fakeCtx();
-    // ub owns a private conversation; ua walked into the live huddle about it.
+    // ub owns a private conversation, so its room is ub's alone (isOwnerOnlyRoom).
     rows.conversations = [{ _id: "cv1", user_id: "ub", team_id: "t1", is_private: true }];
     rows.call_members = [
       { _id: "cm-ua", room_key: "session:cv1", team_id: "t1", user_id: "ua", joined_at: now - 30_000, last_seen: now },
+      { _id: "cm-ub", room_key: "session:cv1", team_id: "t1", user_id: "ub", joined_at: now - 60_000, last_seen: now },
     ];
+    await expect((await handler())(ctx, { room_key: "session:cv1", to_users: ["uc"] })).rejects.toThrow("Cannot invite");
+    rows.call_invites.push({ _id: "inv-ua", room_key: "session:cv1", team_id: "t1", from_user: "ub", to_user: "ua", status: "accepted", created_at: now - 40_000, responded_at: now - 35_000 });
     await (await handler())(ctx, { room_key: "session:cv1", to_users: ["uc"] });
-    expect(rows.call_invites.map((i) => i.to_user)).toEqual(["uc"]);
+    expect(rows.call_invites.filter((i) => i.status === "ringing").map((i) => i.to_user)).toEqual(["uc"]);
   });
 
   test("a walk-in cannot widen a CHANNEL room the channel excludes them from", async () => {

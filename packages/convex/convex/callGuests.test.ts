@@ -589,8 +589,10 @@ describe("a link closes on everybody waiting at it, however it closes", () => {
 
   test("a link made from a seat lives as long as that huddle, and the next huddle turns it off", async () => {
     const room = "session:c1";
+    // u1 was rung into u2's private session's huddle: a seat, not membership.
     const w = world({
       conversations: [{ _id: "c1", user_id: "u2", team_id: "t1", title: "Secret plans", is_private: true }],
+      call_invites: [{ _id: "inv1", room_key: room, team_id: "t1", from_user: "u2", to_user: "u1", status: "accepted", created_at: 0, responded_at: Date.now() }],
       call_members: [
         { _id: "cm1", room_key: room, team_id: "t1", user_id: "u1", user_name: "Sam", joined_at: 0, last_seen: Date.now(), muted: false, camera: false, sharing: false },
         { _id: "cm2", room_key: room, team_id: "t1", user_id: "u2", user_name: "Lee", joined_at: 0, last_seen: Date.now(), muted: false, camera: false, sharing: false },
@@ -614,7 +616,11 @@ describe("a link closes on everybody waiting at it, however it closes", () => {
     const room = "session:c1";
     const w = world({
       conversations: [{ _id: "c1", user_id: "u2", team_id: "t1", title: "x", is_private: true }],
-      call_members: [{ _id: "cm1", room_key: room, team_id: "t1", user_id: "u1", user_name: "Sam", joined_at: 0, last_seen: Date.now(), muted: false, camera: false, sharing: false }],
+      call_invites: [{ _id: "inv1", room_key: room, team_id: "t1", from_user: "u2", to_user: "u1", status: "accepted", created_at: 0, responded_at: Date.now() }],
+      call_members: [
+        { _id: "cm1", room_key: room, team_id: "t1", user_id: "u1", user_name: "Sam", joined_at: 0, last_seen: Date.now(), muted: false, camera: false, sharing: false },
+        { _id: "cm2", room_key: room, team_id: "t1", user_id: "u2", user_name: "Lee", joined_at: 0, last_seen: Date.now(), muted: false, camera: false, sharing: false },
+      ],
     });
     const link = await run(createGuestLink)(w.as("u1"), { room_key: room });
     w.db._tables.team_memberships.splice(0, 1);

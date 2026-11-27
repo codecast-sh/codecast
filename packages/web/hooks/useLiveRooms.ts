@@ -5,6 +5,10 @@ import { useLiveRoomRows, type LiveRoomRow } from "./liveRoomRows";
 import { guestsStillWaiting } from "../lib/calls/knockToasts";
 import { useNowWhen } from "./useCoarseNow";
 import { useFaceRow } from "./useFaceRow";
+import { liveRoomOnlyMine, personalViewerOf } from "../lib/calls/personalCalls";
+import { roomIsOwnerOnly } from "../lib/faces/faceRowSigs";
+import { findSessionRow } from "../lib/calls/findSessionRow";
+import { sessionRoomConversationId } from "@codecast/shared/contracts";
 
 // The live-rooms read layer lives in ./liveRoomRows (platform-neutral); this
 // file binds it to the face row, web's answer to "which room am I in".
@@ -12,6 +16,33 @@ export type { LiveRoomRow } from "./liveRoomRows";
 
 export function useLiveRooms(): LiveRoomRow[] {
   return useLiveRoomRows(useFaceRow().room);
+}
+
+/** The rooms a Live now list shows: every live room in a team workspace, and
+ *  in Personal only the viewer's own (liveRoomOnlyMine). */
+export function useLiveNowRooms(): LiveRoomRow[] {
+  const rows = useLiveRooms();
+  const personalViewer = useInboxStore(personalViewerOf);
+  // Whose session each owner-only room is, as "id:owner" pairs: a session row
+  // that lands after its room wakes this, the sessions collection does not.
+  const ownersSig = useInboxStore((st: any) =>
+    personalViewerOf(st) === null
+      ? ""
+      : rows
+          .flatMap((r) => {
+            const id = r.ownerOnly ? sessionRoomConversationId(r.roomKey) : null;
+            return id ? [`${id}:${findSessionRow(st, id)?.user_id ?? ""}`] : [];
+          })
+          .join("|"),
+  );
+  return useMemo(
+    () => {
+      if (personalViewer === null) return rows;
+      const owners = new Map(ownersSig ? ownersSig.split("|").map((p) => p.split(":") as [string, string]) : []);
+      return rows.filter((r) => liveRoomOnlyMine(r, personalViewer, (id) => owners.get(id) || null));
+    },
+    [rows, personalViewer, ownersSig],
+  );
 }
 
 /** A room nobody is in, with guests at its door on the viewer's own link. */
@@ -89,14 +120,18 @@ export type RoomDoor = "team" | "locked" | "private";
  *  (callRooms), the echo reconciles. */
 export function useRoomDoor(roomKey: string | null): {
   door: RoomDoor;
+  /** Only its owner may enter (roomIsOwnerOnly): private, and no gesture opens it. */
+  fixed: boolean;
   setDoor: (door: Exclude<RoomDoor, "private">) => void;
 } {
+  const fixed = useInboxStore((st: any) => !!roomKey && roomIsOwnerOnly(st, roomKey));
   const door = useInboxStore((st: any) => {
     const r = roomKey ? st.callRooms?.[roomKey] : undefined;
-    return r?.private && r?.locked ? "private" : r?.locked ? "locked" : "team";
+    return r?.private ? "private" : r?.locked ? "locked" : "team";
   }) as RoomDoor;
   return {
     door,
+    fixed,
     setDoor: (next) => {
       if (roomKey && next !== door) useInboxStore.getState().setRoomLocked(roomKey, next === "locked");
     },

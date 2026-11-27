@@ -25,6 +25,7 @@ export function FeedChip({
   label: given,
   fallback,
   removable,
+  removeBlocked,
   onRemove,
   onOpen,
   title,
@@ -34,6 +35,8 @@ export function FeedChip({
   /** The name to show while the store has no row for the session. */
   fallback?: string;
   removable: boolean;
+  /** Why this one may not be taken off: the X stays, disabled, saying so. */
+  removeBlocked?: string | null;
   onRemove?: () => void;
   /** Makes the name a button that opens the target. */
   onOpen?: () => void;
@@ -71,11 +74,12 @@ export function FeedChip({
         <button
           type="button"
           onClick={() => onRemove?.()}
+          disabled={!!removeBlocked}
           // A 20px target round a 10px mark, pulled back into the chip's
           // padding so the chip keeps its size.
-          className="fc-remove -my-1 -mr-1.5 rounded-full p-[5px] text-sol-text-muted hover:text-sol-red"
-          title={agent ? `Remove ${label} from the room` : "Stop this feed"}
-          aria-label={agent ? `Remove ${label} from the room` : "Stop this feed"}
+          className="fc-remove -my-1 -mr-1.5 rounded-full p-[5px] text-sol-text-muted hover:text-sol-red disabled:opacity-40 disabled:hover:text-sol-text-muted"
+          title={removeBlocked ?? (agent ? `Remove ${label} from the room` : "Stop this feed")}
+          aria-label={removeBlocked ?? (agent ? `Remove ${label} from the room` : "Stop this feed")}
         >
           <X className="h-2.5 w-2.5" />
         </button>

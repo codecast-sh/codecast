@@ -105,7 +105,7 @@ describe("parseRoomKey", () => {
   test("rejects malformed keys", () => {
     for (const bad of [
       "",
-      "dm:a",
+      "dm:",
       "dm:a:a",
       "dm:b:a", // non-canonical order is a different (invalid) key, not an alias
       "dm:a:c:b",
@@ -381,18 +381,19 @@ describe("authorizeRoom session", () => {
   });
 
   // F87/F88: team_id is routing. An owner who is not on the conversation's
-  // team (a client-chosen foreign team_id, or removed since) gets no room
-  // there, and so no call reads through the room either.
-  test("owner off the conversation's team is refused", async () => {
+  // team (a client-chosen foreign team_id, or removed since) never bills a
+  // room to it: the room borrows one of the owner's own teams, and an owner
+  // on no team has no room and no call reads through it.
+  test("owner off the conversation's team, and on no other, is refused", async () => {
     const ctx = fakeCtx({
       conversations: [conv()],
       team_memberships: [membership("mate")],
     });
     const res = await authorizeRoom(ctx, "owner" as any, "session:cv1");
     expect(res.ok).toBe(false);
-    if (!res.ok) expect(res.reason).toContain("not a team member");
+    if (!res.ok) expect(res.reason).toContain("no team to hold this huddle");
     const { canReadCall } = await import("./transcripts");
-    const call = { _id: "t1", team_id: TEAM, room_key: "session:cv1", status: "ended", participants: [] } as any;
+    const call = { _id: "t1", team_id: TEAM, room_key: "session:cv1", status: "ended", participants: [], routes: [] } as any;
     expect(await canReadCall(ctx, "owner" as any, call)).toBe(false);
     const member = fakeCtx({
       conversations: [conv()],
@@ -551,15 +552,15 @@ describe("authorizeRoom open door", () => {
     }
   });
 
-  test("a live session huddle admits a teammate who cannot see the conversation", async () => {
-    // The room is joinable (they hear voices); the TITLE is what redacts, and
-    // that is getLiveRooms' job, not the authorizer's.
+  test("a live session huddle admits no teammate who cannot see the conversation", async () => {
+    // A session the team cannot read is its owner's alone (isOwnerOnlyRoom):
+    // its open door stays shut, and only a ring lets a teammate in.
     const ctx = fakeCtx({
       conversations: [{ _id: "cv1", user_id: "ua", team_id: TEAM, is_private: true }],
       team_memberships: everyone,
       call_members: [seat("ua", "session:cv1")],
     });
-    expect((await authorizeRoom(ctx, "uc" as any, "session:cv1")).ok).toBe(true);
+    expect((await authorizeRoom(ctx, "uc" as any, "session:cv1")).ok).toBe(false);
     // Still nobody outside the team.
     expect((await authorizeRoom(ctx, "ud" as any, "session:cv1")).ok).toBe(false);
   });

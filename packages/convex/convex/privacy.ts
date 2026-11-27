@@ -132,7 +132,7 @@ export async function isConversationTeamVisible(
   );
 }
 
-function isConversationTeamVisibleSync(
+export function isConversationTeamVisibleSync(
   conversation: { is_private: boolean; team_visibility?: string; team_id?: any; user_id: any },
   ownerMembershipVisibility: string
 ): boolean {

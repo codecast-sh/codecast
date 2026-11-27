@@ -16,6 +16,7 @@ import { isCallLive } from '@codecast/web/lib/calls/callStatus';
 import { callTitle, type CallPlace } from '@codecast/web/lib/calls/roomLabels';
 import { firstName } from '@codecast/web/components/calls/speakers';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
+import { callOnlyMine, personalViewerOf } from '@codecast/web/lib/calls/personalCalls';
 import { Text as RNText } from '@/components/Themed';
 import { RelativeTime } from '@/components/RelativeTime';
 import { LivePulse, LiveRoomCard, useCallsOn, useLiveRooms } from '@/components/calls/LiveRooms';
@@ -34,7 +35,14 @@ export default function CallsScreen() {
   const liveRooms = useLiveRooms(callsOn);
   // Asked whatever the team's feature says: recordings are personal and the
   // server answers with exactly the calls this viewer may read.
-  const { calls, ready } = useCallList(100);
+  // Personal lists only the calls nobody else can read, its page walked from
+  // the viewer's own calls; a team workspace lists everything readable.
+  const personalViewer = useInboxStore(personalViewerOf);
+  const { calls: readable, ready } = useCallList(100, personalViewer);
+  const calls = useMemo(
+    () => (personalViewer === null ? readable : readable.filter((r: any) => callOnlyMine(r, personalViewer))),
+    [readable, personalViewer],
+  );
   const places = useCallPlaces(calls);
   const openCall = (id: string) => router.push({ pathname: '/recording/[id]', params: { id } } as never);
 

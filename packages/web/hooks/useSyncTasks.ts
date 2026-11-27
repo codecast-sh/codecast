@@ -252,6 +252,14 @@ export function useSyncProjectTasks(projectId: string | null | undefined, worksp
 }
 const selectTaskItems = (r: any) => r?.items ?? r;
 
+/** The tasks pulled from one call (tasks.from_call), wherever each is filed:
+ *  a private call's land in the viewer's Personal workspace, which the active
+ *  workspace's feeder does not reach from a team. */
+export function useSyncCallTasks(callId: string | null | undefined) {
+  const args = useMemo(() => (callId && isConvexId(callId) ? { from_call: callId, include_derived: true } : "skip"), [callId]);
+  return useSyncCollection("tasks", api.tasks.webList, args as any, { select: selectTaskItems });
+}
+
 /**
  * Cross-team mention index for tasks — pulls a minimal-field snapshot of
  * every task in every team the user belongs to, plus their personal tasks.

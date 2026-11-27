@@ -2,10 +2,11 @@
 //
 // A room is a string key, never a row (see call_members in schema.ts). Three
 // shapes, each anchored to something the product already scopes:
-//   dm:<id>:<id>[:<id>…] a set of people (two or more), user ids sorted
+//   dm:<id>[:<id>…]      a set of people (one or more), user ids sorted
 //                        ascending so every side derives the identical key
 //                        without coordination; a chat DM or group thread
-//                        huddles in the room of its member set
+//                        huddles in the room of its member set, and a set
+//                        of one is a huddle with yourself
 //   channel:<channelId>  a chat channel's standing room (private channels
 //                        admit their members only)
 //   session:<convId>     a huddle about one conversation/session
@@ -54,6 +55,12 @@
 // stays with the people who were in it (transcripts.canReadCall). The team is the outer wall and
 // nothing on either layer moves it: no door ever admits a non-teammate.
 //
+// An OWNER-ONLY room (isOwnerOnlyRoom) behaves as a private huddle for everyone
+// but its owner, and nothing stores it: a people room of one is its person's,
+// and a session room is its owner's whenever the team cannot read the
+// session. Derived from the key and the conversation on every read, so no
+// unlock, no new huddle in an empty room and no client flag can open it.
+//
 // Who may WIDEN a room is a third question and it turns on neither layer: the
 // answer is being INSIDE it. Any live occupant may ring a teammate in
 // (authorizeRoomInviter), which is the same gesture as admitting a knocker —
@@ -68,7 +75,8 @@
 // every calls.* mutation and the token mint — the media server trusts our JWT,
 // so this module is the entire security boundary for who can listen in.
 import type { Doc, Id } from "./_generated/dataModel";
-import { createTeamFeedFilter, isTeamMember } from "./privacy";
+import { isTeamMember } from "./privacy";
+import { callTeamsOf, isOwnerOnlyRoom, sessionIsOwnerOnly } from "./callRoomOwnership";
 import { canAccessChannel, isCommunity, isRestricted } from "./chatAccess";
 import { teamFeatureOffMessage, teamHasFeature } from "./teamFeatures";
 import { checkGuestRoster, endGuestAdmissions, roomHasGuestLinks } from "./lib/callGuestAdmission";
@@ -233,24 +241,57 @@ export async function canReadRoomlessCall(
   return (await isTeamMember(ctx, userId, t.team_id)) && (await teamHasFeature(ctx, t.team_id, "calls"));
 }
 
+/** The team a room that is one person's alone bills to: a people room of one,
+ *  or a session with no team (or a team its owner has left). One of their
+ *  teams that can hold calls: the team the room's live seats already bill to,
+ *  so switching workspace mid-huddle never splits its seats, rings and record
+ *  across teams; else `prefer` (the session's team); else the active team;
+ *  else the first. With none, the team a recording would file under, so
+ *  authorizeRoom's feature gate says why calls are off. */
+async function borrowedCallTeam(
+  ctx: any,
+  userId: Id<"users">,
+  roomKey: string,
+  prefer?: Id<"teams"> | null,
+): Promise<Id<"teams"> | null> {
+  const { teams } = await callTeamsOf(ctx, userId);
+  const seats: Doc<"call_members">[] = await ctx.db
+    .query("call_members")
+    .withIndex("by_room", (q: any) => q.eq("room_key", roomKey))
+    .collect();
+  const occupied = liveMembers(seats, Date.now())[0]?.team_id;
+  const user = await ctx.db.get(userId);
+  for (const candidate of [occupied, prefer, user?.active_team_id]) {
+    if (candidate && teams.some((t) => String(t) === String(candidate))) return candidate;
+  }
+  return teams[0] ?? (await recRoutingTeam(ctx, userId));
+}
+
 // A team every one of `users` belongs to, walking the first user's
-// memberships. A people room bills its rows to that team; a set with no
-// common team has no room.
+// memberships. A people room bills its rows to that team: the first common
+// one that can hold calls (callTeamsOf), else the first common one, so
+// authorizeRoom's feature gate says why calls are off. A set with no common
+// team has no room.
 async function sharedTeam(
   ctx: any,
   users: Id<"users">[],
 ): Promise<Id<"teams"> | null> {
   const [first, ...rest] = users;
+  const sharedByAll = async (teamId: Id<"teams">) => {
+    for (const other of rest) {
+      if (!(await isTeamMember(ctx, other, teamId))) return false;
+    }
+    return true;
+  };
+  for (const teamId of (await callTeamsOf(ctx, first)).teams) {
+    if (await sharedByAll(teamId)) return teamId;
+  }
   const memberships = await ctx.db
     .query("team_memberships")
     .withIndex("by_user_id", (q: any) => q.eq("user_id", first))
     .collect();
   for (const m of memberships) {
-    let all = true;
-    for (const other of rest) {
-      if (!(await isTeamMember(ctx, other, m.team_id))) { all = false; break; }
-    }
-    if (all) return m.team_id;
+    if (await sharedByAll(m.team_id)) return m.team_id;
   }
   return null;
 }
@@ -463,6 +504,9 @@ export async function openRoomDoor(
   // outside it, so `ignoreLock` (would I be let in if I knocked?) is no.
   const state = await readRoomState(ctx, roomKey);
   if (state?.private || (!opts.ignoreLock && state?.locked)) return null;
+  // Nor does a room that is one person's: its owner enters by membership,
+  // and anyone else only by being rung in.
+  if (await isOwnerOnlyRoom(ctx, roomKey)) return null;
   return teamId;
 }
 
@@ -552,6 +596,10 @@ export async function authorizeRoomInviter(
   if (!parsed || parsed.kind === "channel") return auth;
   const seat = await liveSeat(ctx, userId, roomKey);
   if (!seat) return auth;
+  // A room that became one person's while a walk-in sat in it (the session
+  // went private, its owner left the team) is widened only by someone who
+  // was rung in; the owner rings by membership above.
+  if ((await isOwnerOnlyRoom(ctx, roomKey)) && !(await acceptedInviteGrant(ctx, userId, roomKey))) return auth;
   const off = await callsOffReason(ctx, seat.team_id);
   return off ? { ok: false, reason: off } : { ok: true, teamId: seat.team_id, parsed };
 }
@@ -626,7 +674,12 @@ export async function authorizeRoomMembership(
       // Third parties cannot join a people room even inside the same team.
       return { ok: false, reason: "not a member of this dm" };
     }
-    const teamId = await sharedTeam(ctx, parsed.users as Id<"users">[]);
+    // A room of one is a huddle with yourself: there is nobody to share a
+    // team with, so it bills to one of yours that can hold calls.
+    const teamId =
+      parsed.users.length === 1
+        ? await borrowedCallTeam(ctx, userId, roomKey)
+        : await sharedTeam(ctx, parsed.users as Id<"users">[]);
     if (!teamId) return { ok: false, reason: "no shared team" };
     return { ok: true, teamId, parsed };
   }
@@ -682,16 +735,16 @@ export async function authorizeRoomMembership(
   );
   if (!conversation) return { ok: false, reason: "conversation not found" };
   if (String(conversation.user_id) === String(userId)) {
-    if (!conversation.team_id) {
-      return { ok: false, reason: "conversation has no team" };
+    // team_id is routing: the session's team bills its room while the owner
+    // is on it. A session with no team, or a team the owner has left, borrows
+    // one of theirs; such a room is the owner's alone (isOwnerOnlyRoom), so the
+    // borrowed team's members get no door into it.
+    if (conversation.team_id && (await isTeamMember(ctx, userId, conversation.team_id))) {
+      return { ok: true, teamId: conversation.team_id, parsed };
     }
-    // team_id is routing: owning the session opens its room only while the
-    // owner is on that team (a client-chosen team_id, or a member removed
-    // since, names a team they cannot speak in).
-    if (!(await isTeamMember(ctx, userId, conversation.team_id))) {
-      return { ok: false, reason: "not a team member" };
-    }
-    return { ok: true, teamId: conversation.team_id, parsed };
+    const teamId = await borrowedCallTeam(ctx, userId, roomKey, conversation.team_id);
+    if (!teamId) return { ok: false, reason: "no team to hold this huddle" };
+    return { ok: true, teamId, parsed };
   }
   if (!conversation.team_id) {
     return { ok: false, reason: "conversation has no team" };
@@ -710,8 +763,7 @@ export async function authorizeRoomMembership(
     )
     .unique();
   if (!membership) return { ok: false, reason: "not a team member" };
-  const feedFilter = await createTeamFeedFilter(ctx, conversation.team_id);
-  if (!feedFilter.isVisible(conversation)) {
+  if (await sessionIsOwnerOnly(ctx, conversation)) {
     return { ok: false, reason: "conversation not team-visible" };
   }
   return { ok: true, teamId: conversation.team_id, parsed };

@@ -7,7 +7,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { authorizeRoom, authorizeRoomNoGrant, canReadRoomlessCall } from "./callRooms";
 import { isTeamMember } from "./privacy";
 import { teamHasFeature } from "./teamFeatures";
-import { isRoomlessKey, parseRoomKey } from "@codecast/shared/contracts";
+import { isRoomlessKey, parseRoomKey, sessionRoomConversationId } from "@codecast/shared/contracts";
 import { canAccessConversation, canAccessDoc, canAccessTask } from "./lib/access";
 import { agentIdentity } from "./callChat";
 import { mayPublishCall } from "./lib/callRecordingRuns";
@@ -71,6 +71,24 @@ export async function canReadCall(
       (await teamHasFeature(ctx, t.team_id, "calls"))
     );
   }
+  // A huddle about your own session that feeds that session (its own route,
+  // carried or owed) is yours to read: its words are your session's, and a
+  // scribe handover (releaseScribe) can leave you neither speaker nor scribe.
+  // A private huddle a teammate chose on your session withheld that route,
+  // so it stays with the people in it. A route someone removed leaves no
+  // trace, and then this door stays shut.
+  const own = sessionRoomConversationId(t.room_key);
+  if (own && (t.own_route_owed || t.routes.some((r) => r.kind === "session" && r.target === own))) {
+    const conversation = await ctx.db.get(own as Id<"conversations">);
+    if (
+      conversation &&
+      String(conversation.user_id) === String(userId) &&
+      (await isTeamMember(ctx, userId, t.team_id)) &&
+      (await teamHasFeature(ctx, t.team_id, "calls"))
+    ) {
+      return true;
+    }
+  }
   // A private huddle's record is the people in it. The room's membership
   // reaches the team (a team-visible session, a public channel) everywhere
   // but a people room, whose key names exactly the people it was for.
@@ -110,6 +128,10 @@ export function shapeCallRow(t: Doc<"transcripts">) {
     started_by: String(t.started_by),
     team_id: String(t.team_id),
     rec_shared: t.rec_shared ?? false,
+    // Readable only by the people in it: started private, or one person's
+    // alone (a room of one, a session the team cannot read). The calls page
+    // files these under Personal.
+    private: t.private ?? false,
     // Whether Record was ever pressed on this call (a run seats the people it
     // shows): the history marks the calls that have video, and a surface
     // that cannot play it yet (the phone) says where it plays rather than
@@ -146,11 +168,36 @@ export function callFilmed(t: Pick<Doc<"transcripts">, "video_runs">): boolean {
  *  walking its whole history. */
 const CALL_LIST_SCAN_CAP = 400;
 
+/** A call the Personal workspace may list, from the record alone: the
+ *  viewer's room of one, a private session huddle, or a recording not shared
+ *  into a team. Personal walks only the calls the viewer started, so this
+ *  keeps the team's out of its page; the client narrows it the rest of the
+ *  way (web lib/calls/personalCalls callOnlyMine). */
+function personalCandidate(t: Doc<"transcripts">, userId: Id<"users">): boolean {
+  if (isRoomlessKey(t.room_key)) return !t.rec_shared;
+  if (t.room_key === `dm:${userId}`) return true;
+  return !!t.private && parseRoomKey(t.room_key)?.kind === "session";
+}
+
 export async function listCallsCore(ctx: any, userId: Id<"users">, limit: number) {
-  const memberships = await ctx.db
-    .query("team_memberships")
-    .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
-    .collect();
+  return (await walkCalls(ctx, userId, limit, false)).calls;
+}
+
+/** Personal's page: only the viewer's own shelf, so newer team calls never
+ *  push their own calls off it. `complete` is false when a walk stopped at
+ *  the scan cap short of a page: the page then vouches for nothing older,
+ *  and a client must not prune by it. */
+export async function listPersonalCallsCore(ctx: any, userId: Id<"users">, limit: number) {
+  return walkCalls(ctx, userId, limit, true);
+}
+
+async function walkCalls(ctx: any, userId: Id<"users">, limit: number, personal: boolean) {
+  const memberships = personal
+    ? []
+    : await ctx.db
+        .query("team_memberships")
+        .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+        .collect();
   // Each source keeps its own newest `limit` calls the viewer would see,
   // filtering WHILE it walks. Taking `limit` rows and filtering afterwards
   // let a team whose newest rows are silent huddles contribute nothing, so
@@ -161,11 +208,16 @@ export async function listCallsCore(ctx: any, userId: Id<"users">, limit: number
   // that session's thread and on its own page, never in the history.
   const keep = async (t: Doc<"transcripts">) =>
     !t.screen_recording && !(await isSilentHuddle(ctx, t)) && (await canReadCall(ctx, userId, t));
+  let complete = true;
   const walk = async (query: any, only?: (t: Doc<"transcripts">) => boolean) => {
     const kept: Doc<"transcripts">[] = [];
     let scanned = 0;
     for await (const t of query) {
-      if (kept.length >= limit || scanned++ >= CALL_LIST_SCAN_CAP) break;
+      if (kept.length >= limit) break;
+      if (scanned++ >= CALL_LIST_SCAN_CAP) {
+        complete = false;
+        break;
+      }
       if ((!only || only(t)) && (await keep(t))) kept.push(t);
     }
     return kept;
@@ -191,7 +243,7 @@ export async function listCallsCore(ctx: any, userId: Id<"users">, limit: number
         .query("transcripts")
         .withIndex("by_creator_started", (q: any) => q.eq("started_by", userId))
         .order("desc"),
-      (t) => isRoomlessKey(t.room_key),
+      personal ? (t) => personalCandidate(t, userId) : (t) => isRoomlessKey(t.room_key),
     )),
   );
   rows.sort((a, b) => b.started_at - a.started_at);
@@ -203,7 +255,7 @@ export async function listCallsCore(ctx: any, userId: Id<"users">, limit: number
     seen.add(String(t._id));
     out.push(shapeCallRow(t));
   }
-  return out;
+  return { calls: out, complete };
 }
 
 /** A huddle that ended with nothing in it: no word said, no line typed or

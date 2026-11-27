@@ -72,6 +72,15 @@ describe("decideAutoScribe", () => {
     expect(decideAutoScribe({ ...base, roomKey: "session:conv1", rosterIds: ["me"] })).toBe("start");
   });
 
+  test("a room of one, a huddle with yourself, transcribes with you alone in it", () => {
+    expect(decideAutoScribe({ ...base, roomKey: "dm:me", rosterIds: ["me"] })).toBe("start");
+    expect(decideAutoScribe({ ...base, roomKey: "dm:me", rosterIds: ["me"], transcribeOff: true })).toBe("hold");
+    // Another person's room of one is not mine, and a 1:1 waiting on its
+    // ring still holds.
+    expect(decideAutoScribe({ ...base, roomKey: "dm:them", rosterIds: ["me"] })).toBe("hold");
+    expect(decideAutoScribe({ ...base, roomKey: "dm:me:them", rosterIds: ["me"] })).toBe("hold");
+  });
+
   test("a session's own room still honors the opt-out", () => {
     expect(
       decideAutoScribe({ ...base, roomKey: "session:conv1", rosterIds: ["me"], transcribeOff: true }),

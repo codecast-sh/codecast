@@ -337,14 +337,15 @@ describe("a face opens one card", () => {
     expect(h.q("[data-member-card] .face-action")).toBeNull();
   });
 
-  test("my own face opens my card: the status switch, no actions on myself", async () => {
+  test("my own face opens my card: the status switch, and Huddle beside it, nothing to talk to", async () => {
     const h = await mount(bar(rowOf([me()])));
     await h.click(h.circle(ME));
     const card = h.q("[data-member-card]")!;
     expect(card).not.toBeNull();
     expect(card.textContent).toContain("you");
     expect(h.all(".face-card-status").map((b) => b.textContent)).toEqual(["available", "busy", "away"]);
-    expect(h.q(".face-action")).toBeNull();
+    expect(h.all(".face-card-self .face-action-word").map((w) => w.textContent)).toEqual(["Huddle"]);
+    expect(h.q(".face-action-talk")).toBeNull();
   });
 });
 

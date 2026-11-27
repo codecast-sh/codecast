@@ -15,6 +15,7 @@ import {
   type CallAnchor,
 } from "@codecast/shared/contracts";
 import { useInboxStore, useMyUserId } from "../../store/inboxStore";
+import { OWN_ROUTE_HELD, ownRouteHeldFrom } from "../../lib/calls/ownRoute";
 import { navigateMainWindow } from "../../lib/desktop";
 import { settleComposerAttachments } from "../../lib/draftImages";
 import { getRoom, startTranscribing } from "../../lib/calls/callManager";
@@ -358,6 +359,8 @@ export const RoomThread = memo(function RoomThread({
   // anyone to, and an ended call has nothing to attach to.
   const canAdd = !recording && !ended && (surface === "stage" || transcribing);
   const canRemove = transcribing;
+  // The room's own session route, when only that session's owner may take it off.
+  const heldRoute = useInboxStore((st) => ownRouteHeldFrom(st, roomKey));
 
   // Follow the tail while the reader is at the bottom; a reader who scrolled
   // up to quote something keeps their place, and a count of what landed
@@ -591,7 +594,10 @@ export const RoomThread = memo(function RoomThread({
                   route={r}
                   label={agent?.name}
                   removable={canRemove}
-                  onRemove={() => void removeFeed(r.kind, r.target)}
+                  removeBlocked={r.kind === "session" && r.target === heldRoute ? OWN_ROUTE_HELD : null}
+                  onRemove={() =>
+                    void removeFeed(r.kind, r.target).catch((e) => toast.error(humanizeConvexError(e, "Could not take it out of the call")))
+                  }
                 />
                 {agent?.working && transcribing && (
                   <WorkingDots className="text-sol-violet" title={`${agent.name} is working`} />

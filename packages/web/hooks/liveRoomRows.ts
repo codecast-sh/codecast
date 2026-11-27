@@ -41,6 +41,9 @@ export type LiveRoomRow = {
   /** The room is being recorded: whoever walks in will be filmed, so the
    *  row says so before they do. */
   recording: boolean;
+  /** Only its owner may enter (roomIsOwnerOnly): what keeps a session room
+   *  on Personal's Live now. */
+  ownerOnly: boolean;
 };
 
 function roomsSig(rooms: LiveRoom[]): string {
@@ -60,8 +63,8 @@ export function useLiveRoomRows(myRoom: string | null | undefined): LiveRoomRow[
     (st: any) => roomsSig(st.liveRooms ?? []),
     (st: any) =>
       Object.values(st.callRooms ?? {})
-        .filter((r: any) => r.locked || r.recording)
-        .map((r: any) => `${r._id}:${r.locked ? "L" : ""}${r.recording ? "R" : ""}`)
+        .filter((r: any) => r.locked || r.recording || r.owner_only)
+        .map((r: any) => `${r._id}:${r.locked ? "L" : ""}${r.recording ? "R" : ""}${r.owner_only ? "O" : ""}`)
         .sort()
         .join("|"),
     // Label inputs. Teammate names (a rename renames the huddle), the channel
@@ -111,6 +114,7 @@ export function useLiveRoomRows(myRoom: string | null | undefined): LiveRoomRow[
         mine: myRoom === room.room_key,
         knocked: now - (knocked[room.room_key] ?? 0) < CALL_KNOCK_TTL_MS,
         recording: !!s.callRooms?.[room.room_key]?.recording,
+        ownerOnly: !!s.callRooms?.[room.room_key]?.owner_only,
       };
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps

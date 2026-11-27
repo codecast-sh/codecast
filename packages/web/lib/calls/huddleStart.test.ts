@@ -142,3 +142,12 @@ describe("requestAnswer", () => {
     expect(calls).toEqual(["hold in1", "decline in1"]);
   });
 });
+
+describe("the private choice", () => {
+  test("offered for a people room or a session room, never a channel or a room of one, which is already yours alone", () => {
+    expect(gate.canStartPrivate({ roomKey: "dm:u-ann:u-me" })).toBe(true);
+    expect(gate.canStartPrivate({ roomKey: "session:c1" })).toBe(true);
+    expect(gate.canStartPrivate({ roomKey: "channel:ch1" })).toBe(false);
+    expect(gate.canStartPrivate({ roomKey: "dm:u-me" })).toBe(false);
+  });
+});

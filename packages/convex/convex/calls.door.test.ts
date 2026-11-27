@@ -287,7 +287,7 @@ describe("lock, knock and the live-room list", () => {
     expect(await (await fn("getLiveRooms"))(ctx, {})).toEqual([]);
   });
 
-  test("a session huddle I cannot see lists without its title", async () => {
+  test("a session huddle I cannot see is not listed, and its title never leaves", async () => {
     const { ctx, rows, now } = fakeCtx();
     rows.conversations = [
       { _id: "cvp", user_id: "ub", team_id: "t1", is_private: true, title: "Secret refactor" },
@@ -297,9 +297,9 @@ describe("lock, knock and the live-room list", () => {
     seat(rows, "uc", "session:cvs", now);
     const live = await (await fn("getLiveRooms"))(ctx, {});
     const byKey = Object.fromEntries(live.map((r: any) => [r.room_key, r]));
-    // Joinable either way — the team wall holds and the voices are audible.
-    expect(byKey["session:cvp"]).toMatchObject({ redacted: true, title: undefined });
-    expect(JSON.stringify(byKey["session:cvp"])).not.toContain("Secret refactor");
+    // A session the team cannot read is its owner's alone (isOwnerOnlyRoom).
+    expect(byKey["session:cvp"]).toBeUndefined();
+    expect(JSON.stringify(live)).not.toContain("Secret refactor");
     expect(byKey["session:cvs"]).toMatchObject({ redacted: false, title: "Shared work" });
   });
 

@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { UserRound, Filter, Link2, PanelTop } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
 import { useSyncTeamMembers } from "../hooks/useSyncTeamMembers";
-import { useFaceRow } from "../hooks/useFaceRow";
+import { useFaceRow, useIdleSelfFace } from "../hooks/useFaceRow";
 import { copyToClipboard, shareOrigin } from "../lib/utils";
 import { DOCK_FACES_TITLE, useFacesFloating } from "../lib/desktop";
 import { ContextMenu, useContextMenu, CtxItem, CtxHeader } from "./ui/context-menu";
@@ -71,6 +71,10 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
   // THE ROW. One subscription, signature gated: a heartbeat, a level tick or
   // a mute that moves no face hands back the same row and this bar sleeps.
   const row = useFaceRow();
+  // Your own face leads the row in every workspace, Personal included, so
+  // your card (status, Huddle) is the same click a teammate's is. The model
+  // draws you only while engaged; the rest of the time it is this one.
+  const selfFace = useIdleSelfFace();
   const floating = useFacesFloating();
   const ctxMenu = useContextMenu<{ id: string; profileHref: string; displayName: string }>();
 
@@ -82,7 +86,10 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
   // puts them at the head), then the rest by presence, up to the cap. Agents
   // are off the header for now (people only); a teammate speaking in chat is
   // pulled into the last seats so their line can drop from their face.
-  const people = useMemo(() => row.entries.filter((e) => !e.bot || row.links.some((l) => l.to === e.id)), [row]);
+  const people = useMemo(() => {
+    const list = row.entries.filter((e) => !e.bot || row.links.some((l) => l.to === e.id));
+    return row.me || !selfFace ? list : [selfFace, ...list];
+  }, [row, selfFace]);
   const shown = useMemo(() => {
     if (people.length <= BAR_FACES) return people === row.entries ? row : { ...row, entries: people };
     const head = people.slice(0, BAR_FACES);
@@ -105,7 +112,9 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
   const live = !!row.me || row.links.length > 0;
   const inCall = isCallCard(row.card);
 
-  if (!effectiveTeamId || rosterCount === 0) {
+  // A team draws once its roster is in. Personal has no roster: the row is
+  // you alone, there while calls are (your card's Huddle is its point).
+  if (effectiveTeamId ? rosterCount === 0 : !callsEnabled || !selfFace) {
     return <TeamMembersPump teamId={effectiveTeamId} />;
   }
 

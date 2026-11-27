@@ -39,6 +39,7 @@ import {
   readRoomState,
   stampRoomWordsPublic,
 } from "./callRooms";
+import { assertMayDropOwnRoute, isOwnerOnlyRoom, ownRouteAdder } from "./callRoomOwnership";
 import { isTeamMember } from "./privacy";
 import { teamHasFeature } from "./teamFeatures";
 import { performSessionSend } from "./pendingMessages";
@@ -95,7 +96,7 @@ import { SEGMENT_WRITE_BATCH, parseTranscriptionSegments, transcribeAudio } from
 export { parseTranscriptionSegments };
 import { HUDDLE_GRACE_MS, quietSince, withinHuddleGrace } from "./lib/huddleGrace";
 import { callSpeakerValidator, lineSpeakerNames } from "./lib/callSpeakers";
-import { callFilmed, callTasks, canReadCall, getCallCore, listCallsCore, routeView, shapeCallRow } from "./callReads";
+import { callFilmed, callTasks, canReadCall, getCallCore, listCallsCore, listPersonalCallsCore, routeView, shapeCallRow } from "./callReads";
 import { campplusEngine, runSpeechPipeline, scribeWordsSource } from "./lib/speechPipeline";
 import {
   assignedSpeaker,
@@ -489,9 +490,14 @@ export async function beginCallRecord(
   const startedAt = Date.now();
   // A private huddle's words stay in its record: the room's own session
   // route would post them into a conversation the team may be able to read,
-  // so its agent joins only when someone inside adds it.
-  const isPrivate = !!(await readRoomState(ctx, args.roomKey))?.private;
-  const ownRoute = args.ownRoute !== false && !isPrivate;
+  // so its agent joins only when someone inside adds it. An owner-only room is
+  // private too, but an owner-only SESSION room keeps its own route: it is theirs.
+  const chosenPrivate = !!(await readRoomState(ctx, args.roomKey))?.private;
+  const ownerOnly = await isOwnerOnlyRoom(ctx, args.roomKey);
+  const isPrivate = chosenPrivate || ownerOnly;
+  const withholdOwn = chosenPrivate && !(ownerOnly && ownRoomTarget(args.roomKey));
+  const ownRoute = args.ownRoute !== false && !withholdOwn;
+  const ownAdder = await ownRouteAdder(ctx, args.roomKey, args.userId);
   const id = await ctx.db.insert("transcripts", {
     room_key: args.roomKey,
     team_id: args.teamId,
@@ -501,11 +507,11 @@ export async function beginCallRecord(
     short_id: await nextShortId(ctx.db, "cl"),
     routes: (ownRoute ? withDefaultRoutes(args.roomKey, args.routes) : args.routes).map((r) => ({
       ...r,
-      added_by: args.userId,
+      added_by: r.kind === "session" && r.target === ownRoomTarget(args.roomKey) ? ownAdder : args.userId,
     })),
     last_seq: 0,
     ...(isPrivate ? { private: true } : {}),
-    ...(args.ownRoute === false && !isPrivate && ownRoomTarget(args.roomKey) ? { own_route_owed: true } : {}),
+    ...(args.ownRoute === false && !withholdOwn && ownRoomTarget(args.roomKey) ? { own_route_owed: true } : {}),
     ...(args.scribeOpen ? { scribe_open: true } : {}),
   });
   // A new record has no public link, whatever the room's last one had.
@@ -537,7 +543,9 @@ export async function beginCallRecord(
  *  turned transcription on, the person it now speaks for. */
 export async function ensureOwnRoute(ctx: any, t: Doc<"transcripts">, userId: Id<"users">): Promise<void> {
   if (!t.own_route_owed || t.status !== "live") return;
-  const routes = withDefaultRoutes(t.room_key, t.routes).map((r) => ({ ...r, added_by: r.added_by ?? userId }));
+  const ownAdder = await ownRouteAdder(ctx, t.room_key, userId);
+  const own = ownRoomTarget(t.room_key);
+  const routes = withDefaultRoutes(t.room_key, t.routes).map((r) => ({ ...r, added_by: r.added_by ?? (r.kind === "session" && r.target === own ? ownAdder : userId) }));
   await ctx.db.patch(t._id, { routes, own_route_owed: undefined });
   await syncAgentFeeds(ctx, (await ctx.db.get(t._id))!);
 }
@@ -551,6 +559,9 @@ export const setRoutes = mutation({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
     const t = await requireOwnLiveTranscript(ctx, userId, args.transcript_id);
+    for (const prior of t.routes.filter((p) => !args.routes.some((r) => r.kind === p.kind && r.target === p.target))) {
+      await assertMayDropOwnRoute(ctx, t, userId, prior.kind, prior.target);
+    }
     // Keep delivery watermarks (and who added what) for routes that survive
     // the edit, so changing one route never re-sends another's history.
     const routes = args.routes.map((r) => {
@@ -654,6 +665,7 @@ export const removeRoute = mutation({
     if (!t) throw new Error("Transcript not found");
     const route = t.routes.find((r) => r.kind === args.kind && r.target === args.target);
     if (!route) return;
+    await assertMayDropOwnRoute(ctx, t, userId, args.kind, args.target);
     // The scribe and the adder may take a route back at any time. While the
     // huddle runs, so may anyone in it, through addRoute's door: an agent in
     // the room hears everyone, so everyone it hears may show it out.
@@ -680,7 +692,10 @@ export const removeAgentFromRoom = internalMutation({
     for (const r of t.routes) {
       if (r.kind !== "session") continue;
       const conv = await findConversationByAnyRefWhere(ctx, r.target, () => true);
-      if (conv && String(conv._id) === args.conversation_id) return await dropRoute(ctx, t, r.kind, r.target);
+      if (conv && String(conv._id) === args.conversation_id) {
+        await assertMayDropOwnRoute(ctx, t, args.user_id, r.kind, r.target);
+        return await dropRoute(ctx, t, r.kind, r.target);
+      }
     }
   },
 });
@@ -1493,7 +1508,8 @@ export function huddleDigestTarget(
  *  stretches (and tells an agent it can snap a frame). A chat room gets a message the
  *  reader can unfold into the transcript (chat.postCallDigest); a session room
  *  gets its agent woken with the summary and the command that reads the whole
- *  transcript, never the transcript itself. Delivery acts as the scribe. */
+ *  transcript, never the transcript itself. Delivery acts as the scribe, or
+ *  as the owner in an owner-only room, like the live words (ownRouteAdder). */
 async function scheduleHuddleDigest(
   ctx: any,
   t: Doc<"transcripts">,
@@ -1533,7 +1549,7 @@ async function scheduleHuddleDigest(
     return;
   }
   await ctx.scheduler.runAfter(0, internal.transcripts.deliverToSession, {
-    as_user: t.started_by,
+    as_user: await ownRouteAdder(ctx, t.room_key, t.started_by),
     to: target.conversationId,
     body: formatHuddleSummaryTag(String(t._id), digest, {
       callRef: t.short_id ?? null,
@@ -2103,11 +2119,14 @@ export const backfillCallShortIds = internalMutation({
 });
 
 export const webListCalls = query({
-  args: { limit: v.optional(v.number()) },
+  // `personal`: Personal's page as { calls, complete } (callReads.listPersonalCallsCore).
+  args: { limit: v.optional(v.number()), personal: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
+    const limit = Math.min(args.limit ?? 50, 200);
+    if (args.personal) return userId ? await listPersonalCallsCore(ctx, userId, limit) : { calls: [], complete: true };
     if (!userId) return [];
-    return listCallsCore(ctx, userId, Math.min(args.limit ?? 50, 200));
+    return listCallsCore(ctx, userId, limit);
   },
 });
 

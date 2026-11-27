@@ -63,6 +63,7 @@ export const TEAM_FEATURES: TeamFeatureDescriptor[] = [
     short: "Huddles with live transcripts",
     onByDefault: true,
     snippets: ["calls"],
+    personal: true,
   },
   {
     key: "org",

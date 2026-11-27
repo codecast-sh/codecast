@@ -2,10 +2,10 @@
 // people rows and the person screen so both open the same room the same way.
 import * as Haptics from 'expo-haptics';
 import type { Router } from 'expo-router';
-import { dmRoomKey } from '@codecast/shared/contracts';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
 import type { LiveRoomRow } from '@/components/calls/LiveRooms';
 import { joinCall, startHuddle } from '@/lib/calls/callManager';
+import { peopleHuddle } from '@/lib/calls/callsGate';
 
 /** Open the direct message with one person. Local-first: openDmChannel
  *  answers in this tick with the room's real id or a stub the server row
@@ -18,13 +18,13 @@ export function openDmWith(router: Router, userId: string): void {
 }
 
 /** Join the huddle they are in when this viewer may, else ring them into a
- *  new one. */
+ *  new one. Yourself: your room of one (`dm:<you>`), ringing nobody. */
 export function huddleWith(router: Router, viewerId: string, userId: string, inRoom: LiveRoomRow | null): void {
   void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
   if (inRoom && (inRoom.canJoin || inRoom.mine)) {
     void joinCall(inRoom.roomKey);
   } else {
-    void startHuddle({ roomKey: dmRoomKey(viewerId, userId), toUserIds: [userId] });
+    void startHuddle(peopleHuddle(viewerId, [userId]));
   }
   router.push('/call');
 }

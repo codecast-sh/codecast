@@ -17,12 +17,10 @@
 // status snapshot via subscribe/getSnapshot; nothing here touches the store
 // except through convex mutations.
 import { Room, RoomEvent, Track, TrackEvent, type LocalTrack } from "livekit-client";
-import { addressesAgent, agentSpokenNames, callSpeakerName, isAgentFaceIdentity, MID_TURN_AGENT_STATUSES } from "@codecast/shared/contracts";
-import { agentStatusAt } from "../liveness";
+import { callSpeakerName, isAgentFaceIdentity } from "@codecast/shared/contracts";
 import { useInboxStore } from "../../store/inboxStore";
-import { characterFor } from "../sessionIdentity";
-import { findSessionRow } from "./findSessionRow";
-import { createScribeEngine, type ConvexHandle, type ScribePacing, type ScribeRoute, type ScribeStatus } from "./scribeEngine";
+import { storePacing } from "./scribePacing";
+import { createScribeEngine, type ConvexHandle, type ScribeRoute, type ScribeStatus } from "./scribeEngine";
 
 export { GAP_MS, MAX_HOLD_MS, type ScribeStatus } from "./scribeEngine";
 
@@ -38,26 +36,7 @@ export function setScribeFeedTargets(targets: string[]): void {
   feedTargets = targets;
 }
 
-/** The engine's view of the fed agents, read from the store at every tick:
- *  busy while EVERY fed agent is mid-turn (the server holds context for a
- *  busy agent, so the scribe need not ask it to), and whether a line names
- *  one of them — the same names the server's own gate matches. */
-const pacing: ScribePacing = {
-  busy() {
-    const st = useInboxStore.getState() as any;
-    const rows = feedTargets.map((t) => findSessionRow(st, t)).filter(Boolean);
-    const now = Date.now();
-    return rows.length > 0 && rows.every((row) => MID_TURN_AGENT_STATUSES.has(agentStatusAt(row, now) ?? ""));
-  },
-  addressed(text) {
-    const st = useInboxStore.getState() as any;
-    return feedTargets.some((t) => {
-      const row = findSessionRow(st, t);
-      if (!row) return false;
-      return addressesAgent(text, agentSpokenNames({ name: characterFor(row).name, agentType: row.agent_type }));
-    });
-  },
-};
+const pacing = storePacing(() => feedTargets, () => useInboxStore.getState());
 
 let room: Room | null = null;
 let roomListener: (() => void) | null = null;
