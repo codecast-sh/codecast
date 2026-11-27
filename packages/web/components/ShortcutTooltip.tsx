@@ -28,7 +28,7 @@ function isTooltipAnchored(el: HTMLElement): boolean {
 // A tooltip closes the moment the pointer leaves its trigger, so it holds
 // words only. A panel with something to read, select or press goes in
 // ui/HoverCard, which stays open while the pointer crosses onto it.
-export function ShortcutTooltip({ label, action, accel, hint, side = "bottom", align, eager = false, children }: {
+export function ShortcutTooltip({ label, action, accel, hint, side = "bottom", align, eager = false, held = false, children }: {
   label: ReactNode;
   action?: ShortcutAction;
   /** A chord with no registry action (the composer's SEND_CHORDS), in accelerator syntax. */
@@ -39,6 +39,8 @@ export function ShortcutTooltip({ label, action, accel, hint, side = "bottom", a
   side?: "top" | "bottom" | "left" | "right";
   align?: "start" | "center" | "end";
   eager?: boolean;
+  /** Held shut: a menu its trigger opened is showing, and the label would sit over it. */
+  held?: boolean;
   children: ReactNode;
 }) {
   // Lazy: hundreds of these mount at once (every card action, every header
@@ -110,7 +112,7 @@ export function ShortcutTooltip({ label, action, accel, hint, side = "bottom", a
   const parts = defs.length > 0 ? formatShortcutParts(defs[0]) : accel ? formatAcceleratorParts(accel) : null;
   return (
     <TooltipProvider delayDuration={300}>
-      <Tooltip open={open} onOpenChange={(v) => { cancelFirstShow(); setOpen(v); }}>
+      <Tooltip open={open && !held} onOpenChange={(v) => { cancelFirstShow(); setOpen(v); }}>
         <TooltipTrigger asChild ref={(node) => { triggerRef.current = node; }} onPointerLeave={cancelFirstShow} onBlur={cancelFirstShow}>{children}</TooltipTrigger>
         {/* Bounded width + wrap: a label that carries a sentence (a trigger's
             standing prompt, a long path) folds into lines instead of running
