@@ -86,7 +86,7 @@ export type LandedIO = {
  * with `wait`, 1 when the branch's pull request was closed unmerged and 2 when it has not merged in time.
  */
 export async function landedOrWait(opts: LandedOptions, io: LandedIO): Promise<{ code: 0 | 1 | 2; line: string; sha?: string; files?: string[]; pr_url?: string }> {
-  const nothing = `Land reported success but ${opts.branch || "the run's branch"} is not on ${opts.base}: nothing was merged`;
+  const nothing = `Land reported success but ${opts.as || opts.branch || "the run's branch"} is not on ${opts.base}: nothing was merged`;
   if (!opts.branch) return { code: 1, line: nothing };
   const waitMs = Math.max(0, Number(opts.wait) || 0) * 1000;
   const every = Math.max(5, Number(opts.interval) || 30) * 1000;

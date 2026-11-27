@@ -428,7 +428,7 @@ describe("line.cast station scripts", () => {
     const bin = path.join(tmp, "bin");
     fs.mkdirSync(bin);
     log = path.join(tmp, "cast.log");
-    fs.writeFileSync(path.join(bin, "cast"), `#!/bin/bash\nif [ "$1 $2" = "ws path" ]; then echo "${repo}"; exit 0; fi\nfor a in "$@"; do printf '%s\\n' "$a"; done >> "${log}"\necho --- >> "${log}"\nif [ "$1 $2" = "env eval" ] && [ -n "$FAKE_ENV_EVAL" ]; then echo "$FAKE_ENV_EVAL"; fi\nif [ "$1 $2" = "flow landed" ] && [ -n "$FAKE_NOT_LANDED" ]; then echo "$FAKE_NOT_LANDED"; exit ${"$"}{FAKE_LANDED_CODE:-1}; fi\n`, { mode: 0o755 });
+    fs.writeFileSync(path.join(bin, "cast"), `#!/bin/bash\nif [ "$1 $2" = "ws path" ]; then echo "${repo}"; exit 0; fi\nfor a in "$@"; do printf '%s\\n' "$a"; done >> "${log}"\necho --- >> "${log}"\nif [ "$1 $2" = "env eval" ] && [ -n "$FAKE_ENV_EVAL" ]; then echo "$FAKE_ENV_EVAL"; fi\nif [ "$1 $2" = "flow landed" ] && [ -n "$FAKE_NOT_LANDED" ]; then echo "$FAKE_NOT_LANDED"; exit ${"$"}{FAKE_LANDED_CODE:-1}; fi\nif [ "$1 $2" = "flow landed" ] && [ -n "$REAL_LANDED" ]; then exec bun "$REAL_LANDED" "$@"; fi\n`, { mode: 0o755 });
     env = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
   });
   afterEach(() => fs.rmSync(tmp, { recursive: true, force: true }));
@@ -600,7 +600,7 @@ describe("line.cast station scripts", () => {
 
   test("ship runs the project's ship command and puts the one line it prints on the task; without one it runs Ship, which never merges on its own", () => {
     const branch = "codecast/line-ct-1";
-    const landedCall = ["flow", "landed", "--branch", branch, "--base", "main", "--files", "web/a.ts", "--since", "", "--out", `${runDir()}/merge.json`, "--run", "run_1"];
+    const landedCall = ["flow", "landed", "--branch", branch, "--as", branch, "--base", "main", "--files", "web/a.ts", "--since", "", "--out", `${runDir()}/merge.json`, "--run", "run_1"];
     const none = run("ship", { branch, change_files: "web/a.ts", run_id: "run_1", station_id: "ship__ship" });
     expect(none.code).toBe(0);
     expect(calls()).toEqual([
@@ -642,6 +642,40 @@ describe("line.cast station scripts", () => {
       ["task", "comment", "ct-1", `Not merged: ${nothing}`, "-t", "blocker"],
       ["task", "comment", "ct-1", `Not merged: ${nothing}`, "-t", "blocker"],
     ]);
+  });
+
+  // Nov 27 (sit, ct-102767 and ct-102776): a repository that ships straight to main ran its ship command, which pushed
+  // the worktree's branch (restore-md) to main and deployed it, and Land said "Land reported success but
+  // codecast/change-ct-N is not on main". The start Land read where the station began came back empty, since the name
+  // in $branch did not resolve there, and with no start a tip main holds never reads as landed.
+  test("ship finds a ship command's landing from the worktree it pushed, whatever $branch names where the station starts", () => {
+    const g = (cwd: string, ...a: string[]) => {
+      const r = spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...a], { cwd, encoding: "utf-8" });
+      if (r.status !== 0) throw new Error(`git ${a.join(" ")}: ${r.stderr}`);
+      return r.stdout.trim();
+    };
+    const origin = path.join(tmp, "origin.git");
+    g(tmp, "init", "-q", "--bare", "-b", "main", origin);
+    g(repo, "remote", "add", "origin", origin);
+    g(repo, "checkout", "-q", "-b", "main");
+    fs.writeFileSync(path.join(repo, "a.txt"), "base\n");
+    g(repo, "add", "-A");
+    g(repo, "commit", "-qm", "base");
+    g(repo, "push", "-q", "origin", "main");
+    const fork = g(repo, "rev-parse", "HEAD");
+    g(repo, "checkout", "-q", "-b", "restore-md");
+    fs.writeFileSync(path.join(repo, "a.txt"), "restored\n");
+    g(repo, "commit", "-qam", "restore the markdown");
+    env.REAL_LANDED = path.resolve(import.meta.dir, "..", "index.ts");
+    const shipped = run("ship", { branch: "codecast/change-ct-1", change_files: "a.txt", run_id: "", "line.commands.ship": 'git push -q origin HEAD:main && echo "live: $(git rev-parse --short HEAD)"' });
+    delete env.REAL_LANDED;
+    const head = g(repo, "rev-parse", "HEAD");
+    expect(g(repo, "rev-parse", "origin/main")).toBe(head);
+    expect(shipped.code).toBe(0);
+    expect(fs.readFileSync(path.join(runDir(), "since"), "utf-8").trim()).toBe(fork);
+    expect(JSON.parse(fs.readFileSync(path.join(runDir(), "merge.json"), "utf-8")).sha).toBe(head);
+    expect(calls().find((c) => c[0] === "flow")).toEqual(["flow", "landed", "--branch", head, "--as", "restore-md", "--base", "main", "--files", "a.txt", "--since", fork, "--out", `${runDir()}/merge.json`, "--run"]);
+    expect(calls().filter((c) => c[0] === "task")).toEqual([["task", "comment", "ct-1", `Merged: live: ${head.slice(0, 7)}`, "-t", "progress"]]);
   });
 
   test("ship ends at Not merged without a blocker when Ship's pull request is still open after the wait", () => {

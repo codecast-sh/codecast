@@ -842,7 +842,12 @@ branch left them, or the first commit a replay already holds, where merging the
 branch in changes nothing; a change that only deletes files needs one of the
 other two, since main may have moved them) and that the
 branch changed something of its own since its fork, read before the land
-command ran and kept in `$run_dir/since`. It records that commit on the run as
+command ran and kept in `$run_dir/since`. A profile ship command lands what the
+run's worktree holds, so for one both are read there: the fork from the
+worktree's HEAD before the command, and the landed commit from its HEAD after,
+named for the branch checked out there. The run's branch name need not resolve
+where the station started (sit's ct-102776 read an empty fork from it and
+called a change it had just pushed and deployed "not on main"). It records that commit on the run as
 its merge through the record `cast line merge` and the Merge station use
 (`/cli/line/merge/record`), as an observed landing: only the run's own runner
 may make it, it spends no merge allowance, says nothing on the task, and fills

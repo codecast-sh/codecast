@@ -17,21 +17,27 @@
 dir=$run_dir
 mkdir -p "$dir"
 rm -f "$dir/merge.json" "$dir/deploy-clock.json"
-# Where the change starts, read before the land command moves anything: a branch with nothing of its own since is
-# never landed. It stays in $run_dir/since for a later rebase that finds the change already landed: once main holds
-# the branch (a fast-forward), its fork is its own tip and says nothing.
-git fetch -q origin "$default_branch" 2>/dev/null
-if [ -s "$dir/since" ] && git merge-base --is-ancestor "$branch" "origin/$default_branch" 2>/dev/null; then
-  since="$(cat "$dir/since")"
-else
-  since="$(git merge-base "$branch" "origin/$default_branch" 2>/dev/null)"
-  printf '%s\n' "$since" > "$dir/since"
-fi
+# Where the change starts, read before the land command moves anything, from `$1`: a branch with nothing of its own
+# since is never landed. It stays in $run_dir/since for a later rebase that finds the change already landed: once main
+# holds the branch (a fast-forward), its fork is its own tip and says nothing. One that cannot be read is no start.
+start_at() {
+  git fetch -q origin "$default_branch" 2>/dev/null
+  if [ -s "$dir/since" ] && grep -q '[0-9a-f]' "$dir/since" && git merge-base --is-ancestor "$1" "origin/$default_branch" 2>/dev/null; then
+    since="$(cat "$dir/since")"
+  else
+    since="$(git merge-base "$1" "origin/$default_branch" 2>/dev/null)"
+    printf '%s\n' "$since" > "$dir/since"
+  fi
+}
 kind=blocker
+# What Land checks is on main, and the branch it names: the run's branch, or (a ship command's) the commit the worktree
+# pushed from and the branch checked out there.
+landref=$branch
+landname=$branch
 # After an exit 0: the commit on main that carries the change (recorded as the run's merge), or the line saying nothing was.
 landed() {
   local out c
-  out="$(cast flow landed --branch "$branch" --base "$default_branch" --files "$change_files" --since "$since" --out "$dir/merge.json" --run "$run_id" "$@" 2>&1)"
+  out="$(cast flow landed --branch "$landref" --as "$landname" --base "$default_branch" --files "$change_files" --since "$since" --out "$dir/merge.json" --run "$run_id" "$@" 2>&1)"
   c=$?
   [ "$c" -eq 0 ] && return 0
   said="$(printf '%s\n' "$out" | grep -v '^[[:space:]]*$' | tail -n 1)"
@@ -49,6 +55,7 @@ if [ -z "$cmd" ] && [ "$ship_mode" = direct ]; then
   exit 1
 fi
 if [ -z "$cmd" ]; then
+  start_at "$branch"
   # A change frozen from a session ships as the snapshot the run reviewed: its branch, never the session's live edits.
   frozen=$change_session
   out="$(cast ship run --task $task_id ${frozen:+--branch $branch} 2>&1)"
@@ -66,8 +73,17 @@ if [ -z "$cmd" ]; then
 fi
 wt="$(cast ws path $worktree)"
 [ -n "$wt" ] && cd "$wt" || exit 1
+# The ship command lands what the worktree holds, so the change's start and its landed commit are read there, from
+# HEAD: the run's branch name need not resolve where the station started (sit's ct-102776 read an empty start from it,
+# and the change it had just pushed read as never merged).
+start_at HEAD
 bash -c "$cmd" > "$dir/ship.out" 2> "$dir/ship.log"
 code=$?
+if landref="$(git rev-parse -q --verify HEAD)"; then
+  landname="$(git symbolic-ref -q --short HEAD)" || landname=$branch
+else
+  landref=$branch
+fi
 if [ "$code" -eq 7 ]; then
   # Exit 7: CI is red. The command's blocker is the brief, so nothing more goes on the task. Its stdout, the same
   # brief, becomes the builder's file. Both files are this run's: $run_dir is the task's and every run on it shares
