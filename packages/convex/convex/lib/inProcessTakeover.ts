@@ -1,11 +1,12 @@
-// A person taking over a session that runs inside its parent's process
-// (pl-1134). Owned by a person means its own process, and only the parent's
-// tools reach the copy inside it, so the parent is told once to stop that copy
-// and never message it again; the daemon holds the person's message until the
-// copy has stopped, then resumes it as its own process (subagentPromotion.ts).
+// Taking over a session that runs inside its parent's process (pl-1134). Only
+// the parent's tools reach the copy inside it, and delivering any message to
+// the child resumes it as its own process once that copy has stopped (the
+// daemon holds it until then, subagentPromotion.ts). So every message that
+// reaches such a child takes it over: the parent is released, and told once to
+// stop its copy and never message it again.
 import type { Id } from "../_generated/dataModel";
 import { runsInParentProcess } from "@codecast/shared/contracts/runsInParent";
-import { mayEditOwners } from "@codecast/shared/contracts/sessionOwners";
+import { mayEditOwners, ownersLeftRefusal, type OwnersChange } from "@codecast/shared/contracts/sessionOwners";
 import { isClosedHidden, isClosedSession } from "@codecast/shared/contracts";
 import { enqueuePendingMessage, formatSessionMessage } from "../pendingMessages";
 import { wakeCost, wakeFieldsOf } from "../wakeCost";
@@ -54,19 +55,34 @@ export async function tellParentOfTakeover(ctx: { db: any }, personId: Id<"users
 }
 
 /**
- * A person's message to a session that runs inside its parent's process takes
- * it over, once: the parent is released (under session owners, by the one
- * owners write's take-over change, so the person owns it) and told to stop
- * its copy. A later message finds the parent released and changes nothing.
+ * A message into a session that runs inside its parent's process takes it
+ * over, once. Under session owners it goes through the one owners write, so
+ * owners_changed_at is stamped and clients refetch: a person who may edit its
+ * owners takes it over (and owns it); anyone else, and a machine's message,
+ * only releases the parent, unless that would leave it with no owner at all,
+ * when the sender takes it. Off the model the release is the stamp. A later
+ * message finds the parent released and changes nothing.
  */
-export async function takeOverOnPersonSend(ctx: { db: any }, personId: Id<"users">, conversation: any): Promise<void> {
+export async function takeOverInProcessChild(ctx: { db: any }, senderId: Id<"users">, conversation: any, opts: { person: boolean }): Promise<void> {
   if (!runsInParentProcess(conversation)) return;
   const row = await ctx.db.get(conversation._id);
   if (!row?.parent_conversation_id || row.parent_released_at != null) return;
-  if (await ownersModelOn(ctx, row) && mayEditOwners(await sessionOwnerFactsOf(ctx, row), String(personId))) {
-    await writeOwnersChange(ctx, personId, row, { takeOver: true }, { checkEdit: true, hold: "filed" });
+  if (await ownersModelOn(ctx, row)) {
+    const facts = await sessionOwnerFactsOf(ctx, row);
+    const at = { actor: String(senderId), now: Date.now() };
+    const release: OwnersChange = { releaseParent: true };
+    const takeOver = opts.person && mayEditOwners(facts, String(senderId));
+    const change = takeOver || ownersLeftRefusal(facts, release, at) ? { takeOver: true } : release;
+    await writeOwnersChange(ctx, senderId, row, change, { checkEdit: takeOver, hold: "filed" });
   } else {
     await ctx.db.patch(row._id, { parent_released_at: Date.now() });
   }
-  await tellParentOfTakeover(ctx, personId, row);
+  await tellParentOfTakeover(ctx, senderId, row);
+}
+
+/** After an owners change (sessionOwnership reparent): when it released the
+ *  parent of a session running in its process, the parent stops its copy. */
+export async function tellParentIfReleased(ctx: { db: any }, actorId: Id<"users">, before: any, change: OwnersChange): Promise<void> {
+  if (before.parent_released_at != null || change.adoptParent || !runsInParentProcess(before)) return;
+  if ((await ctx.db.get(before._id))?.parent_released_at != null) await tellParentOfTakeover(ctx, actorId, before);
 }

@@ -4,10 +4,12 @@ import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { hashToken } from "./apiTokens";
 import { allModules } from "./testModules.testkit";
+import { enqueuePendingMessage } from "./pendingMessages";
+import { finalizeAnswer } from "./sessionDecisions";
 
 setDefaultTimeout(60_000);
 
-// pl-1134: a person's message to a session inside its parent's process takes
+// pl-1134: a message that reaches a session inside its parent's process takes
 // it over (the parent is released and told once to stop its copy); a message
 // from another session is refused, naming the parent.
 
@@ -25,6 +27,8 @@ async function world(opts: { owners?: boolean; team?: boolean } = {}) {
       team = await ctx.db.insert("teams", { name: "Acme", features: opts.owners ? { session_owners: true } : {} } as any);
       await ctx.db.insert("team_memberships", { user_id: me, team_id: team, role: "admin", joined_at: 1 } as any);
     }
+    const mate = await ctx.db.insert("users", { name: "Mira", emailVerificationTime: 1 } as any);
+    if (team) await ctx.db.insert("team_memberships", { user_id: mate, team_id: team, role: "member", joined_at: 1 } as any);
     const base = { user_id: me, agent_type: "claude_code", project_path: "/tmp/p", started_at: now, updated_at: now, message_count: 2, status: "active", ...(team ? { team_id: team } : {}) };
     const parent = await ctx.db.insert("conversations", { ...base, session_id: "86a160aa-623c-4db9-9ce0-f1f1c403cace", short_id: "jxpar01", runs_in_parent: false } as any);
     const child = await ctx.db.insert("conversations", {
@@ -33,7 +37,7 @@ async function world(opts: { owners?: boolean; team?: boolean } = {}) {
     const ownProcess = await ctx.db.insert("conversations", {
       ...base, session_id: "0b6e2c1a-0000-4000-8000-000000000001", short_id: "jxown01", parent_conversation_id: parent, is_subagent: true, runs_in_parent: false,
     } as any);
-    return { me, parent, child, ownProcess };
+    return { me, mate, parent, child, ownProcess };
   });
   const personSend = (conversation_id: any, content: string) =>
     t.mutation(api.pendingMessages.sendMessageToSession, { conversation_id, content, human: true, api_token: TOKEN });
@@ -64,10 +68,22 @@ describe("a person's message to an in-process child", () => {
     await w.personSend(w.ids.child, "take it from here");
     await w.personSend(w.ids.child, "again");
     expect((await w.row(w.ids.child)).parent_released_at).toBeNumber();
+    expect((await w.row(w.ids.child)).owners_changed_at).toBeNumber();
     const owners = await w.t.run(async (ctx) => (await ctx.db.query("session_owners").collect()).filter((r: any) => String(r.conversation_id) === String(w.ids.child)));
     expect(owners.map((r: any) => String(r.user_id))).toEqual([String(w.ids.me)]);
     const told = (await w.parentLines()).filter((l) => l.includes("took over your subagent"));
     expect(told).toHaveLength(1);
+  });
+
+  test("under session owners, a sender who may not edit its owners only releases it, through the owners write", async () => {
+    const w = await world({ owners: true });
+    await w.t.run(async (ctx) => { await enqueuePendingMessage(ctx, (await ctx.db.get(w.ids.child))!, w.ids.mate, { content: "a teammate's note", human: true }); });
+    const child = await w.row(w.ids.child);
+    expect(child.parent_released_at).toBeNumber();
+    expect(child.owners_changed_at).toBeNumber();
+    const owners = await w.t.run(async (ctx) => (await ctx.db.query("session_owners").collect()).filter((r: any) => String(r.conversation_id) === String(w.ids.child)));
+    expect(owners.map((r: any) => String(r.user_id))).not.toContain(String(w.ids.mate));
+    expect((await w.parentLines()).filter((l) => l.includes("took over your subagent"))).toHaveLength(1);
   });
 
   test("Take it over without a message releases it and tells the parent the same way", async () => {
@@ -163,5 +179,33 @@ describe("a child a person took over off the owners model", () => {
     expect((await w.row(w.ids.child)).parent_released_at).toBeNumber();
     await settle();
     expect((await check()).notified).toBe(true);
+  });
+});
+
+describe("a message that is not a person's into an in-process child", () => {
+  // The daemon resumes the child for any message it delivers, so every one
+  // that reaches it takes it over, not only a person's.
+  test("a decision a role answers takes it over and tells the parent once", async () => {
+    const w = await world();
+    const decision = await w.t.run((ctx) => ctx.db.insert("session_decisions", {
+      conversation_id: w.ids.child, session_id: `agent-${AGENT}`, user_id: w.ids.me, question: "Ship it?",
+      options: [{ label: "Yes" }, { label: "No" }], blocking: true, status: "pending", created_at: Date.now(),
+    } as any));
+    await w.t.run(async (ctx) => {
+      await finalizeAnswer(ctx as any, (await ctx.db.get(decision))!, { status: "answered", answer_index: 0 } as any, { kind: "role", id: "or-1", user_id: w.ids.me }, { deliver: true });
+    });
+    expect((await w.row(w.ids.child)).parent_released_at).toBeNumber();
+    expect((await w.parentLines()).filter((l) => l.includes("took over your subagent"))).toHaveLength(1);
+  });
+
+  test("a machine's line takes it over; a held note waits", async () => {
+    const w = await world();
+    const child = () => w.t.run((ctx) => ctx.db.get(w.ids.child)) as Promise<any>;
+    await w.t.run(async (ctx) => { await enqueuePendingMessage(ctx, (await ctx.db.get(w.ids.child))!, w.ids.me, { content: "for the record", hold: true }); });
+    expect((await child()).parent_released_at).toBeUndefined();
+    expect(await w.parentLines()).toEqual([]);
+    await w.t.run(async (ctx) => { await enqueuePendingMessage(ctx, (await ctx.db.get(w.ids.child))!, w.ids.me, { content: "continue", origin: "scheduler" }); });
+    expect((await child()).parent_released_at).toBeNumber();
+    expect(await w.parentLines()).toHaveLength(1);
   });
 });

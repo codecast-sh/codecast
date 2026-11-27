@@ -3,7 +3,7 @@ import { UNCONFIRMED_DELIVERY_REASON, isReservedDevice } from "@codecast/shared/
 import { noteScreenRecordingSent } from "./lib/screenRecordingSent";
 import { steeringOwnerFor, suggestFromTeammate } from "./teamSuggestions";
 import { runsInParentProcess } from "@codecast/shared/contracts/runsInParent";
-import { takeOverOnPersonSend } from "./lib/inProcessTakeover";
+import { takeOverInProcessChild } from "./lib/inProcessTakeover";
 import { unreachableTerminalOf } from "@codecast/shared/contracts/deliveryHold";
 import { isWorkflowRunLog } from "./lib/runLog";
 import { clientRunAnswerRefusal } from "./lib/commandRuns";
@@ -535,10 +535,6 @@ export async function enqueuePendingMessage(
     return messageId;
   }
 
-  // A person's message to a session inside its parent's process takes it
-  // over: it continues as its own process once the parent's copy has stopped.
-  if (fields.human === true) await takeOverOnPersonSend(ctx, fromUserId, conversation);
-
   if (fields.origin === "scheduler" && !fields.client_id
     && !conversation.execution_protocol_state && !fields.image_storage_id && !fields.image_storage_ids?.length) {
     for (const status of ["pending", "injected", "failed", "undeliverable", "held"]) {
@@ -554,6 +550,13 @@ export async function enqueuePendingMessage(
         && (row.kill_generation ?? 0) === (conversation.pending_kill_generation ?? 0));
       if (existing) return existing._id;
     }
+  }
+
+  // Any message that will reach a session inside its parent's process takes
+  // it over: delivering it resumes the child as its own process once the
+  // parent's copy has stopped (lib/inProcessTakeover). A held note waits.
+  if (!(fields.hold || (fields.defer && !conversation.standing_role_id))) {
+    await takeOverInProcessChild(ctx, fromUserId, conversation, { person: fields.human === true });
   }
 
   // A screen recording rides this send: from now on it is sent, and kept.
