@@ -22,6 +22,8 @@ import { EarlierButton } from "../threads/readerFold";
 import { useReaderFold } from "../../hooks/useReaderFold";
 import { objectHref } from "../../lib/entityLinks";
 import { modernButton, modernPill } from "../ui/modernLook";
+import { DictateControls } from "../dictation/DictateControls";
+import { textareaField, useDictation } from "../../lib/dictation/useDictation";
 const api = _api as any;
 
 // A task's comment stream: the comment rows and the composer that posts to
@@ -283,6 +285,15 @@ export function TaskCommentComposer({
   }, [comment, commentImages, shortId, addTaskComment, autoOpen]);
 
   const canSend = comment.trim().length > 0 || commentImages.some(i => i.storageId);
+  // Dictation writes through setComment, as a keystroke does. Enter after it
+  // posts the comment as it stands once the last words are in.
+  const commentValueRef = useRef(comment);
+  commentValueRef.current = comment;
+  const handleAddCommentRef = useRef(handleAddComment);
+  handleAddCommentRef.current = handleAddComment;
+  const [dictationField] = useState(() => textareaField(() => commentRef.current, () => commentValueRef.current, setComment));
+  const dictation = useDictation(dictationField);
+  const focusComment = useCallback(() => commentRef.current?.focus(), []);
 
   if (!commentOpen) {
     return (
@@ -339,6 +350,7 @@ export function TaskCommentComposer({
             value={comment}
             onChange={(e) => setComment(e.target.value)}
             onKeyDown={(e) => {
+              if (dictation.running() && dictation.keyDown(e, () => handleAddCommentRef.current())) return;
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
                 handleAddComment();
@@ -352,13 +364,14 @@ export function TaskCommentComposer({
               }
             }}
             onPaste={handleCommentPaste}
-            placeholder="Leave a comment..."
+            placeholder={dictation.active ? "Listening…" : "Leave a comment..."}
             rows={1}
             className="flex-1 bg-transparent text-sm placeholder:text-sol-text-dim focus:outline-none resize-none overflow-hidden leading-relaxed py-1 text-sol-text"
           />
-          <div className="shrink-0">
+          <div className="shrink-0 flex items-center gap-1">
+            <DictateControls dictation={dictation} onMenuClosed={focusComment} />
             <button
-              onClick={handleAddComment}
+              onClick={() => (dictation.running() ? void dictation.finish().then(() => handleAddCommentRef.current()) : handleAddComment())}
               disabled={!canSend}
               className={`w-7 h-7 rounded-full transition-colors flex items-center justify-center border ${!canSend ? "border-sol-border/30 text-sol-text-dim/25 cursor-not-allowed" : "border-sol-blue/50 bg-sol-blue/20 text-sol-blue hover:bg-sol-blue/30 hover:border-sol-blue"}`}
             >

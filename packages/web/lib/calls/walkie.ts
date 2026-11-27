@@ -34,7 +34,7 @@
 // a listen draws the strip; a call draws the ordinary dock, and the stage when
 // the person expanded it.
 import { api as _api } from "@codecast/convex/convex/_generated/api";
-import { humanizeConvexError } from "@codecast/shared/contracts";
+import { finishRunningDictation, humanizeConvexError } from "@codecast/shared/contracts";
 import { useInboxStore } from "../../store/inboxStore";
 import { roomRecordingOn } from "./roomRecordingFields";
 import { focusExistingHuddle, huddleInOtherWindow } from "./huddleWindow";
@@ -881,6 +881,8 @@ function resolveServerChannelId(b: Burst, channelId: string): Promise<ChannelStu
  * complete burst.
  */
 export function startBurst(channelId: string, roomKey: string, clientId?: string): Promise<void> {
+  // A voice message takes the microphone: a recording in a text box keeps its words and stops.
+  void finishRunningDictation();
   if (voiceHostElsewhere()) {
     // The bubble is on screen HERE, in the window the person pressed in, before
     // the host has heard about it: a voice message is a message, and a message

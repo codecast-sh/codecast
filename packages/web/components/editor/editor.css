@@ -858,3 +858,8 @@
    spans keep .tiptap code's mono. */
 .modern-style .doc-editor,
 .mention-date-resolved:is(.modern-style *), .draft-lab-button:is(.modern-style *), .draft-panel:is(.modern-style *), .draft-trimbar:is(.modern-style *) { font-family: var(--font-ui), sans-serif; }
+
+/* While dictating into an empty editor its hint says so (CreateTaskModal). */
+[data-dictating] .doc-editor .tiptap p.is-editor-empty:first-child::before {
+  content: "Listening…";
+}
