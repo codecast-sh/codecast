@@ -93,8 +93,9 @@ export async function landedCommit(cwd: string, branch: string, base: string, kn
 /** Whether a target ships any of these files: its path globs, or every path when it names none. */
 export function targetTouches(paths: ReadonlyArray<string> | undefined, files: ReadonlyArray<string>): boolean {
   if (!paths?.length) return true;
-  const globs = paths.map((p) => new Bun.Glob(p));
-  return files.some((f) => globs.some((g) => g.match(f)));
+  // A path as written first, then as a glob: app/task/[id].tsx read only as a glob matches nothing (ct-102468).
+  const entries = paths.map((p) => ({ p, glob: new Bun.Glob(p) }));
+  return files.some((f) => entries.some(({ p, glob }) => p === f || glob.match(f)));
 }
 
 /**

@@ -81,6 +81,9 @@ describe("targetState", () => {
     expect(targetTouches(["web/**"], ["api/a.ts"])).toBe(false);
     expect(targetTouches(["web/**", "shared/**"], ["web/w.ts"])).toBe(true);
     expect(targetTouches([], ["anything"])).toBe(true);
+    // ct-102468: a target naming a route file as written reaches it.
+    expect(targetTouches(["packages/mobile/app/task/[id].tsx"], ["packages/mobile/app/task/[id].tsx"])).toBe(true);
+    expect(targetTouches(["packages/mobile/app/task/[id].tsx"], ["packages/mobile/app/task/i.tsx"])).toBe(true);
   });
 });
 

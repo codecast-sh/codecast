@@ -520,6 +520,15 @@ describe("evalCondition: the language", () => {
     expect(evalCondition("outcome > 0", ctx)).toBe(false);
   });
 
+  test("touches: a path with brackets names that file or folder, not a character class (ct-102468)", () => {
+    const files = { change_files: "packages/mobile/app/task/[id].tsx app/[owner]/page.tsx" };
+    expect(evalCondition('change_files touches "packages/mobile/app/task/[id].tsx"', files)).toBe(true);
+    expect(evalCondition('change_files touches "app/[owner]/"', files)).toBe(true);
+    expect(evalCondition('change_files touches "app/[owner]"', files)).toBe(true);
+    expect(evalCondition('change_files touches "app/[other]/"', files)).toBe(false);
+    expect(evalCondition('change_files touches "packages/mobile/app/task/[a-z]*.tsx"', { change_files: "packages/mobile/app/task/x.tsx" })).toBe(true);
+  });
+
   test("touches: a changed path matches a glob (a station's when=)", () => {
     const files = { ...ctx, change_files: "landing/index.html packages/web/app.tsx README.md" };
     expect(evalCondition('change_files touches "landing/**"', files)).toBe(true);
