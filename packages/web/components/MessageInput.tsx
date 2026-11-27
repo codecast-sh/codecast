@@ -64,6 +64,8 @@ import { formatCallTime } from "@codecast/shared/contracts";
 import { isRecordingFile, useScreenRecordingAttach } from "../hooks/useScreenRecordingAttach";
 import { useFileAttach } from "../hooks/useFileAttach";
 import { ComposerAttachButton } from "./chat/ComposerAttachButton";
+import { DictateControls } from "./dictation/DictateControls";
+import { textareaField, useDictation } from "../lib/dictation/useDictation";
 import type { ComposeEditorHandle } from "./editor/ComposeEditor";
 import { useMentionQuery, useMentionServerSearch, sessionMentionTeamId, SERVER_MENTION_TYPES, matchScore, filterMentionItems, channelMentionItems } from "../hooks/useMentionQuery";
 import { mentionContextFor } from "../lib/mentionContext";
@@ -241,6 +243,20 @@ const ForkReplyInput = memo(function ForkReplyInput({ userName, userAvatar, onFo
 /** Write the composer's text to its stored draft. An empty box with no image
  *  rows is a final (server-tombstoned) clear, so the draft dies everywhere and
  *  a server copy cannot resurrect on the next boot; with images it keeps them. */
+/** The same key again, through the composer's current handler: an Enter held
+ *  while dictation finished is sent as the Enter it was, with the text as it
+ *  now stands. */
+function replayKey(e: React.KeyboardEvent<HTMLTextAreaElement>, handler: React.MutableRefObject<((e: React.KeyboardEvent<HTMLTextAreaElement>) => void) | null>) {
+  const { key, code, shiftKey, altKey, metaKey, ctrlKey, currentTarget, target } = e;
+  return () => handler.current?.({
+    key, code, shiftKey, altKey, metaKey, ctrlKey, currentTarget, target,
+    nativeEvent: { isComposing: false },
+    defaultPrevented: false,
+    preventDefault: () => {},
+    stopPropagation: () => {},
+  } as unknown as React.KeyboardEvent<HTMLTextAreaElement>);
+}
+
 function commitDraftText(conversationId: string, text: string) {
   const store = useInboxStore.getState();
   const existing = store.getDraft(conversationId);
@@ -1251,6 +1267,19 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       });
     }
   }, [conversationId, skills, onSideQuestion, queryMentions, cancelPendingDraft]);
+  // Dictation writes through the same setter a keystroke does, so the draft,
+  // its autosave and send see the words; the box's own value is the record.
+  // The field is made once and the controls stay put between keystrokes, so
+  // typing never draws the mic again.
+  const handleMessageChangeRef = useRef(handleMessageChange);
+  handleMessageChangeRef.current = handleMessageChange;
+  const [dictationField] = useState(() => textareaField(
+    () => textareaRef.current,
+    () => messageRef.current,
+    (val) => { messageRef.current = val; handleMessageChangeRef.current(val); },
+  ));
+  const dictation = useDictation(dictationField);
+  const focusComposerBox = useCallback(() => textareaRef.current?.focus(), []);
 
   const isSelectionActive = !!(selectedMessageContent && selectedMessageUuid);
   const savedDraftRef = useRef<string | null>(null);
@@ -1314,9 +1343,9 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // gets to unwind that state instead of the whole dialog closing.
   useWatchEffect(() => {
     if (escapeOwnedRef) {
-      escapeOwnedRef.current = acTrigger !== null || selectedImageIndex !== null || selectedQueueIndex !== null || lightboxImageIndex !== null || handoffOpen;
+      escapeOwnedRef.current = acTrigger !== null || selectedImageIndex !== null || selectedQueueIndex !== null || lightboxImageIndex !== null || handoffOpen || dictation.active;
     }
-  }, [escapeOwnedRef, acTrigger, selectedImageIndex, selectedQueueIndex, lightboxImageIndex, handoffOpen]);
+  }, [escapeOwnedRef, acTrigger, selectedImageIndex, selectedQueueIndex, lightboxImageIndex, handoffOpen, dictation.active]);
   const setSessionHasQueuedMessages = useInboxStore((s) => s.setSessionHasQueuedMessages);
   useWatchEffect(() => {
     setSessionHasQueuedMessages(conversationId, queuedMessages.length > 0);
@@ -1334,6 +1363,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   const reviewComposer = useReviewComposer();
   const attachSend = reviewComposer?.conversationId === conversationId ? reviewComposer.attachSend : undefined;
   const handleSubmitRef = useRef<((e: React.FormEvent, forkTail?: boolean) => Promise<unknown>) | null>(null);
+  const handleKeyDownRef = useRef<((e: React.KeyboardEvent<HTMLTextAreaElement>) => void) | null>(null);
+  const sendFormRef = useRef<((e: React.FormEvent) => void) | null>(null);
   useWatchEffect(() => {
     if (!attachSend) return;
     attachSend(() => { void handleSubmitRef.current?.({ preventDefault: () => {} } as unknown as React.FormEvent); });
@@ -1344,7 +1375,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // the collapsed pill (narrow, fully rounded) bends that into an ellipse.
   const isExpanded = !!hero || composeMode || !!onSubmitWithIntent || !!onSendAndAdvance || isFocused || message.length > 0 || ghostVisible || pastedImages.length > 0 || fileAttach.files.length > 0 || queuedMessages.length > 0 || reviewCount > 0 || !!branchMapNode;
 
-  const toggleCompose = useCallback(() => {
+  const switchCompose = useCallback(() => {
     if (composeMode) {
       const md = composeRef.current?.getMarkdown() || "";
       setMessage(md);
@@ -1358,6 +1389,15 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       setComposeMode(true);
     }
   }, [composeMode, setMessage]);
+  const switchComposeRef = useRef(switchCompose);
+  switchComposeRef.current = switchCompose;
+  // The rich editor takes the text as it stands, so a recording's last words
+  // land in the box before it switches; switching first would drop them into
+  // a textarea that is no longer shown.
+  const toggleCompose = useCallback(() => {
+    if (dictation.running()) void dictation.finish().then(() => switchComposeRef.current());
+    else switchCompose();
+  }, [switchCompose, dictation]);
 
   // Measured after every keystroke (the Safari height fallback, the resize
   // observer): set only on a change.
@@ -2261,6 +2301,9 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // While dictating, Esc cancels it and Enter waits for the last words, then
+    // goes through this handler again as the key it was.
+    if (dictation.running() && dictation.keyDown(e, replayKey(e, handleKeyDownRef), (k) => k.key === "Enter" && !k.shiftKey)) return;
     if (caught && e.key === "Escape") {
       e.preventDefault();
       e.stopPropagation();
@@ -2589,13 +2632,27 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // must honor the compose-popup contract the same way plain Enter does in
   // handleKeyDown: send, then dismiss the popup with fire-and-forget intent.
   // Outside the popup (no onSubmitWithIntent) this is exactly handleSubmit.
-  const handleFormSubmit = (e: React.FormEvent) => {
+  const sendForm = (e: React.FormEvent) => {
     void handleSubmit(e);
     if (submitRefusedRef.current) return;
     onSubmitWithIntent?.(false);
   };
+  const handleFormSubmit = (e: React.FormEvent) => {
+    // Send while dictating sends what was said, once it is all in. The
+    // controller's own state decides (React's still reads "active" for a
+    // render after the recording ends), and the send after it is the send
+    // itself, never this handler again.
+    if (dictation.running()) {
+      e.preventDefault();
+      void dictation.finish().then(() => sendFormRef.current?.({ preventDefault: () => {} } as unknown as React.FormEvent));
+      return;
+    }
+    sendForm(e);
+  };
 
   handleSubmitRef.current = handleSubmit;
+  handleKeyDownRef.current = handleKeyDown;
+  sendFormRef.current = sendForm;
   // Length is compared before the trim, so a message under the limit (every
   // ordinary keystroke) costs one number comparison here.
   const typedLength = maxLength != null && message.length > maxLength ? message.trim().length : 0;
@@ -2695,6 +2752,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
           </button>
         </ShortcutTooltip>
       )}
+      {/* Just before send, in whichever row holds it; the rich editor has no mic. */}
+      {!composeMode && <DictateControls dictation={dictation} size={bareComposer ? "bare" : "dock"} onMenuClosed={focusComposerBox} />}
     </>
   );
 
@@ -3234,7 +3293,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                     onPaste={handlePaste}
                     onFocus={() => setIsFocused(true)}
                     onBlur={() => { setIsFocused(false); setAcTrigger(null); }}
-                    placeholder={ghostVisible ? "" : composerPlaceholder ?? (bareComposer ? "Comment…" : onGateSend ? "Send a message to continue the workflow..." : onWorkflowLaunch ? "Goal override (optional) — press send to run workflow..." : reviewCount > 0 ? (batchWords.placeholder ?? `Send ${batchWords.quotes} quote${batchWords.quotes !== 1 ? "s" : ""} as-is, or add a reply first...`) : hostedConversation ? (allowanceOut ? allowanceOut : hostedComposerWords(hostedLast, hostedAwaitsOk)) : agentStatus === "permission_blocked" ? ((pendingPermissionsCount ?? 0) > 0 ? "Approve or deny permission to continue..." : hasAskUserQuestion ? "Answer the question to continue..." : "Send a message...") : "Send a message...")}
+                    placeholder={dictation.active ? "Listening…" : ghostVisible ? "" : composerPlaceholder ?? (bareComposer ? "Comment…" : onGateSend ? "Send a message to continue the workflow..." : onWorkflowLaunch ? "Goal override (optional) — press send to run workflow..." : reviewCount > 0 ? (batchWords.placeholder ?? `Send ${batchWords.quotes} quote${batchWords.quotes !== 1 ? "s" : ""} as-is, or add a reply first...`) : hostedConversation ? (allowanceOut ? allowanceOut : hostedComposerWords(hostedLast, hostedAwaitsOk)) : agentStatus === "permission_blocked" ? ((pendingPermissionsCount ?? 0) > 0 ? "Approve or deny permission to continue..." : hasAskUserQuestion ? "Answer the question to continue..." : "Send a message...") : "Send a message...")}
                     dim={isSelectionActive && !isSelectionEditedRef.current}
                   />
                   {shared.active && <SharedCarets inputRef={textareaRef} text={message} rows={shared.others} editors={shared.editors} />}
@@ -3243,7 +3302,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                       ref={suggestionRef}
                       conversationId={conversationId}
                       idle={!isWaitingForResponse && !isThinking && !(agentStatus && ACTIVE_AGENT_STATUSES.has(agentStatus))}
-                      hidden={!!message || pastedImages.length > 0}
+                      hidden={!!message || pastedImages.length > 0 || dictation.active}
                       onAccept={(t) => {
                         setMessage(t);
                         messageRef.current = t;
