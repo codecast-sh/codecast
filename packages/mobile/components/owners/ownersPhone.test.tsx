@@ -218,6 +218,23 @@ test('the undo bar sits above the docked stack, follows the keyboard, and clears
   expect(undo.useUndoBar.getState().dockTop).toBeNull();
 });
 
+test('a composer that is not the screen\'s bottom edge leaves the undo bar\'s line alone', () => {
+  undo.setUndoBarDock(520);
+  function Box() {
+    const a = anchor.useUndoBarAnchor(false);
+    return React.createElement('View', { ref: a.ref, onLayout: a.onLayout });
+  }
+  let tree!: import('react-test-renderer').ReactTestRenderer;
+  TestRenderer.act(() => {
+    tree = TestRenderer.create(React.createElement(Box), { createNodeMock: () => ({ measureInWindow: (cb: (x: number, y: number, w: number, h: number) => void) => cb(0, 300, 402, 120) }) });
+  });
+  TestRenderer.act(() => keyboard.get('keyboardDidShow')?.());
+  expect(undo.useUndoBar.getState().dockTop).toBe(520);
+  TestRenderer.act(() => tree.unmount());
+  expect(undo.useUndoBar.getState().dockTop).toBe(520);
+  undo.setUndoBarDock(null);
+});
+
 test("the bar's lift counts from its host's bottom, not the window's: Android's navigation bar below the root is no part of it", () => {
   // iOS: the host fills the window (874), the stack's top at 700.
   expect(undo.undoBarLift(874, 700)).toBe(174);
