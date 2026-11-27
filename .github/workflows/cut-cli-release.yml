@@ -27,6 +27,11 @@ on:
         required: false
         default: "30"
         type: string
+      source_commit:
+        description: The main commit to build (one with a green CI verdict); main's head when empty
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -54,7 +59,7 @@ jobs:
       # in that window would ship code the release did not cut (ct-93387).
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ inputs.source_commit || github.sha }}
           fetch-depth: 0
 
       - uses: ./.github/actions/setup-bun
@@ -63,8 +68,25 @@ jobs:
 
       - name: Resolve the release identity
         shell: bash
+        env:
+          REQUESTED_SOURCE: ${{ inputs.source_commit }}
         run: |
           set -euo pipefail
+          # A cut names a main commit CI already passed, so finalize finds its verdict
+          # at once: on a busy main a newer push cancels the pending CI run, and
+          # main's head may never get one (ct-102056).
+          if [[ -n "$REQUESTED_SOURCE" ]]; then
+            if [[ ! "$REQUESTED_SOURCE" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::source_commit must be a full lowercase 40-character SHA"
+              exit 1
+            fi
+            git fetch origin main
+            if [[ "$(git rev-parse HEAD)" != "$REQUESTED_SOURCE" ]] ||
+              ! git merge-base --is-ancestor "$REQUESTED_SOURCE" origin/main; then
+              echo "::error::source_commit $REQUESTED_SOURCE is not a commit of main"
+              exit 1
+            fi
+          fi
           previous=$(jq -r '.version' packages/cli/package.json)
           if [[ ! "$previous" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
             echo "::error::packages/cli/package.json version is not a canonical semver: $previous"

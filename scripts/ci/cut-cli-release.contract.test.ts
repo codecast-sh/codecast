@@ -129,7 +129,14 @@ describe("the builder builds the commit it was dispatched on", () => {
     // start built whatever landed in that window, shipping code the release
     // did not cut.
     const checkout = steps.find((s) => typeof s.uses === "string" && s.uses.startsWith("actions/checkout@"));
-    expect(checkout?.with?.ref).toBe("${{ github.sha }}");
+    expect(checkout?.with?.ref).toBe("${{ inputs.source_commit || github.sha }}");
+  });
+
+  test("a named source commit must be a full sha on main (ct-102056)", () => {
+    const resolve = steps.find((s) => s.name === "Resolve the release identity");
+    expect(resolve.env.REQUESTED_SOURCE).toBe("${{ inputs.source_commit }}");
+    expect(resolve.run).toContain("^[0-9a-f]{40}$");
+    expect(resolve.run).toContain('git merge-base --is-ancestor "$REQUESTED_SOURCE" origin/main');
   });
 });
 
