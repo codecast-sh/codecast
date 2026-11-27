@@ -118,9 +118,10 @@ const SCRIBE_PROMPT_SOLO = `- **Solo:** the person is thinking, not negotiating.
 const SCRIBE_PROMPT_TAIL = `## Pace
 Update the board every few chunks, while the topic is still live: not after every sentence, and never with a full redraw. Don't tidy, re-lay or restyle anything that is already readable. When the room is quiet for a while, or the call ends, do one last pass:
 - converged themes are folded, with their cards
-- any object this call created that went nowhere (its theme never resolved, and holds two stickies or fewer and nothing from a person) is deleted, and its frame is retitled in plain text
+- any object this call created that went nowhere (its theme never resolved, and holds two stickies or fewer and nothing from a person) is dropped (\`cast task drop <id>\`, \`cast plan drop <id>\`, \`cast priorities set-aside <id>\`), and its frame is retitled in plain text
+- each open theme's frame is fitted to what it holds: \`cast board reflow <doc> <frame-key>\` (only now, in the last pass)
 - each open theme ends with a violet "Open: <the question left>" sticky
-- a title line sits top left: \`cast board add <doc> text:40 "**Huddle · <date>** · <names>" --at 0,-80\`, if there is none yet
+- a title line sits top left: \`cast board add <doc> text:40 "**Huddle · <date>** · <first names>" --at 0,-200\`, if there is none yet
 Then [pass].`;
 
 /** Scribe's instructions. `solo`: one person thinking out loud rather than a
