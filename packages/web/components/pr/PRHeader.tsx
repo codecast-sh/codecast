@@ -431,8 +431,8 @@ export function PRHeader({
         <Figure label="Checks" href={checksHref} title="Open the checks">
           <ChecksBar checks={pr.checks} />
         </Figure>
-        {/* GitHub's reviews; the Ship run's own review is the strip's Review step. */}
-        <Figure label="GitHub review">
+        {/* Who reviewed this head: GitHub's reviewers, and codecast's Ship run reviewer, which answers on the run. */}
+        <Figure label="Review">
           {decision && <span style={{ color: accentVar(decision.accent) }}>{decision.label}</span>}
           {/* codecast's reviewer answers on the run, never on GitHub: its verdict on this head counts as a review. */}
           {runReview && run ? <Link href={`/workflows/runs/${run._id}`} style={{ color: accentVar(TONE_ACCENT[runReview.tone]) }} data-pr-run-review>{runReview.label}</Link> : null}
