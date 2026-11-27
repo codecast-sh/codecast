@@ -313,6 +313,7 @@ export class Parser {
     if (attrs.asker) node.asker = String(attrs.asker);
     if (attrs.answerer) node.answerer = String(attrs.answerer);
     if (attrs.stop) node.stop = String(attrs.stop);
+    if (attrs.resume !== undefined) node.resume = String(attrs.resume);
     if (attrs.keep_subject === true || attrs.keep_subject === "true") node.keep_subject = true;
     if (attrs.whole_stop === true || attrs.whole_stop === "true") node.whole_stop = true;
     if (attrs.max_tokens !== undefined) node.max_tokens = Number(attrs.max_tokens);

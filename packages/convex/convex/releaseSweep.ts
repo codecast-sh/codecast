@@ -99,7 +99,7 @@ async function failedRuns(ctx: any, workspace: string, now: number): Promise<Fai
       run_id: run._id,
       task_short_id: task.short_id,
       flow: wf?.name ?? run.workflow_name ?? "flow",
-      station: run.stop_station ?? stopStationOf(run.node_statuses, run.current_node_id ?? ""),
+      station: run.stop_station ?? stopStationOf(run.node_statuses, run.current_node_id ?? "", wf?.nodes ?? []),
       reason: run.fail_reason ?? null,
       failed_at: run.updated_at,
     });
