@@ -75,7 +75,7 @@ export async function landedCommit(cwd: string, branch: string, base: string, kn
   if (!files.length) return null;
   const blob = (rev: string, f: string) => gitTry(cwd, ["rev-parse", "-q", "--verify", `${rev}:${f}`]).then((s) => s?.trim() ?? "");
   const want = await Promise.all(files.map((f) => blob(tip, f)));
-  const candidates = (await git(cwd, ["log", "--reverse", "--format=%H", `${fork}..${upstream}`, "--", ...files])).split("\n").filter(Boolean);
+  const candidates = (await git(cwd, ["log", "--reverse", "--format=%H", `${fork}..${upstream}`, "--", ...files.map((f) => `:(top,literal)${f}`)])).split("\n").filter(Boolean);
   for (const c of candidates) {
     const got = await Promise.all(files.map((f) => blob(c, f)));
     if (got.every((g, i) => g === want[i])) return { sha: c, files };
