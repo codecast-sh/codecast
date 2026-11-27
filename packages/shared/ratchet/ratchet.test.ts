@@ -18,14 +18,13 @@ function fixture(files: Record<string, string>): string {
   return root;
 }
 
-function specFor(root: string, pin: number): RatchetSpec {
+function specFor(root: string): RatchetSpec {
   return {
     name: "banned call",
     root,
     dirs: ["src"],
     count: (src) => countMatches(src, /banned\(/),
     allowlist: join(root, "allowlist.txt"),
-    pin,
     fix: "Call allowed() instead.",
     pruneCommand: "RATCHET_WRITE=prune bun test x",
     minScanned: 1,
@@ -40,27 +39,27 @@ describe("shrink-only ratchet", () => {
   test("a listed file at its pinned count is clean", () => {
     const root = fixture({ "a.ts": "banned();\n" });
     writeFileSync(join(root, "allowlist.txt"), "src/a.ts 1\n");
-    expect(checkRatchet(specFor(root, 1)).problems).toEqual([]);
+    expect(checkRatchet(specFor(root)).problems).toEqual([]);
   });
 
   test("an unlisted offender fails and the message says what to do instead", () => {
     const root = fixture({ "a.ts": "banned();\n" });
     writeFileSync(join(root, "allowlist.txt"), "");
-    const problems = checkRatchet(specFor(root, 0)).problems;
+    const problems = checkRatchet(specFor(root)).problems;
     expect(problems.some((p) => p.includes("src/a.ts") && p.includes("Call allowed() instead."))).toBe(true);
   });
 
   test("a listed file may not grow", () => {
     const root = fixture({ "a.ts": "banned();\nbanned();\n" });
     writeFileSync(join(root, "allowlist.txt"), "src/a.ts 1\n");
-    const problems = checkRatchet(specFor(root, 1)).problems;
+    const problems = checkRatchet(specFor(root)).problems;
     expect(problems.some((p) => p.includes("went from 1 to 2"))).toBe(true);
   });
 
   test("a stale entry fails, so ground taken cannot be given back", () => {
     const root = fixture({ "a.ts": "allowed();\n" });
     writeFileSync(join(root, "allowlist.txt"), "src/a.ts 1\n");
-    const problems = checkRatchet(specFor(root, 0)).problems;
+    const problems = checkRatchet(specFor(root)).problems;
     expect(problems.some((p) => p.includes("src/a.ts") && p.includes("no longer breaks this rule"))).toBe(true);
   });
 
@@ -69,38 +68,66 @@ describe("shrink-only ratchet", () => {
     // the pattern, the two lists move together and the guard stays green.
     const root = fixture({ "a.ts": "allowed();\n", "b.ts": "banned();\n" });
     writeFileSync(join(root, "allowlist.txt"), "src/a.ts 1\nsrc/b.ts 1\n");
-    const problems = checkRatchet(specFor(root, 1)).problems;
+    const problems = checkRatchet(specFor(root)).problems;
     expect(problems.some((p) => p.includes("src/a.ts") && p.includes("no longer breaks this rule"))).toBe(true);
-  });
-
-  test("a pin left above reality fails, naming the number to lower it to", () => {
-    const root = fixture({ "a.ts": "allowed();\n" });
-    writeFileSync(join(root, "allowlist.txt"), "");
-    const problems = checkRatchet(specFor(root, 3)).problems;
-    expect(problems.some((p) => p.includes("lower the pin in this test from 3 to 0"))).toBe(true);
   });
 
   test("a scan that walks the wrong tree fails instead of passing vacuously", () => {
     const root = fixture({ "a.ts": "banned();\n" });
     writeFileSync(join(root, "allowlist.txt"), "src/a.ts 1\n");
-    const problems = checkRatchet({ ...specFor(root, 1), minScanned: 50 }).problems;
+    const problems = checkRatchet({ ...specFor(root), minScanned: 50 }).problems;
     expect(problems.some((p) => p.includes("guarding nothing"))).toBe(true);
   });
 
-  test("prune drops gone entries and lowers numbers, and adds nothing", () => {
+  test("prune drops gone entries, lowers a number that came down, and adds nothing", () => {
     const root = fixture({ "a.ts": "banned();\n", "b.ts": "banned();\n", "c.ts": "allowed();\n" });
-    const spec = specFor(root, 1);
+    const spec = { ...specFor(root), shrinkFloor: 1 };
     writeFileSync(join(root, "allowlist.txt"), "src/a.ts 5  # a reason worth keeping\nsrc/c.ts 1\n");
     syncAllowlist(spec, [{ key: "src/a.ts", value: 1 }, { key: "src/b.ts", value: 1 }], "prune");
     const written = parseAllowlist(readFileSync(spec.allowlist, "utf8"));
     expect([...written.keys()]).toEqual(["src/a.ts"]); // b never added, c dropped
-    expect(written.get("src/a.ts")).toEqual({ value: 1, note: "a reason worth keeping" });
+    expect(written.get("src/a.ts")).toEqual({ value: 1, note: "a reason worth keeping" }); // 1 is below 5 x 1
+  });
+
+  test("prune rewrites only the lines that fail and leaves every other line as written", () => {
+    // Two prunes from different bases must never rewrite the same line, so a
+    // shrink inside the floor is not lowered, and nothing is re-sorted or
+    // re-spaced.
+    const root = fixture({});
+    const spec = { ...specFor(root), shrinkFloor: 0.9 };
+    const before = [
+      "# hand-written header",
+      "src/z.ts 1000   # split owed, out of order on purpose",
+      "src/a.ts 2000",
+      "src/gone.ts 900",
+      "src/b.ts 1000",
+      "",
+    ].join("\n");
+    writeFileSync(spec.allowlist, before);
+    // z shrank inside the floor, a fell past it, gone is under the cap, b held.
+    syncAllowlist(spec, [{ key: "src/z.ts", value: 950 }, { key: "src/a.ts", value: 1500 }, { key: "src/b.ts", value: 1000 }], "prune");
+    expect(readFileSync(spec.allowlist, "utf8")).toBe([
+      "# hand-written header",
+      "src/z.ts 1000   # split owed, out of order on purpose",
+      "src/a.ts 1500",
+      "src/b.ts 1000",
+      "",
+    ].join("\n"));
+  });
+
+  test("a listed entry with no number fails, since it caps nothing", () => {
+    const root = fixture({ "a.ts": "banned();\nbanned();\n" });
+    writeFileSync(join(root, "allowlist.txt"), "src/a.ts  # no number\n");
+    const problems = checkRatchet(specFor(root)).problems;
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain("src/a.ts is listed in allowlist.txt with no number");
+    expect(problems[0]).toContain("Write its current 2 after it.");
   });
 
   test("with a shrink floor, a listed file that came down below it must be pruned", () => {
     const root = fixture({ "a.ts": "banned();\n" });
     writeFileSync(join(root, "allowlist.txt"), "src/a.ts 3\n");
-    const spec = specFor(root, 1);
+    const spec = specFor(root);
     expect(checkRatchet(spec).problems).toEqual([]); // no floor: a pin only caps growth
     expect(checkRatchet({ ...spec, shrinkFloor: 0.3 }).problems).toEqual([]); // 1 is not below 0.9
     const problems = checkRatchet({ ...spec, shrinkFloor: 0.5 }).problems; // 1 is below 1.5
@@ -111,7 +138,7 @@ describe("shrink-only ratchet", () => {
   test("comments never count as offences", () => {
     const root = fixture({ "a.ts": "// never call banned(\n/* banned( */\nallowed();\n" });
     writeFileSync(join(root, "allowlist.txt"), "");
-    expect(checkRatchet(specFor(root, 0)).problems).toEqual([]);
+    expect(checkRatchet(specFor(root)).problems).toEqual([]);
     expect(codeOnly("// banned(\nallowed();").trim()).toBe("allowed();");
   });
 });

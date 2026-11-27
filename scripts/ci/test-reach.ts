@@ -265,6 +265,21 @@ export function reachOfFile(test: string): Reach {
   return reach;
 }
 
+/** Every file a file imports, directly or through other files, with the fewest imports between them (itself at 0). */
+export function importClosure(file: string): Map<string, number> {
+  const hops = new Map([[file, 0]]);
+  const queue = [file];
+  for (let i = 0; i < queue.length; i++) {
+    for (const dep of nodeOf(queue[i]).deps) {
+      if (!hops.has(dep)) {
+        hops.set(dep, hops.get(queue[i])! + 1);
+        queue.push(dep);
+      }
+    }
+  }
+  return hops;
+}
+
 /** The test files a job runs. */
 export function jobTestFiles(job: string): string[] {
   const excludes = (JOB_TEST_EXCLUDES[job] ?? []).map((dir) => join(ROOT, dir));

@@ -17,6 +17,7 @@
 // still run these files too when they run.
 //
 // `bun scripts/ci/always-run-tests.ts` runs them; `--list` prints them.
+// `bun scripts/ci/local.ts` runs them and the CI jobs a branch's changes gate on, on a laptop, before a push.
 
 import { join, relative } from "node:path";
 import { crossingTests, jobTestFiles, TREE_WIDE_TEST } from "./test-reach";
@@ -32,11 +33,13 @@ export const SUITES: Array<{ job: string; dir: string; roots: string[]; flags: s
   { job: "test-convex", dir: "packages/convex", roots: ["convex", "scripts"], flags: [] },
   // test-cli runs --parallel, a fresh global per file: the boot graph guards
   // count the module registry, which earlier files in one process have filled.
-  { job: "test-cli", dir: "packages/cli", roots: ["src"], flags: ["--parallel"] },
-  { job: "test-cli", dir: "packages/evals", roots: ["src"], flags: ["--parallel"] },
+  // --parallel=4 is a runner's four cores, so on CI the same as a bare
+  // --parallel, and a laptop running these (local.ts) uses the same four workers.
+  { job: "test-cli", dir: "packages/cli", roots: ["src"], flags: ["--parallel=4"] },
+  { job: "test-cli", dir: "packages/evals", roots: ["src"], flags: ["--parallel=4"] },
   // test-web runs --parallel and test-mobile --isolate: their mount tests
   // replace modules with mock.module, which is permanent within one process.
-  { job: "test-web", dir: "packages/web", roots: ["."], flags: ["--parallel"] },
+  { job: "test-web", dir: "packages/web", roots: ["."], flags: ["--parallel=4"] },
   { job: "test-mobile", dir: "packages/mobile", roots: ["."], flags: ["--isolate"] },
 ];
 

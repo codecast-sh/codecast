@@ -30,94 +30,9 @@ import { join } from "node:path";
 // packages | tar -x -C <dir>, then run this test there), not in the shared
 // checkout.
 //
-// The only sanctioned edit is downward. Split the file; then prune.
-//
-// One exception is on record. The baseline of 2026-09-30 (7ff3ea794) reset an
-// unenforced ratchet: CI had never run packages/shared/ratchet before the
-// test-shared job, and the old list was red on 59 entries, so 74 pins and PIN
-// were raised to the committed sizes of that day. It is not a precedent for
-// raising a pin. The largest absorptions (daemon.ts, ccAccounts.ts, schema.ts,
-// conversations.ts, inboxStore.ts) are split work owed, not allowances.
-//
-// A second reset is on record for the same cause. test-shared was red on main
-// from 2026-10-01 to 2026-10-15 on other failures, so this ratchet guarded
-// nothing for two weeks: 69 files crossed 800 and 110 pins grew. The
-// baseline of 2026-10-15 re-pinned every file and PIN to the committed sizes
-// of that day (HEAD 5f038e1ec). The same terms hold: the growth is split work
-// owed (daemon.ts +1700, index.ts +800, workflow/runner.ts +700 lead it).
-//
-// A third reset, same cause. main was red from 2026-10-16 (8a7982b5f) to
-// 2026-10-20, and 25 listed files grew past their pins meanwhile. The baseline
-// of 2026-10-20 re-pinned those 25 to the committed sizes at 574ed955e. The one
-// file newly over the cap (judgeRetire.ts) was split rather than listed. The
-// growth is split work owed: sessionDecisions.ts +200, signals.ts +200,
-// ingest.ts +100 and schema.ts +100 lead it.
-//
-// A fourth reset, same cause. On 2026-10-22 main was pushed as one whole-tree
-// ship with CI red (39851809732), and 31 listed files had grown past their
-// pins in it and the ships that followed it that day. The baseline of
-// 2026-10-22 re-pinned those 31 to the committed sizes at 7db1d49f0 plus the
-// fix that landed this. The four files newly over the cap (agentReviews.ts,
-// deploys.ts, orgTemplates.ts, files/page.tsx) were split rather than
-// listed, and PIN fell to 258. The growth is split work owed: check.ts +250,
-// workflow/runner.test.ts +250 and remote/session-move.ts +200 lead it.
-//
-// A fifth reset, by decision. On 2026-10-24 the shared checkout held the
-// unshipped work of about forty sessions, and 42 of its files broke this
-// ratchet. Ashot chose to raise the pins once rather than hold the work for
-// splits (decision sd-1473). The baseline of
-// 2026-10-24 re-pinned the 37 grown files to the content that shipped, listed
-// the five new ones (the vault's secrets.ts in convex and contracts, its
-// secrets.test.ts and secrets/command.ts, and conversation/classify.ts), and
-// PIN rose to 263. The growth is split work owed: daemon.ts +250, chat.test.ts
-// +200 and schema.ts +200 lead it. The same ship's later passes that day grew
-// 12 more listed files by one step (MessageReview.tsx by two), and its last
-// pass five more (sessionDecisions.ts by two, decideCommand.ts, the runner and
-// comments.v2 and sessionDecisions tests), re-pinned under the same decision.
-// contracts/secrets.ts fell to 950 when its pure rules moved to secretRules.ts.
-// The ship of 2026-10-28 re-pinned eleven grown files under the same decision
-// (inboxStore.ts, orgLayout.ts and OrgGraph.tsx by two steps) and listed
-// pendingMessages.teamSend.test.ts; GoalsDocument.tsx and sources/app.ts were
-// split instead (goalFields.tsx, sources/appMetrics.ts), and FleetMatrix.tsx
-// fell under the cap. The ship of 2026-10-31 re-pinned fourteen grown files
-// under the same decision (decideCommand.ts, publish.ts, artifacts.ts,
-// conversations.ts and CommandPalette.tsx lead it, one step each) and listed
-// orgLine.test.ts; PIN rose to 263. The fix forward of 2026-11-04 split the
-// files that run grew instead of re-pinning them (ingest.ts, the deploy and
-// calls modules, comparisons.ts, the org graph and the ops tabs among them),
-// and PIN fell to 258. The ship of 2026-11-08 (48f912ac7, 132 commits)
-// re-pinned 44 grown files under the same decision; the six it took newly
-// over the cap were split instead (deployCarries.ts, threadKit.ts and
-// threadPageCodeKinds.ts, termRegistry.ts and termConnection.ts,
-// rigFixtures.ts, entityLinks.repo.test.ts). The growth is split work owed:
-// daemon.ts +1100, browser/bridge/host.ts +850, cliEngine.ts, schema.ts and
-// pendingMessages.ts +200 each lead it.
-// The fix forward of the next ship that day (cb77b3421, the cast command
-// overhaul) re-pinned six grown files under the same decision: formatter.ts
-// and convex tasks.ts by two steps, hosts/cli.ts, publish.ts,
-// remote/session-move.ts and contracts/snippets.ts by one. It split the rest
-// instead: commandGroups.ts, newly over the cap, moved its placement code to
-// commandGroupActivation.ts; check.ts its heap cap to checkHeap.ts; and
-// secrets/command.ts its printing to secrets/format.ts. PIN stays 257.
-// 2026-11-10: the audit fix pass took two files under the cap. PIN 255.
-// 2026-11-10: the UI audit ship took ConversationList.tsx under the cap. PIN 254.
-// 2026-11-11: the fix forward of a7b972dac split instead of re-pinning: the
-// stable-context hook installers moved to stableContextHooks.ts, the live
-// artifact write path to lib/liveArtifactWrite.ts, sheet text parsing to
-// sheets/delimited.ts, and buckets.test.ts its filter-list tests out. PIN 252.
-// 2026-11-12: the fix forward of 444a3f30c (Modern design pass) moved the
-// pinned rail out of Sidebar.tsx into sidebar/PinnedRail.tsx. PIN 251.
-// 2026-11-13: the CI fix-forward splits took it to 249. PIN 249.
-// 2026-11-14: the fix forward of the 122-commit deploy split replays.ts under
-// the cap (its write helpers moved to lib/replayWrites.ts), with another split
-// that landed beside it. PIN 247.
-// 2026-11-15: the fix forward of the deploy that grew cloud/mirror/apply.test.ts
-// split it (MCP tests to apply.mcp.test.ts, fixtures to apply.testkit.ts). PIN 246.
-// 2026-11-16: the fix forward of 458b815d8 split nine files back under their
-// pins and took lib/mods/host.ts under the cap (its collection reads moved to
-// lib/mods/collectionQuery.ts). PIN 245.
-// 2026-11-20: a role's charter moved to its doc and its fold migration ran,
-// taking convex/migrations.ts under the cap. PIN 244.
+// The only sanctioned edit is downward. Split the file; then prune. The list
+// is the whole record, with no total beside it, so two branches that each split
+// a different file each delete their own line.
 
 const REPO_ROOT = join(import.meta.dir, "..", "..", "..");
 const ALLOWLIST = join(import.meta.dir, "max-lines-baseline.txt");
@@ -133,9 +48,6 @@ function pinnedSize(source: string): number {
   return lines > CAP ? Math.ceil(lines / STEP) * STEP : 0;
 }
 
-/** How many files are over the cap today. May only fall. */
-const PIN = 244;
-
 const result = checkRatchet({
   name: "max lines",
   root: REPO_ROOT,
@@ -145,7 +57,6 @@ const result = checkRatchet({
   ignoreDirs: ["ios", "android"],
   count: pinnedSize,
   allowlist: ALLOWLIST,
-  pin: PIN,
   fix: `Split it. A file over ${CAP} lines is not allowed to be new, and a listed one may not grow past its ${STEP}-line step.`,
   pruneCommand: "cd packages/shared && RATCHET_WRITE=prune bun test ratchet/maxLines.ratchet.test.ts",
   minScanned: 1500,

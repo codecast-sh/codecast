@@ -22,9 +22,6 @@ const WEB = join(import.meta.dir, "..", "..");
 const CONVEX = join(WEB, "..", "convex", "convex");
 const ALLOWLIST = join(import.meta.dir, "convexServerImports.allowlist.txt");
 
-/** How many files import a convex module that defines functions. May only fall. */
-const PIN = 0;
-
 // A type-only statement (`import type`, `export type`) is erased at build and
 // carries no code into the bundle, so it never counts.
 const IMPORT_RE = /\b(?:import|export)\s+(?!type\b)[^;]*?\bfrom\s+["']@codecast\/convex\/convex\/([^"']+)["']/g;
@@ -58,10 +55,10 @@ const result = checkRatchet({
   exempt: (rel) => /\.test\.tsx?$/.test(rel),
   count: countServerImports,
   allowlist: ALLOWLIST,
-  pin: PIN,
   fix: "Move the shared value into @codecast/shared/contracts and import it from there on both sides.",
   pruneCommand: "cd packages/web && RATCHET_WRITE=prune bun test lib/__tests__/convexServerImports.guard.test.ts",
   minScanned: 400,
+  shrinkFloor: 1,
 });
 
 describe("convex function modules stay out of the web bundle", () => {

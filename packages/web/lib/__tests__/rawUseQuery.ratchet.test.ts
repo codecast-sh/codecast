@@ -23,22 +23,6 @@ const ALLOWLIST = join(import.meta.dir, "rawUseQuery.allowlist.txt");
 // sanctioned spellings and must not count.
 const RAW_USE_QUERY = /(?<![A-Za-z0-9_$])useQuery\s*\(/;
 
-/**
- * How many files subscribe with a plain useQuery today. May only fall.
- * It rose by 4 once, with no new call: ConversationView.tsx was split and its
- * 11 calls now sit in five files (the allowlist rows sum to the same 11).
- * Down to 46 on 2026-09-22: TeamAvatarBar's roster pump moved onto
- * useSyncCollection after a plain useQuery there latched the avatar bar's
- * ErrorBoundary for hours behind a one-minute prod outage.
- * Down to 25 on 2026-10-03: the page degrade tests (components/__tests__/
- * *.degrade.test.tsx) mount each page over a backend missing every function,
- * and each enrichment they caught re-throwing moved onto useQueryNoThrow.
- * Down to 22 on 2026-10-24: ActivityFeed's feed query moved into hooks/useTeamFeed.
- * Down to 21 on 2026-11-09: app/team/activity/page.tsx no longer calls useQuery directly.
- * Down to 19 on 2026-11-26: the plan page and PlanDetailPanel read plan details from the store (planDetails).
- */
-const PIN = 19;
-
 const result = checkRatchet({
   name: "raw useQuery outside hooks",
   root: ROOT,
@@ -47,10 +31,10 @@ const result = checkRatchet({
   exempt: (rel) => /\.test\.tsx?$/.test(rel),
   count: (src) => countMatches(src, RAW_USE_QUERY),
   allowlist: ALLOWLIST,
-  pin: PIN,
   fix: "Mount the feeder in hooks/ and read the store (useTrackedStore / useCollectionRows / useWorkspaceCollection); if the query only enriches a surface that can paint without it, use useQueryNoThrow.",
   pruneCommand: "cd packages/web && RATCHET_WRITE=prune bun test lib/__tests__/rawUseQuery.ratchet.test.ts",
   minScanned: 400,
+  shrinkFloor: 1,
 });
 
 describe("raw useQuery ratchet", () => {

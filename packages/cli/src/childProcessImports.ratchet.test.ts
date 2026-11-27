@@ -24,9 +24,6 @@ const ALLOWLIST = join(import.meta.dir, "childProcessImports.allowlist.txt");
 // Static import, re-export, bare require and dynamic import alike.
 const CHILD_PROCESS_IMPORT = /(?:from\s*["'](?:node:)?child_process["']|(?:require|import)\s*\(\s*["'](?:node:)?child_process["'])/;
 
-/** How many files import node:child_process directly. May only fall. */
-const PIN = 17;
-
 const result = checkRatchet({
   name: "direct child_process import",
   root: ROOT,
@@ -37,10 +34,10 @@ const result = checkRatchet({
     rel === "src/proc.ts" || /\.test\.ts$/.test(rel) || rel.includes("/__tests__/"),
   count: (src) => countMatches(src, CHILD_PROCESS_IMPORT),
   allowlist: ALLOWLIST,
-  pin: PIN,
   fix: "Import the same names from src/proc.ts instead — identical signatures, plus windowsHide and the slow-sync spawn report.",
   pruneCommand: "cd packages/cli && RATCHET_WRITE=prune bun test src/childProcessImports.ratchet.test.ts",
   minScanned: 200,
+  shrinkFloor: 1,
 });
 
 describe("child_process import ratchet", () => {

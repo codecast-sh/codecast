@@ -12,10 +12,8 @@ import { join } from "node:path";
 // task, doc and plan pointing at the old workspace. CLAUDE.md names it as a
 // chokepoint for exactly that reason.
 //
-// One file is pinned: two team_id backfills in conversations.ts stamp a team
-// on conversations that have none and never recompute the linked keys. They
-// are pinned rather than fixed here — the point of the pin is that the next
-// bypass fails in this test rather than in a privacy report.
+// The allowlist is empty: no file patches these fields outside the chokepoint,
+// so the next bypass fails in this test rather than in a privacy report.
 
 const ROOT = import.meta.dir;
 const ALLOWLIST = join(import.meta.dir, "conversationVisibilityPatch.allowlist.txt");
@@ -54,9 +52,6 @@ function rawVisibilityPatches(source: string): number {
   return hits;
 }
 
-/** How many files patch conversation visibility outside the chokepoint. */
-const PIN = 0;
-
 const result = checkRatchet({
   name: "raw conversation visibility patch",
   root: ROOT,
@@ -66,10 +61,10 @@ const result = checkRatchet({
     rel === "lib/conversationVisibility.ts" || /\.test\.ts$/.test(rel) || rel.startsWith("__tests__/"),
   count: rawVisibilityPatches,
   allowlist: ALLOWLIST,
-  pin: PIN,
   fix: "Call patchConversationVisibility from lib/conversationVisibility.ts instead — it patches the row and rewrites the workspace key of every linked work item.",
   pruneCommand: "cd packages/convex && RATCHET_WRITE=prune bun test convex/conversationVisibilityPatch.ratchet.test.ts",
   minScanned: 100,
+  shrinkFloor: 1,
 });
 
 describe("conversation visibility patch ratchet", () => {
