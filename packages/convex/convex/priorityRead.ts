@@ -31,7 +31,7 @@ const LIST_COUNT_CAP = 50;
  * fails a query past 4,096 reads: per-workspace caps let a list hold hundreds.
  */
 export const TEAMMATE_LINKED = 25;
-/** The most teammates' priorities one list judges in one workspace, the most recently active first (more with `all` or a status); past that it says `teammates_truncated`. */
+/** The most teammates' priorities one list judges in one workspace, the most recently active first (with `all` or a status, TEAMMATE_ALL_CAP across every workspace); past that it says `teammates_truncated`. */
 export const TEAMMATE_PRIORITIES_CAP = 60;
 export const TEAMMATE_ALL_CAP = 200;
 /** The most of one person's priorities of one status in one workspace any read takes (the active ones a rank orders, a list's own). */
@@ -255,14 +255,21 @@ function linkReads(ctx: Ctx, r: Reader): LinkReads {
       return seen.get(k)!;
     };
   };
-  const listed = memo((id) => convs(id).then((c) => (c ? r.listed(c) : false)));
+  // Asked of a conversation the caller holds: keyed by its id, never read again.
+  const byConv = <T>(fn: (c: Doc<"conversations">) => Promise<T>) => {
+    const seen = new Map<string, Promise<T>>();
+    return (c: Doc<"conversations">) => {
+      const k = String(c._id);
+      if (!seen.has(k)) seen.set(k, fn(c));
+      return seen.get(k)!;
+    };
+  };
+  const listed = byConv((c) => r.listed(c));
   // The sessions the viewer co-owns, in one read when they are few, so a teammate's sessions cost no read each; past VIEWER_OWNED_READ, one read per session.
   let owned: Promise<Set<string> | null> | undefined;
   const ownedIds = () => (owned ??= ctx.db.query("session_owners").withIndex("by_user", (q: any) => q.eq("user_id", r.viewer)).take(VIEWER_OWNED_READ + 1)
     .then((rows: Doc<"session_owners">[]) => (rows.length > VIEWER_OWNED_READ ? null : new Set(rows.map((o) => String(o.conversation_id))))));
-  const mine = memo(async (id) => {
-    const c = await convs(id);
-    if (!c) return false;
+  const mine = byConv(async (c) => {
     const viewer = String(r.viewer);
     if (String(c.user_id) === viewer || String(c.owner_user_id ?? "") === viewer) return true;
     const ids = await ownedIds();
@@ -288,8 +295,8 @@ function linkReads(ctx: Ctx, r: Reader): LinkReads {
       if (!plan || !authorizedFor(await accessStampFor(ctx, "plans", plan), String(r.viewer), r.held)) return null;
       return { ...planFactsOf(plan), current: plan.current_session_id ? String(plan.current_session_id) : null };
     }),
-    listed: (c) => listed(String(c._id)),
-    mine: (c) => mine(String(c._id)),
+    listed,
+    mine,
     // Corrections are their owner's alone: no one else learns one is waiting.
     pending: async (p) => {
       if (!isOwner(r.viewer, p)) return new Set();
@@ -404,10 +411,11 @@ export async function echo(ctx: Ctx, viewer: Id<"users">, id: Id<"priorities">):
  * read newest first (by_user_workspace_active, OWN_SCAN_READ rows a workspace,
  * at most OWN_PRIORITIES_READ a status), and `own_truncated` says when more
  * were there; teammates' newest first (by_workspace_status_active), at most
- * TEAMMATE_PRIORITIES_CAP judged in each workspace (TEAMMATE_ALL_CAP with
- * `all` or a status), so a read of every workspace returns for each what a
- * read of that one returns, and `teammates_truncated` says when any workspace
- * had more.
+ * TEAMMATE_PRIORITIES_CAP judged in each workspace, so a read of every
+ * workspace returns for each what a read of that one returns; with `all` or a
+ * status, at most TEAMMATE_ALL_CAP across every workspace together, so the
+ * bigger cap never multiplies past the read cap. `teammates_truncated` says
+ * when any were left out.
  */
 export async function visiblePriorities(ctx: Ctx, r: Reader, workspace: string | undefined, status: PriorityStatus | undefined, all: boolean): Promise<{ rows: Priority[]; own_truncated: boolean; teammates_truncated: boolean }> {
   const since = Date.now() - FINISHED_WINDOW_DAYS * DAY;
@@ -419,6 +427,12 @@ export async function visiblePriorities(ctx: Ctx, r: Reader, workspace: string |
   const judged: Priority[] = [];
   let truncated = false;
   let ownTruncated = false;
+  const judge = async (theirs: Priority[]) => {
+    theirs.sort((a, b) => b.last_active_at - a.last_active_at);
+    if (theirs.length > cap) truncated = true;
+    for (const p of theirs.slice(0, cap)) if (await r.canRead(p)) judged.push(p);
+  };
+  const everyWorkspace: Priority[] = [];
   for (const key of keys) {
     if (!(await featureOn(key))) continue;
     // The viewer's own in this workspace, newest first, in one read split by status.
@@ -445,10 +459,10 @@ export async function visiblePriorities(ctx: Ctx, r: Reader, workspace: string |
       if (rows.length > limit) truncated = true;
       for (const p of rows.slice(0, limit)) if (!isOwner(r.viewer, p)) theirs.push(p);
     }
-    theirs.sort((a, b) => b.last_active_at - a.last_active_at);
-    if (theirs.length > cap) truncated = true;
-    for (const p of theirs.slice(0, cap)) if (await r.canRead(p)) judged.push(p);
+    if (status || all) everyWorkspace.push(...theirs);
+    else await judge(theirs);
   }
+  if (status || all) await judge(everyWorkspace);
   return { rows: [...own, ...judged], own_truncated: ownTruncated, teammates_truncated: truncated };
 }
 

@@ -1,12 +1,13 @@
 // A list of every workspace stays under Convex's per-query read cap (4,096
 // db calls) at its worst: two team workspaces at the teammate cap, each
 // priority's milestones naming tasks with sessions, and the viewer's own
-// with links (priorityRead.ts listFor, TEAMMATE_LINKED).
+// with links (priorityRead.ts listFor, TEAMMATE_LINKED); and with `all`,
+// whose bigger cap holds across every workspace together.
 import { expect, setDefaultTimeout, test } from "bun:test";
 import { convexTest } from "convex-test";
 import schema from "./schema";
 import { allModules } from "./testModules.testkit";
-import { TEAMMATE_LINKED, TEAMMATE_PRIORITIES_CAP, listFor } from "./priorityRead";
+import { TEAMMATE_ALL_CAP, TEAMMATE_LINKED, TEAMMATE_PRIORITIES_CAP, listFor } from "./priorityRead";
 import type { Id } from "./_generated/dataModel";
 
 setDefaultTimeout(180_000);
@@ -40,13 +41,19 @@ function counting(ctx: any): { ctx: any; calls: () => number } {
   return { ctx: { ...ctx, db }, calls: () => calls };
 }
 
-test("a list of every workspace at the teammate cap stays well under the read cap, and a teammate's priority past the link budget still reports its mapped sessions", async () => {
+/**
+ * Ada and Bea share `teamNames` (Acme first). Ada has `perTeam` active
+ * priorities in each, ranked 1..perTeam, and one more in Acme ranked last but
+ * the most recently active (`late`), with a session asking on s3; Bea has OWN
+ * in Acme.
+ */
+async function world(perTeam: number, teamNames = ["Acme", "Beta"]) {
   const t = convexTest(schema, allModules);
-  const { bea, late } = await t.run(async (ctx: any) => {
+  const ids = await t.run(async (ctx: any) => {
     const ada = await ctx.db.insert("users", { name: "Ada" });
     const bea = await ctx.db.insert("users", { name: "Bea" });
     const teams: Id<"teams">[] = [];
-    for (const name of ["Acme", "Beta"]) {
+    for (const name of teamNames) {
       const team = await ctx.db.insert("teams", { name, created_at: NOW, features: { priorities: true } });
       for (const u of [ada, bea]) await ctx.db.insert("team_memberships", { user_id: u, team_id: team, role: "member", joined_at: 1 });
       teams.push(team);
@@ -78,21 +85,25 @@ test("a list of every workspace at the teammate cap stays well under the read ca
       for (let m = 0; m < 5; m++) await conv(owner, team, { priority_id: p, priority_step_key: `s${(m % 4) + 1}` });
       return p;
     };
-    for (const team of teams) for (let rank = 1; rank <= TEAMMATE_PRIORITIES_CAP; rank++) await priority(ada, team, rank);
+    for (const team of teams) for (let rank = 1; rank <= perTeam; rank++) await priority(ada, team, rank);
     for (let rank = 1; rank <= OWN; rank++) await priority(bea, teams[0], rank);
-    // Ada's last in Acme, well past the link budget: a session of it asks on s3.
-    const late = await priority(ada, teams[0], TEAMMATE_PRIORITIES_CAP + 1);
-    // The most recently active, so the cap keeps it and leaves out Acme's #60.
+    const late = await priority(ada, teams[0], perTeam + 1);
     await ctx.db.patch(late, { last_active_at: NOW + 10 });
     await conv(ada, teams[0], { priority_id: late, priority_step_key: "s3", thread_state_status: "blocked", thread_state_at: NOW, last_turn_at: NOW - 1000, updated_at: NOW + 1 });
     return { bea, late };
   });
-
-  const { list, calls } = await t.run(async (ctx: any) => {
+  /** Bea's list of every workspace, and the db calls it made. */
+  const listed = (args: { all?: boolean } = {}) => t.run(async (ctx: any) => {
     const counted = counting(ctx);
-    const list = await listFor(counted.ctx, bea, {});
+    const list = await listFor(counted.ctx, ids.bea, args);
     return { list, calls: counted.calls() };
   });
+  return { ...ids, listed };
+}
+
+test("a list of every workspace at the teammate cap stays well under the read cap, and a teammate's priority past the link budget still reports its mapped sessions", async () => {
+  const { late, listed } = await world(TEAMMATE_PRIORITIES_CAP);
+  const { list, calls } = await listed();
   console.log(`priority list worst case: ${calls} db calls for ${list.priorities.length} rows`);
   expect(list.priorities.filter((r: any) => r.mine)).toHaveLength(OWN);
   expect(list.priorities.filter((r: any) => !r.mine && r.links)).toHaveLength(2 * TEAMMATE_PRIORITIES_CAP);
@@ -112,4 +123,15 @@ test("a list of every workspace at the teammate cap stays well under the read ca
   expect(row.plan).toBeNull();
   const s3 = row.links.find((l: any) => l.key === "s3");
   expect(s3.sessions[0]).toMatchObject({ state: "needs_you", mine: false, why: ["mapped"] });
+});
+
+test("with all, teammates' priorities are capped across every workspace together, so the bigger cap stays under the read cap", async () => {
+  // Each of three workspaces holds the cap: a cap per workspace would list three times as many, past 3,000 reads.
+  const { listed } = await world(TEAMMATE_ALL_CAP, ["Acme", "Beta", "Gamma"]);
+  const { list, calls } = await listed({ all: true });
+  console.log(`priority list with all: ${calls} db calls for ${list.priorities.length} rows`);
+  const teammates = list.priorities.filter((r: any) => !r.mine);
+  expect(list.teammates_truncated).toBe(true);
+  expect(teammates).toHaveLength(TEAMMATE_ALL_CAP);
+  expect(calls).toBeLessThan(3_000);
 });
