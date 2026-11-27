@@ -638,6 +638,13 @@ export const getPRsForTimeline = query({
       }
     }
 
-    return [...prs.values()].sort((a, b) => b.updated_at - a.updated_at).slice(0, limit);
+    const rows = [...prs.values()].sort((a, b) => b.updated_at - a.updated_at);
+    // One repository's answer holds every open PR it read, past `limit`: the Deploys page lists each one, and drops a
+    // row it held as open that the answer lacks (it closed). The limit trims only the closed and merged ones.
+    if (repository) {
+      let closed = 0;
+      return rows.filter((pr) => pr.state === "open" || ++closed <= limit);
+    }
+    return rows.slice(0, limit);
   },
 });

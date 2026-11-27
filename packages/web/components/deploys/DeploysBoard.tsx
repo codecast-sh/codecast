@@ -12,8 +12,8 @@ import type { DeployReach } from "@codecast/shared/contracts/deployReach";
 import type { DeployPauseView } from "@codecast/shared/contracts/deployPause";
 import { entityRoute } from "@codecast/shared/entities";
 import {
-  VIEWS, ago, attemptGroups, carriedOfAttempts, carriedOfQueue, fold, mineSessionIds, queueCommits, recordedOf, rowsFor, shipperOf, shippingRuns, splitQueue, tasksOnMain, yourSessions,
-  type BoardDeploy, type BoardQueueCommit, type BoardRow, type BoardView, type Bucket, type CardId, type Carried, type DeployCard as Card, type DeployLine,
+  VIEWS, ago, attemptGroups, carriedOfAttempts, carriedOfQueue, fold, mineSessionIds, openPrs, queueCommits, recordedOf, rowsFor, shipperOf, shippingRuns, splitQueue, tasksOnMain, yourSessions,
+  type BoardDeploy, type BoardQueueCommit, type BoardRow, type BoardView, type Bucket, type CardId, type Carried, type DeployCard as Card, type DeployLine, type OpenPr,
 } from "../../lib/deploys/board";
 import { carriedMatches, commitMatches, deployMatches, focusWord, reachDeployOn, rowMatches, type DeployFocus } from "../../lib/deploys/focus";
 import { changeSpot, type Held, type HoldWord, type Spot } from "../../lib/deploys/spot";
@@ -55,6 +55,10 @@ export type DeploysBoardProps = {
   shipping: { runs: ReadonlyArray<ShippingRun>; shippers: ReadonlyArray<ShippingShipper> } | null;
   /** The Ship runs could not be read (a backend without the query yet): Shipping says so; nothing is credited. */
   shippingError?: boolean;
+  /** The target repository's pull requests the store holds (Shipping draws the open ones no run carries); null while unread. */
+  prs: ReadonlyArray<OpenPr> | null;
+  /** The viewer's GitHub login: Mine keeps the pull requests they opened. */
+  meLogin: string | null;
   /** deployRefs.deployLines by deploy id, for the cards shown: their commits' lines, PR and branch ("—" until read). */
   linesByDeploy?: ReadonlyMap<string, ReadonlyArray<DeployLine>>;
   /** The deploys whose lines the cards now shown want, each time that set changes. */
@@ -113,11 +117,13 @@ export function DeploysBoard(p: DeploysBoardProps) {
   const focusDeploys = !focus ? [] : held ? history.filter((d) => d.short_id === held.short_id) : history.filter((d) => deployMatches(d, focus));
   const runs = p.shipping?.runs ?? null;
   const shipping = useMemo(() => (runs ? shippingRuns(runs, { repository: t.repository, checkouts: p.checkouts, now }) : null), [runs, t.repository, p.checkouts, now]);
+  // The open pull requests no run carries, as Shipping draws them: a link to one finds its card there.
+  const prCards = useMemo(() => (p.prs ? openPrs(p.prs, { repository: t.repository, runs: shipping ? [...shipping.moving, ...shipping.dropped] : [], now, landedPrs: board.landedPrs }) : null), [p.prs, t.repository, shipping, now, board.landedPrs]);
   const pause = production?.pause ?? null;
   // Where the linked change stands here: the deploy that holds it, its place in what waits and what holds it, or its run.
   const onTarget = p.reach?.targets.find((r) => r.target === t.name);
   const spot = focus ? changeSpot({
-    focus, target: t, queue, history: n.history, live: n.live, focusDeploys, paused: !!pause, shipping, shippingError: p.shippingError,
+    focus, target: t, queue, history: n.history, live: n.live, focusDeploys, paused: !!pause, shipping, shippingError: p.shippingError, openPrs: prCards,
     reach: onTarget ? { short_id: onTarget.deploy?.short_id ?? "", state: onTarget.state } : null,
   }) : null;
   // A link brings what it names on screen and flashes it, wherever it is in either column; the rows find themselves.
@@ -169,7 +175,7 @@ export function DeploysBoard(p: DeploysBoardProps) {
       <div className="dpp-body">
         {t.record_only ? null : (
           <div className="dpp-col" data-deploy-col="before">
-            <ShippingColumn runs={runs} shippers={shippers ?? []} error={!!p.shippingError} checkouts={p.checkouts} repository={t.repository} now={now} me={me} mine={mine} focus={focus} onMain={board.onMain} landedPrs={board.landedPrs} />
+            <ShippingColumn runs={runs} shippers={shippers ?? []} error={!!p.shippingError} prs={p.prs} checkouts={p.checkouts} repository={t.repository} now={now} me={me} meLogin={p.meLogin} mine={mine} focus={focus} onMain={board.onMain} landedPrs={board.landedPrs} />
           </div>
         )}
         <div className="dpp-col" data-deploy-col="after">
@@ -511,7 +517,7 @@ export function Paused({ p, canLift, now, onLift }: { p: DeployPauseView; canLif
 /** A deploy's own state, for a link to that deploy; and how a deploy holds a linked change, before the deploy's name. */
 const DEPLOY_WORD: Record<HoldWord, string> = { live: "live now", went_out: "went out", going: "going out", asked: "asked for", failed: "failed", cancelled: "cancelled", rolled_back: "rolled back", superseded: "never went out" };
 const HOLD_WORD: Record<HoldWord, string> = { live: "live in", went_out: "went out in", going: "going out in", asked: "asked for in", failed: "failed in", cancelled: "cancelled in", rolled_back: "rolled back after", superseded: "never went out in" };
-const SPOT_STATE: Record<Spot["kind"], string> = { deploy: "deployed", waiting: "waiting", run: "waiting", reading: "waiting", absent: "missing" };
+const SPOT_STATE: Record<Spot["kind"], string> = { deploy: "deployed", waiting: "waiting", run: "waiting", pr: "waiting", reading: "waiting", absent: "missing" };
 
 /** The thing the link pointed at, and where it is on this target: the deploy that holds it, its place in what waits and
  *  what holds it there, where its run stands off main, or not here. Each reason opens what it names. */
@@ -545,6 +551,13 @@ function SpotWords({ spot: s, own }: { spot: Spot; own: boolean }) {
         <span>not on main</span>
         <a href={`#ship-${s.run._id}`} data-spot-run>{s.word}</a>
         {s.dropped ? <span>parked</span> : null}
+      </span>
+    );
+    case "pr": return (
+      <span className="dpp-focus-where">
+        <span>not on main</span>
+        <a href={`#pr-${s.pr.number}`} data-spot-pr>open, no Ship run · {s.word}</a>
+        {s.quiet ? <span>quiet</span> : null}
       </span>
     );
     case "reading": return <span>looking…</span>;
