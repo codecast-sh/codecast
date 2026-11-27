@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { compareVersions } from "@codecast/shared/contracts/orgTemplateManifest";
+import { useMountEffect } from "../hooks/useMountEffect";
 
 // The CLI release dl.codecast.sh/latest.json names, read through the web
 // server (/api/cli/latest: the manifest sends no CORS header). Settings >
@@ -25,11 +26,11 @@ function fetchLatest(): Promise<string | null> {
 /** The latest CLI release: undefined while it is read, null when the read failed. */
 export function useLatestCliRelease(): string | null | undefined {
   const [latest, setLatest] = useState<string | null | undefined>(undefined);
-  useEffect(() => {
+  useMountEffect(() => {
     let live = true;
     void fetchLatest().then((v) => { if (live) setLatest(v); });
     return () => { live = false; };
-  }, []);
+  });
   return latest;
 }
 

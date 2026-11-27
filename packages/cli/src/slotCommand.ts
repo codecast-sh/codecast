@@ -5,8 +5,10 @@
  * for "busy, ask again". `cast slot ls` lists each slot's holders and waiters.
  */
 
+import type { Command } from "commander";
 import { constants as osConstants } from "node:os";
 import { parseDuration } from "@codecast/shared/contracts/moments";
+import { commandGroup } from "./commandGroupLookup.js";
 import { spawn } from "./proc.js";
 import { EXIT_BUSY, printHint } from "./infraExit.js";
 import { listMachineSlots, machineSlotProblem, takeMachineSlot } from "./machineSlot.js";
@@ -71,4 +73,18 @@ export function renderSlots(slots: ReturnType<typeof listMachineSlots>, now = Da
 export function runSlotLs(o: { json?: boolean }): void {
   const slots = listMachineSlots();
   console.log(o.json ? JSON.stringify(slots, null, 2) : renderSlots(slots));
+}
+
+export function registerSlotCommand(program: Command): void {
+  const slot = program.command("slot").description(commandGroup("slot").description);
+  slot.command("run")
+    .description("Run a command once it holds a place in a slot, and give the place back when it ends; a wait that runs out exits 75")
+    .requiredOption("--name <name>", "The slot, e.g. local_ci (cast slot ls lists them)")
+    .option("--wait <dur>", "Longest to wait for a place (90s, 15m, 1h); default: until one frees")
+    .argument("<cmd...>", "The command, after --")
+    .action((cmd: string[], o: { name: string; wait?: string }) => runSlotRun(cmd, o));
+  slot.command("ls")
+    .description("Each slot's cap, holders and waiters")
+    .option("--json", "Print them as JSON")
+    .action((o: { json?: boolean }) => runSlotLs(o));
 }

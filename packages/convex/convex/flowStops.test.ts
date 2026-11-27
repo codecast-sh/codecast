@@ -11,7 +11,7 @@ import { anyApi } from "convex/server";
 import schema from "./schema";
 import { allModules } from "./testModules.testkit";
 import { hashToken } from "./apiTokens";
-import { openFlowStopIncidents, stopOf, stopStationOf } from "./flowStops";
+import { openFlowStopIncidents, openIncidentIfShared, stopOf, stopStationOf } from "./flowStops";
 import { moveTaskStatus } from "./tasks";
 import { mergeProblemInto } from "./signals";
 import { isUngroundedCause } from "./lineGround";
@@ -265,6 +265,35 @@ describe("a pipeline stop shared by two changes is one incident", () => {
       expect([gone, ((await get(ids.runs[1])) as any).incident_task_id]).toEqual([gone, undefined]);
       expect([gone, ((await get(ids.tasks[1])) as any).blocked_by ?? []]).toEqual([gone, []]);
     }
+  });
+
+  test("the fix shipped on the cause, stopping at the same shared exit, records its stop and never waits on its own cause", async () => {
+    const { ids, newRun, redMain, get, cause } = await world();
+    await redMain(ids.runs[0]);
+    await redMain(ids.runs[1]);
+    const incident = await cause(ids.runs[1]);
+    const fix = await newRun(incident._id);
+    await redMain(fix);
+    // Its stop is recorded (a self-dependency would have thrown and rolled the whole filing back).
+    expect(await get(fix)).toMatchObject({ stop_station: "land__wait_main", stop_fingerprint: "flowstop:acme/app:main_red" });
+    expect(((await get(fix)) as any).incident_task_id).toBeUndefined();
+    expect(((await get(incident._id)) as any).blocked_by ?? []).toEqual([]);
+    expect(((await get(incident._id)) as any).cause.signal_count).toBe(3);
+  });
+
+  test("@release is found from the team the cause is routed to, not from its access key", async () => {
+    const { t, ids, redMain, cause } = await world({ release: false });
+    await redMain(ids.runs[0]);
+    await redMain(ids.runs[1]);
+    const incident = await cause(ids.runs[1]);
+    expect(incident.assignee).toBeUndefined();
+    // Routed to the team, readable only by its owner; the team's @release appears.
+    const release = await t.run(async (ctx: any) => {
+      await ctx.db.patch(incident._id, { workspace: `user:${ids.me}` });
+      return ctx.db.insert("org_roles", { name: "Release", handle: "release", host_user_id: ids.me, team_id: ids.team, scope: { project_ids: [], plan_ids: [] }, status: "active", created_at: T0, updated_at: T0 });
+    });
+    expect(await t.run((ctx: any) => openIncidentIfShared(ctx, incident._id, Date.now()))).toBe(true);
+    expect(((await t.run((ctx: any) => ctx.db.get(incident._id))) as any).assignee).toBe(String(release));
   });
 
   test("a repeat stop changes nothing more, and with no @release the incident still blocks", async () => {

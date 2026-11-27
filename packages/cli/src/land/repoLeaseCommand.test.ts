@@ -154,7 +154,8 @@ describe("cast repo lease", () => {
     signals.emit("SIGINT");
     expect(await passed).toBe(130);
     rmSync(dir, { recursive: true, force: true });
-  });
+    // Two spawns and two waits, each pollUntil's budget stretching with load past bun's 5 s default.
+  }, 30_000);
 
   test("a command spawn refuses outright is reported as one that could not start, and the lease goes back", async () => {
     const s = server();

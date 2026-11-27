@@ -127,6 +127,35 @@ describe("a card two changes wait on is escalated to its people", () => {
     void blockOn;
   });
 
+  test("a task created blocked by the card's task counts as it is created (cast task create --blocked-by)", async () => {
+    const { t, ids, task, ask, blockOn, get, notices } = await world();
+    // Numbered past what the counter hands a created task.
+    await task("ct-501");
+    await task("ct-502");
+    const card = await ask("ct-501");
+    await blockOn("ct-502", "ct-501");
+    expect(((await get(card.id)) as any).escalated).toBeUndefined();
+    await t.mutation(api.tasks.create, { api_token: TOKEN, title: "Follow-up", workspace: "team", team_id: ids.team, blocked_by: ["ct-501"] });
+    expect(((await get(card.id)) as any).escalated).toMatchObject({ note: "2 changes wait on this", waiting: 2 });
+    expect((await notices()).push).toHaveLength(1);
+  });
+
+  test("a plan forked from one whose task waits on the card's task brings a waiter of its own", async () => {
+    const { t, ids, task, ask, blockOn, get, notices } = await world();
+    await task("ct-501");
+    const src = await task("ct-502");
+    await blockOn("ct-502", "ct-501");
+    const card = await ask("ct-501");
+    expect(((await get(card.id)) as any).escalated).toBeUndefined();
+    await t.run(async (ctx: any) => {
+      const plan = await ctx.db.insert("plans", { user_id: ids.me, team_id: ids.team, workspace: ids.ws, short_id: "pl-1", title: "Rollout", status: "active", task_ids: [src], created_at: T0, updated_at: T0 });
+      await ctx.db.patch(src, { plan_id: plan });
+    });
+    await t.mutation(api.plans.fork, { api_token: TOKEN, source_short_id: "pl-1" });
+    expect(((await get(card.id)) as any).escalated).toMatchObject({ note: "2 changes wait on this", waiting: 2 });
+    expect((await notices()).push).toHaveLength(1);
+  });
+
   test("a person's escalation keeps their note", async () => {
     const { t, ids, task, ask, blockOn, get, notices } = await world();
     for (const s of ["ct-1", "ct-2", "ct-3"]) await task(s);

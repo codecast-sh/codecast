@@ -46,14 +46,21 @@ export type ForceDecision = { force: boolean; reason: string };
  * Force only when the daemon a machine would run changed since `forced`, the
  * release the team's machines were last forced onto (teamCliFloor.forcedRelease):
  * comparing against the release just before would let one skipped force never
- * be made up. Unknown (no deploy of that release recorded): force.
+ * be made up. Unknown (no deploy of that release recorded, or its commit
+ * unreadable): force.
  */
 export function decideForce(sha: string, forced: { sha: string | null; floor: string | null } | null, buildIdAt: (sha: string) => string): ForceDecision {
   if (!forced?.sha) return { force: true, reason: `no deploy of the release ${forced?.floor ? `the floor names (${forced.floor})` : "the team was last forced onto"} is recorded, so the daemon may have changed` };
   const since = `${forced.floor ?? "the floor's release"} (${forced.sha.slice(0, 10)})`;
   if (forced.sha === sha) return { force: false, reason: `no force: the floor already names this release, ${since}` };
   const now = buildIdAt(sha);
-  const before = buildIdAt(forced.sha);
+  let before: string;
+  try {
+    before = buildIdAt(forced.sha);
+  } catch {
+    // The earlier release's commit is unreadable here (gone from origin, a shallow clone): as unknown as no deploy of it.
+    return { force: true, reason: `could not read ${forced.sha.slice(0, 10)}: forced` };
+  }
   return now === before
     ? { force: false, reason: `no force: daemon unchanged since ${since} (build ${now})` }
     : { force: true, reason: `daemon changed since ${since} (build ${before} -> ${now})` };

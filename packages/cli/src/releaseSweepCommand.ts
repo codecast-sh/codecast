@@ -15,20 +15,34 @@ export const SWEEP_FOUND_EXIT = 0;
 export const SWEEP_QUIET_EXIT = 1;
 export const SWEEP_ERROR_EXIT = 2;
 
+// Everything printed here reaches @release as its input (a `--new` firing's message), so it holds only ids, counts,
+// shas, versions, times, states and the commands that act, as the server sends them (convex releaseSweep.ts). Free
+// text other people write (titles, stop reasons, device labels, names) never does: `project` keeps only these fields,
+// whatever a server answers, and each line points at the command that shows the rest.
 type Run = { task_short_id: string | null; station: string | null };
 export type Sweep = {
-  incidents: Array<{ short_id: string; title: string; runs: Run[] }>;
+  incidents: Array<{ short_id: string; status: string; runs: Run[] }>;
   late_targets: Array<{ target: string; repository: string; commits: number; oldest_sha: string; waiting_since: number; deadline_ms: number; open: { short_id: string; status: string } | null }>;
-  failed_runs: Array<{ task_short_id: string; flow: string; station: string; reason: string | null; failed_at: number }>;
-  laggards: Array<{ device_id: string; label: string; owner: string; own: boolean; cli_version: string | null; floor: string; floor_set_at: number | null }>;
-  unretired: Array<{ short_id: string; title: string | null }>;
+  failed_runs: Array<{ task_short_id: string; flow: string; station: string | null; failed_at: number }>;
+  laggards: Array<{ device: string; device_id: string | null; own: boolean; owner_id: string; cli_version: string | null; floor: string; floor_set_at: number | null }>;
+  unretired: Array<{ short_id: string }>;
 };
+
+/** The sweep's own fields and nothing else a server sent. */
+export function project(s: Sweep): Sweep {
+  return {
+    incidents: s.incidents.map((i) => ({ short_id: i.short_id, status: i.status, runs: (i.runs ?? []).map((r) => ({ task_short_id: r.task_short_id, station: r.station })) })),
+    late_targets: s.late_targets.map((t) => ({ target: t.target, repository: t.repository, commits: t.commits, oldest_sha: t.oldest_sha, waiting_since: t.waiting_since, deadline_ms: t.deadline_ms, open: t.open ? { short_id: t.open.short_id, status: t.open.status } : null })),
+    failed_runs: s.failed_runs.map((r) => ({ task_short_id: r.task_short_id, flow: r.flow, station: r.station, failed_at: r.failed_at })),
+    laggards: s.laggards.map((l) => ({ device: l.device, device_id: l.device_id, own: l.own, owner_id: l.owner_id, cli_version: l.cli_version, floor: l.floor, floor_set_at: l.floor_set_at })),
+    unretired: s.unretired.map((u) => ({ short_id: u.short_id })),
+  };
+}
 
 const span = (ms: number) => {
   const m = Math.max(0, Math.round(ms / 60_000));
   return m < 60 ? `${m}m` : m < 48 * 60 ? `${Math.round(m / 60)}h` : `${Math.round(m / 1440)}d`;
 };
-const oneLine = (s: string, max = 120) => { const t = s.replace(/\s+/g, " ").trim(); return t.length > max ? `${t.slice(0, max - 1)}…` : t; };
 
 export const sweepCount = (s: Sweep) => s.incidents.length + s.late_targets.length + s.failed_runs.length + s.laggards.length + s.unretired.length;
 
@@ -41,21 +55,23 @@ export function formatSweep(s: Sweep, now: number): string[] {
   const lines: string[] = [];
   for (const i of s.incidents) {
     const runs = i.runs.map((r) => `${r.task_short_id ?? "a run"}${r.station ? ` at ${r.station}` : ""}`).join(", ");
-    lines.push(`${i.short_id}  incident: ${oneLine(i.title)}; holds ${i.runs.length} run${i.runs.length === 1 ? "" : "s"} (${runs})  fix the cause, then: cast task done ${i.short_id} (its runs resume)`);
+    lines.push(`${i.short_id}  incident holding ${i.runs.length} run${i.runs.length === 1 ? "" : "s"} (${runs})  what broke: cast task show ${i.short_id}; fix the cause, then: cast task done ${i.short_id} (its runs resume)`);
   }
   for (const t of s.late_targets) {
     const act = t.open ? `${t.open.short_id} is ${t.open.status}: cast line deploy show ${t.open.short_id}` : `send: cast line deploy --target ${t.target} --go (in a checkout of ${t.repository})`;
     lines.push(`${t.target}  ${t.commits} commit${t.commits === 1 ? "" : "s"} not live ${span(now - t.waiting_since)} after merging (deadline ${span(t.deadline_ms)}), oldest ${t.oldest_sha.slice(0, 10)}  ${act}`);
   }
   for (const r of s.failed_runs) {
-    lines.push(`${r.task_short_id}  ${r.flow} run failed at ${r.station} ${span(now - r.failed_at)} ago${r.reason ? `: ${oneLine(r.reason)}` : ""}  resume once fixed: cast workflow resume ${r.task_short_id} --at ${r.station}`);
+    const resume = r.station ? `resume once fixed: cast workflow resume ${r.task_short_id} --at ${r.station}` : `resume once fixed: cast workflow resume ${r.task_short_id}`;
+    lines.push(`${r.task_short_id}  ${r.flow} run failed${r.station ? ` at ${r.station}` : ""} ${span(now - r.failed_at)} ago  why: cast task show ${r.task_short_id}; ${resume}`);
   }
   for (const l of s.laggards) {
     const since = l.floor_set_at ? ` for ${span(now - l.floor_set_at)}` : "";
-    lines.push(`${l.label}  ${l.owner}'s machine runs ${l.cli_version ?? "an unknown version"}, below the floor ${l.floor}${since}  ${l.own ? `update: cast devices update ${l.label}` : `ask ${l.owner} to run: cast devices update ${l.label}`}`);
+    const update = l.device_id ? `cast devices update ${l.device_id}` : "cast devices update <it> (cast devices lists it)";
+    lines.push(`${l.device_id ?? l.device}  ${l.own ? "your" : "a teammate's"} machine runs ${l.cli_version ?? "an unknown version"}, below the floor ${l.floor}${since}  ${l.own ? `update: ${update}` : `ask its owner to run: ${update}`}`);
   }
   for (const u of s.unretired) {
-    lines.push(`${u.short_id}  live everywhere and settled, not retired${u.title ? `: ${oneLine(u.title, 80)}` : ""}  retire: cast kill ${u.short_id}`);
+    lines.push(`${u.short_id}  live everywhere and settled, not retired  retire: cast kill ${u.short_id}`);
   }
   return lines;
 }
@@ -71,7 +87,7 @@ export function sweepKeys(s: Sweep): string[] {
     ...s.incidents.map((i) => `incident ${i.short_id}`),
     ...s.late_targets.map((t) => `late ${t.target} ${t.oldest_sha.slice(0, 10)}`),
     ...s.failed_runs.map((r) => `failed ${r.task_short_id} ${r.station} ${r.failed_at}`),
-    ...s.laggards.map((l) => `lagging ${l.device_id} below ${l.floor}`),
+    ...s.laggards.map((l) => `lagging ${l.device} below ${l.floor}`),
     ...s.unretired.map((u) => `unretired ${u.short_id}`),
   ].sort();
 }
@@ -114,8 +130,14 @@ export function sweepVerdict(s: Sweep, previous: unknown, now: number): { wake: 
 }
 
 /** Read the sweep and print it; the exit code (precheck semantics). `read` throws on any failure. With `newSince`
- *  (the state precheck's previous state, as JSON), it prints sweepVerdict's JSON and exits 0, or 2 on a failed read. */
-export async function runSweep(o: { read: () => Promise<Sweep>; json?: boolean; newSince?: string; quiet?: boolean; log: (line: string) => void; error: (line: string) => void; now?: () => number }): Promise<number> {
+ *  (the state precheck's previous state, as JSON), it prints sweepVerdict's JSON and exits 0, or 2 on a failed read.
+ *  `newSince: null` is `--new` outside a state precheck (no state variable): 2, never a verdict an exit-mode precheck
+ *  would read as "wake" every firing. */
+export async function runSweep(o: { read: () => Promise<Sweep>; json?: boolean; newSince?: string | null; quiet?: boolean; log: (line: string) => void; error: (line: string) => void; now?: () => number }): Promise<number> {
+  if (o.newSince === null) {
+    o.error(`--new needs a state-mode precheck: cast trigger update <tr> --precheck-mode state`);
+    return SWEEP_ERROR_EXIT;
+  }
   let s: Sweep;
   let previous: unknown = null;
   // A state it cannot read starts the seen set over, rather than skipping every firing from then on.
@@ -123,7 +145,7 @@ export async function runSweep(o: { read: () => Promise<Sweep>; json?: boolean; 
   try {
     const read: unknown = await o.read();
     if (!isSweep(read)) throw new Error("the server answered with no sweep");
-    s = read;
+    s = project(read);
   } catch (err) {
     if (!o.quiet) o.error(`release sweep failed: ${err instanceof Error ? err.message : String(err)}`);
     return SWEEP_ERROR_EXIT;
@@ -168,7 +190,8 @@ what stands then. An error (exit 2) skips and keeps the state. cast trigger log
         const roster = await loadWorkspaceRoster(async () => await apiPost(deps, "/cli/teams", {}, { read: true, exitOnError: false }));
         return await apiPost(deps, "/cli/release/sweep", workspaceScope(resolveWorkspaceForRead(roster, opts.team)), { read: true, exitOnError: false }) as Sweep;
       };
-      const newSince = opts.new ? (process.env[TRIGGER_PRECHECK_STATE_ENV] ?? "null") : undefined;
+      // A state precheck always sets the variable ("null" on its first firing); unset, this is no state precheck.
+      const newSince = opts.new ? (process.env[TRIGGER_PRECHECK_STATE_ENV] ?? null) : undefined;
       process.exit(await runSweep({ read, json: opts.json, newSince, quiet: opts.quiet, log: (l) => console.log(l), error: (l) => console.error(l) }));
     });
 }
