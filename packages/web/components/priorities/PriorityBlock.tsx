@@ -291,6 +291,8 @@ function MilestoneRow({ model, m, layout, now, lookups, defaultOpen = false }: {
   const [open, setOpen] = useState(defaultOpen);
   const [renaming, setRenaming] = useState(false);
   const toggle = () => setOpen((o) => !o);
+  // Whether the row was open before a double-click's first click: the rename starts with the row exactly as it was.
+  const openBeforeClick = useRef(open);
   return (
     <li data-milestone={m.key} data-state={m.state.kind}>
       <div
@@ -320,9 +322,10 @@ function MilestoneRow({ model, m, layout, now, lookups, defaultOpen = false }: {
               <span
                 data-milestone-title
                 title={step.title}
-                // A double-click's second click would close what its first opened: only the first toggles, then the double-click renames.
-                onClick={(e) => { if (e.detail > 1) e.stopPropagation(); }}
-                onDoubleClick={row.mine ? (e) => { e.stopPropagation(); setRenaming(true); } : undefined}
+                // A double-click never changes whether the row is open: its first click toggles (a single click must not wait),
+                // its second is ignored, and the double-click puts the row back as it was before the first.
+                onClick={(e) => { if (e.detail > 1) e.stopPropagation(); else openBeforeClick.current = open; }}
+                onDoubleClick={row.mine ? (e) => { e.stopPropagation(); setOpen(openBeforeClick.current); setRenaming(true); } : undefined}
                 className={cn(
                   "min-w-0 text-ui",
                   open ? "whitespace-normal break-words" : wide ? cn("truncate", COARSE_WRAP) : "line-clamp-2",

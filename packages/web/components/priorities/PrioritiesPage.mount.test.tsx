@@ -338,7 +338,7 @@ test("the legend behind the ⓘ in the page header names every mark", async () =
     await act(async () => { legend.click(); });
     const words = [...document.querySelectorAll("[data-legend-row]")].map((r) => r.getAttribute("data-legend-row"));
     expect(words).toEqual([
-      "Needs you", "New session", "Working", "Sleeping", "Idle", "Done", "Closed", "Workflow run",
+      "Needs you", "New session", "Working", "Sleeping", "Idle", "Done", "Closed", "Starting", "Error", "Stashed", "Workflow run",
       "Backlog", "Open", "In Progress", "In Review", "Done", "Dropped",
       "Pull request, open", "Pull request, merged", "Pull request, closed", "Branch", "Plan", "Deploy",
     ]);
@@ -350,36 +350,43 @@ test("the legend behind the ⓘ in the page header names every mark", async () =
   }
 }, 60_000);
 
-test("a double-click on a milestone's title opens it once, then renames: its second click does not close it again; Space and Enter toggle the row", async () => {
+test("a double-click on a milestone's title never changes whether its row is open; a single click, Space and Enter toggle it", async () => {
   useInboxStore.getState().syncTable("priorities", ROWS as any);
   const page = await mount(view());
   const { act } = React as any;
   const line = () => block(page.container, "pri-3").querySelector('[data-milestone="s1"]')!;
   const title = () => line().querySelector("[data-milestone-title]") as HTMLElement;
-  const opened: string[] = [];
-  const read = () => opened.push(line().querySelector("[role=button]")!.getAttribute("aria-expanded")!);
+  const button = () => line().querySelector("[role=button]") as HTMLElement;
+  const expanded = () => button().getAttribute("aria-expanded");
+  const fire = async (type: string, detail: number) => act(async () => { title().dispatchEvent(new (window as any).MouseEvent(type, { bubbles: true, detail })); });
+  /** The browser's sequence for a double-click: click (detail 1), click (detail 2), dblclick. */
+  const doubleClick = async () => { await fire("click", 1); await fire("click", 2); await fire("dblclick", 2); };
+  const escape = async () => act(async () => { line().querySelector("[data-rename-input]")!.dispatchEvent(new (window as any).KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
   try {
-    // The browser's sequence: click (detail 1), click (detail 2), dblclick.
-    await act(async () => { title().dispatchEvent(new (window as any).MouseEvent("click", { bubbles: true, detail: 1 })); });
-    read();
-    await act(async () => { title().dispatchEvent(new (window as any).MouseEvent("click", { bubbles: true, detail: 2 })); });
-    read();
-    await act(async () => { title().dispatchEvent(new (window as any).MouseEvent("dblclick", { bubbles: true, detail: 2 })); });
-    read();
-    expect(opened).toEqual(["true", "true", "true"]);
+    // Starting closed: still closed, the rename showing.
+    expect(expanded()).toBe("false");
+    await doubleClick();
+    expect(expanded()).toBe("false");
     expect(line().querySelector("[data-rename-input]")).not.toBeNull();
+    await escape();
+    // A plain single click toggles at once.
+    await fire("click", 1);
+    expect(expanded()).toBe("true");
+    // Starting open: still open, the rename showing.
+    await doubleClick();
+    expect(expanded()).toBe("true");
+    expect(line().querySelector("[data-rename-input]")).not.toBeNull();
+    await escape();
     // From the keyboard the row is a button: Space toggles it as Enter does, and does not scroll the page.
-    await act(async () => { line().querySelector("[data-rename-input]")!.dispatchEvent(new (window as any).KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
-    const button = () => line().querySelector("[role=button]") as HTMLElement;
     const press = async (key: string) => {
       const e = new (window as any).KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
       await act(async () => { button().dispatchEvent(e); });
       return e.defaultPrevented;
     };
     expect(await press(" ")).toBe(true);
-    expect(button().getAttribute("aria-expanded")).toBe("false");
+    expect(expanded()).toBe("false");
     expect(await press("Enter")).toBe(true);
-    expect(button().getAttribute("aria-expanded")).toBe("true");
+    expect(expanded()).toBe("true");
   } finally {
     await page.unmount();
     useInboxStore.getState().syncTable("priorities", ROWS as any);

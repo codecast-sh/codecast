@@ -13,8 +13,8 @@ import { isClosedSession, orderByState } from "@codecast/shared/contracts/priori
 import { SessionStatusMark } from "../inbox/SessionStatusMark";
 import { taskVisual } from "../TaskStatusBadge";
 import { useEntityResolution } from "../../lib/entityDisplay";
-import { STATE_WORD, ago, type MilestoneModel, type PriorityModel, type SessionLine } from "../../lib/priorityList";
-import type { SessionStatus } from "../../lib/sessionStatus";
+import { ago, sessionRowMark, type MilestoneModel, type PriorityModel, type SessionLine } from "../../lib/priorityList";
+import { SESSION_STATUS } from "../../lib/sessionStatus";
 import { cn } from "../../lib/utils";
 import { branchesOf, type LinkLookups } from "../../hooks/usePriorityModels";
 import { SessionMenu } from "./controls";
@@ -29,8 +29,6 @@ const ROW_LINK = "flex min-w-0 flex-1 items-center gap-2 self-stretch";
 /** A title on one line on a mouse; on a narrow list or a touch screen it wraps onto a second, as milestone titles do. */
 const TITLE_WRAP = "[@container(max-width:40rem)]:line-clamp-2 [@container(max-width:40rem)]:whitespace-normal [@media(pointer:coarse)]:line-clamp-2 [@media(pointer:coarse)]:whitespace-normal";
 
-/** A session's state as the sidebar marks it. */
-const MARK: Record<SessionLine["state"], SessionStatus> = { needs_you: "needs_you", working: "working", dormant: "dormant", idle: "idle", done: "done", killed: "killed" };
 
 /** A workflow step's title as what it works on: "Review · ct-9 tidy" reads "Review: <task title>", never its id. */
 function useSessionLabel(s: Pick<SessionLine, "title">): string {
@@ -129,22 +127,24 @@ function Item({ icon, title, meta, href, menu, ...data }: { icon: ReactNode; tit
 
 function SessionItem({ s, now, menu }: { s: SessionLine; now: number; menu?: ReactNode }) {
   const label = useSessionLabel(s);
-  const asks = s.state === "needs_you";
-  const icon = s.workflow && !asks ? <Workflow className="size-3.5 text-sol-text-dim" aria-label="Workflow run" /> : <SessionStatusMark status={MARK[s.state]} size={12} />;
+  const mark = sessionRowMark(s);
+  const asks = mark === "needs_you";
+  const icon = s.workflow && !asks ? <Workflow className="size-3.5 text-sol-text-dim" aria-label="Workflow run" /> : <SessionStatusMark status={mark} size={12} />;
   return (
     <Item
       data-session-row={s.conversation_id}
       data-state={s.state}
+      data-mark={mark}
       href={s.href}
       icon={icon}
       title={label}
-      meta={<><span className={asks ? "font-medium text-sol-yellow" : undefined}>{STATE_WORD[s.state]}</span> · {age(s.last_active_at, now)}</>}
+      meta={<><span className={asks ? "font-medium text-sol-yellow" : undefined}>{SESSION_STATUS[mark].word}</span> · {age(s.last_active_at, now)}</>}
       menu={menu}
     />
   );
 }
 
-/** A task in the task-status vocabulary; dropped is struck through. */
+/** A task in the task-status vocabulary; dropped is struck through. Until its row loads it has no status to draw: a neutral dot, never Open. */
 function TaskItem({ id }: { id: string }) {
   const r = useEntityResolution(id, "task");
   const t = r.entity as { title?: string; status?: string } | null;
@@ -154,7 +154,9 @@ function TaskItem({ id }: { id: string }) {
   return (
     <Item
       href={`/tasks/${id}`}
-      icon={<span className={v.color} data-task-status={t?.status ?? "open"}><Icon className="size-3.5" /></span>}
+      icon={t
+        ? <span className={v.color} data-task-status={t.status ?? "open"}><Icon className="size-3.5" /></span>
+        : <span data-task-status="unknown" aria-hidden className="block size-1.5 rounded-full bg-sol-text-dim/50" />}
       title={<span className={cn(closed && "text-sol-text-dim", t?.status === "dropped" && "line-through decoration-sol-text-dim/60")}>{t?.title || id}</span>}
     />
   );

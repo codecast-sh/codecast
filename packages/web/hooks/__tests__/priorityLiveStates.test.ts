@@ -3,7 +3,8 @@
 // the store, then asserts both the inbox's mark for the session and the state
 // the milestone it is linked to reads: Needs You, the old-session fold, a
 // pinned wait, a hosted stop on the sidebar and the phone, Team scope, a
-// dismissed session behind its header, the
+// dismissed session behind its header, a parent lifted into Questions by its
+// child's ask, a role's session riding its lead, a Done row's check, the
 // focused session held in place, a session the store does not hold, and a
 // workflow run asking through its parent's question.
 // Run: cd packages/web && bun test --isolate hooks/__tests__/priorityLiveStates.test.ts
@@ -16,7 +17,7 @@ await seedViewer();
 
 const { useInboxStore } = await import("../../store/inboxStore");
 const { inboxMarkOf } = await import("../../store/inboxMark");
-const { liveStateOf } = await import("../usePriorityModels");
+const { liveMarkOf } = await import("../usePriorityModels");
 const { buildModels, lastDays } = await import("../../lib/priorityList");
 const { NOW, links, row, sess, step } = await import("../../test-helpers/prioritiesList");
 
@@ -34,12 +35,13 @@ afterEach(() => useInboxStore.setState((s: any) => ({
 } as any)));
 
 const st = () => useInboxStore.getState() as any;
-const mark = (id = ID, inbox: "sidebar" | "phone" = "sidebar") => inboxMarkOf(st(), id, { inbox, now: NOW });
-/** The state of a milestone whose one link is `id` (the server saying `server`, the link `mine` or not), as `inbox` draws it. */
-const milestone = (id = ID, { inbox = "sidebar", server = "needs_you", mine = true }: { inbox?: "sidebar" | "phone"; server?: string; mine?: boolean } = {}) => {
+const mark = (id = ID, inbox: "sidebar" | "phone" = "sidebar") => inboxMarkOf(st(), id, { inbox, now: NOW, focusedId: st().currentSessionId ?? null });
+/** The milestone whose one link is `id` (the server saying `server`, the link `mine` or not), as `inbox` draws it. */
+const model = (id = ID, { inbox = "sidebar", server = "needs_you", mine = true }: { inbox?: "sidebar" | "phone"; server?: string; mine?: boolean } = {}) => {
   const r = row(70, "Linked", 1, [step("s1", "The milestone", "critical")], { links: [links("s1", [{ ...sess("linked1", "Linked", server, 1, { mine }), conversation_id: id }])] });
-  return buildModels([r as any], undefined, (cid) => liveStateOf(st(), cid, NOW, inbox), lastDays(10, NOW))[0].milestones[0].state.kind;
+  return buildModels([r as any], undefined, (cid) => liveMarkOf(st(), cid, NOW, inbox), lastDays(10, NOW))[0].milestones[0];
 };
+const milestone = (id = ID, opts: Parameters<typeof model>[1] = {}) => model(id, opts).state.kind;
 
 test("asking in Needs You: Needs you", () => {
   put({ [ID]: asking() });
@@ -91,6 +93,40 @@ test("dismissed: drawn behind the Dismissed header as closed, so the milestone h
   put({ [ID]: { ...asking(), inbox_dismissed_at: NOW - MIN } });
   expect(mark()).toBe("killed");
   expect(milestone()).toBe("start");
+});
+
+test("a parent the inbox lifts into Questions because its child asks: Needs you, as the Questions card draws it", () => {
+  const parent = fixtureId("liftedparent");
+  const child = fixtureId("askingchild");
+  put({
+    [parent]: { ...asking(), thread_state_status: "working", agent_status: "working", agent_status_updated_at: NOW - 5000, last_heartbeat: NOW - 1000, daemon_alive_until: NOW + 60_000 },
+    [child]: { ...asking(), parent_conversation_id: parent, is_subagent: true, is_workflow_sub: true, workflow_run_id: "run1" },
+  });
+  useInboxStore.setState({ sessionDecisions: { d1: { _id: "d1", conversation_id: child, status: "pending", blocking: true, in_queue: true, created_at: NOW - MIN, updated_at: NOW - MIN, question: "Ship it?", options: [] } } } as any);
+  expect(mark(parent)).toBe("needs_you");
+  expect(milestone(parent, { server: "working" })).toBe("needs_you");
+});
+
+test("a role's session riding its lead wears the lead's mark, never Needs you of its own", () => {
+  const lead = fixtureId("rolelead");
+  const ridden = fixtureId("rolesess");
+  const base = { message_count: 4, status: "completed", updated_at: NOW - 10 * MIN, last_turn_at: NOW - 11 * MIN, user_id: VIEWER_ID, thread_state_at: NOW - 10 * MIN };
+  put({
+    [lead]: { ...base, standing_role_id: "role1", thread_state_status: "working", agent_status: "working", agent_status_updated_at: NOW - 5000, last_heartbeat: NOW - 1000, daemon_alive_until: NOW + 60_000 },
+    [ridden]: { ...base, org_role_id: "role1", thread_state_status: "blocked" },
+  });
+  expect(mark(lead)).toBe("working");
+  expect(mark(ridden)).toBe(mark(lead));
+  expect(mark(ridden)).not.toBe("needs_you");
+  expect(milestone(ridden)).not.toBe("needs_you");
+});
+
+test("a session the sidebar draws under Done keeps its Done check on its row, while the milestone reads it as idle", () => {
+  put({ [ID]: { ...asking(), thread_state_status: "done" } });
+  expect(mark()).toBe("done");
+  const m = model(ID, { server: "done" });
+  expect(m.state.kind).toBe("idle");
+  expect([m.sessions[0].state, m.sessions[0].mark]).toEqual(["idle", "done"]);
 });
 
 test("not in the store: no mark; the server's needs_you falls back to sleeping if yours, idle if someone else's", () => {

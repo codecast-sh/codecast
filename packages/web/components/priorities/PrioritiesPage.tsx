@@ -30,6 +30,7 @@ import { PriorityBlock, type RankDrag } from "./PriorityBlock";
 import { Legend } from "./Legend";
 import { MessagesByWorkspace } from "./MessagesByWorkspace";
 import { linkedPrRefs, linkedSessionIds, usePriorityLiveStates, usePriorityLookups } from "../../hooks/usePriorityModels";
+import { useSidebarFocusId } from "../../hooks/useSidebarFocusId";
 
 const api = _api as any;
 
@@ -175,7 +176,7 @@ export function PrioritiesView({ rows, history, now, layout }: {
   const days = useMemo(() => lastDays(LIST_DAYS, now), [now]);
   const todayIndex = days.indexOf(localDayKey(now));
   const ids = useMemo(() => linkedSessionIds(shown), [shown]);
-  const live = usePriorityLiveStates(ids, now);
+  const live = usePriorityLiveStates(ids, now, "sidebar", useSidebarFocusId());
   const models = useMemo(() => buildModels(shown, history, live, days), [shown, history, live, days]);
   const peak = useMemo(() => Math.max(1, ...models.flatMap((m) => m.counts)), [models]);
   const prs = useMemo(() => linkedPrRefs(shown), [shown]);

@@ -19,6 +19,7 @@ import type { PriorityView } from "../../lib/priorityDetail";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { usePriorityDetail, useSyncPriorityDetail } from "../../hooks/usePriorityDetail";
 import { linkedPrRefs, linkedSessionIds, usePriorityLookups, usePriorityModel } from "../../hooks/usePriorityModels";
+import { useSidebarFocusId } from "../../hooks/useSidebarFocusId";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useSearchParams } from "next/navigation";
@@ -74,7 +75,7 @@ function PriorityBody({ row }: { row: PriorityView }) {
     { workspace: row.workspace, days: LIST_DAYS, tz_offset_minutes: new Date().getTimezoneOffset() },
     { remember: true },
   ).data as PriorityHistory | undefined;
-  const model = usePriorityModel(row, history, days);
+  const model = usePriorityModel(row, history, days, "sidebar", useSidebarFocusId());
   // The priority's plan shows once, above the milestones; a milestone lists only a plan of its own (Connected).
   const plan = model.plan;
   const linked = useMemo(() => ({ ids: linkedSessionIds([row]), prs: linkedPrRefs([row]) }), [row]);

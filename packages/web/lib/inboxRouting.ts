@@ -28,6 +28,33 @@ export function sessionFocusKind(pathname?: string | null, source?: string | nul
   return "panel";
 }
 
+/** The pointers the rail's highlight reads. */
+export type RailPointers = {
+  currentConversation?: { source?: string | null } | null;
+  currentSessionId?: string | null;
+  viewingDismissedId?: string | null;
+  sidePanelSessionId?: string | null;
+};
+
+/** The session the rail lights. Which pointer it reads comes from the shared
+ *  helper (sessionFocusKind), so whatever MOVES this highlight (the workbench
+ *  filter's eviction) reads the same answer. On conversation pages the id
+ *  comes from the URL, so non-owner viewers (ViewerView), who never set
+ *  currentSessionId, still get the right row lit. The rail places its rows
+ *  holding `sessionListActiveIdOf(..) ?? currentSessionId` in place. */
+export function sessionListActiveIdOf(st: RailPointers, pathname: string | null): string | null {
+  const isOnConversationPage = pathname?.includes("/conversation/") ?? false;
+  const conversationPageId = isOnConversationPage && pathname
+    ? pathname.replace('/conversation/', '').split(/[/?#]/)[0]
+    : null;
+  const focusKind = sessionFocusKind(pathname, st.currentConversation?.source);
+  return (focusKind === "current"
+    ? (st.viewingDismissedId ?? st.currentSessionId)
+    : focusKind === "url"
+    ? (conversationPageId ?? st.currentSessionId)
+    : st.sidePanelSessionId) ?? null;
+}
+
 /**
  * Whether the mounted PAGE publishes the "panel" pointer itself. Leaving the
  * inbox carries the attended conversation into the rail so the highlight

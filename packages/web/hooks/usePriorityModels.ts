@@ -3,8 +3,9 @@
 // linked session, and the store's lookups for a milestone's branches, pull
 // requests and deploys (lib/priorityList builds the models from them).
 import { useMemo } from "react";
-import type { PriorityHistory, PriorityRow, PrioritySessionState } from "@codecast/shared/contracts/priorities";
-import { buildModels, stateOfMark, type MilestoneModel, type PriorityModel } from "../lib/priorityList";
+import type { PriorityHistory, PriorityRow } from "@codecast/shared/contracts/priorities";
+import { buildModels, type MilestoneModel, type PriorityModel } from "../lib/priorityList";
+import type { SessionStatus } from "../lib/sessionStatus";
 import type { TeamDeployRow } from "../lib/deploys/targets";
 import { useInboxStore } from "../store/inboxStore";
 import { inboxMarkOf, type MarkInbox } from "../store/inboxMark";
@@ -18,31 +19,38 @@ import type { DeployInfo } from "../lib/priorityList";
  */
 export type LiveInbox = MarkInbox;
 
-/** One session's state as `inbox` draws it (usePriorityLiveStates), or undefined when that inbox does not draw it. */
-export function liveStateOf(s: Parameters<typeof inboxMarkOf>[0], id: string, now: number, inbox: LiveInbox = "sidebar"): PrioritySessionState | undefined {
-  const mark = inboxMarkOf(s, id, { inbox, now });
-  return mark ? stateOfMark(mark) : undefined;
+/**
+ * Where `inbox` holds its rows in place: the sidebar's focused id
+ * (hooks/useSidebarFocusId, read on web and handed in), else the store's
+ * currentSessionId, the phone's.
+ */
+type Focus = string | null | undefined;
+const focusOf = (s: { currentSessionId?: string | null }, focusedId: Focus) => (focusedId === undefined ? s.currentSessionId ?? null : focusedId);
+
+/** The mark `inbox` draws for one session (usePriorityLiveStates), or undefined when that inbox does not draw it. */
+export function liveMarkOf(s: Parameters<typeof inboxMarkOf>[0] & { currentSessionId?: string | null }, id: string, now: number, inbox: LiveInbox = "sidebar", focusedId?: Focus): SessionStatus | undefined {
+  return inboxMarkOf(s, id, { inbox, now, focusedId: focusOf(s, focusedId) }) ?? undefined;
 }
 
 /**
- * The mark each linked session's inbox draws for it, by conversation id, as
- * the milestone vocabulary reads it (lib/priorityList buildModels states the
- * whole rule). One subscription to a signature of just those rows' states,
- * so a heartbeat elsewhere wakes nothing.
+ * The mark each linked session's inbox draws for it, by conversation id
+ * (lib/priorityList buildModels reads it as the milestone vocabulary and
+ * states the whole rule). One subscription to a signature of just those
+ * rows' marks, so a heartbeat elsewhere wakes nothing.
  */
-export function usePriorityLiveStates(ids: readonly string[], now: number, inbox: LiveInbox = "sidebar"): (conversationId: string) => PrioritySessionState | undefined {
+export function usePriorityLiveStates(ids: readonly string[], now: number, inbox: LiveInbox = "sidebar", focusedId?: Focus): (conversationId: string) => SessionStatus | undefined {
   const key = ids.join(",");
   const sig = useInboxStore((s) => {
     const out: string[] = [];
     for (const id of key.split(",")) {
-      const state = id ? liveStateOf(s as any, id, Math.max(now, Date.now()), inbox) : undefined;
-      if (state) out.push(`${id}:${state}`);
+      const mark = id ? liveMarkOf(s as any, id, Math.max(now, Date.now()), inbox, focusedId) : undefined;
+      if (mark) out.push(`${id}:${mark}`);
     }
     return out.join(",");
   });
   return useMemo(() => {
-    const states = new Map(sig.split(",").filter(Boolean).map((p) => p.split(":") as [string, PrioritySessionState]));
-    return (id: string) => states.get(id);
+    const marks = new Map(sig.split(",").filter(Boolean).map((p) => p.split(":") as [string, SessionStatus]));
+    return (id: string) => marks.get(id);
   }, [sig]);
 }
 
@@ -93,10 +101,10 @@ export const branchesOf = (m: MilestoneModel, lookups: LinkLookups) =>
 const NO_DAYS: string[] = [];
 
 /** One priority's model (lib/priorityList buildModels), with `inbox`'s live verdict laid over its sessions. */
-export function usePriorityModel(row: PriorityRow, history?: PriorityHistory, days: string[] = NO_DAYS, inbox: LiveInbox = "sidebar"): PriorityModel {
+export function usePriorityModel(row: PriorityRow, history?: PriorityHistory, days: string[] = NO_DAYS, inbox: LiveInbox = "sidebar", focusedId?: string | null): PriorityModel {
   const now = useCoarseNow(30_000);
   const ids = useMemo(() => linkedSessionIds([row]), [row]);
-  const live = usePriorityLiveStates(ids, now, inbox);
+  const live = usePriorityLiveStates(ids, now, inbox, focusedId);
   return useMemo(() => buildModels([row], history, live, days)[0], [row, history, live, days]);
 }
 

@@ -7,6 +7,7 @@ import { Dialog, DialogContent, DialogTitle, DialogTrigger } from "../ui/dialog"
 import { SessionStatusMark } from "../inbox/SessionStatusMark";
 import { TASK_STATUS } from "../TaskStatusBadge";
 import { MILESTONE_STATE_WORD, TOUCH_AREA } from "../../lib/priorityList";
+import { SESSION_STATUS } from "../../lib/sessionStatus";
 import { cn } from "../../lib/utils";
 import { NeedsYouMark, NewSessionMark } from "./parts";
 
@@ -45,6 +46,10 @@ export function Legend() {
               <Row icon={<SessionStatusMark status="idle" size={13} />} word={MILESTONE_STATE_WORD.idle} />
               <Row icon={<SessionStatusMark status="done" size={13} />} word={MILESTONE_STATE_WORD.done} />
               <Row icon={<SessionStatusMark status="killed" size={13} />} word="Closed" />
+              {/* A session row draws its inbox's mark, these three included. */}
+              <Row icon={<SessionStatusMark status="starting" size={13} />} word={SESSION_STATUS.starting.word} />
+              <Row icon={<SessionStatusMark status="error" size={13} />} word={SESSION_STATUS.error.word} />
+              <Row icon={<SessionStatusMark status="stashed" size={13} />} word={SESSION_STATUS.stashed.word} />
               <Row icon={<Workflow className="size-3.5 text-sol-text-dim" />} word="Workflow run" />
             </ul>
           </div>

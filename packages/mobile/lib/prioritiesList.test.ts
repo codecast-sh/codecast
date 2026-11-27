@@ -3,7 +3,7 @@
 // are tested here, over the same models the screens build (web
 // lib/priorityList buildModels).
 import { describe, expect, it } from 'bun:test';
-import { buildModels, lastDays } from '@codecast/web/lib/priorityList';
+import { buildModels, lastDays, sessionRowMark } from '@codecast/web/lib/priorityList';
 import { milestoneStartHref, type PriorityWrites } from '@codecast/web/lib/priorities';
 import { parseComposeLink } from '@codecast/web/lib/composeLink';
 import {
@@ -115,6 +115,17 @@ describe('an open milestone', () => {
     expect(c.live.map((s) => s.short_id)).toEqual(['a', 'w', 'd', 'i']);
     expect(c.closed.map((s) => s.short_id).sort()).toEqual(['f', 'k']);
     expect(c.more).toBe(2);
+  });
+
+  it("a session's row draws the mark its inbox draws (Done's check, the stash tray, an error) while the milestone reads it as idle", () => {
+    const r = row({ links: [link('s1'), link('s2', [session('f', 'idle'), session('t', 'idle'), session('e', 'idle')]), link('s3'), link('s4'), link('p1'), link('p2')] });
+    const drawn: Record<string, any> = { 'conv-f': 'done', 'conv-t': 'stashed', 'conv-e': 'error' };
+    const m = buildModels([r], undefined, (id) => drawn[id], lastDays(10, NOW))[0].milestones.find((x) => x.key === 's2')!;
+    expect(m.state.kind).toBe('idle');
+    const rows = Object.fromEntries(connectedOf(m, null).live.map((x) => [x.short_id, [x.state, sessionRowMark(x)]]));
+    expect(rows).toEqual({ f: ['idle', 'done'], t: ['idle', 'stashed'], e: ['idle', 'error'] });
+    // Not drawn: the row draws its own state.
+    expect(sessionRowMark(ms(row(), 's3').sessions[0])).toBe('dormant');
   });
 
   it("names its own plan, else the priority's on the list; the priority's screen shows that once and passes none", () => {
