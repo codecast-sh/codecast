@@ -57,8 +57,12 @@ const RUNS_SCANNED = 60;
 const CULPRITS_READ = 50;
 const RED_SHAS_KEPT = 50;
 const CANDIDATES_KEPT = 100;
-/** Job conclusions that mean the job never ran. */
-const NOT_RUN = new Set(["skipped", "cancelled", "neutral", "stale"]);
+/**
+ * Job conclusions that mean the job never ran. A job cancelled inside a finished run is not one: a person can only
+ * cancel the whole run (NO_VERDICT drops that), so a cancelled job is one that hit its timeout-minutes, and failed.
+ */
+const NOT_RUN = new Set(["skipped", "neutral", "stale"]);
+const jobFailed = (conclusion: string | null) => isFailedConclusion(conclusion) || conclusion === "cancelled";
 /** Run conclusions that are no verdict. */
 const NO_VERDICT = new Set(["cancelled", "skipped", "neutral", "stale", "action_required"]);
 
@@ -329,9 +333,10 @@ async function judgeAttempt(ctx: any, row: Doc<"main_ci_runs">, ok: boolean): Pr
   // Every job of the run, skipped ones included, when the page holds them all: what says a culprit's job left the workflow.
   const listed = body && jobs.length >= Number(body.total_count ?? jobs.length) ? jobs.map((j) => j.name) : null;
   const ranJobs = jobs.filter((j) => j.conclusion && !NOT_RUN.has(j.conclusion));
-  const ran = ranJobs.map((j) => ({ name: j.name, ok: !isFailedConclusion(j.conclusion) }));
-  const failedJobs = jobs.filter((j) => isFailedConclusion(j.conclusion));
-  // Which failed jobs only aggregate others: the workflow file at the run's commit says, or timing when it cannot.
+  const ran = ranJobs.map((j) => ({ name: j.name, ok: !jobFailed(j.conclusion) }));
+  const failedJobs = jobs.filter((j) => jobFailed(j.conclusion));
+  // Which failed jobs only aggregate others (`verify` behind a timed-out job among them): the workflow file at the
+  // run's commit says, or timing when it cannot.
   const aggregates = failedJobs.length > 1 ? aggregateJobs(failedJobs, ranJobs, await workflowFile(token, row)) : new Set<string>();
   const own = failedJobs.filter((j) => !aggregates.has(j.name));
   // A red run with no failed job read (its jobs unreadable, or a workflow that failed before any job) fails as the workflow.

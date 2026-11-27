@@ -38,6 +38,20 @@ describe("the level sweep's state on a checkout", () => {
     expect(nextLevel(b.state, refused("/r", ["c.ts"]), 10_000).level).toMatchObject({ since: 10_000, told: [] });
   });
 
+  test("a hold whose files change while any of them still conflicts keeps its clock and who it told, so a busy checkout still reaches its ask", () => {
+    const told: CheckoutTold[] = [{ at: 5_000, files: 1, to: "session", conversation_id: "conv_a" }];
+    const a = nextLevel({}, refused("/r", ["a.ts"]), 1_000);
+    // Main touched another dirty file, then a writer fixed the first: the same hold all along.
+    const grown = nextLevel({ ...a.state, stuck: { ...a.state.stuck!, told } }, refused("/r", ["a.ts", "b.ts"]), 2_000);
+    expect(grown.level).toMatchObject({ state: "stuck", files: ["a.ts", "b.ts"], since: 1_000, told });
+    const moved = nextLevel(grown.state, refused("/r", ["b.ts", "c.ts"]), 3_000);
+    expect(moved.level).toMatchObject({ files: ["b.ts", "c.ts"], since: 1_000, told });
+    // A refusal naming no file (HEAD moved under the level) says nothing new: the hold and its files stand.
+    const raced = nextLevel(moved.state, refused("/r", []), 4_000);
+    expect(raced.level).toMatchObject({ state: "stuck", files: ["b.ts", "c.ts"], since: 1_000, told });
+    expect(nextLevel(raced.state, refused("/r", ["c.ts"]), 5_000).level).toMatchObject({ since: 1_000, told });
+  });
+
   test("a level ends the episode and says when; a skip says why; at upstream reads level", () => {
     const stuck = nextLevel({}, refused("/r", ["a.ts"]), 1_000).state;
     const done = nextLevel(stuck, levelled("/r"), 2_000);
@@ -106,7 +120,8 @@ describe("a stuck level tells each writer about its own files, once", () => {
     const sends: Array<{ to: string; body: string; clientId: string }> = [];
     const deps = { post: async (p: string, x: any) => { posts.push([p, structuredClone(x)]); return {}; }, sendBrief: async (to: string, body: string, clientId: string) => { sends.push({ to, body, clientId }); return "sent" as const; } };
     const out = await tellWriters(deps, report, level(), { owners }, held, { host: "laptop", now: 7, dir });
-    expect(out).toEqual({ told: [{ at: 7, files: 100, to: "session", conversation_id: "conv_a" }, { at: 7, files: 20, to: "session", conversation_id: "conv_b" }, { at: 7, files: 3, to: "finding" }], unreachable: [], failed: [] });
+    expect(out).toMatchObject({ told: [{ at: 7, files: 100, to: "session", conversation_id: "conv_a" }, { at: 7, files: 20, to: "session", conversation_id: "conv_b" }, { at: 7, files: 3, to: "finding" }], unreachable: [], failed: [] });
+    expect(Object.fromEntries(Object.entries(out.toldFiles).map(([who, f]) => [who, f.length]))).toEqual({ conv_a: 100, conv_b: 20, "": 3 });
     expect(sends.map((s) => s.to)).toEqual(["conv_a", "conv_b"]);
     // Never a person's message: the sessions are reached through the machine wake alone.
     expect(posts.map(([p]) => p)).toEqual(["/cli/signal/add"]);
@@ -125,6 +140,27 @@ describe("a stuck level tells each writer about its own files, once", () => {
     expect(fs.readFileSync(list, "utf-8").trim().split("\n")).toEqual(files.slice(0, 100));
     expect(sends[1].body).toContain("20 of your files");
     expect(posts[0][1]).toMatchObject({ source: "level", project_path: "/work/app", title: "app on laptop: 3 files no session wrote conflict with origin/main" });
+  });
+
+  test("a writer told of some of its files hears again only about a file it was not told of, under a new ask id; so does the finding", async () => {
+    const dir = tmp("level-asks-");
+    const sends: Array<{ to: string; clientId: string }> = [];
+    const findings: string[] = [];
+    const deps = { post: async (_p: string, x: any) => { findings.push(x.fingerprint); return {}; }, sendBrief: async (to: string, _body: string, clientId: string) => { sends.push({ to, clientId }); return "sent" as const; } };
+    const told: CheckoutTold[] = [{ at: 1, files: 99, to: "session", conversation_id: "conv_a" }, { at: 1, files: 20, to: "session", conversation_id: "conv_b" }, { at: 1, files: 2, to: "finding" }];
+    // A was told of all but its last file, B of all of its, the finding of two of the three.
+    const toldAbout = { conv_a: files.slice(0, 99), conv_b: files.slice(100, 120), "": files.slice(120, 122) };
+    const out = await tellWriters(deps, report, level(told), { owners }, held, { dir, toldAbout });
+    expect(sends.map((x) => x.to)).toEqual(["conv_a"]);
+    expect(findings).toHaveLength(1);
+    expect(out.toldFiles).toEqual({ conv_a: files.slice(0, 100), "": files.slice(120) });
+    // Told of everything it holds now: nothing again.
+    const again = await tellWriters(deps, report, level(told), { owners }, held, { dir, toldAbout: { ...toldAbout, ...out.toldFiles } });
+    expect(again.told).toEqual([]);
+    // Only the files past their grace are asked about, and those name the ask: a later ask about more is a new id.
+    await tellWriters(deps, report, level(), { owners }, held, { dir, due: files.slice(0, 50) });
+    expect(sends[1].to).toBe("conv_a");
+    expect(sends[1].clientId).not.toBe(sends[0].clientId);
   });
 
   test("once per episode per writer: a writer already told, by this daemon or an earlier one, or out of reach, hears nothing again", async () => {
@@ -208,6 +244,29 @@ describe("reporting a machine's checkouts", () => {
     fs.rmSync(root, { recursive: true, force: true });
     await reportCheckouts([], { ...deps, now: t0 + 3 * LEVEL_STUCK_FILE_MS });
     expect(posts[posts.length - 1]).toEqual(["/cli/checkouts/report", { device_id: "dev-1", reports: [], gone: [root] }]);
+  });
+
+  test("a file that joins a long hold waits its own 30 minutes, then is asked about; the hold's first ask is not repeated", async () => {
+    const root = repo();
+    const head = sh(root, "rev-parse", "HEAD");
+    for (const f of ["a.ts", "e.ts"]) fs.writeFileSync(path.join(root, f), "edited\n");
+    const findings: string[] = [];
+    const post = async (p: string, b: any) => { if (p === "/cli/signal/add") findings.push(b.detail_md); return {}; };
+    const deps = { post, sendBrief: neverSend, deviceId: "dev-8", repositoryOf: () => "acme/app", stateFile: path.join(configDir, "state-8.json"), host: "laptop", askDir: configDir };
+    const t0 = 1_000_000;
+    await reportCheckouts([refused(root, ["a.ts"], undefined, head)], { ...deps, now: t0 });
+    await reportCheckouts([refused(root, ["a.ts"], undefined, head)], { ...deps, now: t0 + LEVEL_STUCK_FILE_MS + MIN });
+    expect(findings).toHaveLength(1);
+    // e.ts joins the hold 40 minutes in: inside its own grace nobody hears of it.
+    const joined = t0 + 40 * MIN;
+    await reportCheckouts([refused(root, ["a.ts", "e.ts"], undefined, head)], { ...deps, now: joined });
+    await reportCheckouts([refused(root, ["a.ts", "e.ts"], undefined, head)], { ...deps, now: joined + LEVEL_STUCK_FILE_MS - MIN });
+    expect(findings).toHaveLength(1);
+    await reportCheckouts([refused(root, ["a.ts", "e.ts"], undefined, head)], { ...deps, now: joined + LEVEL_STUCK_FILE_MS + MIN });
+    expect(findings).toHaveLength(2);
+    expect(findings[1]).toContain("e.ts");
+    await reportCheckouts([refused(root, ["a.ts", "e.ts"], undefined, head)], { ...deps, now: joined + 2 * LEVEL_STUCK_FILE_MS });
+    expect(findings).toHaveLength(2);
   });
 
   test("a stuck level whose HEAD moved off the level's base (a raced level, a local commit) asks nobody", async () => {

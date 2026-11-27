@@ -13,7 +13,7 @@
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
-    "postinstall": "bash patches/convex-auth-iss-fix.sh"
+    "postinstall": "bash patches/convex-auth-iss-fix.sh && bash scripts/install-githooks.sh"
   },
   "devDependencies": {
     "turbo": "^2.3.0",

@@ -276,3 +276,74 @@ describe("public release publication", () => {
     expect(result.results.at(-1)?.code).not.toBe(0);
   }, 30_000);
 });
+
+describe("the CI gate on the source commit", () => {
+  /**
+   * The gate step against a fake `gh` that answers from fixtures and a real clone whose main holds the source commit S
+   * and a later commit D on top of it. `runs` are main's push runs, newest first, by commit: "S" or "D".
+   */
+  async function gate(runs: Array<{ id: number; on: "S" | "D"; status: string; conclusion: string | null; verify?: [string, string | null] }>) {
+    const root = mkdtempSync(join(tmpdir(), "finalize-ci-gate-"));
+    const git = (cwd: string, ...args: string[]) => Bun.spawnSync(["git", "-C", cwd, ...args], { env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } }).stdout.toString().trim();
+    try {
+      const origin = join(root, "origin.git");
+      const work = join(root, "work");
+      mkdirSync(origin);
+      git(origin, "init", "-q", "--bare", "-b", "main");
+      git(root, "clone", "-q", origin, work);
+      const commit = (msg: string) => { git(work, "commit", "-q", "--allow-empty", "-m", msg); return git(work, "rev-parse", "HEAD"); };
+      commit("base");
+      const S = commit("source");
+      const D = commit("later");
+      git(work, "push", "-q", "origin", "HEAD:main");
+      const sha = { S, D };
+      const fixtures = join(root, "fixtures");
+      mkdirSync(fixtures);
+      const run = (r: (typeof runs)[number], i: number) => ({ id: r.id, head_sha: sha[r.on], status: r.status, conclusion: r.conclusion, created_at: new Date(Date.UTC(2026, 10, 26, 12, 0, 60 - i)).toISOString() });
+      writeFileSync(join(fixtures, "main.json"), JSON.stringify({ workflow_runs: runs.map(run) }));
+      writeFileSync(join(fixtures, "own.json"), JSON.stringify({ workflow_runs: runs.map(run).filter((r) => r.head_sha === S) }));
+      for (const r of runs) writeFileSync(join(fixtures, `jobs-${r.id}.json`), JSON.stringify({ jobs: r.verify ? [{ name: "test-cli", status: "completed", conclusion: "success" }, { name: "verify", status: r.verify[0], conclusion: r.verify[1] }] : [] }));
+      const bin = join(root, "bin");
+      mkdirSync(bin);
+      writeFileSync(join(bin, "gh"), `#!/bin/bash
+path="$2"; filter="$4"
+case "$path" in
+  *"/actions/workflows/ci.yml/runs?head_sha="*) f=own.json ;;
+  *"/actions/workflows/ci.yml/runs?branch=main"*) f=main.json ;;
+  *"/actions/runs/"*"/jobs"*) id=\${path#*/actions/runs/}; f=jobs-\${id%%/*}.json ;;
+  *) exit 2 ;;
+esac
+jq -r "$filter" "$FIXTURES/$f"
+`, { mode: 0o755 });
+      // Three passes, no waiting between them.
+      const script = (step("Wait for CI on the source commit").run as string).replace("seq 1 360", "seq 1 3").replaceAll("sleep 15", "sleep 0");
+      const child = Bun.spawn(["bash", "-c", script], { cwd: work, env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, FIXTURES: fixtures, SOURCE_COMMIT: S, GITHUB_REPOSITORY: "acme/app", GH_TOKEN: "x" }, stdout: "pipe", stderr: "pipe" });
+      const [code, stdout] = await Promise.all([child.exited, new Response(child.stdout).text()]);
+      return { code, out: stdout.replaceAll(S, "S").replaceAll(D, "D") };
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  test("the source commit's own verify decides while its run stands", async () => {
+    expect(await gate([{ id: 2, on: "D", status: "completed", conclusion: "failure", verify: ["completed", "failure"] }, { id: 1, on: "S", status: "completed", conclusion: "success", verify: ["completed", "success"] }]))
+      .toMatchObject({ code: 0, out: expect.stringContaining("CI verify is green on S (run 1)") });
+    expect(await gate([{ id: 1, on: "S", status: "completed", conclusion: "failure", verify: ["completed", "failure"] }]))
+      .toMatchObject({ code: 1, out: expect.stringContaining("CI verify ended failure on S (run 1)") });
+    // Still running: no later run decides for it, and the gate keeps waiting.
+    expect(await gate([{ id: 2, on: "D", status: "completed", conclusion: "success", verify: ["completed", "success"] }, { id: 1, on: "S", status: "in_progress", conclusion: null, verify: ["in_progress", null] }]))
+      .toMatchObject({ code: 1, out: expect.stringContaining("reached no verdict") });
+  }, 30_000);
+
+  test("a source run replaced by a newer push, or finished with no jobs, takes a later main run's verdict", async () => {
+    for (const own of [{ status: "completed", conclusion: "cancelled" }, { status: "completed", conclusion: "failure" }]) {
+      const green = await gate([{ id: 2, on: "D", status: "completed", conclusion: "success", verify: ["completed", "success"] }, { id: 1, on: "S", ...own }]);
+      expect(green).toMatchObject({ code: 0, out: expect.stringContaining("CI verify is green on D, which holds S (run 2") });
+      const red = await gate([{ id: 2, on: "D", status: "completed", conclusion: "failure", verify: ["completed", "failure"] }, { id: 1, on: "S", ...own }]);
+      expect(red).toMatchObject({ code: 1, out: expect.stringContaining("CI verify ended failure on D, the newest main run holding S (run 2)") });
+    }
+    // The later run is still going: the gate waits for it.
+    expect(await gate([{ id: 2, on: "D", status: "in_progress", conclusion: null, verify: ["in_progress", null] }, { id: 1, on: "S", status: "completed", conclusion: "cancelled" }]))
+      .toMatchObject({ code: 1, out: expect.stringContaining("reached no verdict") });
+  }, 60_000);
+});

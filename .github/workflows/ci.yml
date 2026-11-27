@@ -6,11 +6,16 @@ on:
   pull_request:
     branches: [main]
 
-# A new push to a pull request supersedes the run before it. A push to main is
-# keyed by its commit, so every push keeps its own run: a shared group would
-# cancel the pending run of the push before.
+# A new push to a pull request cancels the run before it. Pushes to main share
+# one group that never cancels a running run: one runs to its verdict, and
+# only the newest push waits behind it, so a burst of pushes does not queue a
+# full run per commit ahead of main's head. A commit whose waiting run was
+# replaced is judged by the newer run, which holds it. A rerun of a main run
+# (run_attempt above 1: red main's rerun of a red run's failed jobs, or a
+# person's) keeps a group of its own: in the shared one it would wait behind
+# the next push, be replaced by a later one, or replace main head's own run.
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.sha }}
+  group: ci-${{ github.event.pull_request.number || (github.run_attempt == 1 && 'main') || format('main-{0}-{1}', github.sha, github.run_attempt) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -169,7 +174,12 @@ jobs:
     needs: [code_paths]
     if: needs.code_paths.outputs.run_build == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Measured 2026-11-27 over 300 CI runs (Nov 25 20:54 to Nov 27 00:07 UTC):
+    # green builds p50 6.5 min, p90 7.9, max 8.3. The builds that reached 20
+    # minutes on Nov 26 hung in the web build after the others finished (its
+    # prerender held a convex client open, fixed in c6c7a326b), so a hang now
+    # fails at 15, not 20.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
