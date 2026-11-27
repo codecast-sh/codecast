@@ -43,6 +43,7 @@ export type ShortcutAction =
   | 'pane.prev'
   | 'ui.zenToggle'
   | 'ui.toggleShortcutsHelp'
+  | 'ui.iconLegend'
   | 'ui.openTours'
   | 'ui.guideOrg'
   | 'ui.guideFlows'

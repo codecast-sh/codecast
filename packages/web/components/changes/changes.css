@@ -75,12 +75,13 @@ a.chg:hover, .chg:focus-visible, [data-state="open"] > .chg {
 
 /* The track: five segments of one bar. Passed solid, the now in its tone, the rest faint. */
 .chg-track { display: inline-flex; align-items: center; gap: 1.5px; flex: none; }
-.chg-pip { width: 0.6em; height: 0.32em; border-radius: 1px; background: var(--chg-idle); }
+/* Fallbacks for a track drawn outside a chip (the icon legend's copy), where no chip sets the colors. */
+.chg-pip { width: 0.6em; height: 0.32em; border-radius: 1px; background: var(--chg-idle, color-mix(in srgb, var(--sol-text-dim) 26%, transparent)); }
 .chg-pip:first-child { border-radius: 0.18em 1px 1px 0.18em; }
 .chg-pip:last-child { border-radius: 1px 0.18em 0.18em 1px; }
-.chg-pip[data-state="done"] { background: var(--chg-done); }
+.chg-pip[data-state="done"] { background: var(--chg-done, color-mix(in srgb, var(--sol-text-muted) 70%, transparent)); }
 .chg-pip[data-state="skipped"] { background: repeating-linear-gradient(90deg, var(--chg-idle) 0 1.5px, transparent 1.5px 3px); }
-.chg-pip[data-now] { background: var(--chg); }
+.chg-pip[data-now] { background: var(--chg, var(--sol-text-muted)); }
 :is(.chg, .chg-seg)[data-tone="muted"] .chg-pip[data-now] { background: var(--sol-text-muted); }
 :is(.chg, .chg-seg)[data-tone="green"] .chg-pip { background: var(--sol-green); }
 :is(.chg, .chg-seg)[data-tone="green"] .chg-pip[data-state="skipped"] { background: repeating-linear-gradient(90deg, color-mix(in srgb, var(--sol-green) 45%, transparent) 0 1.5px, transparent 1.5px 3px); }

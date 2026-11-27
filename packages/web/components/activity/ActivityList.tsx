@@ -23,7 +23,7 @@ export function ActivityNeedsGroup({ items, all = false, teamId }: { items: Acti
   return (
     <section data-activity-needs aria-label="Needs someone" className="mb-6">
       <div className="mb-1 flex h-7 items-center gap-2">
-        <SessionStatusMark status="needs_you" />
+        <SessionStatusMark status="needs_you" labeled />
         <h2 className="text-ui font-semibold text-sol-text">Needs someone</h2>
         <span className="text-meta tabular-nums text-sol-text-dim">{items.length}</span>
       </div>

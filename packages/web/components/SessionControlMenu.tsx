@@ -343,7 +343,7 @@ export function SessionControlPanel({
     <div data-session-control-panel>
       <div className="flex items-center gap-2.5 border-b border-sol-border/30 bg-sol-bg-alt/40 px-3 py-2.5">
         <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-sol-border/40 bg-sol-bg ring-1 ${agentAccent(agentType).ring}`}>
-          <AgentTypeIcon agentType={agentType || "claude_code"} className="h-3.5 w-3.5" />
+          <AgentTypeIcon agentType={agentType || "claude_code"} labeled className="h-3.5 w-3.5" />
         </span>
         <div className="flex min-w-0 flex-col">
           <div className="flex min-w-0 items-baseline gap-1.5 text-xs">
@@ -529,11 +529,13 @@ export function HeaderModelControl({
               data-session-control-trigger="composer"
               onMouseDown={(e) => e.preventDefault()}
               className="group -my-0.5 flex items-center gap-1.5 rounded px-1.5 py-0.5 font-mono text-meta text-sol-text-dim transition-colors hover:bg-sol-bg-alt hover:text-sol-text data-[state=open]:bg-sol-bg-alt data-[state=open]:text-sol-text"
-              title={title}
             >
               <AgentTypeIcon agentType={agentType || "claude_code"} className="h-3 w-3" />
-              {triggerBody}
-              <ChevronUp className="h-2.5 w-2.5 opacity-50 transition-opacity group-hover:opacity-80" />
+              {/* The title rides the model's words, not the agent's mark beside them. */}
+              <span className="contents" title={title}>
+                {triggerBody}
+                <ChevronUp className="h-2.5 w-2.5 opacity-50 transition-opacity group-hover:opacity-80" />
+              </span>
             </button>
           ) : (
             <button

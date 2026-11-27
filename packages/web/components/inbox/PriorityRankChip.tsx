@@ -9,6 +9,7 @@ import { PriorityCard, PrioritySheet } from "../priorities/PriorityRef";
 import { useCoarsePointer } from "../../hooks/useCoarsePointer";
 import { useEntityResolution } from "../../lib/entityDisplay";
 import { priorityHref } from "../../lib/priorities";
+import { Mark } from "../Mark";
 import { useInboxStore } from "../../store/inboxStore";
 import { rankTitle, workspaceMarkOf, type PriorityRankLabel } from "../../store/priorityOrder";
 
@@ -39,12 +40,16 @@ export function PriorityRankChip({ rank }: { rank: NonNullable<PriorityRankLabel
       }}
       className={`${badgeVariants({ variant: "cyan" })} min-w-0 max-w-[14rem] gap-1 overflow-hidden no-underline hover:underline`}
     >
-      <Target className="size-3 shrink-0" aria-hidden />
+      <Mark id="inbox.priority_rank" quiet><Target className="size-3 shrink-0" aria-hidden /></Mark>
       <span className="shrink-0 tabular-nums">#{rank.rank}</span>
       {rank.title && <span className="min-w-0 truncate">{rank.title}</span>}
-      {mark && (mark.personal
-        ? <User className="size-3 shrink-0 text-sol-text-muted" aria-hidden />
-        : <TeamIcon icon={mark.icon} color={mark.color} className="size-3 shrink-0" />)}
+      {mark && (
+        <Mark id="inbox.priority_workspace" tinted quiet>
+          {mark.personal
+            ? <User className="size-3 shrink-0 text-sol-text-muted" aria-hidden />
+            : <TeamIcon icon={mark.icon} color={mark.color} className="size-3 shrink-0" />}
+        </Mark>
+      )}
     </Link>
   );
   // The card it sits on selects its session on a click; nothing in the chip,

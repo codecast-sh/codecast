@@ -32,7 +32,7 @@ export function ModernAskCard({ kicker, aside, question, detail, children, edge 
       {...rest}
     >
       <div className="flex min-w-0 items-center gap-2 text-meta leading-5">
-        <SessionStatusMark status={edge} />
+        <SessionStatusMark status={edge} labeled />
         <span className={`shrink-0 font-medium ${meta.text}`}>{meta.word}</span>
         {kicker && <span className="flex min-w-0 items-center gap-2 truncate text-sol-text-muted">{kicker}</span>}
         {aside && <span className="ml-auto shrink-0 tabular-nums text-sol-text-dim">{aside}</span>}

@@ -1,3 +1,4 @@
+import { Mark } from "../Mark";
 import { SESSION_STATUS, type SessionStatus } from "../../lib/sessionStatus";
 import { STATUS_MARK_SHAPES } from "../../lib/sessionStatusShapes";
 
@@ -6,13 +7,17 @@ import { STATUS_MARK_SHAPES } from "../../lib/sessionStatusShapes";
 // tile, a /sessions row and a section header can never draw one differently.
 // The shapes live in lib/sessionStatusShapes, which the phone draws too.
 
-/** A state's mark, in its colour. */
-export function SessionStatusMark({ status, size = 10, className = "" }: { status: SessionStatus; size?: number; className?: string }) {
+/** A state's mark, in its colour, named on hover. `labeled` when the state's
+ *  word sits beside it, so the icon legend leaves it out. `markId` names
+ *  another meaning drawn in a session's mark (a plan's state). */
+export function SessionStatusMark({ status, size = 10, className = "", labeled, markId }: { status: SessionStatus; size?: number; className?: string; labeled?: boolean; markId?: string }) {
   const meta = SESSION_STATUS[status];
   return (
-    <svg data-status-mark={status} viewBox="0 0 10 10" width={size} height={size} aria-hidden className={`shrink-0 ${meta.text} ${className}`}>
-      {STATUS_MARK_SHAPES[meta.mark]}
-    </svg>
+    <Mark id={markId ?? `session.${status}`} labeled={labeled}>
+      <svg data-status-mark={status} viewBox="0 0 10 10" width={size} height={size} aria-hidden className={`shrink-0 ${meta.text} ${className}`}>
+        {STATUS_MARK_SHAPES[meta.mark]}
+      </svg>
+    </Mark>
   );
 }
 
@@ -31,7 +36,7 @@ export function SessionStatusWord({ status, title, className = "", word }: { sta
 export function SessionStatusLabel({ status, title, className = "" }: { status: SessionStatus; title?: string; className?: string }) {
   return (
     <span className={`inline-flex items-center gap-1.5 whitespace-nowrap ${className}`}>
-      <SessionStatusMark status={status} />
+      <SessionStatusMark status={status} labeled />
       <SessionStatusWord status={status} title={title} className="font-medium" />
     </span>
   );

@@ -178,14 +178,14 @@ function TriageInbox() {
         </Section>
       )}
 
-      <Section refCb={(el) => { sectionRefs.current.you = el; }} title={laneWord("you")} count={live.sections.you.length} lead={<SessionStatusMark status={LANE_STATUS.you} />} empty="Nothing needs you">
+      <Section refCb={(el) => { sectionRefs.current.you = el; }} title={laneWord("you")} count={live.sections.you.length} lead={<SessionStatusMark status={LANE_STATUS.you} markId="triage.you" labeled />} empty="Nothing needs you">
         {TRIAGE_ASKS.map((ask) => {
           const rows = live.sections.you.filter((r) => r.triage.ask === ask);
           if (!rows.length) return null;
           return (
             <div key={ask} className="flex flex-col">
               <div className={`flex items-center gap-2 px-2 pb-0.5 pt-2 text-meta font-medium ${ASK_TEXT[ask]}`}>
-                <SessionStatusMark status={ASK_STATUS[ask]} size={9} />
+                <SessionStatusMark status={ASK_STATUS[ask]} markId={`triage.${ask}`} size={9} labeled />
                 {askWord(ask)}
                 <span className="tabular-nums text-sol-text-dim">{rows.length}</span>
               </div>
@@ -195,15 +195,15 @@ function TriageInbox() {
         })}
       </Section>
 
-      <Section refCb={(el) => { sectionRefs.current.agent = el; }} title={laneWord("agent")} count={live.sections.agent.length} lead={<SessionStatusMark status={LANE_STATUS.agent} />} empty="No agent is running">
+      <Section refCb={(el) => { sectionRefs.current.agent = el; }} title={laneWord("agent")} count={live.sections.agent.length} lead={<SessionStatusMark status={LANE_STATUS.agent} markId="triage.agent" labeled />} empty="No agent is running">
         {live.sections.agent.map(renderRow)}
       </Section>
 
-      <Section refCb={(el) => { sectionRefs.current.parked = el; }} title={laneWord("parked")} count={live.sections.parked.length} lead={<SessionStatusMark status={LANE_STATUS.parked} />} empty="Nothing is parked">
+      <Section refCb={(el) => { sectionRefs.current.parked = el; }} title={laneWord("parked")} count={live.sections.parked.length} lead={<SessionStatusMark status={LANE_STATUS.parked} markId="triage.parked" labeled />} empty="Nothing is parked">
         {live.sections.parked.map(renderRow)}
       </Section>
 
-      <Section refCb={(el) => { sectionRefs.current.settled = el; }} title={laneWord("settled")} count={settledRows.length} lead={<SessionStatusMark status={LANE_STATUS.settled} />} empty="Nothing settled">
+      <Section refCb={(el) => { sectionRefs.current.settled = el; }} title={laneWord("settled")} count={settledRows.length} lead={<SessionStatusMark status={LANE_STATUS.settled} markId="triage.settled" labeled />} empty="Nothing settled">
         {(settledAll ? settledRows : settledRows.slice(0, SETTLED_PREVIEW)).map(renderRow)}
         {settledRows.length > SETTLED_PREVIEW && (
           <button type="button" onClick={() => setSettledAll((v) => !v)} className="self-start px-2 py-1 text-meta text-sol-text-muted hover:text-sol-text">
@@ -247,7 +247,7 @@ function LaneTile({ lane, count, onClick, children }: { lane: "you" | "agent" | 
       className="flex min-w-[7.5rem] flex-col items-start gap-0.5 rounded-lg border border-sol-border px-3 py-2 text-left hover:bg-sol-bg-alt"
     >
       <span className={`flex items-center gap-1.5 text-meta font-medium ${LANE_TEXT[lane]}`}>
-        <SessionStatusMark status={LANE_STATUS[lane]} size={9} />
+        <SessionStatusMark status={LANE_STATUS[lane]} markId={`triage.${lane}`} size={9} labeled />
         {laneWord(lane)}
       </span>
       <span className="text-xl font-semibold tabular-nums text-sol-text">{count}</span>

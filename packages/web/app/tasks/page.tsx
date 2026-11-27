@@ -30,6 +30,8 @@ const NO_MEMBERS: RosterIdentity[] = [];
 import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
 import { TASK_STATUS, TASK_STATUS_ORDER, type TaskStatus } from "../../components/TaskStatusBadge";
+import { Mark } from "../../components/Mark";
+import { taskStatusMarkId } from "../../lib/marks/work";
 import { buildTaskGroups, canSubGroup, parseTaskGroup, taskGroupDropUpdates, TASK_AXES, TASK_AXIS_KEYS } from "../../lib/taskGrouping";
 import { normalizeTaskSort, taskDefaultDir } from "./taskSort";
 import { boardOrderedStatuses, statusByKey, statusVisual, statusWriteFields, taskStatusKey, taskStatusOf, useTeamTaskStatusList } from "../../lib/taskStatuses";
@@ -102,11 +104,13 @@ const ACTIVE: TaskStatus[] = STATUS_ORDER.filter((st) => st !== "done" && st !==
  *  reader sees exactly which two rows the drop involved. */
 function TaskMiniCard({ task }: { task: TaskItem }) {
   const teamStatuses = useTeamTaskStatusList((task as any).team_id);
-  const status = statusVisual(taskStatusOf(task as any, teamStatuses), teamStatuses);
+  const resolved = taskStatusOf(task as any, teamStatuses);
+  const status = statusVisual(resolved, teamStatuses);
+  const statusMark = taskStatusMarkId(resolved.category);
   const StatusIcon = status.icon;
   return (
     <div className="flex items-center gap-2 rounded-md border border-sol-border/40 bg-sol-bg-alt/40 px-2.5 py-1.5 min-w-0">
-      <StatusIcon className={`w-3.5 h-3.5 flex-shrink-0 ${status.color}`} />
+      <Mark id={statusMark}><StatusIcon className={`w-3.5 h-3.5 flex-shrink-0 ${status.color}`} /></Mark>
       <ShortId id={task.short_id} className="text-xs text-sol-text-dim" />
       {task.external && <IssueLink external={task.external} />}
       <span className="text-xs text-sol-text truncate">{task.title}</span>
@@ -343,7 +347,7 @@ function KanbanView({
                 onDragEnd={onColDragEnd}
                 className="flex items-center gap-2 px-1 py-2 mb-2 cursor-grab select-none"
               >
-                <Icon className={`w-3.5 h-3.5 flex-shrink-0 ${cfg.color}`} />
+                <Mark id={taskStatusMarkId(col.category)} labeled><Icon className={`w-3.5 h-3.5 flex-shrink-0 ${cfg.color}`} /></Mark>
                 <span className="text-sm font-medium text-sol-text">{cfg.label}</span>
                 <span className="text-meta text-sol-text-dim tabular-nums">{tasks.length}</span>
                 <div className="ml-auto flex items-center">
@@ -408,7 +412,7 @@ function KanbanView({
                 onClick={() => onToggleHidden(col.id)}
                 className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-sol-bg-alt text-sol-text-muted text-xs transition-colors text-left"
               >
-                <Icon className={`w-3 h-3 flex-shrink-0 ${cfg.color}`} />
+                <Mark id={taskStatusMarkId(col.category)} labeled><Icon className={`w-3 h-3 flex-shrink-0 ${cfg.color}`} /></Mark>
                 <span className="flex-1 truncate">{cfg.label}</span>
                 <span className="text-meta text-sol-text-dim tabular-nums">{grouped[col.id]?.length || 0}</span>
               </button>

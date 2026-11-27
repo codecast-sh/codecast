@@ -2,6 +2,7 @@ import { useMemo, type SyntheticEvent } from "react";
 import Link from "next/link";
 import { FolderGit2, GitBranch, ExternalLink, FolderDown } from "lucide-react";
 import { copyText } from "../../lib/copyText";
+import { Mark } from "../Mark";
 import { useWorkspaceCollection } from "../../hooks/useWorkspaceCollection";
 import { useCollectionRows } from "../../hooks/useCollectionRows";
 import { useSyncTaskExternalEvents, useSyncPlanExternalEvents, useSyncProjectExternalEvents } from "../../hooks/useSyncExternalEvents";
@@ -67,12 +68,12 @@ export function BranchCodeLink({ session, className = "", detail = true }: { ses
   return (
     <span
       className={`cq-sq2-tight inline-flex items-stretch min-w-0 max-w-[320px] rounded border border-sol-cyan/25 bg-sol-cyan/5 font-mono text-meta text-sol-cyan divide-x divide-sol-cyan/20 ${className}`}
-      title={`${repository}${branch ? ` at ${branch}` : head ? ` detached at ${head.slice(0, 7)}` : ""}${sha ? ` on ${sha.slice(0, 7)}` : ""}${dirty ? ", uncommitted changes" : ""}`}
     >
       <Link href={href} onClick={stop} onKeyDown={stop}
         aria-label={`Browse code for ${repository}${branch ? ` at ${branch}` : head ? ` at ${head.slice(0, 7)}` : ""}`}
         className={`${promptPart} min-w-0`}>
-        <GitBranch className="w-3 h-3 shrink-0" /><span className="truncate">{position}</span>
+        <Mark id="git.branch"><GitBranch className="w-3 h-3 shrink-0" /></Mark>
+        <span className="truncate" title={`${repository}${branch ? ` at ${branch}` : head ? ` detached at ${head.slice(0, 7)}` : ""}${sha ? ` on ${sha.slice(0, 7)}` : ""}${dirty ? ", uncommitted changes" : ""}`}>{position}</span>
         {dirty && <span className="text-sol-orange" aria-label="uncommitted changes">*</span>}
       </Link>
       {sha && (

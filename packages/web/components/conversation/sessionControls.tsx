@@ -1076,11 +1076,13 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
       <>
         <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
           <DropdownMenuTrigger asChild>
-            <button type="button" className={FOOT_PICK} title="Agent and model for this session">
-              <AgentTypeIcon agentType={currentAgent} />
-              <span className={agentAccent(currentAgent).text}>{current?.label ?? currentAgent}</span>
-              {!hosted && launch.cfg && <LaunchModelLabel label={launch.label} noDefault={launch.noDefault} />}
-              <ChevronDown className="w-3 h-3 opacity-50" />
+            <button type="button" className={FOOT_PICK}>
+              <AgentTypeIcon agentType={currentAgent} labeled />
+              <span className="contents" title="Agent and model for this session">
+                <span className={agentAccent(currentAgent).text}>{current?.label ?? currentAgent}</span>
+                {!hosted && launch.cfg && <LaunchModelLabel label={launch.label} noDefault={launch.noDefault} />}
+                <ChevronDown className="w-3 h-3 opacity-50" />
+              </span>
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="p-0 max-w-[calc(100vw-1rem)]" onCloseAutoFocus={(e) => { e.preventDefault(); restorePickerFocus(null); }}>
@@ -1094,7 +1096,7 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
                     onSelect={(e) => { e.preventDefault(); handleAgentSwitch(a.type); if (showWorkflow) onToggleWorkflow(); }}
                     className={`gap-2 text-xs ${a.type === currentAgent ? "bg-sol-bg-alt text-sol-text" : ""}`}
                   >
-                    <AgentTypeIcon agentType={a.type} />
+                    <AgentTypeIcon agentType={a.type} labeled className="size-4 modern:size-3.5" />
                     {a.label}
                   </DropdownMenuItem>
                 ))}
@@ -1136,7 +1138,7 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
                     : "border-sol-border/30 text-sol-text-dim hover:text-sol-text hover:border-sol-border/60"
               }`}
             >
-              <AgentTypeIcon agentType={a.type} />
+              <AgentTypeIcon agentType={a.type} labeled />
               {a.label}
             </button>
           );
