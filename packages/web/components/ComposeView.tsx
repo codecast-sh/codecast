@@ -599,9 +599,8 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
   const pageLayout = !docked && !hosted && !recipient;
   const [footSlot, setFootSlot] = useState<HTMLElement | null>(null);
   const [belowSlot, setBelowSlot] = useState<HTMLElement | null>(null);
-  // A picture opened full size from the composer: the modal keeps only the
-  // composer and the strip under it (machine, context), its host drops it to
-  // the bottom of the screen, and the picture takes the room above.
+  // A picture open full size: the modal keeps only the composer and the strip under it (raised
+  // over the backdrop, so the machine stays pickable) at the screen's bottom; the picture fills the rest.
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const pictureUp = lightboxOpen && pageLayout && instance?.mode === "modal";
   useWatchEffect(() => { onPictureOpen?.(pictureUp); }, [pictureUp, onPictureOpen]);
@@ -707,7 +706,6 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
           escapeCloses
         />
       )}
-      {/* Above the picture's backdrop while one is open, so the machine stays pickable. */}
       {conversation && pageLayout && <div ref={setBelowSlot} className={`shrink-0 pb-6 ${lightboxOpen ? "relative z-[10002]" : ""}`} />}
       {confirmClose && (
         <DiscardDraftConfirm
