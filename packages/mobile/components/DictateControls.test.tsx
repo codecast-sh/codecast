@@ -275,7 +275,8 @@ test('typing into the box mid-recording stops it and keeps what was typed', asyn
   await m.act(() => fake.events!.onPartial('hello world'));
   expect(m.value()).toBe('hello!!');
   expect(m.byLabel('Dictate').length).toBe(1);
-  expect(notices).toEqual(['Dictation stopped: the text changed']);
+  // Their own typing stopped it: no notice.
+  expect(notices).toEqual([]);
 });
 
 test('a start that failed says why at once, tints the mic, and a tap says it again and can try again', async () => {

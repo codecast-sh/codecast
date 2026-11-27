@@ -24,6 +24,8 @@ import { holdTextareaTextNodes } from "../../lib/holdTextareaTextNode";
 // The app installs this at boot: a textarea's defaultValue write that repeats
 // its live value is skipped. Dictated words must still show with it on.
 holdTextareaTextNodes(w);
+// The slash/mention picker scrolls its selected row into view.
+(w.Element.prototype as any).scrollIntoView ??= () => {};
 
 // Dictation in the composers (MessageInput: the session composer and chat;
 // the task comment box), driven through window.__dictationTestHost so every
@@ -105,7 +107,7 @@ afterEach(() => {
 
 const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 0)); });
 
-async function mountComposer(opts: { bare?: boolean; foot?: boolean; initialDraft?: string } = {}) {
+async function mountComposer(opts: { bare?: boolean; foot?: boolean; initialDraft?: string; props?: Record<string, unknown> } = {}) {
   const sent: string[] = [];
   const { MessageInput } = await import("../MessageInput");
   const container = w.document.createElement("div");
@@ -121,6 +123,7 @@ async function mountComposer(opts: { bare?: boolean; foot?: boolean; initialDraf
           initialDraft={opts.initialDraft}
           composerFoot={opts.foot ? <span data-foot-start /> : undefined}
           onGateSend={(content) => { sent.push(content); }}
+          {...opts.props}
         />
       </ConvexProvider>,
     );
@@ -324,9 +327,9 @@ test("typing into the box mid-recording stops it and keeps the person's text", a
   await say((e) => e.onPartial("hello world"));
   expect(ta.value).toBe("hello there");
   const mic = c.button("Dictate")!;
-  expect(mic.getAttribute("data-dictation-reason")).toBe("Dictation stopped: the text changed");
-  // Said once as it stopped: a hover-less screen never sees the tooltip.
-  expect(toasts).toEqual(["info: Dictation stopped: the text changed"]);
+  // The person's own typing stopped it: nothing to say, on the mic or in a toast.
+  expect(mic.getAttribute("data-dictation-reason")).toBeNull();
+  expect(toasts).toEqual([]);
   await c.unmount();
 });
 
@@ -450,7 +453,8 @@ test("text typed before the first word is kept: Enter sends it, and the first wo
   await typeInto(b.textarea(), "fix the login bug");
   await say((e) => e.onPartial("today"));
   expect(b.textarea().value).toBe("fix the login bug");
-  expect(b.button("Dictate")!.getAttribute("data-dictation-reason")).toBe("Dictation stopped: the text changed");
+  expect(b.button("Finish dictation")).toBeNull();
+  expect(b.button("Dictate")!.getAttribute("data-dictation-reason")).toBeNull();
   await b.unmount();
 });
 
@@ -747,4 +751,86 @@ test("the real microphone path lets go of a microphone granted after Cancel, bef
   expect(stopped).toBe(1);
   await new Promise((r) => setTimeout(r, 20));
   expect(minted).toEqual([]);
+});
+
+test("every Enter chord but a new line waits for the last words, then does what it does with them", async () => {
+  let dismissed = 0;
+  const chords: [string, Record<string, unknown>][] = [
+    ["Cmd+Enter", { metaKey: true }],
+    ["Cmd+Shift+Enter (fork and send)", { metaKey: true, shiftKey: true }],
+    ["Alt+Shift+Enter (send and dismiss)", { altKey: true, shiftKey: true }],
+    ["Ctrl+Shift+Alt+Enter", { ctrlKey: true, shiftKey: true, altKey: true }],
+  ];
+  for (const [name, init] of chords) {
+    host = fakeHost();
+    w.__dictationTestHost = host.host;
+    const c = await mountComposer({ props: { onForkTail: async () => null, onSendAndDismiss: () => { dismissed++; } } });
+    await act(async () => { c.textarea().focus(); });
+    await c.press("Dictate");
+    await say((e) => e.onPartial("ship it"));
+    await c.key("Enter", init);
+    expect({ name, finishing: host.finishing, sent: c.sent }).toEqual({ name, finishing: true, sent: [] });
+    await say((e) => e.onUtterance({ text: "ship it now." }));
+    await act(async () => { host.endFinish!(); });
+    await flush();
+    await flush();
+    expect({ name, sent: c.sent }).toEqual({ name, sent: ["ship it now."] });
+    await c.unmount();
+  }
+  // The two send-and-dismiss chords dismissed once their send went out.
+  expect(dismissed).toBe(2);
+});
+
+test("Shift+Enter while dictating is a new line, not a send", async () => {
+  const c = await mountComposer();
+  await act(async () => { c.textarea().focus(); });
+  await c.press("Dictate");
+  await say((e) => e.onPartial("ship it"));
+  await c.key("Enter", { shiftKey: true });
+  expect(host.finishing).toBe(false);
+  expect(c.sent).toEqual([]);
+  expect(c.button("Finish dictation")).not.toBeNull();
+  await c.key("Escape");
+  await c.unmount();
+});
+
+test("dictated words open no picker, and an Enter held through the finish sends rather than picks", async () => {
+  const skills = [{ name: "ship", description: "Ship the change" }];
+  const c = await mountComposer({ props: { skills } });
+  await act(async () => { c.textarea().focus(); });
+  await c.press("Dictate");
+  // The sentence in progress rewrites itself, as speech does.
+  await say((e) => e.onPartial("run /s"));
+  await say((e) => e.onPartial("run /sh"));
+  await say((e) => e.onPartial("run /shi"));
+  await c.key("Enter");
+  await act(async () => { host.endFinish!(); });
+  await flush();
+  await flush();
+  expect(c.sent).toEqual(["run /shi"]);
+  await c.unmount();
+});
+
+test("a picker opened by typing during the finish does not take the held Enter", async () => {
+  const skills = [{ name: "ship", description: "Ship the change" }];
+  const c = await mountComposer({ props: { skills } });
+  await act(async () => { c.textarea().focus(); });
+  await c.press("Dictate");
+  await say((e) => e.onPartial("please"));
+  await c.key("Enter");
+  expect(host.finishing).toBe(true);
+  // The person types " /sh" while the last words are on their way.
+  const ta = c.textarea();
+  const setter = Object.getOwnPropertyDescriptor(w.HTMLTextAreaElement.prototype, "value")!.set!;
+  await act(async () => {
+    setter.call(ta, "please /sh");
+    ta.setSelectionRange(10, 10);
+    const propsKey = Object.keys(ta).find((k) => k.startsWith("__reactProps"))!;
+    (ta as any)[propsKey].onChange({ target: ta, currentTarget: ta, nativeEvent: new w.Event("input") });
+  });
+  await act(async () => { host.endFinish!(); });
+  await flush();
+  await flush();
+  expect(c.sent).toEqual(["please /sh"]);
+  await c.unmount();
 });

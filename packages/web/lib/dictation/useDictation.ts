@@ -61,6 +61,12 @@ export type DictationControls = {
 
 const plainEnter = (e: KeyboardEvent) => e.key === "Enter" && !e.shiftKey;
 
+/** A composer's submit keys while recording: every Enter chord (send, queue,
+ *  fork, send-and-dismiss, send together) waits for the last words and is then
+ *  replayed. Only a bare Shift+Enter, a new line, goes through as typed. */
+export const enterChord = (e: KeyboardEvent) =>
+  e.key === "Enter" && !(e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey);
+
 /** `field` is read on every call through a ref, so a caller may pass a fresh
  *  one, but a stable one (useState) keeps the box's renders free of it. The
  *  controls returned are stable while the recording's state holds still. */
@@ -91,7 +97,10 @@ export function useDictation(field: DictationFieldAdapter): DictationControls {
           // its tooltip. A cancel or a finish ends with neither. Top centre:
           // the app's toasts stack bottom-right, over the composer's Send.
           if (next.error) toast.error(next.error, { position: "top-center" });
-          else if (next.stopped) toast(dictationStopLine(next.stopped), { position: "top-center" });
+          else {
+            const line = dictationStopLine(next.stopped);
+            if (line) toast(line, { position: "top-center" });
+          }
         }
         setState(next);
       });
@@ -199,7 +208,9 @@ export function textareaField(
 export function useComposerDictation(
   boxRef: RefObject<HTMLTextAreaElement | null>,
   valueRef: MutableRefObject<string>,
-  onChange: (value: string) => void,
+  /** `dictated` is true for words the recognizer wrote, so the composer can
+   *  keep its pickers (@, #, /) shut for them. */
+  onChange: (value: string, dictated: boolean) => void,
 ): { dictation: DictationControls; focusBox: () => void } {
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
@@ -209,13 +220,21 @@ export function useComposerDictation(
       () => valueRef.current,
       (val) => {
         valueRef.current = val;
-        onChangeRef.current(val);
+        onChangeRef.current(val, true);
       },
     ),
   );
   const dictation = useDictation(field);
   const focusBox = useCallback(() => boxRef.current?.focus(), [boxRef]);
   return { dictation, focusBox };
+}
+
+const replayed = new WeakSet<object>();
+
+/** True for a key replayed after a recording finished: it is the send the
+ *  person pressed, so it never picks an autocomplete item that opened since. */
+export function isReplayedKey(e: KeyboardEvent): boolean {
+  return replayed.has(e);
 }
 
 /** The same key again, through the composer's current handler: an Enter held
@@ -226,12 +245,15 @@ export function replayKey(
   handler: MutableRefObject<((e: KeyboardEvent<HTMLTextAreaElement>) => void) | null>,
 ) {
   const { key, code, shiftKey, altKey, metaKey, ctrlKey, currentTarget, target } = e;
-  return () =>
-    handler.current?.({
+  return () => {
+    const again = {
       key, code, shiftKey, altKey, metaKey, ctrlKey, currentTarget, target,
       nativeEvent: { isComposing: false },
       defaultPrevented: false,
       preventDefault: () => {},
       stopPropagation: () => {},
-    } as unknown as KeyboardEvent<HTMLTextAreaElement>);
+    } as unknown as KeyboardEvent<HTMLTextAreaElement>;
+    replayed.add(again);
+    handler.current?.(again);
+  };
 }

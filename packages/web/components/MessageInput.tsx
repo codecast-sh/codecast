@@ -65,7 +65,7 @@ import { isRecordingFile, useScreenRecordingAttach } from "../hooks/useScreenRec
 import { useFileAttach } from "../hooks/useFileAttach";
 import { ComposerAttachButton } from "./chat/ComposerAttachButton";
 import { DictateControls } from "./dictation/DictateControls";
-import { replayKey, useComposerDictation } from "../lib/dictation/useDictation";
+import { enterChord, isReplayedKey, replayKey, useComposerDictation } from "../lib/dictation/useDictation";
 import type { ComposeEditorHandle } from "./editor/ComposeEditor";
 import { useMentionQuery, useMentionServerSearch, sessionMentionTeamId, SERVER_MENTION_TYPES, matchScore, filterMentionItems, channelMentionItems } from "../hooks/useMentionQuery";
 import { mentionContextFor } from "../lib/mentionContext";
@@ -1209,39 +1209,44 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     };
   });
 
-  const handleMessageChange = useCallback((val: string) => {
+  const handleMessageChange = useCallback((val: string, dictated = false) => {
     setMessage(val);
     if (savedDraftRef.current !== null) {
       isSelectionEditedRef.current = true;
     }
-    const cursorPos = textareaRef.current?.selectionStart ?? val.length;
-    const textBefore = val.slice(0, cursorPos);
-    const slashMatch = (skills?.length ?? 0) > 0 || onSideQuestion ? textBefore.match(SLASH_TRIGGER_RE) : null;
-    const hashMatch = slashMatch ? null : textBefore.match(CHANNEL_TRIGGER_RE);
-    if (slashMatch) {
-      setAcTrigger({ type: "/", startPos: cursorPos - slashMatch[1].length - 1 });
-      setAcIndex(0);
-    } else if (hashMatch) {
-      setAcTrigger({ type: "#", startPos: cursorPos - hashMatch[1].length - 1 });
-      setAcIndex(0);
-    } else {
-      const atMatch = textBefore.match(MENTION_TRIGGER_RE);
-      const startPos = atMatch ? cursorPos - atMatch[0].length : -1;
-      const dead = mentionDeadEndRef.current;
-      if (atMatch && dead && dead.startPos === startPos && (atMatch[1] || "").trim().length > dead.len) {
-        // Still extending a mention that already settled on nothing.
-        setAcTrigger(null);
-      } else if (atMatch) {
-        mentionDeadEndRef.current = null;
-        setAcTrigger({ type: "@", startPos });
+    // Dictated words never open a picker: a spoken "#" or "@" is text, and an
+    // Enter held through the recording's finish must send, not pick.
+    if (dictated) setAcTrigger(null);
+    else {
+      const cursorPos = textareaRef.current?.selectionStart ?? val.length;
+      const textBefore = val.slice(0, cursorPos);
+      const slashMatch = (skills?.length ?? 0) > 0 || onSideQuestion ? textBefore.match(SLASH_TRIGGER_RE) : null;
+      const hashMatch = slashMatch ? null : textBefore.match(CHANNEL_TRIGGER_RE);
+      if (slashMatch) {
+        setAcTrigger({ type: "/", startPos: cursorPos - slashMatch[1].length - 1 });
         setAcIndex(0);
-        queryMentions(atMatch[1] || "");
+      } else if (hashMatch) {
+        setAcTrigger({ type: "#", startPos: cursorPos - hashMatch[1].length - 1 });
+        setAcIndex(0);
       } else {
-        // No active @-mention: don't rebuild the mention index. buildMentionItems
-        // (in the parent) sorts/maps every session/task/doc/plan, and it only
-        // matters once the @ dropdown is open — doing it on every normal keystroke
-        // was pure waste on the typing hot path.
-        setAcTrigger(null);
+        const atMatch = textBefore.match(MENTION_TRIGGER_RE);
+        const startPos = atMatch ? cursorPos - atMatch[0].length : -1;
+        const dead = mentionDeadEndRef.current;
+        if (atMatch && dead && dead.startPos === startPos && (atMatch[1] || "").trim().length > dead.len) {
+          // Still extending a mention that already settled on nothing.
+          setAcTrigger(null);
+        } else if (atMatch) {
+          mentionDeadEndRef.current = null;
+          setAcTrigger({ type: "@", startPos });
+          setAcIndex(0);
+          queryMentions(atMatch[1] || "");
+        } else {
+          // No active @-mention: don't rebuild the mention index. buildMentionItems
+          // (in the parent) sorts/maps every session/task/doc/plan, and it only
+          // matters once the @ dropdown is open — doing it on every normal keystroke
+          // was pure waste on the typing hot path.
+          setAcTrigger(null);
+        }
       }
     }
     if (!sendingRef.current) {
@@ -2277,9 +2282,10 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    // While dictating, Esc cancels it and Enter waits for the last words, then
-    // goes through this handler again as the key it was.
-    if (dictation.running() && dictation.keyDown(e, replayKey(e, handleKeyDownRef), (k) => k.key === "Enter" && !k.shiftKey)) return;
+    // While dictating, Esc cancels it and every Enter chord but a new line
+    // waits for the last words, then goes through this handler again as the
+    // key it was.
+    if (dictation.running() && dictation.keyDown(e, replayKey(e, handleKeyDownRef), enterChord)) return;
     if (caught && e.key === "Escape") {
       e.preventDefault();
       e.stopPropagation();
@@ -2291,7 +2297,9 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       setHandoffOpen(true);
       return;
     }
-    if (acTrigger && acItems.length > 0) {
+    // A replayed Enter is the send pressed before any picker opened.
+    if (acTrigger && isReplayedKey(e)) setAcTrigger(null);
+    else if (acTrigger && acItems.length > 0) {
       if (e.key === "ArrowDown") {
         e.preventDefault();
         setAcIndex(i => Math.min(i + 1, acItems.length - 1));

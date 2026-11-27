@@ -236,3 +236,58 @@ test("the language menu opens above the dialog, and Esc on it closes the menu, n
   expect(m.closed()).toBe(1);
   await m.unmount();
 });
+
+test("Esc and Enter in a picker's search are the picker's: the recording keeps going", async () => {
+  const m = await mountModal();
+  await m.setTitle("Fix login");
+  await act(async () => { m.button("Dictate")!.click(); });
+  await flush();
+  await m.say((e) => e.onPartial("the redirect"));
+  const chip = (label: string) => [...m.container.querySelectorAll("button")].find((b) => b.textContent?.includes(label)) as HTMLButtonElement;
+  const search = (placeholder: string) => m.container.querySelector(`input[placeholder="${placeholder}"]`) as HTMLInputElement | null;
+  const press = async (el: HTMLElement, key: string, init: Record<string, unknown> = {}) => {
+    await act(async () => { el.dispatchEvent(new w.KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init })); });
+    await flush();
+  };
+
+  await act(async () => { chip("Assignee").click(); });
+  await flush();
+  expect(search("Search people and agents")).not.toBeNull();
+  await press(search("Search people and agents")!, "Escape");
+  expect(search("Search people and agents")).toBeNull();
+  expect(m.button("Finish dictation")).not.toBeNull();
+  expect(m.editor().getText()).toBe("the redirect");
+
+  await act(async () => { chip("Labels").click(); });
+  await flush();
+  const labelSearch = search("Search or create a label")!;
+  Object.getOwnPropertyDescriptor(w.HTMLInputElement.prototype, "value")!.set!.call(labelSearch, "urgent");
+  const propsKey = Object.keys(labelSearch).find((k) => k.startsWith("__reactProps"))!;
+  await act(async () => { (labelSearch as any)[propsKey].onChange({ target: labelSearch, currentTarget: labelSearch }); });
+  await press(labelSearch, "Enter");
+  expect(chip("urgent")).toBeTruthy();
+  expect(finishing).toBe(false);
+  expect(created).toEqual([]);
+  expect(m.button("Finish dictation")).not.toBeNull();
+
+  // Back in the description, Esc is the recording's again.
+  await press(m.container.querySelector(".ProseMirror") as HTMLElement, "Escape");
+  expect(m.button("Dictate")).not.toBeNull();
+  expect(m.editor().getText()).toBe("");
+  await m.unmount();
+});
+
+test("the mic pressed from the title adds to the end of a description never clicked into", async () => {
+  const m = await mountModal();
+  await m.setTitle("Fix login");
+  // Text put in without a click: the editor's own selection sits at its start.
+  await act(async () => { m.editor().commands.setContent("<p>Steps to reproduce</p>"); });
+  await act(async () => { m.editor().commands.setTextSelection(1); });
+  await act(async () => { m.title().focus(); });
+  expect(m.editor().isFocused).toBe(false);
+  await act(async () => { m.button("Dictate")!.click(); });
+  await flush();
+  await m.say((e) => e.onPartial("open the app"));
+  expect(m.editor().getText()).toBe("Steps to reproduce open the app");
+  await m.unmount();
+});
