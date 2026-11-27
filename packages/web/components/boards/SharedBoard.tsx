@@ -9,7 +9,7 @@ import { BoardElementView, ConnectorView } from "./BoardElements";
 import { drawOrder, fitBox } from "./boardFrame";
 import type { BoardEl } from "./boardTypes";
 import { boardFolds } from "./boardFolds";
-import { BoardFrameContext } from "./BoardFrameParts";
+import { BoardFrameContext } from "../../lib/boards/frameContext";
 
 const NOOP = () => {};
 const MARGIN = 32;
