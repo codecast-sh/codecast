@@ -98,3 +98,13 @@ test("an unbudgeted call asks the same gate, for the workspace and the content, 
   // Two asks of the one gate scope: runModelCall's own, before anything is sent, and the send's.
   expect(gates.map((g) => [g.workspace, g.conversation_id, g.api_token])).toEqual([["user:u", "c1", "tok"], ["user:u", "c1", "tok"]]);
 });
+
+test("a JSON answer cut off at max_tokens fails as one, never as a value salvaged from inside it", async () => {
+  process.env.ANTHROPIC_API_KEY = "test-key";
+  const cut = '{"priorities": [{"title": "A", "refs": [{"kind": "task", "id": "ct-1"}], "steps": [{"title": "B';
+  globalThis.fetch = (async () => new Response(JSON.stringify({ content: [{ type: "text", text: cut }], usage: { input_tokens: 10, output_tokens: 10 }, stop_reason: "max_tokens" }), { status: 200 })) as any;
+  const ctx = { runQuery: async () => null, runMutation: async () => true, scheduler: { runAfter: async () => {} } };
+  const spec = { model: "claude-haiku-5-5", prompt: "p", max_tokens: 10, output: "json" as const };
+  const r = await runModelCall(ctx, { workspace: "user:u" }, "judge", spec, "Test", 5_000, { budgeted: false });
+  expect(r).toMatchObject({ ok: false, error: "the answer ran past max_tokens before its JSON closed" });
+});

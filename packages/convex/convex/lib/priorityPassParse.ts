@@ -30,7 +30,7 @@ function knownRefs(input: PriorityPassInput): Set<string> {
 
 const REF_KINDS: PriorityRefKind[] = ["task", "session", "pr", "commit"];
 const str = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : null);
-/** The most `why` excerpts kept per priority or step, and the most characters of each. */
+/** The most `why` excerpts kept per priority, and the most characters of each. */
 const WHY_MAX = 5;
 const WHY_CHARS = 500;
 /** A reply's `why` (asked only behind the priority cards experiment): its excerpts, as a field to spread, or nothing. */
@@ -109,7 +109,6 @@ export function parsePriorityPassOutput(raw: unknown, input: PriorityPassInput):
         tier: sr.tier,
         refs: stepRefs,
         ...(typeof sr.done_judged === "boolean" ? { done_judged: sr.done_judged } : {}),
-        ...whyOf(sr.why),
       });
     }
 

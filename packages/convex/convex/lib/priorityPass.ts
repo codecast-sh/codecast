@@ -245,13 +245,14 @@ export const PRIORITY_PASS_SCHEMA = {
 
 /**
  * Behind the priority cards experiment (shared/contracts/priorityCard.ts) the
- * pass's changes are proposed on a card, each with its evidence: the prompt
- * asks for `why` on each priority and step, and the schema allows it. Without
+ * pass's merges are proposed on a card, each with its evidence: the prompt
+ * asks for `why` on each priority that absorbs others, and the schema allows
+ * it (asked of every step too, a long list's reply ran past max_tokens). Without
  * the experiment the system prompt and schema above are sent unchanged.
  */
 export const PRIORITY_PASS_WHY_SYSTEM = `
 
-Evidence: the person reviews every change you make to their list. On each priority you return, and on each of its steps, give why: at most 3 short excerpts that justify the change, each copied verbatim, character for character, from a line under "What they typed" or from a call's action item. Copy a phrase, not a whole message. Leave why empty when nothing the person typed or took on says it. Never paraphrase or combine lines: an excerpt not found word for word in the input is thrown away.`;
+Evidence: the person reviews every merge you propose. On each priority you return with merges, give why: at most 3 short excerpts that justify merging them, each copied verbatim, character for character, from a line under "What they typed" or from a call's action item. Copy a phrase, not a whole message. Leave why empty on every other priority, and when nothing the person typed or took on says it. Never paraphrase or combine lines: an excerpt not found word for word in the input is thrown away.`;
 
 const WHY = { type: "array", items: STRING } as const;
 const PROPOSAL = PRIORITY_PASS_SCHEMA.properties.priorities.items;
@@ -266,7 +267,6 @@ export const PRIORITY_PASS_SCHEMA_WHY = {
         properties: {
           ...PROPOSAL.properties,
           why: WHY,
-          steps: { ...PROPOSAL.properties.steps, items: { ...PROPOSAL.properties.steps.items, properties: { ...PROPOSAL.properties.steps.items.properties, why: WHY } } },
         },
       },
     },

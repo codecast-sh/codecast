@@ -156,8 +156,10 @@ export async function runModelCall(
     charge(cost);
     if (!reply) return { ok: false, reason: "failed", error: error ?? "the model gave no answer", cost_usd: cost, model: spec.model, ...(transient ? { transient: true } : {}) };
     if (spec.output === "json") {
+      // A reply cut off at max_tokens is never read: parseJsonBlock would salvage a value nested inside it.
+      if (reply.stop_reason === "max_tokens") return { ok: false, reason: "failed", error: "the answer ran past max_tokens before its JSON closed", cost_usd: cost, model: spec.model };
       const json = parseJsonBlock(reply.text);
-      if (json === null) return { ok: false, reason: "failed", error: reply.stop_reason === "max_tokens" ? "the answer ran past max_tokens before its JSON closed" : "the answer held no JSON", cost_usd: cost, model: spec.model };
+      if (json === null) return { ok: false, reason: "failed", error: "the answer held no JSON", cost_usd: cost, model: spec.model };
       return { ok: true, text: reply.text, json, usage: reply.usage, cost_usd: cost, model: spec.model, stop_reason: reply.stop_reason };
     }
     return { ok: true, text: reply.text, usage: reply.usage, cost_usd: cost, model: spec.model, stop_reason: reply.stop_reason };
