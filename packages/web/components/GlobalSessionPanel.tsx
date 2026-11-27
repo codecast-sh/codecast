@@ -2745,53 +2745,13 @@ function SessionListPanelImpl({
       return;
     }
 
-    // Card not rendered — try to reveal it by uncollapsing its section. A
-    // subagent (or nested teammate) renders under its parent's card, so the
-    // parent's membership decides which section hosts the row.
+    // Card not rendered. A collapsed section already peeks the open card
+    // (renderSection), so only the hidden buckets at the bottom can still be
+    // hiding it. A subagent (or nested teammate) renders under its parent's
+    // card, so the parent's membership decides which bucket hosts the row.
     const activeRow = s.sessions[activeSessionId];
     const parentId = activeRow ? inboxNestParentOf(sortedSessions, nestWorkers)(activeRow) ?? cardOfNested(globalSubByParent, activeSessionId) : null;
     const inList = (items: InboxSession[]) => items.some(i => i._id === activeSessionId || (!!parentId && i._id === parentId));
-    const sections: [InboxSession[], string][] = flatView
-      ? [[flatList, "all"]]
-      : viewMode === "bucket" && bucketView
-        ? [
-            ...bucketView.labelGroups.map(({ bucket, items }) => [items, `bucket_${bucket._id}`] as [InboxSession[], string]),
-            ...bucketView.projectGroups.map(({ name, items }) => [items, `bucketproj_${name}`] as [InboxSession[], string]),
-          ]
-        : viewMode === "plan" && planView
-        ? [
-            ...planView.planGroups.map(({ key, items }) => [items, `plan_${key}`] as [InboxSession[], string]),
-            ...planView.projectGroups.map(({ name, items }) => [items, `planproj_${name}`] as [InboxSession[], string]),
-          ]
-        : viewMode === "browser" && browserView
-        ? [[browserView, "browser"] as [InboxSession[], string]]
-        : viewMode === "machine" && machineView
-        ? [
-            ...machineView.machineGroups.map(({ deviceId, items }) => [items, `machine_${deviceId}`] as [InboxSession[], string]),
-            ...machineView.projectGroups.map(({ name, items }) => [items, `machineproj_${name}`] as [InboxSession[], string]),
-          ]
-        : orgLensView
-        ? [
-            ...orgLensView.groups.map(({ key, items }) => [items, `${orgLensView.mode}_${key}`] as [InboxSession[], string]),
-            ...orgLensView.projectGroups.map(({ name, items }) => [items, `${orgLensView.mode}proj_${name}`] as [InboxSession[], string]),
-          ]
-        : viewMode === "trigger"
-        ? [
-            // Trigger sub rows are always visible (their rows don't collapse),
-            // so only the project fallthrough tier can need a reveal here.
-            ...triggerView.projectGroups.map(({ name, items }) => [items, `trigproj_${name}`] as [InboxSession[], string]),
-          ]
-        : [
-            [statusQuestions, "questions"],
-            [statusPinned, "pinned"], [statusNew, "new"], [statusNeedsInput, "needs_input"],
-            [statusDone, "done"], [railWorking, "working"], [dormantSplit.shipping, "shipping"], [dormantSplit.sleeping, "dormant"],
-          ];
-    for (const [items, key] of sections) {
-      if (inList(items) && s.collapsedSections[key]) {
-        s.toggleCollapsedSection(key);
-        return;
-      }
-    }
     if (inList(filteredSnoozed) && !openBuckets.snoozed) {
       setOpenBuckets((o) => ({ ...o, snoozed: true }));
       return;
@@ -3012,6 +2972,12 @@ function SessionListPanelImpl({
     if (items.length === 0 && !(isDropTarget && sessionDragActive)) return null;
     const key = opts?.key ?? label.toLowerCase().replace(/\s+/g, "_");
     const collapsed = !!s.collapsedSections[key];
+    const hostsActive = (i: InboxSession) => i._id === activeSessionId
+      || (globalSubByParent.get(i._id) || []).some((sub) => sub._id === activeSessionId);
+    // A collapsed section still draws the open session's card (or the card
+    // hosting it) under its header: a peek that locates the session without
+    // opening the section, gone as soon as another session opens.
+    const peek = collapsed && activeSessionId ? items.filter(hostsActive) : [];
     const isDragOverSection = dragOverSectionKey === key;
     // The flat views draw a nested row under its card (underParent): it rides
     // that card's slot, and one its session owns adds to no count.
@@ -3064,14 +3030,14 @@ function SessionListPanelImpl({
           nameLabel={opts?.nameLabel}
           hideCount={opts?.nameLabel}
         />
-        {!collapsed && (() => {
+        {(!collapsed || peek.length > 0) && (() => {
           const sectionCap = sectionLimits[key] ?? SECTION_RENDER_CAP;
           // Take from the shared global budget (consumed in render order, so the
           // top-priority sections fill first); the active row is force-kept below
           // even when the budget is spent.
           const globalRemaining = Math.max(0, GLOBAL_CARD_BUDGET + globalCardExtra - globalRenderedCards);
           const limit = Math.max(Math.min(sectionCap, globalRemaining), opts?.floor ? Math.min(items.length, SECTION_CARD_FLOOR) : 0);
-          let visibleItems = sectionWindow(items, limit, Math.max(limit, globalRemaining), flatUnderParent);
+          let visibleItems = collapsed ? peek : sectionWindow(items, limit, Math.max(limit, globalRemaining), flatUnderParent);
           // Never let the active row (or the parent hosting the active subagent)
           // fall past the cap — it must stay mounted for auto-scroll and so the
           // session being viewed never vanishes from the list.
@@ -3079,8 +3045,7 @@ function SessionListPanelImpl({
           // after its parent, so both are kept, in list order.
           if (visibleItems.length < items.length && activeSessionId) {
             const shown = new Set(visibleItems);
-            const needed = items.filter((i) => !shown.has(i) && (i._id === activeSessionId
-              || (globalSubByParent.get(i._id) || []).some((sub) => sub._id === activeSessionId)));
+            const needed = items.filter((i) => !shown.has(i) && hostsActive(i));
             if (needed.length) visibleItems = [...visibleItems, ...needed];
           }
           // Hidden cards, counted the way the cap counts them (a row drawn
@@ -3088,7 +3053,7 @@ function SessionListPanelImpl({
           // card's nested rows ran past the budget, so Show more stays.
           const kept = new Set(visibleItems);
           const hidden = items.filter((i) => !kept.has(i));
-          const hiddenCount = hidden.filter((i) => !flatUnderParent?.has(i._id)).length || hidden.length;
+          const hiddenCount = collapsed ? 0 : hidden.filter((i) => !flatUnderParent?.has(i._id)).length || hidden.length;
           globalRenderedCards += visibleItems.length;
           // The flat views hoist a role's session under its role's card as a
           // row of its own (hoistNestedUnderParent), so it takes the small row
@@ -3122,7 +3087,7 @@ function SessionListPanelImpl({
               <div
                 key={session._id}
                 style={holdStyleOf(session._id)}
-                className={`relative border-b border-sol-border/30${holdLeft > 0 ? " inbox-held" : ""}${justStarted ? " animate-inbox-row-in" : ""}${landedIds.has(session._id) ? " inbox-landed" : ""}`}
+                className={`relative border-b border-sol-border/30${holdLeft > 0 ? " inbox-held" : ""}${justStarted ? " animate-inbox-row-in" : ""}${landedIds.has(session._id) ? " inbox-landed" : ""}${collapsed ? " inbox-peek" : ""}`}
                 onDragOver={(e) => {
                   if (!e.dataTransfer.types.includes("codecast/session-id")) return;
                   const draggedId = adoptDrag.draggedRef.current;

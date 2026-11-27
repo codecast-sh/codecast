@@ -3,10 +3,10 @@ import { computeVisualOrder, type InboxSession } from "../inboxStore";
 import { orderSections } from "./placeTestHarness";
 
 // Regression: Ctrl+J/K walks computeVisualOrder()/visualOrderSessions(), which
-// must mirror what GlobalSessionPanel renders. A collapsed section is hidden in
-// the panel, so its cards must be skipped here too — otherwise the selection
-// lands on invisible cards and the panel's auto-scroll effect force-expands the
-// section to reveal them.
+// must mirror what GlobalSessionPanel renders. A collapsed section draws only
+// the open session's card (a peek), so the walk skips every other card in it:
+// it never lands on a card that isn't drawn, and it steps off the peek to that
+// card's on-screen neighbour.
 
 // Fixture ids are Convex-shaped: the chokepoint reads any other id as an
 // optimistic create stub (rendered, never placed), and these tests are about
@@ -123,6 +123,17 @@ describe("computeVisualOrder respects collapse per view mode", () => {
     const order = computeVisualOrder({ ...baseState, collapsedSections: { working: true } })
       .map(tag).sort();
     expect(order).toEqual(["ni1", "ni2"]);
+  });
+
+  it("grouped view: the open session peeks out of collapsed Working, so the walk keeps it between its neighbours", () => {
+    const order = computeVisualOrder({ ...baseState, currentSessionId: cid("wk2"), collapsedSections: { working: true } })
+      .map(tag);
+    expect(order.sort()).toEqual(["ni1", "ni2", "wk2"]);
+  });
+
+  it("time view: the open session peeks out of a collapsed 'All' section", () => {
+    const state = { ...baseState, currentSessionId: cid("ni1"), clientState: { ui: { inbox_view_mode: "time" as const } }, collapsedSections: { all: true } };
+    expect(computeVisualOrder(state).map(tag)).toEqual(["ni1"]);
   });
 
   it("grouped view: nothing collapsed walks every card", () => {

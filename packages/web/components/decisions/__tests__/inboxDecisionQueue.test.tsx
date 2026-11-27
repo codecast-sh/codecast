@@ -95,4 +95,17 @@ describe("the inbox panel's Decisions section is the stepper's queue", () => {
     await act(async () => root.render(<MemoryRouter>{panel}</MemoryRouter>));
     expect(litRow(container)).toBeUndefined();
   });
+
+  test("collapsed, it draws only the open session's card, as a peek", async () => {
+    const collapsed = (active: string | null) => (
+      <MemoryRouter><InboxDecisionQueue collapsed onToggle={() => {}} activeSessionId={active} extraSessions={[]} onSelectSession={() => {}} /></MemoryRouter>
+    );
+    await act(async () => root.render(collapsed(null)));
+    expect(container.querySelector("[data-session-id]")).toBeNull();
+
+    await act(async () => root.render(collapsed(CONV_B)));
+    const cards = [...container.querySelectorAll("[data-session-id]")];
+    expect(cards.map((c) => c.getAttribute("data-session-id"))).toEqual([CONV_B]);
+    expect(cards[0].closest(".inbox-peek")).not.toBeNull();
+  });
 });
