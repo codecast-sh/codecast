@@ -314,6 +314,13 @@
   [data-terminal-bar]:has([data-terminal-attach]) { height: 44px !important; }
   [data-terminal-attach] { min-height: 44px; }
   [data-cc-agents-band] > button { min-height: 44px; }
+  /* Dictation (components/dictation/DictateControls): mic, caret, ✕ and ✓ take
+     44px of width each, so the row is as wide idle as recording and no target
+     overlaps send; the height comes from a 44px hit area, so the composer's
+     row keeps its height. The language menu's rows are 44px. */
+  [data-dictate-target] { position: relative; min-width: 44px; }
+  [data-dictate-target]::after { content: ""; position: absolute; left: 0; right: 0; top: 50%; height: 44px; transform: translateY(-50%); }
+  [data-dictation-menu] [role="menuitemcheckbox"] { min-height: 44px; }
 }
 
 /* Status tabs swap a multi-pill segmented control for a single compact dropdown
