@@ -40,6 +40,8 @@ describe("scribeStatus", () => {
   test("a fresh claim is joining, a stale one is absent", () => {
     expect(scribeStatus({ routes: [{}], scribe_claim: { at: now - 1000 } }, now)).toBe("joining");
     expect(scribeStatus({ routes: [], scribe_claim: { at: now - SCRIBE_CLAIM_TTL_MS } }, now)).toBe("absent");
+    // A removal on record is not Scribe on its way.
+    expect(scribeStatus({ routes: [], scribe_claim: { at: now, removed: true } }, now)).toBe("absent");
   });
   test("no transcript or no claim is absent", () => {
     expect(scribeStatus(null, now)).toBe("absent");

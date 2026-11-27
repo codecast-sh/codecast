@@ -7936,6 +7936,8 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   unpinFromStage: (roomKey: string, ref: string) => void;
   /** The call's board on the stage, made if the call has none (callStage.pinCallBoard); resolves to its doc id. */
   pinCallBoard: (roomKey: string) => Promise<{ doc_id: string } | undefined>;
+  /** The call's board for this person's board view, made if the call has none, never pinned (callStage.openCallBoard). */
+  openCallBoard: (roomKey: string) => Promise<{ doc_id: string } | undefined>;
   setTeamFeature: (teamId: string, feature: string, enabled: boolean) => void;
   setTeamBudget: (teamId: string, capUsd: number) => void;
   setTeamPolicy: (teamId: string, policy: Record<string, unknown>) => void;
@@ -16791,6 +16793,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
     return { roomKey, ref: canonical };
   }),
   pinCallBoard: asyncAction(function (this: Draft, roomKey: string) {
+    return { roomKey };
+  }),
+  openCallBoard: asyncAction(function (this: Draft, roomKey: string) {
     return { roomKey };
   }),
   setRoomTranscribeOff: asyncAction(function (this: Draft, roomKey: string, off: boolean) {

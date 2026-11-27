@@ -26,7 +26,7 @@ export type ScribeLive = {
   team_id: string;
   short_id?: string | null;
   routes: Array<{ kind: string; target: string; added_by: string; role?: string }>;
-  scribe_claim?: { by: string; at: number } | null;
+  scribe_claim?: { by: string; at: number; removed?: boolean } | null;
 } | null | undefined;
 
 type Press = "invite" | "remove";
@@ -71,14 +71,17 @@ export function useScribe(roomKey: string | null, live: ScribeLive) {
     getRoom,
   });
 
-  const invite = useCallback(() => {
+  // `auto`: the person's "Invite Scribe to every huddle", not a press: the
+  // server refuses it once somebody removed Scribe from this call.
+  const invite = useCallback((opts?: { auto?: boolean }) => {
     if (!roomKey || status !== "absent") return;
     notePress(roomKey, "invite");
     void (async () => {
       let claim: number | null = null;
       try {
-        const answer = await convex.mutation(api.transcripts.inviteScribe, { room_key: roomKey });
-        // Somebody else's Scribe is joining or in: the transcript shows it.
+        const answer = await convex.mutation(api.transcripts.inviteScribe, { room_key: roomKey, ...(opts?.auto ? { auto: true } : {}) });
+        // Somebody else's Scribe is joining or in (the transcript shows it),
+        // or an automatic invite met a removal.
         if (!answer.claimed) return;
         claim = answer.claim_id;
         const st = useInboxStore.getState() as any;

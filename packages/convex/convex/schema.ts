@@ -8787,7 +8787,9 @@ export default defineSchema({
     // agent (transcripts.inviteScribe). Cleared when the agent's route lands
     // (addRoute with role "scribe") or Scribe is removed; a claim older than
     // SCRIBE_CLAIM_TTL_MS no longer holds the slot, judged when read.
-    scribe_claim: v.optional(v.object({ by: v.id("users"), at: v.number() })),
+    // `removed`: somebody showed Scribe out (removeScribe) at `at`, by `by`;
+    // an automatic invite is refused until a person invites Scribe again.
+    scribe_claim: v.optional(v.object({ by: v.id("users"), at: v.number(), removed: v.optional(v.literal(true)) })),
     // Monotonic per-transcript segment counter (writer-owned; the scribe is
     // the only appender, so no contention).
     last_seq: v.number(),

@@ -13,15 +13,17 @@ import type { StagePinRow } from "../../hooks/useStagePins";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { AppLoader } from "../AppLoader";
 import { AutoStage } from "./StageViews";
+import { SwitchReview } from "../consequential/ConsequentialSwitch";
+import { autoScribeLedger } from "../consequential/ledgers";
 
-type Scribe = { present: boolean; status: "absent" | "joining" | "listening"; invite: () => void; remove: () => void };
+type Scribe = { present: boolean; status: "absent" | "joining" | "listening"; invite: (opts?: { auto?: boolean }) => void; remove: () => void };
 
 // ── The board on the stage ────────────────────────────────────────────────
 
-// The call's board, by room: made (and pinned) the first time this window
-// opens board view in the call, through the same press as the pin picker's
-// "Call board" (callStage.pinCallBoard). Later visits reuse it rather than
-// pin it again, which would bring it to the front of everyone's stage.
+// The call's board, by call: got (made if the room has none) the first time
+// this window opens board view in the call (callStage.openCallBoard). Board
+// view is one person's way of looking: it never pins, so nobody else's stage
+// moves. Putting the board on everyone's stage is the pin picker's.
 const boards = new Map<string, string>();
 
 /** The stage share for the call's board: its pin row when the room has it
@@ -73,7 +75,7 @@ export function BoardStage({
     let gone = false;
     useInboxStore
       .getState()
-      .pinCallBoard(roomKey)
+      .openCallBoard(roomKey)
       .then((r) => {
         if (!r?.doc_id || gone) return;
         boards.set(key, r.doc_id);
@@ -160,14 +162,28 @@ export function BoardBanner({
     );
   }
   if (state === "next" && workspace) {
-    return <NextTimeBanner workspace={workspace} workspaceName={workspaceName} onClose={() => noteBanner(callKey, { nextClosed: true })} />;
+    return (
+      <NextTimeBanner
+        workspace={workspace}
+        workspaceName={workspaceName}
+        autoScribeOn={autoScribeOn}
+        onClose={() => noteBanner(callKey, { nextClosed: true })}
+      />
+    );
   }
   return null;
 }
 
-function NextTimeBanner({ workspace, workspaceName, onClose }: { workspace: string; workspaceName: string; onClose: () => void }) {
+function NextTimeBanner({ workspace, workspaceName, autoScribeOn, onClose }: { workspace: string; workspaceName: string; autoScribeOn: boolean; onClose: () => void }) {
   const [boardView, setBoardView] = useState(true);
   const [autoScribe, setAutoScribe] = useState(true);
+  // Saving "Invite Scribe" on starts an agent in every huddle: that goes
+  // through the review first. Anything else saves on the press.
+  const [reviewing, setReviewing] = useState(false);
+  const save = () => {
+    setHuddleSettings(workspace, { huddleBoardView: boardView, huddleAutoScribe: autoScribe });
+    onClose();
+  };
   return (
     <div className={BANNER} role="status" data-banner="next">
       <span className="shrink-0 font-medium">
@@ -183,10 +199,7 @@ function NextTimeBanner({ workspace, workspaceName, onClose }: { workspace: stri
       </label>
       <button
         type="button"
-        onClick={() => {
-          setHuddleSettings(workspace, { huddleBoardView: boardView, huddleAutoScribe: autoScribe });
-          onClose();
-        }}
+        onClick={() => (autoScribe && !autoScribeOn ? setReviewing(true) : save())}
         className="shrink-0 rounded-md bg-sol-text px-2.5 py-1 text-[12.5px] font-medium text-sol-bg transition-opacity hover:opacity-90"
       >
         Save
@@ -194,6 +207,16 @@ function NextTimeBanner({ workspace, workspaceName, onClose }: { workspace: stri
       <button type="button" onClick={onClose} className={CLOSE} aria-label="Close">
         <X className="h-3.5 w-3.5" />
       </button>
+      {reviewing && (
+        <SwitchReview
+          ledger={autoScribeLedger({ workspace: workspaceName })}
+          onClose={() => setReviewing(false)}
+          onConfirm={() => {
+            setReviewing(false);
+            save();
+          }}
+        />
+      )}
     </div>
   );
 }
