@@ -14,9 +14,9 @@ The inbox renders these sections top to bottom, and the order is the point: your
 - **Needs You** (yellow): the ball is in your court.
 - **Done** (cyan): delivered; read it when you like.
 - **Working**: the agent is producing right now. Leave it alone.
-- **Sleeping** (blue): parked on a wake a machine owns, such as a scheduled check or a background watcher.
+- **Sleeping** (blue): parked on a wake a machine owns, such as a scheduled check or a background watcher, or snoozed by you; the line under each row says what wakes it, and when.
 
-Below those sit three collapsed buckets that are nobody's move: **Snoozed**, **Stashed** (with a "kill all" button) and **Closed** (closed and killed sessions; a closed one shows its triggers underneath, and moves to Stashed once a trigger or another session wakes it). On a busy day they hold hundreds of sessions, none of them in your way.
+Below those sit two collapsed buckets that are nobody's move: **Stashed** (with a "kill all" button) and **Closed** (closed and killed sessions; a closed one shows its triggers underneath, and moves to Stashed once a trigger or another session wakes it). On a busy day they hold hundreds of sessions, none of them in your way.
 
 ![The inbox after a lead session spawned two workers: under 'Retry failed webhooks' in Working, two indented child rows, 'Webhook API half' on a cloud host and 'Dashboard retry UI', each with its own agent icon and message count](/blog/field-manual/inbox-workers.webp "Workers a session spawns nest under it in the same section (here a Codex worker on a cloud host and a Cursor worker), so a fan-out reads as one line of work instead of three cards.")
 
