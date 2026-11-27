@@ -98,13 +98,17 @@ const runs = [
   }),
 ];
 
-function Board({ unavailable = false }: { unavailable?: boolean }) {
+// An open pull request no Ship run carries, opened by someone else: Shipping lists it under Open pull requests.
+const OPEN_PR = { _id: "pr900", repository: target.repository, number: 900, title: "Hand-opened fix", state: "open", created_at: NOW - 2 * H, author_github_username: "someone", checks_state: "failure" };
+
+function Board({ unavailable = false, prs = [OPEN_PR] }: { unavailable?: boolean; prs?: any[] | null }) {
   const [show, setShow] = useState<any>("sessions");
   const [mine, setMine] = useState(false);
   return (
     <MemoryRouter>
       <DeploysBoard
         target={target} production={undefined} deploys={[live]} shipping={unavailable ? null : { runs: runs as any, shippers: [] }} shippingError={unavailable}
+        prs={prs as any} meLogin="me"
         linesByDeploy={lines} onLinesWanted={(ids) => wanted.push(ids)} checkouts={[]} me={ME} now={NOW}
         priorities={false} focus={null} reach={null} openDeploy={null} show={show} mine={mine} onShow={setShow} onMine={setMine}
         onClearFocus={() => {}} onPress={() => {}} onRollback={() => {}} onPause={() => {}} onLift={() => {}}
@@ -200,7 +204,7 @@ test("Mine narrows both columns to the viewer's work and counts what it kept", (
 
 test("a backend without the Ship runs query says Shipping can't be read, and the deploys still list what they carried", () => {
   const { host, unmount } = mount(true);
-  expect(host.querySelector("[data-deploy-shipping]")!.textContent).toContain("What is shipping can't be read right now");
+  expect(host.querySelector("[data-deploy-shipping]")!.textContent).toContain("Ship runs can't be read right now");
   expect(host.querySelector("[data-deploy-shipping-count]")).toBeNull();
   expect(rowKeys(card(host, "dp-7"))).toEqual(["jx7mineoldaaaa", "jx7anaoldaaaaa"]);
   unmount();
@@ -222,7 +226,7 @@ const many = [
 ];
 const props = (over: Record<string, unknown> = {}) => ({
   target: { ...target, queue: { ...target.queue, commits: 0, shown: 0, groups: [] } }, production: undefined, deploys: many,
-  shipping: { runs: runs as any, shippers: [] }, checkouts: [], me: ME, now: NOW + 30 * H, priorities: false, focus: null, reach: null,
+  shipping: { runs: runs as any, shippers: [] }, prs: [], meLogin: null, checkouts: [], me: ME, now: NOW + 30 * H, priorities: false, focus: null, reach: null,
   openDeploy: null, show: "sessions", mine: false, onShow() {}, onMine() {}, onClearFocus() {}, onPress() {}, onRollback() {}, onPause() {}, onLift() {}, ...over,
 }) as any;
 function mountWith(p: any) {
