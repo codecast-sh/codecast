@@ -706,13 +706,13 @@ export function targetsFromLine(line: string | null | undefined): TargetState[] 
 }
 
 /**
- * The deploy reach found for each target, each live one named by the deploy the run's own Deploy line says carried it
- * there ("Live: 08c639d on web dp-3447"): the run saw the deploy that first took its change out, while reach reads a
- * window of the target's deploys and can only name the oldest one in it. Reach still says the state.
+ * The deploy reach found for each target, a live one it names no deploy for filled in from the run's own Deploy line
+ * ("Live: 08c639d on web dp-3447"). Reach names the first live deploy holding the change (convex deployReach), and
+ * after a rollback and a redeploy it names the one that is live now, so its name wins wherever it has one.
  */
 export function withRunDeploys(targets: ReadonlyArray<TargetState>, line: string | null | undefined): TargetState[] {
   const named = new Map(targetsFromLine(line).filter((t) => t.state === "live" && t.deploy).map((t) => [t.name, t.deploy!]));
-  return targets.map((t) => (t.state === "live" && named.has(t.name) ? { ...t, deploy: named.get(t.name)! } : t));
+  return targets.map((t) => (t.state === "live" && !t.deploy && named.has(t.name) ? { ...t, deploy: named.get(t.name)! } : t));
 }
 
 /** The line await-deploy printed before per-target lines: "4a6e413 landed; live on web dp-12, waiting for backend (going out in dp-13)." */

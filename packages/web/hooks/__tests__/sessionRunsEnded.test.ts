@@ -41,4 +41,9 @@ describe("a session's run that ended outside its feed's window", () => {
     };
     expect(sessionRunsEndedOutOfWindow(held, CONV, [run(1, "running")])).toEqual([id(5)]);
   });
+
+  it("leaves a live run that ships no change (a deploy or eval run) to its own feed", () => {
+    useInboxStore.getState().syncTable("workflowRuns", [run(1, "running", { takes_change: false }), run(2, "running")], { isDelta: true });
+    expect(sessionRunsEndedOutOfWindow(runs(), CONV, [])).toEqual([id(2)]);
+  });
 });

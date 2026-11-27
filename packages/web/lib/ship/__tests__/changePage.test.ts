@@ -368,17 +368,18 @@ describe("changeLinks", () => {
   });
 
   test("the deploy records say each target's state; a waiting target opens Deploys at the change", () => {
-    const links = changeLinks(liveRun, change, [{ name: "web", state: "live", deploy: "dp-9" }, { name: "backend", state: "waiting" }]);
+    const links = changeLinks(liveRun, change, [{ name: "web", state: "live" }, { name: "backend", state: "waiting" }]);
     expect(links.filter((l) => l.kind === "deploy").map((l) => [l.label, l.tone])).toEqual([["web dp-3237", "ok"], ["backend waiting", "default"]]);
     expect(links.find((l) => l.label === "backend waiting")!.href).toBe("/deploys?team=t1&target=backend&sha=31ccbb83b1");
     // A deploy's chip opens the change on that target with the deploy open beside it (the phone reads it as that deploy).
     expect(links.find((l) => l.label === "web dp-3237")!.href).toBe("/deploys?team=t1&target=web&sha=31ccbb83b1&deploy=dp-3237");
   });
 
-  test("a live chip names the deploy the run saw first carry the change, not a later one reach found (ct-98570: web dp-3447, not dp-3454)", () => {
+  test("a live chip names reach's deploy (the first live one holding the change, or the redeploy after a rollback); the run's line fills only one reach leaves unnamed", () => {
     const r = { ...liveRun, node_statuses: [...MERGED, st("deploy__wait", "completed", 16, { result_preview: "Live: 08c639d on web dp-3447, cli dp-3456, mobile dp-3448." })] };
-    const reach = [{ name: "web", state: "live" as const, deploy: "dp-3454" }, { name: "mobile", state: "live" as const, deploy: "dp-3448" }, { name: "api", state: "live" as const, deploy: "dp-3500" }];
-    expect(changeLinks(r, change, reach).filter((l) => l.kind === "deploy").map((l) => l.label)).toEqual(["web dp-3447", "mobile dp-3448", "api dp-3500"]);
+    // A rollback then a redeploy: reach names the deploy live now, not the one the run saw.
+    const reach = [{ name: "web", state: "live" as const, deploy: "dp-3510" }, { name: "mobile", state: "live" as const }, { name: "api", state: "live" as const, deploy: "dp-3500" }];
+    expect(changeLinks(r, change, reach).filter((l) => l.kind === "deploy").map((l) => l.label)).toEqual(["web dp-3510", "mobile dp-3448", "api dp-3500"]);
     // A target reach no longer finds live (rolled back, failed) keeps reach's word: the run's line is history, not the state.
     expect(changeLinks(r, change, [{ name: "web", state: "failed", deploy: "dp-3460" }]).filter((l) => l.kind === "deploy").map((l) => [l.label, l.tone])).toEqual([["web dp-3460", "bad"]]);
   });

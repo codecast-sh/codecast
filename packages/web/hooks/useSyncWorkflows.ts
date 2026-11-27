@@ -234,7 +234,7 @@ const LIVE_RUN = new Set(["pending", "running", "paused"]);
 export function sessionRunsEndedOutOfWindow(runs: Record<string, any>, conversationId: string, answer: ReadonlyArray<{ _id: string }>): string[] {
   const named = new Set(answer.map((r) => String(r._id)));
   return Object.values(runs)
-    .filter((r) => String(r.spawner_conversation_id ?? "") === conversationId && LIVE_RUN.has(r.status) && !named.has(String(r._id)) && isConvexId(String(r._id)))
+    .filter((r) => String(r.spawner_conversation_id ?? "") === conversationId && r.takes_change === true && LIVE_RUN.has(r.status) && !named.has(String(r._id)) && isConvexId(String(r._id)))
     .map((r) => String(r._id))
     .sort();
 }
