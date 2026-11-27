@@ -35,7 +35,7 @@ const session = (id: string, extra: Partial<InboxSession> = {}): InboxSession =>
 
 // A rank here is the pass's slot (ai_rank); null is a priority set aside, which has none.
 const priority = (id: string, rank: number | null, steps: string[], user_id = ME) => ({
-  _id: id, short_id: id, status: rank == null ? "set_aside" : "active", ai_rank: rank, person_pos: null, workspace: "team:team_p", last_active_at: 0, user_id,
+  _id: id, short_id: `pri-${id}`, title: `${id} title`, status: rank == null ? "set_aside" : "active", ai_rank: rank, person_pos: null, workspace: "team:team_p", last_active_at: 0, user_id,
   steps: steps.map((key) => ({ key })),
 });
 const priorities = {
@@ -108,10 +108,10 @@ describe("sortQueueByPriority", () => {
 });
 
 /** The reader over these priorities, other workspaces' ranks and a viewer, in team_p. */
-const readerOf = (p: any = priorities, ranks: Record<string, { _id: string; workspace: string; rank: number }> = {}, viewer: string | null = ME) =>
+const readerOf = (p: any = priorities, ranks: Record<string, { _id: string; workspace: string; rank: number; short_id: string; title: string }> = {}, viewer: string | null = ME) =>
   priorityPlaceReader({ priorities: p, priorityRanks: ranks, currentUser: viewer ? { _id: viewer } : null, clientState: { ui: { active_team_id: PRIORITIES_TEAM._id } } });
 const PERSONAL = `user:${ME}`;
-const elsewhere = { pOtherWorkspace: { _id: "pOtherWorkspace", workspace: PERSONAL, rank: 1 } };
+const elsewhere = { pOtherWorkspace: { _id: "pOtherWorkspace", workspace: PERSONAL, rank: 1, short_id: "pri-9", title: "Personal goal" } };
 
 describe("sortByPriority", () => {
   it("orders by rank, then milestone, then unranked in their given order", () => {
@@ -122,7 +122,7 @@ describe("sortByPriority", () => {
   });
 
   it("puts another workspace's ranked sessions after this workspace's, before the unranked, by rank", () => {
-    const ranks = { ...elsewhere, pFar: { _id: "pFar", workspace: "team:other", rank: 2 }, pNear: { _id: "pNear", workspace: PERSONAL, rank: 3 } };
+    const ranks = { ...elsewhere, pFar: { _id: "pFar", workspace: "team:other", rank: 2, short_id: "pri-10", title: "Far" }, pNear: { _id: "pNear", workspace: PERSONAL, rank: 3, short_id: "pri-11", title: "Near" } };
     const extra = [session("far", link("pFar")), session("near", link("pNear"))];
     expect(sortByPriority([...extra, ...rows.filter((s) => s.is_idle)], readerOf(priorities, ranks)).map(tag)).toEqual([
       "a1", "a2", "anostep", "bs1", "other", "far", "near", "none1", "b", "theirs", "aside", "none2",
@@ -135,27 +135,30 @@ describe("sortByPriority", () => {
     expect(placeOf(session("x", link("pTheirs", "s1")))).toBeNull();
     expect(placeOf(session("x", link("pAside", "s1")))).toBeNull();
     expect(readerOf(priorities, elsewhere, null)(session("x", link("pA", "s1")))).toBeNull();
-    expect(placeOf(session("x", link("pB", "s1")))).toEqual({ rank: 2, step: 0, workspace: null });
+    expect(placeOf(session("x", link("pB", "s1")))).toEqual({ rank: 2, step: 0, workspace: null, shortId: "pri-pB", title: "pB title" });
     // A priority whose rank is not loaded anywhere has no chip, not a placeholder.
     expect(rankLabelOf(placeOf(session("x", link("pOtherWorkspace", "s1"))))).toBeNull();
   });
 
-  it("reads another workspace's rank off priorityRanks, labelled with that workspace", () => {
+  it("reads another workspace's rank and title off priorityRanks, labelled with that workspace", () => {
     const placeOf = readerOf(priorities, elsewhere);
-    expect(placeOf(session("x", link("pOtherWorkspace", "s1")))).toEqual({ rank: 1, step: Infinity, workspace: PERSONAL });
-    expect(rankLabelOf(placeOf(session("x", link("pOtherWorkspace"))))).toEqual({ rank: 1, workspace: PERSONAL });
-    expect(rankLabelOf(placeOf(session("x", link("pB", "s1"))))).toEqual({ rank: 2, workspace: null });
-    // One label object per rank and workspace, so a card's prop keeps its identity.
+    expect(placeOf(session("x", link("pOtherWorkspace", "s1")))).toEqual({ rank: 1, step: Infinity, workspace: PERSONAL, shortId: "pri-9", title: "Personal goal" });
+    expect(rankLabelOf(placeOf(session("x", link("pOtherWorkspace"))))).toEqual({ rank: 1, workspace: PERSONAL, shortId: "pri-9", title: "Personal goal" });
+    expect(rankLabelOf(placeOf(session("x", link("pB", "s1"))))).toEqual({ rank: 2, workspace: null, shortId: "pri-pB", title: "pB title" });
+    // One label object per rank, workspace and priority, so a card's prop keeps its identity.
     expect(rankLabelOf(placeOf(session("y", link("pB"))))).toBe(rankLabelOf(placeOf(session("x", link("pB", "s1")))));
+    // A renamed priority is a new label, so its chips redraw.
+    const renamed = readerOf({ ...priorities, pB: { ...priorities.pB, title: "Renamed" } }, elsewhere);
+    expect(rankLabelOf(renamed(session("x", link("pB"))))?.title).toBe("Renamed");
   });
 
   it("reads the active workspace's rank off its loaded rows, and a lingering row of another workspace off priorityRanks", () => {
     // priorities.list's push has not come yet: the active workspace's rank is in priorityRanks and draws with no mark.
-    const cold = readerOf({}, { pB: { _id: "pB", workspace: `team:${PRIORITIES_TEAM._id}`, rank: 2 } });
-    expect(cold(session("x", link("pB")))).toEqual({ rank: 2, step: Infinity, workspace: null });
+    const cold = readerOf({}, { pB: { _id: "pB", workspace: `team:${PRIORITIES_TEAM._id}`, rank: 2, short_id: "pri-pB", title: "pB title" } });
+    expect(cold(session("x", link("pB")))).toEqual({ rank: 2, step: Infinity, workspace: null, shortId: "pri-pB", title: "pB title" });
     // A row cached from the personal workspace is not this workspace's rank.
     const lingering = { ...priorities, pOtherWorkspace: { ...priority("pOtherWorkspace", 5, ["s1"]), workspace: PERSONAL } };
-    expect(readerOf(lingering, elsewhere)(session("x", link("pOtherWorkspace", "s1")))).toEqual({ rank: 1, step: 0, workspace: PERSONAL });
+    expect(readerOf(lingering, elsewhere)(session("x", link("pOtherWorkspace", "s1")))).toEqual({ rank: 1, step: 0, workspace: PERSONAL, shortId: "pri-9", title: "Personal goal" });
   });
 });
 

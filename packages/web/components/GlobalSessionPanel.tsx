@@ -101,7 +101,7 @@ import { Button } from "./ui/button";
 import { ListHeadNewSession } from "./inbox/NewSessionButton";
 import { CompactPlanRow, PlanAskButton, PlanGroupFacts, PlanGroupMark, PlanTierHeader, RestingPlans } from "./inbox/PlanGroupParts";
 import { PLAN_TIERS, planTierFolded, planTierKey, planTierOf } from "../store/inboxStore";
-import { priorityOrderSig, priorityPlaceReader, rankLabelOf, sortByPriority } from "../store/priorityOrder";
+import { prioritiesAnywhere, priorityOrderSig, priorityPlaceReader, rankLabelOf, sortByPriority } from "../store/priorityOrder";
 import { useWorkspaceFeature } from "../lib/teamFeatures";
 import { PLAN_STATE_STATUS } from "../lib/sessionStatus";
 import type { PlanItem } from "../store/inboxStore";
@@ -1765,7 +1765,8 @@ function SessionListPanelImpl({
     s => orgLensWakeSig(s),
     // Every plan a "By plan" group may name, from any workspace: only while the lens is up.
     s => (resolveInboxViewMode(s) === "plan" ? allPlansSig(s.plans) : ""),
-    // Each session's priority link and each priority's rank: the Priorities view and the filter's Top N read them.
+    // Each session's priority link and each priority's owner, rank, title and milestones: every card's
+    // priority chip, the Priorities view's sort and the filter's Top N read them.
     s => priorityOrderSig(s),
     // The view mode itself: Priorities reads as grouped while the workspace has the feature off.
     s => resolveInboxViewMode(s),
@@ -2084,15 +2085,18 @@ function SessionListPanelImpl({
     return ids;
   }, [globalSubByParent]);
   const subRowOf = (sub: InboxSession) => (isUnderRole(sub) ? "role" : isSpawnedWorker(sub) ? "worker" : undefined);
-  // The Priorities view keeps the status sections and sorts each by the
-  // viewer's priority a session serves, as the keyboard walk does
+  // Every card filed under one of the viewer's priorities names its rank and
+  // title, in every view. The Priorities view also keeps the status sections
+  // and sorts each by that priority, as the keyboard walk does
   // (visualOrderSessions); Pinned keeps the person's own order. Decisions
   // sorts its own groups (InboxDecisionQueue).
-  const priorityKey = resolveInboxViewMode(s) === "priorities" ? priorityOrderSig(s) : "";
+  const priorityKey = prioritiesAnywhere(s) ? priorityOrderSig(s) : "";
   // Links read off the live rows: the placed rows can be older copies of a session whose link just changed.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const priorityPlaceOf = useMemo(() => (priorityKey ? priorityPlaceReader(useInboxStore.getState()) : null), [priorityKey]);
-  const byPriority = useCallback((rows: InboxSession[]) => (priorityPlaceOf ? sortByPriority(rows, priorityPlaceOf) : rows), [priorityPlaceOf]);
+  const priorityRankOf = (session: InboxSession) => (priorityPlaceOf ? rankLabelOf(priorityPlaceOf(session)) : undefined);
+  const sortPlaceOf = resolveInboxViewMode(s) === "priorities" ? priorityPlaceOf : null;
+  const byPriority = useCallback((rows: InboxSession[]) => (sortPlaceOf ? sortByPriority(rows, sortPlaceOf) : rows), [sortPlaceOf]);
   const statusPinned = filteredPinned;
   const statusNew = useMemo(() => byPriority(filteredNew), [byPriority, filteredNew]);
   const statusNeedsInput = useMemo(() => byPriority(filteredNeedsInput), [byPriority, filteredNeedsInput]);
@@ -2901,6 +2905,7 @@ function SessionListPanelImpl({
                   variant={variant}
                   forkColorKey={forkColorKeyOf(session)}
                   sessionLabel={labelByConv[session._id] ?? null}
+                  priorityRank={priorityRankOf(session)}
                   isUnread={!!unreadByConv[session._id]}
                   isFavorite={cardIsFavorite(session)}
                 />
@@ -2945,6 +2950,7 @@ function SessionListPanelImpl({
                     subRow={subRowOf(sub)}
                     underParent
                     sessionLabel={labelByConv[sub._id] ?? null}
+                    priorityRank={priorityRankOf(sub)}
                     isUnread={!!unreadByConv[sub._id]}
                     isFavorite={cardIsFavorite(sub)}
                   />
@@ -3183,7 +3189,7 @@ function SessionListPanelImpl({
                   subRow={flatNestParentOf && isUnderRole(session) && flatNestParentOf(session) ? "role" : flat && nestedWorkerIds.has(session._id) ? "worker" : undefined}
                   underParent={!!flatUnderParent?.has(session._id)}
                   sessionLabel={labelByConv[session._id] ?? null}
-                  priorityRank={priorityPlaceOf ? rankLabelOf(priorityPlaceOf(session)) : undefined}
+                  priorityRank={priorityRankOf(session)}
                   isUnread={!!unreadByConv[session._id]}
                   isFavorite={cardIsFavorite(session)}
                 />
@@ -3226,6 +3232,7 @@ function SessionListPanelImpl({
                     subRow={subRowOf(sub)}
                     underParent
                     sessionLabel={labelByConv[sub._id] ?? null}
+                    priorityRank={priorityRankOf(sub)}
                     isUnread={!!unreadByConv[sub._id]}
                     isFavorite={cardIsFavorite(sub)}
                   />
@@ -3632,6 +3639,7 @@ function SessionListPanelImpl({
                   onPin={s.pinSession}
                   forkColorKey={forkColorKeyOf(session)}
                   sessionLabel={labelByConv[session._id] ?? null}
+                  priorityRank={priorityRankOf(session)}
                   isUnread={!!unreadByConv[session._id]}
                   isFavorite={cardIsFavorite(session)}
                   subRow="trigger"
@@ -3677,6 +3685,7 @@ function SessionListPanelImpl({
           onSelectSession={handleQuestionSelect}
           matches={chipMatchesId}
           priorityPlaceOf={priorityPlaceOf ?? undefined}
+          sortByRank={!!sortPlaceOf}
         />
         {renderSection("Pinned", statusPinned, "text-sol-magenta", undefined, undefined, { floor: true, count: countOf(statusPinned, pinned, "pinned") })}
         {renderSection("New", statusNew, "text-sol-blue", undefined, undefined, { key: "new", floor: true, count: countOf(statusNew, newSessions, "newSessions") })}

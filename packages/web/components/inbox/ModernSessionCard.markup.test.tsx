@@ -231,8 +231,18 @@ describe("the Modern session card", () => {
     expect(bare).toMatch(/<div data-mc-line3[^>]*><\/div>/);
   });
 
-  test("in the Priorities view the rank also sits on line 1, before the time, which a compact card (Dormant, inbox_compact) keeps", async () => {
-    const html = render({ _id: "c-ranked" }, { priorityRank: { rank: 3, workspace: null } });
+  test("a card filed under one of the viewer's priorities names its rank and title and links to it", () => {
+    const html = render({ _id: "c-named" }, { priorityRank: { rank: 3, workspace: null, shortId: "pri-3", title: "Trusted evals" } });
+    const chip = html.slice(html.indexOf("data-mc-line3"));
+    const link = chip.match(/<a [^>]*data-priority-chip="pri-3"[^>]*>/)?.[0] ?? "";
+    expect(link).toContain('href="/priorities/pri-3"');
+    expect(link).toContain('aria-label="Your priority #3: Trusted evals"');
+    expect(chip).toContain(">#3</span>");
+    expect(chip).toContain(">Trusted evals</span>");
+  });
+
+  test("the rank also sits on line 1, before the time, which a compact card (Dormant, inbox_compact) keeps", async () => {
+    const html = render({ _id: "c-ranked" }, { priorityRank: { rank: 3, workspace: null, shortId: "pri-3", title: "Trusted evals" } });
     const compactRank = html.indexOf("data-mc-compact-rank");
     expect(compactRank).toBeGreaterThan(-1);
     expect(compactRank).toBeLessThan(html.indexOf("data-mc-time"));
@@ -245,7 +255,7 @@ describe("the Modern session card", () => {
     const css = await Bun.file(new URL("./modernSessionCard.css", import.meta.url)).text();
     const show = css.slice(css.indexOf("[data-mc-compact-reason],"), css.indexOf("display: inline-flex", css.indexOf("[data-mc-compact-reason],")));
     expect(show).toContain(".modern-style .inbox-compact [data-sv-rail] [data-mc] [data-mc-compact-rank]");
-    // Outside the Priorities view there is no rank anywhere.
+    // A card with no priority has no chip.
     expect(render({ _id: "c-plain-rank" })).not.toContain("data-mc-compact-rank");
   });
 
