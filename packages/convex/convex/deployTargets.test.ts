@@ -271,6 +271,16 @@ describe("recording every way a target goes live (DP11)", () => {
     expect(statusEventOf({ ...payload("success", 3), branches: [{ name: "feature" }] })!.on_default_branch).toBe(false);
   });
 
+  test("a Railway success that says no deployment was needed cancels the deploy: the live sha stays", async () => {
+    const { t, ctx } = await published();
+    const payload = (state: string, n: number, description?: string) => ({ sha: sha(n), context: "acme - web", state, description, target_url: "https://railway/x", branches: [{ name: "main" }], repository: { full_name: REPO, default_branch: "main" }, updated_at: new Date(NOW).toISOString() });
+    await recordGithubDeployStatus(ctx, statusEventOf(payload("success", 1, "Success - acme.sh"))!);
+    await recordGithubDeployStatus(ctx, statusEventOf(payload("pending", 2, "Railway is deploying the service"))!);
+    await recordGithubDeployStatus(ctx, statusEventOf(payload("success", 2, "No deployment needed - watched paths not modified"))!);
+    expect(t.deploys[1]).toMatchObject({ status: "cancelled", sha: sha(2), note: "No deployment needed - watched paths not modified" });
+    expect((await viewOf(ctx, "web"))[0].live.sha).toBe(sha(1));
+  });
+
   test("a json reader records a deploy when the document names a new commit, once", async () => {
     const { t, ctx } = await published();
     const cli = t.deploy_targets.find((r) => r.name === "cli");
