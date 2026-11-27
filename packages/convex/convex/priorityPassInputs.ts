@@ -38,8 +38,6 @@ const SESSIONS_READ = 50; // 88 in one chunk overflowed the reply's 16k-token li
 /** The most typed messages and pin events one pass scans, together, while it collects its sessions: a guard on the read limit. */
 const ACTIVITY_SCAN = 2_000;
 const TASKS_PER_SESSION = 12;
-/** The history rows a replay reads for one task's status as it stood (taskStatusAsOf). */
-const TASK_HISTORY_READ = 40;
 const PR_LINKS_PER_SESSION = 10;
 /** Pull request rows one pass loads beyond what sessions fold: a row carries its files and can reach 1 MB. */
 const PR_ROWS_READ = 8;
@@ -214,12 +212,21 @@ export async function sessionTasks(ctx: { db: any }, conv: Doc<"conversations">,
   return out;
 }
 
-/** A task's status at `at`: what its last status change by then set, else what the first later change moved it from. */
+/**
+ * A task's status at `at`: what its last status change by then set, else what
+ * the first later change moved it from. Reads the task's whole history (one
+ * task's edits, tens to hundreds of rows) and orders by `created_at`, which an
+ * import can stamp out of insertion order.
+ */
 async function taskStatusAsOf(ctx: { db: any }, task: Doc<"tasks">, at: number): Promise<Doc<"tasks">["status"]> {
-  const rows: Doc<"task_history">[] = await ctx.db.query("task_history").withIndex("by_task_id", (q: any) => q.eq("task_id", task._id)).take(TASK_HISTORY_READ);
-  const changes = rows.filter((h) => h.field === "status").sort((a, b) => a.created_at - b.created_at);
-  const then = changes.filter((h) => h.created_at <= at).pop()?.new_value ?? changes.find((h) => h.created_at > at)?.old_value;
-  return (then ?? task.status) as Doc<"tasks">["status"];
+  let before: Doc<"task_history"> | null = null;
+  let after: Doc<"task_history"> | null = null;
+  for await (const h of ctx.db.query("task_history").withIndex("by_task_id", (q: any) => q.eq("task_id", task._id)) as AsyncIterable<Doc<"task_history">>) {
+    if (h.field !== "status") continue;
+    if (h.created_at <= at) { if (!before || h.created_at >= before.created_at) before = h; }
+    else if (!after || h.created_at < after.created_at) after = h;
+  }
+  return ((before ? before.new_value : after?.old_value) ?? task.status) as Doc<"tasks">["status"];
 }
 
 /**

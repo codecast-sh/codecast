@@ -232,9 +232,12 @@ describe("evalPass", () => {
     await w.t.run(async (ctx) => {
       await ctx.db.patch(w.teamConv, { earlier_titles: ["Grader work"], idle_summary: "Shipped the grader fix" } as any);
       const task = await ctx.db.insert("tasks", { user_id: w.ana, team_id: w.acme, workspace: w.team, short_id: "ct-1", title: "Fix the grader", task_type: "task", priority: "medium", source: "human", status: "done", created_from_conversation: w.teamConv, created_at: 1, updated_at: 1 } as any);
+      // A busy task: its status changes come after 60 other edits, and the latest is after the replay's now.
+      for (let i = 0; i < 60; i++) await ctx.db.insert("task_history", { task_id: task, actor_type: "agent", action: "updated", field: "description", old_value: "a", new_value: "b", created_at: w.now - 5 * H + i });
       await ctx.db.insert("task_history", { task_id: task, actor_type: "agent", action: "updated", field: "status", old_value: "open", new_value: "in_progress", created_at: w.now - 3 * H });
-      await ctx.db.insert("task_history", { task_id: task, actor_type: "agent", action: "updated", field: "title", old_value: "Grader", new_value: "Fix the grader", created_at: w.now - 2 * H });
       await ctx.db.insert("task_history", { task_id: task, actor_type: "agent", action: "updated", field: "status", old_value: "in_progress", new_value: "done", created_at: w.now + 2 * H });
+      // Inserted last but stamped earliest: order is by created_at.
+      await ctx.db.insert("task_history", { task_id: task, actor_type: "system", action: "updated", field: "status", old_value: "open", new_value: "open", created_at: w.now - 4 * H });
       const pr = await ctx.db.insert("pull_requests", { team_id: w.acme, github_pr_id: 1, repository: "acme/app", number: 7, title: "Grader", body: "", state: "merged", author_github_username: "ana", linked_session_ids: [w.teamConv], created_at: w.now - 5 * H, merged_at: w.now + 2 * H, updated_at: 1 } as any);
       await ctx.db.insert("pull_request_sessions", { pull_request_id: pr, conversation_id: w.teamConv, tier: "committed", pr_number: 7, team_id: w.acme });
       await ctx.db.patch(w.teamConv, { pr_status: { pr_id: pr, repository: "acme/app", number: 7, state: "merged" } } as any);
