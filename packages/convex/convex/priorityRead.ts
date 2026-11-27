@@ -56,8 +56,6 @@ const LINK_TASK_SESSIONS = 2;
 const LINK_STEP_SESSIONS = 6;
 /** The most of the viewer's co-owned sessions a list reads in one go to tell which linked sessions are theirs. */
 const VIEWER_OWNED_READ = 500;
-/** A closed linked session's newest commits read for one that reached main (shipped). */
-const SHIPPED_READ = 50;
 /** A linked session's last activity, to the 10 minutes: a heartbeat or a streamed message re-runs the list but leaves its answer as it was. */
 const LINK_ACTIVE_ROUND_MS = 10 * 60_000;
 /** The most of today's unassigned sessions a history names. */
@@ -235,8 +233,8 @@ type LinkReads = {
   mine: (c: Doc<"conversations">) => Promise<boolean>;
   /** The milestone keys of a priority's pending corrections ("" for one on the priority itself). */
   pending: (p: Priority) => Promise<Set<string>>;
-  /** One of the session's commits reached its repository's default branch (commits.main_at, stamped by the push webhook, which links a squash merge through its Codecast-Session trailer). */
-  shipped: (c: Doc<"conversations">) => Promise<boolean>;
+  /** One of the session's commits (by conversation id) reached its repository's default branch (commits.main_at, stamped by the push webhook, which links a squash merge through its Codecast-Session trailer). */
+  shipped: (conversationId: string) => Promise<boolean>;
 };
 
 /** The reads links make, each once per list call. A plan answers only when the viewer may read it. */
@@ -258,11 +256,8 @@ function linkReads(ctx: Ctx, r: Reader): LinkReads {
     };
   };
   const listed = byConv((c) => r.listed(c));
-  // The newest SHIPPED_READ of its commits: a session whose work landed has its landing among them.
-  const shipped = byConv(async (c) => {
-    const rows = await ctx.db.query("commits").withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", c._id)).order("desc").take(SHIPPED_READ);
-    return rows.some((x: Doc<"commits">) => x.main_at != null);
-  });
+  // One read: any of its commits with a main_at (undefined sorts below every number).
+  const shipped = memo(async (id) => !!(await ctx.db.query("commits").withIndex("by_conversation_main", (q: any) => q.eq("conversation_id", id).gt("main_at", 0)).first()));
   // The sessions the viewer co-owns, in one read when they are few, so a teammate's sessions cost no read each; past VIEWER_OWNED_READ, one read per session.
   let owned: Promise<Set<string> | null> | undefined;
   const ownedIds = () => (owned ??= ctx.db.query("session_owners").withIndex("by_user", (q: any) => q.eq("user_id", r.viewer)).take(VIEWER_OWNED_READ + 1)
@@ -365,20 +360,16 @@ async function linksFor(r: Reader, reads: LinkReads, p: Priority, steps: Priorit
     const sessions: PriorityLinkedSession[] = [];
     for (const { c, why } of bySteps.get(s.key)!.values()) {
       const mine = await reads.mine(c);
-      const state = linkedSessionState(c, now);
-      // Only a closed one is asked: a live session's state says more than whether some of it landed.
-      const shipped = isClosedSession({ state }) && (await reads.shipped(c));
       sessions.push({
         short_id: c.short_id ?? String(c._id),
         conversation_id: String(c._id),
         title: c.title ?? "",
-        state,
+        state: linkedSessionState(c, now),
         mine,
         started_by_viewer: String(c.user_id) === String(r.viewer),
         workflow: isWorkflowSession(c as any),
         why,
         last_active_at: Math.floor(c.updated_at / LINK_ACTIVE_ROUND_MS) * LINK_ACTIVE_ROUND_MS,
-        ...(shipped ? { shipped: true as const } : {}),
       });
     }
     // The server never cuts a live session from what it reads (the LINK_MAPPED_READ newest mapped per priority, and
@@ -387,9 +378,11 @@ async function linksFor(r: Reader, reads: LinkReads, p: Priority, steps: Priorit
     const live = ordered.filter((x) => !isClosedSession(x));
     const closed = ordered.filter(isClosedSession);
     const closedShown = Math.max(0, LINK_STEP_SESSIONS - live.length);
+    // Only a closed one that is sent is asked whether it shipped: a live session's state says more, and the cut stays by recency.
+    const sent = await Promise.all(closed.slice(0, closedShown).map(async (x) => ((await reads.shipped(x.conversation_id)) ? { ...x, shipped: true as const } : x)));
     links.push({
       key: s.key,
-      sessions: [...live, ...closed.slice(0, closedShown)],
+      sessions: [...live, ...sent],
       sessions_more: Math.max(0, closed.length - closedShown),
       plan: own?.plan ? planRef(own.plan) : null,
       part_of: (own?.part_of ?? []).map(planRef),

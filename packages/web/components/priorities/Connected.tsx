@@ -3,7 +3,7 @@
 // working, sleeping, idle, then the most recent), closed ones last: on the
 // list folded under "› n closed", on the priority's own page (`flat`) listed
 // with the rest, the shipped ones first. A settled session whose work reached
-// main reads Shipped, with Done's mark (lib/priorityList sessionRowStatus). Then
+// main reads Shipped, with Done's mark (lib/priorityList sessionRows). Then
 // tasks in the app's task-status vocabulary (dropped struck through), pull
 // requests, branches, plans and deploys. Each row opens its thing; the
 // session's owner or the priority's fixes its link from its ⋯.
@@ -12,13 +12,12 @@ import Link from "next/link";
 import { ChevronRight, GitBranch, GitMerge, GitPullRequest, GitPullRequestClosed, Map as MapIcon, Workflow } from "lucide-react";
 import type { PriorityPlanRef } from "@codecast/shared/contracts/priorities";
 import { entityRoute } from "@codecast/shared/entities";
-import { isClosedSession, orderByState } from "@codecast/shared/contracts/priorityDerive";
 import { SessionStatusMark } from "../inbox/SessionStatusMark";
 import { Mark } from "../Mark";
 import { taskStatusMarkId } from "../../lib/marks/work";
 import { taskVisual } from "../TaskStatusBadge";
 import { useEntityResolution } from "../../lib/entityDisplay";
-import { ago, sessionRowStatus, type MilestoneModel, type PriorityModel, type SessionLine } from "../../lib/priorityList";
+import { ago, sessionRows, type MilestoneModel, type PriorityModel, type SessionLine } from "../../lib/priorityList";
 import { SESSION_STATUS, type SessionStatus } from "../../lib/sessionStatus";
 import { cn } from "../../lib/utils";
 import { branchesOf, type LinkLookups } from "../../hooks/usePriorityModels";
@@ -54,10 +53,7 @@ export function Connected({ model, m, now, lookups, flat }: {
   flat?: boolean;
 }) {
   const [closedOpen, setClosedOpen] = useState(false);
-  const rows = orderByState(m.sessions).map((s) => ({ s, ...sessionRowStatus(s) }));
-  const live = rows.filter((r) => !isClosedSession(r.s));
-  // Shipped before merely closed; each keeps the sidebar's order (sort is stable).
-  const closed = rows.filter((r) => isClosedSession(r.s)).sort((a, b) => Number(!a.shipped) - Number(!b.shipped));
+  const { live, closed } = sessionRows(m.sessions);
   const plans: Array<{ plan: PriorityPlanRef; partOf?: boolean }> = [
     // Only a plan of the milestone's own: the priority's plan would repeat under every milestone.
     ...(m.plan && m.plan.short_id !== model.plan?.short_id ? [{ plan: m.plan }] : []),

@@ -1,8 +1,9 @@
 // A priority on the phone (`pri-N`), the list's row made bigger as web's
 // priority page is: its title whole, ten days of typing across the screen
-// with the day under each, its plan once, then its milestones as the list
-// draws them (components/priorities/PriorityParts) with every open one
-// expanded to what it is connected to, and the owner's corrections to the
+// with the day under each, its plan once, then its milestones in one list by
+// state with no Done or Polish sections, every one expanded to what it is
+// connected to and its sessions unfolded (components/priorities/PriorityParts
+// Milestones `expand`), and the owner's corrections to the
 // pass. The header carries Share and the priority's ⋯ (Rename, the moves,
 // Correct…, Copy pri-N). Store-fed: priorities.show feeds priorityDetails
 // (web hooks/usePriorityDetail); the workspace list's row paints until the

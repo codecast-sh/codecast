@@ -4,7 +4,7 @@
 // session states. Nothing here is stored: each milestone's state, the ten
 // days of typing.
 import type { PriorityHistory, PriorityLinkedSession, PriorityPlanRef, PriorityRow, PrioritySessionState, PriorityStep } from "@codecast/shared/contracts/priorities";
-import { milestoneStateOf, orderSessions, type MilestoneState, type MilestoneStateKind } from "@codecast/shared/contracts/priorityDerive";
+import { isClosedSession, milestoneStateOf, orderByState, orderSessions, type MilestoneState, type MilestoneStateKind } from "@codecast/shared/contracts/priorityDerive";
 import type { SessionStatus } from "./sessionStatus";
 import type { DrawnMark } from "../store/inboxMark";
 import { milestoneLinksOf } from "./priorities";
@@ -126,6 +126,29 @@ export function sessionRowStatus(s: Pick<SessionLine, "mark" | "state" | "shippe
   const shipped = !!s.shipped && (mark === "done" || mark === "killed");
   return { mark: shipped ? "done" : mark, shipped };
 }
+
+/** A session as its row draws it on a milestone (both apps). */
+export type SessionRow = { s: SessionLine; mark: SessionStatus; shipped: boolean };
+
+/**
+ * A milestone's sessions as rows (both apps): the live ones in the sidebar's
+ * order (needs you, working, sleeping, idle, then the most recent), then the
+ * closed ones, the shipped before the rest, each keeping that order. The list
+ * folds the closed ones; the priority's own page lists them after the live.
+ */
+export function sessionRows(sessions: readonly SessionLine[]): { live: SessionRow[]; closed: SessionRow[] } {
+  const rows = orderByState(sessions).map((s) => ({ s, ...sessionRowStatus(s) }));
+  return {
+    live: rows.filter((r) => !isClosedSession(r.s)),
+    closed: rows.filter((r) => isClosedSession(r.s)).sort((a, b) => Number(!a.shipped) - Number(!b.shipped)),
+  };
+}
+
+const PAGE_ORDER: Record<MilestoneStateKind, number> = { needs_you: 0, working: 1, dormant: 2, idle: 3, start: 4, none: 5, done: 6 };
+
+/** The priority's own page (both apps): every milestone in one list by state, needs you first and done last, critical before polish within one, then the pass's order. */
+export const milestonesByState = (list: readonly MilestoneModel[]): MilestoneModel[] =>
+  [...list].sort((a, b) => PAGE_ORDER[a.state.kind] - PAGE_ORDER[b.state.kind] || Number(a.tier === "polish") - Number(b.tier === "polish"));
 
 export type MilestoneModel = {
   key: string;

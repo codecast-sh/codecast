@@ -11,8 +11,7 @@ import Link from "next/link";
 import { ChevronRight } from "lucide-react";
 import { pastBadge, priorityHref, rankProvenance, type PriorityRow } from "../../lib/priorities";
 import type { ListLayout, MilestoneModel, PriorityModel } from "../../lib/priorityList";
-import type { MilestoneStateKind } from "@codecast/shared/contracts/priorityDerive";
-import { TOUCH_AREA } from "../../lib/priorityList";
+import { TOUCH_AREA, milestonesByState } from "../../lib/priorityList";
 import { cn } from "../../lib/utils";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import type { LinkLookups } from "../../hooks/usePriorityModels";
@@ -243,19 +242,13 @@ function SectionHead({ kind, label, count, open, onClick, className }: { kind: s
 
 type Section = { kind: string; label: string; count: string; open: boolean; toggle: () => void; rows: MilestoneModel[] };
 
-const PAGE_ORDER: Record<MilestoneStateKind, number> = { needs_you: 0, working: 1, dormant: 2, idle: 3, start: 4, none: 5, done: 6 };
-
-/** The priority's page order: by state (needs you first, done last), critical before polish within one, then the pass's order. */
-const byMilestoneState =(list: readonly MilestoneModel[]): MilestoneModel[] =>
-  [...list].sort((a, b) => PAGE_ORDER[a.state.kind] - PAGE_ORDER[b.state.kind] || Number(a.tier === "polish") - Number(b.tier === "polish"));
-
 /**
  * A priority's milestones. On the list: the open critical ones and any that
  * need you, then Done and Polish. A closed section is its head, sharing one
  * line with the next closed one; an open one is its head, caret and all, over
  * its milestones; `focus` opens the one a link named, and the section that
  * holds it. On the priority's page (`expand`): no sections, every milestone
- * in one list by state (byMilestoneState), each open.
+ * in one list by state (lib/priorityList milestonesByState), each open.
  */
 export function Milestones({ model, layout, now, lookups, expand, focus }: {
   model: PriorityModel;
@@ -272,7 +265,7 @@ export function Milestones({ model, layout, now, lookups, expand, focus }: {
   const done = model.milestones.filter((m) => m.tier === "critical" && !unfolded(m));
   const [doneOpen, setDoneOpen] = useState(() => done.some((m) => m.key === focus));
   const [polishOpen, setPolishOpen] = useState(() => polish.some((m) => m.key === focus));
-  if (expand) return <ul data-milestone-list>{byMilestoneState(model.milestones).map((m) => <MilestoneRow key={m.key} model={model} m={m} layout={layout} now={now} lookups={lookups} defaultOpen page />)}</ul>;
+  if (expand) return <ul data-milestone-list>{milestonesByState(model.milestones).map((m) => <MilestoneRow key={m.key} model={model} m={m} layout={layout} now={now} lookups={lookups} defaultOpen page />)}</ul>;
   const line = (m: MilestoneModel) => <MilestoneRow key={m.key} model={model} m={m} layout={layout} now={now} lookups={lookups} defaultOpen={m.key === focus} />;
   const sections: Section[] = [];
   if (done.length) sections.push({ kind: "done", label: "Done", count: `${done.length}`, open: doneOpen, toggle: () => setDoneOpen((o) => !o), rows: done });

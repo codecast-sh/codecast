@@ -1,13 +1,14 @@
 // What the phone's priorities (the list, app/priorities.tsx, and a priority's
 // screen, app/priority/[id].tsx) say and offer, as pure functions over web's
 // models (lib/priorityList), so they are tested without React Native: each
-// milestone's mark, the DONE and POLISH sections, an open milestone's
+// milestone's mark, the list's DONE and POLISH sections (the priority's screen
+// lists every milestone by state instead: milestonesByState), an open milestone's
 // connected groups, the ten-day bars, the owner's ⋯ menus as sheet rows
 // whose presses are web's writes (lib/priorityWrites), and the list's
 // sections per workspace and person as the rows it draws in order.
 import type { PriorityPlanRef, PriorityRow, PriorityStep } from '@codecast/shared/contracts/priorities';
-import { isClosedSession, orderByState, type MilestoneStateKind } from '@codecast/shared/contracts/priorityDerive';
-import { MILESTONE_STATE_WORD, ago, type MilestoneModel, type PriorityModel, type SessionLine } from '@codecast/web/lib/priorityList';
+import type { MilestoneStateKind } from '@codecast/shared/contracts/priorityDerive';
+import { MILESTONE_STATE_WORD, ago, sessionRows, type MilestoneModel, type PriorityModel, type SessionLine } from '@codecast/web/lib/priorityList';
 import { milestoneStart, rankProvenance, type PriorityWrites } from '@codecast/web/lib/priorities';
 import { GROUP_BY_LABEL, type GroupBy, type Sections } from '@codecast/web/lib/prioritySections';
 import type { SessionStatus } from '@codecast/web/lib/sessionStatus';
@@ -110,7 +111,7 @@ export const age = (ts: number, now: number) => { const a = ago(ts, now); return
 export type Connected = {
   /** Live sessions, sorted the way the sidebar files them: needs you, working, sleeping, idle, then the most recent. */
   live: SessionLine[];
-  /** Finished or closed, folded under "› n closed". */
+  /** Finished or closed, the shipped first (web lib/priorityList sessionRows): folded under "› n closed" on the list, listed after the live on the priority's screen. */
   closed: SessionLine[];
   /** Linked sessions the row does not carry. */
   more: number;
@@ -125,11 +126,11 @@ export type Connected = {
  * repeated under a milestone, on the list or the screen (web Connected).
  */
 export function connectedOf(m: MilestoneModel): Connected {
-  const sessions = orderByState(m.sessions);
+  const { live, closed } = sessionRows(m.sessions);
   const own = m.plan;
   return {
-    live: sessions.filter((s) => !isClosedSession(s)),
-    closed: sessions.filter(isClosedSession),
+    live: live.map((r) => r.s),
+    closed: closed.map((r) => r.s),
     more: m.more,
     tasks: m.tasks,
     prs: m.prs,
