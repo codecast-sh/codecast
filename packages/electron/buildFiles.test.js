@@ -95,7 +95,7 @@ test("the entry points themselves are packaged", () => {
 
 test("release verification preserves explicit module extensions", () => {
   const { execFileSync } = require("node:child_process");
-  const script = readFileSync(join(HERE, "scripts/release.sh"), "utf8");
+  const script = readFileSync(join(HERE, "scripts/verify-asar.sh"), "utf8");
   const normalize = script.match(/case "\$mod" in .*? esac/)[0];
   for (const [mod, expected] of [
     ["./notificationRouter", "./notificationRouter.js"],
