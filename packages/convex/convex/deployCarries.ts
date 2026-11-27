@@ -295,7 +295,8 @@ export async function completeLiveRuns(ctx: any, deployId: Id<"deploys">, now = 
   const done: Id<"workflow_runs">[] = [];
   for (const run of runs) {
     const prefix = deployStopOf(run);
-    if (!prefix) continue;
+    // A run a person queued to resume is theirs to finish.
+    if (!prefix || run.resume_queued) continue;
     // This deploy holds the change (its own commit, or a cut on main at or after the merge's place); else it is not
     // what took the change live, and the deploy that does answers for it.
     const commit = await commitBySha(ctx, d.repository, run.merge!.sha);

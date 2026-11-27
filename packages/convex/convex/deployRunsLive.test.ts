@@ -96,6 +96,8 @@ async function world() {
     stoppedAtDeploy("run_b", 3, "Deploy stuck: web is not live with c after 60m.", "task_b"),
     // Stopped for another reason: its change is on main, but the run never reached Deploy.
     { ...stoppedAtDeploy("run_c", 2, "merge is off for this flow", "task_c"), current_node_id: "merge", node_statuses: [{ node_id: "merge", status: "failed" }] },
+    // Stopped at Deploy like run A, but a person queued it to resume.
+    { ...stoppedAtDeploy("run_d", 1, "The deploy that carried a failed: cli dp-1 (Stopped at Send.).", "task_c"), resume_queued: { at: "deploy", by: ME, since: NOW } },
   );
   t.tasks[0].execution_concerns = t.workflow_runs[0].fail_reason;
   const mark = (target: string, n: number, status: "live" | "failed" = "live") =>
@@ -144,6 +146,7 @@ describe("a run stopped at Deploy reads Live once a later deploy carries its cha
     // Its change touching web keeps run B stopped; run C stopped before Deploy and is not read at all.
     expect(run(t, "run_b").status).toBe("failed");
     expect(run(t, "run_c")).toMatchObject({ status: "failed", current_node_id: "merge" });
+    expect(run(t, "run_d").status).toBe("failed");
 
     // A later live deploy changes nothing more and says nothing again.
     await mark("cli", 4, "live");
