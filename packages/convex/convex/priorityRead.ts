@@ -5,9 +5,9 @@
 import { verifyApiToken } from "./apiTokens";
 import { accessStampFor, authorizedFor } from "./lib/accessKeys";
 import { teamFeatureOffMessage } from "./lib/teamFeatureGuard";
-import { effectivePriorityOrder, rankSourceOf } from "@codecast/shared/contracts/priorities";
+import { rankSourceOf } from "@codecast/shared/contracts/priorities";
 import { FEATURE, TEAMMATE_SESSIONS, featureCheck, readerFor, type Reader } from "./lib/priorityAccess";
-import { activeGroup, positionsOf } from "./lib/priorityGroup";
+import { positionOf, positionsFor } from "./lib/priorityGroup";
 import { passTiming } from "./priorityPassSweep";
 import { isSessionOwner } from "./sessionOwners";
 import { mayBeTeamOwned } from "./lib/viewerTriage";
@@ -89,35 +89,6 @@ export function cliWorkspace(viewer: Id<"users">, args: { team_id?: Id<"teams">;
 export const STATUS_ORDER: Record<PriorityStatus, number> = { active: 0, done: 1, quiet: 2, set_aside: 3, merged: 4 };
 /** What a list shows without a status: everything but merged, read status by status so merged rows are never read. */
 const LISTED_STATUSES: PriorityStatus[] = ["active", "done", "quiet", "set_aside"];
-
-/**
- * One owner's active priorities in one workspace, each with its position as
- * the reader sees it, from the group every rank read orders (lib/priorityGroup).
- * The owner reads their real order. A teammate reads that order over the ones
- * they can read, numbered 1..n, so one hidden from them (one that needs a
- * rewrite, one whose sessions are not listed to them) leaves no gap. A
- * teammate's numbering stops once every id in `wanted` has its number: each
- * priority it judges costs a read, and those ranked below go unread.
- */
-export async function positionsFor(ctx: Ctx, r: Reader, owner: Id<"users">, workspace: string, wanted: ReadonlySet<string>): Promise<Map<string, number>> {
-  const group = await activeGroup(ctx, owner, workspace);
-  if (String(owner) === String(r.viewer)) return positionsOf(group);
-  const out = new Map<string, number>();
-  let left = group.filter((p) => wanted.has(String(p._id))).length;
-  for (const p of effectivePriorityOrder(group)) {
-    if (!left) break;
-    if (!(await r.canRead(p))) continue;
-    out.set(String(p._id), out.size + 1);
-    if (wanted.has(String(p._id))) left--;
-  }
-  return out;
-}
-
-/** One priority's position as the reader sees it (positionsFor): the same in a list, on the page and on the pin line. */
-export async function positionOf(ctx: Ctx, r: Reader, p: Priority): Promise<number | null> {
-  if (p.status !== "active") return null;
-  return (await positionsFor(ctx, r, p.user_id, p.workspace, new Set([String(p._id)]))).get(String(p._id)) ?? null;
-}
 
 export function criticalCounts(p: Priority): { critical_done: number; critical_total: number } {
   const critical = p.steps.filter((s) => s.tier === "critical" && !s.dropped);

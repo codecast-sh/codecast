@@ -33,10 +33,11 @@ describe("a teammate's reads", () => {
     const own = (await rowsOf(as(ada), { workspace: ws })).find((r: any) => r.short_id === "pri-2");
     expect([own.rank, (await as(ada).query(pri.show, { short_id: "pri-2" })).rank, (await as(ada).query(pri.pinLine, { conversation_id: pin })).rank]).toEqual([2, 2, 2]);
     expect([own.ai_rank, own.rank_source]).toEqual([2, "ai"]);
-    expect(await t.run(async (ctx) => (await sessionPriorityReader(ctx, ada, acme))(await ctx.db.get(pin)))).toEqual(ref);
-    // A write's echo carries the place, and a teammate's next read follows it.
+    // The owner's pill reads her real place.
+    expect(await t.run(async (ctx) => (await sessionPriorityReader(ctx, ada, acme))(await ctx.db.get(pin)))).toEqual({ ...ref, rank: 2 });
+    // A write's echo carries the place, and a teammate's next read follows it, never who placed it.
     expect(await as(ada).mutation(pri.moveTo, { short_id: "pri-2", to: 1 })).toMatchObject({ rank: 1, rank_source: "person" });
-    expect((await rowsOf(as(bea), { workspace: ws })).find((r: any) => r.short_id === "pri-2")).toMatchObject({ rank: 1, rank_source: "person" });
+    expect((await rowsOf(as(bea), { workspace: ws })).find((r: any) => r.short_id === "pri-2")).toMatchObject({ rank: 1, rank_source: null });
   });
 
   test("a row carries its owner's face: their own photo, else GitHub's, else none", async () => {

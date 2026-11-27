@@ -25,7 +25,8 @@ import { FEATURE, featureCheck, readerFor, type Reader } from "./lib/priorityAcc
 import { hasOkRun, runBlocker } from "./priorityPassRun";
 import type { PriorityDetail, PriorityHistory, PriorityList, PriorityPinLine } from "@codecast/shared/contracts/priorities";
 import type { Doc, Id } from "./_generated/dataModel";
-import { type Priority, type Result, cliWorkspace, criticalCounts, isOwner, listFor, positionOf, showFor, tokenUser } from "./priorityRead";
+import { type Priority, type Result, cliWorkspace, criticalCounts, isOwner, listFor, showFor, tokenUser } from "./priorityRead";
+import { positionOf } from "./lib/priorityGroup";
 import { historyFor } from "./priorityHistory";
 import { doCreate } from "./priorityCreate";
 import { createWorkContext } from "./data";
