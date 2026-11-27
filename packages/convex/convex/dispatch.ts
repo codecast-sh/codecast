@@ -3450,6 +3450,26 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   pinCallBoard: async (ctx, _userId, [roomKey]: [string]) => {
     return await ctx.runMutation!(api.callStage.pinCallBoard, { room_key: roomKey });
   },
+  openCallBoard: async (ctx, _userId, [roomKey]: [string]) => {
+    return await ctx.runMutation!(api.callStage.openCallBoard, { room_key: roomKey });
+  },
+  // The call's Scribe (web useScribe): the claim answer goes back to the
+  // inviter, who spawns the agent only when it claimed the slot.
+  inviteScribe: async (ctx, _userId, [roomKey, auto]: [string, boolean?]) => {
+    return await ctx.runMutation!(api.transcriptsScribe.inviteScribe, { room_key: roomKey, ...(auto ? { auto: true } : {}) });
+  },
+  removeScribe: async (ctx, _userId, [roomKey, which]: [string, { target: string } | { claim: number } | { give_back: number }]) => {
+    return await ctx.runMutation!(api.transcriptsScribe.removeScribe, { room_key: roomKey, ...which });
+  },
+  // Point a live call's words at a session, doc or Slack thread (web useCallFeed),
+  // or seat the Scribe session a claimer spawned (lib/calls/scribeInvite).
+  addLiveRoute: async (
+    ctx,
+    _userId,
+    [transcriptId, route]: [string, { kind: "session" | "doc" | "slack"; target: string; mode: "live" | "after"; face?: boolean; role?: "scribe"; claim?: number }],
+  ) => {
+    return await ctx.runMutation!(api.transcripts.addRoute, { transcript_id: transcriptId as any, ...route });
+  },
   setRoomTranscribeOff: async (ctx, _userId, [roomKey, off]: [string, boolean]) => {
     return await ctx.runMutation!(api.calls.setRoomTranscribeOff, { room_key: roomKey, off: !!off });
   },

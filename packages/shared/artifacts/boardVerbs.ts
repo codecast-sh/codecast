@@ -2,9 +2,9 @@
 // board out cleanly without computing coordinates itself. Each verb is pure:
 // the board as it stands plus arguments in, ops out. The CLI writes them and
 // moves the agent's cursor to what it wrote.
-import type { ArtifactElement, ArtifactOp, Json } from "./core";
-import type { ArtifactVerb, ArtifactView, VerbResult } from "./spec";
-import { newElementKey } from "./spec";
+import { coalesceOps, type ArtifactElement, type ArtifactOp, type Json } from "./core";
+import type { ArtifactVerb, ArtifactView, VerbContext, VerbResult } from "./spec";
+import { artifactView, newElementKey } from "./spec";
 import { parsePublishedPageUrl } from "../entities";
 import {
   BOARD_COLORS,
@@ -12,6 +12,7 @@ import {
   elementBounds,
   alignBoxes,
   center,
+  contains,
   distributeBoxes,
   elementBox,
   stickyFitHeight,
@@ -42,6 +43,19 @@ import {
   timelineOps,
 } from "./boardLayout";
 import { BOARD_TEMPLATES, isBoardTemplate, templateOps } from "./boardTemplates";
+import {
+  agentCollapseOps,
+  collapseFrameOps,
+  expandFrameOps,
+  foldedCount,
+  frameCollapsed,
+  growToHoldOps,
+  hiddenKeys,
+  moveFrameOps,
+  organizeOps,
+  personTouched,
+  reflowFrameOps,
+} from "./boardFrames";
 import { boardArtFor } from "./boardArt";
 
 type Flags = { pos: string[]; flags: Record<string, string | true> };
@@ -98,16 +112,87 @@ function boxesOf(ops: readonly ArtifactOp[]): Box[] {
   return ops.flatMap((op) => ("put" in op && op.put.kind !== "connector" ? [elementBox({ ...(op.put as any), key: op.k, rev: 0 })] : []));
 }
 
-/** A group's members, each moved by the same offset. */
-function moveOps(els: readonly ArtifactElement[], dx: number, dy: number): ArtifactOp[] {
-  return els.filter((e) => e.kind !== "connector").map((e) => ({ k: e.key, set: { x: Math.round(Number(e.x ?? 0) + dx), y: Math.round(Number(e.y ?? 0) + dy) } }));
+/** A frame's entity: a priority, goal, plan or task short id, lowercased. */
+export function frameRefArg(v: string | true | undefined, flag: string): string | undefined {
+  if (v === undefined) return undefined;
+  const m = typeof v === "string" ? /^(pri|in|pl|ct)-\d+$/i.exec(v.trim()) : null;
+  if (!m) throw new Error(`${flag} takes a priority, goal, plan or task id: pri-N, in-N, pl-N or ct-N`);
+  return v.toString().trim().toLowerCase();
+}
+
+/** Agent courtesy, for verbs that lay out more than they were asked to. */
+function frameName(view: ArtifactView, key: string): string {
+  const t = view.get(key)?.title;
+  return typeof t === "string" && t.trim() ? `"${t.trim()}"` : key;
+}
+
+/** Fold `key`; an agent's fold reflows the frames around it only as far as no person's element is touched. */
+function collapseOps(view: ArtifactView, key: string, ctx?: VerbContext): { ops: ArtifactOp[]; note: string | null } {
+  if (!ctx?.agent) return { ops: collapseFrameOps(view, key), note: null };
+  const { ops, leftAsItWas } = agentCollapseOps(view, key);
+  return { ops, note: leftAsItWas ? `left ${frameName(view, leftAsItWas)} as it was: it holds a person's work` : null };
+}
+
+/** The people's elements an agent's batch would touch; none for a person's command. */
+function touchedPeople(view: ArtifactView, ops: readonly ArtifactOp[], asked: readonly string[], ctx?: VerbContext): string[] {
+  return ctx?.agent ? personTouched(view, ops, asked) : [];
+}
+
+/** An agent's whole-batch layout (frame, expand, reflow, organize, move) that would touch a person's element is refused, nothing written. */
+function refuseForPeople(view: ArtifactView, ops: readonly ArtifactOp[], asked: readonly string[], ctx?: VerbContext) {
+  const touched = touchedPeople(view, ops, asked, ctx);
+  if (!touched.length) return;
+  throw new Error(`left the board as it was: this would move or enclose a person's work (${touched.join(", ")}). A person can press Reflow or Organize on the board.`);
+}
+
+/**
+ * The padding for a new frame around `els`: `pad`, or less when they all sit
+ * inside one frame, so the new frame lands strictly inside it (8px clear of
+ * its edge) and never ties with it for containment.
+ */
+function insetPad(view: ArtifactView, els: readonly ArtifactElement[], pad: number): number {
+  const u = unionBox(els.map(elementBounds));
+  if (!u) return pad;
+  const hidden = hiddenKeys(view);
+  const keys = new Set(els.map((e) => e.key));
+  const around = view.elements
+    .filter((f) => f.kind === "frame" && !keys.has(f.key) && !hidden.has(f.key) && !frameCollapsed(f) && contains(elementBounds(f), u))
+    .map(elementBounds)
+    .sort((a, b) => a.w * a.h - b.w * b.h)[0];
+  if (!around) return pad;
+  // frameAround puts the title band (24) above the padding.
+  const gap = Math.min(u.x - around.x, u.y - around.y - 24, around.x + around.w - u.x - u.w, around.y + around.h - u.y - u.h);
+  return Math.max(0, Math.min(pad, gap - 8));
+}
+
+/**
+ * New elements put at `at` (an add-type verb's --at): when that point is inside
+ * an open frame, the frame grows in the same batch to hold them, so they are
+ * its children and a reflow lays them out. An agent's growth may not move or
+ * enclose a person's element (the frame itself may grow): then the new
+ * elements go in where asked and the frame stays as it was.
+ */
+function intoFrame(view: ArtifactView, ops: ArtifactOp[], keys: readonly string[], at: Pt | null, ctx?: VerbContext): { ops: ArtifactOp[]; note: string | null } {
+  if (!at) return { ops, note: null };
+  const placed = artifactView(view.type, view.title, [...view.elements, ...ops.flatMap((o) => ("put" in o ? [{ ...o.put, key: o.k, rev: 0 } as ArtifactElement] : []))]);
+  const grow = growToHoldOps(placed, keys, at);
+  if (!grow.frame || !grow.ops.length) return { ops, note: null };
+  if (touchedPeople(placed, grow.ops, [grow.frame, ...keys], ctx).length) return { ops, note: `left ${frameName(view, grow.frame)} as it was: growing it would move a person's work` };
+  return { ops: coalesceOps([...ops, ...grow.ops]), note: `grew ${frameName(view, grow.frame)} to hold it` };
+}
+
+/** The frame's box after `ops`, from its put or its old box with the set fields. */
+function boxAfter(view: ArtifactView, key: string, ops: readonly ArtifactOp[]): Box {
+  const op = ops.find((o) => o.k === key);
+  const base = op && "put" in op ? { ...(op.put as any), key, rev: 0 } : view.get(key)!;
+  return elementBox({ ...base, ...(op && "set" in op ? op.set : {}) } as ArtifactElement);
 }
 
 const place: ArtifactVerb = {
   summary: "Place a list of items (one per stdin line) in a grid, row or column",
-  usage: "place <doc> grid|row|column [--at x,y] [--cols n] [--gap 40] [--w n] [--h n] [--frame \"Title\"] [--frame-color c] < item lines (`[kind[:color][:shape][:w240][:h120]] [:art:] text | more`)",
+  usage: "place <doc> grid|row|column [--at x,y] [--cols n] [--gap 40] [--w n] [--h n] [--frame \"Title\"] [--frame-ref pri-N|in-N|pl-N|ct-N] [--frame-color c] < item lines (`[kind[:color][:shape][:w240][:h120]] [:art:] text | more`)",
   stdin: true,
-  run(view, args, stdin) {
+  run(view, args, stdin, ctx) {
     const { pos, flags } = parseVerbArgs(args);
     const mode = pos[0] ?? "grid";
     if (!["grid", "row", "column"].includes(mode)) throw new Error("layout is grid, row or column");
@@ -115,9 +200,12 @@ const place: ArtifactVerb = {
     const items = parseItems(stdin ?? "").map((it) => (sw !== undefined || sh !== undefined ? resizeItem(it, sw, sh) : it));
     if (items.length === 0) throw new Error("no items on stdin (one per line)");
     const gap = count(flags.gap, "--gap", 40);
-    const frameTitle = str(flags.frame);
+    // A frame about an entity: its chip resolves per viewer; the title is the caller's words, or the bare id.
+    const ref = frameRefArg(flags["frame-ref"], "--frame-ref");
+    const frameTitle = str(flags.frame) ?? ref;
     const pad = frameTitle ? 40 : 0;
-    const spot = point(flags.at, "--at") ?? freeSpot(view);
+    const anchor = point(flags.at, "--at");
+    const spot = anchor ?? freeSpot(view);
     const at = { x: spot.x + pad, y: spot.y + (frameTitle ? pad + 24 : 0) };
     const cols = mode === "row" ? items.length : mode === "column" ? 1 : count(flags.cols, "--cols", squareCols(items.length, 5));
     const positions = gridPositions(items, { cols, gap, at });
@@ -127,23 +215,28 @@ const place: ArtifactVerb = {
       const fc = str(flags["frame-color"]);
       if (fc && !(BOARD_COLORS as readonly string[]).includes(fc)) throw new Error(`colors: ${BOARD_COLORS.join(", ")}`);
       const f = frameAround(boxes, frameTitle, bottomZ(view), 40, fc);
+      if (f && "put" in f && ref) f.put.ref = ref;
       if (f) { ops.unshift(f); keys.unshift(f.k); }
     }
-    return done(ops, keys, `placed ${items.length} item${items.length === 1 ? "" : "s"} in a ${mode}`, view, boxes);
+    // Without --frame, items placed inside a frame become its children (a new frame is a section of its own).
+    const into = frameTitle ? { ops, note: null } : intoFrame(view, ops, keys, anchor, ctx);
+    return done(into.ops, keys, [`placed ${items.length} item${items.length === 1 ? "" : "s"} in a ${mode}`, into.note].filter(Boolean).join("\n"), view, boxes);
   },
 };
 
 const add: ArtifactVerb = {
   summary: "Add one element: an item line as arguments",
   usage: "add <doc> [kind[:color][:shape][:w240][:h120]] [:art:] <text | more lines> [--at x,y] [--w n] [--h n]   e.g. add <doc> sticky:green :rocket: Launch | Out to everyone",
-  run(view, args) {
+  run(view, args, _stdin, ctx) {
     const { pos, flags } = parseVerbArgs(args);
     let item = parseItem(pos.join(" "));
     if (!item) throw new Error("say what to add, e.g. `cast board add <doc> sticky:pink Launch party`");
     if (flags.w !== undefined || flags.h !== undefined) item = resizeItem(item, flags.w !== undefined ? count(flags.w, "--w", item.w) : undefined, flags.h !== undefined ? count(flags.h, "--h", item.h) : undefined);
-    const at = point(flags.at, "--at") ?? freeSpot(view);
+    const anchor = point(flags.at, "--at");
+    const at = anchor ?? freeSpot(view);
     const { ops, keys } = placeItems([item], [at], item.kind === "frame" ? bottomZ(view) : nextZ(view));
-    return done(ops, keys, `added ${item.kind}`, view, boxesOf(ops));
+    const into = intoFrame(view, ops, keys, anchor, ctx);
+    return done(into.ops, keys, [`added ${item.kind}`, into.note].filter(Boolean).join("\n"), view, boxesOf(ops));
   },
 };
 
@@ -176,7 +269,7 @@ const matrix: ArtifactVerb = {
 
 const edit: ArtifactVerb = {
   summary: "Change an element's words (and illustration or color) in place; its key and arrows stay",
-  usage: "edit <doc> <key> [text | more lines] [--icon name|emoji|none] [--color c]",
+  usage: "edit <doc> <key> [text | more lines] [--icon name|emoji|none] [--color c]   frames also: [--ref pri-N|in-N|pl-N|ct-N|none]",
   run(view, args) {
     const { pos, flags } = parseVerbArgs(args);
     const [el] = requireKeys(view, pos.slice(0, 1));
@@ -194,7 +287,18 @@ const edit: ArtifactVerb = {
       if (!(BOARD_COLORS as readonly string[]).includes(color)) throw new Error(`colors: ${BOARD_COLORS.join(", ")}`);
       set.color = color;
     }
-    if (!Object.keys(set).length) throw new Error("say what to change: new words, --icon or --color");
+    const refFlag = str(flags.ref);
+    if (refFlag) {
+      if (el.kind !== "frame") throw new Error("--ref is a frame's");
+      const nextRef = refFlag === "none" ? null : frameRefArg(refFlag, "--ref")!;
+      // Only what changes; the title stays unless new words are given (a frame with none takes the id).
+      if (nextRef !== (el.ref ?? null)) {
+        set.ref = nextRef;
+        if (nextRef && !words && !(typeof el.title === "string" && el.title.trim())) set.title = nextRef;
+      }
+      if (!Object.keys(set).length) return { ops: [], status: `${el.key} already has that ref: nothing to write` };
+    }
+    if (!Object.keys(set).length) throw new Error("say what to change: new words, --icon or --color (frames: --ref)");
     if (el.kind === "sticky") {
       const b = elementBox(el);
       const text = String(set.text ?? el.text ?? "");
@@ -333,9 +437,9 @@ const distribute: ArtifactVerb = {
 };
 
 const move: ArtifactVerb = {
-  summary: "Move elements together, by an offset or to a spot",
+  summary: "Move elements together, by an offset or to a spot; a frame carries what it holds",
   usage: "move <doc> <keys...> (--by dx,dy | --to x,y)",
-  run(view, args) {
+  run(view, args, _stdin, ctx) {
     const { pos, flags } = parseVerbArgs(args);
     const els = requireKeys(view, pos);
     const by = point(flags.by, "--by");
@@ -343,23 +447,37 @@ const move: ArtifactVerb = {
     if (!by && !to) throw new Error("say --by dx,dy or --to x,y");
     const b = unionBox(els.map(elementBox))!;
     const dx = by ? by.x : to!.x - b.x, dy = by ? by.y : to!.y - b.y;
-    const ops = moveOps(els, dx, dy);
+    // A frame (or folded pill) carries its contents, what it holds and the arrows inside it.
+    const ops = moveFrameOps(view, pos, dx, dy);
+    refuseForPeople(view, ops, pos, ctx);
     return done(ops, pos, `moved ${ops.length}`, view, [{ ...b, x: b.x + dx, y: b.y + dy }]);
   },
 };
 
 const frame: ArtifactVerb = {
-  summary: "Wrap elements in a titled frame (a section)",
-  usage: "frame <doc> \"<title>\" <keys...> [--pad 40] [--color blue]   (or --title \"<title>\" <keys...>)",
-  run(view, args) {
-    const { pos, flags } = parseVerbArgs(args);
-    // The title is the first word, or --title (then every word is a key).
-    const [title, ...keys] = str(flags.title) ? [str(flags.title)!, ...pos] : pos;
+  summary: "Wrap elements in a titled frame (a section), optionally about a codecast object and folded at once",
+  usage: "frame <doc> \"<title>\" <keys...> [--ref pri-N|in-N|pl-N|ct-N] [--collapse] [--pad 40] [--color blue]   (or --title \"<title>\" <keys...>; with --ref the title may be left out and is the id)",
+  run(view, args, _stdin, ctx) {
+    const { pos, flags } = parseVerbArgs(args, ["collapse"]);
+    const ref = frameRefArg(flags.ref, "--ref");
+    // With --ref the title may be left out: a first word that is a key starts the keys, and one shaped like a key but missing is a typo.
+    if (ref && !str(flags.title) && pos[0] && !view.get(pos[0]) && /^[a-z]+_[a-z0-9]+$/.test(pos[0])) throw new Error(`no element ${pos[0]} on this board`);
+    const [title, ...keys] = str(flags.title) ? [str(flags.title)!, ...pos] : ref && pos[0] && view.get(pos[0]) ? [ref, ...pos] : pos;
     if (!title) throw new Error("give the frame a title");
     const els = requireKeys(view, keys);
-    const op = frameAround(els.map(elementBox), title, bottomZ(view), count(flags.pad, "--pad", 40))!;
-    if (str(flags.color) && "put" in op) op.put.color = str(flags.color)!;
-    return done([op], [op.k], `framed ${els.length} as "${title}"`, view, els.map(elementBox));
+    const op = frameAround(els.map(elementBox), title, bottomZ(view), insetPad(view, els, count(flags.pad, "--pad", 40)))!;
+    if ("put" in op) {
+      if (str(flags.color)) op.put.color = str(flags.color)!;
+      if (ref) op.put.ref = ref;
+    }
+    // An agent's frame never boxes in a person's element it was not asked to frame.
+    refuseForPeople(view, [op], keys, ctx);
+    if (!flags.collapse) return done([op], [op.k], `framed ${els.length} as "${title}"`, view, els.map(elementBox));
+    // Framed and folded in one batch: fold the new frame as if it were already there (an agent's fold never hides a person's element).
+    const framed = artifactView(view.type, view.title, [...view.elements, { ...(op as { put: Record<string, Json> }).put, key: op.k, rev: 0 } as ArtifactElement]);
+    const fold = collapseOps(framed, op.k, ctx);
+    const ops = coalesceOps([op, ...fold.ops]);
+    return done(ops, [op.k], [`framed ${els.length} as "${title}", collapsed`, fold.note].filter(Boolean).join("\n"), view, [boxAfter(framed, op.k, ops)]);
   },
 };
 
@@ -392,8 +510,8 @@ const group: ArtifactVerb = {
 
 const card: ArtifactVerb = {
   summary: "Place a live codecast object (task, plan, session, PR, doc) as a card, or turn an element into one",
-  usage: "card <doc> <ref> [--at x,y] [--replace <key>]   ref: ct-123, pl-9, jx7abcd, doc:<id>, #42",
-  run(view, args) {
+  usage: "card <doc> <ref> [--at x,y] [--replace <key>]   ref: ct-123, pl-9, jx7abcd, doc:<id>, #42   (--at inside a frame: the frame grows to hold it)",
+  run(view, args, _stdin, ctx) {
     const { pos, flags } = parseVerbArgs(args);
     const ref = pos[0];
     if (!ref) throw new Error("name the object, e.g. ct-4102");
@@ -405,10 +523,12 @@ const card: ArtifactVerb = {
       const op: ArtifactOp = { k: el.key, put: { kind: "card", ref, x: Math.round(b.x), y: Math.round(b.y), w: 320, h: 168, z: typeof el.z === "number" ? el.z : 0, ...(el.group ? { group: el.group } : {}) } };
       return done([op], [el.key], `${el.key} is now ${ref}`, view, [b]);
     }
-    const at = point(flags.at, "--at") ?? freeSpot(view);
+    const anchor = point(flags.at, "--at");
+    const at = anchor ?? freeSpot(view);
     const k = newElementKey("el");
     const op: ArtifactOp = { k, put: { kind: "card", ref, x: at.x, y: at.y, w: 320, h: 168, z: nextZ(view) } };
-    return done([op], [k], `placed ${ref}`, view, boxesOf([op]));
+    const into = intoFrame(view, [op], [k], anchor, ctx);
+    return done(into.ops, [k], [`placed ${ref}`, into.note].filter(Boolean).join("\n"), view, boxesOf([op]));
   },
 };
 
@@ -431,7 +551,7 @@ export function besideSpot(view: Pick<ArtifactView, "elements">, key: ArtifactEl
 const page: ArtifactVerb = {
   summary: "Place a published page (`cast publish`) live on the board, or turn an element into one",
   usage: "page <doc> <url|slug> [--at x,y | --near <key>] [--w 640 --h 480] [--caption \"...\"] [--replace <key>]",
-  run(view, args) {
+  run(view, args, _stdin, ctx) {
     const { pos, flags } = parseVerbArgs(args);
     const slug = pageSlugOf(pos[0] ?? "");
     if (!slug) throw new Error("name a published page: its https://codecast.sh/a/<slug> address or the slug");
@@ -449,10 +569,12 @@ const page: ArtifactVerb = {
       return done([op], [el.key], `${el.key} is now page ${slug}`, view, [box]);
     }
     const near = str(flags.near);
-    const at = point(flags.at, "--at") ?? (near ? besideSpot(view, requireKeys(view, [near])[0], size) : freeSpot(view));
+    const anchor = point(flags.at, "--at");
+    const at = anchor ?? (near ? besideSpot(view, requireKeys(view, [near])[0], size) : freeSpot(view));
     const k = newElementKey("el");
     const op: ArtifactOp = { k, put: { ...fields, x: at.x, y: at.y, ...size, z: nextZ(view) } as any };
-    return done([op], [k], `placed page ${slug}`, view, boxesOf([op]));
+    const into = intoFrame(view, [op], [k], anchor, ctx);
+    return done(into.ops, [k], [`placed page ${slug}`, into.note].filter(Boolean).join("\n"), view, boxesOf([op]));
   },
 };
 
@@ -470,6 +592,45 @@ const order: ArtifactVerb = {
   },
 };
 
+function foldVerb(fold: "collapse" | "expand"): ArtifactVerb {
+  return {
+    summary: fold === "collapse"
+      ? "Fold a frame into a title pill that hides and carries what it holds; the enclosing frame reflows"
+      : "Unfold a collapsed frame, its contents back in place; the enclosing frame reflows, or what it now covers moves down",
+    usage: `${fold} <doc> <frame>`,
+    run(view, args, _stdin, ctx) {
+      const { pos } = parseVerbArgs(args);
+      const [el] = requireKeys(view, pos.slice(0, 1));
+      if (el.kind !== "frame") throw new Error(`${el.key} is a ${el.kind}, not a frame`);
+      const { ops, note } = fold === "collapse" ? collapseOps(view, el.key, ctx) : { ops: expandFrameOps(view, el.key), note: null };
+      if (fold === "expand") refuseForPeople(view, ops, [el.key], ctx);
+      // The holds: the fold's new `collapsed`, or the one an expand clears.
+      const pill = fold === "collapse" ? ({ ...el, ...(ops.find((o) => o.k === el.key) as { set?: Record<string, Json> })?.set } as ArtifactElement) : el;
+      const n = foldedCount(pill, view.get);
+      const status = fold === "collapse" ? `collapsed ${el.key} (${n} held)` : `expanded ${el.key} (${n} shown)`;
+      return done(ops, [el.key], [status, note].filter(Boolean).join("\n"), view, [boxAfter(view, el.key, ops)]);
+    },
+  };
+}
+
+const reflow: ArtifactVerb = {
+  summary: "Lay a frame's contents out and size it to fit; with no frame, organize the whole board (frames in a grid, loose items below)",
+  usage: "reflow <doc> [frame]",
+  run(view, args, _stdin, ctx) {
+    const { pos } = parseVerbArgs(args);
+    const key = pos[0];
+    if (key) {
+      const [el] = requireKeys(view, [key]);
+      if (el.kind !== "frame") throw new Error(`${el.key} is a ${el.kind}, not a frame`);
+    }
+    const ops = key ? reflowFrameOps(view, key) : organizeOps(view);
+    refuseForPeople(view, ops, key ? [key] : [], ctx);
+    if (!ops.length) return { ops, status: key ? `${key} is already laid out` : "the board is already organized" };
+    const keys = key ? [key] : [...new Set(ops.map((o) => o.k))];
+    return done(ops, keys, key ? `reflowed ${key}` : `organized the board (${ops.length} moved)`, view, key ? [boxAfter(view, key, ops)] : undefined);
+  },
+};
+
 export const BOARD_VERBS: Record<string, ArtifactVerb> = {
-  add, place, template, matrix, edit, clear, timeline, connect, arrange, align, distribute, move, frame, themes, group, card, page, order,
+  add, place, template, matrix, edit, clear, timeline, connect, arrange, align, distribute, move, frame, collapse: foldVerb("collapse"), expand: foldVerb("expand"), reflow, themes, group, card, page, order,
 };

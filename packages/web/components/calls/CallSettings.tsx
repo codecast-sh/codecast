@@ -10,10 +10,10 @@
 // the cue previews (Sounds), and the desktop's meeting recorder mode
 // (MeetingDetectSection). A person who changes something here changes it
 // everywhere, because there is only one thing to change.
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import { useMountEffect } from "../../hooks/useMountEffect";
-import { Mic, Radio, Video, Volume2, X } from "lucide-react";
-import { useInboxStore } from "../../store/inboxStore";
+import { Mic, Radio, SquareKanban, Video, Volume2, X } from "lucide-react";
+import { useInboxStore, useMyUserId } from "../../store/inboxStore";
 import { rememberCamera, rememberMic, rememberDeviceCheck, rememberMicAutoOpen } from "../../lib/calls/joinPrefs";
 import { setNoiseCancellation } from "../../lib/calls/callManager";
 import { useWalkieDoor } from "../../hooks/useWalkie";
@@ -22,6 +22,10 @@ import { SettingsRow, SettingsSection } from "../settings/ui";
 import { MeetingDetectSection } from "../settings/MeetingDetectSection";
 import { WalkieCuesBlock } from "../settings/WalkieCuesBlock";
 import { DeviceRows } from "./DeviceRows";
+import { SelectBox } from "../ui/select-box";
+import { setHuddleSettings, useHuddleSetting } from "../../lib/calls/huddleSettings";
+import { ConsequentialSwitch } from "../consequential/ConsequentialSwitch";
+import { autoScribeLedger } from "../consequential/ledgers";
 
 export function CallSettings({ compact = false }: { compact?: boolean }) {
   // Read straight off the store so a toggle made mid-call (setCamera/setMuted
@@ -53,6 +57,8 @@ export function CallSettings({ compact = false }: { compact?: boolean }) {
           <Switch checked={deviceCheck} onCheckedChange={rememberDeviceCheck} aria-label="Check camera and mic before a call" />
         </SettingsRow>
       </SettingsSection>
+
+      <HuddlesSection pad={pad} />
 
       <SettingsSection
         title="Microphone"
@@ -128,6 +134,62 @@ export function CallSettings({ compact = false }: { compact?: boolean }) {
       {/* Renders nothing in a browser or on a build without detection. */}
       <MeetingDetectSection />
     </div>
+  );
+}
+
+/** How huddles start in one workspace (lib/calls/huddleSettings): the
+ *  person's own, chosen per workspace, the active one first. */
+export function HuddlesSection({ pad }: { pad?: string }) {
+  const teams = useInboxStore((s: any) => s.teams as Array<{ _id: string; name?: string }> | undefined) ?? [];
+  const me = useMyUserId();
+  const activeTeam = useInboxStore((s) => s.clientState?.ui?.active_team_id ?? null);
+  // Personal (the person's own huddles: solo, a private session's room) or a
+  // team, keyed as huddleWorkspace keys a huddle. Starts on the active workspace.
+  const [picked, setPicked] = useState<string | null>(null);
+  const choice = picked ?? activeTeam ?? "personal";
+  const workspace = choice === "personal" ? (me ? `user:${me}` : null) : `team:${choice}`;
+  const workspaceName = choice === "personal" ? "Personal" : teams.find((t) => t._id === choice)?.name ?? "this workspace";
+  const boardView = useHuddleSetting("huddleBoardView", workspace);
+  const autoScribe = useHuddleSetting("huddleAutoScribe", workspace);
+  if (!workspace) return null;
+  return (
+    <SettingsSection
+      title={
+        <span className="flex items-center gap-1.5">
+          Huddles in
+          <SelectBox
+            variant="bare"
+            value={choice}
+            onChange={(e) => setPicked(e.target.value)}
+            aria-label="Workspace"
+            className="normal-case tracking-normal"
+          >
+            <option value="personal">Personal</option>
+            {teams.map((t) => (
+              <option key={t._id} value={t._id}>
+                {t.name ?? "Team"}
+              </option>
+            ))}
+          </SelectBox>
+        </span>
+      }
+      icon={SquareKanban}
+      description="Yours, for every huddle in this workspace."
+    >
+      <SettingsRow label="Open huddles on the board" description="The board takes the stage when you join." className={pad}>
+        <Switch checked={boardView} onCheckedChange={(v) => setHuddleSettings(workspace, { huddleBoardView: v })} aria-label="Open huddles on the board" />
+      </SettingsRow>
+      <SettingsRow label="Invite Scribe to every huddle" description="One Scribe per call." className={pad}>
+        {/* An agent on the person's account in every huddle: on goes through the review, off is one press. */}
+        <ConsequentialSwitch
+          on={autoScribe}
+          ledger={autoScribeLedger({ workspace: workspaceName })}
+          onTurnOn={() => setHuddleSettings(workspace, { huddleAutoScribe: true })}
+          onTurnOff={() => setHuddleSettings(workspace, { huddleAutoScribe: false })}
+          trigger={({ on, press }) => <Switch checked={on} onCheckedChange={press} aria-label="Invite Scribe to every huddle" />}
+        />
+      </SettingsRow>
+    </SettingsSection>
   );
 }
 

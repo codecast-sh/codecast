@@ -52,7 +52,8 @@ import { sha256Hex } from "./lib/hash";
 import { authorizeRoom, isRoomTranscribeOff, liveMembers, liveSeat, readRoomState } from "./callRooms";
 import { liveTranscriptFor, postEvent } from "./callChat";
 import { guestBySecret } from "./callGuests";
-import { beginCallRecord, canReadCall, HUDDLE_GRACE_MS, resolveCallRef } from "./transcripts";
+import { beginCallRecord, canReadCall, HUDDLE_GRACE_MS } from "./transcripts";
+import { resolveCallRef } from "./callReads";
 
 /** A recording opens to the doors that outlast the call, never the live walk-in door (canReadCall). */
 const RECORDINGS = { liveDoor: false } as const;

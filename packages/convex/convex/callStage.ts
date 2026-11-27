@@ -131,6 +131,8 @@ export async function ensureCallBoard(
   userId: Id<"users">,
   /** The agent whose arrival made it: the pin and the thread line are its. */
   bySession?: Id<"conversations">,
+  /** false: make it without putting it on the stage (a person's board view). */
+  pin = true,
 ): Promise<Id<"docs"> | null> {
   if (t.status !== "live") return null;
   if (t.board_doc_id) {
@@ -148,17 +150,18 @@ export async function ensureCallBoard(
   });
   const boardId = id as Id<"docs">;
   await ctx.db.patch(t._id, { board_doc_id: boardId });
-  await writePin(ctx, t.room_key, t.team_id, userId, { kind: "doc", id: String(boardId), ref: `doc:${boardId}` }, bySession, "the call's board");
+  if (pin) await writePin(ctx, t.room_key, t.team_id, userId, { kind: "doc", id: String(boardId), ref: `doc:${boardId}` }, bySession, "the call's board");
   return boardId;
 }
 
 /** The board for a call an agent just joined (transcripts.syncAgentFeeds). */
 export const ensureBoardForFeed = internalMutation({
-  args: { transcript_id: v.id("transcripts"), user_id: v.id("users"), conversation_id: v.id("conversations") },
+  // `pin: false`: Scribe's arrival makes the board without putting it on the stage.
+  args: { transcript_id: v.id("transcripts"), user_id: v.id("users"), conversation_id: v.id("conversations"), pin: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
     const t = await ctx.db.get(args.transcript_id);
     if (!t) return null;
-    return await ensureCallBoard(ctx, t, args.user_id, args.conversation_id);
+    return await ensureCallBoard(ctx, t, args.user_id, args.conversation_id, args.pin !== false);
   },
 });
 
@@ -247,6 +250,22 @@ export const pinCallBoard = mutation({
     const boardId = await ensureCallBoard(ctx, t, userId);
     if (!boardId) throw new Error("The call has ended");
     await writePin(ctx, args.room_key, seat.team_id, userId, { kind: "doc", id: String(boardId), ref: `doc:${boardId}` }, undefined, "the call's board");
+    return { doc_id: boardId };
+  },
+});
+
+/** The call's board for one person's board view: made if the room has none,
+ *  never pinned, so looking at it changes nobody else's stage. */
+export const openCallBoard = mutation({
+  args: { room_key: v.string() },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Unauthorized");
+    if (!(await liveSeat(ctx, userId, args.room_key))) throw new Error("Only someone in the huddle can open its board");
+    const t = await liveTranscriptFor(ctx, args.room_key);
+    if (!t) throw new Error("The huddle has no call record yet: turn transcription on to give it a board");
+    const boardId = await ensureCallBoard(ctx, t, userId, undefined, false);
+    if (!boardId) throw new Error("The call has ended");
     return { doc_id: boardId };
   },
 });

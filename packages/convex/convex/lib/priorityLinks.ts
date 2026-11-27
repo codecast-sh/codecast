@@ -79,6 +79,34 @@ function ownPriorities(ctx: Ctx, userId: Id<"users">, workspace: string): Promis
   return reads.get(key)!;
 }
 
+/** The most of one workspace's active priorities, every member's, a task hook reads. */
+const WORKSPACE_ACTIVE_READ = 300;
+const workspaceReads = new WeakMap<object, Map<string, Promise<Priority[]>>>();
+
+/**
+ * Every member's active priorities in one workspace, the most recently active
+ * first, once per mutation. Bounded: a workspace holds a handful of active
+ * priorities per member (tens in all), and WORKSPACE_ACTIVE_READ caps it. No
+ * index reaches a milestone's refs, and a milestone filed for someone else
+ * (`cast task create --under pri-N`) names a task its owner neither filed nor
+ * linked a session to, so only this read finds it. Read only for a task
+ * pulled from a call (Scribe's case): the read conflicts with every pass
+ * writing a priority in the workspace, and any other task's milestone on a
+ * teammate's priority is caught by its owner's next pass.
+ */
+function workspaceActivePriorities(ctx: Ctx, workspace: string): Promise<Priority[]> {
+  let reads = workspaceReads.get(ctx.db);
+  if (!reads) workspaceReads.set(ctx.db, (reads = new Map()));
+  if (!reads.has(workspace)) {
+    reads.set(workspace, ctx.db
+      .query("priorities")
+      .withIndex("by_workspace_status_active", (q: any) => q.eq("workspace", workspace).eq("status", "active"))
+      .order("desc")
+      .take(WORKSPACE_ACTIVE_READ));
+  }
+  return reads.get(workspace)!;
+}
+
 type Place = { user: Id<"users">; workspace: string };
 
 /** Every milestone naming `ref` among each person's priorities in the workspace given with them. */
@@ -193,13 +221,14 @@ export async function recomputeStepDone(ctx: Ctx, priorityId: Id<"priorities">, 
 /**
  * A task closed or reopened (lib/taskWrite patchTask, issueSync, orgInit
  * setTaskStatus): every milestone naming it, among the priorities of its
- * owner and of the people whose sessions link it, in the task's workspace
- * (the only workspace whose pass can name it, wherever those sessions are).
+ * owner and of the people whose sessions link it, and, for a task pulled from
+ * a call, among every active priority there, in the task's workspace (the only workspace whose pass can
+ * name it, wherever those sessions are).
  * Each of those people's pass there is asked for (lib/priorityPassSchedule),
  * unless the session that made the change is a machine's (a role's seat, a
  * trigger's run, a workflow's): those come round the clock (pinsAskForPass).
  */
-export async function taskStatusChanged(ctx: Ctx & { scheduler?: any }, task: Pick<Doc<"tasks">, "_id" | "short_id" | "user_id" | "workspace" | "conversation_ids" | "created_from_conversation">, acting?: Conv | Id<"conversations"> | null): Promise<void> {
+export async function taskStatusChanged(ctx: Ctx & { scheduler?: any }, task: Pick<Doc<"tasks">, "_id" | "short_id" | "user_id" | "workspace" | "conversation_ids" | "created_from_conversation" | "from_call">, acting?: Conv | Id<"conversations"> | null): Promise<void> {
   const workspace = task.workspace;
   if (!workspace || !(await prioritiesOn(ctx, workspace))) return;
   const rail: Array<{ conversation_id: Id<"conversations"> }> = await ctx.db
@@ -208,7 +237,16 @@ export async function taskStatusChanged(ctx: Ctx & { scheduler?: any }, task: Pi
     .take(LINKED_SESSIONS);
   const sessions = await sessionsOf(ctx, [...(task.conversation_ids ?? []), task.created_from_conversation, ...rail.map((r) => r.conversation_id)]);
   const places = [task.user_id, ...sessions.map((c) => c.user_id)].map((user) => ({ user, workspace }));
-  for (const { priority, key } of await stepsNaming(ctx, places, { kind: "task", id: task.short_id })) await recomputeStepDone(ctx, priority, key);
+  const named = await stepsNaming(ctx, places, { kind: "task", id: task.short_id });
+  // A task pulled from a call: milestones on anyone else's active priority here that name it, and their owners' passes.
+  for (const p of task.from_call ? await workspaceActivePriorities(ctx, workspace) : []) {
+    if (named.some((n) => String(n.priority) === String(p._id))) continue;
+    const keys = p.steps.filter((st) => st.refs.some((r) => r.kind === "task" && r.id === task.short_id)).map((st) => st.key);
+    if (!keys.length) continue;
+    for (const key of keys) named.push({ priority: p._id, key });
+    places.push({ user: p.user_id, workspace });
+  }
+  for (const { priority, key } of named) await recomputeStepDone(ctx, priority, key);
   // The acting session, read only now that priorities is on here (a caller may hand its id).
   const actor: Conv | null = typeof acting === "string" ? await ctx.db.get(acting) : acting ?? null;
   if (actor && !pinsAskForPass(actor)) return;

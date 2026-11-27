@@ -8,11 +8,13 @@ import { boardArtFor } from "./boardArt";
 import { BOARD_VERBS } from "./boardVerbs";
 import { BOARD_ART } from "./boardArt";
 import { pageShareUrl } from "../entities";
+import { foldedCount, frameCollapsed, frameRef, heldWith, hiddenKeys, layoutOnly } from "./boardFrames";
 
 export * from "./boardGeometry";
 export * from "./boardLayout";
 export * from "./boardArt";
 export * from "./boardTemplates";
+export * from "./boardFrames";
 export { BOARD_VERBS, besideSpot, pageSlugOf, parseVerbArgs } from "./boardVerbs";
 
 // "session" is the board's workshop state (dot vote, timer): one undrawn element, key el_session.
@@ -39,8 +41,8 @@ export function readingOrder(els: readonly ArtifactElement[]): ArtifactElement[]
   });
 }
 
-/** One element as a describe line. */
-export function describeElement(el: ArtifactElement, view: Pick<ArtifactView, "get" | "elements">): string {
+/** One element as a describe line. `hidden` (hiddenKeys) keeps what folded frames hide out of holds and stamp targets. */
+export function describeElement(el: ArtifactElement, view: Pick<ArtifactView, "get" | "elements">, hidden: ReadonlySet<string> = hiddenKeys(view)): string {
   const b = elementBox(el);
   const parts: string[] = [el.key, el.kind];
   switch (el.kind) {
@@ -61,8 +63,14 @@ export function describeElement(el: ArtifactElement, view: Pick<ArtifactView, "g
       if (el.text) parts.push(quote(el.text));
       break;
     case "frame": {
-      const holds = view.elements.filter((o) => o.key !== el.key && o.kind !== "frame" && o.kind !== "connector" && contains(b, elementBox(o))).map((o) => o.key);
       parts.push(quote(el.title), fmtBox(b));
+      const ref = frameRef(el), folded = frameCollapsed(el);
+      if (ref) parts.push(`ref ${ref}`);
+      if (folded) {
+        parts.push(`collapsed (${foldedCount(el, (k) => view.get(k))})`);
+        break;
+      }
+      const holds = view.elements.filter((o) => o.key !== el.key && o.kind !== "frame" && o.kind !== "connector" && !hidden.has(o.key) && contains(b, elementBox(o))).map((o) => o.key);
       if (holds.length) parts.push(`holds ${holds.join(" ")}`);
       break;
     }
@@ -83,7 +91,7 @@ export function describeElement(el: ArtifactElement, view: Pick<ArtifactView, "g
     case "stamp": {
       parts.push(String(el.emoji ?? "👍"), fmtBox(b));
       const c = center(b);
-      const on = view.elements.find((o) => o.key !== el.key && o.kind !== "frame" && o.kind !== "connector" && o.kind !== "stamp" && contains(elementBox(o), { ...c, w: 0, h: 0 }));
+      const on = view.elements.find((o) => o.key !== el.key && !hidden.has(o.key) && o.kind !== "frame" && o.kind !== "connector" && o.kind !== "stamp" && contains(elementBox(o), { ...c, w: 0, h: 0 }));
       if (on) parts.push(`on ${on.key}`);
       break;
     }
@@ -126,15 +134,28 @@ export function describeBoard(whole: ArtifactView): string {
   const session = whole.elements.find((e) => e.kind === "session");
   const view = session ? { ...whole, elements: whole.elements.filter((e) => e !== session) } : whole;
   if (view.elements.length === 0) return `board "${view.title}": empty. Start anywhere; 0,0 is a fine top-left.`;
-  const content = unionBox(view.elements.filter((e) => e.kind !== "connector").map(elementBox));
-  const head = `board "${view.title}" · ${view.elements.length} elements` +
+  const hidden = hiddenKeys(view);
+  const shown = view.elements.filter((e) => !hidden.has(e.key));
+  const content = unionBox(shown.filter((e) => e.kind !== "connector").map(elementBox));
+  // Counted as the pill counts its "(n)" (foldedCount): elements on the board, arrows aside; what folds hide is counted apart.
+  const count = shown.filter((e) => e.kind !== "connector").length;
+  const folded = view.elements.reduce((n, e) => n + foldedCount(e, view.get), 0);
+  const head = `board "${view.title}" · ${count} elements` + (folded ? ` (${folded} folded)` : "") +
     (content ? ` · content ${Math.round(content.x)},${Math.round(content.y)} → ${Math.round(content.x + content.w)},${Math.round(content.y + content.h)}` : "") +
     " · x right, y down, boxes are x,y wxh";
-  const lines = readingOrder(view.elements).map((e) => describeElement(e, view));
+  // What a folded frame hides is listed under it, indented, so an agent can still find it by key.
+  const listed = new Set<string>();
+  const linesFor = (els: readonly ArtifactElement[], indent: string): string[] =>
+    readingOrder(els.filter((e) => !listed.has(e.key))).flatMap((e) => {
+      listed.add(e.key);
+      const held = frameCollapsed(e)?.holds.map((k) => view.get(k)).filter((h): h is ArtifactElement => !!h) ?? [];
+      return [`${indent}${describeElement(e, view, hidden)}`, ...linesFor(held, `${indent}  `)];
+    });
+  const lines = linesFor(shown, "");
   const groups = new Map<string, string[]>();
   for (const e of view.elements) if (typeof e.group === "string") groups.set(e.group, [...(groups.get(e.group) ?? []), e.key]);
   for (const [g, keys] of groups) lines.push(`group ${g}: ${keys.join(" ")}`);
-  const clashes = overlaps(view.elements);
+  const clashes = overlaps(shown);
   if (clashes.length) lines.push(`OVERLAPPING (move apart, or ignore if meant): ${clashes.join("  ")}`);
   const votes = view.elements.filter((e) => Array.isArray(e.votes) && e.votes.length).sort((x, y) => (y.votes as unknown[]).length - (x.votes as unknown[]).length);
   const voting = session?.voting as { open?: boolean } | null | undefined;
@@ -164,6 +185,8 @@ export const boardSpec: ArtifactSpec = {
     if (!last) return undefined;
     return { point: { x: Math.round(last.x + last.w), y: Math.round(last.y + last.h) } };
   },
+  layoutOnly,
+  deleteKeys: heldWith,
   verbs: BOARD_VERBS,
   agentGuide: [
     "Boards: `cast board read <doc>` lists every element (key, kind, box x,y wxh, text). Lay out with the verbs, never hand-computed coordinates.",
@@ -178,9 +201,12 @@ export const boardSpec: ArtifactSpec = {
     "Starting a retro, kanban, roadmap, timeline or brainstorm: `cast board template <doc> <name>`, then fill its stickies by key.",
     "Diagrams (architecture, flows): shapes in a grid with `place --cols`, then `connect --elbow` so arrows run at right angles around boxes; label an arrow with --label. Elbow arrows land where they line up with the other end, so several arrows into a wide box stay apart; pin an end with --from-at/--to-at fx,fy (0.25,1 = a quarter along the bottom). Arrows can attach to frames.",
     "Themes: `Theme name: el_a el_b el_c` per line regroups existing stickies into titled frames.",
+    "Frames about a codecast object: `place <doc> grid --frame-ref ct-12` or `frame <doc> <keys...> --ref pri-3 [--collapse]` set the frame's `ref` (pri-N, in-N, pl-N or ct-N): its chip is the title each viewer sees, and the written title is your words or the bare id. `edit <doc> <frame> --ref <id>|none` changes its object and keeps the title.",
+    "Folding: `collapse <doc> <frame>` shrinks a frame to a title pill that hides and carries what it holds; `expand <doc> <frame>` opens it in place. `reflow <doc> <frame>` lays a frame's contents out and sizes it to fit; `reflow <doc>` organizes the whole board. `move` on a frame carries everything in it.",
+    "Courtesy: an agent's layout never moves, resizes, swallows or hides a person's element. A collapse reflows the frames around it only up to the one holding a person's work, and is refused if it would hide one; frame, expand, reflow and move refuse and write nothing when they would touch one (a person can press Reflow or Organize); an add, card, place or page --at inside a frame leaves the frame as it was when growing it would.",
     "Colors: yellow orange red pink violet blue cyan green gray. Shapes: rect ellipse diamond pill triangle hexagon cylinder (a database) star.",
     "Stickers: `stamp 🎉` is a small emoji reaction; `stamp rocket` (any illustration name) places the painted illustration as a 120px sticker.",
-    "Fields for `apply`: every element x y w h z rot group; sticky text color icon; text text size weight(bold) color align(left|center|right); shape shape text color solid icon; frame title color; connector from to (keys) or x1 y1 x2 y2, curve(curved|elbow) arrow(end|both|none) label label_at(0..1) color dash width; pen points [x,y,...] color width opacity; stamp emoji size; card ref; page slug caption; image src alt. Text takes **bold**, *italic*, - lists and links.",
+    "Fields for `apply`: every element x y w h z rot group; sticky text color icon; text text size weight(bold) color align(left|center|right); shape shape text color solid icon; frame title color ref (a codecast id; its chip is the title); connector from to (keys) or x1 y1 x2 y2, curve(curved|elbow) arrow(end|both|none) label label_at(0..1) color dash width; pen points [x,y,...] color width opacity; stamp emoji size; card ref; page slug caption; image src alt. Text takes **bold**, *italic*, - lists and links.",
     "Live codecast objects go on as cards: `cast board card <doc> ct-123`. Stickies into tasks: `cast task create` each, then `cast board card <doc> <ct-id> --replace <sticky key>` (same key, arrows stay attached).",
     "A page you published (`cast publish`) goes on live with `cast board page <doc> <url> --near <key>`: put it beside the stickies or frame it supports, so the room sees it next to the idea. Republishing the same file updates it in place.",
     "Anything else: `cast board apply <doc>` with raw ops; give each put a z (`read` shows the top), or it lands behind what is there.",

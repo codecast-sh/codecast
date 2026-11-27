@@ -230,7 +230,7 @@ export function GuestInCall({
         {recording && <GuestRecordingControl asking={askStop} onAsk={setAskStop} onStop={onStopRecording} />}
         <NoticePills transcribed={transcribed} wordsPublic={wordsPublic} onExplain={explainWords} />
         <div role="radiogroup" aria-label="View" className="ml-1 flex shrink-0 items-center rounded-lg bg-white/[0.04] p-0.5 max-sm:hidden">
-          {STAGE_VIEWS.map((v) => (
+          {STAGE_VIEWS.filter((v) => v.key !== "board").map((v) => (
             <button
               key={v.key}
               type="button"

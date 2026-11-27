@@ -73,6 +73,7 @@ import { GuestDoor, GuestInviteRow, useGuestRemover } from "@/components/calls/G
 import { RecordingNotice, recNoticeStyles } from "@/components/calls/RecordingNotice";
 import { useConfirmStopRecording, useRecordingField, useRoomRecordingMark } from "@/lib/calls/recordingMark";
 import { appAlert } from "@/lib/popups";
+import { CallBoardButton } from "@/components/calls/CallBoardButton";
 
 // The call stage, phone-shaped. The same design intents as the web stage,
 // re-derived for a hand-held portrait screen:
@@ -215,6 +216,7 @@ export default function CallScreen() {
           {!filming && !transcribing.on && <Text style={styles.headerTitle}>huddle</Text>}
           <RecordingBadge roomKey={call.roomKey} canStart={call.phase === "connected"} />
           <TranscribingChip transcribing={transcribing} />
+          <CallBoardButton phase={call.phase} roomKey={call.roomKey} />
         </View>
         <Pressable
           hitSlop={12}

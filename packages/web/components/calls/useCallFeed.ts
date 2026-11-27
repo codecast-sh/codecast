@@ -11,9 +11,9 @@ import {
   humanizeConvexError,
   transcriptChunkHeader,
 } from "@codecast/shared/contracts";
-import { AVATAR_KEYS } from "@codecast/shared/contracts/orgAvatars";
-import { characterNameFor, defaultCharacterFor, type Character } from "@codecast/shared/contracts/sessionCharacter";
-import { SessionCreatePendingError, defaultNewSessionPath, useInboxStore, useTrackedStore } from "../../store/inboxStore";
+import type { Character } from "@codecast/shared/contracts/sessionCharacter";
+import { SessionCreatePendingError, useInboxStore, useTrackedStore } from "../../store/inboxStore";
+import { characterForRoom, charactersInRoom, spawnSessionWithMessage } from "../../lib/calls/spawnFeedSession";
 import { withoutUndo } from "../../store/undoStack";
 import { getRoom, ringInto, startTranscribing } from "../../lib/calls/callManager";
 import { useRecentProjectsFeed } from "../../hooks/useRecentProjectsFeed";
@@ -23,7 +23,7 @@ import { describeRoomLive } from "../../lib/calls/roomLabels";
 import { agentRoomName, findSessionRow } from "../../lib/calls/findSessionRow";
 import { identityPrefsNow } from "../../hooks/useIdentityPrefs";
 import { teamHasFeature } from "../../lib/teamFeatures";
-import { characterFor, identitySig } from "../../lib/sessionIdentity";
+import { identitySig } from "../../lib/sessionIdentity";
 import type { PalettePick, PalettePickTarget, PalettePickResult } from "../../lib/palettePick";
 
 // The two gestures that connect a huddle's words to the rest of the product:
@@ -60,6 +60,8 @@ export function openFeedTargetPicker(opts: {
   // as its standing agent's session, a teammate goes to `onPerson`.
   who?: { exclude: string[]; onPerson: (id: string) => void };
   toggle?: PalettePick["toggle"];
+  // Offer the call's Scribe as the first row (absent from the call only).
+  onScribe?: () => void;
   onPick: (t: FeedTarget, note?: string) => void;
 }) {
   const feed = opts.gesture === "feed";
@@ -72,6 +74,9 @@ export function openFeedTargetPicker(opts: {
       confirmLabel: feed ? "Add" : "Send",
       toggle: opts.toggle,
       extras: [
+        ...(opts.onScribe
+          ? [{ key: "scribe", label: "Scribe", description: "Lays out the huddle on the board", icon: "scribe" as const, lead: true }]
+          : []),
         {
           key: "new-session",
           label: feed ? "A new agent session" : "Send to a new agent session",
@@ -90,6 +95,7 @@ export function openFeedTargetPicker(opts: {
       ],
       onPick: (t: PalettePickTarget, r: PalettePickResult) => {
         if (t.kind === "person") return opts.who?.onPerson(t.id);
+        if (t.kind === "extra" && t.key === "scribe") return opts.onScribe?.();
         const target: FeedTarget | null =
           t.kind === "role"
             ? { kind: "session", id: t.id, label: t.label }
@@ -116,96 +122,6 @@ export type TranscriptExcerpt = {
   live: boolean;
   partial: boolean;
 };
-
-// Local-first "new session seeded with a message": stub + optimistic bubble +
-// side panel now, durable create + send resolve behind it. Same lifecycle as
-// ContextChatInput. Returns a promise of the real conversation id.
-//
-// `body` may be written for the stub (a huddle briefing names the character
-// the session will wear, decided from the stub id), and `onReady` runs with
-// the real id before the message is sent, so a write the briefing promises
-// (that character) lands before the agent reads it.
-
-// The store gives up on a create after its own window (a 30 s race and a 15 s
-// poll) with SessionCreatePendingError, but the durable outbox still owns the
-// create and the session lands later. A feed spawned for a room must wait for
-// that landing, or the session that lands holds a briefing promising words
-// and hears nothing: keep asking while the create is merely parked and the
-// stub still stands, up to five minutes.
-const SPAWN_WAIT_MS = 5 * 60_000;
-async function awaitSpawn(stubId: string): Promise<string> {
-  const store = useInboxStore.getState() as any;
-  const deadline = Date.now() + SPAWN_WAIT_MS;
-  for (;;) {
-    try {
-      return await store.awaitConvexId(stubId);
-    } catch (e) {
-      const parked = e instanceof SessionCreatePendingError && (store.sessions[stubId] || store.conversations[stubId]);
-      if (!parked || Date.now() >= deadline) throw e;
-    }
-  }
-}
-
-function spawnSessionWithMessage(
-  body: string | ((stubId: string) => string),
-  onReady?: (convexId: string) => void,
-  teamId?: string | null,
-): Promise<string> {
-  const store = useInboxStore.getState() as any;
-  const projectPath = defaultNewSessionPath(store, teamId);
-  const gitRoot = projectPath;
-  const { stubId } = store.beginOptimisticSession({
-    agentType: "claude_code",
-    projectPath,
-    gitRoot,
-    create: (sid: string) =>
-      store.createSession({
-        agent_type: "claude_code",
-        project_path: projectPath,
-        git_root: gitRoot,
-        session_id: sid,
-      }),
-  });
-  const text = typeof body === "function" ? body(stubId) : body;
-  const clientId = store.addOptimisticMessage(stubId, text);
-  store.openSidePanel(stubId);
-  return awaitSpawn(stubId).then((convexId: string) => {
-    onReady?.(convexId);
-    store.sendMessage(convexId, text, undefined, clientId);
-    return convexId;
-  });
-}
-
-/** The character a session spawned FOR a huddle wears (session-characters.md
- *  S1): the hash default for `seed`, unless an agent already in the room
- *  wears that face or that name, in which case the next free face and its
- *  name. Two agents called Ember in one room would answer each other's asks.
- *  Written as a CHOSEN character (the seed is the stub, not the row's final
- *  id), so the room's name for it holds on every surface. */
-export function characterForRoom(seed: string, taken: Character[]): Character {
-  const clash = (c: { avatar: string; name: string }) =>
-    taken.some((t) => t.avatar === c.avatar || t.name.toLowerCase() === c.name.toLowerCase());
-  const own = defaultCharacterFor(seed);
-  if (!clash(own)) return { ...own, chosen: true };
-  const start = AVATAR_KEYS.indexOf(own.avatar);
-  for (let i = 1; i < AVATAR_KEYS.length; i++) {
-    const avatar = AVATAR_KEYS[(start + i) % AVATAR_KEYS.length];
-    const c = { avatar, name: characterNameFor(seed, avatar) };
-    if (!clash(c)) return { ...c, chosen: true };
-  }
-  return { ...own, chosen: true };
-}
-
-/** The characters of the agents a live transcript already feeds, read from
- *  the store, so a newcomer can avoid their faces and names. */
-function charactersInRoom(routes: Array<{ kind: string; target: string }>): Character[] {
-  const st = useInboxStore.getState() as any;
-  return routes
-    .filter((r) => r.kind === "session")
-    .map((r) => findSessionRow(st, r.target))
-    .filter(Boolean)
-    .map((row) => characterFor(row));
-}
 
 export function excerptBody(excerpt: TranscriptExcerpt, note?: string): string {
   const header = transcriptChunkHeader({
@@ -281,7 +197,6 @@ export function useAddLiveFeed(opts: {
   teamId?: string | null;
   getRoom: () => any;
 }) {
-  const convex = useConvex();
   const { roomKey, liveTranscriptId, routes, teamId, getRoom } = opts;
 
   return useCallback(
@@ -334,13 +249,7 @@ export function useAddLiveFeed(opts: {
       const attach = async () => {
         if (liveTranscriptId) {
           try {
-            await convex.mutation(api.transcripts.addRoute, {
-              transcript_id: liveTranscriptId as any,
-              kind: route.kind,
-              target: route.target,
-              mode: "live",
-              ...face,
-            });
+            await useInboxStore.getState().addLiveRoute(liveTranscriptId, { kind: route.kind, target: route.target, mode: "live", ...face });
             return;
           } catch (err) {
             if (!String(err).includes("ended")) throw err;
@@ -362,7 +271,7 @@ export function useAddLiveFeed(opts: {
           );
         }
         if (!(await startTranscribing(roomKey, [{ ...route, mode: "live", ...face }]))) {
-          throw new Error("Could not start transcribing. Somebody else may be the scribe already; pick the feed again once their words show here.");
+          throw new Error("Could not start transcribing. Somebody else may be transcribing already; pick the feed again once their words show here.");
         }
       };
       try {
@@ -377,7 +286,7 @@ export function useAddLiveFeed(opts: {
         throw err;
       }
     },
-    [convex, roomKey, liveTranscriptId, teamId, getRoom],
+    [roomKey, liveTranscriptId, teamId, getRoom],
   );
 }
 
@@ -471,8 +380,10 @@ export function useAddToCall(opts: {
   liveTranscriptId: string | null;
   routes: Array<{ kind: string; target: string }>;
   teamId?: string | null;
+  /** The call's Scribe (useScribe): offered first while it is absent. */
+  scribe?: { present: boolean; invite: () => void };
 }) {
-  const { roomKey, liveTranscriptId, routes, teamId } = opts;
+  const { roomKey, liveTranscriptId, routes, teamId, scribe } = opts;
   // A new agent starts in the room team's most used repo, read off this list.
   useRecentProjectsFeed();
   const addFeed = useAddLiveFeed({ roomKey, liveTranscriptId, routes, teamId, getRoom });
@@ -524,6 +435,7 @@ export function useAddToCall(opts: {
       toggle: facesOn
         ? { label: "Video avatar", value: face, onChange: (v) => { face = v; writeAgentFacePref(v); } }
         : undefined,
+      onScribe: scribe && !scribe.present ? scribe.invite : undefined,
       onPick: (t) => feed(t, facesOn ? face : undefined),
     });
   };

@@ -52,8 +52,11 @@ export type ArtifactVerb = {
   summary: string;
   usage: string;
   stdin?: boolean;
-  run(view: ArtifactView, args: string[], stdin?: string): VerbResult;
+  run(view: ArtifactView, args: string[], stdin?: string, ctx?: VerbContext): VerbResult;
 };
+
+/** What the caller knows that a pure verb can't: whether an agent session is writing (agent courtesy). */
+export type VerbContext = { agent?: boolean };
 
 export type ArtifactSpec = {
   type: ArtifactType;
@@ -95,6 +98,14 @@ export type ArtifactSpec = {
    * refused.
    */
   claimScope?(key: string, fields?: Record<string, unknown>): string | null;
+  /**
+   * A set that only lays an element out (moves or resizes it). The server
+   * keeps the element's `by` for it, so authorship survives someone else's
+   * layout. Without it, every write stamps its writer.
+   */
+  layoutOnly?(set: Record<string, unknown>): boolean;
+  /** What deleting `keys` removes (a board's folded frame takes what it holds). Without it, the keys themselves. */
+  deleteKeys?(view: ArtifactView, keys: readonly string[]): string[];
   /** Product verbs beyond the shared ones (create, read, apply, history, ...). */
   verbs?: Record<string, ArtifactVerb>;
   /**

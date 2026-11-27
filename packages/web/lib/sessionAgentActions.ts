@@ -2,7 +2,8 @@ import { captureError } from "./analytics";
 import type { ConvexAgentType } from "@codecast/shared/contracts";
 import { isConvexId, type InboxSession, useInboxStore } from "../store/inboxStore";
 import { isParkedDispatchError } from "../store/mutativeMiddleware";
-import { withoutUndo } from "../store/undoStack";
+// The engine, not web's undoStack, whose load installs sonner as the notifier (the phone reaches this file).
+import { withoutUndo } from "@platform/engine";
 
 export async function switchSessionAgent(
   session: Pick<InboxSession, "_id" | "agent_type">,

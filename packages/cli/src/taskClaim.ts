@@ -67,6 +67,16 @@ export function taskHintBody(options: { model?: string; effort?: string; ephemer
   return body;
 }
 
+/** `cast task create --under <id>`: a task takes the new one as its subtask, a plan as one of its tasks, a priority as a new milestone. */
+export function underTarget(raw: string, options: { parent?: string; plan?: string }): { parent_id?: string; plan_id?: string; under_priority?: string } {
+  const ref = raw.trim().toLowerCase();
+  const kind = /^(ct|pl|pri)-\d+$/.exec(ref)?.[1];
+  if (!kind) throw new Error(`--under takes a task, plan or priority id (ct-N, pl-N or pri-N), got "${raw}"`);
+  if (kind === "ct" && options.parent) throw new Error("Use --under or --parent, not both");
+  if (kind === "pl" && options.plan) throw new Error("Use --under or --plan, not both");
+  return kind === "ct" ? { parent_id: ref } : kind === "pl" ? { plan_id: ref } : { under_priority: ref };
+}
+
 // `cast task ready`: the frontier comes in the order work should be taken, with
 // tasks nobody touched in 30 days last and flagged `stale` (TG7). They fold into
 // a count unless asked for.

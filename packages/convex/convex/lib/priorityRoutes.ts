@@ -6,6 +6,7 @@ import { registerCliRoute } from "./cliRoute";
 
 const QUERIES = { list: "cliList", show: "cliShow", history: "cliHistory" } as const;
 const MUTATIONS = {
+  create: "cliCreate",
   move: "cliMove",
   step: "cliSetStepTier",
   milestone: "cliMilestone",

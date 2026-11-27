@@ -94,6 +94,14 @@ for (const platform of ["ios", "android"] as const) {
       expect(offenders.map(chainTo)).toEqual([]);
     });
 
+    // Web's undo module installs sonner as the shared engine's notifier when
+    // it loads, which takes the phone's undo bar (lib/undoBar) off every
+    // gesture app-wide. Shared code takes withoutUndo from @platform/engine.
+    test("web's undo notifier never reaches the native bundle", () => {
+      const webUndo = path.join(repoRoot, "packages/web/store/undoStack.ts");
+      expect(graph.nodes.has(webUndo) ? chainTo(webUndo) : null).toBeNull();
+    });
+
     test("a shared web file never uses the @/ alias, which Metro points at mobile", () => {
       const offenders: string[] = [];
       for (const file of graph.nodes.keys()) {

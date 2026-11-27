@@ -1,13 +1,14 @@
 // How each board element draws. Every element is one absolutely placed node
 // in world coordinates, in z order, memoized on its own row so a drag
 // re-renders only what moved (and the connectors attached to it).
-import { memo, useLayoutEffect, useRef, useState } from "react";
-import { ArrowUpRight } from "lucide-react";
+import { memo, useContext, useLayoutEffect, useRef, useState } from "react";
+import { ArrowUpRight, ChevronRight } from "lucide-react";
 import {
   boardArtFor,
   connectorGeometry,
   labelSpot,
   elementBox,
+  frameCollapsed,
   shapeFontSize,
   shapeOutline,
   smoothPath,
@@ -28,6 +29,8 @@ import { pageShareUrl } from "../../lib/publishedPageUrls";
 import { PAGE_ESCAPE_MESSAGE } from "../../../shared/render/pageTheme";
 import { colorToken, shapeFill, stickyFill, tint } from "./boardColors";
 import type { BoardEl } from "./boardTypes";
+import { FrameTitle, FrameTools } from "./BoardFrameParts";
+import { BoardFrameContext } from "../../lib/boards/frameContext";
 
 export type EditProps = {
   /** This element's text is being edited in place. */
@@ -199,13 +202,41 @@ const ShapeView = memo(function ShapeView({ el, editing, onEditInput, onEditDone
   );
 });
 
-const FrameView = memo(function FrameView({ el, editing, onEditInput, onEditDone }: ViewProps) {
+type FrameProps = {
+  /** A frame the pointer is over: its controls show. */
+  hovered?: boolean;
+  /** A selected frame shows its controls too: a tap selects, and a touch screen has no hover. */
+  selected?: boolean;
+  /** A folded frame's "(n)", counted from the live board by its drawer (boardFolds' foldCount), so a held element added or deleted redraws the pill. */
+  held?: number;
+};
+
+const FrameView = memo(function FrameView({ el, editing, onEditInput, onEditDone, hovered, selected, held }: ViewProps & FrameProps) {
   const title = typeof el.title === "string" ? el.title : "";
-  return (
-    <div data-key={el.key} data-frame className="board-el board-frame" style={boxStyle(el, { background: tint(el.color ?? "gray", 7), borderColor: tint(el.color ?? "gray", 34) })}>
-      <div className="board-frame-title" data-part="frame-title" style={{ color: el.color ? colorToken(el.color) : "var(--sol-text-muted)" }}>
-        {editing ? <InlineEditor value={title} className="board-frame-title-edit" onInput={onEditInput} onDone={onEditDone} selectAll singleLine /> : title || "Frame"}
+  const folded = frameCollapsed(el);
+  const actions = useContext(BoardFrameContext);
+  const color = el.color ? colorToken(el.color) : "var(--sol-text-muted)";
+  const label = editing ? <InlineEditor value={title} className="board-frame-title-edit" onInput={onEditInput} onDone={onEditDone} selectAll singleLine /> : <FrameTitle el={el} title={title} />;
+  if (folded) {
+    // A folded frame is a pill, pressed and dragged as a whole (no data-frame: its body is not canvas).
+    return (
+      <div data-key={el.key} data-folded className="board-el board-frame board-frame-pill" style={boxStyle(el, { background: tint(el.color ?? "gray", 10), borderColor: tint(el.color ?? "gray", 34), color })}>
+        {actions.readOnly ? (
+          <span className="board-frame-pill-chev" aria-hidden><ChevronRight size={16} strokeWidth={1.75} /></span>
+        ) : (
+          <button type="button" data-board-ui className="board-frame-pill-chev" aria-label="Expand frame" title="Expand" onClick={() => actions.toggleFold(el.key)}>
+            <ChevronRight size={16} strokeWidth={1.75} />
+          </button>
+        )}
+        <span className="board-frame-pill-title">{label}</span>
+        <span className="board-frame-pill-count">({held ?? 0})</span>
       </div>
+    );
+  }
+  return (
+    <div data-key={el.key} data-frame className={`board-el board-frame${hovered ? " is-hovered" : ""}${selected ? " is-selected" : ""}`} style={boxStyle(el, { background: tint(el.color ?? "gray", 7), borderColor: tint(el.color ?? "gray", 34) })}>
+      <div className="board-frame-title" data-part="frame-title" style={{ color }}>{label}</div>
+      {!editing && <FrameTools el={el} />}
     </div>
   );
 });
@@ -361,7 +392,7 @@ const PageView = memo(function PageView({ el, pageLive, onPageLive }: { el: Boar
 });
 
 /** One element, dispatched by kind. Connectors are drawn by ConnectorView with their ends. */
-export const BoardElementView = memo(function BoardElementView(props: ViewProps & PageLiveProps & { interactive?: boolean }) {
+export const BoardElementView = memo(function BoardElementView(props: ViewProps & PageLiveProps & FrameProps & { interactive?: boolean }) {
   switch (props.el.kind) {
     case "sticky": return <StickyView {...props} />;
     case "text": return <TextView {...props} />;

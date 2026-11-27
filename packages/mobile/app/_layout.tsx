@@ -54,6 +54,7 @@ import { appAlert } from '@/lib/popups';
 setTaskErrorReporter((msg) => appAlert('Task', msg));
 
 const CallOverlay = lazy(() => import('@/components/calls/CallOverlay').then((m) => ({ default: m.CallOverlay })));
+const PhoneAutoScribe = lazy(() => import('@/components/calls/PhoneAutoScribe').then((m) => ({ default: m.PhoneAutoScribe })));
 
 class OverlayErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
   state = { failed: false };
@@ -336,6 +337,8 @@ function RootLayoutNav() {
                       name="call"
                       options={{ presentation: 'fullScreenModal', headerShown: false, animation: 'slide_from_bottom' }}
                     />
+                    {/* The call's board, over the call screen (components/calls/CallBoardButton). */}
+                    <Stack.Screen name="call-board" options={{ presentation: 'fullScreenModal', headerShown: false }} />
                   </Stack>
                   <ComposeHost />
                   <UndoBarHost />
@@ -345,6 +348,7 @@ function RootLayoutNav() {
                     <OverlayErrorBoundary>
                       <Suspense fallback={null}>
                         <CallOverlay />
+                        <PhoneAutoScribe />
                       </Suspense>
                     </OverlayErrorBoundary>
                   ) : null}

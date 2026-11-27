@@ -3,10 +3,14 @@
 //
 // Access follows the workspace's sharing settings (lib/priorityAccess.ts): a
 // priority is readable by its owner, and by a teammate holding its `workspace`
-// key only while the owner lists their sessions to that team; nothing is
+// key only while the owner lists their sessions to that team, or while the
+// teammate can read the call it was pulled from (`from_call`) and no pass
+// has written it yet (`pass_at` 0); nothing is
 // readable, writable or run while the `priorities` feature is off there. Only the owner
-// changes a priority, and every change marks its field set by the person, so
-// the pass (lib/priorityPass.ts, priorityPassRun applyPlan) never overrides it:
+// changes a priority (a member of its workspace may create one for them or add
+// a task's milestone to it, priorityCreate.ts), and every change marks its
+// field set by the person, so the pass (lib/priorityPass.ts, priorityPassRun
+// applyPlan) never overrides it:
 // a placed rank; a milestone's tier, done state, title and drop (steps are milestones);
 // set aside, done and merge; a session's move and "not this". Corrections are
 // the person's words to the pass, read by every later pass until deleted.
@@ -25,6 +29,9 @@ import type { PriorityDetail, PriorityHistory, PriorityList, PriorityPinLine } f
 import type { Doc, Id } from "./_generated/dataModel";
 import { type Priority, type Result, cliWorkspace, criticalCounts, isOwner, listFor, showFor, tokenUser } from "./priorityRead";
 import { historyFor } from "./priorityHistory";
+import { doCreate } from "./priorityCreate";
+import { createWorkContext } from "./data";
+import { fromCallWorkspace } from "./callReads";
 import { type MilestoneChange, doCorrect, doCorrectionDelete, doMerge, doMilestone, doMove, doPriorityDone, doSessionMove, doSessionNotThis, doSetAside, doUndoPriorityDone } from "./priorityWrite";
 
 function orThrow<T>(res: Result<T>): T {
@@ -230,6 +237,34 @@ export const cliHistory = query({
     const viewer = await tokenUser(ctx, args.api_token);
     if (!viewer) return { error: "Unauthorized" };
     return historyFor(ctx, viewer, { days: args.days, tz_offset_minutes: args.tz_offset_minutes, workspace: cliWorkspace(viewer, args) });
+  },
+});
+
+/**
+ * `cast priorities create`: a priority a person names, in the workspace a task
+ * filed from the same place lands in (createWorkContext: the named one, else
+ * the calling session's team when it is team visible, else the directory
+ * rule), so `cast task create --under` it needs no --team either.
+ */
+export const cliCreate = mutation({
+  args: {
+    api_token: v.string(),
+    title: v.string(),
+    summary: v.optional(v.string()),
+    owner: v.optional(v.string()),
+    from_call: v.optional(v.string()),
+    workspace: v.optional(v.union(v.literal("personal"), v.literal("team"))),
+    team_id: v.optional(v.id("teams")),
+    conversation_id: v.optional(v.string()),
+    project_path: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const viewer = await tokenUser(ctx, args.api_token);
+    if (!viewer) return { error: "Unauthorized" };
+    // A priority pulled from one person's own huddle is theirs (fromCallWorkspace).
+    const callWorkspace = await fromCallWorkspace(ctx, viewer, args.from_call);
+    const { db } = await createWorkContext(ctx, { userId: viewer, workspace: callWorkspace ?? args.workspace, team_id: callWorkspace ? undefined : args.team_id, project_path: args.project_path, conversation_id: args.conversation_id });
+    return doCreate(ctx, viewer, { workspace: db.workspaceKey, title: args.title, summary: args.summary, owner: args.owner, from_call: args.from_call });
   },
 });
 

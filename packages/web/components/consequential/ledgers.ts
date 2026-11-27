@@ -774,3 +774,25 @@ export function cardShipLedger(r: { title: string; failing: number }): SwitchLed
     keep: "Not now",
   };
 }
+
+/** "Invite Scribe to every huddle" in one workspace: an agent session starts on the person's account in each huddle there. */
+export function autoScribeLedger(r: { workspace: string }): SwitchLedger {
+  return {
+    name: "Invite Scribe to every huddle",
+    subject: r.workspace,
+    figures: [
+      { value: "1", label: "agent a huddle", tone: "warn" },
+      { value: "0", label: "presses to start", tone: "warn" },
+    ],
+    rows: [
+      { k: "Joins", v: `Every huddle in ${r.workspace}` },
+      { k: "Runs on", v: "Your account", tone: "warn" },
+      { k: "Does", v: "Lays out the board" },
+      { k: "Speaks", v: "Never", tone: "ok" },
+      { k: "One call", v: "Scribe chip › Remove" },
+    ],
+    stop: "Settings › Calls › Huddles",
+    confirm: "Invite to every huddle",
+    keep: "Keep off",
+  };
+}

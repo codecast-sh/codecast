@@ -38,6 +38,7 @@ import { inlineForeignText } from "@codecast/shared/contracts";
 import { listLiveManagedSessions, liveConversationIdSet } from "./lib/liveSessions";
 import { graphOutside, sortGraphRefs, stampGraphStatus } from "./lib/taskGraph";
 import { patchDepMirror } from "./tasks";
+import { fromCallWorkspace, resolveFromCall } from "./callReads";
 import { isTeamMember, teamVisibleConvTeam } from "./privacy";
 import { linkConversationToEntityBestEffort } from "./conversationLinks";
 import { cliDocWriter, docLiveState, docRevision, writeDocBody } from "./lib/docBody";
@@ -75,6 +76,12 @@ export const create = mutation({
     join_policy: v.optional(v.string()),
     join_k: v.optional(v.number()),
     messaging_policy: v.optional(messagingPolicyValidator),
+    // `cast plan create --from-call cl-42`: the call this plan came out of.
+    from_call: v.optional(v.string()),
+    // `cast plan create --team <name>|personal`: an explicit workspace wins
+    // over the session's team and the directory rule, as for tasks.
+    workspace: v.optional(v.union(v.literal("personal"), v.literal("team"))),
+    team_id: v.optional(v.id("teams")),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
@@ -95,11 +102,17 @@ export const create = mutation({
       }
     }
 
-    const db = await createDataContext(ctx, {
-      userId: auth.userId,
-      project_path: args.project_path,
-      ...(convTeamId ? { workspace: "team" as const, team_id: convTeamId } : {}),
-    });
+    // A plan pulled from one person's own huddle is theirs (fromCallWorkspace).
+    const callWorkspace = await fromCallWorkspace(ctx, auth.userId, args.from_call);
+    const db = await createDataContext(ctx, callWorkspace
+      ? { userId: auth.userId, workspace: callWorkspace }
+      : args.workspace
+      ? { userId: auth.userId, workspace: args.workspace, team_id: args.team_id }
+      : {
+          userId: auth.userId,
+          project_path: args.project_path,
+          ...(convTeamId ? { workspace: "team" as const, team_id: convTeamId } : {}),
+        });
     let project_id: Id<"projects"> | undefined;
     if (args.project_id) {
       const pid = ctx.db.normalizeId("projects", args.project_id);
@@ -109,6 +122,7 @@ export const create = mutation({
       project_id = pid;
     }
 
+    const from_call = (await resolveFromCall(ctx, auth.userId, args.from_call)) ?? undefined;
     const short_id = await nextShortId(ctx.db, "pl");
 
     const id = await db.insert("plans", {
@@ -129,6 +143,7 @@ export const create = mutation({
       entries: [],
       session_ids: [],
       created_from_conversation_id,
+      from_call,
       model_stylesheet: args.model_stylesheet,
       fidelity: args.fidelity as any,
       join_policy: args.join_policy as any,

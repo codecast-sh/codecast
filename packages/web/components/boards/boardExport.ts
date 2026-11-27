@@ -10,6 +10,8 @@ import {
   elbowObstacles,
   elementBounds,
   elementBox,
+  frameCollapsed,
+  frameRef,
   labelSpot,
   shapeFontSize,
   shapeOutline,
@@ -24,6 +26,7 @@ import { wrapRuns, type Run } from "./boardMarks";
 import { colorToken, shapeFill, stickyFill, tint } from "./boardColors";
 import { drawOrder } from "./boardFrame";
 import type { BoardEl } from "./boardTypes";
+import { boardFolds, foldCount } from "./boardFolds";
 import { useInboxStore } from "../../store/inboxStore";
 import { pageShareUrl, pageThumbUrl } from "../../lib/publishedPageUrls";
 
@@ -116,8 +119,10 @@ export type ExportInput = { elements: BoardEl[]; byKey: Map<string, BoardEl>; ro
 export async function boardSvg({ elements, byKey, root, only }: ExportInput): Promise<string> {
   const c = resolver(root);
   const keep = only?.length ? new Set(only) : null;
-  const els = drawOrder(elements).filter((e) => !keep || keep.has(e.key) || (e.kind === "connector" && keep.has(String(e.from)) && keep.has(String(e.to))));
-  const boxes: Box[] = els.map((e) => (e.kind === "connector" ? connectorGeometry(e, (k) => byKey.get(k))?.box : e.kind === "frame" ? { ...elementBox(e), y: elementBox(e).y - 28, h: elementBox(e).h + 28 } : elementBounds(e))).filter(Boolean) as Box[];
+  // What folded frames hold stays folded in the picture; an arrow into a fold ends at its pill.
+  const { shown, endOf } = boardFolds(elements, byKey);
+  const els = drawOrder(shown).filter((e) => !keep || keep.has(e.key) || (e.kind === "connector" && keep.has(String(e.from)) && keep.has(String(e.to))));
+  const boxes: Box[] = els.map((e) => (e.kind === "connector" ? connectorGeometry(e, endOf)?.box : e.kind === "frame" ? { ...elementBox(e), y: elementBox(e).y - 28, h: elementBox(e).h + 28 } : elementBounds(e))).filter(Boolean) as Box[];
   const all = unionBox(boxes) ?? { x: 0, y: 0, w: 400, h: 300 };
   const vb = { x: Math.floor(all.x - PAD), y: Math.floor(all.y - PAD), w: Math.ceil(all.w + PAD * 2), h: Math.ceil(all.h + PAD * 2) };
   const font = getComputedStyle(root).fontFamily || "monospace";
@@ -136,7 +141,7 @@ export async function boardSvg({ elements, byKey, root, only }: ExportInput): Pr
   }, 0);
   const ink = c("var(--board-ink)");
   const text = c("var(--sol-text)");
-  const obstacles = elbowObstacles(elements);
+  const obstacles = elbowObstacles(shown);
   const art = new Map<string, string | null>();
   for (const e of els) {
     const a = boardArtFor(e.kind === "stamp" ? e.emoji : e.icon);
@@ -153,6 +158,14 @@ export async function boardSvg({ elements, byKey, root, only }: ExportInput): Pr
     switch (e.kind) {
       case "frame": {
         const title = typeof e.title === "string" ? e.title : "";
+        if (frameCollapsed(e)) {
+          // A folded frame: its pill, reading "<object or title> (n)".
+          const ref = frameRef(e);
+          const label = `${ref ? `${ref} ${title}`.trim() : title || "Frame"} (${foldCount(e, byKey)})`;
+          out.push(`<g data-folded="${esc(e.key)}"><rect x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" rx="12" fill="${c(tint(e.color ?? "gray", 10))}" stroke="${c(tint(e.color ?? "gray", 34))}"/>`);
+          out.push(`${textBlock([label], b.x + 40, b.y + (b.h - 15 * 1.3) / 2, 15, { link, color: c(e.color ? colorToken(e.color) : "var(--sol-text-muted)"), weight: 600 })}</g>`);
+          break;
+        }
         out.push(`<rect x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" rx="10" fill="${c(tint(e.color ?? "gray", 7))}" stroke="${c(tint(e.color ?? "gray", 34))}"/>`);
         if (title) out.push(textBlock([title], b.x + 2, b.y - 24, 13, { link, color: c(e.color ? colorToken(e.color) : "var(--sol-text-muted)"), weight: 600 }));
         break;
@@ -210,7 +223,7 @@ export async function boardSvg({ elements, byKey, root, only }: ExportInput): Pr
         break;
       }
       case "connector": {
-        const g = connectorGeometry(e, (k) => byKey.get(k), e.curve === "elbow" ? obstacles : undefined);
+        const g = connectorGeometry(e, endOf, e.curve === "elbow" ? obstacles : undefined);
         if (!g) break;
         const col = c(colorToken(e.color, "gray"));
         const w = typeof e.width === "number" ? e.width : 2;

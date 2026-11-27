@@ -1,0 +1,21 @@
+// "Open huddles on the board" (lib/calls/huddleSettings), applied once per
+// call to a huddle's stage: when its workspace is known and the person's
+// settings have loaded, a stage still on the default view moves to the
+// board. Waiting for the settings matters on a cold reload into a live call,
+// where the workspace resolves before clientState hydrates. The decision is
+// the call's (`callKey`), so a stage that stays mounted into the next call
+// decides again there.
+import { useRef } from "react";
+import { useInboxStore } from "../store/inboxStore";
+import { useWatchEffect } from "./useWatchEffect";
+import { readHuddleSetting } from "../lib/calls/huddleSettings";
+
+export function useBoardViewDefault(callKey: string | null, workspace: string | null, toBoard: () => void): void {
+  const settingsLoaded = useInboxStore((st) => st.clientStateInitialized);
+  const decidedFor = useRef<string | null>(null);
+  useWatchEffect(() => {
+    if (!callKey || decidedFor.current === callKey || !workspace || !settingsLoaded) return;
+    decidedFor.current = callKey;
+    if (readHuddleSetting(useInboxStore.getState().clientState?.ui, "huddleBoardView", workspace)) toBoard();
+  }, [callKey, workspace, settingsLoaded]);
+}

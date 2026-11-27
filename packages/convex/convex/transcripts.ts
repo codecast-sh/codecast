@@ -45,7 +45,6 @@ import { teamHasFeature } from "./teamFeatures";
 import { performSessionSend } from "./pendingMessages";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import {
-  addressesAgent,
   agentSpokenNames,
   HEARTBEAT_ALIVE_MS,
   LIVE_TRANSCRIBE_MODEL,
@@ -56,7 +55,6 @@ import {
   REC_LEASE_STALE_MS,
   RECORDING_SUMMARY_PUSH_TYPE,
   asrTranscriptionSession,
-  callParticipantKind,
   callSpeakerName,
   coveredSpans,
   formatHuddleDigest,
@@ -78,6 +76,7 @@ import {
   unionTranscribeLanguages,
 } from "@codecast/shared/contracts";
 import { characterOf } from "@codecast/shared/contracts/sessionCharacter";
+import { scribeChunkHeader } from "@codecast/shared/contracts/scribePrompt";
 import { canAccessConversation, requireAccessibleDoc } from "./lib/access";
 import { verifyApiToken } from "./apiTokens";
 import { nextShortId } from "./counters";
@@ -95,8 +94,9 @@ import { vendorRefusalFromDb } from "./lib/vendorGuard";
 import { SEGMENT_WRITE_BATCH, parseTranscriptionSegments, transcribeAudio } from "./lib/recordingTranscription";
 export { parseTranscriptionSegments };
 import { HUDDLE_GRACE_MS, quietSince, withinHuddleGrace } from "./lib/huddleGrace";
+import { CATCH_UP_QUIET_MS, CONTEXT_MIN_GAP_MS, sessionDeliveryVerdict, type DeliverReason } from "./lib/sessionDelivery";
 import { callSpeakerValidator, lineSpeakerNames } from "./lib/callSpeakers";
-import { callFilmed, callTasks, canReadCall, getCallCore, listCallsCore, listPersonalCallsCore, routeView, shapeCallRow } from "./callReads";
+import { callFilmed, callTasks, canReadCall, getCallCore, listCallsCore, listPersonalCallsCore, resolveCallRef, routeView, shapeCallRow } from "./callReads";
 import { campplusEngine, runSpeechPipeline, scribeWordsSource } from "./lib/speechPipeline";
 import {
   assignedSpeaker,
@@ -136,6 +136,7 @@ export type Route = {
   hold_until?: number;
   briefed_chunks?: number;
   context_at?: number;
+  role?: "scribe";
 };
 
 // Why deliverRoutes is running. A flush is the scribe's lull; the other three
@@ -147,17 +148,6 @@ const DELIVER_REASON = v.union(
   v.literal("hold_expired"),
   v.literal("route_added"),
 );
-type DeliverReason = "flush" | "settle" | "hold_expired" | "route_added";
-// A catch up delivery counts the room as quiet after this long without a
-// closed utterance: the scribe's own lull (scribeEngine GAP_MS).
-export const CATCH_UP_QUIET_MS = 2_500;
-// The shortest gap between two context deliveries to one session. A line
-// that names the agent still goes at once and carries everything unsent with
-// it; the rest of the room's talk waits and arrives as one catch up. Each
-// delivery costs the agent a whole turn over its context, so the gap stays,
-// but at a minute: an agent that is meant to check what the room says as it
-// goes cannot hear it three minutes late.
-export const CONTEXT_MIN_GAP_MS = 60_000;
 // deliverRoutes reschedules itself at most this many times per run: a failed
 // final delivery backs off from DELIVER_RETRY_MS, a catch up that found the
 // room talking waits one more quiet window.
@@ -212,7 +202,7 @@ export async function syncAgentFeeds(ctx: any, t: Doc<"transcripts">): Promise<v
     .query("call_agent_feeds")
     .withIndex("by_transcript", (q: any) => q.eq("transcript_id", t._id))
     .collect();
-  const wanted = new Map<string, { conversationId: Id<"conversations">; addedBy: Id<"users">; face: boolean }>();
+  const wanted = new Map<string, { conversationId: Id<"conversations">; addedBy: Id<"users">; face: boolean; scribe: boolean }>();
   if (t.status === "live") {
     for (const r of t.routes) {
       if (r.kind !== "session") continue;
@@ -223,7 +213,8 @@ export async function syncAgentFeeds(ctx: any, t: Doc<"transcripts">): Promise<v
       // one makes the session a participant in the room.
       await linkCallSession(ctx, t._id, conv._id as Id<"conversations">, addedBy, { live: true });
       if (r.mode !== "live") continue;
-      wanted.set(String(conv._id), { conversationId: conv._id as Id<"conversations">, addedBy, face: r.face !== false });
+      // Scribe never gets a face, whatever its route's flag says.
+      wanted.set(String(conv._id), { conversationId: conv._id as Id<"conversations">, addedBy, face: r.face !== false && r.role !== "scribe", scribe: r.role === "scribe" });
     }
   }
   for (const row of existing) {
@@ -279,6 +270,8 @@ export async function syncAgentFeeds(ctx: any, t: Doc<"transcripts">): Promise<v
   }
   // The first agent in the room gives the call its board, pinned on the
   // stage: the agents keep it as the room's shared picture of the talk.
+  // Scribe's board is made but not pinned: people reach it through board
+  // view (and "Open huddles on the board"), so its arrival moves nobody's stage.
   // Scheduled, not imported: callStage reaches docs.ts, and a static import
   // from here closes an import cycle that breaks module load.
   if (wanted.size > 0 && t.status === "live" && !isRoomlessKey(t.room_key) && !t.board_doc_id) {
@@ -287,6 +280,7 @@ export async function syncAgentFeeds(ctx: any, t: Doc<"transcripts">): Promise<v
       transcript_id: t._id,
       user_id: first.addedBy,
       conversation_id: first.conversationId,
+      ...(first.scribe ? { pin: false } : {}),
     });
   }
 }
@@ -574,6 +568,7 @@ export const setRoutes = mutation({
         ...(prior?.hold_until ? { hold_until: prior.hold_until } : {}),
         ...(prior?.briefed_chunks !== undefined ? { briefed_chunks: prior.briefed_chunks } : {}),
         ...(prior?.context_at ? { context_at: prior.context_at } : {}),
+        ...(prior?.role ? { role: prior.role } : {}),
       };
     });
     await ctx.db.patch(t._id, { routes });
@@ -592,6 +587,10 @@ export const addRoute = mutation({
     mode: v.union(v.literal("live"), v.literal("after")),
     // Session routes: false leaves the agent's video avatar out of the call.
     face: v.optional(v.boolean()),
+    // The call's Scribe joining: the session its inviter spawned takes the
+    // slot inviteScribe claimed, named by the claim's `claim_id`.
+    role: v.optional(v.literal("scribe")),
+    claim: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -612,12 +611,30 @@ export const addRoute = mutation({
       throw new Error("Transcript not found");
     }
     if (t.status !== "live") throw new Error("Transcript has ended");
+    // Only the claim's holder seats Scribe, and only while the claim is
+    // still the call's: an expired claim somebody else re-claimed is lost.
+    const scribe = args.role === "scribe";
+    // A retried seat (its first try committed, the answer was lost) is done
+    // already: the seat cleared the claim, so the check below would refuse it.
+    if (scribe && t.routes.some((r) => r.kind === args.kind && r.target === args.target && r.role === "scribe")) return;
+    if (scribe && (!t.scribe_claim || t.scribe_claim.removed || String(t.scribe_claim.by) !== String(userId) || t.scribe_claim.at !== args.claim)) {
+      throw new Error("This Scribe invite no longer holds: it was withdrawn, or someone else invited Scribe");
+    }
     if (t.routes.some((r) => r.kind === args.kind && r.target === args.target)) return;
     await ctx.db.patch(t._id, {
       routes: [
         ...t.routes,
-        { kind: args.kind, target: args.target, mode: args.mode, sent_seq: 0, added_by: userId, ...(args.face === false ? { face: false } : {}) },
+        {
+          kind: args.kind,
+          target: args.target,
+          mode: args.mode,
+          sent_seq: 0,
+          added_by: userId,
+          ...(args.face === false ? { face: false } : {}),
+          ...(scribe ? { role: "scribe" as const } : {}),
+        },
       ],
+      ...(scribe ? { scribe_claim: undefined } : {}),
     });
     await syncAgentFeeds(ctx, (await ctx.db.get(t._id))!);
     if (args.mode === "live") {
@@ -643,6 +660,7 @@ export const setAgentFace = mutation({
     }
     if (t.status !== "live") throw new Error("Transcript has ended");
     const i = t.routes.findIndex((r) => r.kind === "session" && r.target === args.target);
+    if (i >= 0 && args.face && t.routes[i].role === "scribe") throw new Error("Scribe has no face");
     if (i < 0 || (t.routes[i].face !== false) === args.face) return;
     const routes = [...t.routes];
     const { face: _face, ...rest } = routes[i];
@@ -676,7 +694,7 @@ export const removeRoute = mutation({
       !isRoomlessKey(t.room_key) &&
       (await authorizeRoom(ctx, userId, t.room_key)).ok;
     if (!isScribe && !isAdder && !inRoom) throw new Error("Not your route");
-    await dropRoute(ctx, t, args.kind, args.target);
+    await dropRoute(ctx, t, args.kind, args.target, userId);
   },
 });
 
@@ -694,16 +712,20 @@ export const removeAgentFromRoom = internalMutation({
       const conv = await findConversationByAnyRefWhere(ctx, r.target, () => true);
       if (conv && String(conv._id) === args.conversation_id) {
         await assertMayDropOwnRoute(ctx, t, args.user_id, r.kind, r.target);
-        return await dropRoute(ctx, t, r.kind, r.target);
+        return await dropRoute(ctx, t, r.kind, r.target, args.user_id);
       }
     }
   },
 });
 
-/** Take one route off a transcript and let the fed sessions follow. */
-async function dropRoute(ctx: any, t: Doc<"transcripts">, kind: string, target: string): Promise<void> {
+/** Take one route off a transcript and let the fed sessions follow. Scribe's
+ *  route going is a removal on record, as removeScribe writes it (`by`: who
+ *  showed it out, else whoever seated it), so automatic invites stay out. */
+async function dropRoute(ctx: any, t: Doc<"transcripts">, kind: string, target: string, by?: Id<"users">): Promise<void> {
+  const route = t.routes.find((r) => r.kind === kind && r.target === target);
   await ctx.db.patch(t._id, {
-    routes: t.routes.filter((r) => !(r.kind === kind && r.target === target)),
+    routes: t.routes.filter((r) => r !== route),
+    ...(route?.role === "scribe" ? { scribe_claim: { by: by ?? route.added_by ?? t.started_by, at: Date.now(), removed: true as const } } : {}),
   });
   await syncAgentFeeds(ctx, (await ctx.db.get(t._id))!);
 }
@@ -1138,6 +1160,7 @@ export async function endTranscript(
   await ctx.scheduler.runAfter(0, internal.transcripts.deliverRoutes, {
     transcript_id: t._id,
     include_after_routes: true,
+    ended: true,
   });
   await ctx.scheduler.runAfter(0, internal.transcripts.generateSummary, {
     transcript_id: t._id,
@@ -1714,6 +1737,7 @@ export const finishRecordingTranscript = internalMutation({
     await ctx.scheduler.runAfter(0, internal.transcripts.deliverRoutes, {
       transcript_id: t._id,
       include_after_routes: true,
+      ended: true,
     });
     await ctx.scheduler.runAfter(0, internal.transcripts.generateSummary, {
       transcript_id: t._id,
@@ -1949,6 +1973,15 @@ export const getLive = query({
       // The room's team, so an agent spawned into it starts in that team's repo.
       team_id: String(t.team_id),
       routes: t.routes.map((r: Route) => routeView(t, r)),
+      // Scribe's instructions name the call by it.
+      short_id: t.short_id ?? null,
+      // One person's own huddle (a solo huddle, a private session's room):
+      // it belongs to their personal workspace, whatever team it bills to,
+      // so Scribe and the huddle settings work there (web huddleWorkspace).
+      personal: await isOwnerOnlyRoom(ctx, t.room_key),
+      // Scribe on its way (inviteScribe): who claimed the slot and when.
+      // Whether it still holds is judged by the reader's clock (scribeStatus).
+      scribe_claim: t.scribe_claim ? { by: String(t.scribe_claim.by), at: t.scribe_claim.at, ...(t.scribe_claim.removed ? { removed: true } : {}) } : null,
       tail: segs.reverse().map((s: Doc<"transcript_segments">) => ({
         seq: s.seq,
         speaker_name: s.speaker_name,
@@ -1967,28 +2000,6 @@ export const getLive = query({
 // ── Call list/detail (web page + cast CLI) ────────────────────────────────
 // One core, two doors of authentication: the web queries use getAuthUserId,
 // the CLI twins verifyApiToken. Authorization per row is canReadCall.
-
-/** A call named the way prose names it: its short id (`cl-42`) or its full
- *  id. Null for anything else, and for a call the viewer may not read. */
-export async function resolveCallRef(
-  ctx: any,
-  userId: Id<"users">,
-  ref: string,
-  opts: { liveDoor?: boolean } = {},
-): Promise<Doc<"transcripts"> | null> {
-  const r = ref.trim().toLowerCase();
-  let t: Doc<"transcripts"> | null = null;
-  if (/^cl-\d+$/.test(r)) {
-    t = await ctx.db
-      .query("transcripts")
-      .withIndex("by_short_id", (q: any) => q.eq("short_id", r))
-      .first();
-  } else {
-    const id = ctx.db.normalizeId("transcripts", r);
-    t = id ? await ctx.db.get(id) : null;
-  }
-  return t && (await canReadCall(ctx, userId, t, opts)) ? t : null;
-}
 
 /** The most turns one embedded excerpt carries; a longer range shows its
  *  head and says how many more the call page holds. */
@@ -2057,6 +2068,8 @@ async function callRefCore(
     title: row.title,
     participants: row.participants,
     summary: row.summary,
+    // The call's board: a board marks the objects this call made "new" on its frames.
+    board: t.board_doc_id ? String(t.board_doc_id) : null,
   };
   // A moment (`cl-42@12:34`) carries the line said then, its card's caption.
   if (args.at_ms !== undefined) return { ...lean, turns: null, line: await lineAtMoment(ctx, t, args.at_ms) };
@@ -2742,13 +2755,23 @@ export const deliverToSession = internalMutation({
     // overlapping deliverRoutes runs, a crash before markRouteSent) is a no-op.
     client_id: v.optional(v.string()),
   },
-  handler: async (ctx, args) => {
+  // `fresh`: false when an earlier delivery already queued this client_id.
+  handler: async (ctx, args): Promise<{ fresh: boolean }> => {
+    if (args.client_id) {
+      const conv = await findConversationByAnyRefWhere(ctx, args.to, () => true);
+      const queued = conv && (await ctx.db
+        .query("pending_messages")
+        .withIndex("by_conversation_client_id", (q: any) => q.eq("conversation_id", conv._id).eq("client_id", args.client_id))
+        .first());
+      if (queued) return { fresh: false };
+    }
     await performSessionSend(ctx, args.as_user, {
       to: args.to,
       body: args.body,
       image_storage_ids: args.image_storage_ids,
       client_id: args.client_id,
     });
+    return { fresh: true };
   },
 });
 
@@ -2794,60 +2817,13 @@ export const slackTokenForChannel = internalQuery({
   },
 });
 
-/** Whether a session route's unsent words go now, and in which lane. Pure,
- *  so the pacing rule is one readable function with tests. Context also
- *  waits out CONTEXT_MIN_GAP_MS after the last context chunk.
- *
- *  A line that names the agent goes at once, mid-turn if need be: the ask
- *  lane. Everything else is context, and context waits while the agent is
- *  mid-turn or holding the room off (`hold_until`); its turn's end and the
- *  hold's end each run delivery again. A clock-driven delivery (settle, hold
- *  expiry) also waits for the room to be quiet, so a catch up never opens
- *  on half a sentence: the scribe's next lull delivers it instead. */
-export function sessionDeliveryVerdict(opts: {
-  reason: DeliverReason;
-  now: number;
-  route: { hold_until?: number; context_at?: number };
-  pacing: { names: string[]; busy: boolean } | null;
-  unsent: Array<{ text: string; ended_at: number; speaker_id?: string }>;
-}): { deliver: false; wait?: "quiet" | "gap"; at?: number } | { deliver: true; lane: "ask" | "context"; held: boolean } {
-  const { reason, now, route, pacing, unsent } = opts;
-  // Only the team opens the ask lane. A guest naming the agent is talking
-  // about it or to it, and their words still arrive as context, but they
-  // never cut into its turn: the ask lane reaches the agent at once with the
-  // authority of whoever pointed the route at the call, and an outsider in
-  // somebody's meeting does not get to spend that.
-  const teamWords = unsent.filter((s) => !s.speaker_id || callParticipantKind(s.speaker_id) !== "guest");
-  const addressed = !!pacing && addressesAgent(teamWords.map((s) => s.text).join("\n"), pacing.names);
-  if (addressed) return { deliver: true, lane: "ask", held: false };
-  const holding = (route.hold_until ?? 0) > now;
-  if (pacing?.busy || holding) return { deliver: false };
-  // A lull's flush and a turn's end both wait out the gap. A context chunk
-  // costs the agent a turn, and that turn's end is a settle seconds later:
-  // exempt, it shipped the next chunk at once and the gap never held. The
-  // gap's own closing run is a settle that arrives after the gap, so it
-  // delivers; a hold's catch up and a new route's backlog are never gapped.
-  const gapped = reason === "flush" || reason === "settle";
-  if (gapped && route.context_at && route.context_at + CONTEXT_MIN_GAP_MS > now) {
-    return { deliver: false, wait: "gap", at: route.context_at + CONTEXT_MIN_GAP_MS };
-  }
-  const clockDriven = reason === "settle" || reason === "hold_expired";
-  if (clockDriven) {
-    const lastEnd = Math.max(...unsent.map((s) => s.ended_at));
-    // Not quiet yet: the caller schedules one more clock-driven run after
-    // the quiet window, so the words never wait for the call's end.
-    if (now - lastEnd < CATCH_UP_QUIET_MS) return { deliver: false, wait: "quiet" };
-  }
-  // Words said under a hold are a catch up however they leave: the hold's end
-  // can find the agent still mid-turn, and the scribe's next lull ships them.
-  const saidUnderHold = unsent.some((s) => s.ended_at <= (route.hold_until ?? 0));
-  return { deliver: true, lane: "context", held: clockDriven || saidUnderHold };
-}
-
 export const deliverRoutes = internalAction({
   args: {
     transcript_id: v.id("transcripts"),
     include_after_routes: v.boolean(),
+    // The call has stopped (endTranscript): Scribe's last message says so. A
+    // forced flush mid-call ships the after routes too, but the call goes on.
+    ended: v.optional(v.boolean()),
     reason: v.optional(DELIVER_REASON),
     // How many times this run has already rescheduled itself (a failed final
     // delivery, a catch up that found the room talking). Bounded.
@@ -2876,9 +2852,12 @@ export const deliverRoutes = internalAction({
         continue;
       }
       const unsent = segments.filter((s: { seq: number }) => s.seq > route.sent_seq);
-      if (unsent.length === 0) continue;
-      const chunk = formatChunk(unsent);
-      const maxSeq = unsent[unsent.length - 1].seq;
+      // Scribe's final pass waits for word that the call is over, so the
+      // stop sends it one last message even when no words are left.
+      const scribeEnd = args.ended === true && route.kind === "session" && route.role === "scribe";
+      if (unsent.length === 0 && !scribeEnd) continue;
+      const chunk = unsent.length ? formatChunk(unsent) : "";
+      const maxSeq = unsent.length ? unsent[unsent.length - 1].seq : route.sent_seq;
       // Delivery acts as whoever pointed the route at the call — a
       // participant feeding an agent speaks as themselves. Routes from before
       // added_by existed fall back to the scribe.
@@ -2915,12 +2894,28 @@ export const deliverRoutes = internalAction({
             call: transcript.short_id ?? null,
             board: transcript.board_doc_id ? String(transcript.board_doc_id) : null,
           };
-          await ctx.runMutation(internal.transcripts.deliverToSession, {
-            as_user: asUser,
-            to: route.target,
-            body: `${own ? ownRoomChunkHeader(headerOpts) : liveFeedChunkHeader(headerOpts)}\n\n${chunk}`,
-            client_id: deliveryClientId(transcript._id, route.target, maxSeq),
-          });
+          const header = route.role === "scribe"
+            ? scribeChunkHeader({ ...headerOpts, ended: scribeEnd })
+            : own ? ownRoomChunkHeader(headerOpts) : liveFeedChunkHeader(headerOpts);
+          // Words carry their chunk's id, so a flush racing the stop with the
+          // same words dedupes against it. The end alone has an id of its own,
+          // sent once per stop, also when that racing flush won the words.
+          const sent: { fresh: boolean } = chunk
+            ? await ctx.runMutation(internal.transcripts.deliverToSession, {
+                as_user: asUser,
+                to: route.target,
+                body: `${header}\n\n${chunk}`,
+                client_id: deliveryClientId(transcript._id, route.target, maxSeq),
+              })
+            : { fresh: false };
+          if (scribeEnd && !sent.fresh) {
+            await ctx.runMutation(internal.transcripts.deliverToSession, {
+              as_user: asUser,
+              to: route.target,
+              body: scribeChunkHeader({ ...headerOpts, ended: true }),
+              client_id: `${deliveryClientId(transcript._id, route.target, maxSeq)}:end`,
+            });
+          }
         } else if (route.kind === "doc") {
           await ctx.runMutation(internal.transcripts.deliverToDoc, {
             as_user: asUser,
@@ -2985,6 +2980,7 @@ export const deliverRoutes = internalAction({
     await ctx.scheduler.runAfter(retry.delay, internal.transcripts.deliverRoutes, {
       transcript_id: args.transcript_id,
       include_after_routes: args.include_after_routes,
+      ...(args.ended ? { ended: true } : {}),
       reason: retry.reason,
       attempt: attempt + 1,
     });

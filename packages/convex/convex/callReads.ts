@@ -14,6 +14,8 @@ import { mayPublishCall } from "./lib/callRecordingRuns";
 import { callGuestsOnRecord } from "./lib/callGuestAdmission";
 import { speakerRoster, speakersForClient } from "./lib/callSpeakers";
 import type { Route } from "./transcripts";
+import { notFound } from "./lib/auth";
+import { isOwnerOnlyRoom } from "./callRoomOwnership";
 
 /** A route as clients read it: whose it is, and whether its agent wears a face. */
 export function routeView(t: Doc<"transcripts">, r: Route) {
@@ -23,6 +25,7 @@ export function routeView(t: Doc<"transcripts">, r: Route) {
     mode: r.mode,
     added_by: String(r.added_by ?? t.started_by),
     ...(r.face === false ? { face: false } : {}),
+    ...(r.role ? { role: r.role } : {}),
   };
 }
 
@@ -369,4 +372,47 @@ export async function callTasks(ctx: any, userId: Id<"users">, transcriptId: Id<
     out.push({ short_id: t.short_id, title: t.title, status: t.status, assignee: t.assignee ?? null });
   }
   return out;
+}
+
+/** A call named the way prose names it: its short id (`cl-42`) or its full
+ *  id. Null for anything else, and for a call the viewer may not read. */
+export async function resolveCallRef(
+  ctx: any,
+  userId: Id<"users">,
+  ref: string,
+  opts: { liveDoor?: boolean } = {},
+): Promise<Doc<"transcripts"> | null> {
+  const r = ref.trim().toLowerCase();
+  let t: Doc<"transcripts"> | null = null;
+  if (/^cl-\d+$/.test(r)) {
+    t = await ctx.db
+      .query("transcripts")
+      .withIndex("by_short_id", (q: any) => q.eq("short_id", r))
+      .first();
+  } else {
+    const id = ctx.db.normalizeId("transcripts", r);
+    t = id ? await ctx.db.get(id) : null;
+  }
+  return t && (await canReadCall(ctx, userId, t, opts)) ? t : null;
+}
+
+/** A `from_call` write: the call a task, plan or priority was pulled from,
+ *  named as prose names it (`cl-42` or a full id) and readable by the writer.
+ *  Undefined writes nothing; "" clears the link. */
+export async function resolveFromCall(ctx: any, userId: Id<"users">, ref: string | undefined): Promise<Id<"transcripts"> | null | undefined> {
+  if (ref === undefined) return undefined;
+  if (!ref.trim()) return null;
+  const call = await resolveCallRef(ctx, userId, ref);
+  if (!call) notFound(`Call not found: ${ref}`);
+  return call._id;
+}
+
+/** Where a create filed from a call lands when the call decides it: what is
+ *  pulled from one person's own huddle (isOwnerOnlyRoom, getLive's
+ *  `personal`) goes to the writer's personal workspace, whatever --team or
+ *  the session's team says. Undefined leaves the usual rule. */
+export async function fromCallWorkspace(ctx: any, userId: Id<"users">, ref: string | undefined): Promise<"personal" | undefined> {
+  if (!ref?.trim()) return undefined;
+  const call = await resolveCallRef(ctx, userId, ref);
+  return call && (await isOwnerOnlyRoom(ctx, call.room_key)) ? "personal" : undefined;
 }

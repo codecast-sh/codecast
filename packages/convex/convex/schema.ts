@@ -7287,6 +7287,9 @@ export default defineSchema({
     current_session_id: v.optional(v.id("conversations")),
     created_from_conversation_id: v.optional(v.id("conversations")),
     created_from_insight_id: v.optional(v.id("session_insights")),
+    // The call this plan was pulled from (a transcripts row). Set by `cast
+    // plan create --from-call`.
+    from_call: v.optional(v.id("transcripts")),
     doc_id: v.optional(v.id("docs")),
     plan_version: v.optional(v.number()),
     drive_state: v.optional(
@@ -8795,8 +8798,18 @@ export default defineSchema({
         // Session routes: when the last context lane chunk went out; the next
         // waits CONTEXT_MIN_GAP_MS unless a line names the agent.
         context_at: v.optional(v.number()),
+        // Session routes: "scribe" marks the call's Scribe, the silent agent
+        // keeping its board (transcriptsScribe.inviteScribe). At most one per call.
+        role: v.optional(v.literal("scribe")),
       }),
     ),
+    // A claim on the call's one Scribe slot while its inviter starts the
+    // agent (transcriptsScribe.inviteScribe). Cleared when the agent's route lands
+    // (addRoute with role "scribe") or Scribe is removed; a claim older than
+    // SCRIBE_CLAIM_TTL_MS no longer holds the slot, judged when read.
+    // `removed`: somebody showed Scribe out (removeScribe) at `at`, by `by`;
+    // an automatic invite is refused until a person invites Scribe again.
+    scribe_claim: v.optional(v.object({ by: v.id("users"), at: v.number(), removed: v.optional(v.literal(true)) })),
     // Monotonic per-transcript segment counter (writer-owned; the scribe is
     // the only appender, so no contention).
     last_seq: v.number(),

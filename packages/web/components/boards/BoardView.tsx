@@ -17,16 +17,18 @@ import {
   BOARD_TEMPLATE_ART,
   BOARD_TEMPLATE_LABELS,
   bottomZ,
+  carriedKeys,
+  moveFrameOps,
   stickyFitHeight,
   stickyIconHeight,
   templateOps,
   type BoardTemplate,
-  clearOffset,
   cloneOps,
   connectorGeometry,
   elbowObstacles,
   elementBounds,
   elementBox,
+  frameCollapsed,
   intersects,
   nextZ,
   readingOrder,
@@ -47,14 +49,14 @@ import { BOARD_ASK_SLOT, MOD, SHIFT, editField } from "./boardModel";
 import { BoardContextMenu, type BoardMenuItem, type BoardMenuPayload } from "./BoardContextMenu";
 import { useContextMenu } from "../ui/context-menu";
 import { isMac } from "../../shortcuts";
-import { BoardOverlay, type RemoteSelection } from "./BoardOverlay";
+import { BoardOverlay } from "./BoardOverlay";
 import { BoardToolbar } from "./BoardToolbar";
 import { BoardSelectionBar, type BarAction } from "./BoardSelectionBar";
 import { BoardPrompt, type PromptMode } from "./BoardPrompt";
 import { CommentPins, CommentThreadPopover } from "./BoardComments";
 import { initialsOf, pinPoints, useThreads } from "./commentThreads";
 import { useBoardCamera } from "./useBoardCamera";
-import { useBoardGestures, withFrameContents } from "./useBoardGestures";
+import { useBoardGestures } from "./useBoardGestures";
 import { useBoardKeys } from "./useBoardKeys";
 import { pageOps, pasteOps, placeImage, serializeSelection } from "./boardActions";
 import { parsePublishedPageUrl } from "@codecast/shared/entities";
@@ -69,6 +71,12 @@ import { clearVotingOps, readSession, sessionOp, startVotingOps, toggleVoteOps, 
 import { runBoardBar } from "./boardCommands";
 import { useBoardOpeningFit } from "./useBoardOpeningFit";
 import { useBoardSelectionChrome } from "./useBoardSelectionChrome";
+import { useBoardFolds } from "./useBoardFolds";
+import { foldCount } from "./boardFolds";
+import { duplicateOffset } from "./boardPlacement";
+import { BoardFrameContext } from "../../lib/boards/frameContext";
+import { useBoardFrameActions } from "./useBoardFrameActions";
+import { useFrameHover } from "./useFrameHover";
 
 const MINIMAP_KEY = "board-minimap";
 /** Below this pane width the overview would cover the board itself, so it is not offered. */
@@ -83,7 +91,7 @@ const NOOP_EDIT = { editing: false, onEditInput: NOOP, onEditDone: NOOP };
 
 type PromptState = { mode: PromptMode; at: Pt; world?: Pt; anchor?: string | null };
 
-export default function BoardView({ doc, live, selection, setSelection, mode, snapshot, toScreen, setExports }: LiveViewProps) {
+export default function BoardView({ doc, live, selection: selectionIn, setSelection, mode, snapshot, toScreen, setExports }: LiveViewProps) {
   const readOnly = mode === "view";
   const liveEls = useLiveElements(doc._id);
   const rawEls = (snapshot ?? liveEls) as BoardEl[];
@@ -116,7 +124,10 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
   // Gestures add the elements they create here until the next render brings them from the store.
   const byKeyRef = useRef(byKey);
   byKeyRef.current = byKey;
-  const ordered = useMemo(() => drawOrder(elements), [elements]);
+  // What folded frames hold is off the canvas, and out of every selection.
+  const { folds, foldsRef, shown, selection, remote } = useBoardFolds(elements, byKey, selectionIn, setSelection, others);
+  const ordered = useMemo(() => drawOrder(shown), [shown]);
+  const frameHover = useFrameHover(shown);
 
   const [tool, setToolState] = useState<BoardTool>("select");
   const [shapeKind, setShapeKind] = useState("rect");
@@ -160,7 +171,8 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
   }, []);
 
   // ── Camera: first paint fits the content; cursors follow every frame ──────
-  useBoardOpeningFit({ cam, live, elements, byKey, threads, chromeInsets });
+  // A pin on a held element stands on its pill (folds.resolved), for fitting as for drawing.
+  useBoardOpeningFit({ cam, live, elements: shown, byKey: folds.resolved, threads, chromeInsets });
 
   const screenOf = useCallback((pos: ArtifactPosition & { key?: string }) => {
     const root = cam.rootRef.current;
@@ -205,16 +217,17 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
   useWatchEffect(() => {
     live.setPresence({ position: lastPointer.current ? { point: lastPointer.current } : undefined, selection });
   }, [selection.join(",")]);
-  const remote = useMemo<RemoteSelection[]>(() => others
-    .filter((p) => p.selection?.length)
-    .map((p) => ({ actor: p.actor, name: p.kind === "agent" ? `✳ ${p.name}` : p.name, color: p.color, keys: p.selection!, agent: p.kind === "agent" })), [others]);
 
   // ── Edit in place ──────────────────────────────────────────────────────────
   const startEdit = useCallback((key: string) => {
     const el = byKeyRef.current.get(key);
-    if (readOnly || !el || !editField(el)) return;
+    if (readOnly || !el || !editField(el) || foldsRef.current.hidden.has(key)) return;
     setEditing(key);
-  }, [readOnly]);
+  }, [readOnly, foldsRef]);
+  // Text being typed into an element that just folded away is done.
+  useWatchEffect(() => {
+    if (editing && folds.hidden.has(editing)) { live.commit(); setEditing(null); }
+  }, [editing, folds]);
   const editHandlers = useMemo(() => {
     if (!editing) return NOOP_EDIT;
     return {
@@ -309,7 +322,7 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
   }, [live, setSelection, setTool]);
 
   const gestures = useBoardGestures({
-    cam, live, byKey: byKeyRef, selection, setSelection, tool, setTool, shapeKind, stamp, penColor, spaceHeld, startEdit, onComment, onCardTool, enterPage: onPageLive, readOnly, locked,
+    cam, live, byKey: byKeyRef, hidden: () => foldsRef.current.hidden, selection, setSelection, tool, setTool, shapeKind, stamp, penColor, spaceHeld, startEdit, onComment, onCardTool, enterPage: onPageLive, readOnly, locked,
   });
 
   // ── Commands (keyboard and the selection bar share them) ───────────────────
@@ -321,15 +334,16 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
     for (const e of byKeyRef.current.values()) if (e.kind === "connector" && (set.has(String(e.from)) || set.has(String(e.to)))) set.add(e.key);
     return [...set];
   };
+  const { boardView, withHeld, organize, frameActions } = useBoardFrameActions({ live, byKeyRef, docId: String(doc._id), readOnly, myName: me?.name, others });
   const deleteSelection = () => {
     if (!selection.length) return;
-    live.apply(withAttached(selection).map((k) => ({ k, del: true as const })));
+    live.apply(withAttached(withHeld(selection)).map((k) => ({ k, del: true as const })));
     setSelection([]);
   };
   const copy = (cut: boolean) => {
     if (!selectedEls.length) return;
-    // A frame copies (and cuts) with what is inside it, and arrows between copied things come along.
-    const keys = withFrameContents(selection, byKeyRef.current);
+    // A frame copies (and cuts) with what is inside it or folded into it, and arrows between copied things come along.
+    const keys = carriedKeys(boardView(), selection);
     const text = serializeSelection(keys.map((k) => byKeyRef.current.get(k)!).filter(Boolean));
     copiedFrom.current = lastPointer.current;
     // A cut deletes only once the copy is safely on the clipboard.
@@ -340,18 +354,8 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
   };
   const duplicate = () => {
     if (!selectedEls.length) return;
-    const els = withFrameContents(selection, byKeyRef.current).map((k) => byKeyRef.current.get(k)!).filter(Boolean);
-    // The copy lands beside the original (a gap to its right), or the nearest clear spot from there,
-    // so neither covers the other or a neighbour.
-    const box = unionBox(els.filter((e) => e.kind !== "connector").map(elementBounds));
-    let dx = 24, dy = 24;
-    if (box) {
-      const inFrame = new Set(els.map((e) => e.key));
-      const taken = allEls().filter((e) => !inFrame.has(e.key) && e.kind !== "frame" && e.kind !== "connector" && e.kind !== "pen").map(elementBounds).concat(box);
-      const off = clearOffset({ ...box, x: box.x + box.w + 24 }, taken, 40);
-      dx = Math.round(box.w + 24 + off.x);
-      dy = Math.round(off.y);
-    }
+    const els = carriedKeys(boardView(), selection).map((k) => byKeyRef.current.get(k)!).filter(Boolean);
+    const { box, dx, dy } = duplicateOffset(els, allEls(), foldsRef.current.hidden);
     const { ops, map } = cloneOps(els, dx, dy, nextZ({ elements: allEls() }), (k) => byKeyRef.current.has(k));
     live.apply(ops);
     // A copy that landed past the edge of the view is brought into it, beside its original.
@@ -387,8 +391,8 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
     cam.glide({ z, x: W / 2 - (b.x + b.w / 2) * z, y: H / 2 - (b.y + b.h / 2) * z });
   };
   const fitTo = (selectionOnly: boolean) => {
-    const els = selectionOnly && selectedEls.length ? selectedEls : elements;
-    cam.fit(fitBox(els, byKey, selectionOnly ? [] : pinPoints(threads, byKey).values()), { maxZ: selectionOnly ? 2 : 1, insets: chromeInsets() });
+    const els = selectionOnly && selectedEls.length ? selectedEls : shown;
+    cam.fit(fitBox(els, folds.resolved, selectionOnly ? [] : pinPoints(threads, folds.resolved).values()), { maxZ: selectionOnly ? 2 : 1, insets: chromeInsets() });
   };
 
   const keysActive = useBoardKeys({
@@ -398,7 +402,7 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
     redo: () => live.redo(),
     copy,
     duplicate,
-    selectAll: () => setSelection(elements.map((e) => e.key)),
+    selectAll: () => setSelection(shown.map((e) => e.key)),
     clearSelection: () => {
       if (prompt) { setPrompt(null); return true; }
       if (thread) { setThread(null); return true; }
@@ -411,13 +415,7 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
     group: (off) => runBar({ type: off ? "ungroup" : "group" }),
     frameSelection: () => { if (selectedEls.length) runBar({ type: "frame" }); },
     order: (where) => runBar({ type: "order", where }),
-    nudge: (dx, dy) => live.apply(withFrameContents(selection, byKeyRef.current).map((k) => byKeyRef.current.get(k)!).filter(Boolean).flatMap((e) => {
-      if (e.kind !== "connector") return [{ k: e.key, set: { x: (Number(e.x) || 0) + dx, y: (Number(e.y) || 0) + dy } }];
-      const set: Record<string, number> = {};
-      if (typeof e.from !== "string" && typeof e.x1 === "number") { set.x1 = e.x1 + dx; set.y1 = (Number(e.y1) || 0) + dy; }
-      if (typeof e.to !== "string" && typeof e.x2 === "number") { set.x2 = e.x2 + dx; set.y2 = (Number(e.y2) || 0) + dy; }
-      return Object.keys(set).length ? [{ k: e.key, set }] : [];
-    })),
+    nudge: (dx, dy) => { const ops = moveFrameOps(boardView(), selection, dx, dy); if (ops.length) live.apply(ops); },
     zoomBy: (f) => cam.zoomBy(f),
     zoomTo: (z) => cam.zoomBy(z / cam.cam.current.z),
     fit: fitTo,
@@ -432,7 +430,7 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
       if (selection.length === 1) startEdit(selection[0]);
     },
     cycle: (dir) => {
-      const order = readingOrder([...byKeyRef.current.values()].filter((e) => e.kind !== "pen")) as BoardEl[];
+      const order = readingOrder(foldsRef.current.shown.filter((e) => e.kind !== "pen")) as BoardEl[];
       if (!order.length) return false;
       const at = selection.length ? order.findIndex((e) => e.key === selection[selection.length - 1]) : -1;
       const next = order[at === -1 ? (dir > 0 ? 0 : order.length - 1) : (at + dir + order.length) % order.length];
@@ -501,7 +499,7 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
         { label: "Comment here", keys: ["C"], run: () => onComment(world, null) },
         paste,
         "sep",
-        { label: "Select all", keys: [MOD, "A"], run: () => setSelection(elements.map((e) => e.key)) },
+        { label: "Select all", keys: [MOD, "A"], run: () => setSelection(shown.map((e) => e.key)) },
         fit,
       ];
     }
@@ -554,7 +552,7 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
   };
 
   // Elbow connectors route around these: everything a line should not cross.
-  const obstacles = useMemo(() => elbowObstacles(elements), [elements]);
+  const obstacles = useMemo(() => elbowObstacles(shown), [shown]);
 
   // ── Culling ────────────────────────────────────────────────────────────────
   const { world, cam: vcam } = cam.viewport;
@@ -565,17 +563,17 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
     return ordered.filter((el) => {
       if (keep.has(el.key) || el.key === editing) return true;
       if (el.kind === "connector") {
-        const g = connectorGeometry(el, (k) => byKey.get(k));
+        const g = connectorGeometry(el, folds.endOf);
         return !!g && intersects(g.box, pad);
       }
       return intersects(elementBounds(el), pad);
     });
-  }, [ordered, world.x, world.y, world.w, world.h, byKey, selection, editing]);
+  }, [ordered, world.x, world.y, world.w, world.h, folds, selection, editing]);
 
   const { barAt, editAt, announce } = useBoardSelectionChrome({ selectedEls, byKey, obstacles, editing, readOnly, viewport: cam.viewport });
 
   const openThread = threads.find((t) => t.root.key === thread);
-  const threadAt = openThread ? (() => { const p = pinPoints(threads, byKey).get(openThread.root.key); return p ? cam.toScreen(p) : null; })() : null;
+  const threadAt = openThread ? (() => { const p = pinPoints(threads, folds.resolved).get(openThread.root.key); return p ? cam.toScreen(p) : null; })() : null;
   const zoomPct = Math.round(vcam.z * 100);
   const empty = live.ready && elements.length === 0 && !snapshot && !prompt;
   const teamId = (doc as typeof doc & { team_id?: string }).team_id;
@@ -606,13 +604,14 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
       onPointerMove={(e) => {
         const p = cam.clientToWorld(e.clientX, e.clientY);
         lastPointer.current = p;
+        frameHover.move(p, cam.cam.current.z);
         live.setPresence({ position: { point: { x: Math.round(p.x), y: Math.round(p.y) } }, selection });
         gestures.onPointerMove(e);
       }}
       onPointerUp={(e) => { setPressing(false); gestures.onPointerUp(e); }}
       onPointerCancel={(e) => { setPressing(false); gestures.onPointerUp(e); }}
       onLostPointerCapture={() => setPressing(false)}
-      onPointerLeave={() => { lastPointer.current = null; }}
+      onPointerLeave={() => { lastPointer.current = null; frameHover.leave(); }}
       onDoubleClick={gestures.onDoubleClick}
       onDragOver={(e) => { if (!readOnly && [...e.dataTransfer.items].some((i) => i.kind === "file" || i.type === "text/uri-list")) e.preventDefault(); }}
       onDrop={onDrop}
@@ -637,14 +636,15 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
       }}
     >
       <div className="board-grid" aria-hidden />
+      <BoardFrameContext.Provider value={frameActions}>
       <div ref={cam.worldRef} className="board-world">
         {visible.map((el) =>
           el.kind === "connector" ? (
             <ConnectorView
               key={el.key}
               el={el}
-              from={typeof el.from === "string" ? byKey.get(el.from) : undefined}
-              to={typeof el.to === "string" ? byKey.get(el.to) : undefined}
+              from={typeof el.from === "string" ? folds.endOf(el.from) : undefined}
+              to={typeof el.to === "string" ? folds.endOf(el.to) : undefined}
               obstacles={el.curve === "elbow" ? obstacles : undefined}
               {...(editing === el.key ? editHandlers : NOOP_EDIT)}
             />
@@ -653,6 +653,9 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
               key={el.key}
               el={el}
               interactive={el.kind === "card" && selection.length === 1 && selection[0] === el.key}
+              hovered={el.kind === "frame" && frameHover.hovered === el.key}
+              selected={el.kind === "frame" && selection.includes(el.key)}
+              held={frameCollapsed(el) ? foldCount(el, byKey) : undefined}
               {...(el.kind === "page" ? { pageLive: livePage === el.key, onPageLive } : null)}
               {...(editing === el.key ? editHandlers : NOOP_EDIT)}
             />
@@ -667,9 +670,10 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
           readOnly={readOnly}
           showHandles={!pressing}
         />
-        {session.voting && <BoardVoteDots els={elements} me={myId} open={session.voting.open} />}
-        <CommentPins threads={threads} byKey={byKey} open={thread} onOpen={(k) => setThread(thread === k ? null : k)} />
+        {session.voting && <BoardVoteDots els={shown} me={myId} open={session.voting.open} />}
+        <CommentPins threads={threads} byKey={folds.resolved} open={thread} onOpen={(k) => setThread(thread === k ? null : k)} />
       </div>
+      </BoardFrameContext.Provider>
 
       {empty && (
         <div className="board-empty" data-board-ui>
@@ -721,7 +725,7 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
           live.apply([sessionOp(!!sessionEl, { timer: ms ? { ends_at: Date.now() + ms, ms } : add && t ? { ends_at: Math.max(t.ends_at, Date.now()) + add, ms: t.ms + add } : null })], { undoable: false });
         }}
       />
-      {minimap && elements.length > 0 && roomForMinimap(cam.viewport.w, cam.viewport.h) && <BoardMinimap elements={elements} byKey={byKey} cam={cam} top={cam.viewport.w < 820} />}
+      {minimap && shown.length > 0 && roomForMinimap(cam.viewport.w, cam.viewport.h) && <BoardMinimap elements={shown} byKey={byKey} cam={cam} top={cam.viewport.w < 820} />}
       {editAt && <BoardEditBar at={editAt} />}
       <BoardContextMenu state={ctxMenu} items={menuItems} />
       <div aria-live="polite" style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clipPath: "inset(50%)" }}>{announce}</div>
@@ -768,6 +772,7 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
         readOnly={readOnly}
         locked={locked}
         setLocked={setLocked}
+        onOrganize={organize}
         onImages={(files) => {
           const at = viewCenter();
           files.forEach((f, i) => void placeImage(live, convex as any, f, { x: at.x + i * 40, y: at.y + i * 40 }, allEls()));

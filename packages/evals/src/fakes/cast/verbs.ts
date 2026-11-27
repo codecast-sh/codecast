@@ -5,6 +5,7 @@ import { briefBudget, briefBudgetWords, briefOverBudgetMessage } from '@codecast
 import { patchBriefNarrative } from '../../../../cli/src/briefLines';
 import { parseFindings } from '../../../../cli/src/reviewFindings';
 
+import { BOARD_WRITES, underOf } from './board';
 import type { Parsed } from './tree';
 import { mint, type FakeTask, type FakeWorld } from './world';
 
@@ -17,6 +18,8 @@ import { mint, type FakeTask, type FakeWorld } from './world';
 
 export interface Ctx {
   w: FakeWorld;
+  /** The call's stdin, for a verb the CLI reads it for whole (`board apply`, `board place`). */
+  stdin?: string;
 }
 
 export interface Answer {
@@ -26,7 +29,7 @@ export interface Answer {
   cli?: true;
 }
 
-type Handler = (p: Parsed, ctx: Ctx) => Answer | null;
+export type Handler = (p: Parsed, ctx: Ctx) => Answer | null;
 
 const ok = (...lines: string[]): Answer => ({ out: `${lines.join('\n')}\n`, exit: 0 });
 const fail = (...lines: string[]): Answer => ({ out: `${lines.join('\n')}\n`, exit: 1 });
@@ -104,6 +107,8 @@ const taskCreate: Handler = (p, ctx) => {
   const { w } = ctx;
   const title = text(p.args[0]).trim();
   if (!title) return fail('Error: a task needs a title');
+  const under = underOf(p);
+  if ('exit' in under) return under;
   const id = mint(w, 'ct-');
   const explicit = p.opts.foundDuring as string | undefined;
   const found = explicit === 'none' ? undefined : explicit ?? w.bound;
@@ -117,6 +122,9 @@ const taskCreate: Handler = (p, ctx) => {
     ...(p.opts.plan ? { plan: String(p.opts.plan) } : {}),
     ...(p.opts.project ? { project: String(p.opts.project) } : {}),
     ...(found ? { found_during: found } : {}),
+    ...(p.opts.fromCall ? { from_call: String(p.opts.fromCall) } : {}),
+    ...(under.under ? { under: under.under } : {}),
+    ...(p.opts.assignee ? { assignee: String(p.opts.assignee) } : {}),
     comments: [],
   };
   w.tasks[id] = t;
@@ -142,6 +150,32 @@ const taskComment: Handler = (p, ctx) => {
   if (!body.trim()) return fail('Error: empty comment');
   if (t !== 'outside') t.comments.push({ type: String(p.opts.type ?? 'note'), text: body, seq: ctx.w.seq });
   return ok(`ok Comment added to ${id}`);
+};
+
+/** `task update`: a task the turn created takes the new words; one the record holds is answered as prod would and left as it was. */
+const taskUpdate: Handler = (p, ctx) => {
+  const id = String(p.args[0]);
+  const t = taskRef(ctx, id);
+  if (!t) return null;
+  if (t === 'missing') return fail(`Error: Task not found: ${id}`);
+  if (t !== 'outside') {
+    if (p.opts.title !== undefined) t.title = text(p.opts.title);
+    if (p.opts.description !== undefined) t.description = text(p.opts.description);
+    if (p.opts.assignee !== undefined) t.assignee = String(p.opts.assignee);
+    if (p.opts.status !== undefined) t.status = String(p.opts.status);
+    if (p.opts.priority !== undefined) t.priority = String(p.opts.priority);
+  }
+  return ok(`ok Updated ${id}`);
+};
+
+/** `task drop`: the task is cancelled, as prod words it. */
+const taskDrop: Handler = (p, ctx) => {
+  const id = String(p.args[0]);
+  const t = taskRef(ctx, id);
+  if (!t) return null;
+  if (t === 'missing') return fail(`Error: Task not found: ${id}`);
+  if (t !== 'outside') t.status = 'dropped';
+  return ok(`ok Dropped ${id}`);
 };
 
 const taskStart: Handler = (p, ctx) => {
@@ -407,7 +441,7 @@ const chatDm: Handler = (p, ctx) => {
 };
 
 /** The writes the fake answers, as an agent types them: what a harness note under --fakes tells the agent it may run. */
-export const FAKED_WRITES = ['send', 'state', 'task create', 'task comment', 'task start', 'task handoff', 'task verdict', 'trigger add', 'trigger complete', 'brief edit', 'role wake', 'decide', 'chat send', 'chat dm'];
+export const FAKED_WRITES = ['send', 'state', 'task create', 'task comment', 'task update', 'task drop', 'task start', 'task handoff', 'task verdict', 'trigger add', 'trigger complete', 'brief edit', 'role wake', 'decide', 'chat send', 'chat dm', ...BOARD_WRITES];
 
 /** Each modelled command path, joined by spaces. */
 export const VERBS: Record<string, Handler> = {
@@ -415,6 +449,8 @@ export const VERBS: Record<string, Handler> = {
   state,
   'task create': taskCreate,
   'task comment': taskComment,
+  'task update': taskUpdate,
+  'task drop': taskDrop,
   'task start': taskStart,
   'task handoff': taskHandoff,
   'task verdict': taskVerdict,

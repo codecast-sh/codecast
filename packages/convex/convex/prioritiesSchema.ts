@@ -66,7 +66,7 @@ export const priorityTables = {
     first_seen_at: v.number(),
     last_active_at: v.number(),
     done_at: v.optional(v.number()),
-    /** The last pass that wrote it. */
+    /** The last pass that wrote it; 0 for one a person created that no pass has written yet. */
     pass_at: v.number(),
     /** How many sessions it holds (conversations.priority_id), kept by the pass as it maps them. */
     session_count: v.optional(v.number()),
@@ -80,6 +80,9 @@ export const priorityTables = {
     needs_rewrite: v.optional(v.boolean()),
     /** The highest milestone key number it ever held ("s7": 7): a new milestone's key comes after it, so a removed one's key is never reused. */
     step_key_max: v.optional(v.number()),
+    // The call this priority was pulled from (a transcripts row). Set by `cast
+    // priorities create --from-call`.
+    from_call: v.optional(v.id("transcripts")),
     created_at: v.number(),
     updated_at: v.number(),
   })

@@ -11,7 +11,6 @@ import {
   finishRecordingTranscript,
   flush,
   HOLD_MAX_MS,
-  sessionDeliveryVerdict,
   start,
   stop,
   ROLLING_SUMMARY_GAP_MS,
@@ -45,12 +44,11 @@ import {
   deliveryClientId,
   dropDeadRoute,
   readUnsent,
-  CATCH_UP_QUIET_MS,
-  CONTEXT_MIN_GAP_MS,
   DELIVER_RETRY_MAX,
   DELIVER_RETRY_MS,
   removeAgentFromRoom,
 } from "./transcripts";
+import { CATCH_UP_QUIET_MS, CONTEXT_MIN_GAP_MS, sessionDeliveryVerdict } from "./lib/sessionDelivery";
 import { LIVE_TRANSCRIBE_MODEL, lineSaidAt } from "@codecast/shared/contracts";
 import { makeFakeDb } from "./testDb";
 import { captureFetch, goldenBody, recordGolden, type GoldenCase } from "./__golden__/golden.testkit";
@@ -1958,6 +1956,12 @@ describe("call references (cl-N)", () => {
     expect(out?._id).toBe("tr_rec");
     expect(out?.title).toBe("Pricing sync");
     expect(out?.turns).toBeNull();
+    expect(out?.board).toBeNull();
+  });
+
+  test("names the call's board, so a board can tell the objects its call made", async () => {
+    const out = await call(webGetCallRef, ctxFor("ua", [{ ...row(), board_doc_id: "doc_board" }]), { ref: "cl-7" });
+    expect(out?.board).toBe("doc_board");
   });
 
   test("a line range carries the attributed words", async () => {

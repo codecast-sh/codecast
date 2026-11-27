@@ -3,13 +3,16 @@
 import "./board.css";
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Minus, Plus, Scan } from "lucide-react";
-import { elbowObstacles } from "@codecast/shared/artifacts/board";
+import { elbowObstacles, frameCollapsed } from "@codecast/shared/artifacts/board";
 import type { LiveSharedViewProps } from "../live/registry";
 import { BoardElementView, ConnectorView } from "./BoardElements";
 import { drawOrder, fitBox } from "./boardFrame";
 import type { BoardEl } from "./boardTypes";
+import { boardFolds, foldCount } from "./boardFolds";
+import { BoardFrameContext } from "../../lib/boards/frameContext";
 
 const NOOP = () => {};
+const FRAME_INFO = { docId: null, readOnly: true, reflow: NOOP, toggleFold: NOOP };
 const MARGIN = 32;
 const MIN_Z = 0.25;
 const MAX_Z = 2;
@@ -19,9 +22,11 @@ export default function SharedBoard({ elements }: LiveSharedViewProps) {
   // The workshop state (kind "session") is never drawn.
   const els = useMemo(() => (elements as BoardEl[]).filter((e) => e.kind !== "session"), [elements]);
   const byKey = useMemo(() => new Map(els.map((e) => [e.key, e])), [els]);
-  const ordered = useMemo(() => drawOrder(els), [els]);
-  const box = useMemo(() => fitBox(els, byKey), [els, byKey]);
-  const obstacles = useMemo(() => elbowObstacles(els), [els]);
+  // A shared board shows its folds folded, as the live board does.
+  const folds = useMemo(() => boardFolds(els, byKey), [els, byKey]);
+  const ordered = useMemo(() => drawOrder(folds.shown), [folds]);
+  const box = useMemo(() => fitBox(folds.shown, byKey), [folds, byKey]);
+  const obstacles = useMemo(() => elbowObstacles(folds.shown), [folds]);
   const ref = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
   useLayoutEffect(() => {
@@ -62,24 +67,26 @@ export default function SharedBoard({ elements }: LiveSharedViewProps) {
         <div className="overflow-x-auto rounded-xl border border-sol-border/50">
           <div className="board-root is-readonly" style={{ height, width: innerW, touchAction: "auto" }}>
             <div className="board-grid" aria-hidden style={{ backgroundSize: `${24 * z * (z < 0.5 ? 2 : 1)}px ${24 * z * (z < 0.5 ? 2 : 1)}px`, backgroundPosition: `${x}px ${y}px` }} />
+            <BoardFrameContext.Provider value={FRAME_INFO}>
             <div className="board-world" style={{ transform: `translate3d(${x}px, ${y}px, 0) scale(${z})` }}>
               {ordered.map((el) =>
                 el.kind === "connector" ? (
                   <ConnectorView
                     key={el.key}
                     el={el}
-                    from={typeof el.from === "string" ? byKey.get(el.from) : undefined}
-                    to={typeof el.to === "string" ? byKey.get(el.to) : undefined}
+                    from={typeof el.from === "string" ? folds.endOf(el.from) : undefined}
+                    to={typeof el.to === "string" ? folds.endOf(el.to) : undefined}
                     obstacles={el.curve === "elbow" ? obstacles : undefined}
                     editing={false}
                     onEditInput={NOOP}
                     onEditDone={NOOP}
                   />
                 ) : (
-                  <BoardElementView key={el.key} el={el} editing={false} onEditInput={NOOP} onEditDone={NOOP} />
+                  <BoardElementView key={el.key} el={el} editing={false} onEditInput={NOOP} onEditDone={NOOP} held={frameCollapsed(el) ? foldCount(el, byKey) : undefined} />
                 ),
               )}
             </div>
+            </BoardFrameContext.Provider>
           </div>
         </div>
         </div>

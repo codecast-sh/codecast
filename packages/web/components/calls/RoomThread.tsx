@@ -39,6 +39,8 @@ import { passageHits, useThreadFind } from "../../hooks/useThreadFind";
 import { usePaneShortcutAction } from "../../shortcuts/ShortcutProvider";
 import { ChatLine, EventLine, PassageBlock, RecapCard, type LocalRow, type RoomThreadSelection } from "./RoomThreadRows";
 import { useAddToCall, useAgentsInRoom, useRemoveLiveFeed } from "./useCallFeed";
+import { useScribe, type ScribeLive } from "./useScribe";
+import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { teamHasFeature } from "../../lib/teamFeatures";
 import {
   HEARS,
@@ -80,7 +82,7 @@ import { AgentFaceToggle, DensityControl, WorkingDots, type Density } from "./Ro
 export type { RoomThreadSelection } from "./RoomThreadRows";
 export { SegmentedRadio } from "./RoomThreadControls";
 
-export type RoomThreadRoute = { kind: string; target: string; mode: string; added_by: string; face?: boolean };
+export type RoomThreadRoute = { kind: string; target: string; mode: string; added_by: string; face?: boolean; role?: string };
 
 /** What the thread reads of transcripts.webGetCall. */
 export type RoomThreadCall = {
@@ -321,7 +323,11 @@ export const RoomThread = memo(function RoomThread({
 
   // The header's button and the empty card's open the call's one add list
   // (AddPeople.tsx): teammates, roles and agents.
-  const { open: openAddAgent, adding } = useAddToCall({ roomKey, liveTranscriptId, routes, teamId: call?.team_id });
+  // The list offers the call's Scribe first while it is absent, as the call
+  // controls' Add does (AddPeople): from a seat in the live huddle only.
+  const scribeLive = useQueryNoThrow(api.transcripts.getLive, seated && liveTranscriptId ? { room_key: roomKey, tail: 1 } : "skip").data as ScribeLive;
+  const scribe = useScribe(seated ? roomKey : null, scribeLive);
+  const { open: openAddAgent, adding } = useAddToCall({ roomKey, liveTranscriptId, routes, teamId: call?.team_id, scribe: seated && scribeLive ? scribe : undefined });
   const removeFeed = useRemoveLiveFeed(liveTranscriptId);
   const facesOn = useInboxStore((st) => teamHasFeature(st.teams, call?.team_id, "agent_faces"));
   // What an agent did is in the past once the call ended or nothing is live
@@ -349,7 +355,7 @@ export const RoomThread = memo(function RoomThread({
   const transcribeAlone = () => {
     if (!getRoom()) return void toast.error("Not connected to the huddle yet. Try again in a moment.");
     void startTranscribing(roomKey).then((ok) => {
-      if (!ok) toast.error("Could not start transcribing. Somebody else may be the scribe already.");
+      if (!ok) toast.error("Could not start transcribing. Somebody else may be transcribing already.");
     });
   };
 
@@ -582,7 +588,8 @@ export const RoomThread = memo(function RoomThread({
           Nothing to show, no band. */}
       {showHead && (
         <div className={`rt-head${quietHead ? " rt-head-quiet" : ""}`}>
-          {routes.map((r) => {
+          {/* Scribe is the stage header's chip, not one of these. */}
+          {routes.filter((r) => r.role !== "scribe").map((r) => {
             const agent = r.kind === "session" ? roster.find((a) => a.target === r.target) : null;
             return (
               <span

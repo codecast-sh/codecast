@@ -8,7 +8,8 @@ import {
 } from "@codecast/shared/contracts";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
 import { DispatchNotWiredError } from "../store/mutativeMiddleware";
-import { withoutUndo } from "../store/undoStack";
+// The engine, not web's undoStack, whose load installs sonner as the notifier (the phone reaches this file).
+import { withoutUndo } from "@platform/engine";
 
 // modelOptionKey ("claude-opus-4-8" → "opus") is pure contract logic — it lives
 // in @codecast/shared/contracts now (the store's create path needs it too). Kept

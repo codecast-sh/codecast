@@ -382,6 +382,7 @@ import { createExpectationsSlice, type ExpectationsSliceActions } from "./expect
 import { createOpsSlice, type OpsSliceActions } from "./opsSlice";
 import { createLiveArtifactsSlice, type LiveArtifactsSliceActions } from "./liveArtifactsSlice";
 import { createMeetingBotsSlice, type MeetingBotsSliceActions } from "./meetingBotsSlice";
+import { createHuddleSlice, type HuddleClientUI, type HuddleSliceActions } from "./huddleSlice";
 import { createSessionOwnersSlice, type SessionOwnersSliceActions } from "./sessionOwnersSlice";
 import { createAgentConnectionsSlice, type AgentConnectionsSliceActions } from "./agentConnectionsSlice";
 import { createComposeSlice, composeDraftContent, type ComposeInstance, type ComposeSliceState, type SessionStart } from "./composeSlice";
@@ -1998,7 +1999,7 @@ import { showsModern } from "../lib/modernStyle";
 /** What the header slide-over shows (components/anchor/AnchorPanel). */
 export type AnchorPanelTarget = { kind: "anchor"; id: string } | { kind: "session"; id: string };
 
-export type ClientUI = {
+export type ClientUI = HuddleClientUI & {
   theme?: "light" | "dark";
   // Sessions whose canvas is on (lib/sessionCanvas): conversation id → the
   // page the person pinned, null for "the latest page". Absent is off.
@@ -6596,7 +6597,7 @@ function dropGuestKnock(draft: any, guestId: string): void {
 // RegisteredCollectionSlots: every collection in CLIENT_SYNC_REGISTRY gets a
 // typed `Record<string, any>` slot here by registration alone; the explicit
 // fields below narrow the ones with a real row type.
-interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSliceActions, ProjectUpdatesSliceActions, LineWorkflowSliceActions, LineSliceActions, PrioritiesSliceActions, TrialSliceActions, ExpectationsSliceActions, OpsSliceActions, LiveArtifactsSliceActions, MeetingBotsSliceActions, AgentConnectionsSliceActions, SessionOwnersSliceActions, ComposeSliceState, Omit<RegisteredCollectionSlots, keyof ChatSliceState | keyof OrgSliceState> {
+interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSliceActions, ProjectUpdatesSliceActions, LineWorkflowSliceActions, LineSliceActions, PrioritiesSliceActions, TrialSliceActions, ExpectationsSliceActions, OpsSliceActions, LiveArtifactsSliceActions, MeetingBotsSliceActions, HuddleSliceActions, AgentConnectionsSliceActions, SessionOwnersSliceActions, ComposeSliceState, Omit<RegisteredCollectionSlots, keyof ChatSliceState | keyof OrgSliceState> {
   sessions: Record<string, InboxSession>;
   pending: Record<string, PendingEntry>;
   currentSessionId: string | null;
@@ -17003,6 +17004,8 @@ const inboxStoreConfig = (set: any, get: any) => ({
   ...createLiveArtifactsSlice(),
   // Meeting bot writes (store/meetingBotsSlice.ts): send to a pasted link, remove.
   ...createMeetingBotsSlice(),
+  // A huddle's board view, Scribe and live feeds (store/huddleSlice.ts).
+  ...createHuddleSlice(set, get),
   // Outside agents over MCP (store/agentConnectionsSlice.ts): disconnect from Settings.
   ...createAgentConnectionsSlice(),
   // Session owners under the session_owners model (store/sessionOwnersSlice.ts).

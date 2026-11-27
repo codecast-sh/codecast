@@ -155,7 +155,8 @@ describe("updateClientUI stamped view keys", () => {
 describe("PER_DEVICE_UI_KEYS", () => {
   it("names keys that exist on ClientUI", async () => {
     const src = await Bun.file(new URL("../inboxStore.ts", import.meta.url)).text();
-    const block = src.match(/export type ClientUI = \{([\s\S]*?)\n\};/);
+    // ClientUI may open with an intersection (HuddleClientUI & {…}); the per-device keys live in the literal block.
+    const block = src.match(/export type ClientUI = (?:\w+ & )?\{([\s\S]*?)\n\};/);
     expect(block).toBeTruthy();
     const keys = new Set([...block![1].matchAll(/^\s+([a-z_]+)\?:/gm)].map((m) => m[1]));
     for (const k of PER_DEVICE_UI_KEYS) {

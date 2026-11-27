@@ -19,7 +19,7 @@ import { CODECAST_HOOK_SCRIPTS, CODECAST_SKILL_NAMES, ORCH_AGENT_FILES, ORCH_MAR
 import { isOlderBackendRefusal } from "./castApi.js";
 import type { LoopFreezeState } from "./loopFreezeState.js";
 import { describeHangMarker, latestHang, noRestartReason, type HangMarker } from "./daemonMarkers.js";
-import { READY_LIST_LIMIT, buildTaskClaimBody, buildTaskStartBody, foldStaleTasks, groupTasksByAssignee, readyCountLine, startedLines, taskHintBody, unclaimedLine } from "./taskClaim.js";
+import { READY_LIST_LIMIT, buildTaskClaimBody, buildTaskStartBody, foldStaleTasks, groupTasksByAssignee, readyCountLine, startedLines, taskHintBody, unclaimedLine, underTarget } from "./taskClaim.js";
 import { ASSIGNEE_MEANS } from "@codecast/shared/contracts/orgAssignee";
 import { usedOf } from "@codecast/shared/contracts/orgCapacity";
 import { chatSendOrigin, commentSession, sessionIdFromEnv, workOriginStamp } from "./sessionIdentity.js";
@@ -10443,9 +10443,6 @@ function fmtCallDuration(row: { started_at: number; ended_at: number | null }): 
   return callLength(row.started_at, row.ended_at);
 }
 
-/** The call a reference names, or a thrown error whose `code` says why not
- *  ("not_found", "ambiguous"). A short id (cl-42) or full id resolves on the
- *  server; anything else is a unique prefix of a recent call's id. */
 /** A task's `--from-call` value: a call as `cast calls` names it, resolved
  *  to the id the server stores; '' passes through to unlink. */
 async function taskCallArg(ref: string): Promise<string> {
@@ -10457,25 +10454,8 @@ async function taskCallArg(ref: string): Promise<string> {
 }
 
 async function findCallId(ref: string, opts: { throwOnError?: boolean } = {}): Promise<string> {
-  const { isServerCallRef } = await import("./callSnap.js");
-  if (parseCallRef(ref) || isServerCallRef(ref)) return ref.toLowerCase();
-  const rows: any[] = await cliPost("/cli/calls/list", { limit: 200 }, opts);
-  const exact = rows.find((r) => r._id === ref);
-  if (exact) return exact._id;
-  const matches = rows.filter((r) => r._id.startsWith(ref));
-  if (matches.length === 1) return matches[0]._id;
-  // `try` holds the commands the sentence names, for a caller that answers
-  // in JSON (`cast call snap --json`).
-  const err = (code: "not_found" | "ambiguous", message: string, tries: string[]) => Object.assign(new Error(message), { code, try: tries });
-  if (matches.length > 1) throw err("ambiguous", `"${ref}" matches ${matches.length} recent calls; use more characters, or the short id from \`cast calls\``, ["cast calls"]);
-  // A short id typed without its prefix (`107` for cl-107) is the likeliest
-  // miss: say the spelling that works, and whether that call is there.
-  if (/^\d+$/.test(ref)) {
-    const short = `cl-${Number(ref)}`;
-    const there = rows.some((r) => r.short_id === short);
-    throw err("not_found", `No recent call matches "${ref}"${there ? `; did you mean ${short}?` : `; a call's short id is written ${short}.`} \`cast calls\` lists them`, there ? [`cast call ${short}`, "cast calls"] : ["cast calls"]);
-  }
-  throw err("not_found", `No recent call matches "${ref}"; \`cast calls\` lists them`, ["cast calls"]);
+  const { findCallIdIn } = await import("./callFind.js");
+  return findCallIdIn((urlPath, body) => cliPost(urlPath, body, opts), ref);
 }
 
 program
@@ -17741,6 +17721,7 @@ work
   .option("--status <status>", "Initial status: a category (backlog, open, in_progress, in_review, done, dropped) or one of your team's statuses by name, e.g. today", "open")
   .option("--plan <plan_id>", "Plan short ID to associate this task with")
   .option("--parent <task_id>", "Nest this task under a parent task (e.g. ct-4102)")
+  .option("--under <id>", "File it under a task (its subtask), a plan (one of its tasks) or a priority (a new critical milestone): ct-N, pl-N or pri-N")
   .option("--human", "Put the task on the human's board — for work the human must see and manage (rare)")
   .option("--from-meeting", "This task came out of a meeting with people in it, not from your own work")
   .option("--from-call <call>", "The call this task was pulled from (cl-42, from `cast calls`); implies --from-meeting, and the task shows on the call's page")
@@ -17760,9 +17741,11 @@ work
       process.exit(1);
     }
     let hints: Record<string, any> = {};
+    let under: ReturnType<typeof underTarget> = {};
     let blockers: ReturnType<typeof routeBlockerRef>[] = [];
     try {
       hints = taskHintBody(options);
+      if (options.under !== undefined) under = underTarget(options.under, options);
       // Parsed before anything is written, so a mistyped blocker files nothing.
       blockers = splitRefs(options.blockedBy).map((ref) => routeBlockerRef(ref));
     } catch (err) {
@@ -17800,6 +17783,7 @@ work
       if (options.labels) body.labels = options.labels.split(",").map((s: string) => s.trim());
       if (options.plan) body.plan_id = options.plan;
       if (options.parent) body.parent_id = options.parent;
+      Object.assign(body, under);
       Object.assign(body, hints);
 
       // Origin by evidence (workOriginStamp): a session binds the task and
@@ -17826,7 +17810,7 @@ work
       }
       // Subtasks never rebind the session's task pulse — the loop is "claim
       // the parent once, advance subtasks under it".
-      if (!options.parent) recordTaskFiled(sessionId, result.short_id, options.plan, result.session_bound);
+      if (!options.parent && !under.parent_id) recordTaskFiled(sessionId, result.short_id, options.plan ?? under.plan_id, result.session_bound);
     }
     if (options.json) printJson(created.length === 1 ? created[0] : created);
   });
@@ -20099,6 +20083,8 @@ plan
   .option("--model-stylesheet <stylesheet>", "CSS-like model routing rules")
   .option("--policy <name>", "How the plan's agents share findings: lead (report to the lead, the default) or shared-log (post typed entries to the plan)", choiceOption(["lead", "shared-log"]))
   .option("--human", "File it as a person's plan, on the shelf (a script a person drives; a terminal is detected on its own)")
+  .option("--from-call <call>", "The call this plan was pulled from (cl-42, from `cast calls`)")
+  .option("--team <name|id|personal>", "Workspace to file it in: a team, or personal (default: the session's team, else the directory's mapping)")
   .option("--json", "Output the created plan as JSON: { short_id, title, tasks }")
   .action(async (title: string, options: any) => {
     // Steps are read before the plan is filed, so bad input files nothing.
@@ -20123,6 +20109,8 @@ plan
     if (options.project) body.project_id = await resolveProjectId(options.project);
     if (options.modelStylesheet) body.model_stylesheet = options.modelStylesheet;
     if (options.policy) body.messaging_policy = options.policy;
+    if (options.fromCall !== undefined) body.from_call = await taskCallArg(options.fromCall);
+    if (options.team) Object.assign(body, workspaceScope(await readWorkspace(options.team)));
 
     const sessionId = detectCurrentSessionId();
     if (options.fromSession) {

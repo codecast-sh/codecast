@@ -176,6 +176,7 @@ function rowFor(viewer: Id<"users">, p: Priority, owner: Owner, position: number
     session_count_more: more,
     sessions: mapped.filter((c): c is PrioritySession => c !== null).slice(0, limit),
     correction_pending: pending,
+    ...(p.from_call ? { from_call: String(p.from_call) } : {}),
   };
 }
 
@@ -439,8 +440,8 @@ async function byShortId(ctx: Ctx, shortId: string): Promise<Priority | null> {
   return await ctx.db.query("priorities").withIndex("by_short_id", (q: any) => q.eq("short_id", shortId.trim().toLowerCase())).first();
 }
 
-/** A priority the viewer can read, or the plain reason they cannot. */
-async function readable(ctx: Ctx, r: Reader, shortId: string): Promise<Result<Priority>> {
+/** A priority the viewer can read, or the plain reason they cannot: one that does not exist and one they cannot read get the same answer. */
+export async function readable(ctx: Ctx, r: Reader, shortId: string): Promise<Result<Priority>> {
   const p = await byShortId(ctx, shortId);
   // Access first, so the feature message never tells someone a priority exists.
   if (!p || p.status === "merged" || !(await r.canRead(p))) return { error: `no priority ${shortId} you can see` };
