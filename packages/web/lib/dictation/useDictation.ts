@@ -5,7 +5,8 @@
 import { useCallback, useMemo, useRef, useState, type KeyboardEvent, type MutableRefObject, type RefObject } from "react";
 import { flushSync } from "react-dom";
 import { useConvex } from "convex/react";
-import { createDictation, dictationRunning, DICTATION_IDLE, type Dictation, type DictationField, type DictationState } from "@codecast/shared/contracts/dictation";
+import { toast } from "sonner";
+import { createDictation, dictationRunning, dictationStopLine, DICTATION_IDLE, type Dictation, type DictationField, type DictationState } from "@codecast/shared/contracts/dictation";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { dictationHost } from "./host";
 
@@ -83,7 +84,15 @@ export function useDictation(field: DictationFieldAdapter): DictationControls {
         setValue: (value, caret, anchor) => fieldRef.current.setValue(value, caret, anchor),
       };
       const made = createDictation(proxy, dictationHost(() => convexRef.current as any), (next) => {
-        if (next.phase === "idle") fieldRef.current.end?.();
+        if (next.phase === "idle") {
+          fieldRef.current.end?.();
+          // A recording that failed or stopped by itself says why, once, as it
+          // ends: the mic keeps the reason, but a hover-less screen never shows
+          // its tooltip. A cancel or a finish ends with neither. Top centre:
+          // the app's toasts stack bottom-right, over the composer's Send.
+          if (next.error) toast.error(next.error, { position: "top-center" });
+          else if (next.stopped) toast(dictationStopLine(next.stopped), { position: "top-center" });
+        }
         setState(next);
       });
       ctl.current = made;
@@ -163,6 +172,8 @@ export function textareaField(
       const ta = el();
       if (ta && ta.ownerDocument.activeElement === ta) {
         ta.setSelectionRange(Math.min(anchor, caret), Math.max(anchor, caret), anchor > caret ? "backward" : "forward");
+        // Words landing at the end of a box taller than its view stay in sight.
+        if (caret === value.length && ta.scrollHeight > ta.clientHeight) ta.scrollTop = ta.scrollHeight;
       }
     },
     holds: (target) => {
