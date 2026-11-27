@@ -15,7 +15,7 @@ describe("safety blockers in fleet recovery", () => {
 
   test("bulk selection excludes safety stops, including explicitly included workers", () => {
     const recoverable = { ...safety, _id: "conversations_limit", agent_type: "claude_code", pending_api_error_kind: "limit" };
-    const child = { ...safety, _id: "conversations_child", is_subagent: true };
+    const child = { ...safety, _id: "conversations_child", is_subagent: true, runs_in_parent: true };
     expect(actedBlockedConversations([safety, recoverable, child], false)).toEqual([recoverable]);
     expect(actedBlockedConversations([safety, recoverable, child], true)).toEqual([recoverable]);
   });

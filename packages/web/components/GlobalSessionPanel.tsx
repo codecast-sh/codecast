@@ -31,7 +31,8 @@ import { INBOX_CLOCK_MS, useCoarseNow } from "../hooks/useCoarseNow";
 import { LivePulseDot } from "./SessionActivityLine";
 import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
 import { useKillWithReview } from "../hooks/useKillWithReview";
-import { actedBlockedConversations, skippedBlockedWorkers, blockedHeadlineCause, isSubagentConversation, LOGIN_FLOW_STALE_MS, runsOwnFleet, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
+import { actedBlockedConversations, skippedBlockedWorkers, blockedHeadlineCause, LOGIN_FLOW_STALE_MS, runsOwnFleet, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
+import { runsInParentProcess } from "@codecast/shared/contracts/runsInParent";
 import { contextShareOf, formatShare, formatTokens, restartPlan, restartReloadsContext } from "@codecast/convex/convex/wakeCost";
 import { isClosedSession } from "@codecast/shared/contracts";
 import { contextWindowTokens, restartShareOfRemaining, formatCountdown } from "@codecast/shared/contracts";
@@ -366,7 +367,7 @@ function BlockedSessionsBanner({
   // rest; for these rows the restart is a /compact (the same send the card's
   // own button makes), so the banner never asks for a second decision.
   const isContextFull = (sess: InboxSession) => sess.pending_api_error_kind === "context";
-  const contextBlocked = blocked.filter((sess) => isContextFull(sess) && !isSubagentConversation(sess));
+  const contextBlocked = blocked.filter((sess) => isContextFull(sess) && !runsInParentProcess(sess));
   // Workers are drawn in their machine rows but start unticked, and join the
   // acted set only when a person ticks one — never because they are all that
   // is blocked. Continuing an in-process worker cannot reach it; it resumes a
@@ -710,7 +711,7 @@ function BlockedSessionsBanner({
 
   // "3 sessions and 19 workers": the headline and each machine count the same way.
   const countLabelOf = (rows: InboxSession[], join = " and ") => {
-    const workers = rows.filter(isSubagentConversation).length;
+    const workers = rows.filter(runsInParentProcess).length;
     const plural = (k: number, w: string) => `${k} ${w}${k === 1 ? "" : "s"}`;
     return [rows.length - workers > 0 || workers === 0 ? plural(rows.length - workers, "session") : null, workers > 0 ? plural(workers, "worker") : null].filter(Boolean).join(join);
   };
@@ -733,10 +734,10 @@ function BlockedSessionsBanner({
       )}
       <button onClick={() => onOpen?.(sess)} className="flex min-w-0 flex-1 items-center gap-2 text-left" title="Open this session">
         {mixedCauses && <AuthErrorBadge kind={sess.pending_api_error_kind} agentType={sess.agent_type} />}
-        <span className={`min-w-0 flex-1 truncate text-meta ${isSubagentConversation(sess) && !chosenIds.has(sess._id) ? "text-sol-text-dim" : "text-sol-text"}`}>
+        <span className={`min-w-0 flex-1 truncate text-meta ${runsInParentProcess(sess) && !chosenIds.has(sess._id) ? "text-sol-text-dim" : "text-sol-text"}`}>
           {cleanTitle(sess.title || "") || "Untitled session"}
         </span>
-        {markWorkers && isSubagentConversation(sess) && <span className="shrink-0 text-meta text-sol-text-dim">worker</span>}
+        {markWorkers && runsInParentProcess(sess) && <span className="shrink-0 text-meta text-sol-text-dim">worker</span>}
         <span className="shrink-0 text-meta text-sol-text-dim">{getProjectName(sess.git_root, sess.project_path)}</span>
         {canPick && sess.context_tokens && reloads(sess) && formatShare(shareOfRemaining(sess.context_tokens)) ? (
           <span
@@ -838,7 +839,7 @@ function BlockedSessionsBanner({
           {lanes.map((lane) => {
             const rows = blockedSorted.filter((sess) => laneOf.get(sess._id) === lane);
             const canAct = lane.state === "continue" || lane.state === "switch";
-            const workers = rows.filter(isSubagentConversation).length;
+            const workers = rows.filter(runsInParentProcess).length;
             const plain = rows.length - workers;
             const countLabel = countLabelOf(rows, " · ");
             return (
@@ -2297,7 +2298,7 @@ function SessionListPanelImpl({
   // pill: their parents have moved on, so there's no one waiting on a revive.
   // It gets the quiet pill instead, the way back to the banner after its X.
   const blockedHasNonSub = useMemo(
-    () => blockedSessions.some((sess) => !isSubagentConversation(sess)),
+    () => blockedSessions.some((sess) => !runsInParentProcess(sess)),
     [blockedSessions],
   );
   // A LIVE 0→N transition of the blocked set is a fresh incident: replay the

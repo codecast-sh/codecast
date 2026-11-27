@@ -90,20 +90,20 @@ describe("runsInParentBackfill", () => {
 
   test("a dry run counts and writes nothing", async () => {
     const { read, run } = await legacyWorld();
-    expect(await run({})).toMatchObject({ dryRun: true, stampedTrue: 2, stampedFalse: 2, adoptedCleared: 1, done: true });
+    expect(await run({})).toMatchObject({ dryRun: true, stampedTrue: 2, stampedFalse: 2, done: true });
     const rows = await read();
     for (const r of Object.values(rows)) expect(r.runs_in_parent).toBeUndefined();
     expect(rows.adopted.adopted_at).toBe(5);
   });
 
-  test("the real run stamps the legacy answer, clears adopted_at, and a second run writes nothing", async () => {
+  test("the real run stamps the legacy answer, leaves adopted_at, and a second run writes nothing", async () => {
     const { read, run } = await legacyWorld();
     await run({ dryRun: false });
     const rows = await read();
     expect([rows.agent.runs_in_parent, rows.codex.runs_in_parent, rows.spawned.runs_in_parent, rows.adopted.runs_in_parent]).toEqual([true, true, false, false]);
-    expect(rows.adopted.adopted_at).toBeUndefined();
+    expect(rows.adopted.adopted_at).toBe(5);
     // The parent already held its fact.
-    expect(await run({ dryRun: false })).toMatchObject({ stampedTrue: 0, stampedFalse: 0, adoptedCleared: 0 });
+    expect(await run({ dryRun: false })).toMatchObject({ stampedTrue: 0, stampedFalse: 0 });
   });
 
   test("pages through the table", async () => {

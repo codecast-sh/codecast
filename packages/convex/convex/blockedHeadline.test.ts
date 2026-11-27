@@ -14,7 +14,7 @@ describe("blockedHeadlineCause", () => {
   // emptied, so every count was zero and the first entry won by default.
   test("names the limit when the whole set is skipped subagent workers", () => {
     const fleet = Array.from({ length: 44 }, (_, i) =>
-      conv("limit", { _id: `c${i}`, is_subagent: true, parent_conversation_id: "parent" }),
+      conv("limit", { _id: `c${i}`, is_subagent: true, parent_conversation_id: "parent", session_id: `agent-a${i}b2c3d4e5` }),
     );
     expect(actedBlockedConversations(fleet, false)).toEqual([]);
     expect(blockedHeadlineCause(fleet)).toBe("usage limits");
@@ -62,7 +62,7 @@ describe("blockedIncidentNotice", () => {
     const notice = blockedIncidentNotice([
       conv("auth", { _id: "a", updated_at: 10 }),
       conv("auth", { _id: "b", updated_at: 20 }),
-      conv("safety", { _id: "w", updated_at: 30, is_subagent: true, parent_conversation_id: "b" }),
+      conv("safety", { _id: "w", updated_at: 30, is_subagent: true, parent_conversation_id: "b", agent_type: "codex", cli_flags: "--print" }),
     ]);
     expect(notice).toMatchObject({
       title: "2 sessions blocked on login",
@@ -73,7 +73,14 @@ describe("blockedIncidentNotice", () => {
   });
 
   test("a fleet of parked workers alone raises no push", () => {
-    expect(blockedIncidentNotice([conv("safety", { is_subagent: true }), conv("limit", { parent_conversation_id: "p" })])).toBeNull();
+    expect(blockedIncidentNotice([conv("safety", { is_subagent: true, runs_in_parent: true }), conv("limit", { parent_conversation_id: "p", session_id: "agent-a1b2c3d4e5" })])).toBeNull();
+  });
+
+  // A `cast spawn --subagent` worker is a child by its link but runs its own
+  // process: nothing else revives it, so its park is the person's.
+  test("a parked worker with its own process raises the push", () => {
+    const spawned = conv("limit", { _id: "s", updated_at: 5, is_subagent: true, parent_conversation_id: "p", session_id: "0b6e2c1a-uuid", runs_in_parent: false });
+    expect(blockedIncidentNotice([spawned])).toMatchObject({ title: "1 session blocked on usage limits", anchor: spawned });
   });
 
   test("a top-level safety stop says it waits for the person", () => {

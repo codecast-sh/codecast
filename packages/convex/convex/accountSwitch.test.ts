@@ -4,7 +4,6 @@ import { makeFakeDb } from "./testDb";
 import {
   isBlockedConversation,
   isRemoteAuthBlocked,
-  isSubagentConversation,
   actedBlockedConversations,
   skippedBlockedWorkers,
   isDeviceOnline,
@@ -125,18 +124,6 @@ describe("isValidProfileName", () => {
     for (const bad of ["", "-lead", "has space", "a/b", "a;b", "x".repeat(50)]) {
       expect(isValidProfileName(bad)).toBe(false);
     }
-  });
-});
-
-describe("isSubagentConversation", () => {
-  test("flags explicit subagents and parent-linked workers", () => {
-    expect(isSubagentConversation({ is_subagent: true })).toBe(true);
-    expect(isSubagentConversation({ parent_conversation_id: "jx7parent" })).toBe(true);
-  });
-
-  test("a plain top-level conversation is not a subagent", () => {
-    expect(isSubagentConversation({})).toBe(false);
-    expect(isSubagentConversation({ is_subagent: false, parent_conversation_id: undefined })).toBe(false);
   });
 });
 
@@ -1144,6 +1131,7 @@ describe("automatic passes dismiss the workers they skip (ct-51132)", () => {
     agent_type: "claude_code",
     owner_device_id: "dev-1",
     parent_conversation_id: "parent",
+    runs_in_parent: true,
     updated_at: now - 10 * 60_000,
     pending_api_error: true,
     pending_api_error_kind: kind,
@@ -1239,11 +1227,11 @@ describe("an old park synced again is history, not an incident (2026-10-07)", ()
 });
 
 describe("actedBlockedConversations", () => {
-  const top = { _id: "top", is_subagent: false };
-  const worker = { _id: "worker", parent_conversation_id: "top" };
-  const flagged = { _id: "flagged", is_subagent: true };
+  const top = { _id: "top", is_subagent: false, runs_in_parent: false };
+  const worker = { _id: "worker", parent_conversation_id: "top", runs_in_parent: true };
+  const flagged = { _id: "flagged", is_subagent: true, runs_in_parent: true };
 
-  test("skips subagent workers by default, top-level rows first on opt-in", () => {
+  test("skips in-process workers by default, top-level rows first on opt-in", () => {
     expect(actedBlockedConversations([worker, top, flagged], false)).toEqual([top]);
     expect(actedBlockedConversations([worker, top, flagged], true)).toEqual([top, worker, flagged]);
   });
@@ -1259,13 +1247,28 @@ describe("actedBlockedConversations", () => {
     // Opting out is a decision: every recoverable worker not acted on is
     // dismissed in the same gesture, and the two sets partition the
     // recoverable rows. A safety stop belongs to neither — it waits for review.
-    const safety = { _id: "safety", is_subagent: true, pending_api_error_kind: "safety" };
+    const safety = { _id: "safety", is_subagent: true, runs_in_parent: true, pending_api_error_kind: "safety" };
     const all = [worker, top, flagged, safety];
     expect(skippedBlockedWorkers(all, false)).toEqual([worker, flagged]);
     expect(skippedBlockedWorkers(all, true)).toEqual([]);
     const acted = actedBlockedConversations(all, false);
     const skipped = skippedBlockedWorkers(all, false);
     expect([...acted, ...skipped].map((c) => c._id).sort()).toEqual(["flagged", "top", "worker"]);
+  });
+  // A `cast spawn --subagent` worker, a ship session or a plan worker carries
+  // is_subagent and a parent link but runs its own process: a revive restarts
+  // it as itself, by default.
+  test("a worker with its own process is in the default revive", () => {
+    const spawned = { _id: "spawned", is_subagent: true, parent_conversation_id: "top", session_id: "0b6e2c1a-uuid", runs_in_parent: false };
+    expect(actedBlockedConversations([spawned, worker], false)).toEqual([spawned]);
+    expect(skippedBlockedWorkers([spawned, worker], false)).toEqual([worker]);
+  });
+
+  test("a legacy row answers by its session id", () => {
+    const inProcess = { _id: "legacy-agent", is_subagent: true, parent_conversation_id: "top", session_id: "agent-a1b2c3d4e5" };
+    const ownProcess = { _id: "legacy-spawned", is_subagent: true, parent_conversation_id: "top", session_id: "0b6e2c1a-uuid" };
+    expect(actedBlockedConversations([inProcess, ownProcess], false)).toEqual([ownProcess]);
+    expect(skippedBlockedWorkers([inProcess, ownProcess], false)).toEqual([inProcess]);
   });
 });
 

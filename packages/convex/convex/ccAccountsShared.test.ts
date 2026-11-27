@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { exhaustionBannerCopy, isAgentSpawnedConversation, isSubagentConversation, subagentLinkFields,
+import { exhaustionBannerCopy, isAgentSpawnedConversation, nestParentIdOf, subagentLinkFields,
   fleetAccount,
   isFleetProfile,
   continueTargetPin,
@@ -14,7 +14,7 @@ import { exhaustionBannerCopy, isAgentSpawnedConversation, isSubagentConversatio
 // Regression (ct-37439): a subagent active in the last 30d is pulled into the
 // inbox via the top-level scan (recentConversations), NOT only as a child of its
 // parent. The top-level row projection used to omit is_subagent /
-// parent_conversation_id, so the client's isSubagentConversation returned false
+// parent_conversation_id, so the client's nestParentIdOf found no parent
 // and the session rendered as a loose flat card instead of nesting under its
 // parent. subagentLinkFields is the single projection both inbox emission paths
 // spread, so a subagent self-identifies no matter which path emitted it.
@@ -28,14 +28,14 @@ describe("subagentLinkFields", () => {
       is_subagent: true,
       parent_conversation_id: "jx78arhhbhmg6g1vjcmt1k5s1188p13e",
     });
-    // The downstream client predicate must agree the row is a subagent.
-    expect(isSubagentConversation(row)).toBe(true);
+    // The downstream client nesting must agree the row has a parent.
+    expect(nestParentIdOf(row)).toBe("jx78arhhbhmg6g1vjcmt1k5s1188p13e");
   });
 
   test("a genuine top-level conversation carries no parent link", () => {
     const row = subagentLinkFields({});
     expect(row).toEqual({ is_subagent: false, parent_conversation_id: null });
-    expect(isSubagentConversation(row)).toBe(false);
+    expect(nestParentIdOf(row)).toBeNull();
   });
 
   test("a child with only a parent id (no is_subagent flag) still self-identifies", () => {
@@ -44,7 +44,7 @@ describe("subagentLinkFields", () => {
     const row = subagentLinkFields({ parent_conversation_id: "jx78arh" });
     expect(row.is_subagent).toBe(false);
     expect(row.parent_conversation_id).toBe("jx78arh");
-    expect(isSubagentConversation(row)).toBe(true);
+    expect(nestParentIdOf(row)).toBe("jx78arh");
   });
 
   test("stringifies a Convex Id object (server passes the id, not a string)", () => {

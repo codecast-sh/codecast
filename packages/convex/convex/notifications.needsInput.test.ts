@@ -335,6 +335,21 @@ describe("needs-input push — exclusions (mirrors the idle sound's guards)", ()
   // --isolated / cloud / path-stamped session is first-class and pushes like
   // any other card. Fan-out from INSIDE a session still stands down — those
   // workers carry a spawner (reason agent_spawned), not because of the tree.
+  // A child stands down while it answers to its parent; once a person takes
+  // it over (parent_released_at) the wait is theirs. A released Task subagent
+  // still stands down as agent_spawned (is_subagent); a released fork or
+  // handoff (a parent link with its parent message) is heard.
+  test("a child answers to its parent until a person releases it", async () => {
+    const child = { parent_conversation_id: "convP", parent_message_uuid: "plan-handoff" };
+    const held = settledIdleWorld({ conv: child });
+    expect((await performNeedsInputCheck(held.ctx as any, { conversation_id: "conv1" })).reason).toBe("subagent");
+    const released = settledIdleWorld({ conv: { ...child, parent_released_at: 1 } });
+    expect((await performNeedsInputCheck(released.ctx as any, { conversation_id: "conv1" })).notified).toBe(true);
+    expect(released.tables.notifications.length).toBe(1);
+    const releasedSub = settledIdleWorld({ conv: { is_subagent: true, parent_conversation_id: "convP", parent_released_at: 1 } });
+    expect((await performNeedsInputCheck(releasedSub.ctx as any, { conversation_id: "conv1" })).reason).toBe("agent_spawned");
+  });
+
   test("a human-started worktree session pushes", async () => {
     const { ctx, tables } = settledIdleWorld({
       conv: { worktree_name: "cloud-d03aaa", worktree_branch: "codecast/cloud-d03aaa" },

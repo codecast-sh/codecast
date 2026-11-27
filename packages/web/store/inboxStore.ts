@@ -194,7 +194,7 @@ import { cardVerdictIndexes } from "@codecast/shared/contracts/changeCard";
 import { escalationTargetIds } from "@codecast/shared/contracts/decisionEscalation";
 import { peopleAboveRole } from "@codecast/shared/contracts/orgLead";
 import type { OrgTree } from "../components/org/orgTypes";
-import { isAgentSpawnedConversation, isAgentTeamWorker, isSubagentConversation, nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
+import { isAgentSpawnedConversation, isAgentTeamWorker, nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
 
 export type { PendingEntry } from "./syncProtocol";
 
@@ -838,6 +838,9 @@ export type InboxSession = {
   // Launched as a program (the server's verdict on cli_flags --print, which it
   // never sends): what a close of its lead reads (shared goesDownWithLead).
   headless_launch?: boolean | null;
+  // It runs inside its parent's process (the server's verdict, legacy rows
+  // resolved): what every process gate reads (shared runsInParentProcess).
+  runs_in_parent?: boolean | null;
   // An adopted flow station's flow: its name and run (enrichInboxSessionRow).
   flow_name?: string | null;
   flow_run_id?: string | null;
@@ -1099,8 +1102,8 @@ export type InboxSession = {
   role_started?: boolean | null;
   owners_changed_at?: number | null;
   parent_released_at?: number | null;
-  // When a person dragged it under its parent: it still runs its own process
-  // (shared isSubagentConversation).
+  // When a person dragged it under its parent: where its card sits (it still
+  // runs its own process; process gates read runsInParentProcess).
   adopted_at?: number | null;
   wait_up_at?: number | null;
   wait_up_count?: number | null;
@@ -3576,10 +3579,11 @@ export function getSessionRenderKey(
 
 // Sole consumer: the waiting chime (hooks/useSyncInboxSessions.ts). A true
 // mirror of convex/notifications.ts checkNeedsInput's two stand-downs — reason
-// "subagent" (isSubagentConversation: is_subagent / parent link) and reason
-// "agent_spawned" (isAgentSpawnedConversation: spawned_by, non-lead agent
-// identity, workflow subs, parentless subagents) — built from the same two
-// shared predicates the server calls. The server's third stand-down
+// "subagent" (a child that answers to its parent: is_subagent or a parent
+// link, until a person released it from that parent with
+// parent_released_at) and reason "agent_spawned" (the shared
+// isAgentSpawnedConversation: spawned_by, non-lead agent identity, workflow
+// subs, parentless subagents). The server's third stand-down
 // (agent_task_id → "schedule_run") has no chime counterpart: a schedule run
 // is never in the inbox as a waiting card. A worktree_name is a
 // LOCATION, not a parent: a human-started --isolated / cloud / path-stamped
@@ -3589,9 +3593,7 @@ export function getSessionRenderKey(
 // The one caveat, same as the server: `cast spawn` from a plain terminal
 // records no spawner and so is treated as human-started.
 export function isSub(s: InboxSession): boolean {
-  // A session dragged under another (adopted_at) runs its own process but
-  // answers to that session, so it stays silent too.
-  return isSubagentConversation(s) || s.adopted_at != null || isAgentSpawnedConversation(s);
+  return ((!!s.is_subagent || !!s.parent_conversation_id) && !s.parent_released_at) || isAgentSpawnedConversation(s);
 }
 
 export function isFork(s: InboxSession): boolean {

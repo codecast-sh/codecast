@@ -1,9 +1,10 @@
 import { HEARTBEAT_ALIVE_MS, isHibernated, sessionCommandOutcome } from "@codecast/shared/contracts";
+import { runsInParentProcess } from "@codecast/shared/contracts/runsInParent";
 
 export function hibernationCandidate(row: any, viewerId: string | undefined, now: number): boolean {
   return !!viewerId && row.user_id === viewerId && !!row.owner_device_id && !!row.conversation_id &&
     !!row.session_id && ["idle", "done", "dormant"].includes(row.agent_status) &&
-    !row.is_killed && !row.killed && !row.dismissed && !row.is_subagent &&
+    !row.is_killed && !row.killed && !row.dismissed && !runsInParentProcess(row) &&
     !row.has_pending && !row.awaiting_input && !row.session_error && !row.pending_api_error &&
     now - row.last_heartbeat < HEARTBEAT_ALIVE_MS && row.awake_idle_ms >= 2 * 3600_000;
 }

@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { performApplyOwnersChange } from "./sessionOwnership";
-import { actedBlockedConversations, blockedIncidentNotice, isSubagentConversation } from "./ccAccountsShared";
+import { actedBlockedConversations, blockedIncidentNotice } from "./ccAccountsShared";
+import { runsInParentProcess } from "@codecast/shared/contracts/runsInParent";
 
 // Adopting a parent (adopt_parent): a person drags one session onto another
 // in the sidebar and the dragged one becomes that session's worker. The write
@@ -203,7 +204,7 @@ describe("adopt_parent", () => {
     await performApplyOwnersChange(ctxOf(db), ME as any, { session_id: S, adopt_parent: LEAD });
     expect(conv(db).adopted_at).toBeGreaterThan(0);
     const parked = { ...conv(db), pending_api_error: true, pending_api_error_kind: "limit", updated_at: 1 };
-    expect(isSubagentConversation(parked)).toBe(false);
+    expect(runsInParentProcess(parked)).toBe(false);
     expect(actedBlockedConversations([parked], false).map((c: any) => c._id)).toEqual([S]);
     expect(blockedIncidentNotice([parked])?.anchor._id).toBe(S);
     // Moving it to another parent keeps the first mark.
@@ -212,6 +213,12 @@ describe("adopt_parent", () => {
     expect(conv(db).adopted_at).toBe(was);
     await performApplyOwnersChange(ctxOf(db), ME as any, { session_id: S, detach_parent: true });
     expect(conv(db).adopted_at).toBeUndefined();
+  });
+
+  test("refuses to move a session that runs inside its parent's process", async () => {
+    const db = fixtures(true, { runs_in_parent: true });
+    addRow(db, ME, 1);
+    await expect(performApplyOwnersChange(ctxOf(db), ME as any, { session_id: S, adopt_parent: LEAD })).rejects.toThrow(/how it was started/);
   });
 
   test("neither the adopt's report line nor its undo's answers a standing wait", async () => {

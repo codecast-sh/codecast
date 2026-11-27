@@ -2,6 +2,7 @@
 // the mutations (accountSwitch.ts), and tests. No server/_generated imports.
 
 import { isWorkflowRunLog } from "./lib/runLog";
+import { runsInParentProcess, type RunsInParentFacts } from "@codecast/shared/contracts/runsInParent";
 import { hasModelRoom, type ModelPin } from "./lib/modelRoom";
 export { isWorkflowRunLog };
 import { v } from "convex/values";
@@ -1141,14 +1142,16 @@ export function parkedAccountResetAt(
 // blocked kind, for Codex the ones needing no Claude credential. kind "error"
 // (a marked opencode/pi client error) is OUT of the blocked set for everyone.
 // A statusful 5xx banner is kind "fatal": Claude Code writes it only after its
-// own retries are spent. Dismissed is an explicit user "go away" — never
-// auto-revive. A workflow run's log is never blocked: no agent of its own runs
+// own retries are spent. Dismissed is an explicit user "go away", and killed
+// a retired session (a station killed with its run) — never auto-revive.
+// A workflow run's log is never blocked: no agent of its own runs
 // there, so a continue only wakes a fresh one that asks what it is for.
 export function isBlockedConversation(conv: {
   pending_api_error?: boolean;
   pending_api_error_kind?: string | null;
   agent_type?: string;
   inbox_dismissed_at?: number | null;
+  inbox_killed_at?: number | null;
   is_workflow_primary?: boolean;
   session_id?: string | null;
 }): boolean {
@@ -1156,6 +1159,7 @@ export function isBlockedConversation(conv: {
     conv.pending_api_error === true &&
     blockedKindsForAgent(conv.agent_type).has(conv.pending_api_error_kind ?? "") &&
     !conv.inbox_dismissed_at &&
+    !conv.inbox_killed_at &&
     !isWorkflowRunLog(conv)
   );
 }
@@ -1194,38 +1198,18 @@ export function isRemoteAuthBlocked(
   );
 }
 
-// A subagent for REVIVE purposes: spawned by/for another session. These are
-// excluded from the default revive — a worker whose parent moved on is work
-// nobody is waiting for, and resuming it burns the fresh account's window.
-// The narrow REVIVE predicate. The inbox's isSub (waiting chime) is this OR
-// isAgentSpawnedConversation below; worktree_name never marks a subagent — a
-// worktree session is a first-class task of its own.
-// Shared verbatim by the server selection and the web banner so the counts
-// shown always match what the actions touch.
-// A session a person dragged under another (adopted_at) works for it but runs
-// its own process, so it is revived as itself.
-export function isSubagentConversation(conv: {
-  is_subagent?: boolean;
-  parent_conversation_id?: string | null;
-  adopted_at?: number | null;
-}): boolean {
-  return conv.is_subagent === true || (!!conv.parent_conversation_id && conv.adopted_at == null);
-}
-
-// The rows a fleet revive acts on, top-level first. Subagent workers join
-// ONLY on an explicit opt-in — never because they happen to be all that is
-// blocked. A worker runs inside its parent's process, so a "continue" cannot
-// reach it; the delivery rail resumes it as a standalone copy that runs its
-// brief again with nobody collecting the result. Shared by the server
-// selection and the web banner so the acted count is one number.
-export function actedBlockedConversations<T extends {
-  pending_api_error_kind?: string | null;
-  is_subagent?: boolean;
-  parent_conversation_id?: string | null;
-}>(blocked: T[], includeSubagents: boolean): T[] {
+// The rows a fleet revive acts on, those with a process of their own first.
+// A worker that runs inside its parent's process (runsInParentProcess) joins
+// ONLY on an explicit opt-in — never because workers are all that is
+// blocked: a "continue" cannot reach it, and the delivery rail resumes it as
+// a standalone copy that runs its brief again with nobody collecting the
+// result. A worker with its own process (`cast spawn --subagent`, a flow
+// station) is revived as itself. Shared by the server selection and the web
+// banner so the acted count is one number.
+export function actedBlockedConversations<T extends { pending_api_error_kind?: string | null } & RunsInParentFacts>(blocked: T[], includeSubagents: boolean): T[] {
   const recoverable = blocked.filter((c) => !UNREVIVABLE_BANNER_KINDS.has(c.pending_api_error_kind ?? ""));
-  const topLevel = recoverable.filter((c) => !isSubagentConversation(c));
-  return includeSubagents ? [...topLevel, ...recoverable.filter(isSubagentConversation)] : topLevel;
+  const topLevel = recoverable.filter((c) => !runsInParentProcess(c));
+  return includeSubagents ? [...topLevel, ...recoverable.filter(runsInParentProcess)] : topLevel;
 }
 
 // The complement of the acted set: the workers a revive leaves out when the
@@ -1237,13 +1221,9 @@ export function actedBlockedConversations<T extends {
 // Shared by the server (which clears the flag) and the web banner (which
 // paints the clear and names the count on the button), so both agree on
 // exactly which rows go.
-export function skippedBlockedWorkers<T extends {
-  pending_api_error_kind?: string | null;
-  is_subagent?: boolean;
-  parent_conversation_id?: string | null;
-}>(blocked: T[], includeSubagents: boolean): T[] {
+export function skippedBlockedWorkers<T extends { pending_api_error_kind?: string | null } & RunsInParentFacts>(blocked: T[], includeSubagents: boolean): T[] {
   if (includeSubagents) return [];
-  return blocked.filter((c) => !UNREVIVABLE_BANNER_KINDS.has(c.pending_api_error_kind ?? "") && isSubagentConversation(c));
+  return blocked.filter((c) => !UNREVIVABLE_BANNER_KINDS.has(c.pending_api_error_kind ?? "") && runsInParentProcess(c));
 }
 
 // The one-line cause a blocked FLEET is reported on — the banner headline and
@@ -1278,17 +1258,17 @@ export function blockedHeadlineCause<T extends { pending_api_error_kind?: string
   ] as const).reduce((best, cur) => (cur[0] > best[0] ? cur : best))[1];
 }
 
-/** The blocked-incident push: what parked, counted over top-level sessions
- *  only, and the newest park it covers, or null when nothing a person owns is
- *  parked. A subagent worker belongs to the session that started it, which
- *  reads its state and revives or drops it; pushing its park asked the person
- *  to act on work they never started (a Codex reviewer's safety stop read
- *  "1 needs safety review (1 subagent)" on the lock screen). The inbox still
- *  lists parked workers under their parent. */
+/** The blocked-incident push: what parked, counted over sessions with a
+ *  process of their own, and the newest park it covers, or null when none is
+ *  parked. A worker inside its parent's process belongs to the session that
+ *  started it, which reads its state and revives or drops it; pushing its park
+ *  asked the person to act on work they never started (a Codex reviewer's
+ *  safety stop read "1 needs safety review (1 subagent)" on the lock screen).
+ *  The inbox still lists parked workers under their parent. */
 export function blockedIncidentNotice<
-  T extends { pending_api_error_kind?: string | null; updated_at?: number; is_subagent?: boolean; parent_conversation_id?: string | null },
+  T extends { pending_api_error_kind?: string | null; updated_at?: number } & RunsInParentFacts,
 >(blocked: T[]): { title: string; message: string; anchor: T; newestPark: number } | null {
-  const owned = blocked.filter((c) => !isSubagentConversation(c));
+  const owned = blocked.filter((c) => !runsInParentProcess(c));
   if (owned.length === 0) return null;
   const of = (kind: string) => owned.filter((c) => c.pending_api_error_kind === kind).length;
   const auth = of("auth");
@@ -1316,9 +1296,8 @@ export function blockedIncidentNotice<
 }
 
 // The parent-link fields every inbox session row MUST carry so the client can
-// tell a subagent from a top-level session and nest it under its parent. The
-// client reads exactly these via isSubagentConversation; without them a row
-// looks top-level. Both inbox emission paths spread this — the top-level scan
+// tell a subagent from a top-level session and nest it under its parent;
+// without them a row looks top-level. Both inbox emission paths spread this — the top-level scan
 // (enrichInboxSessionRow) and the parent's child enumeration — so a subagent
 // self-identifies no matter which path emitted it (the client dedups duplicate
 // _id rows last-wins, and the child enumeration is capped, so the top-level row
@@ -1373,7 +1352,7 @@ export function nestParentIdOf(conv: {
 // Whether a conversation was spawned by an agent rather than started by a
 // human. Gates the teammate "started coding" notification: agent fan-out
 // (Task-tool subagents, workflow subs, agent-team teammates) must never ping
-// the team. Broader than isSubagentConversation on purpose — spawned_by and
+// the team. Broader than a parent link on purpose — spawned_by and
 // agent identity mark sessions that stay first-class in the inbox but are
 // still machine-initiated. The one session with agent identity a human DID
 // start is the team lead (stamped agent_name "team-lead" by linkSpawnedBy).

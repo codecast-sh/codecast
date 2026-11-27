@@ -44,7 +44,6 @@ import {
   blockedAt,
   BLOCKED_WINDOW_MS,
   isRemoteAuthBlocked,
-  isSubagentConversation,
   isDeviceOnline,
   isValidProfileName,
   targetAccountEmail,
@@ -68,6 +67,7 @@ import {
   findFlowDevice,
   runsOwnFleet,
 } from "./ccAccountsShared";
+import { runsInParentProcess } from "@codecast/shared/contracts/runsInParent";
 import { awaitsManualTarget, decideSwitchAhead, dropLineHostRefused, holdsManualTarget, hostsLineWork } from "./ccSwitchAhead";
 import { poolUsageOverlay } from "./accountPool";
 import { deliverSessionNotificationToParties } from "./lib/sessionNotify";
@@ -125,8 +125,8 @@ async function listBlockedConversations(
     .order("desc")
     .take(1000);
   const all: Doc<"conversations">[] = recent.map(withSafetyBlock).filter((c: Doc<"conversations">) => isBlockedConversation(c) && isCurrentBlock(c, now));
-  const topLevel = all.filter((c: Doc<"conversations">) => !isSubagentConversation(c));
-  const subagents = all.filter(isSubagentConversation);
+  const topLevel = all.filter((c: Doc<"conversations">) => !runsInParentProcess(c));
+  const subagents = all.filter(runsInParentProcess);
   const acted = includeSafety
     ? includeSubagents ? [...topLevel, ...subagents] : topLevel
     : actedBlockedConversations(all, includeSubagents);
@@ -220,7 +220,7 @@ async function workerParks(
     // A run's log has no agent to take a station's place.
     if (worker.pending_api_error_kind !== "limit" || worker.agent_type === "codex" || !parentId || (parent && isWorkflowRunLog(parent))) continue;
     if (!parents.has(parentId)) {
-      parents.set(parentId, parent && !isSubagentConversation(parent) && !parent.inbox_dismissed_at
+      parents.set(parentId, parent && !runsInParentProcess(parent) && !parent.inbox_dismissed_at
         ? {
             ...parent,
             pending_api_error: true,

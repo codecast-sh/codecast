@@ -9057,6 +9057,7 @@ async function inboxOwnerRowFields(ctx: any, conv: any): Promise<Record<string, 
     role_started: conv.role_started ?? null,
     owners_changed_at: conv.owners_changed_at ?? null,
     parent_released_at: conv.parent_released_at ?? null,
+    adopted_at: conv.adopted_at ?? null,
     wait_up_at: conv.wait_up_at ?? null,
     wait_up_count: conv.wait_up_count ?? null,
     wait_up_person: conv.wait_up_person?.toString() ?? null,
@@ -9183,7 +9184,7 @@ async function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: nu
     // path is for confirmed children, so is_subagent is forced true (covers the
     // parent_message_uuid-less child that has no is_subagent flag of its own),
     // except for a session a person dragged under the parent (adopted_at): it
-    // runs its own process and reads its own placement (isSubagentConversation).
+    // runs its own process and reads its own placement.
     ...subagentLinkFields({ is_subagent: child.is_subagent === true || child.adopted_at == null, parent_conversation_id: parentId }),
     spawned_by_conversation_id: child.spawned_by_conversation_id?.toString() || null,
     agent_team_name: child.agent_team_name ?? null,
