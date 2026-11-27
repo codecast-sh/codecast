@@ -1,7 +1,7 @@
 // Posting a priority change card (shared/contracts/priorityCard.ts): behind
-// the person's priority_cards experiment, a pass run that proposes changes
-// posts them on one silent multi-select decision, in the same write as its
-// direct changes (priorityPassRun applyPlan). The decision row is the
+// the person's priority_cards experiment, a pass run that proposes merges
+// posts them on one silent multi-select decision, in the same write as the
+// rest of its changes (priorityPassRun applyPlan). The decision row is the
 // proposal's one home (session_decisions.priority_card); answering it is
 // lib/priorityCardApply.ts. No Convex functions here.
 
@@ -15,13 +15,15 @@ import { syncDecisionInbox } from "./lib/decisionInbox";
 import { parseWorkspaceKey } from "./lib/accessKeys";
 import { activeGroup } from "./lib/priorityGroup";
 import { sessionVisibility } from "./lib/prioritySessionVisibility";
-import { cardContext, cardQuestion, dropRepeats, type CardDraft } from "./lib/priorityCardPass";
+import { cardContext, cardQuestion, declinedMerges, dropDeclined, dropRepeats, withCreatedIds, type CardDraft } from "./lib/priorityCardPass";
 import { inWorkspace } from "./priorityPassInputs";
 
 type Ctx = { db: any };
 
 /** How many of one person's open decisions are read to find their open cards. */
 const OPEN_READ = 1_000;
+/** How many of one person's newest answered (and dismissed) decisions are read for the merges they declined. */
+const DECLINED_READ = 300;
 /** How many of a pair's ok runs are counted for a card's run facts. */
 const RUNS_READ = 1_000;
 /** How many runs back a card looks for the previous card's run (four small index ranges each); past it, it counts this many. */
@@ -31,7 +33,7 @@ const CONVERSATIONS_READ = 100;
 
 const isCardOf = (d: Doc<"session_decisions">, workspace: string) => (d.priority_card as PriorityCard | undefined)?.workspace === workspace;
 
-/** The person's priority cards in this workspace still waiting on an answer, read from their newest open decisions. applyPlan reads them once per run. */
+/** The person's priority cards in this workspace still waiting on an answer, read from their newest open decisions. */
 export async function openCards(ctx: Ctx, userId: Id<"users">, workspace: string): Promise<Doc<"session_decisions">[]> {
   const pending: Doc<"session_decisions">[] = await ctx.db.query("session_decisions").withIndex("by_user_status_created", (q: any) => q.eq("user_id", userId).eq("status", "pending")).order("desc").take(OPEN_READ);
   return pending.filter((d) => isCardOf(d, workspace));
@@ -49,12 +51,20 @@ export async function cardAnsweredSince(ctx: Ctx, userId: Id<"users">, workspace
   return answered.some((d) => isCardOf(d, workspace));
 }
 
-/** The corrections `open` (the person's open cards, openCards) hold: each waits on its card's answer, whatever later runs read. */
-export function correctionsOnOpenCards(open: ReadonlyArray<Doc<"session_decisions">>): Set<string> {
-  const held = new Set<string>();
-  for (const d of open) for (const id of ((d.priority_card as PriorityCard).held as { corrections?: string[] }).corrections ?? []) held.add(String(id));
-  return held;
+/**
+ * The merges the person declined on their priority cards in this workspace
+ * (unticked on an answered card, or on a dismissed one), from their newest
+ * resolved decisions: a run never proposes one again, and its prompt says so.
+ */
+export async function declinedMergesFor(ctx: Ctx, userId: Id<"users">, workspace: string): Promise<Array<{ absorbed: string; into: string }>> {
+  const cards: Array<{ status: string; card: PriorityCard }> = [];
+  for (const status of ["answered", "dismissed"] as const) {
+    const rows: Doc<"session_decisions">[] = await ctx.db.query("session_decisions").withIndex("by_user_status_resolved", (q: any) => q.eq("user_id", userId).eq("status", status)).order("desc").take(DECLINED_READ);
+    for (const d of rows) if (isCardOf(d, workspace)) cards.push({ status, card: d.priority_card as PriorityCard });
+  }
+  return declinedMerges(cards);
 }
+
 
 /**
  * How many of `runs` (the pair's ok runs, newest first, this one first) came
@@ -119,18 +129,29 @@ export type PostedCard = { posted: Id<"session_decisions"> } | { skipped: string
  * settled ok (`run_id`). Changes an open card of the person's already
  * proposes are left off; a card left with none is not posted (null). With no
  * session in the workspace to ask from, the changes stay unwritten and the
- * reason comes back for the run's record. The card holds the corrections the
- * run read (`corrections`): they stay pending until the person answers it.
- * `open` is the person's open cards here (openCards, read once by applyPlan).
+ * reason comes back for the run's record. `open` is the person's open cards
+ * here (openCards).
+ * The card holds only merges (sd-5035): the run wrote everything else, the
+ * new priorities among it (`created`: plan ref -> short id, which a merge
+ * into one now names), and a merge the person declined before is left off.
  */
 export async function postPriorityCard(
   ctx: Ctx,
-  run: { user_id: Id<"users">; workspace: string; run_id: Id<"priority_pass_runs">; cost_usd?: number; from: number; to: number; conversations?: Record<string, Id<"conversations">>; corrections?: Id<"priority_corrections">[] },
+  run: { user_id: Id<"users">; workspace: string; run_id: Id<"priority_pass_runs">; cost_usd?: number; from: number; to: number; conversations?: Record<string, Id<"conversations">>; created: Record<string, string> },
   raw: CardDraft,
   now: number,
   open: ReadonlyArray<Doc<"session_decisions">>,
 ): Promise<PostedCard> {
-  const draft = dropRepeats(raw, open.map((d) => d.priority_card as PriorityCard));
+  const order = effectivePriorityOrder(await activeGroup(ctx, run.user_id, run.workspace));
+  const rankOf = new Map(order.map((p, i) => [p.short_id, i + 1]));
+  const titles = new Map<string, string>();
+  for (const g of raw.groups) {
+    const id = run.created[g.priority] ?? g.priority;
+    const p: Doc<"priorities"> | null = await ctx.db.query("priorities").withIndex("by_short_id", (q: any) => q.eq("short_id", id)).first();
+    if (p && String(p.user_id) === String(run.user_id) && p.workspace === run.workspace) titles.set(id, p.title);
+  }
+  const named = withCreatedIds(raw, run.created, (id) => (titles.has(id) ? { title: titles.get(id)!, rank: rankOf.get(id) ?? null } : null));
+  const draft = dropRepeats(dropDeclined(named, await declinedMergesFor(ctx, run.user_id, run.workspace)), open.map((d) => d.priority_card as PriorityCard));
   if (!draft.changes.length) return null;
   const asker = await askingConversation(ctx, run.user_id, run.workspace, run.conversations);
   if (!asker) return { skipped: `card not posted: no session in this workspace to ask from (${draft.changes.length} changes left unwritten)` };
@@ -144,8 +165,6 @@ export async function postPriorityCard(
   const sinceLastCard = await runsSinceLastCard(ctx, run.user_id, run.workspace, runsNewestFirst);
 
   // Where the person's words went: by the priority each session sits on now, ranked as the priorities stand now.
-  const order = effectivePriorityOrder(await activeGroup(ctx, run.user_id, run.workspace));
-  const rankOf = new Map(order.map((p, i) => [p.short_id, i + 1]));
   const total = draft.typed.reduce((sum, t) => sum + t.chars, 0);
   const words: PriorityWordsRow[] = [];
   for (const t of total ? draft.typed : []) {
@@ -175,8 +194,7 @@ export async function postPriorityCard(
     changes: draft.changes,
     words,
     suggested: draft.changes.map((c) => c.id),
-    // The corrections the run read wait with the card: answering it (or dismissing it) applies them (lib/priorityCardApply).
-    held: { ...draft.held, conversations, corrections: run.corrections ?? [] },
+    held: { ...draft.held, conversations },
   };
 
   const titleOf = (priority: string) => draft.groups.find((g) => g.priority === priority)?.title ?? priority;
@@ -187,8 +205,8 @@ export async function postPriorityCard(
     session_id: asker.session_id,
     user_id: run.user_id,
     short_id,
-    question: cardQuestion(window),
-    context_md: cardContext(draft.changes.length, draft),
+    question: cardQuestion(draft.changes, titleOf),
+    context_md: cardContext({ ...draft, window }),
     kind: "multi",
     category: "unknown",
     options: draft.changes.map((c) => ({ label: changeLine(c, titleOf), ...(c.kind === "new_priority" ? {} : { description: titleOf(c.priority) }) })),

@@ -1,12 +1,16 @@
 // Priority change cards (plan pl-1131): behind a person's `priority_cards`
-// experiment, a priorities pass run writes only its session placements and
-// bookkeeping, and proposes every change to the person's priorities on one
-// decision card. The card is stored on the decision row
-// (session_decisions.priority_card): it is the proposal's one home. The
-// decision is a silent multi-select whose option i is change i, so every
-// client that answers a multi decision answers this one; the web draws it
-// from this payload. Answering writes the picked changes against the
-// priorities as they stand then (convex lib/priorityCardApply).
+// experiment, a priorities pass run writes everything it writes without the
+// experiment except its merges (sd-5035), and proposes those on one decision
+// card. Until a merge is accepted nothing of it happens: the absorbed
+// priority keeps its milestones and sessions. A merge the person declines
+// (leaves unticked, or dismisses) is never proposed again. The card is
+// stored on the decision row (session_decisions.priority_card): it is the
+// proposal's one home. The decision is a silent multi-select whose option i
+// is change i, so every client that answers a multi decision answers this
+// one; the web draws it from this payload. Answering writes the picked
+// merges against the priorities as they stand then (convex
+// lib/priorityCardApply). The kinds below other than "merge" are not put on
+// a card today.
 // PURE isomorphic data — no Node or DOM APIs.
 
 /** What one row of the card changes. Each kind has its own icon and, where it does not explain itself, a one-word prefix. */
@@ -166,7 +170,8 @@ export function changeLine(c: PriorityChange, titleOf: (priority: string) => str
 export const PRIORITY_CARDS_EXPERIMENT = "priority_cards";
 
 /**
- * Whether a decision row is a priority card.
+ * Whether a decision row is a priority card (the merges a pass run proposed,
+ * waiting on their person).
  *
  * THE RULE: a priority card belongs to its person alone and is acted on only
  * through the card. Only its person (the row's user_id, in their own name)

@@ -477,7 +477,8 @@ export function planForAccepted(held: HeldPlan, accepted: ReadonlySet<string>, r
   for (const c of held.changes.filter((c) => accepted.has(c.id) && c.kind === "merge")) {
     const gone = live(c.target!);
     const into = byId.has(c.parent ?? "") ? null : live(c.priority);
-    land(c, parentLanded(c) && !!gone && gone.status !== "set_aside" && gone.status_set_by !== "person" && (!!c.parent || !!into));
+    // Stale when either one was merged by hand, deleted or set aside since the card was posted.
+    land(c, parentLanded(c) && !!gone && gone.status !== "set_aside" && gone.status_set_by !== "person" && (!!c.parent || (!!into && into.status !== "set_aside")));
   }
 
   const patches = new Map<string, Partial<PriorityWrite>>();

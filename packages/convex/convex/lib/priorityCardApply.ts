@@ -24,7 +24,7 @@ type Ctx = { db: any; scheduler?: any };
 const CORRECTION_CHARS = 2_000;
 
 /** What answering writes from: the core's held plan, with the conversations the run read its waiting sessions as. */
-type Held = HeldPlan & { conversations?: Record<string, Id<"conversations">>; corrections?: Id<"priority_corrections">[] };
+type Held = HeldPlan & { conversations?: Record<string, Id<"conversations">> };
 
 /** The ticked option indexes of a multi answer. */
 function ticked(verdict: { answer_index?: number; answer_json?: unknown }): number[] {
@@ -90,13 +90,6 @@ export async function settlePriorityCard(
   if (text) {
     const target = await correctionTarget(ctx, person, card);
     if (target) await doCorrect(ctx as any, person, target, correctionText(row, card, text), undefined);
-  }
-  // The corrections the run read waited on this answer: the person has decided what of them lands.
-  for (const id of (card.held as Held).corrections ?? []) {
-    const c: Doc<"priority_corrections"> | null = await ctx.db.get(id);
-    if (c?.status === "pending" && !c.deleted_at && String(c.user_id) === String(person) && c.workspace === card.workspace) {
-      await ctx.db.patch(id, { status: "applied", applied_at: now, applied_window: card.run.window });
-    }
   }
   const outcome: NonNullable<PriorityCard["outcome"]> = { accepted: accepted.filter((id) => !skipped.includes(id)), skipped, at: now, ...(text ? { text } : {}) };
   await ctx.db.patch(row._id, { priority_card: { ...card, outcome } });

@@ -1,11 +1,12 @@
-// What a pass run adds to its card (lib/priorityCardPass.ts): evidence,
-// typed shares, repeats an open card holds, and the card's words. Pure.
+// What a pass run writes at once and puts on its card (lib/priorityCardPass.ts):
+// the run without its merges, evidence, typed shares, repeats an open card
+// holds, declined merges, and the card's words. Pure.
 import { describe, expect, test } from "bun:test";
 import type { PriorityChange } from "@codecast/shared/contracts/priorityCard";
 import type { PriorityPassOutput } from "@codecast/shared/contracts/priorities";
 import { mergePriorities, type PassPriority, type PassSession, type PriorityPassInput } from "./priorityPass";
 import { splitPlan } from "./priorityCard";
-import { cardDraft, cardQuestion, dropRepeats, spanWords, typedByPriority } from "./priorityCardPass";
+import { cardContext, cardQuestion, declinedMerges, dropDeclined, dropRepeats, mergeCardDraft, planWithoutMerges, spanWords, typedByPriority, withEvidence, type CardDraft } from "./priorityCardPass";
 
 const H = 3_600_000;
 const NOW = 1_800_000_000_000;
@@ -18,10 +19,58 @@ const priority = (short_id: string, over: Partial<PassPriority> = {}): PassPrior
 const input = (over: Partial<PriorityPassInput> = {}): PriorityPassInput => ({
   person: "Ana", workspace: "Acme", now: NOW, window_start: NOW - 3 * H, priorities: [], initiatives: [], step_tasks: [], sessions: [], calls: [], ...over,
 });
-const draftOf = (inp: PriorityPassInput, output: PriorityPassOutput) => {
+/** Every change the core splits out of a reply, with evidence, as a draft. */
+const draftOf = (inp: PriorityPassInput, output: PriorityPassOutput): CardDraft => {
   const plan = mergePriorities(inp, output);
-  return cardDraft(splitPlan(plan, inp, output), plan, inp, output);
+  const split = splitPlan(plan, inp, output);
+  return { changes: withEvidence(split.changes, plan, inp, output), groups: split.groups, held: split.held, typed: [], sessions: 0, calls: 0 };
 };
+
+describe("merges wait, the rest is written", () => {
+  const step = (key: string, title: string) => ({ key, title, tier: "critical" as const, tier_set_by: "pass" as const, refs: [], done: false });
+  const inp = input({
+    priorities: [
+      priority("pri-1", { title: "Evals", steps: [step("s1", "Faults"), step("s2", "Docs")], sessions: [{ id: "a", title: "a", step_key: "s1", last_active: NOW - H }] }),
+      priority("pri-2", { title: "Grader", steps: [step("s1", "Calibrate"), step("s2", "Docs")], sessions: [{ id: "b", title: "b", step_key: "s1", last_active: NOW - H }] }),
+    ],
+    sessions: [session("a", ["x"]), session("b", ["y"])],
+  });
+  const output: PriorityPassOutput = { priorities: [{
+    short_id: "pri-1", title: "Trusted evals", summary: "", status: "active", serves: null, rank: 1, merges: ["pri-2"],
+    steps: [{ key: "s1", title: "Faults", tier: "critical", refs: [] }, { key: "s2", title: "Docs", tier: "polish", refs: [] }, { key: "pri-2/s1", title: "Calibrate", tier: "critical", refs: [] }],
+    sessions: [{ session: "a", step: "s1" }, { session: "b", step: "pri-2/s1" }],
+  }], unassigned: [] };
+
+  test("the run without its merges: the survivor takes no milestone of the absorbed one (its own same-titled one stays), and the absorbed one's sessions stay", () => {
+    const plan = mergePriorities(inp, output);
+    const direct = planWithoutMerges(inp, output, plan);
+    expect(direct.merges).toEqual([]);
+    const evals = direct.updates.find((u) => u.short_id === "pri-1")!;
+    expect([evals.patch.title, evals.patch.steps?.map((s) => [s.key, s.title, s.tier])]).toEqual(["Trusted evals", [["s1", "Faults", "critical"], ["s2", "Docs", "polish"]]]);
+    expect(direct.updates.some((u) => u.short_id === "pri-2" && u.patch.status)).toBe(false);
+    expect(direct.sessions.map((s) => s.session)).not.toContain("b");
+  });
+
+  test("the card holds the merge alone, and the session waiting on it", () => {
+    const plan = mergePriorities(inp, output);
+    const direct = planWithoutMerges(inp, output, plan);
+    const card = mergeCardDraft(splitPlan(plan, inp, output), plan, direct, inp, output);
+    expect(card.changes.map((c) => [c.kind, c.priority, c.target])).toEqual([["merge", "pri-1", "pri-2"]]);
+    expect(card.held.changes.map((c) => c.kind)).toEqual(["merge"]);
+    expect(card.held.sessions.map((s) => [s.session, s.needs])).toEqual([["b", [card.changes[0].id]]]);
+    expect(card.groups.map((g) => g.changes)).toEqual([[card.changes[0].id]]);
+  });
+
+  test("a merge declined (unticked, or on a dismissed card) is remembered either way round, and left off a later card", () => {
+    const merge = { id: "c1", kind: "merge", priority: "pri-1", target: "pri-2", from: "Grader", evidence: [] } as PriorityChange;
+    const other = { ...merge, id: "c2", target: "pri-3" } as PriorityChange;
+    expect(declinedMerges([{ status: "answered", card: { changes: [merge, other], outcome: { accepted: ["c2"], skipped: [], at: 1 } } }])).toEqual([{ absorbed: "pri-2", into: "pri-1" }]);
+    expect(declinedMerges([{ status: "dismissed", card: { changes: [merge] } }])).toEqual([{ absorbed: "pri-2", into: "pri-1" }]);
+    expect(declinedMerges([{ status: "answered", card: { changes: [merge], outcome: { accepted: [], skipped: ["c1"], at: 1 } } }])).toEqual([]);
+    const draft: CardDraft = { changes: [{ ...merge, priority: "pri-2", target: "pri-1" }, other], groups: [{ priority: "pri-1", rank: 1, title: "Evals", changes: ["c1", "c2"] }], held: { v: 1, order: [], creates: [], changes: [], sessions: [] }, typed: [], sessions: 0, calls: 0 };
+    expect(dropDeclined(draft, [{ absorbed: "pri-2", into: "pri-1" }]).changes.map((c) => c.id)).toEqual(["c2"]);
+  });
+});
 
 describe("evidence", () => {
   test("a call's action item is an event naming the call; a goal is named by title", () => {
@@ -87,10 +136,13 @@ describe("repeats", () => {
 });
 
 describe("words", () => {
-  test("the question fits the window the run read", () => {
+  test("the question names the merge; the context, the window the run read", () => {
     expect(spanWords(40 * 60_000)).toBe("hour");
     expect(spanWords(5 * H)).toBe("5 hours");
     expect(spanWords(14 * 24 * H)).toBe("14 days");
-    expect(cardQuestion({ from: 0, to: 3 * H })).toBe("Should your priorities follow your last 3 hours of work?");
+    const merge = { id: "c1", kind: "merge", priority: "pri-1", target: "pri-2", from: "Grader", evidence: [] } as PriorityChange;
+    expect(cardQuestion([merge], () => "Trusted evals")).toBe("Merge “Grader” into “Trusted evals”?");
+    expect(cardQuestion([merge, { ...merge, id: "c2" }], () => "x")).toBe("Merge 2 pairs of your priorities?");
+    expect(cardContext({ sessions: 2, calls: 0, window: { from: 0, to: 3 * H } })).toStartWith("The priorities pass read 2 sessions from your last 3 hours and wrote its other changes.");
   });
 });
