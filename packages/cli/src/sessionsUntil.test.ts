@@ -27,6 +27,12 @@ describe("untilReached (-w --until)", () => {
     // Every watched session left the set (killed, dismissed): nothing holds it open.
     expect(untilReached(settled, {}, true)).toBe(true);
   });
+
+  test("waiting for done stops on a session that pinned done and files dormant under a park", () => {
+    const done = parseUntilStates("done");
+    expect(untilReached(done, { a: { state: "dormant", pin: "done" } }, true)).toBe(true);
+    expect(untilReached(done, { a: { state: "dormant", pin: "dormant" } }, true)).toBe(false);
+  });
 });
 
 describe("settleRows", () => {
@@ -47,5 +53,12 @@ describe("settleRows", () => {
   test("a killed session settles whatever its state", () => {
     const out = settleRows([{ id: "jx7aaaa1", work_state: "idle", is_killed: true }], new Set(["jx7aaaa1"]), new Set(), wanted);
     expect(out[0].to).toBe("killed");
+  });
+  test("a session that pinned done and files dormant under a park has delivered: waiting for done settles", () => {
+    const parked = [{ id: "jx7aaaa1", work_state: "dormant", thread_state_status: "done" }];
+    expect(settleRows(parked, new Set(["jx7aaaa1"]), new Set(), wanted).map((e) => e.to)).toEqual(["done"]);
+    // Asked for dormant, it reads as what it is; a dormant pin is no delivery.
+    expect(settleRows(parked, new Set(["jx7aaaa1"]), new Set(), parseUntilStates("dormant")).map((e) => e.to)).toEqual(["dormant"]);
+    expect(settleRows([{ id: "jx7aaaa1", work_state: "dormant", thread_state_status: "dormant" }], new Set(["jx7aaaa1"]), new Set(), wanted)).toEqual([]);
   });
 });

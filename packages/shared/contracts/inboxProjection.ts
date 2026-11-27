@@ -201,6 +201,8 @@ export interface WorkStateInput {
   childProducing?: boolean;
   /** The home of an armed ONCE inject trigger. Weaker than a standing loop: it only demotes a `done` rest to dormant, never needs_input (see dormancy.ArmedTriggerHomes). */
   armedOnceTriggerHome?: boolean;
+  /** A park the server sees is live (rowParkedWakeLive): a routine run this session started (a ship flow waiting on CI), an open blocker on the task it holds, or a wait. Like armedOnceTriggerHome it only demotes a `done` rest to dormant: the run's end wakes the session, so nothing waits on the person yet. Computed by rowWakeInputs. */
+  parkedWakeLive?: boolean;
   /** The settle classifier's verdict for THIS settle (settle_verdict, current per isSettleVerdictCurrent), when no declaration exists. Only "done" carries weight. */
   settleVerdict?: string | null;
   /** conversations.thread_state_status — the agent's declaration ON THE ROW, for rows with no daemon status at all (see the fallback in classifyWorkState). */
@@ -326,7 +328,10 @@ export function classifyWorkState(input: WorkStateInput): WorkState {
   // nothing is left for the human to unblock. Only `done` demotes — a once
   // trigger on a needs_input session is a reminder, and a reminder must never
   // hide an open ask.
-  const doneRest = (): WorkState => (input.armedOnceTriggerHome ? "dormant" : "done");
+  // So does a done rest while a park the server sees is live: a session that
+  // shipped through a flow waits on that run's CI, and the run's end wakes it
+  // (jx70vnz filed Done while its ship run sat in CI).
+  const doneRest = (): WorkState => (input.armedOnceTriggerHome || input.parkedWakeLive ? "dormant" : "done");
   const restState = (): WorkState => {
     // A blocked PIN is the agent's explicit claim on the human — the same
     // claim that un-stashes (setThreadState) — so neither the classifier's

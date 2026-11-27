@@ -310,4 +310,29 @@ describe("placeProjectableRow — server-seen wakes and pin freshness", () => {
     expect(placeProjectableRow(claim(DORMANT_CLAIM_TTL_MS - 60_000), false, EPOCH).bucket).toBe("dormant");
     expect(placeProjectableRow(claim(DORMANT_CLAIM_TTL_MS), false, EPOCH).bucket).toBe("needs_input");
   });
+
+  // jx70vnz: a hibernated session pinned dormant, then a background task woke
+  // it and the turn ended without a new pin. The classifier read that turn as
+  // done, and the ship run it started sat in CI. The run's end wakes it, so it
+  // waits under Dormant (classifyWorkState's doneRest).
+  test("a done rest waiting on its own live run files dormant, and done once the run ends", () => {
+    const shipped = (extra: Record<string, any>) => {
+      const facts = row("r", {
+        agent_status: "hibernated", is_idle: true, message_count: 96, updated_at: EPOCH - 10 * 60_000,
+        last_heartbeat: EPOCH - 49_000, daemon_alive_until: EPOCH + 60_000,
+        thread_state_status: "dormant", thread_state_at: EPOCH - 17 * 60_000, last_turn_at: EPOCH - 12 * 60_000,
+        settle_verdict: "done", settle_verdict_at: EPOCH - 10 * 60_000, parked_wake_kind: "run", ...extra,
+      });
+      return placeProjectableRow({ ...facts, ...deriveLiveAt(facts, EPOCH) }, false, EPOCH).bucket;
+    };
+    expect(shipped({})).toBe("dormant");
+    expect(shipped({ parked_wake_kind: "none" })).toBe("done");
+    // The run counts only while its machine's daemon beats.
+    expect(shipped({ last_heartbeat: EPOCH - HOUR, daemon_alive_until: EPOCH - HOUR })).toBe("done");
+    // A turn the classifier did not read as done may have asked: it stays with the person.
+    expect(shipped({ settle_verdict: null, settle_verdict_at: null })).toBe("needs_input");
+    // A person who spoke last reads the answer under Done, like every structural park.
+    expect(shipped({ last_turn_allows_park: false })).toBe("done");
+    expect(shipped({ last_turn_allows_park: true })).toBe("dormant");
+  });
 });

@@ -78,6 +78,7 @@ export function SessionCardView({
   priorityRank,
   variant = "default",
   sectionStatus,
+  placedStatus,
   forkColorKey,
   subRow,
   roleSessions = 0,
@@ -183,7 +184,9 @@ export function SessionCardView({
   // agent says is true right now, the other is a description of the session, and
   // two summary lines on a card is one too many. Ages on the clock, so a state
   // the thread has run past reads dim instead of confident.
-  const stateView = threadStateView(session, session.message_count, now);
+  // Judged against where the inbox files the card (its section, else the
+  // row's own placement), so the chip never names a status it overrules.
+  const stateView = threadStateView(session, session.message_count, now, sectionStatus ?? placedStatus);
   // "Working" = the agent is actively running right now. The green pulse keys
   // off this ACTUAL state rather than the section the card lives in, so pinned
   // and flat-view cards — which always render with the "default" variant —

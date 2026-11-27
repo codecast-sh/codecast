@@ -81,7 +81,8 @@ answers `parked` when the caller is the setter of a wait that can still wake it,
 and then adds the task to the caller's `conversations.parked_on_task_ids`
 (newest last, at most ten), so while any wait on a listed task still owes it
 a wake the session carries `parked_wake_kind` "wait", which files it Dormant
-under a dormant pin or claim. A setter whose held task lists the task in
+under a dormant pin or claim, and under a done pin while the machine
+delivered its last turn. A setter whose held task lists the task in
 `blocked_by` gets `parked: "close"` and `owns` (whether it is that task's
 owning session, which its unblocking wakes). A caller that is not the setter
 (it joins a wait another session set) but whose held task lists the task gets

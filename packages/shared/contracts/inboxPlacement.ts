@@ -143,7 +143,7 @@ export function rowVerifiedWake(
   );
 }
 
-export type WakeInputs = Pick<WorkStateInput, "verifiedWake" | "pinPredatesTurn" | "pinSpeaks" | "dormantClaimExpired">;
+export type WakeInputs = Pick<WorkStateInput, "verifiedWake" | "parkedWakeLive" | "pinPredatesTurn" | "pinSpeaks" | "dormantClaimExpired">;
 
 // The wake and pin inputs of classifyWorkState, from the row. Every caller
 // (placeProjectableRow, cast sessions, the needs-input push) takes them from
@@ -153,7 +153,8 @@ export type WakeInputs = Pick<WorkStateInput, "verifiedWake" | "pinPredatesTurn"
 // claim (the daemon's, or a fresh dormant pin speaking over a settled idle)
 // with no verified wake, quiet past DORMANT_CLAIM_TTL_MS.
 export function rowWakeInputs(
-  row: Parameters<typeof rowVerifiedWake>[0] & Pick<ProjectableInboxRow, "last_turn_at" | "thread_state_at" | "thread_state_status">,
+  row: Parameters<typeof rowVerifiedWake>[0] & Pick<ProjectableInboxRow, "last_turn_at" | "thread_state_at" | "thread_state_status">
+    & Partial<Pick<ProjectableInboxRow, "last_turn_allows_park" | "last_message_preview" | "last_user_message">>,
   status: { trusted: string | null | undefined; raw: string | null | undefined },
   epoch: number,
   childProducing = false,
@@ -164,6 +165,9 @@ export function rowWakeInputs(
   const claim = status.trusted === "dormant" || (pinSpeaks && row.thread_state_status === "dormant");
   return {
     verifiedWake,
+    // Like every structural park, only while the machine delivered the last
+    // turn: a person who spoke last reads the answer under Done.
+    parkedWakeLive: rowParkedWakeLive(row, epoch) && rowLastTurnAllowsPark(row),
     pinPredatesTurn,
     pinSpeaks,
     dormantClaimExpired: claim && !verifiedWake && epoch - row.updated_at >= DORMANT_CLAIM_TTL_MS,

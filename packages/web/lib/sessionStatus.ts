@@ -150,6 +150,9 @@ export type StatusRow = {
   // The wake facts the shared pin rules read (rowWakeInputs).
   armed_trigger_kind?: string | null;
   parked_wake_kind?: string | null;
+  // Whether the machine delivered the last turn (rowLastTurnAllowsPark): a park holds only then.
+  last_turn_allows_park?: boolean | null;
+  last_user_message?: string | null;
   producing_until?: number | null;
   loop_state?: Parameters<typeof rowWakeInputs>[0]["loop_state"];
   inbox_killed_at?: number | null;
@@ -321,21 +324,24 @@ function workStateOfRow(row: StatusRow, now: number): WorkState {
   const status = agentStatusAt(row, now);
   if (row.awaiting_input || status === "permission_blocked") return "needs_input";
   const failed = !!(row.pending_api_error || row.session_error || row.is_unresponsive);
-  if (status === "done") return "done";
+  const wake = carriesWakeFacts(row) ? rowWakeInputs({ ...row, updated_at: row.updated_at ?? 0 }, { trusted: status, raw: row.agent_status }, now) : null;
+  // A done rest under a live server-seen park (its ship run in CI) is dormant,
+  // as classifyWorkState's doneRest files it.
+  const parked = !!wake?.parkedWakeLive;
+  if (status === "done") return parked ? "dormant" : "done";
   if (status === "waiting") return "dormant";
-  if (!carriesWakeFacts(row)) {
+  if (!wake) {
     if (status === "hibernated" && failed) return "needs_input";
     if (status === "dormant" || status === "hibernated") return "dormant";
     if (status && status !== "idle" && !DEAD_AGENT_STATUSES.has(status)) return "working";
     return failed ? "needs_input" : "idle";
   }
-  const wake = rowWakeInputs({ ...row, updated_at: row.updated_at ?? 0 }, { trusted: status, raw: row.agent_status }, now);
   const pin = wake.pinPredatesTurn ? null : row.thread_state_status;
   if (status === "dormant") return wake.dormantClaimExpired ? "needs_input" : "dormant";
   if (status && status !== "idle" && status !== "hibernated" && !DEAD_AGENT_STATUSES.has(status)) return "working";
   if (failed) return "needs_input";
   if (status === "idle" && !wake.pinSpeaks) return "idle";
-  if (pin === "done") return "done";
+  if (pin === "done") return parked ? "dormant" : "done";
   if (pin === "dormant") return wake.verifiedWake && !wake.dormantClaimExpired ? "dormant" : "idle";
   return "idle";
 }

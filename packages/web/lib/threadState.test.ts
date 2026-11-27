@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { compactAge, threadStateView } from "./threadState";
+import { compactAge, declaredOfPlacement, declaredOfWorkState, threadStateView } from "./threadState";
 
 const NOW = 1_700_000_000_000;
 
@@ -106,5 +106,55 @@ describe("threadStateView", () => {
     )!;
     expect(v.messagesSince).toBeNull();
     expect(v.provenance).toBe("1m ago");
+  });
+});
+
+// The inbox owns who acts next. A surface that knows where the row files
+// passes it, and a pin claim the placement overrules shows no status: jx75e8s
+// sat under Needs You wearing "Dormant" after a wake turn left its pin stale.
+describe("threadStateView: the placement overrules the declared status", () => {
+  const pin = (status: string) => ({
+    thread_state: "Waiting on typecheck",
+    thread_state_at: NOW - 4 * 60_000,
+    thread_state_msg_count: 160,
+    thread_state_status: status,
+  });
+
+  test("a status the placement agrees with stands", () => {
+    expect(threadStateView(pin("dormant"), 165, NOW, "dormant")!.status).toBe("dormant");
+    expect(threadStateView(pin("blocked"), 165, NOW, "blocked")!.status).toBe("blocked");
+  });
+
+  test("a status the placement files elsewhere shows none, and the line stays", () => {
+    const v = threadStateView(pin("dormant"), 165, NOW, "blocked")!;
+    expect(v.status).toBeNull();
+    expect(v.headline).toBe("Waiting on typecheck");
+    expect(threadStateView(pin("done"), 165, NOW, "dormant")!.status).toBeNull();
+    expect(threadStateView(pin("dormant"), 165, NOW, null)!.status).toBeNull();
+  });
+
+  test("with no placement passed, the declared status stands", () => {
+    expect(threadStateView(pin("dormant"), 165, NOW)!.status).toBe("dormant");
+  });
+
+  test("each placement maps to the status its section stands for", () => {
+    expect(declaredOfWorkState("needs_input")).toBe("blocked");
+    expect(declaredOfWorkState("dormant")).toBe("dormant");
+    expect(declaredOfWorkState("done")).toBe("done");
+    expect(declaredOfWorkState("working")).toBe("working");
+    expect(declaredOfWorkState("idle")).toBeNull();
+    expect(declaredOfWorkState(null)).toBeNull();
+  });
+
+  test("the bucket decides where it is a section, so the chip matches the section header", () => {
+    // A wait its agent owner answers files under Working while its state says needs_input.
+    const working = declaredOfPlacement({ bucket: "working", state: "needs_input" });
+    expect(working).toBe("working");
+    expect(threadStateView(pin("blocked"), 165, NOW, working)!.status).toBeNull();
+    // An open ask files under Questions: a dormant pin there says nothing.
+    expect(threadStateView(pin("dormant"), 165, NOW, declaredOfPlacement({ bucket: "questions", state: "dormant" }))!.status).toBeNull();
+    expect(declaredOfPlacement({ bucket: "snoozed", state: "done" })).toBe("dormant");
+    // A pinned row has no status section: its state decides.
+    expect(declaredOfPlacement({ bucket: "pinned", state: "dormant" })).toBe("dormant");
   });
 });

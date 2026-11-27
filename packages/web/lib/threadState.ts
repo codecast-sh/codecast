@@ -19,7 +19,39 @@ import {
   type ThreadStateFreshness,
   type ThreadStateRow,
   type ThreadStateStatus,
+  type WorkState,
 } from "@codecast/shared/contracts";
+
+/** The declared status a placement amounts to: what the inbox section a row
+ *  files under says about who acts next. `idle` and `new` rows claim nothing. */
+export function declaredOfWorkState(state: WorkState | null | undefined): ThreadStateStatus | null {
+  switch (state) {
+    case "needs_input": return "blocked";
+    case "working": return "working";
+    case "done": return "done";
+    case "dormant": return "dormant";
+    default: return null;
+  }
+}
+
+/** The status a row's placement shows: its bucket where the bucket is a
+ *  status section (a wait an agent owner answers files under Working; an open
+ *  ask under Questions, which waits on the person), else its work state (a
+ *  pinned or new row draws no section of its own). */
+export function declaredOfPlacement(placement: { bucket: string; state: WorkState }): ThreadStateStatus | null {
+  switch (placement.bucket) {
+    case "questions": return "blocked";
+    case "snoozed": return "dormant";
+    case "needs_input": case "working": case "done": case "dormant": return declaredOfWorkState(placement.bucket);
+    default: return declaredOfWorkState(placement.state);
+  }
+}
+
+/** The declared status, unless the placement files the row elsewhere. */
+function declaredStatusShown(declared: ThreadStateStatus | null, placed: ThreadStateStatus | null | undefined): ThreadStateStatus | null {
+  if (placed === undefined || declared === placed) return declared;
+  return null;
+}
 
 export interface ThreadStateView {
   /** Full text, as the agent wrote it. */
@@ -31,7 +63,10 @@ export interface ThreadStateView {
   /** The ask (`You:`, or an older `Blocked:` line) when there is one, else the
    * headline. The inbox card's one slot. */
   cardLine: string;
-  /** Declared tri-state, null on rows written before it existed. */
+  /** Declared status, null on rows written before it existed, and null when the
+   * caller passed the row's placement and it files the row elsewhere: the inbox
+   * owns who acts next, so no surface may show a pin's claim it overrules (a
+   * "Dormant" chip under Needs You, jx75e8s). */
   status: ThreadStateStatus | null;
   /** Never "stale" — a stale state is not viewable (the function returns null). */
   freshness: Exclude<ThreadStateFreshness, "stale">;
@@ -123,6 +158,9 @@ export function threadStateView(
   fields: ThreadStateFields | null | undefined,
   liveMessageCount: number,
   now: number,
+  /** Where the inbox files the row (declaredOfWorkState of its placement, or
+   *  the section it is drawn in). Omitted: the declared status stands. */
+  placed?: ThreadStateStatus | null,
 ): ThreadStateView | null {
   const text = fields?.thread_state?.trim();
   if (!text) return null;
@@ -147,7 +185,7 @@ export function threadStateView(
     headline: threadStateHeadline(text),
     rows,
     cardLine: threadStateCardLine(text, rows),
-    status: parseThreadStateStatus(fields?.thread_state_status),
+    status: declaredStatusShown(parseThreadStateStatus(fields?.thread_state_status), placed),
     freshness,
     age,
     messagesSince,

@@ -14,6 +14,8 @@ import { approvesSecretRead, cleanSecretEdit, type SecretMeta, type SecretMetaEd
 import { withoutSecrets } from "@codecast/shared/contracts/secretShapes";
 import { followersSig, sameViewAnchor, type FollowerRow, type ViewAnchor } from "../lib/follow";
 import { settingsDataKey } from "../lib/settingsData";
+import { declaredOfPlacement } from "../lib/threadState";
+import type { ThreadStateStatus } from "@codecast/shared/contracts";
 import { crawlScopesClearedBy, crawlWatermarkScope } from "../hooks/syncMetaKeys";
 import type { SharedObjectKind } from "@codecast/shared/entities";
 import type { CodeAnchorText } from "@codecast/shared/comments";
@@ -4053,6 +4055,46 @@ export function placedRailPlacement(placed: Pick<PlacedInbox, "placements">, id:
   const p = placed.placements.get(id);
   return p ? { bucket: p.bucket, state: p.work_state } : null;
 }
+// The section each row was drawn in, per placed inbox. Section assembly
+// re-routes rows past their bucket (a wait the viewer cannot command files
+// under Dormant, a stashed row with an open ask under Questions), so the
+// sections, not the placements, say where a row sits.
+const DRAWN_SECTIONS = ["questions", "pinned", "newSessions", "needsInput", "done", "dormant", "working"] as const;
+const _drawnSection = new WeakMap<PlacedInbox, Map<string, InboxSectionKey>>();
+function drawnSectionOf(placed: PlacedInbox, id: string): InboxSectionKey | null {
+  let map = _drawnSection.get(placed);
+  if (!map) {
+    map = new Map();
+    for (const key of DRAWN_SECTIONS) for (const row of placed[key]) map.set(row._id, key);
+    _drawnSection.set(placed, map);
+  }
+  return map.get(id) ?? null;
+}
+const STATUS_OF_SECTION: Partial<Record<InboxSectionKey, ThreadStateStatus>> = {
+  questions: "blocked", needsInput: "blocked", done: "done", dormant: "dormant", working: "working",
+};
+
+/** The status the sidebar shows a row under: the status section it last drew
+ *  the row in. A row in no status section (Pinned, New, one the sidebar does
+ *  not hold) reads its own placement, and so does every row once the last
+ *  placement is past the minute before `now`: a mounted sidebar places at
+ *  least every minute, so an older one is a rail nobody draws (the phone
+ *  layout's closed drawer). A pin's chip shows its declared status only where
+ *  it agrees with this. */
+export function sidebarStatusOf(
+  state: Pick<PlaceInboxState, "clientState" | "livenessHeldAt"> & { currentSessionId?: string | null },
+  s: InboxSession,
+  now: number,
+): ThreadStateStatus | null {
+  // While liveness facts are held (waking from sleep, offline), the sidebar
+  // places at the held instant (placeInboxRows), so this reads time there too.
+  now = Math.min(now, state.livenessHeldAt ?? Infinity);
+  const last = lastPlacedInbox(state, { focusedId: state.currentSessionId ?? null });
+  const placed = last && last.epoch >= inboxEpoch(now) - 60_000 ? last : null;
+  const section = placed ? drawnSectionOf(placed, s._id) : null;
+  if (section && section in STATUS_OF_SECTION) return STATUS_OF_SECTION[section]!;
+  return declaredOfPlacement((placed && placedRailPlacement(placed, s._id)) ?? railRowPlacement(s, now));
+}
 
 // Structural signature for the pending `cast decide` rows the questions
 // section branches on. Shared by the panel's subscription deps.
@@ -4235,6 +4277,35 @@ export function projectReplicaInbox(
 // placement key; `val` also seeds the stable-ref reuse below.
 const _placedMemo = new Map<string, { key: unknown[]; sessions: Record<string, InboxSession>; val: PlacedInbox }>();
 const PLACED_MEMO_CAP = 8;
+
+// A surface that reads the last placement (sidebarStatusOf) re-reads when the
+// sidebar places again, not only on its own next store write: the sidebar
+// places while it renders, after the store published. Listeners hear once per
+// batch, in a microtask, so no render updates another component mid-render.
+let _placedVersion = 0;
+let _placedNotifyQueued = false;
+const _placedListeners = new Set<() => void>();
+function writePlacedMemo(slot: string, entry: { key: unknown[]; sessions: Record<string, InboxSession>; val: PlacedInbox }): void {
+  const changed = _placedMemo.get(slot)?.val !== entry.val;
+  _placedMemo.set(slot, entry);
+  if (!changed) return;
+  _placedVersion++;
+  if (_placedNotifyQueued || _placedListeners.size === 0) return;
+  _placedNotifyQueued = true;
+  queueMicrotask(() => {
+    _placedNotifyQueued = false;
+    for (const listener of _placedListeners) listener();
+  });
+}
+/** Subscribe to the sidebar placing again (useSyncExternalStore with placedInboxVersion). */
+export function subscribePlacedInbox(listener: () => void): () => void {
+  _placedListeners.add(listener);
+  return () => { _placedListeners.delete(listener); };
+}
+/** Moves each time a placement memo holds a new result. */
+export function placedInboxVersion(): number {
+  return _placedVersion;
+}
 const EMPTY_TRUNCATED: InboxTruncation[] = [];
 
 // Stable-ref helpers: hand back the PREVIOUS object when the new one is
@@ -4448,7 +4519,7 @@ export function placeInboxRows(
     if (memo.sessions === state.sessions) return memo.val;
     const refreshed = refreshPlacedRows(memo, state.sessions, now);
     if (refreshed) {
-      _placedMemo.set(slot, { key, sessions: state.sessions, val: refreshed });
+      writePlacedMemo(slot, { key, sessions: state.sessions, val: refreshed });
       return refreshed;
     }
   }
@@ -4915,7 +4986,7 @@ export function placeInboxRows(
     assertPlacementParity(state, { scope, focusedId, epoch, now, scoped, askingOf, inFlight, placements, membership });
   }
 
-  _placedMemo.set(slot, { key, sessions: state.sessions, val });
+  writePlacedMemo(slot, { key, sessions: state.sessions, val });
   if (_placedMemo.size > PLACED_MEMO_CAP) {
     const first = _placedMemo.keys().next().value;
     if (first !== undefined && first !== slot) _placedMemo.delete(first);

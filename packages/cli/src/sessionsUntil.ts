@@ -35,9 +35,18 @@ export function parseUntilStates(value: string | boolean | undefined): Set<strin
 /** -w --until may stop: it has seen at least one session, and every session it
  *  still holds rests in one of `states`. A session that left the set (killed,
  *  dismissed) has nothing more to report, so it does not hold the watch open. */
-export function untilReached(states: ReadonlySet<string>, current: Record<string, { state: string }>, seenAny: boolean): boolean {
+export function untilReached(states: ReadonlySet<string>, current: Record<string, { state: string; pin?: string | null }>, seenAny: boolean): boolean {
   if (!seenAny) return false;
-  return Object.values(current).every((r) => states.has(r.state));
+  return Object.values(current).every((r) => states.has(untilStateOf(r.state, r.pin, states)));
+}
+
+/**
+ * The state a wait reads a session at. A session that pinned done files dormant while something it holds stays
+ * parked (its own run, a blocked task: classifyWorkState's doneRest). It delivered: waiting for done must not wait
+ * out that park, though a wait that asks for dormant still reads it as dormant.
+ */
+export function untilStateOf(workState: string, pin: string | null | undefined, wanted: ReadonlySet<string>): string {
+  return workState === "dormant" && pin === "done" && wanted.has("done") && !wanted.has("dormant") ? "done" : workState;
 }
 
 export interface SettleEvent {
@@ -56,7 +65,7 @@ export function settleRows(rows: any[], watched: Set<string>, settled: Set<strin
   const out: SettleEvent[] = [];
   for (const r of rows) {
     if (!watched.has(r.id) || settled.has(r.id)) continue;
-    const to = r.is_killed ? "killed" : String(r.work_state);
+    const to = r.is_killed ? "killed" : untilStateOf(String(r.work_state), r.thread_state_status, wanted);
     if (to !== "killed" && !wanted.has(to)) continue;
     settled.add(r.id);
     out.push({
