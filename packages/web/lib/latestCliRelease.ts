@@ -34,8 +34,15 @@ export function useLatestCliRelease(): string | null | undefined {
   return latest;
 }
 
+const RELEASE = /^\d+\.\d+\.\d+$/;
+
 /** Whether a machine running `version` is behind `latest`. Unknown or non-release versions are not called behind. */
 export function behindRelease(version: string | undefined, latest: string | null): boolean {
-  const release = /^\d+\.\d+\.\d+$/;
-  return !!version && !!latest && release.test(version) && compareVersions(version, latest) < 0;
+  return !!version && !!latest && RELEASE.test(version) && compareVersions(version, latest) < 0;
+}
+
+/** The highest release of those given, or null when none is one. A window's read of the manifest is kept for its life,
+ *  so a device's own check can name a newer release than it: Update sends the newer, which a lower one would clear. */
+export function newestRelease(...versions: Array<string | null | undefined>): string | null {
+  return versions.filter((v): v is string => !!v && RELEASE.test(v)).reduce<string | null>((a, b) => (a && compareVersions(a, b) >= 0 ? a : b), null);
 }

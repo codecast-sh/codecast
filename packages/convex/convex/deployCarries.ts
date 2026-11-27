@@ -17,7 +17,7 @@ import { runWorkflowOf } from "./lib/runGraph";
 import { patchTask } from "./lib/taskWrite";
 import { enqueuePendingMessage } from "./pendingMessages";
 import { settleRunTask } from "./workflow_runs";
-import { askDaemonToRetire } from "./retireOnLive";
+import { internal } from "./_generated/api";
 import { workspaceKeyHasFeature } from "./lib/teamFeatureGuard";
 
 /** How far back merges are read for the waiting set and a marker's carries. */
@@ -358,21 +358,21 @@ async function runsMergedInto(ctx: any, d: Doc<"deploys">): Promise<Doc<"workflo
 /**
  * Tell the session that heard the run stop (the one its runner's end message reached, found by that send's client
  * id) that the run is over at Live, once. The run's subject, whose change it was, is the one retired when nothing is
- * left for it, never whichever session heard the stop: its daemon is asked (retireOnLive.askDaemonToRetire), and when
- * the subject is the one to tell, the tell waits on that answer and goes only if it stays. A killed session is left
- * alone, and a stop that reached nobody tells nobody.
+ * left for it, never whichever session heard the stop: its daemon is asked (retireOnLive.retireSessionOnLive), and when
+ * the subject is the one to tell, that judgment sends the tell, at once if it is kept, else once the ask's time is up
+ * if it stays. A killed session is left alone, and a stop that reached nobody tells nobody.
  */
 async function tellStoppedSession(ctx: any, run: Doc<"workflow_runs">, task: Doc<"tasks"> | null, flow: string, line: string, workspace: string): Promise<void> {
-  const now = Date.now();
   const subject: Doc<"conversations"> | null = run.primary_conversation_id ? await ctx.db.get(run.primary_conversation_id) : null;
   const content = `The ${flow} run${task?.short_id ? ` on ${task.short_id}` : ""} is over: Live. ${line} It had stopped at Deploy; a later deploy took the change live. Nothing more is waiting on this session for it.`;
   const tell = { content: formatSessionMessage("unknown", content, { name: "codecast" }), client_id: `run:${run._id}:live`, from_user_id: run.user_id };
   const told = await stopHeardBy(ctx, run, task);
   const subjectHeard = !!subject && !!told && String(told._id) === String(subject._id);
   // Retiring is behind the team's retire_on_live flag; off, the session that heard the stop is told, as before it.
-  const retiring = subject && !subject.inbox_killed_at && (await workspaceKeyHasFeature(ctx, workspace, "retire_on_live"))
-    ? (await askDaemonToRetire(ctx, subject, now, { workspace, ...(subjectHeard ? { tell } : {}) })) === null
-    : false;
+  const retiring = !!subject && !subject.inbox_killed_at && (await workspaceKeyHasFeature(ctx, workspace, "retire_on_live"));
+  // Judged in its own transaction: the judgment reads the subject's commits and edits, so a deploy completing many
+  // runs would otherwise read them all in this one, past its limits, and complete none.
+  if (retiring && subject) await ctx.scheduler.runAfter(0, internal.retireOnLive.retireSessionOnLive, { conversation: subject._id, workspace, ...(subjectHeard ? { tell } : {}) });
   if (!told || (subjectHeard && retiring)) return;
   // A send refused (a hosted session the run's owner does not own) leaves the run completed all the same.
   await enqueuePendingMessage(ctx, told, run.user_id, { content: tell.content, client_id: tell.client_id }).catch(() => {});

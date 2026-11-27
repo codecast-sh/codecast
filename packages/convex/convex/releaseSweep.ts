@@ -14,7 +14,8 @@
 //   - team machines online and still below a floor raised half an hour ago or
 //     more (teamCliFloor.teamFleet);
 //   - sessions whose change is live everywhere and that nothing keeps, yet are
-//     still in the inbox (retireOnLive.liveRetireRefusal answers null).
+//     still in the inbox (retireOnLive.liveRetireRefusal answers null), in a
+//     workspace with the `retire_on_live` feature on.
 // Reads only. A public action runs each kind in queries of its own, so no kind
 // spends another's read budget, and the heavy reads are cut finer still: a
 // `commits` row carries its files' patches (tens of KB each on a busy repo),
@@ -29,10 +30,11 @@ import { verifyApiToken } from "./apiTokens";
 import { createWorkContext } from "./data";
 import { parseWorkspaceKey } from "./lib/accessKeys";
 import { canAccessConversation } from "./lib/access";
-import { isFlowStop, openFlowStopIncidents, stopStationOf, type FlowStopIncident } from "./flowStops";
+import { heldByIncident, isFlowStop, openFlowStopIncidents, stopStationOf, type FlowStopIncident } from "./flowStops";
 import { commitBySha, targetDeploys, targetRows } from "./deployTargetsState";
 import { teamFleet } from "./teamCliFloor";
 import { liveRetireRefusal } from "./retireOnLive";
+import { workspaceKeyHasFeature } from "./lib/teamFeatureGuard";
 import { isTerminalTaskStatus } from "@codecast/shared/tasks";
 import { commitTouchesTarget, deployDeadlineMs } from "@codecast/shared/contracts/deployTargets";
 import { liveDeployOf } from "@codecast/shared/contracts/deploys";
@@ -146,8 +148,10 @@ async function failedRuns(ctx: any, workspace: string, now: number): Promise<Fai
     .take(FAILED_RUNS_READ);
   const out: FailedRun[] = [];
   for (const run of rows) {
-    // An incident's runs are listed under it; a queued resume is already acted on; a run with no task cannot be resumed.
-    if (run.incident_task_id || run.resume_queued || !run.task_id || isCancelled(run.fail_reason)) continue;
+    // A queued resume is already acted on; a run with no task cannot be resumed.
+    if (run.resume_queued || !run.task_id || isCancelled(run.fail_reason)) continue;
+    // An open incident's runs are listed under it, while it still stops them; a stale mark hides nothing.
+    if (await heldByIncident(ctx, run)) continue;
     // A stop is @release's only at a shared exit (its fingerprint), held while no second change shares it.
     if (isFlowStop(run.fail_reason) && !run.stop_fingerprint) continue;
     const task: Doc<"tasks"> | null = await ctx.db.get(run.task_id);
@@ -259,8 +263,8 @@ async function unretired(ctx: ActionCtx, scope: SweepScope, now: number): Promis
   return { rows, skipped };
 }
 
-/** Who sweeps which workspace, and the repositories its targets name. */
-type SweepScope = { workspace: string; viewer: Id<"users">; repositories: string[] };
+/** Who sweeps which workspace, the repositories its targets name, and whether it retires sessions on live at all. */
+type SweepScope = { workspace: string; viewer: Id<"users">; repositories: string[]; retires: boolean };
 const scopeArgs = { api_token: v.string(), workspace: v.optional(v.union(v.literal("personal"), v.literal("team"))), team_id: v.optional(v.id("teams")) };
 
 export const scope = internalQuery({
@@ -269,7 +273,12 @@ export const scope = internalQuery({
     const auth = await verifyApiToken(ctx, args.api_token, false);
     if (!auth) throw new ConvexError("Unauthorized");
     const { db } = await createWorkContext(ctx, { userId: auth.userId, workspace: args.workspace, team_id: args.team_id });
-    return { workspace: db.workspaceKey, viewer: auth.userId, repositories: [...new Set((await targetRows(ctx, db.workspaceKey)).map((t) => t.repository))] };
+    return {
+      workspace: db.workspaceKey,
+      viewer: auth.userId,
+      repositories: [...new Set((await targetRows(ctx, db.workspaceKey)).map((t) => t.repository))],
+      retires: await workspaceKeyHasFeature(ctx, db.workspaceKey, "retire_on_live"),
+    };
   },
 });
 
@@ -316,6 +325,8 @@ export const sweep = action({
       kind("failed_runs", (): Promise<FailedRun[]> => ctx.runQuery(internal.releaseSweep.failedRunsOf, { workspace: s.workspace, now })),
       kind("laggards", (): Promise<Laggard[]> => ctx.runQuery(internal.releaseSweep.laggardsOf, { workspace: s.workspace, viewer: s.viewer, now })),
       kind("unretired", async () => {
+        // With retire on live off, a live, finished session in the inbox is the expected state, not an exception.
+        if (!s.retires) return [];
         const { rows, skipped } = await unretired(ctx, s, now);
         unretiredSkipped = skipped;
         return rows;

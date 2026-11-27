@@ -156,6 +156,25 @@ describe("a card two changes wait on is escalated to its people", () => {
     expect((await notices()).push).toHaveLength(1);
   });
 
+  test("a fix filed as its own task that an incident's cause waits on: the changes the cause stops wait on the fix's card", async () => {
+    const { t, task, ask, blockOn, get, notices } = await world();
+    await task("ct-1");
+    const cause = await task("ct-10");
+    await t.run((ctx: any) => ctx.db.patch(cause, { cause: { signal_count: 2, first_seen: T0, last_seen: T0, fingerprints: ["flowstop:acme/app:ci_unread"] } }));
+    await task("ct-11");
+    await task("ct-12");
+    const card = await ask("ct-1");
+    await blockOn("ct-10", "ct-1");
+    // The cause alone is no change.
+    expect(((await get(card.id)) as any).escalated).toBeUndefined();
+    await blockOn("ct-11", "ct-10");
+    await blockOn("ct-12", "ct-10");
+    // The cause gaining its second stopped change escalates the fix's card, not only cards on the cause.
+    expect(((await get(card.id)) as any).escalated).toMatchObject({ note: "2 changes wait on this", waiting: 2 });
+    expect((await notices()).push).toHaveLength(1);
+    expect(await t.run(async (ctx: any) => cardWaiters(ctx, await ctx.db.get(card.id)))).toBe(2);
+  });
+
   test("a person's escalation keeps their note", async () => {
     const { t, ids, task, ask, blockOn, get, notices } = await world();
     for (const s of ["ct-1", "ct-2", "ct-3"]) await task(s);

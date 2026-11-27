@@ -640,8 +640,8 @@ the task's followers are not notified), and the run's owner hears it: its
 subject session in the run's end message, else the person whose account ran
 it, through a note posted `to_owner`.
 
-A stop of the pipeline every change goes through (main stayed red, main keeps
-moving, CI never reported, a deploy stuck or failed) is marked on its exit
+A stop of the pipeline every change goes through (main stayed red, CI never
+reported, a deploy stuck or failed) is marked on its exit
 with the breakage it names, `shared="main_red"` (lowercase letters, digits and
 `_`; a bare `shared=true` names it by the exit's id); a segment exit's mark
 rides onto the step a flow routes it by. Only such a stop records a
@@ -657,7 +657,9 @@ clears only on that attempt's CI and review), else at the station that failed
 (never a segment's exit step): queued where a line's sweep carries out the queue, else at once on its
 machine. Dropped as another problem's duplicate, its runs wait on that one. A
 stop about the change itself (a rejection, findings, a conflict) is never an
-incident, however alike its words read across changes.
+incident, however alike its words read across changes, and neither is
+congestion (main keeps moving, a merge turn not won): nothing is broken, and
+each change resumes on its own.
 
 Every comment a run posts goes through the run's own primary session, so it is
 signed by the run in its flow's label ("Ship run"), and so are its notifications
