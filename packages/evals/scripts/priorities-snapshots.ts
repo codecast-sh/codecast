@@ -16,7 +16,7 @@
 // Everything it writes holds the person's real content: it goes under --out, never in the repo.
 
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -28,13 +28,14 @@ const MODEL = 'claude-opus-5-5';
 const USER = 'jasoncbenn@gmail.com';
 const GOLDEN_PATH = join(homedir(), '.codecast/emergent-goals/golden/jason.json');
 const WINDOW_START = Date.parse('2026-11-10T00:00:00Z');
-const CUTS = [
+const ALL_CUTS = [
   { name: 'T1', at: Date.parse('2026-11-14T00:00:00Z') },
   { name: 'T2', at: Date.parse('2026-11-18T00:00:00Z') },
   { name: 'T3', at: Date.parse('2026-11-21T00:00:00Z') },
   { name: 'T4', at: Date.parse('2026-11-25T00:00:00Z') },
+  // Held out: past the hand set, on the forward replay's 90-minute grid.
+  { name: 'T5', at: Date.parse('2026-11-27T22:30:00Z') },
 ];
-const LAST = CUTS[CUTS.length - 1]!.at;
 /** Rendered characters one digest step reads at most; a longer segment is read in sub-chunks. */
 const CHUNK_CHARS = 120_000;
 const CONCURRENCY = 6;
@@ -53,6 +54,15 @@ const VARIANT = (flag('variant') ?? 'v1') as 'v1' | 'v2';
 const CACHED_ONLY = argv.includes('--cached-only');
 /** New spend one run may make before it stops (cached steps cost nothing). */
 const BUDGET_USD = Number(flag('budget') ?? 30);
+/**
+ * The study runs through T4 (validated against the hand set). `--through T5` extends the universe and the
+ * digests to T5 and synthesizes T5 alone, reusing every cached digest; its files carry a -T5 suffix.
+ */
+const THROUGH = flag('through') ?? 'T4';
+const CUTS = ALL_CUTS.slice(0, ALL_CUTS.findIndex((c) => c.name === THROUGH) + 1);
+if (!CUTS.length) throw new Error(`--through ${THROUGH}: no such cut`);
+const LAST = CUTS[CUTS.length - 1]!.at;
+const SUFFIX = THROUGH === 'T4' ? '' : `-${THROUGH}`;
 const dir = (...p: string[]) => { const d = join(OUT, ...p); mkdirSync(d, { recursive: true }); return d; };
 const readJson = <T>(p: string): T => JSON.parse(readFileSync(p, 'utf8'));
 const writeJson = (p: string, v: unknown) => writeFileSync(p, JSON.stringify(v, null, 2));
@@ -105,7 +115,7 @@ async function pool<T, R>(items: T[], n: number, fn: (t: T, i: number) => Promis
 type UniSession = { id: string; conversation_id: string; title: string; workspace: 'union' | 'codecast' | 'personal'; kind: string; parent?: string; typed: Array<{ at: number; text: string }> };
 
 function universe(): UniSession[] {
-  const path = join(OUT, 'universe.json');
+  const path = join(OUT, `universe${SUFFIX}.json`);
   if (existsSync(path)) return readJson(path);
   const golden: Golden = readJson(GOLDEN_PATH);
   const { user_id, workspaces } = replayScope(golden, (name, fallback) => {
@@ -165,9 +175,25 @@ async function castRead(s: UniSession, range: string): Promise<{ conversation?: 
 /** The server reads at most 8192 lines at once: a longer session is read in pages. */
 const PAGE = 8_000;
 
+/** Cached transcripts fetched before the last cut whose newer lines could not be read: they stop where the cache does. */
+const staleTranscripts: string[] = [];
+
 async function fetchTranscript(s: UniSession): Promise<RawMessage[] | null> {
   const path = transcriptPath(s);
-  if (existsSync(path)) return readJson<{ messages: RawMessage[] }>(path).messages;
+  if (existsSync(path)) {
+    const cached = readJson<{ conversation?: unknown; messages: RawMessage[]; fetched_at?: number }>(path);
+    if ((cached.fetched_at ?? statSync(path).mtimeMs) >= LAST) return cached.messages;
+    // Fetched before the last cut: lines only append, so read the ones added since.
+    const messages = [...cached.messages];
+    for (let from = Number(messages.at(-1)?.line ?? messages.length) + 1; ; from += PAGE) {
+      const page = await castRead(s, `${from}:${from + PAGE - 1}`);
+      if (!page) { staleTranscripts.push(s.id); return cached.messages; }
+      messages.push(...page.messages);
+      if (page.messages.length < PAGE) break;
+    }
+    writeFileSync(path, JSON.stringify({ conversation: cached.conversation, messages, fetched_at: Date.now() }));
+    return messages;
+  }
   // One the backend would not serve last time is not asked again (delete the marker to retry).
   const unreadable = `${path}.unreadable`;
   if (existsSync(unreadable)) return null;
@@ -182,7 +208,7 @@ async function fetchTranscript(s: UniSession): Promise<RawMessage[] | null> {
     messages.push(...page.messages);
     if (page.messages.length < PAGE) break;
   }
-  writeFileSync(path, JSON.stringify({ conversation: first.conversation, messages }));
+  writeFileSync(path, JSON.stringify({ conversation: first.conversation, messages, fetched_at: Date.now() }));
   return messages;
 }
 
@@ -474,9 +500,17 @@ async function main() {
     if (!r) return 0;
     return segments(r.lines).reduce((n, seg) => n + Math.min(seg.name === 'pre' ? PRE_WINDOW_CHARS : Infinity, seg.lines.reduce((m, l) => m + l.text.length + 1, 0)), 0);
   };
-  const stats = pick.map((s) => ({ id: s.id, workspace: s.workspace, kind: s.kind, title: s.title, chars: chars(s), anomalies: rendered.get(s.id)?.anomalies ?? [], typed_matched: rendered.get(s.id)?.typed_matched ?? 0, typed_total: rendered.get(s.id)?.typed_total ?? 0 }));
-  writeJson(join(OUT, only || limit ? 'transcript-stats.partial.json' : 'transcript-stats.json'), { missing, stats });
-  console.error(`transcripts: ${rendered.size} read, ${missing.length} missing; ${stats.reduce((n, s) => n + s.chars, 0)} rendered chars to digest`);
+  // What this run digests anew: the last segment of a session digested before, every segment of a new one.
+  const before = SUFFIX ? new Set(readJson<UniSession[]>(join(OUT, 'universe.json')).map((s) => s.id)) : null;
+  const newChars = (s: UniSession) => {
+    const r = rendered.get(s.id);
+    if (!r || !before?.has(s.id)) return chars(s);
+    return segments(r.lines).find((seg) => seg.name === THROUGH)!.lines.reduce((m, l) => m + l.text.length + 1, 0);
+  };
+  const stats = pick.map((s) => ({ id: s.id, workspace: s.workspace, kind: s.kind, title: s.title, chars: chars(s), new_chars: newChars(s), anomalies: rendered.get(s.id)?.anomalies ?? [], typed_matched: rendered.get(s.id)?.typed_matched ?? 0, typed_total: rendered.get(s.id)?.typed_total ?? 0 }));
+  writeJson(join(OUT, only || limit ? `transcript-stats${SUFFIX}.partial.json` : `transcript-stats${SUFFIX}.json`), { missing, stale: staleTranscripts, stats });
+  const fresh = stats.reduce((n, s) => n + s.new_chars, 0);
+  console.error(`transcripts: ${rendered.size} read, ${missing.length} missing, ${staleTranscripts.length} stale; ${stats.reduce((n, s) => n + s.chars, 0)} rendered chars, ${fresh} new (~$${(fresh * 2.03e-6).toFixed(2)} at the T1–T4 rate)`);
   if (stage === 'transcripts') return;
 
   const toDigest = pick.filter((s) => rendered.has(s.id) && s.kind !== 'role');
@@ -489,14 +523,15 @@ async function main() {
 
   const roles = pick.filter((s) => s.kind === 'role');
   const snapshots: Snapshot[] = [];
-  for (const cut of CUTS) {
+  // A later cut synthesizes only itself: T1–T4 stay as the study wrote them.
+  for (const cut of SUFFIX ? CUTS.slice(-1) : CUTS) {
     const snap = await synthesize(cut, pick, digests);
     for (const r of roles) if (!snap.standing_sessions.includes(r.id) && (!r.typed.length || r.typed[0]!.at <= cut.at)) snap.standing_sessions.push(r.id);
     writeJson(join(VARIANT === 'v1' ? dir('snapshots') : dir('snapshots', VARIANT), `${cut.name}.json`), snap);
     snapshots.push(snap);
     console.error(`${cut.name}: ${snap.priorities.length} priorities, ${Object.keys(snap.session_labels).length} sessions placed, ${snap.standing_sessions.length} standing, ${snap.one_off_sessions?.length ?? '-'} one-off, ${snap.unaccounted.length} unaccounted`);
   }
-  if (stage === 'synth') return;
+  if (stage === 'synth' || SUFFIX) return console.error(`total spend this run $${spent.usd.toFixed(2)} (${spent.calls} calls)`);
 
   const v = await validate(snapshots[snapshots.length - 1]!, pick);
   writeJson(join(OUT, VARIANT === 'v1' ? 'validation-T4.json' : `validation-T4-${VARIANT}.json`), v);
