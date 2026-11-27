@@ -6,6 +6,7 @@
 // the bar under the track. Pure, with relative imports only: the phone's run page reads a run here too.
 import { SEGMENT_SEP, takesSessionChange, type FlowEdgeIn, type FlowNodeIn } from "@codecast/shared/contracts/flowPool";
 import { entityRoute } from "@codecast/shared/entities";
+import { verdictOnHead } from "@codecast/shared/contracts/deployTargets";
 import { journeyStages, targetsFromLine, withRunDeploys, type Journey, type TargetState } from "./journey";
 import { gateWaitWords, holdWords, journeyWords, sentBackWords, stopTitle, type JourneyTone } from "./journeyWords";
 import { landedSha } from "./runRecord";
@@ -164,15 +165,29 @@ function failedDeploys(reason: string | null | undefined): Array<{ target: strin
   return [...out].map(([target, deploy]) => ({ target, deploy }));
 }
 
-/** A change on main whose deploy failed: it is landed, which deploy failed, and that the target's next deploy takes it live. */
-function deployFailedWords(run: ChangeRun): string | null {
+/**
+ * A change on main whose deploy failed: it is landed, and for each target that deploy failed on, where the change
+ * stands there now from the deploy records (`targets`, deploy reach): live in a later deploy, going out in one, else
+ * that deploy failed and the target's next deploy takes it live (it is on main, so any later deploy of the target
+ * carries it). Without reach, the failed deploys the reason names.
+ */
+function deployFailedWords(run: ChangeRun, targets: ReadonlyArray<TargetState>): string | null {
   const failed = failedDeploys(run.fail_reason);
   if (!failed.length) return null;
-  return `Landed · ${failed.map((f) => `${f.target} ${f.deploy}`).join(", ")} failed · goes live with the next ${listWords(failed.map((f) => f.target))} deploy${failed.length > 1 ? "s" : ""}`;
+  const now = failed.map((f) => ({ ...f, at: targets.find((t) => t.name === f.target) }));
+  const live = now.filter((f) => f.at?.state === "live");
+  const going = now.filter((f) => f.at?.state === "deploying");
+  const waiting = now.filter((f) => f.at?.state !== "live" && f.at?.state !== "deploying");
+  const parts = [
+    ...live.map((f) => `live on ${f.target}${f.at!.deploy ? ` ${f.at!.deploy}` : ""}`),
+    ...going.map((f) => `going out to ${f.target}${f.at!.deploy ? ` in ${f.at!.deploy}` : ""}`),
+    ...(waiting.length ? [`${waiting.map((f) => `${f.target} ${f.deploy}`).join(", ")} failed`, `goes live with the next ${listWords(waiting.map((f) => f.target))} deploy${waiting.length > 1 ? "s" : ""}`] : []),
+  ];
+  return ["Landed", ...parts].join(" · ");
 }
 
 /** The page's headline for a change run: where the change stands now, and what it waits on. */
-export function changeHeadline(j: Journey, run: ChangeRun, graph: ChangeGraph, ctx: { pr?: PrState } = {}): ChangeHeadline {
+export function changeHeadline(j: Journey, run: ChangeRun, graph: ChangeGraph, ctx: { pr?: PrState; targets?: ReadonlyArray<TargetState> } = {}): ChangeHeadline {
   const n = j.now;
   const { tone } = journeyWords(j);
   const head = (words: string, waits: string | null = null, t: JourneyTone = tone): ChangeHeadline => ({ words, waits, tone: t });
@@ -219,7 +234,7 @@ export function changeHeadline(j: Journey, run: ChangeRun, graph: ChangeGraph, c
       const title = stopTitle(n);
       const onMain = onMainByRun(run, j);
       if (n.fix === "deploy" && onMain) {
-        const words = deployFailedWords(run);
+        const words = deployFailedWords(run, ctx.targets ?? []);
         if (words) return head(title, words);
       }
       return head(title, ctx.pr?.merged && !onMain ? "PR merged on GitHub" : stopDetail(run, graph, title, onMain));
@@ -315,9 +330,7 @@ export function reviewOnHead(
   const v = run?.review_verdict;
   const words = v ? REVIEW_WORDS[v.verdict] : undefined;
   if (!v?.head_sha || !head || !words) return null;
-  let at = v.head_sha;
-  for (const r of run?.station_rebases ?? []) if (r.from === at) at = r.to;
-  return at === head || v.head_sha === head ? words : null;
+  return verdictOnHead(v.head_sha, head, run?.station_rebases) ? words : null;
 }
 
 /**

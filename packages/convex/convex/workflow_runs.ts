@@ -2195,7 +2195,9 @@ export async function shippingRunsCore(ctx: Ctx, userId: Id<"users">, workspace:
       fail_reason: run.fail_reason ?? null,
       // The stations' own verdicts, which the stepper reads before the station statuses.
       ci_verdict: run.ci_verdict ? { green: run.ci_verdict.green, head_sha: run.ci_verdict.head_sha, at: run.ci_verdict.at } : null,
-      review_verdict: run.review_verdict ? { verdict: run.review_verdict.verdict, at: run.review_verdict.at } : null,
+      review_verdict: run.review_verdict ? { verdict: run.review_verdict.verdict, at: run.review_verdict.at, head_sha: run.review_verdict.head_sha } : null,
+      // A verdict binds to the head it read, or one Merge only rebased it onto (shared deployTargets verdictOnHead).
+      ...(run.station_rebases?.length ? { station_rebases: run.station_rebases.map((r) => ({ from: r.from, to: r.to })) } : {}),
       check_verdict: checkVerdictOf(run),
       track: shipTrackOf(await feedWorkflowOf(ctx, run, reads), run),
       merge: run.merge ? { sha: run.merge.sha, branch: run.merge.branch, into: run.merge.into, at: run.merge.at, ...(run.merge.pr_url ? { pr_url: run.merge.pr_url } : {}) } : null,

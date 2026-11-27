@@ -35,7 +35,7 @@ export function ChangeRunHead({ run, flow, now_ms, chips, newer }: { run: any; f
   const stages = useMemo(() => endedStages(journey, run, flow), [journey, run, flow]);
   // The role whose line started the run holds its merge switch: its page, read only when merge was off.
   const mergeRole = useInboxStore((s) => (run.org_role_id && mergeIsOff(run) ? roleRowsOf(s as any).roles.find((r) => r._id === run.org_role_id)?.short_id ?? null : null));
-  const head = changeHeadline(journey, run, flow, { pr: prMerge });
+  const head = changeHeadline(journey, run, flow, { pr: prMerge, targets });
   const links = changeLinks(run, flow, targets, prMerge);
   const action = changeAction(journey, run, flow, { newer, pr: prMerge, mergeRole, targets });
   const subject = run.spawner_conversation_id ? String(run.spawner_conversation_id) : null;

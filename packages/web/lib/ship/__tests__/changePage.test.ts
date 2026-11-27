@@ -302,6 +302,10 @@ describe("D: a stop always has one way on, and never one that cannot help", () =
     expect(act(r)?.kind).toBe("deploys");
     const two = run({ ...r, fail_reason: "Stopped: The deploy that carried 929c5d8 failed: desktop dp-3559 (Stopped at Send.), web dp-12. A later deploy that takes it live ends this run at Live." });
     expect(head(two).waits).toBe("Landed · desktop dp-3559, web dp-12 failed · goes live with the next desktop and web deploys");
+    // The deploy records say where it is now: a later deploy took it live or is sending it, so no next deploy is promised.
+    const words = (targets: any[]) => changeHeadline(journeyOf(change, two, [], null), two, change, { targets }).waits;
+    expect(words([{ name: "desktop", state: "live", deploy: "dp-3601" }, { name: "web", state: "deploying", deploy: "dp-14" }])).toBe("Landed · live on desktop dp-3601 · going out to web in dp-14");
+    expect(words([{ name: "desktop", state: "live", deploy: "dp-3601" }, { name: "web", state: "failed" }])).toBe("Landed · live on desktop dp-3601 · web dp-12 failed · goes live with the next web deploy");
   });
 
   test("F2: a flow's own top-level unmerged that loops back to landing is not Deploy finding the change off main", () => {

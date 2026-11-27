@@ -81,6 +81,10 @@ describe("prStepper and prState", () => {
     expect(prStepper({ checks_state: "success" }, "changes")).toEqual(["done", "done", "failed", "idle"]);
     expect(prState({ checks_state: "success" }, "rejected").word).toBe("Changes requested");
     expect(prStepper({ checks_state: "success" }, null)).toEqual(["done", "done", "idle", "idle"]);
+    // A person's changes requested on GitHub blocks the merge whatever the run's reviewer said.
+    expect(prStepper({ checks_state: "success", review_decision: "changes_requested" }, "ship")).toEqual(["done", "done", "failed", "idle"]);
+    expect(prState({ checks_state: "success", review_decision: "changes_requested" }, "ship").word).toBe("Changes requested");
+    expect(prState({ checks_state: "success", review_decision: "approved" }, "changes").word).toBe("Changes requested");
   });
 });
 

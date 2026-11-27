@@ -446,7 +446,10 @@ export type ShippingRun = {
   fail_reason: string | null;
   /** The CI station's verdict and the reviewer's, as their stations reported them; the merge once it landed. */
   ci_verdict?: { green: boolean; head_sha: string; at: number } | null;
-  review_verdict?: { verdict: string; at: number } | null;
+  /** `head_sha`: the head the reviewer read; a verdict binds to it (verdictOnHead). */
+  review_verdict?: { verdict: string; at: number; head_sha?: string } | null;
+  /** Heads the Merge station only rebased onto main (`from` the judged head, `to` the one it pushed): a verdict on `from` holds on `to`. */
+  station_rebases?: ReadonlyArray<{ from: string; to: string }> | null;
   /** The personal flow's Check station's verdict (its check.json): pass or skipped is green, fail is not; null before it reports. */
   check_verdict?: { green: boolean; at: number } | null;
   /** How the run's flow lands a change, read from its graph: through a pull request (a `pr` station, or Union's `land` segment) or straight to main. */
@@ -510,4 +513,15 @@ export function groupQueueBySession(commits: readonly QueueCommit[]): QueueGroup
   }
   const out = [...groups.values()].map((g) => ({ ...g, commits: [...g.commits].sort((a, b) => b.at - a.at), ci: worstCi(g.commits.map((c) => c.ci)) }));
   return out.sort((a, b) => (a.key === "none" ? 1 : 0) - (b.key === "none" ? 1 : 0) || b.commits[0].at - a.commits[0].at);
+}
+
+/**
+ * Whether a verdict read on `judged` holds on `head`: the same head, or one the Merge station only rebased it onto
+ * (`rebases`, followed in order). A review binds to the head it read, so a fix round's new head has none until a
+ * reviewer reads it. The run page's Review link, a PR's header and its Shipping rail all judge by this.
+ */
+export function verdictOnHead(judged: string, head: string, rebases: ReadonlyArray<{ from: string; to: string }> | null | undefined = []): boolean {
+  let at = judged;
+  for (const r of rebases ?? []) if (r.from === at) at = r.to;
+  return at === head || judged === head;
 }

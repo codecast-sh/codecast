@@ -168,7 +168,7 @@ export default function RunScreen() {
   const reach = useDeployReach(mergedSha && changePrRef ? `${changePrRef.repository}@${mergedSha}` : null);
   const targets = useMemo<TargetState[]>(() => reachTargets(reach), [reach]);
   const journey = useMemo(() => (run && changeFlow ? journeyOf(changeFlow, run as any, targets, viewer) : null), [run, changeFlow, targets, viewer]);
-  const head = journey && run && changeFlow ? changeHeadline(journey, run as any, changeFlow, { pr: prMerge }) : null;
+  const head = journey && run && changeFlow ? changeHeadline(journey, run as any, changeFlow, { pr: prMerge, targets }) : null;
   const links = journey && run && changeFlow ? changeLinks(run as any, changeFlow, targets, prMerge) : [];
   const newer = run ? [...others].filter((r) => r.created_at > run.created_at).sort((a, b) => b.created_at - a.created_at)[0]?._id ?? null : null;
   // The role whose line started the run holds its merge switch: its page, read only when merge was off.
