@@ -377,10 +377,14 @@ export function MessageComposer({
         pressRetentionOffset={{ top: 20, bottom: 20, left: 20, right: 20 }}
         accessibilityRole="button"
         accessibilityLabel={showStop ? stop!.label : 'Send'}
+        accessibilityState={dictation.sendWaiting ? { busy: true } : undefined}
       >
+        {/* A send pressed mid-dictation waits here for the last words. */}
         {showStop
           ? <FontAwesome name="stop" size={11} color="#fff" />
-          : <FontAwesome name={sendIcon} size={14} color="#fff" />}
+          : dictation.sendWaiting
+            ? <ActivityIndicator size="small" color="#fff" />
+            : <FontAwesome name={sendIcon} size={14} color="#fff" />}
       </NativePressable>
     </RNView>
   );

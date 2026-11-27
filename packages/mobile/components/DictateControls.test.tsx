@@ -9,8 +9,21 @@ import React from 'react';
 import { teamVendorBlock } from '@codecast/shared/contracts/vendorCoverage';
 
 const host = (name: string) => name;
+// TouchableOpacity decides "disabled" as React Native 0.81 does (its
+// _createPressabilityConfig: disabled ?? aria-disabled ??
+// accessibilityState.disabled; the source is pinned by a test below), and a
+// disabled one has no press. So a press here reaches onPress only when the
+// real touchable would.
+function touchableDisabled(props: any): boolean {
+  return !!(props.disabled ?? props['aria-disabled'] ?? props.accessibilityState?.disabled);
+}
+function TouchableOpacity(props: any) {
+  return React.createElement('TouchableOpacity', { ...props, onPress: touchableDisabled(props) ? undefined : props.onPress });
+}
+const openedSettings: number[] = [];
 mock.module('react-native', () => ({
-  View: host('View'), Text: host('Text'), TextInput: host('TextInput'), TouchableOpacity: host('TouchableOpacity'),
+  View: host('View'), Text: host('Text'), TextInput: host('TextInput'), TouchableOpacity,
+  Linking: { openSettings: async () => void openedSettings.push(1) },
   ActivityIndicator: host('ActivityIndicator'),
   StyleSheet: { create: <T,>(s: T) => s, flatten: (s: unknown) => s, hairlineWidth: 1, absoluteFillObject: {} },
   Platform: { OS: 'ios', select: (o: Record<string, unknown>) => o.ios ?? o.default },
@@ -43,7 +56,11 @@ mock.module('expo-secure-store', () => ({
 mock.module('convex/react', () => ({ useConvex: () => ({}) }));
 // The real host opens the microphone; every test hands in a fake through the
 // dev seam instead, so this one must never be reached.
-mock.module('@/lib/dictationHost', () => ({ phoneDictationHost: () => ({ open: () => Promise.reject(new Error('real host reached')) }) }));
+const NEEDS_MIC = 'Codecast needs the microphone to dictate. Turn it on in Settings.';
+mock.module('@/lib/dictationHost', () => ({
+  DICTATION_NEEDS_MIC: NEEDS_MIC,
+  phoneDictationHost: () => ({ open: () => Promise.reject(new Error('real host reached')) }),
+}));
 
 // The store slice dictation reads: the viewer's switch and the active team.
 let storeState: any = {};
@@ -89,7 +106,7 @@ function installHost() {
 }
 
 beforeEach(() => {
-  alerts.length = 0; sheets.length = 0; notices.length = 0; secure.clear();
+  alerts.length = 0; sheets.length = 0; notices.length = 0; openedSettings.length = 0; secure.clear();
   storeState = { currentUser: { _id: 'u1', dictation_enabled: true }, teams: [], clientState: { ui: {} } };
   installHost();
 });
@@ -133,11 +150,19 @@ async function mount(initial = '') {
   });
   mounted.push(r);
   const byLabel = (label: string) => r.root.findAll((n) => n.props.accessibilityLabel === label && typeof n.type === 'string');
-  const press = (label: string) => TestRenderer.act(async () => { byLabel(label)[0]!.props.onPress(); await flush(); });
+  // Through the touchable: a press on a disabled one throws, as nothing would happen on the phone.
+  const press = (label: string) => TestRenderer.act(async () => {
+    const onPress = byLabel(label)[0]!.props.onPress;
+    if (!onPress) throw new Error(`"${label}" is disabled: a tap does nothing`);
+    onPress();
+    await flush();
+  });
   const box = () => r.root.findByProps({ testID: 'box' });
+  // What the composer's Send reads to show a send waiting on the last words.
+  const dictationOf = () => r.root.findByType(DictateControls).props.dictation as import('@/lib/dictation').PhoneDictation;
   const act = (fn: () => void) => TestRenderer.act(async () => { fn(); await flush(); });
   return {
-    r, byLabel, press, act,
+    r, byLabel, press, act, dictationOf,
     value: () => box().props.value as string,
     placeholder: () => box().props.placeholder as string,
     select: (start: number, end = start) => act(() => box().props.onSelectionChange({ nativeEvent: { selection: { start, end } } })),
@@ -253,10 +278,13 @@ test('typing into the box mid-recording stops it and keeps what was typed', asyn
   expect(notices).toEqual(['Dictation stopped: the text changed']);
 });
 
-test('a start that failed tints the mic, and a tap says why and can try again', async () => {
+test('a start that failed says why at once, tints the mic, and a tap says it again and can try again', async () => {
   (globalThis as any).__dictationTestHost = { open: () => Promise.reject(new Error('Dictation needs a newer app version')) };
   const m = await mount('');
   await m.press('Dictate');
+  // At once, in the bar the auto-stop line uses, with no second tap.
+  expect(notices).toEqual(['Dictation needs a newer app version']);
+  expect(alerts).toEqual([]);
   const mic = m.byLabel('Dictate')[0]!;
   expect(mic.props.accessibilityHint).toBe('Dictation needs a newer app version');
   // Failed reads without colour too: the struck-through mic.
@@ -269,6 +297,25 @@ test('a start that failed tints the mic, and a tap says why and can try again', 
   installHost();
   await m.act(() => alerts[0]!.buttons![1]!.onPress!());
   expect(m.byLabel('Finish dictation').length).toBe(1);
+  // The retry's success says nothing more.
+  expect(notices.length).toBe(1);
+});
+
+test('a refused microphone says so at once with the way to Settings, and again from the struck mic', async () => {
+  (globalThis as any).__dictationTestHost = { open: () => Promise.reject(new Error(NEEDS_MIC)) };
+  const m = await mount('');
+  await m.press('Dictate');
+  expect(notices).toEqual([]);
+  expect(alerts.map((a) => [a.title, a.message, a.buttons?.map((b) => b.text)])).toEqual([
+    ["Dictation didn't start", NEEDS_MIC, ['Not now', 'Open Settings']],
+  ]);
+  await m.act(() => alerts[0]!.buttons![1]!.onPress!());
+  expect(openedSettings).toEqual([1]);
+  expect(m.byLabel('Dictate')[0]!.findByType('Feather' as any).props.name).toBe('mic-off');
+  await m.press('Dictate');
+  expect(alerts[1]!.buttons!.map((b) => b.text)).toEqual(['OK', 'Try again', 'Open Settings']);
+  await m.act(() => alerts[1]!.buttons![2]!.onPress!());
+  expect(openedSettings).toEqual([1, 1]);
 });
 
 test('the server refusing mid-start says its reason on the mic', async () => {
@@ -276,24 +323,41 @@ test('the server refusing mid-start says its reason on the mic', async () => {
   await m.press('Dictate');
   await m.act(() => fake.events!.onFailed('Dictation is not configured'));
   expect(m.byLabel('Dictate')[0]!.props.accessibilityHint).toBe('Dictation is not configured');
+  expect(notices).toEqual(['Dictation is not configured']);
 });
 
 test("a team without OpenAI under its BAA gets a dimmed mic that says why", async () => {
   setStore({ teams: [{ _id: 't1', name: 'Clinic', policy: { regulated_data: true } }], clientState: { ui: { active_team_id: 't1' } } });
   const m = await mount('');
+  const why = teamVendorBlock({ name: 'Clinic', policy: { regulated_data: true } }, 'openai')!;
   const mic = m.byLabel('Dictate')[0]!;
-  expect(mic.props.accessibilityState).toEqual({ disabled: true });
-  expect(m.byLabel('Dictation settings')).toEqual([]);
+  // Pressable, or the tap that says why would do nothing (RN treats
+  // accessibilityState.disabled as disabled); VoiceOver reads the reason.
+  expect(touchableDisabled(mic.props)).toBe(false);
+  expect(mic.props.accessibilityHint).toBe(why);
   await m.press('Dictate');
   expect(fake.events).toBe(null);
-  expect(notices.length).toBe(1);
-  expect(notices[0]).toBe(teamVendorBlock({ name: 'Clinic', policy: { regulated_data: true } }, 'openai')!);
+  expect(notices).toEqual([why]);
+  // The chevron stays, dimmed with the mic, and says the same.
+  await m.press('Dictation settings');
+  expect(sheets).toEqual([]);
+  expect(notices).toEqual([why, why]);
+});
+
+test("the touchable stand-in decides disabled as React Native's own TouchableOpacity does", () => {
+  const { readFileSync } = require('node:fs');
+  const file = Bun.resolveSync('react-native/Libraries/Components/Touchable/TouchableOpacity.js', import.meta.dir);
+  const src = (readFileSync(file, 'utf8') as string).replace(/\s+/g, ' ');
+  expect(src).toContain("disabled: this.props.disabled ?? this.props['aria-disabled'] ?? this.props.accessibilityState?.disabled,");
+  expect(touchableDisabled({ accessibilityState: { disabled: true } })).toBe(true);
+  expect(touchableDisabled({ disabled: false, accessibilityState: { disabled: true } })).toBe(false);
 });
 
 test('the chevron picks the language, kept on this device', async () => {
   const m = await mount('');
   await m.press('Dictation settings');
   const first = sheets.at(-1)!;
+  expect(first.title).toBe('Dictation settings');
   expect(first.items.find((i) => i.selected)?.label).toBe('Auto');
   await m.act(() => first.items.find((i) => i.label === 'Japanese')!.onPress());
   expect([...secure.values()]).toEqual(['ja']);
@@ -395,15 +459,48 @@ test('every target is 44pt and none overlaps its neighbour, send included', asyn
   expect(recording.at(-1)).toEqual(idle.at(-1));
 });
 
-test('a blocked mic, alone, keeps its target clear of send', async () => {
-  setStore({ teams: [{ _id: 't1', name: 'Clinic', policy: { regulated_data: true } }], clientState: { ui: { active_team_id: 't1' } } });
+test('blocked keeps the same row: nothing beside it moves', async () => {
+  const open = await mount('');
+  const idle = targets(open, ['Dictate', 'Dictation settings']);
+  await open.act(() => setStore({ teams: [{ _id: 't1', name: 'Clinic', policy: { regulated_data: true } }], clientState: { ui: { active_team_id: 't1' } } }));
   const m = await mount('');
-  const mic = m.byLabel('Dictate')[0]!;
+  const blocked = targets(m, ['Dictate', 'Dictation settings']);
+  expectClear(blocked);
+  expect(blocked).toEqual(idle);
+});
+
+test('✓ is quiet like ✕; a send waiting on the last words shows on Send, not on ✓', async () => {
+  const m = await mount('');
+  await m.press('Dictate');
   const flat = (st: any): any => (Array.isArray(st) ? Object.assign({}, ...st.filter(Boolean).map(flat)) : st ?? {});
-  const st = flat(mic.props.style);
-  const { DICTATE_SEND_SLOP: send } = require('./DictateControls');
-  expect(st.width + mic.props.hitSlop.left + mic.props.hitSlop.right).toBeGreaterThanOrEqual(44);
-  expect(st.width + mic.props.hitSlop.right).toBeLessThanOrEqual(st.width + st.marginRight - send.left);
+  const bg = (label: string) => flat(m.byLabel(label)[0]!.props.style).backgroundColor;
+  expect(bg('Finish dictation')).toBe(bg('Cancel dictation'));
+  await m.act(() => fake.events!.onPartial('ship it'));
+  expect(m.dictationOf().sendWaiting).toBe(false);
+  await m.send();
+  expect(m.dictationOf().sendWaiting).toBe(true);
+  const finish = m.byLabel('Finish dictation')[0]!;
+  expect(finish.findAllByType('ActivityIndicator' as any)).toEqual([]);
+  expect(finish.findByType('Feather' as any).props.name).toBe('check');
+  await m.act(() => fake.finished());
+  expect(sent).toEqual(['ship it']);
+  expect(m.dictationOf().sendWaiting).toBe(false);
+
+  // ✓ pressed alone: the spinner is on ✓, and no send waits.
+  await m.press('Dictate');
+  await m.act(() => fake.events!.onPartial('draft'));
+  await m.press('Finish dictation');
+  expect(m.dictationOf().sendWaiting).toBe(false);
+  expect(m.byLabel('Finish dictation')[0]!.findAllByType('ActivityIndicator' as any).length).toBe(1);
+  await m.act(() => fake.finished());
+
+  // Send then Cancel: nothing waits any more.
+  await m.press('Dictate');
+  await m.act(() => fake.events!.onPartial('scratch'));
+  await m.send();
+  expect(m.dictationOf().sendWaiting).toBe(true);
+  await m.press('Cancel dictation');
+  expect(m.dictationOf().sendWaiting).toBe(false);
 });
 
 test('text typed before the first word is kept, and Cancel leaves it', async () => {
@@ -424,8 +521,7 @@ test('any team without OpenAI under its BAA dims the mic, whichever team is acti
   });
   const m = await mount('');
   const mic = m.byLabel('Dictate')[0]!;
-  expect(mic.props.accessibilityState).toEqual({ disabled: true });
   expect(mic.props.accessibilityHint).toBe(teamVendorBlock({ name: 'Clinic', policy: { regulated_data: true } }, 'openai')!);
   await m.act(() => setStore({ teams: [{ _id: 't0', name: 'Open', policy: {} }] }));
-  expect(m.byLabel('Dictate')[0]!.props.accessibilityState).toBe(undefined);
+  expect(m.byLabel('Dictate')[0]!.props.accessibilityHint).toBe(undefined);
 });

@@ -4,11 +4,12 @@
 //
 // - Hidden unless the person turned dictation on (Settings › Voice).
 // - A team whose BAA does not cover OpenAI gets a dimmed mic; a tap says why.
-// - A start that failed shows the struck-through mic (tinted where there is
-//   colour); a tap says why, and can retry.
+// - A start that failed says why at once (lib/dictation), then shows the
+//   struck-through mic (tinted where there is colour); a tap says it again,
+//   and can retry.
 //
 // Every target is 44pt and none overlaps another, send's included: the row is
-// 80pt wide in both states and ends in the gap before send, whose left slop
+// 80pt wide in every state (blocked included) and ends in the gap before send, whose left slop
 // beside it is 0 (DICTATE_SEND_SLOP). Idle: mic [-8,36], chevron [36,80].
 // Recording: ✕ [-8,36], ✓ [36,80]. Send's own target then starts at 80.
 import { StyleSheet, TouchableOpacity, View as RNView, ActivityIndicator } from 'react-native';
@@ -17,9 +18,9 @@ import { DICTATION_LANGUAGES } from '@codecast/shared/contracts/dictation';
 import { MOBILE_SESSION_STYLE as S } from '@codecast/shared/render/mobileSessionStyle';
 import { themedStyles, useTheme } from '@/constants/Theme';
 import { mixColor } from '@/lib/solColor';
-import { appAlert, showActionSheet } from '@/lib/popups';
+import { showActionSheet } from '@/lib/popups';
 import { showNotice } from '@/lib/undoBar';
-import type { PhoneDictation } from '@/lib/dictation';
+import { explainDictationFailure, type PhoneDictation } from '@/lib/dictation';
 import { setDictationLanguage, useDictationLanguage } from '@/lib/dictationLanguage';
 
 // 32pt buttons like attach and send, with hitSlop to a 44pt target. The first
@@ -37,11 +38,13 @@ export function DictateControls({ dictation }: { dictation: PhoneDictation }) {
   if (!shown) return null;
 
   if (state.phase !== 'idle') {
-    const finishing = state.phase === 'finishing';
+    // The spinner goes where the press was: on ✓ for a Finish, on Send (its
+    // composer draws it) for a send waiting on the last words.
+    const finishing = state.phase === 'finishing' && !dictation.sendWaiting;
     return (
       <RNView style={[styles.row, styles.recording]}>
         <TouchableOpacity
-          style={styles.cancel}
+          style={[styles.quiet, styles.cancel]}
           onPress={dictation.cancel}
           activeOpacity={0.6}
           hitSlop={FIRST_SLOP}
@@ -51,9 +54,9 @@ export function DictateControls({ dictation }: { dictation: PhoneDictation }) {
           <Feather name="x" size={17} color={Theme.textMuted} />
         </TouchableOpacity>
         <TouchableOpacity
-          style={[styles.finish, { backgroundColor: mixColor(Theme.text, 85, Theme.bg) }]}
+          style={styles.quiet}
           onPress={() => void dictation.finish()}
-          activeOpacity={0.7}
+          activeOpacity={0.6}
           hitSlop={FINISH_SLOP}
           disabled={finishing}
           accessibilityRole="button"
@@ -61,69 +64,67 @@ export function DictateControls({ dictation }: { dictation: PhoneDictation }) {
           accessibilityState={{ busy: finishing, disabled: finishing }}
         >
           {finishing ? (
-            <ActivityIndicator size="small" color={Theme.bg} />
+            <ActivityIndicator size="small" color={Theme.textMuted} />
           ) : (
-            <Feather name="check" size={16} color={Theme.bg} />
+            <Feather name="check" size={17} color={Theme.textMuted} />
           )}
         </TouchableOpacity>
       </RNView>
     );
   }
 
-  const failed = !!state.error;
+  const failed = !blocked && !!state.error;
+  // Blocked stays pressable: a disabled touchable (RN reads
+  // accessibilityState.disabled as disabled) would swallow the tap that says why.
   const pressMic = () => {
     if (blocked) return showNotice(blocked);
-    if (failed) {
-      return appAlert("Dictation didn't start", state.error!, [
-        { text: 'OK', style: 'cancel' },
-        { text: 'Try again', onPress: dictation.start },
-      ]);
-    }
+    if (failed) return explainDictationFailure(state.error!, dictation.start);
     dictation.start();
   };
-  const openLanguages = () =>
+  const openSettings = () => {
+    if (blocked) return showNotice(blocked);
     showActionSheet(
-      'Dictation language',
+      'Dictation settings',
       DICTATION_LANGUAGES.map((l) => ({
         label: l.label,
         selected: l.code === language,
         onPress: () => setDictationLanguage(l.code),
       })),
     );
+  };
 
   return (
-    <RNView style={styles.row}>
+    <RNView style={[styles.row, !!blocked && styles.dim]}>
       <TouchableOpacity
-        style={[styles.mic, failed && !blocked && { backgroundColor: mixColor(Theme.red, 16, Theme.bg) }, !!blocked && styles.dim]}
+        style={[styles.mic, failed && { backgroundColor: mixColor(Theme.red, 16, Theme.bg) }]}
         onPress={pressMic}
         activeOpacity={0.6}
         hitSlop={FIRST_SLOP}
         accessibilityRole="button"
         accessibilityLabel="Dictate"
         accessibilityHint={blocked ?? state.error ?? undefined}
-        accessibilityState={blocked ? { disabled: true } : undefined}
       >
         {/* The struck-through mic says "failed" without colour (the grayscale tablet). */}
-        <Feather name={failed && !blocked ? 'mic-off' : 'mic'} size={17} color={failed && !blocked ? Theme.red : Theme.textMuted} />
+        <Feather name={failed ? 'mic-off' : 'mic'} size={17} color={failed ? Theme.red : Theme.textMuted} />
       </TouchableOpacity>
-      {blocked ? null : (
-        <TouchableOpacity
-          style={styles.chevron}
-          onPress={openLanguages}
-          activeOpacity={0.6}
-          hitSlop={{ top: 6, bottom: 6, left: 0, right: 0 }}
-          accessibilityRole="button"
-          accessibilityLabel="Dictation settings"
-          accessibilityValue={{ text: DICTATION_LANGUAGES.find((l) => l.code === language)?.label ?? 'Auto' }}
-        >
-          <Feather name="chevron-down" size={13} color={Theme.textMuted0} />
-        </TouchableOpacity>
-      )}
+      <TouchableOpacity
+        style={styles.chevron}
+        onPress={openSettings}
+        activeOpacity={0.6}
+        hitSlop={{ top: 6, bottom: 6, left: 0, right: 0 }}
+        accessibilityRole="button"
+        accessibilityLabel="Dictation settings"
+        accessibilityHint={blocked ?? undefined}
+        accessibilityValue={{ text: DICTATION_LANGUAGES.find((l) => l.code === language)?.label ?? 'Auto' }}
+      >
+        <Feather name="chevron-down" size={13} color={Theme.textMuted0} />
+      </TouchableOpacity>
     </RNView>
   );
 }
 
 const styles = themedStyles((Theme) => StyleSheet.create({
+  // The same 80pt in every state, so nothing beside it moves.
   row: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -136,30 +137,28 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     ...S.imageButton,
     borderRadius: 16,
   },
-  // Blocked has no chevron: the mic keeps its slop clear of send.
+  // Blocked: both dimmed, both still say why on a tap.
   dim: {
     opacity: 0.4,
-    marginRight: 8,
   },
   // The chevron's box is its whole 44pt target, running toward send; the
-  // glyph sits against the mic.
+  // glyph sits in its middle.
   chevron: {
     width: 44,
     height: 32,
     marginLeft: 4,
     justifyContent: 'center',
-    alignItems: 'flex-start',
+    alignItems: 'center',
   },
-  cancel: {
+  // ✕ and ✓ are quiet, like attach: send stays the one primary button.
+  quiet: {
     ...S.imageButton,
     borderRadius: 16,
-    marginRight: 8,
     backgroundColor: Theme.bgAlt,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: Theme.borderLight,
   },
-  finish: {
-    ...S.imageButton,
-    borderRadius: 16,
+  cancel: {
+    marginRight: 8,
   },
 }));
