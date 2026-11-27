@@ -191,7 +191,8 @@ export async function activitySince(ctx: { db: any }, userId: Id<"users">, since
 /**
  * The tasks a session links (the association rail, the tasks it filed, its
  * active task), in this workspace. `asOf` keeps only the links and filings
- * made by then, and leaves out the active task, whose binding time is not kept.
+ * made by then, each with its status as it stood then, and leaves out the
+ * active task, whose binding time is not kept.
  */
 export async function sessionTasks(ctx: { db: any }, conv: Doc<"conversations">, workspace: string, asOf?: number): Promise<PassTask[]> {
   const by = (row: { _creationTime: number }) => asOf === undefined || row._creationTime <= asOf;
@@ -206,34 +207,52 @@ export async function sessionTasks(ctx: { db: any }, conv: Doc<"conversations">,
     if (out.length >= TASKS_PER_SESSION) break;
     const id = ctx.db.normalizeId("tasks", raw);
     const t: Doc<"tasks"> | null = id ? await ctx.db.get(id) : null;
-    if (t && t.workspace === workspace) out.push({ short_id: t.short_id, title: t.title, status: t.status });
+    if (t && t.workspace === workspace) out.push({ short_id: t.short_id, title: t.title, status: asOf === undefined ? t.status : await taskStatusAsOf(ctx, t, asOf) });
   }
   return out;
 }
 
 /**
+ * A task's status at `at`: what its last status change by then set, else what
+ * the first later change moved it from. Reads the task's whole history (one
+ * task's edits, tens to hundreds of rows) and orders by `created_at`, which an
+ * import can stamp out of insertion order.
+ */
+async function taskStatusAsOf(ctx: { db: any }, task: Doc<"tasks">, at: number): Promise<Doc<"tasks">["status"]> {
+  let before: Doc<"task_history"> | null = null;
+  let after: Doc<"task_history"> | null = null;
+  for await (const h of ctx.db.query("task_history").withIndex("by_task_id", (q: any) => q.eq("task_id", task._id)) as AsyncIterable<Doc<"task_history">>) {
+    if (h.field !== "status") continue;
+    if (h.created_at <= at) { if (!before || h.created_at >= before.created_at) before = h; }
+    else if (!after || h.created_at < after.created_at) after = h;
+  }
+  return ((before ? before.new_value : after?.old_value) ?? task.status) as Doc<"tasks">["status"];
+}
+
+/**
  * The pull requests a session links: the one it shepherds (folded on the row,
  * no read), then its linked rows, its own commits first, while the pass's
- * row budget lasts.
+ * row budget lasts. `asOf` keeps only the pull requests opened and linked by
+ * then, merged only if they had merged by then; the folded one is current, so
+ * a replay reads it through its link.
  */
-async function sessionPrs(ctx: { db: any }, conv: Doc<"conversations">, budget: { left: number; seen: Map<string, { ref: string; merged: boolean }> }) {
+async function sessionPrs(ctx: { db: any }, conv: Doc<"conversations">, budget: { left: number; seen: Map<string, { ref: string; merged: boolean } | null> }, asOf?: number) {
   const out = new Map<string, { ref: string; merged: boolean }>();
-  if (conv.pr_status) out.set(String(conv.pr_status.pr_id), { ref: `${conv.pr_status.repository}#${conv.pr_status.number}`, merged: conv.pr_status.state === "merged" });
+  if (conv.pr_status && asOf === undefined) out.set(String(conv.pr_status.pr_id), { ref: `${conv.pr_status.repository}#${conv.pr_status.number}`, merged: conv.pr_status.state === "merged" });
   const links = await ctx.db.query("pull_request_sessions").withIndex("by_conversation", (q: any) => q.eq("conversation_id", conv._id)).take(PR_LINKS_PER_SESSION);
   links.sort((a: any, b: any) => Number(b.tier === "committed") - Number(a.tier === "committed"));
   for (const link of links) {
     const key = String(link.pull_request_id);
-    if (out.has(key)) continue;
+    if (out.has(key) || (asOf !== undefined && link._creationTime > asOf)) continue;
     let pr = budget.seen.get(key);
-    if (!pr) {
+    if (pr === undefined) {
       if (budget.left <= 0) break;
       budget.left--;
       const row: Doc<"pull_requests"> | null = await ctx.db.get(link.pull_request_id);
-      if (!row) continue;
-      pr = { ref: `${row.repository}#${row.number}`, merged: row.state === "merged" };
+      pr = !row || (asOf !== undefined && row.created_at > asOf) ? null : { ref: `${row.repository}#${row.number}`, merged: asOf === undefined ? row.state === "merged" : (row.merged_at ?? Infinity) <= asOf };
       budget.seen.set(key, pr);
     }
-    out.set(key, pr);
+    if (pr) out.set(key, pr);
   }
   return [...out.values()];
 }
@@ -405,6 +424,7 @@ async function pinAsOf(ctx: { db: any }, conv: Doc<"conversations">, asOf: numbe
  * workspace it reads in.
  */
 export const passInputs = internalQuery({
+  // `now` is a replay's (live passes read at the present): everything a session shows is as it stood then.
   args: { user_id: v.id("users"), workspace: v.string(), now: v.optional(v.number()), window_start: v.optional(v.number()) },
   handler: async (ctx, args): Promise<PassInputs> => {
     const now = args.now ?? Date.now();
@@ -475,7 +495,7 @@ export const passInputs = internalQuery({
 
     // Earliest first activity first, as they were read.
     const oldestFirst = [...touched.values()].sort((a, b) => firstAfter(a, cursor_at) - firstAfter(b, cursor_at));
-    const prBudget = { left: PR_ROWS_READ, seen: new Map<string, { ref: string; merged: boolean }>() };
+    const prBudget = { left: PR_ROWS_READ, seen: new Map<string, { ref: string; merged: boolean } | null>() };
     const shortId = shortIds(ctx);
     // The person's priorities in this workspace, read first: a short id a stored step ref holds is that ref's conversation's to bear.
     const rows = await livePriorities(ctx, args.user_id, args.workspace, now, PRIORITIES_READ);
@@ -493,13 +513,14 @@ export const passInputs = internalQuery({
       sessions.push({
         id: await names.name(conv),
         ...(await sessionKind(ctx, conv, names.name)),
-        title: conv.title ?? "",
+        // A replay sees the first generated title (the oldest kept) and no idle summary: when a later one was written is not kept.
+        title: (args.now === undefined ? conv.title : conv.earlier_titles?.[0] ?? conv.title) ?? "",
         first_prompt: conv.first_prompt ?? "",
         pin: await pinAsOf(ctx, conv, args.now ?? null),
-        idle_summary: conv.idle_summary ?? null,
+        idle_summary: args.now === undefined ? conv.idle_summary ?? null : null,
         last_active: t.last,
-        tasks: await sessionTasks(ctx, conv, args.workspace),
-        prs: await sessionPrs(ctx, conv, prBudget),
+        tasks: await sessionTasks(ctx, conv, args.workspace, args.now),
+        prs: await sessionPrs(ctx, conv, prBudget, args.now),
         pin_events: t.pin_events,
         typed: t.typed,
         ...(await personLinks(conv, shortId)),

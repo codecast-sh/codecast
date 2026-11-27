@@ -5,7 +5,10 @@
 // the same request builder, parser and merge as the pass (priorityPassRun.ts),
 // chunk after chunk oldest first, carrying each chunk's priorities into the
 // next chunk's input in memory, so its end state is what a chain of first
-// passes would leave. Calls go on codecast's own key; a team's vendor refusal
+// passes would leave. Every session reads as it stood at the window's end
+// (passInputs `now`), and the result's `end` resumes a replay from there: a
+// caller stepping the window end forward plays the pass through time as live
+// runs it. Calls go on codecast's own key; a team's vendor refusal
 // and the regulated-team filter hold as for any pass. Internal, so staff run
 // it (packages/convex/run.sh).
 
@@ -54,6 +57,8 @@ export type EvalResult = {
   omitted: string[];
   /** Set when the window is not finished: call again with it as `resume`. */
   resume?: EvalState;
+  /** Where the run stands when it returns, finished or not: `resume` for a call over a later window end. */
+  end: EvalState;
 };
 
 /** A plan applied to in-memory priorities as applyPlan applies it to the rows (a calibration run has no person settings to keep). */
@@ -127,7 +132,7 @@ export const evalPass = internalAction({
     const omitted: string[] = [];
     let cost_usd = 0;
     const done = (resume?: EvalState): EvalResult => ({
-      outputs, priorities: state.priorities, cost_usd, sessions_read: [...readIds].map(([id, title]) => ({ id, title })), omitted, ...(resume ? { resume } : {}),
+      outputs, priorities: state.priorities, cost_usd, sessions_read: [...readIds].map(([id, title]) => ({ id, title })), omitted, end: state, ...(resume ? { resume } : {}),
     });
     for (;;) {
       if (outputs.length && Date.now() - started > EVAL_CALLS_START_WITHIN_MS) return done(state);

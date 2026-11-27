@@ -196,6 +196,67 @@ describe("evalPass", () => {
     expect(sent[0]!.prompt).toBe(sent[1]!.prompt);
   });
 
+  test("a replay stepped through time: each call's end resumes the next, which reads only what moved since and holds the priorities so far", async () => {
+    const w = await world();
+    await w.send(w.ana, w.oldConv, w.now - 2 * DAY, "start the grader work");
+    await w.send(w.ana, w.teamConv, w.now - H, "get grader faults under ten percent");
+    model.reply = () => model.prompts.length === 1
+      ? JSON.stringify({ priorities: [proposal({ sessions: [{ session: "jx7old", step: "s1" }] })], unassigned: [] })
+      : JSON.stringify({ priorities: [proposal({ short_id: "pri-1", sessions: [{ session: "jx7team", step: "s1" }] })], unassigned: [] });
+    const args = { user_id: w.ana, workspace: w.team, window_start: w.now - 3 * DAY };
+
+    const first = await w.t.action(pass.evalPass, { ...args, window_end: w.now - DAY });
+    expect(first.resume).toBeUndefined();
+    expect(first.end).toMatchObject({ cursor_at: w.now - DAY, next_id: 1 });
+    // Nothing moved in the next step: no model call, and the state stands.
+    const quiet = await w.t.action(pass.evalPass, { ...args, window_end: w.now - 12 * H, resume: first.end });
+    expect(model.prompts).toHaveLength(1);
+    expect(quiet.priorities).toEqual(first.priorities);
+    const second = await w.t.action(pass.evalPass, { ...args, window_end: w.now, resume: quiet.end });
+
+    expect(model.prompts).toHaveLength(2);
+    expect(model.prompts[0]).toContain("start the grader work");
+    expect(model.prompts[0]).not.toContain("get grader faults under ten percent");
+    expect(model.prompts[1]).toContain('pri-1 · "Trusted evals"');
+    expect(model.prompts[1]).toContain("get grader faults under ten percent");
+    expect(model.prompts[1]).not.toContain("start the grader work");
+    expect(second.priorities).toHaveLength(1);
+    expect(second.priorities[0].sessions.map((s: any) => s.id).sort()).toEqual([String(w.oldConv), String(w.teamConv)].sort());
+    expect(await w.priorities()).toEqual([]);
+  });
+
+  test("a replay sees each session as it stood at its now: the first title, no idle summary, a task's status then, a pull request merged only if it had merged; a live pass sees them as they are", async () => {
+    const w = await world();
+    // The replay's now is after the rows below are written (a link counts from when it was made) and before the later changes.
+    const then = w.now + H;
+    await w.t.run(async (ctx) => {
+      await ctx.db.patch(w.teamConv, { earlier_titles: ["Grader work"], idle_summary: "Shipped the grader fix" } as any);
+      const task = await ctx.db.insert("tasks", { user_id: w.ana, team_id: w.acme, workspace: w.team, short_id: "ct-1", title: "Fix the grader", task_type: "task", priority: "medium", source: "human", status: "done", created_from_conversation: w.teamConv, created_at: 1, updated_at: 1 } as any);
+      // A busy task: its status changes come after 60 other edits, and the latest is after the replay's now.
+      for (let i = 0; i < 60; i++) await ctx.db.insert("task_history", { task_id: task, actor_type: "agent", action: "updated", field: "description", old_value: "a", new_value: "b", created_at: w.now - 5 * H + i });
+      await ctx.db.insert("task_history", { task_id: task, actor_type: "agent", action: "updated", field: "status", old_value: "open", new_value: "in_progress", created_at: w.now - 3 * H });
+      await ctx.db.insert("task_history", { task_id: task, actor_type: "agent", action: "updated", field: "status", old_value: "in_progress", new_value: "done", created_at: w.now + 2 * H });
+      // Inserted last but stamped earliest: order is by created_at.
+      await ctx.db.insert("task_history", { task_id: task, actor_type: "system", action: "updated", field: "status", old_value: "open", new_value: "open", created_at: w.now - 4 * H });
+      const pr = await ctx.db.insert("pull_requests", { team_id: w.acme, github_pr_id: 1, repository: "acme/app", number: 7, title: "Grader", body: "", state: "merged", author_github_username: "ana", linked_session_ids: [w.teamConv], created_at: w.now - 5 * H, merged_at: w.now + 2 * H, updated_at: 1 } as any);
+      await ctx.db.insert("pull_request_sessions", { pull_request_id: pr, conversation_id: w.teamConv, tier: "committed", pr_number: 7, team_id: w.acme });
+      await ctx.db.patch(w.teamConv, { pr_status: { pr_id: pr, repository: "acme/app", number: 7, state: "merged" } } as any);
+      // Opened after the replay's now.
+      const later = await ctx.db.insert("pull_requests", { team_id: w.acme, github_pr_id: 2, repository: "acme/app", number: 8, title: "Follow-up", body: "", state: "open", author_github_username: "ana", linked_session_ids: [w.teamConv], created_at: w.now + 2 * H, updated_at: 1 } as any);
+      await ctx.db.insert("pull_request_sessions", { pull_request_id: later, conversation_id: w.teamConv, tier: "committed", pr_number: 8, team_id: w.acme });
+    });
+    await w.send(w.ana, w.teamConv, w.now - H, "get grader faults under ten percent");
+    const session = async (now?: number) => {
+      const { input } = await w.t.query(pass.passInputs, { user_id: w.ana, workspace: w.team, window_start: w.now - DAY, ...(now ? { now } : {}) });
+      return input.sessions.find((s: any) => s.id === "jx7team");
+    };
+
+    expect(await session(then)).toMatchObject({ title: "Grader work", idle_summary: null, tasks: [{ short_id: "ct-1", status: "in_progress" }], prs: [{ ref: "acme/app#7", merged: false }] });
+    const live = await session();
+    expect(live).toMatchObject({ title: "Session jx7team", idle_summary: "Shipped the grader fix", tasks: [{ short_id: "ct-1", status: "done" }] });
+    expect(live.prs).toEqual([{ ref: "acme/app#7", merged: true }, { ref: "acme/app#8", merged: false }]);
+  });
+
   test("a replay sees each session's pin as it stood at the window's end, with its status; a live pass sees the pin as it is", async () => {
     const w = await world();
     const end = w.now - 2 * DAY;
