@@ -1,6 +1,8 @@
 // codecast's prove command (scripts/line.ts, line-profile.md LP4): the replay
 // JSON it reads, and the majority rule a miss and a guard are held to.
 import { describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import path from "node:path";
 import { provenEntry, replayRuns } from "./line";
 
 const run = (status: string, score: number | null = null) => ({ status, score, gatesFailed: [], missedFloors: [] }) as any;
@@ -21,5 +23,13 @@ describe("scripts/line.ts prove", () => {
     expect(provenEntry("g-1", "guard", [run("pass"), run("fail")]).ok).toBe(false);
     expect(provenEntry("g-1", "guard", [run("pass"), run("pass"), run("crash")])).toEqual({ freeze: "g-1", kind: "guard", passed: 2, scored: 2, ok: true });
     expect(provenEntry("fz-2", "miss", [run("crash")])).toEqual({ freeze: "fz-2", kind: "miss", passed: 0, scored: 0, ok: false, error: "no rep scored" });
+  });
+});
+
+describe("scripts/line.ts ship", () => {
+  test("is gone: codecast lands through the library change flow, not a script of its own", () => {
+    const r = spawnSync("bun", [path.join(import.meta.dir, "line.ts"), "ship"], { encoding: "utf8" });
+    expect(r.status).not.toBe(0);
+    expect(r.stderr + r.stdout).toContain("usage: bun scripts/line.ts prove|eval");
   });
 });
