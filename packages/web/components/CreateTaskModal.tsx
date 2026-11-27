@@ -10,6 +10,10 @@ import type { AssigneeInfo } from "@codecast/shared/contracts/orgAssignee";
 import { Switch } from "./ui/switch";
 import { CreateDialog, CreateDialogTitle, CreateChipCaret, createChipClass, createMenuItemClass, CREATE_MENU_CLASS, CREATE_MENU_SEARCH_CLASS } from "./CreateDialog";
 import { DocEditor } from "./editor/DocEditor";
+import type { Editor } from "@tiptap/react";
+import { DictateControls } from "./dictation/DictateControls";
+import { useDictation } from "../lib/dictation/useDictation";
+import { editorField } from "../lib/dictation/editorField";
 import type { MentionItem } from "./editor/MentionList";
 import { toast } from "sonner";
 import { getLabelColor, DEFAULT_LABELS } from "../lib/labelColors";
@@ -273,6 +277,22 @@ export function CreateTaskModal({ onClose, teamMembers, currentUser, defaults }:
     }
   }, [title, priority, status, taskStatuses, assignee, labels, createMore, onClose, workspaceArgs, defaults]);
 
+  // Dictation into the description: the words go into the editor at its
+  // cursor. Cmd/Ctrl+Enter (the dialog's submit) waits for the last words and
+  // creates the task with them; the editor's own save is debounced, so the
+  // description is read off the editor for that submit.
+  const editorRef = useRef<Editor | null>(null);
+  const onEditor = useCallback((ed: Editor | null) => { editorRef.current = ed; }, []);
+  const [descriptionField] = useState(() => editorField(() => editorRef.current));
+  const dictation = useDictation(descriptionField);
+  const handleSubmitRef = useRef(handleSubmit);
+  handleSubmitRef.current = handleSubmit;
+  const submitDictated = () => {
+    const ed = editorRef.current;
+    if (ed) descriptionRef.current = (ed.storage as any).markdown?.getMarkdown() ?? ed.getHTML();
+    void handleSubmitRef.current();
+  };
+
   return (
     <CreateDialog
       icon={<CheckSquare className="h-3 w-3 text-sol-cyan" />}
@@ -301,9 +321,16 @@ export function CreateTaskModal({ onClose, teamMembers, currentUser, defaults }:
         />
       </div>
 
-      <div className="px-5 pb-3 pt-1 min-h-[120px] max-h-[280px] overflow-y-auto doc-editor-compact">
+      <div
+        className="px-5 pb-3 pt-1 min-h-[120px] max-h-[280px] overflow-y-auto doc-editor-compact"
+        data-dictating={dictation.active || undefined}
+        // Capture: ahead of the editor's own keys (Mod-Enter is its line break)
+        // and the dialog's Escape.
+        onKeyDownCapture={(e) => dictation.keyDown(e, submitDictated, (k) => k.key === "Enter" && (k.metaKey || k.ctrlKey))}
+      >
         <DocEditor
           key={editorKey}
+          onEditor={onEditor}
           content=""
           onUpdate={(md) => { descriptionRef.current = md; }}
           onMentionQuery={handleMentionQuery}
@@ -324,6 +351,9 @@ export function CreateTaskModal({ onClose, teamMembers, currentUser, defaults }:
           teamMembers={teamMembers}
           currentUser={currentUser}
         />
+        <div className="ml-auto">
+          <DictateControls dictation={dictation} size="bare" onMenuClosed={() => editorRef.current?.commands.focus()} />
+        </div>
       </div>
     </CreateDialog>
   );

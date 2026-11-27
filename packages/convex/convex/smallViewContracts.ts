@@ -61,6 +61,8 @@ const CURRENT_USER_METADATA_FIELDS = [
   // Voice recognition consent (voiceprints.ts): Settings › Voice reads the
   // switch off currentUser, and a dropped field would read as off.
   "voice_id_enabled",
+  // Dictation switch (dictation.ts): the mic reads it off currentUser.
+  "dictation_enabled",
   "timezone",
   "hide_activity",
   "username",

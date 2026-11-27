@@ -4,6 +4,7 @@ import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../../store/inboxStore";
 import { useDocPresence } from "../../hooks/useDocPresence";
 import { MessageInput } from "../MessageInput";
+import { isDictating } from "../../lib/dictation/useDictation";
 import "../chat/chat.css";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { useConversationSpeaker } from "../../hooks/useLiveIdentityRow";
@@ -82,7 +83,8 @@ export function CommentComposer({
   // Esc backs out (capture phase, before MessageInput sees it): cancel a reply
   // first, otherwise close. Enter posts the comment as usual.
   const onKeyDownCapture = (e: React.KeyboardEvent) => {
-    if (e.key !== "Escape") return;
+    // A recording in the box takes Esc first: it cancels the dictation.
+    if (e.key !== "Escape" || isDictating()) return;
     if (replyTo && onCancelReply) { e.preventDefault(); e.stopPropagation(); onCancelReply(); }
     else if (onClose) { e.preventDefault(); e.stopPropagation(); onClose(); }
   };
