@@ -4677,6 +4677,7 @@ export function placeInboxRows(
     const hidden = ridesStash || !!s.inbox_killed_at || !!s.inbox_stashed_at || (s.inbox_snoozed_until ?? 0) > now;
     if (!hidden) activeKeyed.push({ s, rank: sessionSortRank(s, null), key: sessionSortKey(s, null, now) });
     if (root !== null && (ridesStash || isSessionStashed(s))) stashed.push(s);
+    else if (root !== null && !s.inbox_killed_at && (s.inbox_snoozed_until ?? 0) > now) snoozed.push(s); // a snoozed child sleeps in Sleeping
   }
   activeKeyed.sort(compareRankedSessions);
   const sorted = activeKeyed.map((x) => x.s);
@@ -5180,7 +5181,7 @@ export function visualOrderSessions(
     // A conversation's loaded transcript, for the hosted stop rule's fallback
     // (lib/hostedNotice hostedStopOf).
     messagesOf?: (id: string) => readonly any[] | undefined;
-    dormantSplit?: DormantSplitNav | null; focusedId?: string | null; // The rail's split of Dormant and the open row: those rows walk where they draw.
+    dormantSplit?: DormantSplitNav | null; // The rail's split of Dormant: those rows walk where they draw.
   } = {},
 ): InboxSession[] {
   const collapsed = opts.collapsedSections;
@@ -5201,7 +5202,7 @@ export function visualOrderSessions(
   const needs = splitHostedStops(chipped(placed.needsInput), (id) => opts.messagesOf?.(id));
   // The status view's order (questions … working, shipping, dormant split as the rail
   // draws it): the chokepoint's own sections, so the walk and the render agree.
-  const [working, shipping, sleeping] = splitDormantWalk(chipped(placed.working), [...chipped(placed.dormant), ...chipped(snoozedSleepingRows(placed.snoozed, opts.focusedId))], opts.dormantSplit);
+  const [working, shipping, sleeping] = splitDormantWalk(chipped(placed.working), [...chipped(placed.dormant), ...chipped(placed.snoozed)], opts.dormantSplit);
   const sections: Array<[InboxSession[], string]> = [
     [chipped(placed.questions), "questions"], [chipped(placed.pinned), "pinned"], [chipped(placed.newSessions), "new"],
     [needs.asks, "needs_input"], [needs.stopped, "hosted_stopped"], [chipped(placed.done), "done"],
@@ -5718,7 +5719,7 @@ import { SESSION_STATUSES, sessionStatusOf, type SessionStatus, type StatusLive 
 import type { SubagentActivityOf } from "../lib/railActivity";
 import { nestOwnedChildren, ownedChildrenOf, resolveShowSubagents, resolveSubagentFilter, subagentKept, withOpenOwnedChild, type SubagentFilter, type SubagentRow, type SubagentRowsMode } from "./subagentCards";
 export { cardOfNested, drawnUnderParentIds, flatHeaderCount, fullRowsCounts, isOwnedChildRow, resolveShowSubagents, resolveSubagentFilter, resolveSubagentRows, SUBAGENT_FILTER_STATES, subagentKept, subagentPasses, type SubagentFilter, type SubagentRow, type SubagentRowsMode } from "./subagentCards";
-import { dropOrphanSubagents, hoistNestedUnderParent, inboxNestParentOf, isSpawnedWorker, nestedSessionIds, snoozedSleepingRows } from "./inboxNesting";
+import { dropOrphanSubagents, hoistNestedUnderParent, inboxNestParentOf, isSpawnedWorker, nestedSessionIds } from "./inboxNesting";
 export { inboxNestParentOf, isSpawnedWorker } from "./inboxNesting";
 import type { PriorityRow } from "@codecast/shared/contracts/priorities";
 import { teamMembersOf } from "../lib/activeTeam";
@@ -6432,7 +6433,7 @@ function visualOrderOf(state: {
     bucketFilters: chipBucketFilters(state),
     bucketByConv,
     collapsedSections: mode === "grouped" || mode === "priorities" ? collapsed : undefined,
-    walk: opts.walk, focusedId,
+    walk: opts.walk,
     projectOf: projectOfFromState(state),
     priorityRankOf: priorityRankOfForFilters(state, chipProjectFilters(state)),
     priorityPlaceOf: mode === "priorities" ? priorityPlaceReader(state) : undefined,

@@ -23,7 +23,6 @@ import { StatusDot } from "./StatusDot";
 import type { WorkState } from "@codecast/shared/contracts";
 import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, chipFilterSection, computeManualSortKey, isConvexId, placeInboxRows, placementDecisionsSig, getProjectName, pendingSendWakeSig, isSessionHidden, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipFilterOpts, chipProjectFilters, passesFilterTerms, priorityRankOfFromState, cardPriorityRankOf, priorityChipRows, projectAxisKeys, projectOfFromState, groupSessionsForLabelView, groupSessionsByPlan, groupSessionsByMachine, groupSessionsForOrgLens, isOrgLensMode, orgLensAvailable, orgLensSourcesOf, orgLensWakeSig, ORG_LENS_MODES, sessionWorkState, personSessionWorkState, selectFavoriteSessions, isFavoriteInStore, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
 import { hiddenBucketTree, killAllIds } from "../store/hiddenBucketTree";
-import { snoozedSleepingRows } from "../store/inboxNesting";
 import { sessionsWakeSig, teamInboxIdsOf, resolveInboxViewMode, resolveInboxOldestFirst, manualOrderKeysForDrop, resolveShowOld, classifySession, inboxNestParentOf, drawnUnderParentIds, flatHeaderCount, cardOfNested, isSpawnedWorker, nestsWorkers, NEW_SESSION_HOLD_MS, ensureHydrated } from "../store/inboxStore";
 import { loadMoreKilledSessions } from "../hooks/killedShelf";
 import { makeCollectionSig } from "../store/wakeSig";
@@ -2195,8 +2194,9 @@ function SessionListPanelImpl({
     }
     return out;
   }, []);
-  // Snoozed rows sleep in Sleeping, after its own rows: their line says until when.
-  const filteredSnoozed = useMemo(() => filterByChip(snoozedSleepingRows(snoozedList, activeSessionId)), [filterByChip, snoozedList, activeSessionId]);
+  // Snoozed rows sleep in Sleeping, after its own rows: their line says until when. Each is a card of its
+  // own, a subagent snoozed with its parent too: the rail nests only rows that are not set aside (subsByParent).
+  const filteredSnoozed = useMemo(() => filterByChip(snoozedList), [filterByChip, snoozedList]);
   const statusSleeping = useMemo(() => byPriority([...filteredDormant, ...filteredSnoozed]), [byPriority, filteredDormant, filteredSnoozed]);
   const dormantSplit = useRailDormantSplit(statusSleeping, coarseNow, scheduleBarRowsFor);
   const railWorking = useMemo(() => (dormantSplit.working.length ? byPriority([...filteredWorking, ...dormantSplit.working]) : statusWorking), [dormantSplit.working, byPriority, filteredWorking, statusWorking]);
