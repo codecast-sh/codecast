@@ -273,6 +273,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   setRoomLocked: SETTINGS,
   pinToStage: SETTINGS,
   unpinFromStage: SETTINGS,
+  openCallBoard: never("call: the board it makes stays the call's, and nothing is pinned"),
   pinCallBoard: never("call: the board it makes stays the call's; take it off the stage with unpin"),
   setRoomRecording: SETTINGS,
   setRoomTranscribeOff: SETTINGS,

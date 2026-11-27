@@ -21,14 +21,16 @@ export type ScribeStatus = "absent" | "joining" | "listening";
 
 /** The Scribe status of a live transcript from its routes and its pending
  *  claim, at `now`. A route carrying role "scribe" is a Scribe that joined;
- *  a claim younger than SCRIBE_CLAIM_TTL_MS is one on its way. */
+ *  a claim younger than SCRIBE_CLAIM_TTL_MS is one on its way. A claim marked
+ *  `removed` is a removal on record (it keeps automatic invites out), not one
+ *  on its way. */
 export function scribeStatus(
-  live: { routes: ReadonlyArray<{ role?: string }>; scribe_claim?: { at: number } | null } | null | undefined,
+  live: { routes: ReadonlyArray<{ role?: string }>; scribe_claim?: { at: number; removed?: boolean } | null } | null | undefined,
   now: number,
 ): ScribeStatus {
   if (!live) return "absent";
   if (live.routes.some((r) => r.role === "scribe")) return "listening";
-  if (live.scribe_claim && now - live.scribe_claim.at < SCRIBE_CLAIM_TTL_MS) return "joining";
+  if (live.scribe_claim && !live.scribe_claim.removed && now - live.scribe_claim.at < SCRIBE_CLAIM_TTL_MS) return "joining";
   return "absent";
 }
 

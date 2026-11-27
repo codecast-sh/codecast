@@ -94,6 +94,26 @@ describe("call stage pins", () => {
     expect(pins.map((p: any) => [p.ref, p.doc_type, p.readable])).toEqual([[`doc:${first}`, "board", true]]);
   });
 
+  test("board view gets the call's board, made if needed, and writes no pin or thread line", async () => {
+    const { t, ids, as } = await world();
+    const pinRows = () => t.run(async (ctx) => await ctx.db.query("call_stage_pins").collect());
+    const pinnedLines = () => t.run(async (ctx) => (await ctx.db.query("call_chat_messages").collect()).filter((m: any) => m.event === "stage_pinned"));
+    const made = await as(ids.ben).mutation(api.callStage.openCallBoard, { room_key: ids.room });
+    const board = await t.run(async (ctx) => ctx.db.get(made.doc_id));
+    expect(board!.doc_type).toBe("board");
+    expect(await pinRows()).toEqual([]);
+    expect(await pinnedLines()).toEqual([]);
+    // Once the room has pinned it, opening board view leaves that pin as it was.
+    await as(ids.ana).mutation(api.callStage.pinCallBoard, { room_key: ids.room });
+    const [before] = await pinRows();
+    const again = await as(ids.ben).mutation(api.callStage.openCallBoard, { room_key: ids.room });
+    expect(String(again.doc_id)).toBe(String(made.doc_id));
+    const after = await pinRows();
+    expect(after.map((p: any) => [p.ref, p.at])).toEqual([[before.ref, before.at]]);
+    expect((await pinnedLines()).length).toBe(1);
+    await expect(as(ids.out).mutation(api.callStage.openCallBoard, { room_key: ids.room })).rejects.toThrow("Only someone in the huddle");
+  });
+
   test("an agent fed the room reads the board and pins through the CLI routes", async () => {
     const { ids, as, post } = await world();
     const board = await post("/cli/calls/board", { session: "jx7agnt" });
