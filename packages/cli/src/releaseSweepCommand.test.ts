@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { judgeTriggerPrecheck } from "@codecast/shared/contracts";
-import { formatSweep, runSweep, type Sweep } from "./releaseSweepCommand";
+import { judgeTriggerPrecheck, TRIGGER_PRECHECK_STATE_CHARS } from "@codecast/shared/contracts";
+import { formatSweep, runSweep, sweepKeys, type Sweep } from "./releaseSweepCommand";
 
 // `cast release sweep` gates the Release Captain's hourly check: exit 0 only
 // when something needs action, 1 when quiet, 2 when the sweep failed, and
@@ -58,16 +58,9 @@ describe("cast release sweep", () => {
     expect(lines[6]).toBe("jx7done  live everywhere and settled, not retired: Fix checkout  retire: cast kill jx7done");
   });
 
-  // The changes precheck wakes the captain when this output differs from the
-  // last firing's, so standing exceptions must print the same every hour.
-  test("--keys prints the same sorted keys for the same exceptions at any time, and new keys for new ones", async () => {
-    const keysAt = async (s: Sweep, now: number) => {
-      const c = capture();
-      expect(await runSweep({ read: async () => s, keys: true, log: c.log, error: c.error, now: () => now })).toBe(0);
-      expect(c.err).toEqual([]);
-      return c.out;
-    };
-    const first = await keysAt(BUSY, NOW);
+  // The state precheck remembers these keys, so standing exceptions must read the same every hour.
+  test("the same sorted keys for the same exceptions at any time, and new keys for new ones", () => {
+    const first = sweepKeys(BUSY);
     expect(first).toEqual([
       "failed ct-601 land__ci 1799999400000",
       "incident ct-500",
@@ -83,35 +76,95 @@ describe("cast release sweep", () => {
       incidents: [{ ...BUSY.incidents[0], runs: [...BUSY.incidents[0].runs, { task_short_id: "ct-503", station: null }] }],
       late_targets: [{ ...BUSY.late_targets[0], commits: 3 }, { ...BUSY.late_targets[1], open: { short_id: "dp-10", status: "queued" } }],
     };
-    expect(await keysAt(later, NOW + 5 * 60 * MIN)).toEqual(first);
+    expect(sweepKeys(later)).toEqual(first);
     // A run failing again, or a raised floor, reads as new.
     const refailed: Sweep = { ...BUSY, failed_runs: [{ ...BUSY.failed_runs[0], failed_at: NOW + 60 * MIN }], laggards: [{ ...BUSY.laggards[0], floor: "1.1.307" }] };
-    const next = await keysAt(refailed, NOW + 2 * 60 * MIN);
+    const next = sweepKeys(refailed);
     expect(next).toContain(`failed ct-601 land__ci ${NOW + 60 * MIN}`);
     expect(next).toContain("lagging dev-ana below 1.1.307");
     expect(next).not.toEqual(first);
-    // Quiet prints no keys and exits 1, so the precheck skips and keeps its record.
-    const quiet = capture();
-    expect(await runSweep({ read: async () => QUIET, keys: true, log: quiet.log, error: quiet.error })).toBe(1);
-    expect(quiet.out).toEqual([]);
   });
 
-  test("read by the changes precheck, standing exceptions skip and a new one wakes", async () => {
-    const firing = async (s: Sweep, now: number) => {
+  describe("--new, read by the state precheck", () => {
+    const HOUR = 60 * MIN;
+    const DAY = 24 * HOUR;
+    /** One firing as the daemon runs it: the previous state in the env, the verdict judged from stdout. */
+    const firing = async (s: Sweep, now: number, previous: string | undefined) => {
       const c = capture();
-      const exitCode = await runSweep({ read: async () => s, keys: true, log: c.log, error: c.error, now: () => now });
-      return { command: "cast release sweep --keys", exitCode, timedOut: false, durationMs: 5, stdout: c.out.map((l) => `${l}\n`).join("") };
+      const exitCode = await runSweep({ read: async () => s, newSince: previous ?? "null", log: c.log, error: c.error, now: () => now });
+      const result = { command: "cast release sweep --new", exitCode, timedOut: false, durationMs: 5, stdout: c.out.map((l) => `${l}\n`).join("") };
+      const verdict = judgeTriggerPrecheck("state", result, previous, (o) => o);
+      // The daemon keeps the state whether or not it woke; a skip with no state keeps the old one.
+      return { ...verdict, kept: verdict.state ?? previous };
     };
-    const judge = async (s: Sweep, now: number, previous: string | undefined) => judgeTriggerPrecheck("changes", await firing(s, now), previous, (o) => o);
-    const recorded = await judge(BUSY, NOW, undefined);
-    expect(recorded.wake).toBe(false);
-    expect((await judge(BUSY, NOW + 60 * MIN, recorded.state)).reason).toBe("precheck output unchanged");
-    expect((await judge(BUSY, NOW + 24 * 60 * MIN, recorded.state)).reason).toBe("precheck output unchanged");
     const withNew: Sweep = { ...BUSY, incidents: [...BUSY.incidents, { short_id: "ct-700", title: "Main stayed red", runs: [] }] };
-    const woke = await judge(withNew, NOW + 2 * 60 * MIN, recorded.state);
-    expect(woke.wake).toBe(true);
-    expect(woke.message).toContain("incident ct-700");
-    expect((await judge(QUIET, NOW + 3 * 60 * MIN, woke.state)).reason).toBe("precheck exited 1");
+
+    test("standing exceptions skip, a set that only shrinks never wakes, and a new key wakes with the new keys and the sweep", async () => {
+      const first = await firing(BUSY, NOW, undefined);
+      // Nothing seen yet: what stands on the first firing is new.
+      expect(first.wake).toBe(true);
+      let at = await firing(BUSY, NOW + HOUR, first.kept);
+      expect([at.wake, at.reason]).toEqual([false, "precheck: no new exception; 7 standing"]);
+      // The failed run ages out of the sweep's window, the unretired session is retired: fewer exceptions, no wake.
+      const shrunk: Sweep = { ...BUSY, failed_runs: [], unretired: [] };
+      at = await firing(shrunk, NOW + 3 * HOUR, at.kept);
+      expect(at.wake).toBe(false);
+      at = await firing(QUIET, NOW + 4 * HOUR, at.kept);
+      expect([at.wake, at.reason]).toEqual([false, "precheck: nothing needs the Release Captain"]);
+      const woke = await firing(withNew, NOW + 5 * HOUR, at.kept);
+      expect(woke.wake).toBe(true);
+      expect(woke.message).toStartWith("New: incident ct-700\n");
+      expect(woke.message).toContain("ct-700  incident: Main stayed red");
+      expect((await firing(withNew, NOW + 6 * HOUR, woke.kept)).wake).toBe(false);
+    });
+
+    test("a laggard that leaves the sweep and comes back within 7 days does not wake; gone longer, it does", async () => {
+      const lag: Sweep = { ...QUIET, laggards: [BUSY.laggards[0]] };
+      let at = await firing(lag, NOW, undefined);
+      expect(at.wake).toBe(true);
+      // The laptop sleeps for a night, wakes still below the floor; then a long weekend away, and back.
+      for (const [s, t] of [[QUIET, NOW + HOUR], [lag, NOW + 12 * HOUR], [QUIET, NOW + DAY], [lag, NOW + 4 * DAY], [QUIET, NOW + 5 * DAY], [lag, NOW + 11 * DAY - HOUR]] as const) {
+        at = await firing(s, t, at.kept);
+        expect([t - NOW, at.wake]).toEqual([t - NOW, false]);
+      }
+      // Its first sighting is kept across the returns.
+      expect(JSON.parse(at.kept!).seen["lagging dev-ana below 1.1.306"]).toEqual([NOW, NOW + 11 * DAY - HOUR]);
+      at = await firing(QUIET, NOW + 11 * DAY, at.kept);
+      at = await firing(lag, NOW + 19 * DAY, at.kept);
+      expect(at.wake).toBe(true);
+    });
+
+    test("keys last listed over 7 days ago are dropped from the state, and the state fits what the trigger keeps", async () => {
+      const kept = (await firing(BUSY, NOW, undefined)).kept;
+      const later = (await firing(QUIET, NOW + 8 * DAY, kept)).kept;
+      expect(JSON.parse(later!)).toEqual({ seen: {} });
+      const many: Sweep = { ...QUIET, unretired: Array.from({ length: 400 }, (_, i) => ({ short_id: `jx${String(i).padStart(5, "0")}`, title: null })) };
+      // More keys than the state holds: the verdict is still read and kept (cut to fit), never refused.
+      const big = await firing(many, NOW, undefined);
+      expect(big.wake).toBe(true);
+      expect(big.state).toBeDefined();
+      expect(big.kept!.length).toBeLessThan(TRIGGER_PRECHECK_STATE_CHARS);
+      const next = await firing(BUSY, NOW + HOUR, big.kept);
+      expect(next.wake).toBe(true);
+      expect(next.message).toContain("New: failed ct-601");
+    });
+
+    test("a failed read exits 2, so the precheck skips and keeps the state", async () => {
+      const kept = (await firing(BUSY, NOW, undefined)).kept;
+      const c = capture();
+      expect(await runSweep({ read: async () => { throw new Error("HTTP 502"); }, newSince: kept, log: c.log, error: c.error })).toBe(2);
+      expect(c.out).toEqual([]);
+    });
+  });
+
+  test("a 200 with no sweep in its body is a failed read, never a quiet hour", async () => {
+    for (const body of [null, undefined, "", {}, { incidents: [] }]) {
+      for (const opts of [{}, { quiet: true }, { newSince: "null" }]) {
+        const c = capture();
+        expect(await runSweep({ read: async () => body as any, ...opts, log: c.log, error: c.error })).toBe(2);
+        expect(c.out).toEqual([]);
+      }
+    }
   });
 
   test("--json prints the sweep as read", async () => {

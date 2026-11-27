@@ -112,8 +112,11 @@ export interface WorkflowNode {
   // A stop that says the shared pipeline is broken (main red, CI or a deploy
   // down), not this change: the same stop on two changes is one incident for the
   // workspace's @release, and the runs it stopped resume when it closes (convex
-  // flowStops.ts). A segment exit's mark rides onto the step a routed stop leaves by.
-  shared?: boolean;
+  // flowStops.ts). The value names the breakage (`shared="main_red"`), so every
+  // flow composing one segment, and every exit that means the same breakage, is
+  // one incident; a bare `shared=true` names it by the exit's own id. A segment
+  // exit's mark rides onto the step a routed stop leaves by.
+  shared?: true | string;
   // A stop exit: the station a run stopped here resumes at (a station id), when the station that failed is not the
   // one to start again from (a resume is a new attempt, and Merge clears only on that attempt's CI and review). The
   // incident that holds the run resumes it there (convex flowStops.ts); without one it resumes at what failed.

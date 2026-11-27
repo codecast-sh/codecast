@@ -2,7 +2,8 @@
 // "Stopped: ...") records the station to resume it at. A stop at an exit the
 // flow marks `shared` (the pipeline every change goes through: main red, CI
 // that never reports, a deploy that failed) also records a fingerprint, keyed
-// by that exit, and files a flowstop signal, held while it is the only change
+// by the repository and the breakage the exit names (`shared="main_red"`), and
+// files a flowstop signal, held while it is the only change
 // stopped that way. Once held or attached stops come from two runs on two
 // different open tasks, each its task's newest run and stopped within a day,
 // their cause is an incident: it goes to the workspace's @release, every run it
@@ -20,11 +21,11 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { verifyApiToken } from "./apiTokens";
 import { createDataContext, createWorkContext } from "./data";
 import { parseWorkspaceKey } from "./lib/accessKeys";
+import { isSameWorkspace } from "./lib/access";
 import { liveRoleByHandle } from "./lib/orgAccess";
 import { siteUrl } from "./lib/siteUrl";
 import { runWorkflowOf } from "./lib/runGraph";
 import { taskByRef } from "./lib/taskGraph";
-import { workspaceHasFeature } from "./lib/teamFeatureGuard";
 import { commitSignal, heldSignals, normalizeSignal, openCauseOfHeld } from "./signals";
 import { addDepCore, handTask } from "./tasks";
 import { resumeFailedRunCore } from "./failedRunResume";
@@ -54,7 +55,7 @@ export const isFlowStop = (failReason: string | undefined): boolean => !!failRea
 
 type StationRow = { node_id: string; status: string; outcome?: string; completed_at?: number };
 /** What a stop reads of the run's graph (cli graphPayload.ts); a graph pushed before these were sent has none. */
-type StopNode = { id: string; type?: string; shared?: boolean; resume?: string; segment?: string; segment_exit?: string; fold?: boolean };
+type StopNode = { id: string; type?: string; shared?: boolean | string; resume?: string; segment?: string; segment_exit?: string; fold?: boolean };
 
 const latest = <N extends StationRow>(rows: N[]): N | undefined =>
   rows.reduce<N | undefined>((best, n) => (!best || (n.completed_at ?? 0) >= (best.completed_at ?? 0) ? n : best), undefined);
@@ -63,7 +64,8 @@ const latest = <N extends StationRow>(rows: N[]): N | undefined =>
  * Where a run stopped, read against its graph. `sharedExit`: the exit it ended
  * at when that is marked shared, else (a flow that routes every segment stop to
  * one generic exit, as Union's `stopped`) the segment exit step it left by when
- * that is; null for a stop about the change itself. `station`:
+ * that is; null for a stop about the change itself. `breakage`: what that exit
+ * names (`shared="main_red"`), else (`shared=true`) its own id. `station`:
  * where a resume starts, the station that exit (or that step) names in
  * `resume`, else the station that failed last, never the end, a
  * segment's exit step (it only echoes the exit and fails again), an exit, a
@@ -71,7 +73,7 @@ const latest = <N extends StationRow>(rows: N[]): N | undefined =>
  * segment the stop came out of, from its entry; else the station it reached
  * last; else the end itself.
  */
-export function stopOf(rows: ReadonlyArray<StationRow>, endNodeId: string, graph: ReadonlyArray<StopNode> = []): { station: string; sharedExit: string | null } {
+export function stopOf(rows: ReadonlyArray<StationRow>, endNodeId: string, graph: ReadonlyArray<StopNode> = []): { station: string; sharedExit: string | null; breakage: string | null } {
   const byId = new Map(graph.map((n) => [n.id, n]));
   const end = byId.get(endNodeId);
   const visited = rows.filter((n) => n.node_id !== endNodeId);
@@ -83,7 +85,8 @@ export function stopOf(rows: ReadonlyArray<StationRow>, endNodeId: string, graph
     return !g || (!g.segment_exit && g.type !== "exit" && g.type !== "parallel_fanin" && !g.fold);
   };
   const station = end?.resume ?? via?.resume ?? latest(failed.filter(resumable))?.node_id ?? via?.segment ?? end?.segment ?? latest(visited.filter(resumable))?.node_id ?? endNodeId;
-  return { station, sharedExit: end?.shared ? endNodeId : via?.shared ? via.id : null };
+  const exit = end?.shared ? end : via?.shared ? via : null;
+  return { station, sharedExit: exit?.id ?? null, breakage: exit ? (typeof exit.shared === "string" ? exit.shared : exit.id) : null };
 }
 
 /** The station a stop resumes at (stopOf); `cast release sweep` names it for a run that recorded none. */
@@ -123,11 +126,12 @@ export async function recordRunStop(ctx: any, runId: Id<"workflow_runs">, now: n
   if (!ws) return null;
   const wf: Doc<"workflows"> | null = await runWorkflowOf(ctx, run);
   const nodes = (wf?.nodes ?? []) as Array<StopNode & { label?: string }>;
-  const { station, sharedExit } = stopOf(run.node_statuses, run.current_node_id ?? "", nodes);
-  const flow = wf?.name ?? run.workflow_name ?? "flow";
+  const { station, sharedExit, breakage } = stopOf(run.node_statuses, run.current_node_id ?? "", nodes);
   const reason = run.fail_reason!.slice(STOP_PREFIX.length).trim();
-  // Only a stop of the shared pipeline is keyed, by its exit: a stop about this change keeps no key a later stop could match.
-  const fingerprint = sharedExit ? flowStopFingerprint((await repositoryOfRun(ctx, run)) ?? "", flow, sharedExit) : undefined;
+  // Only a stop of the shared pipeline is keyed, by the breakage its exit names, never by the flow: every flow
+  // composing one segment, and every exit meaning one breakage, meet in one cause. A stop about this change keeps no
+  // key a later stop could match.
+  const fingerprint = breakage ? flowStopFingerprint((await repositoryOfRun(ctx, run)) ?? "", breakage) : undefined;
   await ctx.db.patch(run._id, { stop_station: station, stop_fingerprint: fingerprint });
   if (!fingerprint) return null;
 
@@ -157,12 +161,18 @@ export async function recordRunStop(ctx: any, runId: Id<"workflow_runs">, now: n
 /**
  * Whether a stopped run still stands for its change: its task is open and no
  * newer run of the task replaced it. A superseded run's stop is history, and
- * resuming it would race the run that replaced it.
+ * resuming it would race the run that replaced it. Given the stop's
+ * `workspace`, its task must be in it too.
  */
-async function standsForTask(ctx: any, run: Doc<"workflow_runs">): Promise<boolean> {
+async function standsForTask(ctx: any, run: Doc<"workflow_runs">, workspace?: string): Promise<boolean> {
   if (!run.task_id) return false;
   const task: Doc<"tasks"> | null = await ctx.db.get(run.task_id);
   if (!task || isTerminalTaskStatus(task.status)) return false;
+  // A task in another workspace than the stop's cannot wait on it (tasks.addDepCore refuses), so it is no part of it.
+  if (workspace !== undefined) {
+    const ws = parseWorkspaceKey(workspace);
+    if (!ws || !isSameWorkspace(task, ws)) return false;
+  }
   const newest: Doc<"workflow_runs"> | null = await ctx.db.query("workflow_runs").withIndex("by_task", (q: any) => q.eq("task_id", run.task_id)).order("desc").first();
   return String(newest?._id) === String(run._id);
 }
@@ -183,7 +193,7 @@ async function stopsOfTasks(ctx: any, rows: Doc<"signals">[], now: number, cause
     if (run?.status !== "failed" || run.stop_fingerprint !== row.fingerprint) continue;
     const held = !!causeId && String(run.incident_task_id ?? "") === String(causeId);
     if (!held && now - run.updated_at > LIVE_STOP_MS) continue;
-    if (await standsForTask(ctx, run)) runs.set(String(id), run);
+    if (await standsForTask(ctx, run, row.workspace)) runs.set(String(id), run);
   }
   return { runs: [...runs.values()], tasks: new Set([...runs.values()].map((r) => String(r.task_id))) };
 }
@@ -219,12 +229,10 @@ export async function openIncidentIfShared(ctx: any, causeId: Id<"tasks">, now: 
 const stoppedBy = (run: Doc<"workflow_runs">, cause: Pick<Doc<"tasks">, "cause">) =>
   run.status === "failed" && isFlowStop(run.fail_reason) && !!run.stop_fingerprint && (cause.cause?.fingerprints ?? []).includes(run.stop_fingerprint);
 
-/** Whether a line carries out the run's queued resume (orgLine.planQueuedResumes): a role's run, where lines run. */
+/** Whether a line carries out the run's queued resume (orgLine.planQueuedResumes): a role's run, whether or not lines
+ *  run now, so switching Flows off holds it until they are back on (linesRunIn's promise). */
 async function lineResumes(ctx: any, run: Doc<"workflow_runs">): Promise<boolean> {
-  const role: Doc<"org_roles"> | null = run.org_role_id ? await ctx.db.get(run.org_role_id) : null;
-  if (!role) return false;
-  const ws = { team_id: role.team_id ?? null, user_id: role.team_id ? null : (role.scope_user_id ?? null) };
-  return (await workspaceHasFeature(ctx, ws, "line")) && (await workspaceHasFeature(ctx, ws, "org"));
+  return !!run.org_role_id && !!(await ctx.db.get(run.org_role_id));
 }
 
 /**

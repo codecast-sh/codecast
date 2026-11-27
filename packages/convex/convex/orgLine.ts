@@ -550,9 +550,10 @@ const QUEUED_RESUMES_READ = 200;
  * Failed runs queued to resume (cast workflow resume --queue), oldest first, each on its own machine while that
  * machine has a free slot. They plan before any new start in the pass and take its slots: finishing work comes before
  * starting it. A team whose live flow is off resumes nothing, as it starts nothing; a hold is for the flow's new runs, so
- * work queued to resume goes on through one. Only a machine that offers the line's checkout (a pool slot) takes a
- * queued resume. A run a person started by hand, outside any role's line, resumes on its own machine all the same,
- * counted from that machine's slot (queuedPlace).
+ * work queued to resume goes on through one. Flows or Org off (linesRunIn) holds every line's queued resume until both
+ * are on again. Only a machine that offers the line's checkout (a pool slot) takes a queued resume. A run a person
+ * started by hand on a machine with a line slot resumes there, counted from that machine's slot (queuedPlace); one
+ * outside any line resumes at once.
  */
 async function planQueuedResumes(ctx: Ctx, now: number, roles: any[], loads: LineLoads, featureOn: Map<string, boolean>, flowsByTeam: Map<string, any>): Promise<Array<{ run_id: string; device: string }>> {
   const queued: any[] = await ctx.db.query("workflow_runs").withIndex("by_resume_queued", (q: any) => q.gt("resume_queued.since", 0)).take(QUEUED_RESUMES_READ);
@@ -561,12 +562,14 @@ async function planQueuedResumes(ctx: Ctx, now: number, roles: any[], loads: Lin
     if (out.length >= MAX_STARTS_PER_SWEEP) break;
     if (!run.runner_device) continue;
     const role = run.org_role_id ? roles.find((r) => String(r._id) === String(run.org_role_id)) : null;
-    // No line would ever carry out its queue: it resumes now, on its own machine, as `cast workflow resume` would, and
+    // Outside any line (a person's Ship): it resumes now, on its own machine, as `cast workflow resume` would, and
     // never stands in the queue ahead of runs a line carries out.
-    if (!(await lineCarries(ctx, run, role, featureOn))) {
+    if (!(await inLineScope(ctx, run, role))) {
       out.push({ run_id: String(run._id), device: run.runner_device });
       continue;
     }
+    // A line's run waits while Flows or Org is off, as the line's starts do, and resumes from the queue once both are on.
+    if (!(await linesRunIn(ctx, queuedScope(run, role), featureOn))) continue;
     if (run.org_role_id && role?.status !== "active") continue;
     const flow = flowsByTeam.get(String((role ?? run).team_id ?? ""));
     if (flow && !flow.on) continue;
@@ -586,23 +589,23 @@ async function planQueuedResumes(ctx: Ctx, now: number, roles: any[], loads: Lin
 /** Where a queued run's lines would run: its role's workspace, else its own. */
 const queuedScope = (run: any, role: any) => role ?? { team_id: run.team_id, scope_user_id: run.team_id ? undefined : run.user_id };
 
-/** Whether a line carries out a run's queued resume: lines run where the run is, and its role still exists or, for a
- *  run no role started, its machine offers a line slot for its checkout. */
-async function lineCarries(ctx: Ctx, run: any, role: any, featureOn: Map<string, boolean>): Promise<boolean> {
-  if (!(await linesRunIn(ctx, queuedScope(run, role), featureOn))) return false;
+/** Whether a run's queued resume is a line's to carry out, whether or not lines run now: its role still exists or, for
+ *  a run no role started, its machine offers a line slot for its checkout. */
+async function inLineScope(ctx: Ctx, run: any, role: any): Promise<boolean> {
   return run.org_role_id ? !!role : !!(await lineSlotOf(ctx, null, queuedPlace(run)));
 }
 
 /** A queued run's own machine and checkout; with no role to seat it, counted for the run's owner. */
 const queuedPlace = (run: any): RunPlace => ({ device: run.runner_device, ...(run.org_role_id ? {} : { user: String(run.user_id) }), project_path: run.project_path ?? "" });
 
-/** One planned resume, checked again: still queued, and its machine's slot still free (slotStillFree) where a line
- *  carries it out; where none would, no slot is counted (planQueuedResumes). */
+/** One planned resume, checked again: still queued, and, for a line's run, lines still on and its machine's slot still
+ *  free (slotStillFree); a run outside any line counts no slot (planQueuedResumes). */
 export async function resumePlanned(ctx: Ctx, runId: string, now = Date.now()): Promise<string | null> {
   const run = await ctx.db.get(runId);
   const role = run?.org_role_id ? await ctx.db.get(run.org_role_id) : null;
   if (!run?.resume_queued || !run.runner_device) return null;
-  if (!(await lineCarries(ctx, run, role, new Map()))) return resumeQueuedRun(ctx, run._id, now);
+  if (!(await inLineScope(ctx, run, role))) return resumeQueuedRun(ctx, run._id, now);
+  if (!(await linesRunIn(ctx, queuedScope(run, role), new Map()))) return null;
   if (!(await slotStillFree(ctx, role, queuedPlace(run)))) return null;
   return resumeQueuedRun(ctx, run._id, now);
 }
