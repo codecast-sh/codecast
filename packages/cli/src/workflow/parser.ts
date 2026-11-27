@@ -8,6 +8,7 @@ import { SEGMENT_SEP, retiredFlowLine, segmentTopOf } from "@codecast/shared/con
 import { Parser, tokenize, inlineRef, isStopExit, mentionsFailure, shapeOf, type Attr, type RawGraph, type ReadFile } from "./rawGraph";
 import { VARIANT_KEYS, applyOverrides, variantEdits, withGuides } from "./variantEdits";
 import { teamFlowFile } from "./teamFlowIndex";
+import { machineSlotProblem } from "../machineSlot.js";
 
 export type { ReadFile };
 const readDisk: ReadFile = (abs) => (fs.existsSync(abs) && fs.statSync(abs).isFile() ? fs.readFileSync(abs, "utf-8") : null);
@@ -493,6 +494,13 @@ export function validateWorkflow(graph: WorkflowGraph): string[] {
   for (const node of graph.nodes.values()) {
     if (node.type === "command" && !node.script) {
       errors.push(`Command node '${node.id}' has no script attribute`);
+    }
+    if (node.machine_slot !== undefined) {
+      if (node.type !== "command") errors.push(`${node.id} [machine_slot="${node.machine_slot}"]: only a command station (shape=parallelogram) takes a machine slot`);
+      else {
+        const problem = machineSlotProblem(node.machine_slot);
+        if (problem) errors.push(`${node.id} [machine_slot="${node.machine_slot}"]: ${problem}`);
+      }
     }
     if (node.type === "call" && !node.prompt) {
       errors.push(`Call node '${node.id}' has no prompt attribute`);

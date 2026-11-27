@@ -17,6 +17,7 @@ test("the report shows each queue's load against its cap, what waits, and how to
   const report: QueueReport = {
     check: { cap: 6, running: [{ project: "cli", root: "/r", pid: 1, checking: true }], waiting: [{ project: "web", root: "/r", pid: 2, at: now - 120_000 }] },
     interactive_jobs: { cap: 8, running: [{ pid: 3, at: now - 3 * 60_000, what: "cast spawn --cloud x" }], waiting: [] },
+    slots: [{ name: "local_ci", cap: 2, running: [{ pid: 4, at: now - 5 * 60_000, what: "Local CI of ct-7" }], waiting: [{ pid: 5, at: now - 60_000, what: "Local CI of ct-8" }] }],
     workers: {
       device: "mac",
       rows: withQueuePositions([
@@ -31,6 +32,8 @@ test("the report shows each queue's load against its cap, what waits, and how to
   expect(text).toContain("waiting 2m: web @ /r");
   expect(text).toContain("Interactive jobs  1/8 running");
   expect(text).toContain("3m  pid 3  cast spawn --cloud x");
+  expect(text).toContain("Slot local_ci  1/2 running, 1 waiting");
+  expect(text).toContain("waiting 1m: pid 5  Local CI of ct-8");
   expect(text).toContain("Workers on this machine  1/2 running, 1 waiting");
   expect(text).toContain("jx7que1  queued, next, 1m  fix the thing");
   expect(text).toContain("(1 more on your other machines)");
@@ -38,7 +41,7 @@ test("the report shows each queue's load against its cap, what waits, and how to
 });
 
 test("a server that cannot be reached leaves the local queues readable", () => {
-  const text = renderQueueReport({ check: { cap: 6, running: [], waiting: [] }, interactive_jobs: { cap: 8, running: [], waiting: [] }, workers: { error: "offline" } }, now);
+  const text = renderQueueReport({ check: { cap: 6, running: [], waiting: [] }, interactive_jobs: { cap: 8, running: [], waiting: [] }, slots: [], workers: { error: "offline" } }, now);
   expect(text).toContain("Workers  unavailable: offline");
   expect(text).toContain("Typecheck watchers  0/6 running");
 });

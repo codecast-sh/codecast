@@ -17,6 +17,7 @@ import { evalCondition } from "./condition";
 import { factsFor, holdsItsFacts, pinDirectCommands, runGraph, StartFactsError } from "./startFacts";
 import { keepEnds } from "./keepEnds";
 import { executeCommand, expandScriptVars, recordNodeOutput, type StationWatch } from "./commandStation";
+import { withStationSlot } from "./stationSlot";
 import { planReadiness } from "../planReadiness.js";
 import { readGateCard } from "../cardFile.js";
 import { agentResultPreview, resultPreview } from "./chainWorkflow.js";
@@ -1398,7 +1399,7 @@ async function executeFanout(
     const ctx = { ...state.context };
     let outcome: NodeOutcome;
     if (options.dryRun) outcome = "success";
-    else if (branch.type === "command") outcome = await executeCommand(branch, ctx, cwd, stationWatch(options), stationEnv(options));
+    else if (branch.type === "command") outcome = await withStationSlot(branch, ctx, () => executeCommand(branch, ctx, cwd, stationWatch(options), stationEnv(options)), slotHolder(branch, options));
     else if (branch.type === "call") outcome = await executeCallNode(branch, graph, ctx, cwd, options);
     // A hand is checkpointed when it starts, so a resumed fanout waits on it rather than starting a second (runResume.ts).
     else if ((branch.type === "agent" || branch.type === "prompt") && branch.backend === "session") outcome = await executeSessionNode(branch, graph, ctx, cwd, options, () => {
@@ -1755,6 +1756,9 @@ function stopIfEnded(options: RunOptions): void {
 function stationEnv(options: RunOptions): Record<string, string> {
   return options.runSession ? { [RUN_CONVERSATION_ENV]: options.runSession } : {};
 }
+
+/** Who holds a station's machine slot, as `cast queue` lists it. */
+const slotHolder = (node: WorkflowNode, options: RunOptions): string => `${node.label} of ${options.taskId ?? options.runId ?? "a local run"}`;
 
 /**
  * What a command station watches while its script runs: whether a person stopped the run. A cancel from the web
@@ -2694,7 +2698,7 @@ async function runNodeLoop(
     } else if (current.type === "start") {
       outcome = "success";
     } else if (current.type === "command") {
-      outcome = await executeCommand(current, state.context, cwd, stationWatch(options), stationEnv(options));
+      outcome = await withStationSlot(current, state.context, () => executeCommand(current, state.context, cwd, stationWatch(options), stationEnv(options)), slotHolder(current, options));
     } else if (current.type === "call") {
       outcome = await executeCallNode(current, graph, state.context, cwd, options);
     } else if (current.type === "human" && options.runId) {
