@@ -66,7 +66,30 @@ describe("workspace ports given up and reclaimed", () => {
     const run = await acquireWorkspace(repoRoot, "change-ct-1", { ...opts, branch: "pl/change" });
     expect(run.workspace.resourceIndex).toBe(0);
     expect(run.workspace.branch).toBe("pl/change");
-    expect(run.notices?.join("\n")).toContain("reclaimed 40 port slot(s) from workspaces whose worktree is gone");
+    expect(run.notices?.join("\n")).toContain(`reclaimed 40 port slot(s) from workspaces whose worktree or branch is gone (40 in ${fs.realpathSync(repoRoot)};`);
+  }, 15000);
+
+  // ct-102049: every acquire, in any repo, listed the same 177 dead workspaces by name.
+  test("a dead workspace is named once, in one short line, and its record is kept", async () => {
+    for (let index = 0; index < 3; index++) {
+      holdIndex(`ended-${index}`, index);
+      setState(repoRoot, `ended-${index}`, "ready");
+    }
+    const first = await acquireWorkspace(repoRoot, "first", opts);
+    const notice = first.notices?.find((line) => line.startsWith("reclaimed")) ?? "";
+    expect(notice).toBe(`reclaimed 3 port slot(s) from workspaces whose worktree or branch is gone (3 in ${fs.realpathSync(repoRoot)}; \`cast ws ls\` there lists them)`);
+    expect(readState(repoRoot, "ended-1")).toMatchObject({ state: "ready", portsReclaimedAt: expect.any(String) });
+
+    holdIndex("ended-later", 9);
+    setState(repoRoot, "ended-later", "ready");
+    const second = await acquireWorkspace(repoRoot, "second", opts);
+    expect(second.notices?.filter((line) => line.startsWith("reclaimed"))).toEqual([
+      `reclaimed 1 port slot(s) from workspaces whose worktree or branch is gone (1 in ${fs.realpathSync(repoRoot)}; \`cast ws ls\` there lists them)`,
+    ]);
+    const third = await acquireWorkspace(repoRoot, "third", opts);
+    expect(third.notices?.filter((line) => line.startsWith("reclaimed")) ?? []).toEqual([]);
+    // Still reclaimed: the marked records' slots stay free for the next acquire.
+    expect(third.workspace.resourceIndex).toBe(2);
   }, 15000);
 
   test("a no-port acquire of a ready workspace gives its ports up in place and says nothing of others' slots", async () => {

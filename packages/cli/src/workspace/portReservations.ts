@@ -4,7 +4,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { createHash, randomUUID } from "node:crypto";
 import { atomicWriteFile } from "../atomicWrite.js";
 import { spawnSync } from "../proc.js";
-import { listStates, type PersistedWorkspaceState } from "./contract.js";
+import { listStates, readState, writeState, type PersistedWorkspaceState } from "./contract.js";
 import { defaultConfigDir } from "../config/configDir.js";
 
 export interface PortReservation {
@@ -42,6 +42,26 @@ export function partitionReservations(reservations: PortReservation[]): {
     else live.push(reservation);
   }
   return { live, stale };
+}
+
+/**
+ * The one-line notice for stale reservations not named before, each marked as named so the next acquire, in any repo,
+ * does not repeat it (ct-102049: every acquire listed the same 177 dead workspaces). The record is kept, since `cast ws
+ * ls` and `cast ws destroy` in its repo still need it; one that changed since it was read is left alone.
+ */
+export function noteReclaimed(stale: Array<{ reservation: PortReservation }>): string | undefined {
+  const fresh = stale.filter(({ reservation }) => !reservation.workspace.portsReclaimedAt);
+  if (fresh.length === 0) return undefined;
+  const at = new Date().toISOString();
+  const perRepo = new Map<string, number>();
+  for (const { reservation: { repoRoot, workspace } } of fresh) {
+    perRepo.set(repoRoot, (perRepo.get(repoRoot) ?? 0) + 1);
+    try {
+      if (readState(repoRoot, workspace.name)?.updatedAt === workspace.updatedAt) writeState(repoRoot, { ...workspace, portsReclaimedAt: at });
+    } catch {}
+  }
+  const where = [...perRepo].map(([repoRoot, count]) => `${count} in ${repoRoot}`).join(", ");
+  return `reclaimed ${fresh.length} port slot(s) from workspaces whose worktree or branch is gone (${where}; \`cast ws ls\` there lists them)`;
 }
 
 function workspaceOperationFile(root: string, name: string): string {

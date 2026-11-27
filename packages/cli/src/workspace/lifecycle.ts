@@ -43,7 +43,7 @@ import {
 } from "./contract.js";
 import { buildHookEnv, runHook } from "./hooks.js";
 import { PortAllocationError, allocatePorts, computePorts, isPortFree, portsToEnv } from "./ports.js";
-import { partitionReservations, withPortReservations, withWorkspaceOperation, type PortReservation } from "./portReservations.js";
+import { noteReclaimed, partitionReservations, withPortReservations, withWorkspaceOperation, type PortReservation } from "./portReservations.js";
 import { portExhaustion, withoutPorts } from "./portRelease.js";
 import { MANIFEST_REL_PATH, resolveManifest } from "./resolver.js";
 import { linkSharedDirectories, unlinkSharedDirectories } from "./share.js";
@@ -598,10 +598,8 @@ async function allocateWorkspacePorts(
   const { live: holders, stale } = partitionReservations(reservations.filter(
     (reservation) => reservation.repoRoot !== root || reservation.workspace.name !== name,
   ));
-  if (stale.length > 0) notices.push(
-    `reclaimed ${stale.length} port slot(s) from workspaces whose worktree is gone: ` +
-    stale.map(({ reservation, reason }) => `${reservation.workspace.name} (${reason})`).join(", "),
-  );
+  const reclaimed = noteReclaimed(stale);
+  if (reclaimed) notices.push(reclaimed);
   const reservedPorts = new Set(holders.flatMap(({ workspace }) => Object.values(workspace.ports)));
   const portAlloc = await allocatePorts(manifest, { startIndex, reservedPorts }).catch((error) => {
     if (error instanceof PortAllocationError) error.message = describePortExhaustion(name, manifest, error, holders, root);

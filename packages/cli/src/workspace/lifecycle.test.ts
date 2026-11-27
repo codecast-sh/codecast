@@ -360,7 +360,7 @@ range = 100
     fs.rmSync(first.workspace.path, { recursive: true, force: true });
     const reused = await acquireWorkspace(repoRoot, "reuse", opts);
     expect(reused.workspace.ports).toEqual(first.workspace.ports);
-    expect(reused.notices?.join("\n")).toContain("gone (worktree missing)");
+    expect(reused.notices?.join("\n")).toContain("reclaimed 1 port slot(s) from workspaces whose worktree or branch is gone");
   });
 
   test("keeps root checkout ports when its recorded branch was deleted", async () => {
@@ -415,7 +415,7 @@ range = 100
     execSync("git update-ref -d refs/heads/codecast/unbranched", { cwd: repoRoot });
     const reused = await acquireWorkspace(repoRoot, "reuse", opts);
     expect(reused.workspace.ports).toEqual(first.workspace.ports);
-    expect(reused.notices?.join("\n")).toContain("unbranched (branch gone)");
+    expect(reused.notices?.join("\n")).toContain("reclaimed 1 port slot(s) from workspaces whose worktree or branch is gone");
   });
 
   test("keeps the reservation of a workspace that is still being created", async () => {

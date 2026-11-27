@@ -56,6 +56,8 @@ export interface PersistedWorkspaceState {
   sessions?: string[];
   /** Set only on a workspace a tool made for itself (Workspace.purpose). */
   purpose?: WorkspacePurpose;
+  /** When an acquire found this record's worktree or branch gone and took its port slot back: it is named that once. */
+  portsReclaimedAt?: string;
 }
 
 /** Canonical projection of persisted state back into a Workspace. */
