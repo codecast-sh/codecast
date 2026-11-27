@@ -5,9 +5,10 @@
 // row, else the detail's own copy of a priority the list does not hold, and
 // the detail's corrections. Each rides `dispatch` to the side effect of the
 // same name (convex/dispatch.ts), which runs the API's own mutation. The
-// collection is not localFirst (store/clientSyncRegistry), so the server's
-// next push settles the paint; a refused write is put back by its caller
-// (lib/priorityWrites).
+// list is localFirst (store/clientSyncRegistry): the paint holds over pushes
+// from before the server had the write, and the write's acknowledgement
+// settles it on the server's next answer (PRIORITY_ACTIONS); a refused write
+// is put back by its caller (lib/priorityWrites).
 import { asyncAction } from "./mutativeMiddleware";
 import type { PriorDone, PriorityRow, PrioritySetBy, PriorityStepTier } from "@codecast/shared/contracts/priorities";
 import {
@@ -114,3 +115,6 @@ export function createPrioritiesSlice(): PrioritiesSliceActions {
     runPriorities: asyncAction(function (this: PaintState, _workspace: string) {}) as PrioritiesSliceActions["runPriorities"],
   };
 }
+
+/** Every priority control: its acknowledgement settles the locks its paint planted (lib/dispatchBinding). */
+export const PRIORITY_ACTIONS: ReadonlySet<string> = new Set(Object.keys(createPrioritiesSlice()));

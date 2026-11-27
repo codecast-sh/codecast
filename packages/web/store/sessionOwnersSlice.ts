@@ -16,7 +16,7 @@
 // under the ordinary field lock, and riding `dispatch` to the side effect of
 // the same name (convex dispatch.ts). A refusal rolls every painted field
 // back; the dispatch's acknowledgement settles the locks it planted
-// (settleOwnersAck, lib/dispatchBinding), so a server answer that differs
+// (settleAckedLocks, lib/dispatchBinding), so a server answer that differs
 // from the paint (someone else's change at the same moment) lands.
 //
 // Spread into the store (inboxStore), so it gains these without a line of its own.

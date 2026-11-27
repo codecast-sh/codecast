@@ -125,6 +125,7 @@ export const WINDOW_SLOTS: Record<string, SlotClass> = {
   "store/chatSlice.ts:settledSends": { shared: "keyed by the client id a window mints for its own hand-off send, so windows never collide" },
   "store/orgSlice.ts:intentSeq": { shared: "process-wide counter: ids stay unique across windows and no window reads another's value" },
   "store/orgSlice.ts:NO_REVERT_TREE_KINDS": CONSTANT,
+  "store/prioritiesSlice.ts:PRIORITY_ACTIONS": CONSTANT,
   "store/pendingMessageJournal.ts:sequence": { shared: "process-wide counter: journal stamps stay unique across windows" },
   "store/stageSplit.ts:idCounter": { shared: "process-wide counter: pane ids stay unique across windows" },
   "store/storeListenerCensus.ts:liveListenerCount": { shared: "dev listener census, read only from the console" },
