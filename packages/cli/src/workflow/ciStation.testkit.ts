@@ -120,7 +120,7 @@ export function fakeGh(o: {
     const patched = a.startsWith(`api --paginate repos/${REPO}/pulls/7/files`) ? /select\((\[.*?\]) \| any/.exec(a) : null;
     if (patched) {
       const wanted: string[] = JSON.parse(patched[1]!);
-      const all = o.patches ?? (o.files ?? ["src/app.ts"]).map((filename) => ({ filename, status: "modified", patch: "@@ -1 +1 @@\n-old\n+new" }));
+      const all: NonNullable<typeof o.patches> = o.patches ?? (o.files ?? ["src/app.ts"]).map((filename) => ({ filename, status: "modified", patch: "@@ -1 +1 @@\n-old\n+new" }));
       return { code: 0, out: all.filter((f) => wanted.includes(f.filename) || (!!f.previous_filename && wanted.includes(f.previous_filename))).map((f) => JSON.stringify(f)).join("\n") };
     }
     if (a.startsWith(`api --paginate repos/${REPO}/pulls/7/files`)) return { code: 0, out: (o.files ?? ["src/app.ts"]).join("\n") };
