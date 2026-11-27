@@ -183,7 +183,9 @@ function int16To24k(input: Int16Array, inRate: number): ArrayBuffer {
 
 type AsrSessionOpts = {
   convex: AsrConvexHandle;
-  roomKey: string;
+  /** The call room the key is minted against, or null for dictation: a
+   *  person's own words into a text box, minted by dictation.mintDictationToken. */
+  roomKey: string | null;
   /** Timeline clock for utterance offsets, in ms. */
   clock: () => number;
   events?: AsrPipeEvents;
@@ -394,9 +396,13 @@ export function openAsrPcmSession(opts: AsrSessionOpts): AsrPcmSession {
     // `clientCommits` follows whatever model comes back. A returned `{ error }`
     // is the server's answer and is not retried here.
     let clientTurns = true;
-    const tryMint = (args: { room_key: string; languages?: string[] }) =>
+    const tryMint = ({ room_key, ...args }: { room_key: string | null; languages?: string[] }) =>
       convex
-        .action(api.transcripts.mintAsrToken, clientTurns ? { ...args, client_turns: true } : args)
+        .action(
+          ...((room_key === null
+            ? [api.dictation.mintDictationToken, args]
+            : [api.transcripts.mintAsrToken, clientTurns ? { room_key, ...args, client_turns: true } : { room_key, ...args }]) as [any, any]),
+        )
         .catch((err: any) => ({
           error: String(err?.message ?? "Could not start transcription"),
           thrown: true,
@@ -404,7 +410,9 @@ export function openAsrPcmSession(opts: AsrSessionOpts): AsrPcmSession {
     const first = { room_key: roomKey, ...(languages.length ? { languages } : {}) };
     let minted = await tryMint(first);
     if (closed) return;
-    if (minted?.thrown) {
+    // The dictation mint is new with client turns, so it has no older server
+    // to fall back to: a thrown first mint is its answer.
+    if (minted?.thrown && roomKey !== null) {
       clientTurns = false;
       minted = await tryMint(first);
       if (closed) return;
@@ -552,7 +560,8 @@ export { __resetAsrCaptureForTest } from "./asrCapture";
  */
 export function openAsrPipe(opts: {
   convex: AsrConvexHandle;
-  roomKey: string;
+  /** null for dictation (see AsrSessionOpts). */
+  roomKey: string | null;
   track: MediaStreamTrack;
   /** Timeline clock for utterance offsets, in ms. */
   clock: () => number;
