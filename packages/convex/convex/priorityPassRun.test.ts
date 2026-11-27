@@ -680,6 +680,9 @@ describe("applyPlan", () => {
     await w.send(w.ana, w.teamConv, w.now - 4 * 60_000, "grader faults at eight percent");
     expect((await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team })).status).toBe("ok");
     expect((await w.conversation(w.benConv))?.priority_id).toBeUndefined();
+    // Ben's session never wrote Ana's priority: its leaving flags no rewrite, and the team still reads it.
+    expect((await w.priorities())[0].needs_rewrite).toBeUndefined();
+    expect(await w.t.withIdentity({ subject: `${w.ben}|session` }).query((api as any).priorities.show, { short_id: p.short_id })).toMatchObject({ short_id: p.short_id });
   });
 
   test("a merge survivor's carried place lands only on a row the person has not placed since", async () => {

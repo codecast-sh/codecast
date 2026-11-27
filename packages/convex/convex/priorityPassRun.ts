@@ -270,9 +270,11 @@ export async function moveCorrections(ctx: { db: any }, from: Id<"priorities">, 
 
 /**
  * A session that left this workspace lets go of the priority here, so its new
- * workspace's pass can map it. The priority's title and summary may have been
- * written from it: it needs a rewrite (hidden from teammates until then)
- * unless this plan rewrote it already (`rewritten`, short ids).
+ * workspace's pass can map it. When the session is the owner's own, the
+ * priority's title and summary may have been written from it: it needs a
+ * rewrite (hidden from teammates until then) unless this plan rewrote it
+ * already (`rewritten`, short ids). A teammate's session (a Start on the
+ * owner's milestone) never wrote the priority, so its leaving hides nothing.
  */
 async function letGoStrays(
   ctx: { db: any },
@@ -288,7 +290,7 @@ async function letGoStrays(
     // Still counting in the workspace, the person's own or a teammate's they started there (lib/priorityLinks linkFromStart): it stays.
     if (!conv || !held || !(await leftWorkspace(vis, conv, pair.workspace)) || String(held.user_id) !== String(pair.user_id) || held.workspace !== pair.workspace) continue;
     await move(conv, undefined, undefined);
-    if (!rewritten.has(held.short_id)) await ctx.db.patch(held._id, { needs_rewrite: true });
+    if (String(conv.user_id) === String(pair.user_id) && !rewritten.has(held.short_id)) await ctx.db.patch(held._id, { needs_rewrite: true });
   }
 }
 
