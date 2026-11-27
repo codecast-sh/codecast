@@ -13,6 +13,7 @@ import { admitGuest, denyGuest } from "../lib/calls/guestDoorActions";
 import { getCallStageOpen, useCallStageOpen } from "../lib/calls/callStage";
 import { getScribeStatus, setScribeFeedTargets, stopScribe, subscribeScribe } from "../lib/calls/transcription";
 import { decideAutoScribe } from "../lib/calls/autoScribe";
+import { feedTargetsOf } from "../lib/calls/scribePacing";
 import { channelRoomKey, sessionRoomKey } from "@codecast/shared/contracts";
 import { channelRowRoomKey } from "../lib/chatViews";
 import { soundRoomKnock } from "../lib/sounds";
@@ -108,10 +109,7 @@ export function useCallSync(): void {
   // The agents the transcript feeds, handed to the scribe so its flush
   // cadence can wait on their turns (scribeEngine WORKING_HOLD_MS). Routes
   // are the server's list, so an agent anyone added mid-call counts.
-  const feedTargetsSig = ((liveTranscript as any)?.routes ?? [])
-    .filter((r: any) => r.kind === "session")
-    .map((r: any) => String(r.target))
-    .join("|");
+  const feedTargetsSig = feedTargetsOf(liveTranscript as any).join("|");
   useWatchEffect(() => {
     setScribeFeedTargets(feedTargetsSig ? feedTargetsSig.split("|") : []);
   }, [feedTargetsSig]);
