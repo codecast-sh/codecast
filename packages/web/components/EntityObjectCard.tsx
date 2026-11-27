@@ -2,34 +2,15 @@ import React, { useCallback, useId, useRef, useState } from "react";
 import { PriorityCard } from "./priorities/PriorityRef";
 import {
   ChevronDown,
-  FileText,
-  Flag,
-  Folder,
   FolderOpen,
   GitBranch,
-  GitCommitHorizontal,
-  GitPullRequest,
-  MessageSquare,
-  Network,
-  Phone,
-  Film,
-  Rocket,
-  Workflow,
-  Signpost,
-  Radio,
-  Map as MapIcon, Target,
-  Zap,
-  Hexagon,
-  UserRound,
-  KeyRound,
-  Bug,
-  BellRing,
+  Map as MapIcon,
 } from "lucide-react";
 import { taskVisual } from "./TaskStatusBadge";
 import { stripMarkdown, docContentPreview, docBodyMarkdown } from "../lib/notificationText";
 import { flowSlugOf, parseCallRef, parseReplayRef, replayRefStart, type EntityType } from "../lib/entityLinks";
 import { renderFlowCard } from "../lib/fenceRenderers";
-import { ACCENT, type Accent } from "../lib/entityCardAccent";
+import { ACCENT, TYPE_ICON, type Accent } from "../lib/entityCardAccent";
 import { SessionMark } from "./identity";
 import { cleanUserMessage } from "./sessionMessage";
 import { cleanTitle } from "../lib/conversationProcessor";
@@ -88,31 +69,6 @@ import { useRoleAuthor } from "../hooks/useLiveIdentityRow";
 // store seed on the first frame, live webGet keeping it fresh. The expanded
 // detail needs no extra queries — webGet already carries the deep fields
 // (doc content, plan tasks, task comments).
-
-const TYPE_ICON: Record<EntityType, any> = {
-  session: MessageSquare,
-  task: Target, // replaced by the status disc at render time
-  plan: MapIcon,
-  doc: FileText,
-  trigger: Zap,
-  project: Folder,
-  initiative: Flag,
-  proposal: Network,
-  decision: Signpost,
-  pr: GitPullRequest,
-  commit: GitCommitHorizontal,
-  call: Phone,
-  replay: Film,
-  issue: Bug,
-  metric: BellRing,
-  deploy: Rocket,
-  source: Radio,
-  role: Hexagon,
-  person: UserRound,
-  secret: KeyRound,
-  flow: Workflow,
-  priority: Target,
-};
 
 /** An object's mark as its card and every list of it draw it: a task's
  *  status disc, a session's author, a pull request's state, else the kind's

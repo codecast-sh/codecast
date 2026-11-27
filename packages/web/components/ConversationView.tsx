@@ -232,6 +232,7 @@ import { adjustScrollForResizeRule } from "../lib/virtualList/resizeAdjust";
 import type { MountedRows } from "../lib/virtualList/coverage";
 import { createScrollSync, type ScrollSync } from "../lib/virtualList/scrollSync";
 import { lazyNamed } from "../lib/lazyNamed";
+import { rememberReadingSpot, readingSpotForOpen } from "../lib/transcriptReadingSpot";
 
 const MOMENT_FEATURES: readonly MomentFeature[] = ["decide", "visual", "publish"];
 /** Agent states in which the session is waiting on its human, not working. */
@@ -2224,6 +2225,20 @@ const ConversationViewInner = (
     jumped: boolean;
   } | null>(null);
 
+  // Browser back or forward onto this conversation lands where the reader
+  // left it (lib/transcriptReadingSpot). The remembered spot rides the branch
+  // anchor, which already places a message at an offset, holds off the
+  // snap to the tail, and pages the window to the message when it is not loaded.
+  const openedConvId = conversation?._id ? String(conversation._id) : null;
+  const openedConvIdRef = useRef<string | null>(null);
+  if (openedConvId && openedConvIdRef.current !== openedConvId) {
+    openedConvIdRef.current = openedConvId;
+    const spot = targetMessageId || propHighlightQuery ? null : readingSpotForOpen(openedConvId);
+    if (spot && onJumpToTimestamp) {
+      branchAnchorRef.current = { sourceId: openedConvId, targetId: openedConvId, ...spot, at: Date.now(), jumped: false };
+    }
+  }
+
   // BranchSelector / tree panel: switching branches is a local, store-driven switch —
   // the same instant path the sidebar uses. navigateToSession sets currentSessionId, the
   // inbox re-renders from cache, and QueuePageClient's URL-sync effect updates the address
@@ -2686,6 +2701,28 @@ const ConversationViewInner = (
     const scrollContainer = containerRef.current;
     if (!scrollContainer) return;
 
+    // The reading spot for back/forward: the first message row still showing
+    // below the top edge, and where its top sits. At most every 100ms, so a
+    // click right after a scroll still leaves with the spot it scrolled to.
+    let spotTimer: ReturnType<typeof setTimeout> | undefined;
+    const recordSpot = (convId: string) => {
+      spotTimer = undefined;
+      if (convId !== openedConvIdRef.current || scrollContainer.clientHeight === 0) return;
+      if (!userScrolledRef.current || isNearBottomRef.current) { rememberReadingSpot(convId, null); return; }
+      const top = scrollContainer.getBoundingClientRect().top;
+      const tl = timelineRef.current;
+      for (const v of virtualizer.getVirtualItems()) {
+        const item = tl[v.index];
+        if (item?.type !== "message" || !item.data?.message_uuid) continue;
+        const el = virtualizer.elementsCache.get(v.key) as HTMLElement | undefined;
+        if (!el?.isConnected) continue;
+        const rect = el.getBoundingClientRect();
+        if (rect.bottom <= top + 40) continue;
+        rememberReadingSpot(convId, { messageUuid: item.data.message_uuid, timestamp: item.data.timestamp, offset: (rect.top - top) / cssZoomOf(scrollContainer) });
+        return;
+      }
+    };
+
     const handleScroll = () => {
       const { scrollTop, scrollHeight, clientHeight } = scrollContainer;
       // A hidden tab pane (display:none ancestor) has zero geometry: every
@@ -2693,6 +2730,8 @@ const ConversationViewInner = (
       // the latches that remember the real reading position. Those events are
       // noise — ignore them until the pane is visible again.
       if (clientHeight === 0) return;
+      const convId = openedConvIdRef.current;
+      if (convId && spotTimer === undefined) spotTimer = setTimeout(() => recordSpot(convId), 100);
       const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
       const isAtBottom = distanceFromBottom < 100;
       isNearBottomRef.current = isAtBottom;
@@ -2757,6 +2796,7 @@ const ConversationViewInner = (
 
     return () => {
       scrollContainer.removeEventListener("scroll", handleScroll);
+      clearTimeout(spotTimer);
     };
   });
 
