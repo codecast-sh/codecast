@@ -134,9 +134,14 @@ describe("the finish", () => {
     const note = await finishCliRelease({ root: "/x", deploy: "dp-9", version: "1.1.306", waitMs: 0, post: s.post, buildIdAt: ids(true), log: () => {}, setGlobal: async (v) => { global.push(v); return true; } });
     expect(global).toEqual(["1.1.306"]);
     expect(note).toContain("Forced everywhere: the global floor is now 1.1.306.");
-    expect(note).toContain("Forced: Acme's floor is now 1.1.306.");
-    // Every team is held to the global floor: no other team's Captain needs telling.
-    expect(s.calls.some((c) => c.path === "/cli/team-cli-floor/tell-other-teams")).toBe(false);
+    // Every team is held to the global floor: no team floor to set, no refusal of one to tell, no other team's Captain.
+    expect(s.calls.map((c) => c.path)).toEqual(["/cli/deploys/get", "/cli/team-cli-floor/forced", "/cli/deploys/get", "/cli/line/deploy/report"]);
+    expect(note).not.toContain("Acme");
+    // A global floor already at or past the release holds the team the same way.
+    const held = server({}, { set: () => { throw new Error("not a team admin"); } });
+    const heldNote = await finishCliRelease({ root: "/x", deploy: "dp-9", version: "1.1.306", waitMs: 0, post: held.post, buildIdAt: ids(true), log: () => {}, setGlobal: async () => true, globalFloor: async () => "1.1.310" });
+    expect(held.calls.some((c) => c.path.startsWith("/cli/team-cli-floor/") && c.path !== "/cli/team-cli-floor/forced")).toBe(false);
+    expect(heldNote).not.toContain("Not forced");
   });
 
   test("staff running an older release's finish never lower the global floor a newer release set", async () => {
@@ -213,6 +218,8 @@ describe("the finish", () => {
     const note = await finishCliRelease({ root: "/x", deploy: "dp-9", version: "1.1.306", waitMs: 0, post: s.post, buildIdAt: ids(true), log: () => {} });
     const tells = s.calls.filter((c) => c.path === "/cli/team-cli-floor/tell-release");
     expect(tells.map((c) => c.body)).toEqual([{ team_id: "team_1", deploy: "dp-9", version: "1.1.306" }]);
+    // Told once the report wrote the note its message points at.
+    expect(s.calls.map((c) => c.path).slice(-2)).toEqual(["/cli/line/deploy/report", "/cli/team-cli-floor/tell-release"]);
     expect(note.startsWith("Sent by Ana\n\nPaused by Bo\n\nRelease 1.1.306:")).toBe(true);
     expect(note).toContain("Lagging: bo-mac (Bo, 1.1.305)");
   });
