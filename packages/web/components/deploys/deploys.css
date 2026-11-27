@@ -255,7 +255,8 @@ button.dpp-card-title:hover { text-decoration: underline; }
 .dpp-row[data-id-col] .dpp-row-main { padding-left: 0; text-indent: 0; }
 /* The hanging indent belongs to the row's own lines: anything inside that lays out its own box (a branch, a pill's icon, a note) starts flush. */
 .dpp-row-main * { text-indent: 0; }
-.dpp-row-id { white-space: nowrap; }
+/* A sha is one word: its reference pill never breaks mid-hash in a narrow column. */
+.dpp-row-id, .dpp-row-id .entity-ref__label { white-space: nowrap; overflow-wrap: normal; word-break: normal; }
 .dpp-newer { margin-left: 8px; font-size: 11.5px; font-style: italic; color: var(--sol-text-dim); }
 .dpp-row-main > .entity-ref { display: inline !important; line-height: 1.55; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
 .dpp-row-main > .entity-ref > span { display: inline !important; white-space: normal !important; overflow: visible !important; text-overflow: clip !important; }

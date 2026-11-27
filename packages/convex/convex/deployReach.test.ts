@@ -192,3 +192,15 @@ test("a deploy's corrected sha moves its place on main: commits after it are no 
   expect((await w.reach("acme/app#12")).state).toBe("live");
   expect((await w.reach(`acme/app@${sha(4)}`)).state).toBe("waiting");
 });
+
+test("a change that went out more than a window of deploys ago names the deploy that first carried it", async () => {
+  const w = await world();
+  await w.mark("web", 2, "live", NOW - 9_000);
+  const first = w.t.deploys.find((d: any) => d.short_id === "dp-1");
+  // 22 later web deploys of sha(4), unstamped as prod's are: every one holds the merge, and the newest 20 all do.
+  for (let i = 0; i < 22; i++) {
+    w.t.deploys.push({ ...first, _id: `dp_later_${i}`, short_id: `dp-${100 + i}`, sha: sha(4), cut_at: undefined, created_at: NOW - 8_000 + i * 10, live_at: NOW - 8_000 + i * 10 + 5 });
+  }
+  const r = await w.reach("acme/app#12");
+  expect(r.targets[0]).toMatchObject({ target: "web", state: "live", deploy: { short_id: "dp-1" } });
+});

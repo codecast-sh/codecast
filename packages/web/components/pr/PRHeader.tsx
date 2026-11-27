@@ -24,6 +24,10 @@ import { PRLinked, PRReviewers } from "./PRLinked";
 import { PRDeployBand, PRReachChip } from "./PRDeploy";
 import { PRShipStrip } from "./PRShipStrip";
 import { usePrDeploy } from "../../hooks/usePrDeploy";
+import { usePullRequestRun } from "../../hooks/useSyncWorkflows";
+import { reviewOnHead, type ChangeLink } from "../../lib/ship/changePage";
+
+const TONE_ACCENT: Record<ChangeLink["tone"], "green" | "red" | "yellow" | "muted"> = { ok: "green", bad: "red", wait: "yellow", default: "muted" };
 import { copyToClipboard, relTimeShort } from "../../lib/utils";
 import { withShortcut } from "../../shortcuts/registry";
 import {
@@ -364,6 +368,8 @@ export function PRHeader({
   const editTitle = () => setEditNonce((n) => n + 1);
   const verbs = typeof actions === "function" ? actions({ editTitle }) : actions;
   const deploy = usePrDeploy(pr, repository, authed);
+  const run = usePullRequestRun(authed ? repository : null, authed ? number : null);
+  const runReview = reviewOnHead(run, pr.head_sha);
 
   return (
     <header className="pr-band border-b border-sol-border/60 px-5 pt-4 pb-3 shrink-0">
@@ -427,7 +433,9 @@ export function PRHeader({
         {/* GitHub's reviews; the Ship run's own review is the strip's Review step. */}
         <Figure label="GitHub review">
           {decision && <span style={{ color: accentVar(decision.accent) }}>{decision.label}</span>}
-          {PRReviewers({ pr, reviews }) ?? (!decision && <span className="text-sol-text-dim">Nobody has reviewed yet</span>)}
+          {/* codecast's reviewer answers on the run, never on GitHub: its verdict on this head counts as a review. */}
+          {runReview && run ? <Link href={`/workflows/runs/${run._id}`} style={{ color: accentVar(TONE_ACCENT[runReview.tone]) }} data-pr-run-review>{runReview.label}</Link> : null}
+          {PRReviewers({ pr, reviews }) ?? (!decision && !runReview && <span className="text-sol-text-dim">Nobody has reviewed yet</span>)}
         </Figure>
         <Figure label="Merge">
           {merge ? (

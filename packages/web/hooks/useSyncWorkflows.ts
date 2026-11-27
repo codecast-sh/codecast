@@ -2,7 +2,8 @@
 // runs collection (registry: workflowRuns isDelta).
 import { useMemo } from "react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
-import { useInboxStore } from "../store/inboxStore";
+import { isConvexId, useInboxStore } from "../store/inboxStore";
+import { liveRunsSig } from "./useLiveRunsCheck";
 import { activeTeamIdOf } from "../lib/activeTeam";
 import { entityIdArgs, useSyncCollection } from "./useSyncCollection";
 import { useCollectionRows } from "./useCollectionRows";
@@ -223,11 +224,37 @@ export function useRunWorkflow(run: PinnedRun | null | undefined): any | null | 
   return graph ?? (answered ? row : undefined);
 }
 
+const LIVE_RUN = new Set(["pending", "running", "paused"]);
+
+/**
+ * The runs the store holds as live for a session that the session's feed no longer names. The feed answers every live
+ * run of the session and only its newest few ended ones, so a run that ended outside that window (a session that
+ * shipped four times) would read live forever: these are asked for by id, and their rows heal in place.
+ */
+export function sessionRunsEndedOutOfWindow(runs: Record<string, any>, conversationId: string, answer: ReadonlyArray<{ _id: string }>): string[] {
+  const named = new Set(answer.map((r) => String(r._id)));
+  return Object.values(runs)
+    .filter((r) => String(r.spawner_conversation_id ?? "") === conversationId && LIVE_RUN.has(r.status) && !named.has(String(r._id)) && isConvexId(String(r._id)))
+    .map((r) => String(r._id))
+    .sort();
+}
+
 /** Feeder: the runs a session started for its change (convex sessionFlowRuns), live ones first. */
 export function useSyncSessionFlowRuns(conversationId: string | null | undefined) {
   // entityIdArgs: a session not yet created on the server is a local stub id,
   // and v.id("conversations") rejects it (a server error per pane per stub).
-  return useSyncCollection("workflowRuns", api.sessionFlowRuns.forConversation, entityIdArgs("conversation_id", conversationId ?? undefined));
+  const feed = useSyncCollection("workflowRuns", api.sessionFlowRuns.forConversation, entityIdArgs("conversation_id", conversationId ?? undefined));
+  const answer = Array.isArray(feed.data) ? (feed.data as Array<{ _id: string }>) : null;
+  // Woken by the live rows' status only (liveRunsSig), never a heartbeat.
+  const sig = useInboxStore((s) => liveRunsSig((s as any).workflowRuns ?? {}));
+  const ended = useMemo(
+    () => (answer && conversationId ? sessionRunsEndedOutOfWindow((useInboxStore.getState() as any).workflowRuns ?? {}, conversationId, answer).join(",") : ""),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the signature carries every field the walk reads
+    [answer, conversationId, sig],
+  );
+  const args = useMemo(() => (ended ? { ids: ended.split(",") } : "skip"), [ended]);
+  useSyncCollection("workflowRuns", api.workflow_runs.byIds, args as { ids: string[] } | "skip");
+  return feed;
 }
 
 /** Reader: a session's own flow runs, newest first (undefined while cold and empty). */
@@ -241,6 +268,14 @@ export function useSessionFlowRuns(conversationId: string | null | undefined): a
   );
   const rows = useWorkflowRuns(where);
   return rows.length || ready ? rows.slice().sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0)) : undefined;
+}
+
+/** Reader (and its feeder): the newest run whose PR station opened this pull request, or null. */
+export function usePullRequestRun(repository: string | null | undefined, number: number | null | undefined): any | null {
+  useSyncCollection("workflowRuns", api.sessionFlowRuns.forPullRequest, repository && number ? { repository, number } : "skip");
+  const repo = repository?.toLowerCase() ?? null;
+  const where = useMemo(() => (r: any) => !!repo && r.pr?.number === number && String(r.pr?.repository ?? "").toLowerCase() === repo, [repo, number]);
+  return useWorkflowRuns(where)[0] ?? null;
 }
 
 /** Feeder: the run a session works in (convex sessionFlowRuns.ofSession): its own run, or its parent log's for a station. */

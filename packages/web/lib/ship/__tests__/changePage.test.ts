@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { journeyOf } from "../journey";
 import { stopTitle } from "../journeyWords";
-import { changeAction, changeHeadline, changeLinks, changePr, changeStations, currentHead, deployLine, endedStages, shipsChange } from "../changePage";
+import { changeAction, changeHeadline, changeLinks, changePr, changeStations, currentHead, deployLine, endedStages, reviewOnHead, shipsChange } from "../changePage";
 import { deploysHref } from "../../deploys/focus";
 import { BRANCHING_FLOW, UNION_CHANGE_FLOW } from "../journeyFixtures";
 import { appPool, flowBySlug, pushedFlow } from "../../line/flowPool";
@@ -367,12 +367,32 @@ describe("changeLinks", () => {
     expect(changeLinks(r, union).map((l) => `${l.kind}:${l.label}`)).toEqual(["pr:PR #5016", "ci:CI", "review:Review", "merged:Merged 5caaa34", "deploy:backend dp-12"]);
   });
 
-  test("the deploy records win over the station's line; a waiting target opens Deploys at the change", () => {
+  test("the deploy records say each target's state; a waiting target opens Deploys at the change", () => {
     const links = changeLinks(liveRun, change, [{ name: "web", state: "live", deploy: "dp-9" }, { name: "backend", state: "waiting" }]);
-    expect(links.filter((l) => l.kind === "deploy").map((l) => [l.label, l.tone])).toEqual([["web dp-9", "ok"], ["backend waiting", "default"]]);
+    expect(links.filter((l) => l.kind === "deploy").map((l) => [l.label, l.tone])).toEqual([["web dp-3237", "ok"], ["backend waiting", "default"]]);
     expect(links.find((l) => l.label === "backend waiting")!.href).toBe("/deploys?team=t1&target=backend&sha=31ccbb83b1");
     // A deploy's chip opens the change on that target with the deploy open beside it (the phone reads it as that deploy).
-    expect(links.find((l) => l.label === "web dp-9")!.href).toBe("/deploys?team=t1&target=web&sha=31ccbb83b1&deploy=dp-9");
+    expect(links.find((l) => l.label === "web dp-3237")!.href).toBe("/deploys?team=t1&target=web&sha=31ccbb83b1&deploy=dp-3237");
+  });
+
+  test("a live chip names the deploy the run saw first carry the change, not a later one reach found (ct-98570: web dp-3447, not dp-3454)", () => {
+    const r = { ...liveRun, node_statuses: [...MERGED, st("deploy__wait", "completed", 16, { result_preview: "Live: 08c639d on web dp-3447, cli dp-3456, mobile dp-3448." })] };
+    const reach = [{ name: "web", state: "live" as const, deploy: "dp-3454" }, { name: "mobile", state: "live" as const, deploy: "dp-3448" }, { name: "api", state: "live" as const, deploy: "dp-3500" }];
+    expect(changeLinks(r, change, reach).filter((l) => l.kind === "deploy").map((l) => l.label)).toEqual(["web dp-3447", "mobile dp-3448", "api dp-3500"]);
+    // A target reach no longer finds live (rolled back, failed) keeps reach's word: the run's line is history, not the state.
+    expect(changeLinks(r, change, [{ name: "web", state: "failed", deploy: "dp-3460" }]).filter((l) => l.kind === "deploy").map((l) => [l.label, l.tone])).toEqual([["web dp-3460", "bad"]]);
+  });
+
+  test("the PR page's review: the run's verdict on the PR's head, or on the head Merge only rebased to make it", () => {
+    const r = { review_verdict: { verdict: "ship", head_sha: "f081d05" }, station_rebases: [{ from: "f081d05", to: "9a9a9a9" }] };
+    expect(reviewOnHead(r, "f081d05")).toEqual({ label: "Review passed", tone: "ok" });
+    expect(reviewOnHead(r, "9a9a9a9")).toEqual({ label: "Review passed", tone: "ok" });
+    // A head pushed after the review (a fix) is not judged yet; no verdict, no head, or an unknown verdict says nothing.
+    expect(reviewOnHead(r, "1234567")).toBeNull();
+    expect(reviewOnHead({ review_verdict: { verdict: "changes", head_sha: "abc" } }, "abc")).toEqual({ label: "Review asked for changes", tone: "wait" });
+    expect(reviewOnHead({ review_verdict: { verdict: "huh", head_sha: "abc" } }, "abc")).toBeNull();
+    expect(reviewOnHead(null, "abc")).toBeNull();
+    expect(reviewOnHead(r, null)).toBeNull();
   });
 
   test("no review session, no review link: a label with nowhere to go is not drawn", () => {

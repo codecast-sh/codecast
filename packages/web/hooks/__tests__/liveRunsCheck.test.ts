@@ -18,8 +18,9 @@ describe("the runs the store holds as live that the server does not", () => {
     expect(staleLiveRuns(runs, { workspaces: [T], ids: [id(2)], complete: true })).toEqual([id(1)]);
   });
 
-  test("a capped answer cannot say which rows ended, so it names none", () => {
-    expect(staleLiveRuns(runs, { workspaces: [T], ids: [], complete: false })).toEqual([]);
+  test("a workspace too full to name in full is left out of the answer's workspaces, and only its rows go unchecked", () => {
+    const answer = { workspaces: ["team:other"], ids: [], complete: false };
+    expect(staleLiveRuns(runs, answer)).toEqual([id(4)]);
   });
 
   test("at most one byIds answer's worth at a time", () => {

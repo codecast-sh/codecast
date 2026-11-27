@@ -116,6 +116,8 @@ const FEED_CASES: Record<string, (ids: Ids) => Record<string, unknown>[]> = {
   "workflow_runs.listRuns": (ids) => [{}, { team_id: ids.T }, { team_id: ids.O }],
   // The run each placement's session works in, asked of every such session: the run's own access decides.
   "sessionFlowRuns.ofSession": (ids) => Object.values(ids.runSessions).map((conversation_id) => ({ conversation_id })),
+  // The runs that opened each placement's pull request, asked of every one: the run's own access decides.
+  "sessionFlowRuns.forPullRequest": (ids) => Object.values(ids.rows.prNumbers).map((number) => ({ repository: "acme/app", number: Number(number) })),
   "conversations.getMessageFeed": (ids) => [{ filter: "team" }, { filter: "team", activeTeamId: ids.T }, { filter: "team", activeTeamId: ids.O }, { filter: "my" }],
   // Mention indexes (useSyncMentionTasks/Docs/Plans): rows land in store.mentionIndex,
   // not a registry key, so FEED_TABLE names their table.
@@ -187,7 +189,7 @@ async function seed(t: ReturnType<typeof convexTest>) {
     };
     let n = 0;
     const base = (place: string) => ({ title: `${place} row`, created_at: now, updated_at: now });
-    const rows: Record<string, Record<string, string>> = { tasks: {}, docs: {}, plans: {}, projects: {}, liveFlows: {}, sessionFlows: {}, flowMaps: {}, teamKitItems: {}, opsGroups: {}, opsEvents: {}, opsReplays: {}, teamDeploys: {}, pipelines: {}, checkouts: {}, messageFeed: {}, workflowRuns: {}, envStandings: {}, priorities: {} };
+    const rows: Record<string, Record<string, string>> = { tasks: {}, docs: {}, plans: {}, projects: {}, liveFlows: {}, sessionFlows: {}, flowMaps: {}, teamKitItems: {}, opsGroups: {}, opsEvents: {}, opsReplays: {}, teamDeploys: {}, pipelines: {}, checkouts: {}, messageFeed: {}, workflowRuns: {}, envStandings: {}, priorities: {}, prNumbers: {} };
     const groupRefs: Record<string, string> = {};
     const runSessions: Record<string, string> = {};
     for (const [place, p] of Object.entries(placements)) {
@@ -196,8 +198,11 @@ async function seed(t: ReturnType<typeof convexTest>) {
       rows.plans[place] = await db.insert("plans", { ...p, ...base(place), short_id: `pl-${++n}`, status: "active", source: "human" });
       rows.projects[place] = await db.insert("projects", { ...p, ...base(place), status: "active" });
       const workflow_id = await db.insert("workflows", { ...p, name: `${place} flow`, slug: `${place}-flow`, nodes: [], edges: [], created_at: now, updated_at: now } as any);
-      const run = await db.insert("workflow_runs", { ...p, workflow_id, workflow_name: `${place} flow`, status: "completed", node_statuses: [], created_at: now, updated_at: now } as any);
+      // Each run opened its own pull request (sessionFlowRuns.forPullRequest reads runs by it).
+      const pr = ++n;
+      const run = await db.insert("workflow_runs", { ...p, workflow_id, workflow_name: `${place} flow`, status: "completed", node_statuses: [], pr: { repository: "acme/app", number: pr, first_head_sha: "a1", head_sha: "a1", at: now }, created_at: now, updated_at: now } as any);
       rows.workflowRuns[place] = run;
+      rows.prNumbers[place] = String(pr);
       // The session that works in the run (sessionFlowRuns.ofSession reads its workflow_run_id).
       runSessions[place] = await db.insert("conversations", {
         user_id: p.user_id, ...(p.team_id ? { team_id: p.team_id } : {}), is_private: place !== "team" && place !== "other", workflow_run_id: run,

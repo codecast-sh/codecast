@@ -92,11 +92,13 @@ function ShipButton({ conversationId, sessionTitle }: { conversationId: string; 
   const showRun = !!run && !!runFlow && !again && !starting;
   const notice = declined && press ? <PressNotice press={press} onRead={() => { setOpen(false); openMessage(conversationId, press.reply!.id); }} /> : null;
   const onOpenChange = (o: boolean) => { setOpen(o); if (!o) setAgain(false); };
-  // The chip stays in the header at every width (the squeeze sheds its words, never the chip): Ship is one press away.
+  // The chip stays in the header at every width, with its words: a squeezed header first sheds the targets after "·",
+  // then caps the rest, and only the narrowest header leaves the dot alone (ship.css). Ship is one press away.
+  const [head, ...tail] = chip.words.split(" · ");
   const trigger = (
-    <button type="button" className={`cq-sq6 ${HEADER_CHIP} shp-chip`} aria-label={chip.words} title={chip.words} data-tone={chip.tone} data-run-through data-ship-state={journey?.now.kind ?? "none"}>
+    <button type="button" className={`${HEADER_CHIP} shp-chip`} aria-label={chip.words} title={chip.words} data-tone={chip.tone} data-run-through data-ship-state={journey?.now.kind ?? "none"}>
       {chip.tone === "idle" ? <Rocket className="w-3 h-3" /> : <i className="shp-chip-dot" aria-hidden />}
-      <span className="cq-sq2">{chip.words}</span>
+      <span className="shp-chip-words">{head}{tail.length ? <span className="cq-sq3"> · {tail.join(" · ")}</span> : null}</span>
     </button>
   );
   const panel = showRun ? (

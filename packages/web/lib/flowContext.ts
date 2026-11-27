@@ -136,11 +136,12 @@ export function flowContext(
       ...(r.outcome && r.outcome !== "success" && r.outcome !== "failure" ? { outcome: r.outcome } : {}),
     });
   }
-  // What happened leads; what has not happened folds: a station not reached before the last one reached is a branch
-  // the run passed by, and the rest are still ahead.
-  const lastReached = stations.reduce((last, s, i) => (s.state !== "next" ? i : last), -1);
-  const ahead = stations.slice(lastReached + 1);
-  const shown = stations.slice(0, lastReached + 1).filter((s) => s.state !== "next");
+  // What happened leads, in the order it ran; what has not happened folds: a station not reached that the graph lists
+  // before the last one reached is a branch the run passed by, and the rest are still ahead.
+  const graphAt = new Map(graphNodes.map((n, i) => [n.id, i]));
+  const lastReached = stations.reduce((last, s) => (s.state !== "next" ? Math.max(last, graphAt.get(s.id) ?? -1) : last), -1);
+  const ahead = stations.filter((s) => s.state === "next" && (graphAt.get(s.id) ?? Infinity) > lastReached);
+  const shown = stations.filter((s) => s.state !== "next");
   stations.length = 0;
   stations.push(...shown);
   const at = stations.findIndex((s) => s.current);

@@ -75,7 +75,7 @@ export function ShippingColumn({ runs, shippers, error, prs, prsFailed = false, 
         {dropped.length ? (
           <li>
             <button type="button" className="dpp-fold" aria-expanded={showQuiet} onClick={() => setToggled(!showQuiet)} data-deploy-dropped={dropped.length}>
-              <ChevronRight className="dpp-chev" aria-hidden />Quiet runs<span className="dpp-pick-n">{dropped.length}</span><span className="dpp-fold-sub">no movement for 7+ days</span>
+              <ChevronRight className="dpp-chev" aria-hidden />Quiet runs<span className="dpp-pick-n">{dropped.length}</span><span className="dpp-fold-sub">stopped, or no movement for 7+ days</span>
             </button>
           </li>
         ) : null}

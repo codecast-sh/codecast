@@ -34,9 +34,18 @@ describe("runNodeRows", () => {
     expect(rows.map((r) => [r.id, r.label])).toEqual([["x", "first"], ["y", "y"]]);
   });
 
-  test("a status the graph does not know is appended, never dropped", () => {
+  test("a status the graph does not know is kept, never dropped, in the order it ran", () => {
     const run = { status: "running", node_statuses: [{ node_id: "retry-2", status: "running", label: "A (retry)" }] };
-    expect(runNodeRows(run, workflow).map((r) => r.id)).toEqual(["a", "b", "c", "retry-2"]);
+    expect(runNodeRows(run, workflow).map((r) => r.id)).toEqual(["retry-2", "a", "b", "c"]);
+  });
+
+  test("the stations in the order they ran, then the ones never reached in graph order (a change run's side routes)", () => {
+    // The change flow lists Merge's side routes (Branch moved, Retest) and Why a person after Merge; this run took the
+    // card route before Merge and never moved its branch.
+    const g = { nodes: ["pr", "verdicts", "merge", "moved", "retest", "why", "decide", "landed"].map((id) => ({ id, label: id, type: "command" })) };
+    const at = (node_id: string, t: number) => ({ node_id, status: "completed", started_at: t });
+    const run = { status: "completed", node_statuses: [at("pr", 1), at("verdicts", 2), at("why", 3), at("decide", 4), at("merge", 5), at("landed", 6)] };
+    expect(runNodeRows(run, g).map((r) => r.id)).toEqual(["pr", "verdicts", "why", "decide", "merge", "landed", "moved", "retest"]);
   });
 });
 

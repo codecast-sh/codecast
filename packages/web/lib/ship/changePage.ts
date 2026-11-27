@@ -6,7 +6,7 @@
 // the bar under the track. Pure, with relative imports only: the phone's run page reads a run here too.
 import { SEGMENT_SEP, takesSessionChange, type FlowEdgeIn, type FlowNodeIn } from "@codecast/shared/contracts/flowPool";
 import { entityRoute } from "@codecast/shared/entities";
-import { journeyStages, targetsFromLine, type Journey, type TargetState } from "./journey";
+import { journeyStages, targetsFromLine, withRunDeploys, type Journey, type TargetState } from "./journey";
 import { gateWaitWords, holdWords, journeyWords, sentBackWords, stopTitle, type JourneyTone } from "./journeyWords";
 import { landedSha } from "./runRecord";
 import { deploysFocusHref, deploysHref as wordsHref, runDeploysHref, runTeam } from "../deploys/focus";
@@ -282,6 +282,22 @@ const REVIEW_WORDS: Record<string, { label: string; tone: ChangeLink["tone"] }> 
 };
 
 /**
+ * The run's own review verdict on a pull request's head, in words: read on that head, or on one the Merge station only
+ * rebased onto main to give it (`station_rebases`). Null when the run's reviewer has not judged this head.
+ */
+export function reviewOnHead(
+  run: { review_verdict?: { verdict: string; head_sha?: string | null } | null; station_rebases?: ReadonlyArray<{ from: string; to: string }> | null } | null | undefined,
+  head: string | null | undefined,
+): { label: string; tone: ChangeLink["tone"] } | null {
+  const v = run?.review_verdict;
+  const words = v ? REVIEW_WORDS[v.verdict] : undefined;
+  if (!v?.head_sha || !head || !words) return null;
+  let at = v.head_sha;
+  for (const r of run?.station_rebases ?? []) if (r.from === at) at = r.to;
+  return at === head || v.head_sha === head ? words : null;
+}
+
+/**
  * The change's facts as links, in the order the change meets them: its pull request, the CI on it, its review (the
  * reviewer's session), the commit it merged (the run's, else the one GitHub merged the PR as), and each deploy that
  * carries it (`targets`: where the deploy records put it, else the Deploy stage's own line). CI and review say a state
@@ -315,7 +331,8 @@ export function changeLinks(run: ChangeRun, graph: ChangeGraph, targets: Readonl
   } else if (prState?.merged && pr) {
     out.push({ kind: "merged", label: "PR merged", href: entityRoute("pr", `${pr.repository}#${pr.number}`) ?? prGithub!, external: false, tone: "ok", title: "GitHub merged the pull request" });
   }
-  const reach = targets.length ? targets : targetsFromLine(deployLine(run, stations));
+  // Reach says each target's state; the run's own line names the deploy that first carried the change, when it saw one.
+  const reach = targets.length ? withRunDeploys(targets, deployLine(run, stations)) : targetsFromLine(deployLine(run, stations));
   for (const t of reach) {
     out.push({
       kind: "deploy",
