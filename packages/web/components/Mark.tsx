@@ -6,7 +6,7 @@
 import type { ReactNode } from "react";
 import { MARK_BY_ID, type MarkGroup } from "../lib/marks";
 import { openIconLegend } from "../lib/iconLegend";
-import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
+import { ShortcutTooltip } from "./ShortcutTooltip";
 import type { ShortcutAction } from "../shortcuts";
 
 const warned = new Set<string>();

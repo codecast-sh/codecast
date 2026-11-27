@@ -28,7 +28,7 @@ async function verifySlackComposer() {
   mock.module("../../hooks/useChatTyping", () => ({ useTypingReporter: () => ({ stop() {}, onTyping() {} }), useTypingMembers: () => [] }));
   mock.module("./TypingIndicator", () => ({ TypingIndicator: () => null }));
   mock.module("../calls/WalkiePtt", () => ({ WalkiePttButton: () => null }));
-  mock.module("../KeyboardShortcutsHelp", () => ({ KeyCap: ({ children }: any) => <kbd>{children}</kbd>, MenuKeyCaps: () => null, ShortcutTooltip: ({ children }: any) => children }));
+  mock.module("../KeyboardShortcutsHelp", () => ({ KeyCap: ({ children }: any) => <kbd>{children}</kbd>, MenuKeyCaps: () => null }));
   mock.module("../ui/popover", () => ({ Popover: ({ children }: any) => <div>{children}</div>, PopoverTrigger: ({ children }: any) => children, PopoverContent: ({ children }: any) => <div>{children}</div> }));
   mock.module("../MessageInput", () => ({ MessageInput: ({ onGateSend, composerFoot }: any) => {
     const [text, setText] = React.useState("Draft survives authorization");
