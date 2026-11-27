@@ -7,6 +7,7 @@
 import { existsSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import type { CiFailure } from "../../packages/shared/contracts/ciFailures";
+import type { JobResult } from "./local";
 
 /** More failing files than this is the change, not the load: they all stay red, and nothing runs again. */
 export const MAX_RERUNS = 5;
@@ -44,4 +45,20 @@ export async function sortFlaky(failing: CiFailure[], runAlone: (file: string) =
     flaky: failing.filter((f) => ended(f, "pass")),
     unjudged: failing.filter((f) => ended(f, "stopped")).map((f) => ({ ...f, assertion: `failed in the run; run again alone, it was stopped before a verdict. ${f.assertion ?? ""}`.trim() })),
   };
+}
+
+/**
+ * Each job that ran red, as the reruns alone left it: failing while any failure of its stays, else no verdict while a
+ * rerun was stopped, else passing, and its counts those that are left (still failing, flaky, not judged), never the
+ * count it ran with ("pass 30s 1 failing" for a job whose one failure passed alone).
+ */
+export function settledJobs(results: JobResult[], left: { failing: CiFailure[]; flaky: CiFailure[]; unjudged: CiFailure[] }): JobResult[] {
+  return results.map((r) => {
+    if (r.status !== "fail") return r;
+    const of = (list: CiFailure[]) => list.filter((f) => f.job === r.job).length;
+    const [failing, flaky, unjudged] = [of(left.failing), of(left.flaky), of(left.unjudged)];
+    const counts = [failing && `${failing} failing`, flaky && `${flaky} flaky (passed alone)`, unjudged && `${unjudged} not judged`].filter(Boolean);
+    const logs = r.reason?.match(/\blogs .+$/)?.[0];
+    return { ...r, status: failing ? "fail" : unjudged ? "no verdict" : "pass", reason: [...counts, logs].filter(Boolean).join(", ") || undefined };
+  });
 }

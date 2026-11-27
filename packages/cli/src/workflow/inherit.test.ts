@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import * as path from "node:path";
+import { spawnSync } from "node:child_process";
+import { expandScriptVars } from "./commandStation";
 import { graphDiff, graphHash, parseWorkflowFile, parseWorkflowSource, validateWorkflow } from "./parser";
 import { BUILTIN_WORKFLOW_TEMPLATES } from "./templates";
 import { planGraphEdit } from "../lineGraphEdit";
@@ -183,6 +186,20 @@ describe("variant edits: after=, before=, skip, when=, guide=", () => {
     expect([next("build"), next("a"), next("b")]).toEqual([["a"], ["b"], ["review"]]);
     expect(g.edges.filter((e) => e.to === "c").map((e) => [e.from, e.condition])).toEqual([["review", "outcome = success"]]);
     expect(next("c")).toEqual(["push"]);
+  });
+
+  test("codecast's own Local CI passes at once when Fix Local CI's turn changed nothing, and runs otherwise", () => {
+    const g = parseWorkflowFile(path.resolve(import.meta.dir, "../../../../.codecast/flows/change.cast"));
+    expect(validateWorkflow(g)).toEqual([]);
+    // The fix goes back to Local CI only: whatever follows Local CI's pass runs on every path.
+    expect(g.edges.filter((e) => e.from === "local_ci_fix").map((e) => e.to)).toEqual(["local_ci"]);
+    // The script, with no cast on PATH: a run that gets past the check stops at its first cast call, which says so.
+    const run = (ctx: Record<string, string>) => spawnSync("bash", ["-c", expandScriptVars(g.nodes.get("local_ci")!.script!, { worktree: "w", run_dir: "/nowhere", default_branch: "main", ...ctx })], { encoding: "utf8", env: { PATH: "/usr/bin:/bin" } });
+    const skipped = run({ sent_back_from: "local_ci_fix", "local_ci_fix.moved": "false" });
+    expect([skipped.status, skipped.stdout.trim()]).toEqual([0, "Fix Local CI changed nothing in the change, so Local CI does not run it again: the pull request opens, and CI judges it against main."]);
+    for (const ctx of [{ sent_back_from: "local_ci_fix", "local_ci_fix.moved": "true" }, { sent_back_from: "fix_conflict", "local_ci_fix.moved": "false" }, {}] as Array<Record<string, string>>) {
+      expect(run(ctx).stdout).toStartWith("Local CI did not run:");
+    }
   });
 
   test("skip joins a station's neighbours and drops what nothing reaches after it", () => {

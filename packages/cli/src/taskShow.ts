@@ -5,6 +5,7 @@
 // is a pure formatter over the rows the server returns; index.ts fetches and
 // prints.
 import { flowName } from "@codecast/shared/contracts/flowPool";
+import { sessionEndWords } from "@codecast/shared/contracts/sessionEnd";
 import { c } from "./colors.js";
 import { decisionHandle, describeResolution, formatAge, type DecisionRow } from "./decideCommand.js";
 import { graphChange, graphChangeText } from "@codecast/shared/tasks";
@@ -102,13 +103,20 @@ const RUN_MARKS: Record<string, string> = {
 export function runSummary(run: RunRow): string {
   const node = run.current_node_label ?? run.current_node_id;
   const gate = run.gate_decision_short_id ? `  gate ${c.cyan}${run.gate_decision_short_id}${c.reset}` : "";
-  const fail = run.status === "failed" && run.fail_reason ? `  ${c.red}${head(run.fail_reason, 60)}${c.reset}` : "";
+  const fail = run.status === "failed" && run.fail_reason ? `  ${c.red}${head(sessionEndWords(run.fail_reason), 60)}${c.reset}` : "";
   return `${run.status}  ${c.bold}${runFlow(run)}${c.reset}${node ? `  ${c.dim}at ${node}${c.reset}` : ""}${gate}${fail}`;
 }
 
-/** A run's flow as a person reads it. */
-const runFlow = (run: Pick<RunRow, "workflow_label" | "workflow_name" | "workflow_slug">): string =>
-  flowName({ label: run.workflow_label, name: run.workflow_name, slug: run.workflow_slug });
+/**
+ * A run's flow as a person reads it: its label, with the slug `cast flow ls` lists it by when that is another name
+ * ("Ship (change)"), so the two connect; a flow with no label reads its name in words ("line_deploy" is "line deploy").
+ */
+export function runFlow(run: Pick<RunRow, "workflow_label" | "workflow_name" | "workflow_slug">): string {
+  const slug = run.workflow_slug?.trim();
+  const label = run.workflow_label?.trim();
+  if (!label) return flowName({ slug: (slug || run.workflow_name?.trim())?.replace(/[-_]+/g, " ") });
+  return slug && label.toLowerCase() !== slug.toLowerCase() ? `${label} (${slug})` : label;
+}
 
 export function formatTaskRuns(runs: RunRow[], now: number = Date.now()): string[] {
   if (runs.length === 0) return [];
@@ -203,7 +211,7 @@ export function formatRunsTable(runs: RunRow[], now: number = Date.now(), opts: 
   const out = [`${c.dim}${line(header)}${c.reset}`];
   runs.forEach((r, i) => {
     out.push(line(rows[i]));
-    if (r.status === "failed" && r.fail_reason) out.push(`  ${c.dim}${r.fail_reason.split("\n")[0].slice(0, 160)}${c.reset}`);
+    if (r.status === "failed" && r.fail_reason) out.push(`  ${c.dim}${sessionEndWords(r.fail_reason).split("\n")[0].slice(0, 160)}${c.reset}`);
   });
   return out.join("\n");
 }

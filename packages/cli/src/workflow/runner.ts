@@ -14,6 +14,8 @@ import { diskFullFailReason, requeueAfterDiskFull } from "../diskFull.js";
 import { countingSemaphore } from "../semaphore.js";
 import { WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowRunState, NodeOutcome } from "./types";
 import { evalCondition } from "./condition";
+import { holdForVerdict, type VerdictAsk } from "./verdictAsk";
+import { sessionEndWords } from "@codecast/shared/contracts/sessionEnd";
 import { factsFor, holdsItsFacts, pinDirectCommands, runGraph, StartFactsError } from "./startFacts";
 import { keepEnds } from "./keepEnds";
 import { executeCommand, expandScriptVars, recordNodeOutput, type StationWatch } from "./commandStation";
@@ -496,9 +498,11 @@ async function executeSubjectNode(node: WorkflowNode, graph: WorkflowGraph, cont
     else delete context["change_landed"];
     const said = (change.landed ? `the session's change is already on upstream at ${change.landed.slice(0, 10)}: nothing is left to land`
       : moved ? `froze the session's change again at ${change.tip.slice(0, 10)} (${change.paths.length} file${change.paths.length === 1 ? "" : "s"})`
-      : "the session's change is as it was: the stage runs again on the same change") + (behindWords(change) ? `; ${behindWords(change)}` : "") + (heldNote ? `; ${heldNote}` : "");
+      : "the session's change is as it was") + (behindWords(change) ? `; ${behindWords(change)}` : "") + (heldNote ? `; ${heldNote}` : "");
     console.log(`  ${c.green}✓${c.reset} ${said}`);
     recordNodeOutput(context, node.id, said);
+    // Whether the turn changed the change, for a route that skips a stage the same change would only fail again.
+    context[`${node.id}.moved`] = String(moved);
   } catch (err) {
     context["last_error"] = `Could not freeze session ${subject.shortId}'s change again: ${refreezeWords(err, graph, options)}`;
     context["station_dead"] = node.id;
@@ -620,9 +624,10 @@ async function briefWriters(node: WorkflowNode, graph: WorkflowGraph, context: R
     else delete context["change_landed"];
     const said = `briefed ${names}; ${change.landed ? `the checkout's change is already on upstream at ${change.landed.slice(0, 10)}: nothing is left to land`
       : moved ? `froze the checkout's change again at ${change.tip.slice(0, 10)} (${change.paths.length} file${change.paths.length === 1 ? "" : "s"})`
-      : "the checkout's change is as it was: the stage runs again on the same change"}${heldNote ? `; ${heldNote}` : ""}${unheard ? `. ${unheard}` : ""}`;
+      : "the checkout's change is as it was"}${heldNote ? `; ${heldNote}` : ""}${unheard ? `. ${unheard}` : ""}`;
     console.log(`  ${c.green}✓${c.reset} ${said}`);
     recordNodeOutput(context, node.id, said);
+    context[`${node.id}.moved`] = String(moved);
     context[`${node.id}.briefed`] = writers.map((w) => w.shortId).join(" ");
   } catch (err) {
     // The stage's words stay out of a refreeze's own failure: it is about the worktree, and a restart it names ends it.
@@ -822,6 +827,8 @@ async function waitOnStation(
     hand = spawned;
     context[`${node.id}.session_id`] = hand.shortId;
     context[`${node.id}.conversation_id`] = hand.conversationId;
+    // When this hand started, kept with it so a runner that takes over the wait reads its work since then (verdictAsk.ts).
+    context[`${node.id}.hand_at`] = String(Date.now());
     onSpawned?.();
     console.log(`  ${c.green}spawned${c.reset} ${c.cyan}${hand.shortId}${c.reset}`);
   }
@@ -860,6 +867,7 @@ async function waitOnStation(
     await cliCall(options, "/cli/work/update", { short_id: options.taskId, status: "in_progress" });
   }
   let askedForHandoffAt = 0;
+  const verdictAsk: { ask: VerdictAsk } = { ask: null };
   let seenMessages = -1;
   // Reads in a row that found the subject past its brief and not at work (below).
   let subjectQuiet = 0;
@@ -1075,6 +1083,13 @@ async function waitOnStation(
       askedOnce = false;
       const waiting = await taskWaiting((route, body) => cliCall(options, route, body), options.taskId);
       if (waiting && clock.park()) console.log(`${c.dim}  ${shortId}: its task waits (${waiting}); the node's clock stops until it clears${c.reset}`);
+      continue;
+    }
+    // A reviewer that left no verdict is asked once to finish before it settles (verdictAsk.ts).
+    if (node.reviewer && !subject && await holdForVerdict((route, body) => cliCall(options, route, body), verdictAsk, {
+      row, pinned, taskId: options.taskId, since: (Number(context[`${node.id}.hand_at`]) || startMs) - CLOCK_SKEW_MS, to: conversationId, from: options.runSession, shortId, runId: options.runId, graceMs: options.verdictAskGraceMs,
+    })) {
+      askedOnce = false;
       continue;
     }
     // The pin is display text, capped; its json block is stored whole as
@@ -1717,6 +1732,8 @@ export interface RunOptions {
   presenterGraceMs?: number;
   /** How long a hand asked for its missing handoff has before a finished reading counts (HANDOFF_ASK_GRACE_MS; tests shorten it). */
   handoffAskGraceMs?: number;
+  /** How long a reviewer that left no verdict has to take the ask to finish (VERDICT_ASK_GRACE_MS; tests shorten it). */
+  verdictAskGraceMs?: number;
   /** Continue this run row from where it stands instead of from start (runResume.ts). */
   resume?: ResumeRow;
   /** Set by runWorkflow on a resume: the gate and the hand the node it resumes at left open, each taken once. */
@@ -2473,7 +2490,7 @@ async function driveRun(
 
   // An exit with `stop` ends the run on purpose, in the graph's own words for why.
   if (current.type === "exit" && current.stop && !state.failed) {
-    const why = expandPromptVars(current.stop, graph, state.context).trim().replace(/\s+/g, " ");
+    const why = sessionEndWords(expandPromptVars(current.stop, graph, state.context)).trim().replace(/\s+/g, " ");
     state.failed = true;
     state.failReason = `Stopped: ${(why || current.label).slice(0, 1000)}`;
     state.context["stopped_at"] = current.id;
@@ -2913,8 +2930,14 @@ async function runNodeLoop(
     // tell that round from its first and checked its own work again (ct-58757).
     // A station that parks (a hold in front of another) is told what sent the run there even on its first visit, so it
     // can pass it on: ct-61678's Revise note was lost at a hold the run had not passed before (Oct 30).
-    if (state.completed.includes(next.id) || next.parks) state.context["sent_back"] = `${current.label}: ${state.context[`${current.id}.output`] ?? ""}`.trim();
-    else delete state.context["sent_back"];
+    // `sent_back_from` names that station by id, for a script or route that reads which one it was.
+    if (state.completed.includes(next.id) || next.parks) {
+      state.context["sent_back"] = `${current.label}: ${state.context[`${current.id}.output`] ?? ""}`.trim();
+      state.context["sent_back_from"] = current.id;
+    } else {
+      delete state.context["sent_back"];
+      delete state.context["sent_back_from"];
+    }
 
     checkpoint(next.id);
     console.log();

@@ -10,6 +10,7 @@ import {
   formatTaskEvidence,
   formatTaskRuns,
   isHolding,
+  runFlow,
   type RunRow,
   type TaskEvidence,
 } from "./taskShow";
@@ -144,6 +145,19 @@ describe("cast task show: evidence", () => {
 });
 
 describe("cast workflow runs", () => {
+  test("a flow's label names it beside the slug cast flow ls lists it by; a flow with no label reads its name in words", () => {
+    expect(runFlow({ workflow_label: "Ship", workflow_name: "change", workflow_slug: "change" })).toBe("Ship (change)");
+    expect(runFlow({ workflow_label: "Change", workflow_name: "change", workflow_slug: "change" })).toBe("Change");
+    expect(runFlow({ workflow_name: "line_deploy", workflow_slug: "line-deploy" })).toBe("line deploy");
+    expect(runFlow({})).toBe("run");
+  });
+
+  test("a stop that quotes a station's session state says it in words", () => {
+    const failed = run({ status: "failed", fail_reason: "Stopped: The reviewer left no verdict, so the change is not judged. work_state: needs_input", gate_decision_short_id: undefined });
+    expect(formatRunsTable([failed], now)).toContain("not judged. Its session stopped, waiting for input.");
+    expect(formatRunsTable([failed], now)).not.toContain("work_state");
+  });
+
   test("one table: age, status, workflow, task, node, gate", () => {
     const out = formatRunsTable([run(), run({ _id: "r2", status: "running", task_short_id: undefined, plan_short_id: "pl-682", current_node_label: "Implement", gate_decision_short_id: undefined, updated_at: now - 60_000 })], now);
     const lines = out.split("\n");
