@@ -6,7 +6,7 @@
 // Done/Undone and the rest of the owner's controls (controls), and a
 // double-click on its title renames it. On a desktop list the owner's rank is
 // a drag handle (arrow keys step it).
-import { useLayoutEffect, useRef, useState, type DragEvent } from "react";
+import { useLayoutEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
 import Link from "next/link";
 import { ChevronRight } from "lucide-react";
 import { pastBadge, priorityHref, rankProvenance, type PriorityRow } from "../../lib/priorities";

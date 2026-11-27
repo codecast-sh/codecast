@@ -506,9 +506,12 @@ test("a teammate's priority: its owner by the title, its title is no rename, and
     const owner = el.querySelector("header [data-priority-owner]")!;
     expect(owner.textContent).toBe("SSam Teammate");
     expect(owner.querySelector("[data-owner-face]")?.getAttribute("aria-label")).toBe("Sam Teammate");
-    // No write control on a teammate's milestones or their sessions.
+    // No write control on a teammate's milestones; the viewer's own sessions on them may only leave (Not this priority).
     expect(el.querySelector("[data-priority-page] [data-milestone-menu]")).toBeNull();
-    expect(el.querySelector("[data-priority-page] [data-session-menu]")).toBeNull();
+    const sessionMenu = el.querySelector("[data-priority-page] [data-session-menu]")!;
+    await act(async () => { sessionMenu.dispatchEvent(new (window as any).KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+    expect([...document.querySelectorAll('[role="menuitem"]')].map((n) => n.getAttribute("data-act"))).toEqual(["not-priority"]);
+    await act(async () => { document.activeElement?.dispatchEvent(new (window as any).KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
     await act(async () => { el.querySelector("h1")!.dispatchEvent(new (window as any).MouseEvent("dblclick", { bubbles: true })); });
     expect(el.querySelector("[data-rename-input]")).toBeNull();
     await act(async () => { el.querySelector('[data-priority-menu="pri-60"]')!.dispatchEvent(new (window as any).KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
