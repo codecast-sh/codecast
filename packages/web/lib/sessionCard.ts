@@ -31,6 +31,9 @@ export function untitledSessionName(session: { first_prompt?: string | null }, p
  *  alone (isAdoptedChild), so it draws as a full card despite its parent. */
 export function drawsNested(session: InboxSession, subRow?: unknown): boolean {
   if (subRow) return true;
+  // Under the owners model a row stands alone in its owners' inboxes
+  // (inboxNestParentOf places none under a parent), so it draws as a full card.
+  if (underOwnersModel(session)) return false;
   if (isAdoptedChild(session)) return false;
   return !!session.is_subagent || !!nestParentIdOf(session);
 }
