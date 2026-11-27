@@ -156,6 +156,71 @@ export function shippingRuns(
   };
 }
 
+/* ───────────── Open pull requests with no Ship run ───────────── */
+
+/** An open pull request as the left column reads it: a pullRequests list row, GitHub's state mirrored on it. */
+export type OpenPr = {
+  _id: string;
+  repository: string;
+  number: number;
+  title: string;
+  state: string;
+  draft?: boolean;
+  head_ref?: string;
+  author_github_username?: string;
+  /** When it was opened. Its updated_at is no measure of movement: a push to main restamps every open PR at once. */
+  created_at: number;
+  /** The tasks it names (ct-N in its title, body or branch): a run of one of them carries it. */
+  task_ids?: string[];
+  /** "none" | "pending" | "success" | "failure" */
+  checks_state?: string;
+  /** "approved" | "changes_requested" | "review_required" | "none" */
+  review_decision?: string;
+  /** GitHub's mergeable_state: "clean", "behind", "dirty", "blocked", "unstable", "unknown", "draft". */
+  mergeable_state?: string;
+  behind_by?: number;
+};
+
+/**
+ * The left column's second half: this repository's open pull requests no Ship run carries (a run's card already
+ * stands for its PR: by its number, or by a task the PR names when the run recorded no PR) and whose commit is not on
+ * main yet; `keep` narrows them (Mine). Newest opened first. None fold away: a PR has no honest "last moved" to judge.
+ */
+export function openPrs(
+  prs: ReadonlyArray<OpenPr>,
+  o: { repository: string; runs: ReadonlyArray<Pick<ShippingRun, "pr" | "task_id">>; landedPrs?: ReadonlySet<number>; keep?: (pr: OpenPr) => boolean },
+): OpenPr[] {
+  const repo = o.repository.toLowerCase();
+  const carried = new Set(o.runs.flatMap((r) => (r.pr && r.pr.repository.toLowerCase() === repo ? [r.pr.number] : [])));
+  // Only a run that recorded no PR stands for the PRs naming its task: one with a PR stands for that PR alone.
+  const runTasks = new Set(o.runs.flatMap((r) => (!r.pr && r.task_id ? [String(r.task_id)] : [])));
+  const byRun = (p: OpenPr) => carried.has(p.number) || !!p.task_ids?.some((t) => runTasks.has(String(t)));
+  return prs
+    .filter((p) => p.state === "open" && p.repository.toLowerCase() === repo && !byRun(p) && !o.landedPrs?.has(p.number) && (!o.keep || o.keep(p)))
+    .sort((a, b) => b.created_at - a.created_at);
+}
+
+/** PR · CI · Review · Merge for a pull request no run carries, read from what GitHub says of it. */
+export function prStepper(pr: Pick<OpenPr, "draft" | "checks_state" | "review_decision" | "mergeable_state">): StepState[] {
+  const ci: StepState = pr.checks_state === "success" ? "done" : pr.checks_state === "failure" ? "failed" : pr.checks_state === "pending" ? "active" : "idle";
+  const review: StepState = pr.review_decision === "approved" ? "done" : pr.review_decision === "changes_requested" ? "failed" : "idle";
+  const merge: StepState = pr.mergeable_state === "dirty" ? "failed" : "idle";
+  return [pr.draft ? "waiting" : "done", ci, review, merge];
+}
+
+/** What a pull request no run carries waits on, the first that applies, in the words its card and its page say. */
+export function prState(pr: Pick<OpenPr, "draft" | "checks_state" | "review_decision" | "mergeable_state" | "behind_by">): RunState {
+  if (pr.draft) return { word: "Draft", tone: "blue" };
+  if (pr.checks_state === "failure") return { word: "CI failing", tone: "red" };
+  if (pr.mergeable_state === "dirty") return { word: "Merge conflicts", tone: "red" };
+  if (pr.review_decision === "changes_requested") return { word: "Changes requested", tone: "red" };
+  if (pr.checks_state === "pending") return { word: "CI running", tone: "yellow" };
+  const behind = pr.mergeable_state === "behind" || (pr.behind_by ?? 0) > 0;
+  const detail = behind ? `behind main${pr.behind_by ? ` by ${pr.behind_by}` : ""}` : undefined;
+  const state: RunState = pr.review_decision === "approved" ? { word: "Ready to merge", tone: "blue" } : { word: "Waiting on review", tone: "blue" };
+  return detail ? { ...state, detail } : state;
+}
+
 /* ───────────── Crediting: the session that pressed Ship ───────────── */
 
 const sameSha = (a: string, b: string) => a.length >= 7 && b.length >= 7 && (a.startsWith(b) || b.startsWith(a));

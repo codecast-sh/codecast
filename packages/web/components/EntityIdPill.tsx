@@ -24,9 +24,6 @@ import {
   Phone,
   Signpost,
   Check,
-  CircleCheck,
-  CircleMinus,
-  CircleQuestionMark,
   Zap,
   GitPullRequest,
   GitPullRequestClosed,
@@ -41,6 +38,7 @@ import {
   UserRound,
 } from "lucide-react";
 import { taskVisual } from "./TaskStatusBadge";
+import { DECISION_STATE } from "../lib/entityCardAccent";
 import { GoalHoverContent } from "./initiatives/GoalHoverContent";
 import { Popover, PopoverContent, PopoverAnchor } from "./ui/popover";
 import { useHoverCard } from "../hooks/useHoverCard";
@@ -334,16 +332,6 @@ function PlanHoverContent({ plan }: { plan: any }) {
     </div>
   );
 }
-
-// One state vocabulary for a decision reference. The pill keeps the
-// decision's yellow in every state (color names the object type); its glyph
-// says whether the question is still open, and a settled one fades.
-const DECISION_STATE: Record<string, { label: string; color: string; icon: typeof Signpost }> = {
-  pending: { label: "Open", color: "text-sol-yellow", icon: CircleQuestionMark },
-  answered: { label: "Answered", color: "text-sol-green", icon: CircleCheck },
-  dismissed: { label: "Dismissed", color: "text-sol-text-dim", icon: CircleMinus },
-  withdrawn: { label: "Withdrawn", color: "text-sol-text-dim", icon: CircleMinus },
-};
 
 // What a decision reference has to answer at a glance: the question, whether
 // it is still open, and the option labels with the chosen ones marked. What
