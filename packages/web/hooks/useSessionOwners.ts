@@ -52,7 +52,7 @@ function ownersSig(s: any, conversationId: string): string {
     home && isInboxMember(home, s.currentUser?._id) ? "member" : "",
     read ? `${read.owners_changed_at ?? ""}:${read.can_edit ? 1 : 0}:${read.role?.name ?? ""}:${read.parent_session?.title ?? ""}:${read.people_ids.map((id) => `${id}=${read.people_info[id]?.name ?? ""}`).join(";")}` : "-",
     // Where it came from, which the menu offers first.
-    read ? `${read.released_parent?.conversation_id ?? ""}=${read.released_parent?.title ?? ""}:${read.released_role?.role_id ?? ""}:${read.spawned_by?.conversation_id ?? ""}=${read.spawned_by?.adoptable ? 1 : 0}` : "-",
+    read ? `${read.released_parent?.conversation_id ?? ""}=${read.released_parent?.title ?? ""}:${read.released_role?.role_id ?? ""}=${read.released_role?.name ?? ""}:${read.spawned_by?.conversation_id ?? ""}=${read.spawned_by?.title ?? ""}=${read.spawned_by?.adoptable ? 1 : 0}` : "-",
     home?.user_id ?? "",
   ].join("|");
 }

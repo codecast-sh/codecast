@@ -143,8 +143,8 @@ describe("applySessionOwners", () => {
     expect(facts().org_role_id).toBe(ROLE);
     expect(owners()).toEqual([]);
     const back = (useInboxStore.getState() as any).sessionOwners[S];
-    expect(back.released_parent).toBeNull();
-    expect(back.released_role).toBeNull();
+    expect(back.released_parent ?? null).toBeNull();
+    expect(back.released_role ?? null).toBeNull();
   });
 
   test("put back from the read alone: the released parent owns it again and you stay", () => {

@@ -23,9 +23,9 @@ export function sessionOwnersRowOf(conversationId: string, read: any): SessionOw
     people_info: Object.fromEntries((read.people ?? []).map((p: OwnerPersonInfo) => [String(p.user_id), p])),
     role: read.role ?? null,
     parent_session: read.parent_session ?? null,
-    released_parent: read.released_parent ?? null,
-    released_role: read.released_role ?? null,
-    spawned_by: read.spawned_by ?? null,
+    // Where it came from rides only the open conversation's read; the cards'
+    // read leaves it out, and applySessionOwnersReads keeps what is cached.
+    ...Object.fromEntries(ORIGIN_KEYS.filter((k) => read[k] !== undefined).map((k) => [k, read[k] ?? null])),
     implicit_starter: read.implicit_starter ?? null,
     starter_id: read.starter_id ?? read.implicit_starter?.user_id ?? null,
     role_started: !!read.role_started,
@@ -33,6 +33,8 @@ export function sessionOwnersRowOf(conversationId: string, read: any): SessionOw
     owners_changed_at: read.owners_changed_at ?? null,
   };
 }
+
+const ORIGIN_KEYS = ["released_parent", "released_role", "spawned_by"] as const;
 
 export function applySessionOwnersRead(conversationId: string, read: any): void {
   applySessionOwnersReads({ [conversationId]: read });
@@ -44,9 +46,13 @@ export function applySessionOwnersReads(reads: Record<string, any>): void {
   const store = useInboxStore.getState();
   const rows: SessionOwnersRow[] = [];
   const off: string[] = [];
+  const cachedRows = (store as any).sessionOwners ?? {};
   for (const [id, read] of Object.entries(reads ?? {})) {
     const row = sessionOwnersRowOf(id, read);
-    if (row) rows.push(row);
+    if (row) {
+      for (const k of ORIGIN_KEYS) if (!(k in row) && cachedRows[id]?.[k] !== undefined) (row as any)[k] = cachedRows[id][k];
+      rows.push(row);
+    }
     else if (read && (store as any).sessionOwners?.[id]) off.push(id);
   }
   // A lock the change's acknowledgement never settled (its window closed)

@@ -25,8 +25,7 @@ import {
   type OwnerRowSnapshot,
 } from "./sessionOwners";
 import { mayEditOwners, ownersOf, releasedParentOf } from "@codecast/shared/contracts/sessionOwners";
-import { isClosedSession } from "@codecast/shared/contracts";
-import { assertHumanOwner, assertRoleMayOwn, ownerCandidatesFor, ownersChangeFor, resolveOwnerRef, writeOwnersChange, type OwnerCandidate } from "./lib/ownersChange";
+import { assertHumanOwner, assertRoleMayOwn, ownerCandidatesFor, ownersChangeFor, resolveOwnerRef, takeBackRefusal, writeOwnersChange, type OwnerCandidate } from "./lib/ownersChange";
 export { OWNER_CANDIDATE_CAP, type OwnerCandidate } from "./lib/ownersChange";
 import { teamFeatureOffMessage } from "./lib/teamFeatureGuard";
 import { notifySessionAssigned, notifySessionOwnershipChanged } from "./sessionAssignmentNotifications";
@@ -870,12 +869,14 @@ export type OwnersModelRead = {
   role: { role_id: string; short_id: string | null; handle: string; name: string } | null;
   parent_session: { conversation_id: string; short_id: string; title: string | null } | null;
   /** Where it came from, which the owners menu offers back first: the parent
-   *  a person released it from (alive, so it can take it back), the role an
-   *  owners change took off it, and the session that spawned it (`adoptable`:
-   *  the viewer may make it that session's worker). */
-  released_parent: { conversation_id: string; short_id: string; title: string | null } | null;
-  released_role: { role_id: string; short_id: string | null; handle: string; name: string } | null;
-  spawned_by: { conversation_id: string; short_id: string; title: string | null; adoptable: boolean } | null;
+   *  a person released it from (only when the viewer may put it back), the
+   *  role an owners change took off it, and the session that spawned it
+   *  (`adoptable`: the viewer may make it that session's worker). Read for an
+   *  open conversation only (listOwners), never for the inbox cards: the
+   *  spawner's row changes with every message it streams. */
+  released_parent?: { conversation_id: string; short_id: string; title: string | null } | null;
+  released_role?: { role_id: string; short_id: string | null; handle: string; name: string } | null;
+  spawned_by?: { conversation_id: string; short_id: string; title: string | null; adoptable: boolean } | null;
   implicit_starter: (OwnerInfo & { implicit: true }) | null;
   /** The human who started it (shared SessionOwnerFacts.starter) and whether
    *  a role started it: what a client needs to paint an owners change by the
@@ -903,6 +904,7 @@ export async function performListOwners(
   ctx: { db: any },
   authUserId: Id<"users">,
   sessionId: string,
+  opts: { origin?: boolean } = {},
 ): Promise<({
   short_id: string;
   conversation_id: Id<"conversations">;
@@ -915,7 +917,7 @@ export async function performListOwners(
   const owners = await listOwnerInfos(ctx, conversation._id);
   const team = await teamOwnerInfo(ctx, conversation._id);
   if (await ownersModelOn(ctx, conversation)) {
-    return { short_id, conversation_id: conversation._id, team, ...(await ownersModelRead(ctx, authUserId, conversation, owners)) };
+    return { short_id, conversation_id: conversation._id, team, ...(await ownersModelRead(ctx, authUserId, conversation, owners, !!opts.origin)) };
   }
   if (owners.length === 0 && !team) {
     const starter = await humanStarterUser(ctx, conversation);
@@ -924,7 +926,7 @@ export async function performListOwners(
   return { short_id, conversation_id: conversation._id, owners, team };
 }
 
-async function ownersModelRead(ctx: { db: any }, authUserId: Id<"users">, conversation: any, people: OwnerInfo[]): Promise<OwnersModelRead & { owners: OwnerInfo[] }> {
+async function ownersModelRead(ctx: { db: any }, authUserId: Id<"users">, conversation: any, people: OwnerInfo[], origin: boolean): Promise<OwnersModelRead & { owners: OwnerInfo[] }> {
   const facts = await sessionOwnerFactsOf(ctx, conversation);
   const o = ownersOf(facts);
   const starter = o.implicitStarter ? await ctx.db.get(o.implicitStarter) : null;
@@ -936,17 +938,6 @@ async function ownersModelRead(ctx: { db: any }, authUserId: Id<"users">, conver
     const access = await checkConversationAccess(ctx, authUserId, c);
     return access === "owner" || access === "team" ? c.title ?? null : null;
   };
-  const sessionRef = async (c: any) => ({ conversation_id: String(c._id), short_id: c.short_id ?? String(c._id).slice(0, 7), title: await titleFor(c) });
-  const alive = (c: any) => !!c && !c.inbox_killed_at && !isClosedSession(c);
-  // A person's release, never a dead parent's (deadParentAt): only a live one can take it back.
-  const releasedLink = conversation.parent_released_at != null ? releasedParentOf(facts) : null;
-  const releasedDoc = releasedLink ? await ctx.db.get(releasedLink) : null;
-  const releasedRoleDoc = conversation.released_role_id && String(conversation.released_role_id) !== o.role ? await ctx.db.get(conversation.released_role_id) : null;
-  // A spawned peer (no parent link, started as itself) its spawner may adopt.
-  const spawner = !conversation.parent_conversation_id && conversation.spawned_by_conversation_id ? await ctx.db.get(conversation.spawned_by_conversation_id) : null;
-  const movable = !conversation.is_subagent && !conversation.is_workflow_sub && !conversation.parent_message_uuid;
-  const spawnerAdoptable = !!spawner && movable && alive(spawner) && String(spawner._id) !== String(conversation._id)
-    && (await ownersModelOn(ctx, spawner)) && mayEditOwners(await sessionOwnerFactsOf(ctx, spawner), String(authUserId));
   return {
     session_owners: true,
     owners: implicit_starter ? [...people, implicit_starter] : people,
@@ -955,16 +946,40 @@ async function ownersModelRead(ctx: { db: any }, authUserId: Id<"users">, conver
     parent_session: o.parentSession
       ? { conversation_id: o.parentSession, short_id: parent?.short_id ?? o.parentSession.slice(0, 7), title: parent ? await titleFor(parent) : null }
       : null,
-    released_parent: alive(releasedDoc) ? await sessionRef(releasedDoc) : null,
-    released_role: releasedRoleDoc && releasedRoleDoc.status !== "retired"
-      ? { role_id: String(releasedRoleDoc._id), short_id: releasedRoleDoc.short_id ?? null, handle: releasedRoleDoc.handle, name: releasedRoleDoc.name }
-      : null,
-    spawned_by: spawner ? { ...(await sessionRef(spawner)), adoptable: spawnerAdoptable } : null,
+    ...(origin ? await originRead(ctx, authUserId, conversation, facts, o.role, titleFor) : {}),
     implicit_starter,
     starter_id: facts.starter,
     role_started: !!facts.role_started,
     can_edit: mayEditOwners(facts, String(authUserId)),
     owners_changed_at: conversation.owners_changed_at ?? null,
+  };
+}
+
+// Where it came from, for the owners menu (OwnersModelRead): the parent a
+// person released it from, when the viewer may put it back; the role a change
+// took off it; the session that spawned it, adoptable by the same rules.
+async function originRead(
+  ctx: { db: any },
+  authUserId: Id<"users">,
+  conversation: any,
+  facts: Awaited<ReturnType<typeof sessionOwnerFactsOf>>,
+  role: string | null,
+  titleFor: (c: any) => Promise<string | null>,
+): Promise<Pick<OwnersModelRead, "released_parent" | "released_role" | "spawned_by">> {
+  const sessionRef = async (c: any) => ({ conversation_id: String(c._id), short_id: c.short_id ?? String(c._id).slice(0, 7), title: await titleFor(c) });
+  const releasedLink = conversation.parent_released_at != null ? releasedParentOf(facts) : null;
+  const releasedDoc = releasedLink ? await ctx.db.get(releasedLink) : null;
+  const roleDoc = conversation.released_role_id && String(conversation.released_role_id) !== role ? await ctx.db.get(conversation.released_role_id) : null;
+  // A spawned peer (no parent link, started as itself) its spawner may adopt.
+  const spawner = !conversation.parent_conversation_id && conversation.spawned_by_conversation_id ? await ctx.db.get(conversation.spawned_by_conversation_id) : null;
+  const movable = !conversation.is_subagent && !conversation.is_workflow_sub && !conversation.parent_message_uuid;
+  const adoptable = !!spawner && movable && String(spawner._id) !== String(conversation._id) && !(await takeBackRefusal(ctx, authUserId, conversation, spawner));
+  return {
+    released_parent: releasedDoc && !(await takeBackRefusal(ctx, authUserId, conversation, releasedDoc)) ? await sessionRef(releasedDoc) : null,
+    released_role: roleDoc && roleDoc.status !== "retired"
+      ? { role_id: String(roleDoc._id), short_id: roleDoc.short_id ?? null, handle: roleDoc.handle, name: roleDoc.name }
+      : null,
+    spawned_by: spawner ? { ...(await sessionRef(spawner)), adoptable } : null,
   };
 }
 
@@ -980,7 +995,7 @@ export const listOwners = query({
       if (args.api_token) throw new Error("Authentication failed: invalid token or session");
       return null;
     }
-    return performListOwners(ctx, authUserId, args.session_id);
+    return performListOwners(ctx, authUserId, args.session_id, { origin: true });
   },
 });
 

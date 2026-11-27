@@ -73,14 +73,14 @@ describe("restore_parent", () => {
     const db = fixtures(true, { parent_conversation_id: LEAD, is_subagent: true });
     await performApplyOwnersChange(ctxOf(db), ME as any, { session_id: S, take_over: true });
     expect(conv(db).parent_released_at).toBeGreaterThan(0);
-    const read: any = await performListOwners(ctxOf(db), ME as any, S);
+    const read: any = await performListOwners(ctxOf(db), ME as any, S, { origin: true });
     expect(read.parent_session).toBeNull();
     expect(read.released_parent).toEqual({ conversation_id: LEAD, short_id: "jxlead1", title: "jxlead1" });
     await performApplyOwnersChange(ctxOf(db), ME as any, { session_id: S, restore_parent: true });
     expect(conv(db).parent_released_at).toBeUndefined();
     expect(conv(db).parent_conversation_id).toBe(LEAD);
     expect(people(db)).toEqual([ME]);
-    const back: any = await performListOwners(ctxOf(db), ME as any, S);
+    const back: any = await performListOwners(ctxOf(db), ME as any, S, { origin: true });
     expect(back.parent_session?.conversation_id).toBe(LEAD);
     expect(back.released_parent).toBeNull();
   });
@@ -95,9 +95,25 @@ describe("restore_parent", () => {
       const db = fixtures(true, { parent_conversation_id: LEAD, parent_released_at: 5 }, leadOver);
       addRow(db, ME, 1);
       await expect(performApplyOwnersChange(ctxOf(db), ME as any, { session_id: S, restore_parent: true })).rejects.toThrow(/killed|closed/);
-      const read: any = await performListOwners(ctxOf(db), ME as any, S);
+      const read: any = await performListOwners(ctxOf(db), ME as any, S, { origin: true });
       expect(read.released_parent).toBeNull();
     }
+  });
+
+  test("refuses a parent the caller neither owns nor runs, and the read does not offer it", async () => {
+    const db = fixtures(true, { parent_conversation_id: LEAD, parent_released_at: 5 }, { user_id: MATE });
+    addRow(db, ME, 1);
+    await expect(performApplyOwnersChange(ctxOf(db), ME as any, { session_id: S, restore_parent: true })).rejects.toThrow(/own or run/);
+    const read: any = await performListOwners(ctxOf(db), ME as any, S, { origin: true });
+    expect(read.released_parent).toBeNull();
+  });
+
+  test("the inbox cards' read leaves where-it-came-from out", async () => {
+    const db = fixtures(true, { parent_conversation_id: LEAD, parent_released_at: 5 });
+    addRow(db, ME, 1);
+    const read: any = await performListOwners(ctxOf(db), ME as any, S);
+    expect("released_parent" in read).toBe(false);
+    expect("spawned_by" in read).toBe(false);
   });
 
   test("a take-over records the role it took off; that role coming back clears it", async () => {
@@ -105,7 +121,7 @@ describe("restore_parent", () => {
     db._tables.org_roles.push(roleRow);
     await performApplyOwnersChange(ctxOf(db), ME as any, { session_id: S, take_over: true });
     expect(conv(db).released_role_id).toBe(ROLE);
-    const read: any = await performListOwners(ctxOf(db), ME as any, S);
+    const read: any = await performListOwners(ctxOf(db), ME as any, S, { origin: true });
     expect(read.released_role).toEqual({ role_id: ROLE, short_id: "or-1", handle: "evals", name: "Eval Suite lead" });
     await performApplyOwnersChange(ctxOf(db), ME as any, { session_id: S, role: ROLE });
     expect(conv(db).released_role_id).toBeUndefined();
@@ -113,7 +129,7 @@ describe("restore_parent", () => {
 
   test("names the session that spawned a peer, adoptable by a viewer who runs it", async () => {
     const db = fixtures(true, { spawned_by_conversation_id: LEAD });
-    const read: any = await performListOwners(ctxOf(db), ME as any, S);
+    const read: any = await performListOwners(ctxOf(db), ME as any, S, { origin: true });
     expect(read.spawned_by).toEqual({ conversation_id: LEAD, short_id: "jxlead1", title: "jxlead1", adoptable: true });
   });
 });

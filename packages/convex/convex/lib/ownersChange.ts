@@ -172,7 +172,7 @@ export async function ownersChangeFor(
     ...(target.restore?.length ? { restore: target.restore } : {}),
     ...(target.role === undefined ? {} : { role: target.role === null ? null : String((await resolveOwnerRole(ctx, authUserId, conversation, target.role))._id) }),
     ...(target.release_parent ? { releaseParent: true } : {}),
-    ...(target.restore_parent ? await restorableParent(ctx, conversation) : {}),
+    ...(target.restore_parent ? await restorableParent(ctx, authUserId, conversation) : {}),
     ...(target.take_over ? { takeOver: true } : {}),
     ...(target.adopt_parent || target.detach_parent ? assertMovableWorker(conversation) : {}),
     ...(target.adopt_parent ? { adoptParent: await adoptableParentId(ctx, authUserId, conversation, target.adopt_parent) } : {}),
@@ -221,14 +221,28 @@ export async function adoptableParentId(ctx: { db: any }, authUserId: Id<"users"
   return String(target._id);
 }
 
-// Putting the parent back: only a released one that can still answer it.
-// A parent that died reads as released (deadParentAt) but has nobody to
-// answer, so it is refused here rather than restored in name only.
-export async function restorableParent(ctx: { db: any }, conversation: any): Promise<{ restoreParent: true }> {
+// Why `parent` cannot take this session back as its worker, or null: the
+// adopt rules, said of the session it came from. It is alive and under the
+// owners model, the caller owns or runs it (you hand work only to a session
+// that is yours), and its runner can open this session. The owners read
+// offers a parent back only when this is null.
+export async function takeBackRefusal(ctx: { db: any }, authUserId: Id<"users">, conversation: any, parent: any): Promise<string | null> {
+  if (!parent || parent.inbox_killed_at) return "The session it came from was killed; it cannot take it back";
+  if (isClosedSession(parent)) return "The session it came from is closed; it cannot take it back";
+  if (!(await ownersModelOn(ctx, parent))) return "The session it came from is not under session owners";
+  if (!mayEditOwners(await sessionOwnerFactsOf(ctx, parent), String(authUserId))) return "You can only hand work to a session you own or run";
+  if (!parent.user_id || (await checkConversationAccess(ctx as any, parent.user_id, conversation)) === "denied") {
+    return "That session's runner cannot open this one, so it could not answer it";
+  }
+  return null;
+}
+
+// Putting the parent back: only a released one (a person's release, never a
+// dead parent's, which reads as released through deadParentAt) that can take it.
+export async function restorableParent(ctx: { db: any }, authUserId: Id<"users">, conversation: any): Promise<{ restoreParent: true }> {
   if (!conversation.parent_conversation_id || conversation.parent_released_at == null) throw new Error("It has no session to go back to");
-  const parent = await ctx.db.get(conversation.parent_conversation_id);
-  if (!parent || parent.inbox_killed_at) throw new Error("The session it came from was killed; it cannot take it back");
-  if (isClosedSession(parent)) throw new Error("The session it came from is closed; it cannot take it back");
+  const refusal = await takeBackRefusal(ctx, authUserId, conversation, await ctx.db.get(conversation.parent_conversation_id));
+  if (refusal) throw new Error(refusal);
   return { restoreParent: true };
 }
 

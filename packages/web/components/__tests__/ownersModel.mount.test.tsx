@@ -307,6 +307,24 @@ describe("flag on: where it came from, when that session is a role's own", () =>
     await settle();
     expect(ownersSent()).toEqual([{ add: ["me"], adopt_parent: LEAD }]);
   });
+
+  test("picking a role after staging an adopt drops the adopt, so what Save sends is what the menu shows", async () => {
+    seed(true, { spawned_by: { conversation_id: LEAD, short_id: "jxlead1", title: "Planner", adoptable: true } });
+    await render(<OwnersSegment key="spawner-role" conversationId={S} />);
+    await click($("[data-owners-seg]"));
+    await click($(`[data-owner-candidate="s:${LEAD}"] .own-plus`));
+    await click($(`[data-owner-candidate="r:${ROLE}"] .own-plus`));
+    expect($$("[data-owner-row]").map(rowText)).toEqual(["YouOwner", "Eval Suite leadRole · answers for you · new"]);
+    await click($("[data-owners-save]"));
+    await settle();
+    expect(ownersSent()).toEqual([{ role: ROLE }]);
+  });
+
+  test("the cards' read, which leaves where-it-came-from out, keeps what the open conversation read", () => {
+    seed(true, { released_parent: { conversation_id: LEAD, short_id: "jxlead1", title: "Planner" } });
+    applySessionOwnersRead(S, { session_owners: true, conversation_id: S, people: [{ user_id: "me", name: me.name, email: null, added_by: "me", added_at: 1 }], role: null, parent_session: null, implicit_starter: null, starter_id: "me", role_started: false, can_edit: true, owners_changed_at: 2 });
+    expect((useInboxStore.getState() as any).sessionOwners[S].released_parent?.conversation_id).toBe(LEAD);
+  });
 });
 
 describe("flag on: a session not created yet", () => {

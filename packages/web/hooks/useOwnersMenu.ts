@@ -143,7 +143,9 @@ export function useOwnersMenu(conversationId: string, view: SessionOwnersView, o
     // (removing that role let both go).
     const seatBack = c.kind === "role" && !!initial.parent && view.parent?.seatRoleId === c.role._id;
     setDraft((d) => (c.kind === "session" ? setParent(d, c.id, { adopt: c.adopt })
-      : c.kind === "role" ? { ...setRole(d, roleOwnerOf(c.role)), ...(seatBack ? { parent: initial.parent } : {}) }
+      // A role and a newly adopted session cannot both own it (an adopt takes
+      // the role off): the role wins, and the staged adopt goes.
+      : c.kind === "role" ? { ...setRole(d, roleOwnerOf(c.role)), ...(seatBack || (d.parent && d.parent !== initial.parent && d.parent !== releasedParent?.conversation_id) ? { parent: initial.parent } : {}) }
         : addPerson(d, c.person._id)));
   };
   const selectAllTeammates = () => setDraft((d) => addPeople(d, unselected.map((m) => String(m._id))));
