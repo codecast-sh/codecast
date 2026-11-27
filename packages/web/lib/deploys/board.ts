@@ -514,7 +514,8 @@ export function rowsFor(c: Carried, view: BoardView, isMine: (sessionId: string)
  * (proposed `/branch/<owner>/<repo>/<name…>`) when that ships.
  */
 export function branchHref(repository: string, branch: string, pr: number | null | undefined): string {
-  return pr ? entityRoute("pr", `${repository}#${pr}`)! : `https://github.com/${repository}/tree/${branch.split("/").map(encodeURIComponent).join("/")}`;
+  const page = pr ? entityRoute("pr", `${repository}#${pr}`) : null;
+  return page ?? `https://github.com/${repository}/tree/${branch.split("/").map(encodeURIComponent).join("/")}`;
 }
 
 /** How long ago, as a card or run says it: "now" inside a minute. */

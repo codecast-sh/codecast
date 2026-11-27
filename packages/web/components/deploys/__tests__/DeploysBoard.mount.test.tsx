@@ -41,6 +41,7 @@ mock.module("next/link", () => ({
 const { createRoot } = await import("react-dom/client");
 const { MemoryRouter } = await import("react-router");
 const { DeploysBoard } = await import("../DeploysBoard");
+const { EntityFixtureContext } = await import("../../../lib/entityDisplay");
 
 afterAll(() => {
   closeDomWindow(dom);
@@ -234,11 +235,11 @@ const props = (over: Record<string, unknown> = {}) => ({
   shipping: { runs: runs as any, shippers: [] }, checkouts: [], me: ME, now: NOW + 30 * H, priorities: false, focus: null, reach: null,
   openDeploy: null, show: "sessions", mine: false, onShow() {}, onMine() {}, onClearFocus() {}, onPress() {}, onRollback() {}, onPause() {}, onLift() {}, ...over,
 }) as any;
-function mountWith(p: any) {
+function mountWith(p: any, fixtures: Record<string, { type: any; entity: any }> | null = null) {
   const host = document.createElement("div");
   document.body.appendChild(host);
   const root = createRoot(host);
-  const draw = (q: any) => act(() => root.render(<MemoryRouter><DeploysBoard {...q} /></MemoryRouter>));
+  const draw = (q: any) => act(() => root.render(<MemoryRouter><EntityFixtureContext.Provider value={fixtures}><DeploysBoard {...q} /></EntityFixtureContext.Provider></MemoryRouter>));
   draw(p);
   return { host, draw, unmount: () => act(() => root.unmount()) };
 }
@@ -350,5 +351,41 @@ test("opened at a waiting commit, the chip says its place since the live deploy 
   const chip = host.querySelector(".dpp-focus")!;
   expect(chip.querySelector("[data-spot-place]")!.textContent).toBe("1 of 2 since dp-7");
   expect(chip.querySelector('[data-spot-held="failed"]')!.getAttribute("href")).toBe("#deploy-dp-9");
+  unmount();
+});
+
+test("a merged PR on the board is one pill at full colour, not a settled reference's dim", () => {
+  const merged = { _id: "pr30", repository: "o/r", number: 30, title: "Live change", state: "merged", merged_at: NOW - 6 * H };
+  const { host, unmount } = mountWith(props({ deploys: [live], linesByDeploy: lines, show: "prs" }), { "o/r#30": { type: "pr", entity: merged } });
+  const pill = card(host, "dp-7").querySelector('[data-deploy-row="#30"] .entity-ref')!;
+  expect(pill.textContent).toContain("#30 Live change");
+  const classes = pill.className.split(/\s+/);
+  expect(classes).toContain("text-sol-green");
+  expect(classes).not.toContain("text-sol-green/60");
+  unmount();
+});
+
+test("Priorities: one pill per priority with its sessions, yours by rank, then teammates' by rank, then unranked, No priority last", () => {
+  const pri = (id: string, rank: number | null, user_id: string) => ({ id, title: `Priority ${id}`, rank, user_id });
+  const s = (id: string, priority: ReturnType<typeof pri> | null) => ({ ...sess(id, ME, `Session ${id}`), priority });
+  const sessions = [
+    s("jx7nonesaaaaaa", null),
+    s("jx7unrankedaaa", pri("pri-9", null, ME)),
+    s("jx7theirs2aaaa", pri("pri-4", 2, "user-ana")),
+    s("jx7mine2aaaaaa", pri("pri-3", 2, ME)),
+    s("jx7theirs1aaaa", pri("pri-2", 1, "user-ana")),
+    s("jx7mine1aaaaaa", pri("pri-1", 1, ME)),
+    s("jx7mine1bbbbbb", pri("pri-1", 1, ME)),
+  ];
+  const d = dep("dp-20", 21 * H, { commits: sessions.length, sessions, commit_rows: sessions.map((x, i) => ({ sha: `p${String(i).padStart(9, "0")}`, subject: `Change ${i}`, conversation_id: x.conversation_id, tasks: [] })) });
+  const { host, unmount } = mountWith(props({ deploys: [d], show: "priorities", priorities: true }));
+  const c = card(host, "dp-20");
+  expect(rowKeys(c)).toEqual(["pri-1", "pri-3", "pri-2", "pri-4", "pri-9", "none"]);
+  const row = (k: string) => c.querySelector(`[data-deploy-row="${k}"]`)!;
+  expect(row("pri-1").querySelectorAll(".entity-ref")).toHaveLength(1);
+  expect(row("pri-1").textContent).toContain("Priority pri-1");
+  expect(row("pri-1").textContent).toContain("· 2 sessions");
+  expect(row("none").querySelector(".entity-ref")).toBeNull();
+  expect(row("none").textContent).toContain("No priority · 1 session");
   unmount();
 });
