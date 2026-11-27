@@ -322,17 +322,18 @@ class FrameLayout {
   }
 
   /**
-   * Push rule: whatever at the top level a grown frame newly overlaps (frames
-   * and loose elements alike) moves down just clear of it, and so on for what
-   * that then overlaps, so a frame never swallows a person's sticky. A shrink
-   * overlaps nothing new, so it moves nothing.
+   * Push rule: whatever at the top level a grown frame newly overlaps, or now
+   * wholly covers (frames and loose elements alike), moves down just clear of
+   * it, and so on for what that then overlaps, so a frame never swallows a
+   * person's sticky. A shrink covers nothing new, so it moves nothing.
    */
   push(grown: Node, before: Box) {
     const queue: { n: Node; before: Box }[] = [{ n: grown, before }];
     for (let guard = 0; queue.length && guard < 10_000; guard++) {
       const { n: p, before: pb } = queue.shift()!;
       for (const s of this.root.kids) {
-        if (s === p || s === grown || !overlap(p.box, s.box) || overlap(pb, s.box)) continue;
+        // Newly overlapped moves, and so does anything now wholly inside, whatever `before` says: a frame never takes in what is not its own.
+        if (s === p || s === grown || !overlap(p.box, s.box) || (overlap(pb, s.box) && !contains(p.box, s.box))) continue;
         const dy = p.box.y + p.box.h + (s.el.kind === "frame" ? FRAME_SPACING : FRAME_GAP) - s.box.y;
         if (dy <= 0) continue;
         const sb = { ...s.box };
@@ -410,14 +411,11 @@ class FrameLayout {
     // Cards and pages sit beside the frame nearest to them; everything else loose goes in a grid below.
     const beside = new Map<Node, Node[]>(frames.map((f) => [f, []]));
     const strays: Node[] = [];
-    const mid = (b: Box) => ({ x: b.x + b.w / 2, y: b.y + b.h / 2 });
+    // Nearest by the gap between boxes, so a card already beside a wide frame stays with it.
+    const gap = (a: Box, b: Box) => Math.hypot(Math.max(0, a.x - b.x - b.w, b.x - a.x - a.w), Math.max(0, a.y - b.y - b.h, b.y - a.y - a.h));
     for (const l of readingSort(loose)) {
       if (frames.length && (l.el.kind === "card" || l.el.kind === "page")) {
-        const m = mid(l.box);
-        const near = frames.reduce((a, b) => {
-          const da = Math.hypot(mid(a.box).x - m.x, mid(a.box).y - m.y), db = Math.hypot(mid(b.box).x - m.x, mid(b.box).y - m.y);
-          return db < da ? b : a;
-        });
+        const near = frames.reduce((a, b) => (gap(b.box, l.box) < gap(a.box, l.box) ? b : a));
         beside.get(near)!.push(l);
       } else strays.push(l);
     }

@@ -105,12 +105,13 @@ describe("collapse and expand", () => {
     expect(box(v3, "el_a").x - box(v3, "el_b").x).toBe(40 - 300);
   });
 
-  test("folding never moves a neighbour: one parked inside the folded area stays on expand", () => {
+  test("a frame parked wholly inside the folded area is pushed out on expand, with its contents", () => {
     const v0 = themeBoard();
     const v1 = apply(v0, collapseFrameOps(v0, "el_f"));
     const v2 = apply(v1, moveFrameOps(v1, "el_g", 0, 100 - 500));
     const v3 = apply(v2, expandFrameOps(v2, "el_f"));
-    expect(box(v3, "el_g").y).toBe(100);
+    expect(box(v3, "el_g").y).toBe(400 + FRAME_SPACING);
+    expect(box(v3, "el_g1").y).toBe(400 + FRAME_SPACING + 64);
     expect(pos(v3, "el_out")).toEqual(pos(v0, "el_out"));
   });
 
@@ -121,6 +122,33 @@ describe("collapse and expand", () => {
     const v2 = apply(v1, expandFrameOps(v1, "el_A"));
     expect(box(v2, "el_B").y).toBe(300);
     expect(box(v2, "el_A")).toEqual(box(v0, "el_A"));
+  });
+
+  test("expanding over a loose sticky after the pill moved pushes it out, and it stays out", () => {
+    const v0 = board([frame("el_A", 0, 0, 600, 400), sticky("el_a", 40, 64), frame("el_B", 0, 300, 600, 300), sticky("el_P", 1240, 200)]);
+    const v1 = apply(v0, collapseFrameOps(v0, "el_A"));
+    const v2 = apply(v1, moveFrameOps(v1, "el_A", 1000, 0));
+    const v3 = apply(v2, expandFrameOps(v2, "el_A"));
+    const v4 = apply(v3, reflowFrameOps(v3, "el_A"));
+    for (const v of [v3, v4]) {
+      expect(overlaps(box(v, "el_A"), box(v, "el_P"))).toBe(false);
+      expect(box(v, "el_P").y).toBeGreaterThanOrEqual(box(v, "el_A").y + box(v, "el_A").h);
+      expect(box(v, "el_B").y).toBe(300);
+    }
+  });
+
+  test("a sticky placed inside a folded frame's area is pushed out on expand, not taken in", () => {
+    const v0 = board([frame("el_A", 0, 0, 600, 400), sticky("el_a", 40, 64), frame("el_B", 0, 300, 600, 300)]);
+    const v1 = apply(v0, collapseFrameOps(v0, "el_A"));
+    const v2 = apply(v1, [{ k: "el_Q", put: { kind: "sticky", x: 300, y: 200, w: 200, h: 160, text: "Q", color: "yellow" } }]);
+    const v3 = apply(v2, expandFrameOps(v2, "el_A"));
+    const v4 = apply(v3, reflowFrameOps(v3, "el_A"));
+    for (const v of [v3, v4]) {
+      expect(overlaps(box(v, "el_A"), box(v, "el_Q"))).toBe(false);
+      expect(box(v, "el_Q").y).toBeGreaterThanOrEqual(box(v, "el_A").y + box(v, "el_A").h);
+      expect(box(v, "el_B").y).toBe(300);
+    }
+    expect(pos(v4, "el_a")).toEqual(pos(v0, "el_a"));
   });
 
   test("an arrow from inside a nested fold to a sibling hides when the outer frame folds", () => {
@@ -372,6 +400,23 @@ describe("organize", () => {
     expect(f.h).toBe(FRAME_PILL_H);
     expect({ x: (v2.get("el_a")!.x as number) - (f.x as number), y: (v2.get("el_a")!.y as number) - (f.y as number) }).toEqual({ x: 40, y: 64 });
     expect([...hiddenKeys(v2)].sort()).toEqual(["el_a", "el_ab", "el_b"]);
+  });
+
+  test("organizing twice changes nothing the second time", () => {
+    const v0 = board([
+      frame("el_wide", 500, 900, 1200, 300, { title: "Wide" }),
+      sticky("el_w1", 540, 964),
+      frame("el_tall", 0, 0, 400, 700, { title: "Tall" }),
+      frame("el_small", 2400, 100, 400, 300, { title: "Small" }),
+      frame("el_ag", 3000, 3000, 500, 300, { title: "Agenda" }),
+      el("el_card", "card", { x: 1800, y: 950, w: 320, h: 168, ref: "ct-1" }),
+      sticky("el_s1", 4000, 4000, { h: 400 }),
+      sticky("el_s2", 4300, 4100),
+      sticky("el_s3", 4600, 4000, { h: 240 }),
+      el("el_t", "text", { x: 4000, y: 4600, w: 300, h: 32, text: "loose note", size: 20 }),
+    ]);
+    const v1 = apply(v0, organizeOps(v0));
+    expect(organizeOps(v1)).toEqual([]);
   });
 
   test("an empty board organizes to nothing", () => {
