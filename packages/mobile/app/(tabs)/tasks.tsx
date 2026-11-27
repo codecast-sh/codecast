@@ -190,7 +190,7 @@ function CreateTaskModal({
 }
 
 type TaskListItem =
-  | { kind: "header"; key: string; icon: React.ComponentProps<typeof FontAwesome>["name"]; color: string; label: string; count: number }
+  | { kind: "header"; key: string; icon: React.ComponentProps<typeof FontAwesome>["name"]; mark?: React.ReactNode; color: string; label: string; count: number }
   | { kind: "task"; key: string; task: TaskItem }
   | { kind: "doneToggle"; key: string };
 
