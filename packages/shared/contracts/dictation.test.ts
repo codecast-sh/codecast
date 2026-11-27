@@ -80,6 +80,7 @@ function harness(initial = "", selection: [number, number] | null = null) {
   let resolveOpen: ((p: DictationPipe) => void) | null = null;
   let rejectOpen: ((e: Error) => void) | null = null;
   let resolveFinish: (() => void) | null = null;
+  let lastSignal: { readonly aborted: boolean } | null = null;
   const pipe = {
     finished: 0,
     closed: 0,
@@ -89,6 +90,8 @@ function harness(initial = "", selection: [number, number] | null = null) {
     },
     close() {
       pipe.closed++;
+      // As asrPipe does: closing releases a finish still waiting.
+      resolveFinish?.();
     },
   };
   const field = {
@@ -102,8 +105,9 @@ function harness(initial = "", selection: [number, number] | null = null) {
   const d = createDictation(
     field,
     {
-      open(e) {
+      open(e, signal) {
         events = e;
+        lastSignal = signal;
         return new Promise((res, rej) => {
           resolveOpen = res;
           rejectOpen = rej;
@@ -133,6 +137,9 @@ function harness(initial = "", selection: [number, number] | null = null) {
     },
     type(v: string) {
       value = v;
+    },
+    get signal() {
+      return lastSignal!;
     },
     get events() {
       if (!events) throw new Error("not opened");
@@ -387,5 +394,95 @@ describe("finishRunningDictation", () => {
     await done;
     expect(dictationRunning()).toBe(false);
     expect(h.value).toBe("words");
+  });
+});
+
+describe("finishThen", () => {
+  test("Enter then Esc while finishing sends nothing, even though closing releases the wait", async () => {
+    const h = harness("draft before", [12, 12]);
+    const sent: string[] = [];
+    h.d.start();
+    await h.opened();
+    h.events.onPartial("and more");
+    h.d.finishThen(() => sent.push(h.value));
+    expect(h.d.state.phase).toBe("finishing");
+    h.d.cancel();
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(h.value).toBe("draft before");
+    expect(sent).toEqual([]);
+  });
+
+  test("two presses while finishing send once, with the newest handler", async () => {
+    const h = harness();
+    const sent: string[] = [];
+    h.d.start();
+    await h.opened();
+    h.events.onPartial("looks good");
+    h.d.finishThen(() => sent.push("first " + h.value));
+    h.d.finishThen(() => sent.push("second " + h.value));
+    await h.finished();
+    expect(sent).toEqual(["second looks good"]);
+  });
+
+  test("idle runs it at once; unmount while finishing runs nothing", async () => {
+    const h = harness("x");
+    let ran = 0;
+    h.d.finishThen(() => ran++);
+    expect(ran).toBe(1);
+    h.d.start();
+    await h.opened();
+    h.events.onPartial("y");
+    h.d.finishThen(() => ran++);
+    h.d.dispose();
+    await h.finished();
+    expect(ran).toBe(1);
+  });
+
+  test("a finishThen for a cancelled recording never fires a later recording's send", async () => {
+    const h = harness();
+    const sent: string[] = [];
+    h.d.start();
+    await h.opened();
+    h.events.onPartial("one");
+    h.d.finishThen(() => sent.push("old"));
+    h.d.cancel();
+    h.d.start();
+    await h.opened();
+    h.events.onPartial("two");
+    h.d.finishThen(() => sent.push("new " + h.value));
+    await h.finished();
+    expect(sent).toEqual(["new two"]);
+  });
+});
+
+describe("abandoned starts and the recordings still finishing", () => {
+  test("the host is told a start was abandoned", async () => {
+    const h = harness();
+    h.d.start();
+    expect(h.signal.aborted).toBe(false);
+    h.d.cancel();
+    expect(h.signal.aborted).toBe(true);
+  });
+
+  test("a recording still finishing counts as running after the newer one is cancelled", async () => {
+    const { dictationRunning, finishRunningDictation } = await import("./dictation");
+    const a = harness();
+    const b = harness();
+    a.d.start();
+    await a.opened();
+    a.events.onPartial("keep me");
+    b.d.start();
+    b.d.cancel();
+    expect(a.d.state.phase).toBe("finishing");
+    expect(dictationRunning()).toBe(true);
+    let done = false;
+    const all = finishRunningDictation().then(() => (done = true));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(done).toBe(false);
+    await a.finished();
+    await all;
+    expect(dictationRunning()).toBe(false);
+    expect(a.value).toBe("keep me");
   });
 });
