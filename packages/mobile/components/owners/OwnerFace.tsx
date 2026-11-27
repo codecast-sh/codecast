@@ -30,7 +30,7 @@ export function PersonFace({ name, image, size = 18 }: { name: string; image?: s
         alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
       }}
     >
-      <Text allowFontScaling={false} style={{ fontSize: Math.round(size * 0.55), lineHeight: size, fontWeight: '600', color: Theme.text }} testID="person-face-initials">{initials || '?'}</Text>
+      <Text allowFontScaling={false} style={{ fontSize: Math.round(size * 0.55), fontWeight: '600', color: Theme.text }} testID="person-face-initials">{initials || '?'}</Text>
     </View>
   );
 }

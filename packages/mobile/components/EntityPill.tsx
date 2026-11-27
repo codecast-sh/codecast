@@ -25,6 +25,7 @@ import { deployPillElapsed, deployPillState, deployPillSuffix, deployTone, isRol
 import { usePrPillLook, useRefLifecycle } from '@codecast/web/hooks/useRefLifecycle';
 import type { PrGlyph } from '@codecast/web/lib/changes/prPill';
 import { ChangeWords } from '@/components/ChangeText';
+import { PriorityPillMarks } from '@/components/priorities/PriorityPillMarks';
 import { useNowWhen } from '@codecast/web/hooks/useCoarseNow';
 import type { ReachState } from '@codecast/shared/contracts/deployReach';
 
@@ -296,7 +297,7 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback, to }
   return (
     <RNText
       style={[styles.pill, { backgroundColor: color + (deployState === 'failed' ? FAILED_TINT : '1a'), color }]}
-      accessibilityLabel={deployState ? `${label}, ${deployPillSuffix(entity, now)}` : prLook?.word ? `${label}, ${prLook.word}` : undefined}
+      accessibilityLabel={deployState ? `${label}, ${deployPillSuffix(entity, now)}` : prLook?.word ? `${label}, ${prLook.word}` : type === 'priority' && entity ? [label, entity.owner, entity.rank != null ? `rank ${entity.rank}` : null].filter(Boolean).join(', ') : undefined}
       onPress={to ? () => void openLink(to) : route ? () => router.push(route as any) : undefined}
       onLongPress={messageLongPress ? () => messageLongPress([{ label: 'Copy ID', text: entity?.short_id ?? rawId }]) : undefined}
       suppressHighlighting
@@ -310,6 +311,8 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback, to }
         <Octicons name={PR_GLYPH_ICON[prLook.glyph]} size={10} color={color} />
       ) : deployState ? (
         <Feather name={isRollback(entity) ? 'rotate-ccw' : DEPLOY_ICON[deployState]} size={10} color={color} style={deployState === 'replaced' ? { opacity: 0.5 } : undefined} />
+      ) : type === 'priority' && entity ? (
+        <PriorityPillMarks row={entity} />
       ) : (
         <MobileIdentityFace row={identityRow} size={12} fallback={<Feather name={TYPE_ICON[type]} size={10} color={color} />} />
       )}
