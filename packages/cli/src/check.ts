@@ -972,10 +972,18 @@ export function listWatchers(now = Date.now()): Array<WatchState & { dir: string
   const out: Array<WatchState & { dir: string }> = [];
   const home = checkHome();
   if (!fs.existsSync(home)) return out;
-  for (const tree of fs.readdirSync(home)) {
-    const treeDir = path.join(home, tree);
-    if (!fs.statSync(treeDir).isDirectory()) continue;
-    for (const project of fs.readdirSync(treeDir)) {
+  // The home also holds capacity.lock and its transient .break files, which come and go between a readdir and any
+  // stat of the entry: the readdir's own entry types say which are trees, and a tree removed meanwhile is skipped.
+  for (const tree of fs.readdirSync(home, { withFileTypes: true })) {
+    if (!tree.isDirectory()) continue;
+    const treeDir = path.join(home, tree.name);
+    let projects: string[];
+    try {
+      projects = fs.readdirSync(treeDir);
+    } catch {
+      continue;
+    }
+    for (const project of projects) {
       const dir = path.join(treeDir, project);
       const s = readWatchState(dir);
       if (!s) continue;

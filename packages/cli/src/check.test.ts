@@ -12,7 +12,7 @@ import { heapCapMb, heapDeath, isNativeFrame, tscNodeOptions, TSC_HEAP_MB } from
 import { CheckFailure, summarize } from "./checkOutcome.js";
 import { acquireFileLock } from "./lockFile.js";
 import { EXIT_BUSY } from "./infraExit.js";
-import { listWatchers, removeOwnState, stopWatcher, watcherIdentity, WATCHER_PID_TRUST_MS, checkProject, lastLogLine, logPath, classifyWatchLine, filesNotAsChecked, unlistedChanges, buildInfoPath, IDLE_EXIT_MS, STUCK_PASS_MS, watcherExit, tscBinary, tscInTree, nearestTsconfig, outputPath, readCheckConfig, readWatchState, resolveProjects, slugOf, watchDir, watchReducer, writeWatchState, type WatchState } from "./check.js";
+import { checkHome, listWatchers, removeOwnState, stopWatcher, watcherIdentity, WATCHER_PID_TRUST_MS, checkProject, lastLogLine, logPath, classifyWatchLine, filesNotAsChecked, unlistedChanges, buildInfoPath, IDLE_EXIT_MS, STUCK_PASS_MS, watcherExit, tscBinary, tscInTree, nearestTsconfig, outputPath, readCheckConfig, readWatchState, resolveProjects, slugOf, watchDir, watchReducer, writeWatchState, type WatchState } from "./check.js";
 import { tscFileVersion } from "./tscFileVersion.js";
 
 let isolation: IsolatedCodecastDir;
@@ -449,6 +449,15 @@ describe("a watcher stopped for --fresh", () => {
     } finally {
       other.kill(9);
     }
+  });
+
+  test("an entry of the typecheck home that is gone by the time it is looked at (a released capacity.lock) is skipped, not thrown", () => {
+    const dir = watchDir("/tree", "web");
+    writeWatchState(dir, { pid: process.pid, project: "web", tsconfig: "x", root: "/tree", startedAt: 1, inProgress: false, finishedAt: 1, errors: 0 });
+    // A dangling link is listed by readdir and then fails a stat with ENOENT: the window a released lock leaves.
+    fs.symlinkSync(path.join(checkHome(), "gone"), path.join(checkHome(), "capacity.lock.break.1.ab"));
+    fs.writeFileSync(path.join(checkHome(), "capacity.lock"), "{}");
+    expect(listWatchers().map((w) => w.pid)).toEqual([process.pid]);
   });
 
   test("listing again asks ps only about a watcher pid it has not seen alive lately, and still drops one that changed program", () => {
