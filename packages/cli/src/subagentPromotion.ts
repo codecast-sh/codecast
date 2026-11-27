@@ -18,8 +18,9 @@ export const PROMOTED_AGENTS_FILE = "promoted-agents.json";
 export const PROMOTION_SETTLE_MS = 2_000;
 export const PROMOTION_HOLD_REASON = "waiting for its parent to stop it";
 
-/** parent session id -> agent id -> the conversation's short id and when it was written. */
-export type PromotedAgents = Record<string, Record<string, { short_id: string; at: number }>>;
+/** parent session id -> SendMessage address (the agent id, and a named
+ *  agent's name) -> the conversation's short id and when it was written. */
+export type PromotedAgents = Record<string, Record<string, { short_id: string; at: number; name?: true }>>;
 
 export function readPromotedAgents(configDir: string): PromotedAgents {
   try {
@@ -30,24 +31,37 @@ export function readPromotedAgents(configDir: string): PromotedAgents {
   }
 }
 
-/** Puts the agent on its parent's deny list (written atomically) and returns
- *  when it was first put there. Never removed. */
-export function recordPromotedAgent(configDir: string, parentSessionId: string, agentId: string, shortId: string, now: number): number {
+/** Puts the agent's addresses on its parent's deny list (written atomically)
+ *  and returns when it was first put there. Never removed. */
+export function recordPromotedAgent(configDir: string, parentSessionId: string, agentId: string, name: string | null, shortId: string, now: number): number {
   const all = readPromotedAgents(configDir);
-  const existing = all[parentSessionId]?.[agentId];
-  if (existing) return existing.at;
-  all[parentSessionId] = { ...all[parentSessionId], [agentId]: { short_id: shortId, at: now } };
+  const mine = { ...all[parentSessionId] };
+  const addresses = name ? [agentId, name] : [agentId];
+  const known = addresses.map((a) => mine[a]).filter(Boolean);
+  if (known.length === addresses.length) return Math.min(...known.map((e) => e.at));
+  mine[agentId] ??= { short_id: shortId, at: now };
+  if (name) mine[name] ??= { short_id: shortId, at: now, name: true };
+  all[parentSessionId] = mine;
   fs.mkdirSync(configDir, { recursive: true });
   const file = path.join(configDir, PROMOTED_AGENTS_FILE);
   const tmp = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(all));
   fs.renameSync(tmp, file);
-  return now;
+  return Math.min(now, ...known.map((e) => e.at));
 }
 
-/** A Claude Code subagent's agent id from its session id (`agent-<id>`). */
+/** A Claude Code subagent's agent id from its session id: `agent-<hex>` for
+ *  a Task subagent, `agent-a<name>-<hex>` for a named one. */
 export function agentIdOfSession(sessionId: string): string | null {
-  return /^agent-([0-9a-f]{7,})$/.exec(sessionId)?.[1] ?? null;
+  return /^agent-(.+)$/.exec(sessionId)?.[1] ?? null;
+}
+
+/** The name a named agent is addressed by (SendMessage `to`, recipient_kind
+ *  "name"): its meta's `name`, else the one its agent id carries. */
+export function agentNameOf(agentId: string, meta: unknown): string | null {
+  const name = meta && typeof meta === "object" ? (meta as { name?: unknown }).name : undefined;
+  if (typeof name === "string" && name) return name;
+  return /^a(.+)-[0-9a-f]{16}$/.exec(agentId)?.[1] ?? null;
 }
 
 /**
@@ -68,13 +82,16 @@ export function sendMessageGuardOutput(input: string, promoted: (parentSessionId
   if (!agents) return "";
   for (const raw of [hook.tool_input?.to, hook.tool_input?.recipient]) {
     if (typeof raw !== "string") continue;
-    const hit = agents[raw.replace(/\s+\[[^\]]*\]\s*$/, "").trim()];
+    const address = raw.replace(/\s+\[[^\]]*\]\s*$/, "").trim();
+    const hit = Object.hasOwn(agents, address) ? agents[address] : undefined;
     if (!hit) continue;
     return JSON.stringify({
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
         permissionDecision: "deny",
-        permissionDecisionReason: `This agent was taken over and now runs as its own session ${hit.short_id}. Reach it with: cast send ${hit.short_id}`,
+        // A name outlives its agent: a later agent given the same name is
+        // refused too, and is told to pick another.
+        permissionDecisionReason: `This agent was taken over and now runs as its own session ${hit.short_id}. Reach it with: cast send ${hit.short_id}${hit.name ? ". A new agent needs a name of its own." : ""}`,
       },
     });
   }
@@ -101,7 +118,14 @@ export async function promotionHold(jsonlPath: string, shortId: string, deps: Pr
   const idx = parts.lastIndexOf("subagents");
   const agentId = agentIdOfSession(path.basename(jsonlPath, ".jsonl"));
   if (idx < 1 || !agentId) return null;
-  const deniedAt = recordPromotedAgent(deps.configDir, parts[idx - 1], agentId, shortId, deps.now());
+  let meta: unknown = null;
+  try {
+    meta = JSON.parse(fs.readFileSync(jsonlPath.replace(/\.jsonl$/, ".meta.json"), "utf-8"));
+  } catch {
+    // no meta: the id still names it
+  }
+  const name = agentNameOf(agentId, meta);
+  const deniedAt = recordPromotedAgent(deps.configDir, parts[idx - 1], agentId, name, shortId, deps.now());
   // A SendMessage the hook let through just before the deny lands within
   // milliseconds; wait out the settle once, so its line is on disk to see.
   const sinceDeny = deps.now() - deniedAt;

@@ -15,13 +15,23 @@ import { personName } from "./sessionTell";
 
 const shortIdOf = (c: any): string => c.short_id ?? String(c._id).slice(0, 7);
 
-/** The SendMessage address of a Claude Code subagent: its session id is `agent-<id>`. */
+/** A Claude Code subagent's agent id: its session id is `agent-<id>`, where a
+ *  Task subagent's id is hex and a named agent's is `a<name>-<16 hex>`. */
 export function claudeAgentIdOf(sessionId: string | null | undefined): string | null {
-  return /^agent-([0-9a-f]{7,})$/.exec(sessionId ?? "")?.[1] ?? null;
+  return /^agent-(.+)$/.exec(sessionId ?? "")?.[1] ?? null;
+}
+
+/** The name a parent sends a named agent by (SendMessage `to`), or null for a Task subagent. */
+export function claudeAgentNameOf(agentId: string): string | null {
+  return /^a(.+)-[0-9a-f]{16}$/.exec(agentId)?.[1] ?? null;
 }
 
 export function takeoverLine(person: string, description: string, agentId: string, shortId: string): string {
-  return `${person} took over your subagent "${description}" (agent ${agentId}). It now continues as its own session ${shortId}. If it is still running, stop it with TaskStop ${agentId}. Do not SendMessage it again; reach it with \`cast send ${shortId}\`.`;
+  const name = claudeAgentNameOf(agentId);
+  const reach = `It now continues as its own session ${shortId}. If it is still running, stop it with TaskStop ${agentId}.`;
+  return name
+    ? `${person} took over your agent ${name} ("${description}", agent id ${agentId}). ${reach} Do not SendMessage ${name} again; reach it with \`cast send ${shortId}\`.`
+    : `${person} took over your subagent "${description}" (agent ${agentId}). ${reach} Do not SendMessage it again; reach it with \`cast send ${shortId}\`.`;
 }
 
 /** Tell the parent of a Claude Code subagent that a person took it over.
@@ -29,7 +39,7 @@ export function takeoverLine(person: string, description: string, agentId: strin
  *  cache went cold: a copy still running inside it is what the person's
  *  message waits on. A killed or closed parent runs nothing and only keeps it. */
 export async function tellParentOfTakeover(ctx: { db: any }, personId: Id<"users">, child: any): Promise<void> {
-  const agentId = claudeAgentIdOf(child.session_id);
+  const agentId = child.agent_type === "claude_code" ? claudeAgentIdOf(child.session_id) : null;
   if (!agentId || !child.parent_conversation_id) return;
   const parent = await ctx.db.get(child.parent_conversation_id);
   if (!parent || parent.ended_at) return;

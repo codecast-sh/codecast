@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { openTaskStart } from "./backgroundTaskStart.js";
 import { scanOpenBackgroundTasks } from "./backgroundTaskScan.js";
 import { claudeSessionProcessAlive } from "./sessionProcessMatcher.js";
-import { SubagentFinishTracker, subagentParentAlive, subagentRunState, type SubagentRunFacts, type SubagentStatusSink } from "./subagentFinish.js";
+import { SubagentFinishTracker, parentTaskNotice, readSubagentRunFacts, subagentParentAlive, subagentRunState, type SubagentRunFacts, type SubagentStatusSink } from "./subagentFinish.js";
 
 const FILE = "/p/proj/parent-uuid/subagents/agent-abc.jsonl";
 const CONV = "convChild1";
@@ -53,6 +53,47 @@ describe("subagentRunState", () => {
   });
   test("a teammate idles inside its lead: running while the lead lives", () => {
     expect(subagentRunState(facts({ ...FINISHED, taskKind: "in_process_teammate", teamName: "session-1" }, jsonl(launch, doneText)))).toBe("running");
+  });
+});
+
+// A named Agent call (`name` given) runs as an in-process teammate: its meta
+// has taskKind/teamName, it never gets `finished`, and its id is a<name>-<hex>.
+const NAMED_ID = "areview-mobile-fe89e5471ddad254";
+const TEAMMATE = { agentType: "review-mobile", description: "Review phone app", name: "review-mobile", taskKind: "in_process_teammate", teamName: "session-199be19e" };
+const noticeLine = (id: string, status: string, at: string) => line({ type: "user", origin: { kind: "task-notification" }, message: { role: "user", content: `<task-notification>\n<task-id>${id}</task-id>\n<status>${status}</status>\n<summary>Agent "review" was stopped by Claude</summary>\n</task-notification>` }, timestamp: at });
+const teammateIdle = jsonl(launch, line({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "Report sent." }] }, timestamp: "2026-11-27T04:30:00.000Z" }));
+
+describe("a named agent stops when its parent's latest notice for it says so", () => {
+  test("a killed notice after its last line stops it", () => {
+    expect(subagentRunState({ meta: TEAMMATE, agentJsonl: teammateIdle, parentAlive: true, parentNotice: { status: "killed", at: Date.parse("2026-11-27T04:31:00.000Z") } })).toBe("stopped");
+    expect(subagentRunState({ meta: TEAMMATE, agentJsonl: teammateIdle, parentAlive: true, parentNotice: { status: "stopped", at: Date.parse("2026-11-27T04:31:00.000Z") } })).toBe("stopped");
+  });
+  test("lines written after the notice mean it was revived", () => {
+    expect(subagentRunState({ meta: TEAMMATE, agentJsonl: teammateIdle, parentAlive: true, parentNotice: { status: "killed", at: Date.parse("2026-11-27T04:29:00.000Z") } })).toBe("running");
+  });
+  test("a completed notice, or none, leaves a teammate running", () => {
+    expect(subagentRunState({ meta: TEAMMATE, agentJsonl: teammateIdle, parentAlive: true, parentNotice: { status: "completed", at: Date.parse("2026-11-27T04:31:00.000Z") } })).toBe("running");
+    expect(subagentRunState({ meta: TEAMMATE, agentJsonl: teammateIdle, parentAlive: true, parentNotice: null })).toBe("running");
+  });
+  test("parentTaskNotice reads the latest notification naming the agent, among batched ids", () => {
+    const parent = jsonl(
+      noticeLine(NAMED_ID, "completed", "2026-11-27T04:20:00.000Z"),
+      line({ type: "queue-operation", operation: "enqueue", content: `<task-notification><task-id>bother1</task-id><task-id>${NAMED_ID}</task-id><status>killed</status></task-notification>`, timestamp: "2026-11-27T04:31:00.000Z" }),
+      noticeLine("a0559479375992e8a", "completed", "2026-11-27T04:32:00.000Z"),
+    );
+    expect(parentTaskNotice(parent, NAMED_ID)).toEqual({ status: "killed", at: Date.parse("2026-11-27T04:31:00.000Z") });
+    expect(parentTaskNotice(parent, "nobody")).toBeNull();
+  });
+  test("readSubagentRunFacts finds the notice in the parent's transcript beside the subagents dir", async () => {
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), "named-agent-"));
+    fs.mkdirSync(path.join(project, "parent-uuid", "subagents"), { recursive: true });
+    const agentPath = path.join(project, "parent-uuid", "subagents", `agent-${NAMED_ID}.jsonl`);
+    fs.writeFileSync(agentPath, teammateIdle);
+    fs.writeFileSync(agentPath.replace(/\.jsonl$/, ".meta.json"), JSON.stringify(TEAMMATE));
+    fs.writeFileSync(path.join(project, "parent-uuid.jsonl"), jsonl(launch, noticeLine(NAMED_ID, "killed", "2026-11-27T04:31:00.000Z")));
+    const facts = await readSubagentRunFacts(agentPath);
+    expect(facts?.parentNotice).toEqual({ status: "killed", at: Date.parse("2026-11-27T04:31:00.000Z") });
+    expect(subagentRunState(facts!)).toBe("stopped");
   });
 });
 

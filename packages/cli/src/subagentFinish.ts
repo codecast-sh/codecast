@@ -27,6 +27,14 @@ export interface SubagentRunFacts {
   agentJsonl: string;
   /** A live claude process holds the parent session (claudeSessionProcessAlive). */
   parentAlive: boolean;
+  /** The parent's latest task-notification for this agent (parentTaskNotice). */
+  parentNotice?: ParentTaskNotice | null;
+}
+
+export interface ParentTaskNotice {
+  status: string;
+  /** The notification line's timestamp (ms). */
+  at: number;
 }
 
 export interface SubagentStatusSink {
@@ -57,6 +65,22 @@ function lastMessageLine(jsonl: string): { type: string; message?: { content?: u
   return null;
 }
 
+// When the agent last wrote anything: its newest timestamped line of any kind.
+function lastLineAt(jsonl: string): number {
+  const lines = jsonl.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    try {
+      const at = Date.parse(JSON.parse(line)?.timestamp);
+      if (Number.isFinite(at)) return at;
+    } catch {
+      // a torn tail
+    }
+  }
+  return 0;
+}
+
 function firstText(content: unknown): string {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
@@ -70,10 +94,14 @@ function firstText(content: unknown): string {
  * runs (it wakes when that work reports), cleared on every resume and
  * self-wake, and never written by a TaskStop, which leaves an interrupt line
  * instead. A dead parent stops it whatever the files say (orphaned tool
- * subprocesses can still write).
+ * subprocesses can still write). A teammate (a named Agent call) never gets
+ * `finished`: it stops when its parent's latest notification for it says
+ * killed or stopped (TaskStop, or a resumed parent's sweep) and nothing was
+ * written after it; any agent counts as stopped by that notice.
  */
 export function subagentRunState(f: SubagentRunFacts): SubagentRunState {
   if (!f.parentAlive) return "stopped";
+  if (f.parentNotice && (f.parentNotice.status === "killed" || f.parentNotice.status === "stopped") && f.parentNotice.at >= lastLineAt(f.agentJsonl)) return "stopped";
   const meta = f.meta && typeof f.meta === "object" ? (f.meta as { teamName?: unknown; finished?: unknown }) : null;
   if (meta?.teamName !== undefined) return "running";
   const last = lastMessageLine(f.agentJsonl);
@@ -97,6 +125,59 @@ export function subagentParentAlive(filePath: string): boolean {
   return claudeSessionProcessAlive(path.join(parts.slice(0, idx - 3).join(path.sep) || path.sep, "sessions"), parts[idx - 1]);
 }
 
+/** How much of the parent's transcript is read for its latest notification:
+ *  a parent transcript runs to tens of megabytes, and the notice that matters
+ *  is recent. */
+export const PARENT_NOTICE_TAIL_BYTES = 2 * 1024 * 1024;
+
+/**
+ * The parent's latest task-notification naming `taskId`, from its transcript
+ * (or its tail): as a delivered user line, a queued operation or an
+ * attachment. A notification can name several tasks under one status.
+ */
+export function parentTaskNotice(parentJsonl: string, taskId: string): ParentTaskNotice | null {
+  const tag = `<task-id>${taskId}</task-id>`;
+  const lines = parentJsonl.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (!lines[i].includes(tag)) continue;
+    let at: number;
+    try {
+      at = Date.parse(JSON.parse(lines[i])?.timestamp);
+    } catch {
+      continue;
+    }
+    // The status of the notification block that holds this id.
+    const line = lines[i];
+    const tagAt = line.indexOf(tag);
+    const start = line.lastIndexOf("<task-notification>", tagAt);
+    const end = line.indexOf("</task-notification>", tagAt);
+    const status = /<status>([^<]+)<\/status>/.exec(line.slice(Math.max(0, start), end < 0 ? undefined : end))?.[1];
+    if (status && Number.isFinite(at)) return { status, at };
+  }
+  return null;
+}
+
+async function readTail(filePath: string, bytes: number): Promise<string> {
+  const fh = await fsp.open(filePath, "r");
+  try {
+    const { size } = await fh.stat();
+    const start = Math.max(0, size - bytes);
+    const buf = Buffer.alloc(size - start);
+    await fh.read(buf, 0, buf.length, start);
+    return buf.toString("utf8");
+  } finally {
+    await fh.close();
+  }
+}
+
+/** <project>/<parent>/subagents/agent-<id>.jsonl -> <project>/<parent>.jsonl */
+function parentTranscriptPath(filePath: string): string | null {
+  const parts = filePath.split(path.sep);
+  const idx = parts.lastIndexOf("subagents");
+  if (idx < 2) return null;
+  return path.join(parts.slice(0, idx - 1).join(path.sep) || path.sep, `${parts[idx - 1]}.jsonl`);
+}
+
 export async function readSubagentRunFacts(filePath: string): Promise<SubagentRunFacts | null> {
   let agentJsonl: string;
   try {
@@ -110,7 +191,17 @@ export async function readSubagentRunFacts(filePath: string): Promise<SubagentRu
   } catch {
     // no meta yet
   }
-  return { meta, agentJsonl, parentAlive: subagentParentAlive(filePath) };
+  let parentNotice: ParentTaskNotice | null = null;
+  const parentPath = parentTranscriptPath(filePath);
+  const taskId = path.basename(filePath, ".jsonl").replace(/^agent-/, "");
+  if (parentPath) {
+    try {
+      parentNotice = parentTaskNotice(await readTail(parentPath, PARENT_NOTICE_TAIL_BYTES), taskId);
+    } catch {
+      // no parent transcript: liveness alone decides
+    }
+  }
+  return { meta, agentJsonl, parentAlive: subagentParentAlive(filePath), parentNotice };
 }
 
 interface Entry {

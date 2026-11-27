@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { spawnSync } from "./proc.js";
 import { SESSION_TRAILER_HOOK } from "./sessionTrailerHook.js";
 import {
-  PROMOTED_AGENTS_FILE, PROMOTION_HOLD_REASON, PROMOTION_SETTLE_MS, promotionHold, readPromotedAgents, recordPromotedAgent, sendMessageGuardOutput, type PromotedAgents, type PromotionGateDeps,
+  PROMOTED_AGENTS_FILE, PROMOTION_HOLD_REASON, PROMOTION_SETTLE_MS, agentIdOfSession, agentNameOf, promotionHold, readPromotedAgents, recordPromotedAgent, sendMessageGuardOutput, type PromotedAgents, type PromotionGateDeps,
 } from "./subagentPromotion.js";
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "promote-"));
@@ -30,6 +30,15 @@ describe("the SendMessage guard", () => {
   test("a sibling subagent's call carries the root parent's session_id and is denied too; a ref suffix is dropped", () => {
     expect(sendMessageGuardOutput(payload(`${AGENT} [e7fb8a]`, { agent_id: "aother", agent_type: "general-purpose" }), lookup)).toContain("jx7abcd");
   });
+  test("a named agent is denied by the name its parent sends to, and told to pick a new name", () => {
+    const named: PromotedAgents = { [PARENT]: { "areview-mobile-fe89e5471ddad254": { short_id: "jx7named", at: 1 }, "review-mobile": { short_id: "jx7named", at: 1, name: true } } };
+    const byName = JSON.parse(sendMessageGuardOutput(payload("review-mobile", { tool_input: { to: "review-mobile", recipient: "review-mobile", recipient_kind: "name" } }), (p) => named[p]));
+    expect(byName.hookSpecificOutput.permissionDecisionReason).toBe("This agent was taken over and now runs as its own session jx7named. Reach it with: cast send jx7named. A new agent needs a name of its own.");
+    expect(sendMessageGuardOutput(payload("areview-mobile-fe89e5471ddad254"), (p) => named[p])).toContain("jx7named");
+  });
+  test("an address that is an object key of every object is not a promoted agent", () => {
+    expect(sendMessageGuardOutput(payload("constructor"), lookup)).toBe("");
+  });
   test("lets every other call through", () => {
     expect(sendMessageGuardOutput(payload("aca2c98614b1916fb"), lookup)).toBe("");
     expect(sendMessageGuardOutput(payload(AGENT).replace(PARENT, "other-parent"), lookup)).toBe("");
@@ -53,7 +62,7 @@ describe("the hook script", () => {
   test("a SendMessage reaches cast only once something was promoted, whatever the trailer setting", () => {
     const dir = tmp();
     expect(run(payload(AGENT), { CODECAST_DIR: dir })).toBe(false);
-    recordPromotedAgent(dir, PARENT, AGENT, "jx7abcd", 1);
+    recordPromotedAgent(dir, PARENT, AGENT, null, "jx7abcd", 1);
     expect(run(payload(AGENT), { CODECAST_DIR: dir })).toBe(true);
     expect(run(payload(AGENT), { CODECAST_DIR: dir, CODECAST_SESSION_TRAILER: "0" })).toBe(true);
   });
@@ -68,11 +77,36 @@ describe("the hook script", () => {
 describe("the deny list", () => {
   test("is keyed by parent, keeps the first write, and is written whole", () => {
     const dir = tmp();
-    expect(recordPromotedAgent(dir, PARENT, AGENT, "jx7abcd", 100)).toBe(100);
-    expect(recordPromotedAgent(dir, PARENT, AGENT, "jx7abcd", 900)).toBe(100);
-    recordPromotedAgent(dir, PARENT, "a0559479375992e8a", "jx7efgh", 200);
+    expect(recordPromotedAgent(dir, PARENT, AGENT, null, "jx7abcd", 100)).toBe(100);
+    expect(recordPromotedAgent(dir, PARENT, AGENT, null, "jx7abcd", 900)).toBe(100);
+    recordPromotedAgent(dir, PARENT, "a0559479375992e8a", null, "jx7efgh", 200);
     expect(readPromotedAgents(dir)).toEqual({ [PARENT]: { [AGENT]: { short_id: "jx7abcd", at: 100 }, a0559479375992e8a: { short_id: "jx7efgh", at: 200 } } });
     expect(fs.readdirSync(dir)).toEqual([PROMOTED_AGENTS_FILE]);
+  });
+});
+
+describe("a named agent's addresses", () => {
+  test("its agent id keeps everything after agent-, and its name comes from the meta or the id", () => {
+    expect(agentIdOfSession(`agent-${AGENT}`)).toBe(AGENT);
+    expect(agentIdOfSession("agent-averifier-c79d1d65d5516bf9")).toBe("averifier-c79d1d65d5516bf9");
+    expect(agentNameOf("areview-mobile-fe89e5471ddad254", { name: "review-mobile" })).toBe("review-mobile");
+    expect(agentNameOf("averifier-c79d1d65d5516bf9", null)).toBe("verifier");
+    expect(agentNameOf(AGENT, {})).toBeNull();
+  });
+  test("promotion records both, before the state is read", async () => {
+    const dir = tmp();
+    const parentDir = path.join(tmp(), "-p", PARENT, "subagents");
+    fs.mkdirSync(parentDir, { recursive: true });
+    const jsonlPath = path.join(parentDir, "agent-areview-mobile-fe89e5471ddad254.jsonl");
+    fs.writeFileSync(jsonlPath.replace(/\.jsonl$/, ".meta.json"), JSON.stringify({ name: "review-mobile", teamName: "session-1" }));
+    let seen: string[] = [];
+    const reason = await promotionHold(jsonlPath, "jx7named", {
+      configDir: dir, now: () => 10_000, sleep: async () => {}, mtimeMs: () => 0,
+      runState: async () => { seen = Object.keys(readPromotedAgents(dir)[PARENT] ?? {}); return "running"; },
+    });
+    expect(reason).toBe(PROMOTION_HOLD_REASON);
+    expect(seen.sort()).toEqual(["areview-mobile-fe89e5471ddad254", "review-mobile"]);
+    expect(readPromotedAgents(dir)[PARENT]["review-mobile"]).toEqual({ short_id: "jx7named", at: 10_000, name: true });
   });
 });
 

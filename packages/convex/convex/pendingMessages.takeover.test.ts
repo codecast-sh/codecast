@@ -87,6 +87,13 @@ describe("a person's message to an in-process child", () => {
     expect(rows.map((r: any) => r.status)).toEqual(["pending"]);
   });
 
+  test("a named agent's parent is told the name it sends to and the id TaskStop takes", async () => {
+    const w = await world();
+    await w.t.run((ctx) => ctx.db.patch(w.ids.child, { session_id: "agent-areview-mobile-fe89e5471ddad254", subagent_description: "Review phone app" } as any));
+    await w.personSend(w.ids.child, "take it from here");
+    expect((await w.parentLines())[0]).toContain('Jason took over your agent review-mobile ("Review phone app", agent id areview-mobile-fe89e5471ddad254). It now continues as its own session jxkid01. If it is still running, stop it with TaskStop areview-mobile-fe89e5471ddad254. Do not SendMessage review-mobile again; reach it with `cast send jxkid01`.');
+  });
+
   test("a child with its own process is a plain send", async () => {
     const w = await world();
     await w.personSend(w.ids.ownProcess, "hello");
