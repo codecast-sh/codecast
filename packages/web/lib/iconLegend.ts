@@ -112,18 +112,29 @@ const visible = (el: Element) => el.checkVisibility({ opacityProperty: true, vis
 /** What a person can see right now: laid out, not hidden or transparent, and
  *  uncovered at its centre (a rail slid under the panel, or a row scrolled out
  *  of its list, is not on screen). Something invisible over it (a card's hover
- *  tools at opacity 0) does not cover it. */
+ *  tools at opacity 0) does not cover it, nor does the control the mark sits
+ *  in (a link or button whose touch area is laid over its own glyph), nor the
+ *  panel itself where it floats over the page as a sheet (a phone): the legend
+ *  names what the page under it shows. */
 export function isOnScreen(el: HTMLElement): boolean {
   if (!visible(el)) return false;
   const r = el.getBoundingClientRect();
   if (r.width === 0 || r.height === 0) return false;
+  const control = el.parentElement?.closest("a, button, [role=button]");
   for (const hit of document.elementsFromPoint(r.left + r.width / 2, r.top + r.height / 2)) {
-    if (hit === el || el.contains(hit)) return true;
+    if (hit === el || el.contains(hit) || hit === control) return true;
+    if (isFloatingLegend(hit)) continue;
     if (!visible(hit)) continue;
     // A mark that ignores the pointer lets the hit fall through to its container.
     return hit.contains(el) && getComputedStyle(el).pointerEvents === "none";
   }
   return false;
+}
+
+/** The "?" panel drawn over the page (a fixed sheet below sm), not beside it. */
+function isFloatingLegend(hit: Element): boolean {
+  const sheet = hit.closest<HTMLElement>("[data-legend-sheet]");
+  return !!sheet && getComputedStyle(sheet).position === "fixed";
 }
 
 /** The same glyph drawn at two sizes is one variant. */

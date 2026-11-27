@@ -4,7 +4,8 @@
 // saves only when the person left on purpose, by a press outside the box or
 // Tab; a bare blur (an extension that swallows Escape, a window switch)
 // cancels. On the list a bare blur leaves a priority's and a milestone's
-// title as they were and sends nothing.
+// title as they were, sends nothing, and gives focus back to the title (a
+// milestone's: its row).
 // Run: cd packages/web && bun test --isolate components/priorities/TitleInput.mount.test.tsx
 import { expect, test } from "bun:test";
 import { installDom, installMissingBackend, seedViewer } from "../../test-helpers/missingBackend";
@@ -74,6 +75,9 @@ test("on the list, a bare blur leaves the priority's and a milestone's title as 
     await blur(input);
     expect(b.querySelector("[data-rename-input]")).toBeNull();
     expect(b.querySelector("[data-priority-title]")!.textContent).toBe(before);
+    // Focus goes back to the title, as Escape's does, never to the page.
+    await act(async () => { await new Promise((r) => setTimeout(r, 10)); });
+    expect(document.activeElement).toBe(b.querySelector("[data-priority-title]"));
     const ms = b.querySelector('[data-milestone="s1"] [data-milestone-title]')!;
     const msBefore = ms.textContent;
     await act(async () => { ms.dispatchEvent(new (window as any).MouseEvent("dblclick", { bubbles: true, cancelable: true, detail: 2 })); });
@@ -81,6 +85,8 @@ test("on the list, a bare blur leaves the priority's and a milestone's title as 
     await typed(input, "Abandoned too");
     await blur(input);
     expect(b.querySelector('[data-milestone="s1"] [data-milestone-title]')!.textContent).toBe(msBefore);
+    await act(async () => { await new Promise((r) => setTimeout(r, 10)); });
+    expect(document.activeElement).toBe(b.querySelector('[data-milestone="s1"] [role=button]'));
     await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
     expect(sent.filter((a) => a === "renamePriorityTitle" || a === "renamePriorityStep")).toEqual([]);
   } finally {

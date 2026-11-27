@@ -118,3 +118,27 @@ test("the Icons tab reads the page only while it shows", async () => {
     useInboxStore.setState({ shortcutsPanelOpen: initial });
   }
 });
+
+test("below sm the panel is a full-width sheet over the page, hidden while closed; from sm up the 320px column is unchanged", async () => {
+  const initial = useInboxStore.getState().shortcutsPanelOpen;
+  useInboxStore.setState({ shortcutsPanelOpen: false });
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  const cls = () => (container.firstElementChild as HTMLElement).className.split(/\s+/);
+  try {
+    await act(() => root.render(<KeyboardShortcutsPanel />));
+    const panel = container.firstElementChild as HTMLElement;
+    // The icon legend reads the page under a floating sheet (lib/iconLegend isOnScreen keys on this mark).
+    expect(panel.hasAttribute("data-legend-sheet")).toBe(true);
+    expect(cls()).toContain("max-sm:hidden");
+    await act(() => useInboxStore.getState().toggleShortcutsPanel());
+    for (const c of ["max-sm:fixed", "max-sm:inset-x-0", "max-sm:bottom-0", "max-sm:!w-full", "max-sm:h-[70dvh]"]) expect(cls()).toContain(c);
+    expect(cls()).not.toContain("max-sm:hidden");
+    expect((panel.firstElementChild as HTMLElement).className).toContain("max-sm:w-full");
+    // Desktop keeps the column: its width is still the 320px the page sits beside.
+    expect(panel.style.width).toBe("320px");
+  } finally {
+    act(() => root.unmount());
+    useInboxStore.setState({ shortcutsPanelOpen: initial });
+  }
+});
