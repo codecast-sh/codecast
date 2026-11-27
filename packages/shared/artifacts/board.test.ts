@@ -253,12 +253,25 @@ describe("describe", () => {
     ]);
     const text = boardSpec.describe(v);
     const lines = text.split("\n");
-    expect(lines[0]).toContain('board "Launch" · 5 elements');
+    // Arrows aside, as a pill counts.
+    expect(lines[0]).toContain('board "Launch" · 4 elements ·');
     expect(lines[1]).toBe('el_f  frame  "Week 1"  0,0 600x300  holds el_s1 el_s2');
     expect(lines[2]).toBe('el_s1  sticky  yellow  40,60 200x160  🫐  "One"');
     expect(lines[3]).toBe('el_s2  sticky  pink  300,50 200x160  "Two ⏎ lines"');
     expect(lines[4]).toBe("el_k  card  ct-12  0,400 320x168");
     expect(lines[5]).toBe("el_c  connector  el_s1 → el_s2  curved");
+  });
+
+  test("the head counts what is on the board as the pill does: arrows aside, folded elements apart", () => {
+    const v = board([
+      el("el_f", "frame", { x: 0, y: 0, w: 260, h: 48, title: "Notes", collapsed: { w: 600, h: 400, holds: ["el_a", "el_b", "el_ab"] } }),
+      el("el_a", "sticky", { x: 40, y: 64 }),
+      el("el_b", "sticky", { x: 300, y: 64 }),
+      el("el_ab", "connector", { from: "el_a", to: "el_b" }),
+      el("el_c", "sticky", { x: 0, y: 600 }),
+      el("el_fc", "connector", { from: "el_f", to: "el_c" }),
+    ]);
+    expect(boardSpec.describe(v).split("\n")[0]).toMatch(/^board "Launch" · 2 elements \(2 folded\) · content/);
   });
   test("empty board", () => {
     expect(boardSpec.describe(board([]))).toContain("empty");

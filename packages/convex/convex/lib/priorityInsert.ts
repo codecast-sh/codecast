@@ -1,6 +1,6 @@
 // The one insert of a new priorities row: its pri-N, an empty session count
 // and the milestone key mark its steps start from. A person's create
-// (priorityWrite doCreate) writes through it; the pass's creates
+// (priorityCreate doCreate) writes through it; the pass's creates
 // (priorityPassRun applyPlan) mirror it and should switch to it.
 
 import type { Doc, Id } from "../_generated/dataModel";

@@ -281,11 +281,17 @@ export async function applyBatchCore(ctx: any, input: BatchInput): Promise<{ rev
   const createdComments: NewComment[] = [];
   let addedRows = 0;
   let revDelta = 0;
+  const layoutOnly = layer === "comments" ? undefined : artifactSpec(doc.doc_type as any).layoutOnly;
   for (const op of ops) {
     const { row, state } = await stateOf(ctx, doc._id, layer, op.k);
     let prev = state;
+    let prevBy = row && !row.dead ? row.by : undefined;
     // A draft edit of an element the draft has not touched yet starts from main.
-    if ((!row || row.dead) && layer === "draft") prev = (await stateOf(ctx, doc._id, "main", op.k)).state;
+    if ((!row || row.dead) && layer === "draft") {
+      const main = await stateOf(ctx, doc._id, "main", op.k);
+      prev = main.state;
+      prevBy = main.state ? main.row?.by : undefined;
+    }
     if (layer === "comments" && state && !state.deleted && !input.internal) {
       const problem = commentWriteProblem(state, op, caller, doc);
       if (problem) throw new ConvexError(problem);
@@ -304,7 +310,9 @@ export async function applyBatchCore(ctx: any, input: BatchInput): Promise<{ rev
       if (draftBytes > DRAFT_BYTES_MAX) throw new ConvexError(`A draft holds at most ${DRAFT_BYTES_MAX >> 20} MB; save or discard it first`);
     }
     rev += 1;
-    const fields = { kind: next.kind, fields: next.fields, rev, by: caller.actor, at: now, deleted: next.deleted ? true : undefined, dead: undefined };
+    // A write that only moves or resizes keeps the element's author: a person's Organize leaves an agent's frames the agent's.
+    const by = "set" in op && prevBy && layoutOnly?.(op.set) ? prevBy : caller.actor;
+    const fields = { kind: next.kind, fields: next.fields, rev, by, at: now, deleted: next.deleted ? true : undefined, dead: undefined };
     if (row) await ctx.db.patch(row._id, fields);
     else await ctx.db.insert("live_elements", { doc_id: doc._id, layer, key: op.k, ...fields });
     if (!row || row.dead) addedRows += 1;

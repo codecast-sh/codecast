@@ -3,7 +3,8 @@
 //
 // Frame fields (board elements are free-form JSON, so no schema change):
 //   ref?: string        a codecast short id (pri-N, in-N, pl-N, ct-N); the title renders as its chip, `title` is the fallback
-//   collapsed?: { w, h, holds }   present while folded: the expanded size and the keys the pill hides
+//   collapsed?: { w, h, holds, overlapped? }   present while folded: the expanded size, the keys the pill hides,
+//                       and the top-level neighbours the frame overlapped as it folded (an expand leaves those where they are)
 //
 // Containment stays geometric: an element belongs to the smallest visible,
 // unfolded frame whose box holds it. A folded frame's holds are hidden:
@@ -26,8 +27,10 @@
 //   expandFrameOps(view, key)        unfold; the enclosing frame reflows, or at the top level what it now covers moves down
 //   enclosingFrameKeys(view, key)    the open frames around a visible element, innermost first
 //   growToHoldOps(view, keys, at)    new elements placed at a point inside a frame: that frame grows to hold them, pushing what it covers
-//   personTouched(view, ops, exempt) the people's elements a batch moves, resizes or newly encloses (agent courtesy)
-//   agentCollapseOps(view, key)      an agent's fold: reflows upward only as far as no person's element is touched
+//   heldWith(view, keys)             keys plus everything the folded frames among them hold (a delete takes the holds too)
+//   personTouched(view, ops, exempt) the people's elements a batch moves, resizes, newly encloses or folds away (agent courtesy)
+//   agentCollapseOps(view, key)      an agent's fold: refused when it hides a person's element; reflows upward only as far as no person's element is touched
+//   layoutOnly(set)                  a set that only moves or resizes: the server keeps the element's author for it
 //   reflowFrameOps(view, key)        lay out a frame's children and size it to fit (a resolved frame, one holding a folded
 //                                    frame and a card, narrows to its widest card or pill, its text wrapped to that), then settle its level
 //   organizeOps(view, opts)          the whole board: agenda frames in the top row, other frames below, loose items gridded under them
@@ -36,7 +39,7 @@ import type { ArtifactView } from "./spec";
 import { contains, elementBounds, textHeight, textWidth, type Box, type Pt } from "./boardGeometry";
 import { squareCols, tidyBoxes } from "./boardLayout";
 
-export type FrameCollapsed = { w: number; h: number; holds: string[] };
+export type FrameCollapsed = { w: number; h: number; holds: string[]; overlapped?: string[] };
 
 /** Inside a frame: padding to its edge, the gap between children, and the extra room over the first row for the title. */
 export const FRAME_PAD = 40;
@@ -53,7 +56,8 @@ type View = Pick<ArtifactView, "elements" | "get">;
 export function frameCollapsed(el: ArtifactElement | undefined): FrameCollapsed | null {
   const c = el?.kind === "frame" ? (el.collapsed as any) : null;
   if (!c || typeof c !== "object" || typeof c.w !== "number" || typeof c.h !== "number" || !Array.isArray(c.holds)) return null;
-  return { w: c.w, h: c.h, holds: c.holds.filter((k: unknown): k is string => typeof k === "string") };
+  const keys = (v: unknown[]) => v.filter((k: unknown): k is string => typeof k === "string");
+  return { w: c.w, h: c.h, holds: keys(c.holds), ...(Array.isArray(c.overlapped) ? { overlapped: keys(c.overlapped) } : {}) };
 }
 
 /** What a folded frame's "(n)" counts: the held elements still on the board, arrows aside. One rule for the pill, export and `cast board read`. */
@@ -92,6 +96,8 @@ const area = (b: Box) => b.w * b.h;
 const overlap = (a: Box, b: Box) => Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x) > 0 && Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y) > 0;
 const sameBox = (a: Box, b: Box) => a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
 const inBox = (p: Pt, b: Box) => p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h;
+/** Overlaps nothing: a push judged against it moves everything the grown box covers. */
+const NO_BOX: Box = { x: 0, y: 0, w: 0, h: 0 };
 
 /** A free connector end (not attached to an element), or null. */
 function freeEnd(c: ArtifactElement, end: 1 | 2): Pt | null {
@@ -130,6 +136,13 @@ export function carriedKeys(view: Pick<ArtifactView, "elements">, keys: readonly
     if (moves(1) && moves(2)) set.add(o.key);
   }
   return [...set];
+}
+
+/** `keys` with everything the folded frames among them hold, nested folds and their arrows included: what a delete removes. */
+export function heldWith(view: Pick<ArtifactView, "elements">, keys: readonly string[]): string[] {
+  const byKey = new Map(view.elements.map((e) => [e.key, e]));
+  const pills = keys.filter((k) => frameCollapsed(byKey.get(k)));
+  return pills.length ? [...new Set([...keys, ...carriedKeys(view, pills)])] : [...keys];
 }
 
 /** Move a frame (or a selection) by dx, dy with everything it carries. */
@@ -217,6 +230,8 @@ class FrameLayout {
   hidden: Set<string>;
   /** How many enclosing frames a size change may reflow, innermost first; the top-level push comes only past the last. */
   levels = Infinity;
+  /** Top-level elements the push leaves where they are while they only overlap the grown frame (an expand's `overlapped`). */
+  private stay = new Set<string>();
 
   constructor(view: View) {
     this.els = new Map(view.elements.map((e) => [e.key, e]));
@@ -328,7 +343,8 @@ class FrameLayout {
   /**
    * After a frame changed size: its enclosing frame reflows; at the top level,
    * the push rule, judging what is newly covered against `judge` (the box the
-   * frame had before the change; for an expand, the box it had before folding).
+   * frame had before the change; for an expand, no box: all it covers moves
+   * but what it overlapped as it folded).
    */
   settle(n: Node, before: Box, judge: Box = before, level = 0) {
     if (sameBox(before, n.box)) return;
@@ -353,7 +369,7 @@ class FrameLayout {
       const { n: p, before: pb } = queue.shift()!;
       for (const s of this.root.kids) {
         // Newly overlapped moves, and so does anything now wholly inside, whatever `before` says: a frame never takes in what is not its own.
-        if (s === p || s === grown || !overlap(p.box, s.box) || (overlap(pb, s.box) && !contains(p.box, s.box))) continue;
+        if (s === p || s === grown || !overlap(p.box, s.box) || ((overlap(pb, s.box) || (p === grown && this.stay.has(s.key))) && !contains(p.box, s.box))) continue;
         const dy = p.box.y + p.box.h + (s.el.kind === "frame" ? FRAME_SPACING : FRAME_GAP) - s.box.y;
         if (dy <= 0) continue;
         const sb = { ...s.box };
@@ -401,19 +417,21 @@ class FrameLayout {
       };
       if (held(1) && held(2)) holds.add(c.key);
     }
-    const c: FrameCollapsed = { w: before.w, h: before.h, holds: [...holds] };
+    // What already overlapped it stays put when it opens again; anything that arrives meanwhile is pushed clear.
+    const overlapped = n.parent === this.root ? this.root.kids.filter((s) => s !== n && overlap(before, s.box)).map((s) => s.key) : [];
+    const c: FrameCollapsed = { w: before.w, h: before.h, holds: [...holds], ...(overlapped.length ? { overlapped } : {}) };
     this.collapsedOverride.set(n.key, c);
     this.setFields(n.key, { collapsed: c as unknown as Json });
     for (const k of holds) this.hidden.add(k);
     n.kids = [];
-    this.resize(n, pillWidth(n.el), FRAME_PILL_H);
+    // Never wider than the frame was, so a fold never covers or pushes a neighbour.
+    this.resize(n, Math.min(pillWidth(n.el), before.w), FRAME_PILL_H);
     this.settle(n, before);
   }
 
   expand(n: Node) {
     const c = this.collapsedOf(n.key)!;
     const before = { ...n.box };
-    const unfolded = { ...n.box, w: c.w, h: c.h };
     this.collapsedOverride.set(n.key, null);
     this.setFields(n.key, { collapsed: null });
     this.resize(n, c.w, c.h);
@@ -431,7 +449,9 @@ class FrameLayout {
       const maxX = Math.max(...n.kids.map((k) => k.box.x + k.box.w)), maxY = Math.max(...n.kids.map((k) => k.box.y + k.box.h));
       this.resize(n, Math.max(n.box.w, maxX + FRAME_PAD - n.box.x), Math.max(n.box.h, maxY + FRAME_PAD - n.box.y));
     }
-    this.settle(n, before, unfolded);
+    // Judged against no box: what arrived on the area while it was folded moves clear, half-covered or wholly.
+    this.stay = new Set(c.overlapped ?? []);
+    this.settle(n, before, NO_BOX);
   }
 
   organize(people: readonly string[]) {
@@ -586,6 +606,17 @@ export function isPersonElement(el: ArtifactElement | undefined): boolean {
 }
 
 const GEOMETRY = ["x", "y", "w", "h", "x1", "y1", "x2", "y2"] as const;
+const GEOMETRY_SET = new Set<string>(GEOMETRY);
+
+/**
+ * A set that only moves or resizes (x, y, w, h, x1..y2). The server keeps the
+ * element's `by` for it, so a person's Organize or drag leaves an agent's
+ * frames the agent's, and an agent's layout never makes a person's sticky its own.
+ */
+export function layoutOnly(set: Record<string, unknown>): boolean {
+  const fields = Object.keys(set);
+  return fields.length > 0 && fields.every((f) => GEOMETRY_SET.has(f));
+}
 
 /** The board after one batch, `by` kept, so a check can read both sides. */
 function applied(view: Pick<ArtifactView, "elements">, ops: readonly ArtifactOp[]): ArtifactElement[] {
@@ -613,10 +644,10 @@ function holders(els: readonly ArtifactElement[]): Map<string, Set<string>> {
 }
 
 /**
- * The people's elements a batch would move or resize, or newly put inside a
- * frame that did not hold them before. `exempt` are the keys the command was
- * asked to act on (the frame it folds, the keys it moves): their own change
- * is the point of the command.
+ * The people's elements a batch would move or resize, newly put inside a
+ * frame that did not hold them before, or fold out of sight. `exempt` are the
+ * keys the command was asked to act on (the frame it folds, the keys it
+ * moves): their own change is the point of the command.
  */
 export function personTouched(view: Pick<ArtifactView, "elements">, ops: readonly ArtifactOp[], exempt: readonly string[] = []): string[] {
   const skip = new Set(exempt);
@@ -636,17 +667,22 @@ export function personTouched(view: Pick<ArtifactView, "elements">, ops: readonl
     const was = before.get(k)!;
     if ([...now].some((f) => !was.has(f))) out.add(k);
   }
+  const hiddenBefore = hiddenKeys(view);
+  for (const k of hiddenKeys({ elements: after })) if (!hiddenBefore.has(k) && !skip.has(k) && isPersonElement(byKey.get(k))) out.add(k);
   return [...out];
 }
 
 /**
- * An agent's fold: the fold always happens, then the enclosing frames reflow
- * one level at a time, stopping at the first level whose reflow would touch
- * a person's element. `leftAsItWas` is that level's frame.
+ * An agent's fold. A fold that would hide a person's element is refused (it
+ * throws, nothing written). Otherwise the fold happens, then the enclosing
+ * frames reflow one level at a time, stopping at the first level whose reflow
+ * would touch a person's element. `leftAsItWas` is that level's frame.
  */
 export function agentCollapseOps(view: View, key: string): { ops: ArtifactOp[]; leftAsItWas: string | null } {
   const around = enclosingFrameKeys(view, key);
   let ops = collapseFrameOps(view, key, { levels: 0 });
+  const folded = personTouched(view, ops, [key]);
+  if (folded.length) throw new Error(`left the board as it was: folding ${key} would hide a person's work (${folded.join(", ")}). A person can fold it on the board.`);
   for (let level = 1; level <= around.length; level++) {
     const next = collapseFrameOps(view, key, { levels: level });
     if (personTouched(view, next, [key]).length) return { ops, leftAsItWas: around[level - 1] };

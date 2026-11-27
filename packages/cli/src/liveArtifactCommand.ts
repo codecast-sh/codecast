@@ -117,7 +117,8 @@ export function readNotes(cli: string, noun: string, id: string, a: { archived?:
 
 /**
  * Element keys for `rm`: each an element key, or a reference the product reads
- * (a sheet's A1 or Tab!A1). Throws naming every one that matches nothing.
+ * (a sheet's A1 or Tab!A1), plus what the product deletes with them (a board's
+ * folded frame takes what it holds). Throws naming every one that matches nothing.
  */
 export function resolveRmKeys(spec: ArtifactSpec, view: ReturnType<typeof artifactView>, refs: string[]): string[] {
   const keys: string[] = [];
@@ -131,7 +132,8 @@ export function resolveRmKeys(spec: ArtifactSpec, view: ReturnType<typeof artifa
     const hint = spec.type === "sheet" ? "; to empty cells use `cast sheet clear <doc> <range>`" : "";
     throw new Error(`no element ${missing.join(", ")} in this ${spec.label.toLowerCase()} (\`cast ${spec.cli} read <doc> --json\` lists every key${hint})`);
   }
-  return [...new Set(keys)];
+  const unique = [...new Set(keys)];
+  return spec.deleteKeys?.(view, unique) ?? unique;
 }
 
 async function readComments(deps: PublishDeps, docId: string) {

@@ -82,6 +82,21 @@ describe("live artifacts", () => {
     expect(bot).toMatchObject({ name: "Lay out the timeline", session_short_id: "jx7agnt", selection: ["el_a", "el_b"] });
   });
 
+  test("on a board, a write that only moves or resizes keeps the element's author; any other field takes the writer", async () => {
+    const { t, doc, rosa, as, agent, conv } = await setup();
+    const byOf = async (k: string) => (await as(rosa).query(api.liveArtifacts.elementsSince, { doc_id: doc, since: 0 }))!.rows.find((x: any) => x.key === k)!.by;
+    await t.mutation(api.liveArtifacts.apply, { doc_id: doc, ops: [{ k: "el_f", put: { kind: "frame", x: 0, y: 0, w: 600, h: 400, title: "Theme" } }], ...agent });
+    await as(rosa).mutation(api.liveArtifacts.apply, { doc_id: doc, ops: [{ k: "el_p", put: { kind: "sticky", x: 900, y: 0 } }] });
+    // Rosa's Organize moves and resizes Scribe's frame; Scribe's layout moves Rosa's sticky.
+    await as(rosa).mutation(api.liveArtifacts.apply, { doc_id: doc, ops: [{ k: "el_f", set: { x: 40, y: 40, w: 500, h: null } }] });
+    await t.mutation(api.liveArtifacts.apply, { doc_id: doc, ops: [{ k: "el_p", set: { y: 500 } }], ...agent });
+    expect(await byOf("el_f")).toBe(`s:${conv}`);
+    expect(await byOf("el_p")).toBe(`u:${rosa}`);
+    // Words, or a fold, are a real edit: they take the writer.
+    await as(rosa).mutation(api.liveArtifacts.apply, { doc_id: doc, ops: [{ k: "el_f", set: { title: "Rosa's", x: 0 } }] });
+    expect(await byOf("el_f")).toBe(`u:${rosa}`);
+  });
+
   test("the server refuses kinds the product does not register and reserved fields", async () => {
     const { doc, rosa, as } = await setup();
     await expect(as(rosa).mutation(api.liveArtifacts.apply, { doc_id: doc, ops: [{ k: "el_x", put: { kind: "cell", input: "1" } }] })).rejects.toThrow(/not a board element/);

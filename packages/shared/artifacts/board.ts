@@ -8,7 +8,7 @@ import { boardArtFor } from "./boardArt";
 import { BOARD_VERBS } from "./boardVerbs";
 import { BOARD_ART } from "./boardArt";
 import { pageShareUrl } from "../entities";
-import { foldedCount, frameCollapsed, frameRef, hiddenKeys } from "./boardFrames";
+import { foldedCount, frameCollapsed, frameRef, heldWith, hiddenKeys, layoutOnly } from "./boardFrames";
 
 export * from "./boardGeometry";
 export * from "./boardLayout";
@@ -137,7 +137,10 @@ export function describeBoard(whole: ArtifactView): string {
   const hidden = hiddenKeys(view);
   const shown = view.elements.filter((e) => !hidden.has(e.key));
   const content = unionBox(shown.filter((e) => e.kind !== "connector").map(elementBox));
-  const head = `board "${view.title}" · ${view.elements.length} elements` +
+  // Counted as the pill counts its "(n)" (foldedCount): elements on the board, arrows aside; what folds hide is counted apart.
+  const count = shown.filter((e) => e.kind !== "connector").length;
+  const folded = view.elements.reduce((n, e) => n + foldedCount(e, view.get), 0);
+  const head = `board "${view.title}" · ${count} elements` + (folded ? ` (${folded} folded)` : "") +
     (content ? ` · content ${Math.round(content.x)},${Math.round(content.y)} → ${Math.round(content.x + content.w)},${Math.round(content.y + content.h)}` : "") +
     " · x right, y down, boxes are x,y wxh";
   // What a folded frame hides is listed under it, indented, so an agent can still find it by key.
@@ -182,6 +185,8 @@ export const boardSpec: ArtifactSpec = {
     if (!last) return undefined;
     return { point: { x: Math.round(last.x + last.w), y: Math.round(last.y + last.h) } };
   },
+  layoutOnly,
+  deleteKeys: heldWith,
   verbs: BOARD_VERBS,
   agentGuide: [
     "Boards: `cast board read <doc>` lists every element (key, kind, box x,y wxh, text). Lay out with the verbs, never hand-computed coordinates.",
@@ -198,7 +203,7 @@ export const boardSpec: ArtifactSpec = {
     "Themes: `Theme name: el_a el_b el_c` per line regroups existing stickies into titled frames.",
     "Frames about a codecast object: `place <doc> grid --frame-ref ct-12` or `frame <doc> <keys...> --ref pri-3 [--collapse]` set the frame's `ref` (pri-N, in-N, pl-N or ct-N): its chip is the title each viewer sees, and the written title is your words or the bare id. `edit <doc> <frame> --ref <id>|none` changes its object and keeps the title.",
     "Folding: `collapse <doc> <frame>` shrinks a frame to a title pill that hides and carries what it holds; `expand <doc> <frame>` opens it in place. `reflow <doc> <frame>` lays a frame's contents out and sizes it to fit; `reflow <doc>` organizes the whole board. `move` on a frame carries everything in it.",
-    "Courtesy: an agent's layout never moves, resizes or swallows a person's element. A collapse reflows the frames around it only up to the one holding a person's work; expand, reflow and move refuse and write nothing when they would touch one (a person can press Reflow or Organize).",
+    "Courtesy: an agent's layout never moves, resizes, swallows or hides a person's element. A collapse reflows the frames around it only up to the one holding a person's work, and is refused if it would hide one; frame, expand, reflow and move refuse and write nothing when they would touch one (a person can press Reflow or Organize); an add, card, place or page --at inside a frame leaves the frame as it was when growing it would.",
     "Colors: yellow orange red pink violet blue cyan green gray. Shapes: rect ellipse diamond pill triangle hexagon cylinder (a database) star.",
     "Stickers: `stamp 🎉` is a small emoji reaction; `stamp rocket` (any illustration name) places the painted illustration as a 120px sticker.",
     "Fields for `apply`: every element x y w h z rot group; sticky text color icon; text text size weight(bold) color align(left|center|right); shape shape text color solid icon; frame title color ref (a codecast id; its chip is the title); connector from to (keys) or x1 y1 x2 y2, curve(curved|elbow) arrow(end|both|none) label label_at(0..1) color dash width; pen points [x,y,...] color width opacity; stamp emoji size; card ref; page slug caption; image src alt. Text takes **bold**, *italic*, - lists and links.",

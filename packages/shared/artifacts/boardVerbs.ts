@@ -2,7 +2,7 @@
 // board out cleanly without computing coordinates itself. Each verb is pure:
 // the board as it stands plus arguments in, ops out. The CLI writes them and
 // moves the agent's cursor to what it wrote.
-import type { ArtifactElement, ArtifactOp, Json } from "./core";
+import { coalesceOps, type ArtifactElement, type ArtifactOp, type Json } from "./core";
 import type { ArtifactVerb, ArtifactView, VerbContext, VerbResult } from "./spec";
 import { artifactView, newElementKey } from "./spec";
 import { parsePublishedPageUrl } from "../entities";
@@ -47,6 +47,7 @@ import {
   agentCollapseOps,
   collapseFrameOps,
   expandFrameOps,
+  foldedCount,
   frameCollapsed,
   growToHoldOps,
   hiddenKeys,
@@ -119,19 +120,6 @@ export function frameRefArg(v: string | true | undefined, flag: string): string 
   return v.toString().trim().toLowerCase();
 }
 
-/** Set ops folded into the puts of the same batch, so a new frame is written whole. */
-function foldInto(ops: ArtifactOp[], more: readonly ArtifactOp[]): ArtifactOp[] {
-  const out = [...ops];
-  for (const op of more) {
-    const i = out.findIndex((o) => o.k === op.k && "put" in o);
-    if (i < 0 || !("set" in op)) { out.push(op); continue; }
-    const put = { ...(out[i] as { put: Record<string, Json> }).put };
-    for (const [f, v] of Object.entries(op.set)) if (v === null) delete put[f]; else put[f] = v;
-    out[i] = { k: op.k, put: put as any };
-  }
-  return out;
-}
-
 /** Agent courtesy, for verbs that lay out more than they were asked to. */
 function frameName(view: ArtifactView, key: string): string {
   const t = view.get(key)?.title;
@@ -145,10 +133,14 @@ function collapseOps(view: ArtifactView, key: string, ctx?: VerbContext): { ops:
   return { ops, note: leftAsItWas ? `left ${frameName(view, leftAsItWas)} as it was: it holds a person's work` : null };
 }
 
-/** An agent's whole-batch layout (expand, reflow, organize, move) that would touch a person's element is refused, nothing written. */
+/** The people's elements an agent's batch would touch; none for a person's command. */
+function touchedPeople(view: ArtifactView, ops: readonly ArtifactOp[], asked: readonly string[], ctx?: VerbContext): string[] {
+  return ctx?.agent ? personTouched(view, ops, asked) : [];
+}
+
+/** An agent's whole-batch layout (frame, expand, reflow, organize, move) that would touch a person's element is refused, nothing written. */
 function refuseForPeople(view: ArtifactView, ops: readonly ArtifactOp[], asked: readonly string[], ctx?: VerbContext) {
-  if (!ctx?.agent) return;
-  const touched = personTouched(view, ops, asked);
+  const touched = touchedPeople(view, ops, asked, ctx);
   if (!touched.length) return;
   throw new Error(`left the board as it was: this would move or enclose a person's work (${touched.join(", ")}). A person can press Reflow or Organize on the board.`);
 }
@@ -176,16 +168,17 @@ function insetPad(view: ArtifactView, els: readonly ArtifactElement[], pad: numb
 /**
  * New elements put at `at` (an add-type verb's --at): when that point is inside
  * an open frame, the frame grows in the same batch to hold them, so they are
- * its children and a reflow lays them out. An agent's growth may not push a
- * person's element (the frame itself may grow).
+ * its children and a reflow lays them out. An agent's growth may not move or
+ * enclose a person's element (the frame itself may grow): then the new
+ * elements go in where asked and the frame stays as it was.
  */
 function intoFrame(view: ArtifactView, ops: ArtifactOp[], keys: readonly string[], at: Pt | null, ctx?: VerbContext): { ops: ArtifactOp[]; note: string | null } {
   if (!at) return { ops, note: null };
   const placed = artifactView(view.type, view.title, [...view.elements, ...ops.flatMap((o) => ("put" in o ? [{ ...o.put, key: o.k, rev: 0 } as ArtifactElement] : []))]);
   const grow = growToHoldOps(placed, keys, at);
   if (!grow.frame || !grow.ops.length) return { ops, note: null };
-  refuseForPeople(placed, grow.ops, [grow.frame, ...keys], ctx);
-  return { ops: foldInto(ops, grow.ops), note: `grew ${frameName(view, grow.frame)} to hold it` };
+  if (touchedPeople(placed, grow.ops, [grow.frame, ...keys], ctx).length) return { ops, note: `left ${frameName(view, grow.frame)} as it was: growing it would move a person's work` };
+  return { ops: coalesceOps([...ops, ...grow.ops]), note: `grew ${frameName(view, grow.frame)} to hold it` };
 }
 
 /** The frame's box after `ops`, from its put or its old box with the set fields. */
@@ -477,11 +470,13 @@ const frame: ArtifactVerb = {
       if (str(flags.color)) op.put.color = str(flags.color)!;
       if (ref) op.put.ref = ref;
     }
+    // An agent's frame never boxes in a person's element it was not asked to frame.
+    refuseForPeople(view, [op], keys, ctx);
     if (!flags.collapse) return done([op], [op.k], `framed ${els.length} as "${title}"`, view, els.map(elementBox));
-    // Framed and folded in one batch: fold the new frame as if it were already there.
+    // Framed and folded in one batch: fold the new frame as if it were already there (an agent's fold never hides a person's element).
     const framed = artifactView(view.type, view.title, [...view.elements, { ...(op as { put: Record<string, Json> }).put, key: op.k, rev: 0 } as ArtifactElement]);
     const fold = collapseOps(framed, op.k, ctx);
-    const ops = foldInto([op], fold.ops);
+    const ops = coalesceOps([op, ...fold.ops]);
     return done(ops, [op.k], [`framed ${els.length} as "${title}", collapsed`, fold.note].filter(Boolean).join("\n"), view, [boxAfter(framed, op.k, ops)]);
   },
 };
@@ -610,8 +605,8 @@ function foldVerb(fold: "collapse" | "expand"): ArtifactVerb {
       const { ops, note } = fold === "collapse" ? collapseOps(view, el.key, ctx) : { ops: expandFrameOps(view, el.key), note: null };
       if (fold === "expand") refuseForPeople(view, ops, [el.key], ctx);
       // The holds: the fold's new `collapsed`, or the one an expand clears.
-      const folded = fold === "collapse" ? frameCollapsed({ ...el, ...(ops.find((o) => o.k === el.key) as { set?: Record<string, Json> })?.set } as ArtifactElement) : frameCollapsed(el);
-      const n = folded?.holds.filter((k) => view.get(k)).length ?? 0;
+      const pill = fold === "collapse" ? ({ ...el, ...(ops.find((o) => o.k === el.key) as { set?: Record<string, Json> })?.set } as ArtifactElement) : el;
+      const n = foldedCount(pill, view.get);
       const status = fold === "collapse" ? `collapsed ${el.key} (${n} held)` : `expanded ${el.key} (${n} shown)`;
       return done(ops, [el.key], [status, note].filter(Boolean).join("\n"), view, [boxAfter(view, el.key, ops)]);
     },

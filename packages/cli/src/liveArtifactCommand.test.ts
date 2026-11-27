@@ -77,6 +77,13 @@ describe("cast board|sheet|data: the whole life of an artifact", () => {
     const bview = artifactView("board", "B", [{ key: "el_a", kind: "sticky", rev: 1, x: 0, y: 0 } as any]);
     expect(resolveRmKeys(board, bview, ["el_a"])).toEqual(["el_a"]);
     expect(() => resolveRmKeys(board, bview, ["el_a", "el_gone"])).toThrow(/no element el_gone in this board/);
+    // A folded frame goes with what it holds, as a delete on the web does.
+    const pill = artifactView("board", "B", [
+      { key: "el_p", kind: "frame", rev: 1, x: 0, y: 0, w: 260, h: 48, collapsed: { w: 400, h: 300, holds: ["el_h", "el_hc"] } } as any,
+      { key: "el_h", kind: "sticky", rev: 1, x: 40, y: 64 } as any,
+      { key: "el_hc", kind: "connector", rev: 1, from: "el_h", to: "el_p" } as any,
+    ]);
+    expect(resolveRmKeys(board, pill, ["el_p"]).sort()).toEqual(["el_h", "el_hc", "el_p"]);
   });
 });
 
@@ -148,6 +155,9 @@ describe("cast board frame verbs (pl-1145)", () => {
     expect(set(r, "el_i").collapsed.holds).toEqual(["el_s1"]);
     expect(set(r, "el_s2")).toBeDefined();
     expect(r.status).toBe("collapsed el_i (1 held)\nkeys: el_i");
+    // Held counts as the pill does: arrows aside.
+    const arrow = artifactView("board", "B", [frameEl("el_f", 0, 0, 600, 400), sticky("el_a", 40, 64), sticky("el_b", 300, 64), { key: "el_ab", kind: "connector", rev: 1, from: "el_a", to: "el_b" }]);
+    expect(verbs.collapse.run(arrow, ["el_f"]).status).toMatch(/^collapsed el_f \(2 held\)/);
     const folded = artifactView("board", "B", [frameEl("el_f", 0, 0, 260, 48, { collapsed: { w: 400, h: 300, holds: ["el_a"] } }), sticky("el_a", 40, 64)]);
     const e = verbs.expand.run(folded, ["el_f"], undefined, AGENT);
     expect(set(e, "el_f")).toMatchObject({ collapsed: null, w: 400, h: 300 });
@@ -196,6 +206,31 @@ describe("cast board frame verbs (pl-1145)", () => {
     const own = artifactView("board", "B", [frameEl("el_t", 0, 0, 1200, 900), sticky("el_s", 80, 128), sticky("el_p", 2000, 0, "u:jason")]);
     expect(verbs.move.run(own, ["el_t", "--by", "100,0"], undefined, AGENT).ops.map((o) => o.k).sort()).toEqual(["el_s", "el_t"]);
     expect(verbs.reflow.run(own, ["el_t"], undefined, AGENT).ops.length).toBeGreaterThan(0);
+  });
+
+  test("courtesy: an agent's frame never boxes in or folds away a person's sticky; a person's frame does", () => {
+    const v0 = artifactView("board", "B", [sticky("el_a", 0, 0), sticky("el_p", 240, 0, "u:jason"), sticky("el_b", 480, 0)]);
+    expect(() => verbs.frame.run(v0, ["Theme", "el_a", "el_b"], undefined, AGENT)).toThrow("left the board as it was: this would move or enclose a person's work (el_p). A person can press Reflow or Organize on the board.");
+    expect(() => verbs.frame.run(v0, ["Theme", "el_a", "el_b", "--collapse"], undefined, AGENT)).toThrow(/\(el_p\)/);
+    expect(verbs.frame.run(v0, ["Theme", "el_a", "el_b", "--collapse"]).ops).toHaveLength(1);
+    // Named, the person's sticky is what the agent was asked to frame; folding it out of sight is still refused.
+    expect(verbs.frame.run(v0, ["Theme", "el_a", "el_p", "el_b"], undefined, AGENT).ops).toHaveLength(1);
+    expect(() => verbs.frame.run(v0, ["Theme", "el_a", "el_p", "el_b", "--collapse"], undefined, AGENT)).toThrow(/folding .* would hide a person's work \(el_p\)/);
+  });
+
+  test("courtesy: an agent's card --at inside a frame whose growth would move a person's work goes in where asked, the frame left as it was", () => {
+    const v0 = artifactView("board", "B", [
+      frameEl("el_o", 0, 0, 1400, 900, { by: "u:jason", title: "Jason's" }),
+      frameEl("el_i", 40, 64, 500, 400, { title: "Budget" }),
+      sticky("el_s", 80, 128),
+      sticky("el_p", 700, 128, "u:jason"),
+    ]);
+    const r = verbs.card.run(v0, ["ct-5", "--at", "100,400"], undefined, AGENT);
+    expect(r.ops).toHaveLength(1);
+    expect(put(r, r.ops[0].k)).toMatchObject({ kind: "card", ref: "ct-5", x: 100, y: 400 });
+    expect(r.status).toContain(`left "Budget" as it was: growing it would move a person's work`);
+    // A person's card grows the frame.
+    expect(verbs.card.run(v0, ["ct-5", "--at", "100,400"]).status).toContain(`grew "Budget" to hold it`);
   });
 
   test("reflow lays out one frame, or organizes the board with no frame; a laid-out frame writes nothing", () => {

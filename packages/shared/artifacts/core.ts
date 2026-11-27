@@ -30,7 +30,7 @@ export type ElementBase = {
   kind: string;
   /** Server revision of the element's last write (0 for an unconfirmed local create). */
   rev: number;
-  /** Actor of the last write: "u:<userId>" or "s:<conversationId>". */
+  /** Actor of the last write ("u:<userId>" or "s:<conversationId>"), except one that only moves or resizes (ArtifactSpec.layoutOnly). */
   by?: string;
   at?: number;
 };

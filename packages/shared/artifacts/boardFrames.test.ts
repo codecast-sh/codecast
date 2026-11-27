@@ -15,7 +15,9 @@ import {
   FRAME_PILL_H,
   FRAME_SPACING,
   FRAME_TITLE_BAND,
+  heldWith,
   hiddenKeys,
+  layoutOnly,
   moveFrameOps,
   organizeOps,
   personTouched,
@@ -152,6 +154,26 @@ describe("collapse and expand", () => {
       expect(box(v, "el_B").y).toBe(300);
     }
     expect(pos(v4, "el_a")).toEqual(pos(v0, "el_a"));
+  });
+
+  test("a pill is never wider than its frame, so a long title folds without pushing a neighbour", () => {
+    const v0 = board([frame("el_f", 0, 0, 280, 300, { title: "Budget caps and the quarterly hiring plan for Q3" }), sticky("el_a", 40, 64), frame("el_g", 360, 0, 400, 300)]);
+    const ops = collapseFrameOps(v0, "el_f");
+    expect(ops.map((o) => o.k)).toEqual(["el_f"]);
+    expect(apply(v0, ops).get("el_f")!.w).toBe(280);
+  });
+
+  test("expand pushes what arrived on its area while folded, half-covered or wholly; what overlapped it as it folded stays", () => {
+    const v0 = board([frame("el_A", 0, 0, 600, 400), sticky("el_a", 40, 64), frame("el_B", 0, 300, 600, 300)]);
+    const v1 = apply(v0, collapseFrameOps(v0, "el_A"));
+    expect((v1.get("el_A")!.collapsed as any).overlapped).toEqual(["el_B"]);
+    const v2 = apply(v1, [
+      { k: "el_Q", put: { kind: "sticky", x: 500, y: 200, w: 200, h: 160, text: "Q", color: "yellow" } },
+      { k: "el_F", put: { kind: "frame", x: 100, y: 150, w: 800, h: 300, title: "F" } },
+    ]);
+    const v3 = apply(v2, expandFrameOps(v2, "el_A"));
+    for (const k of ["el_Q", "el_F"]) expect(overlaps(box(v3, "el_A"), box(v3, k))).toBe(false);
+    expect(box(v3, "el_B").y).toBe(300);
   });
 
   test("an arrow from inside a nested fold to a sibling hides when the outer frame folds", () => {
@@ -565,5 +587,35 @@ describe("agent courtesy", () => {
     // No person anywhere: every level reflows.
     const clean = board(v0.elements.map((e) => ({ ...e, by: "s:a" })));
     expect(agentCollapseOps(clean, "el_n")).toEqual({ ops: collapseFrameOps(clean, "el_n"), leftAsItWas: null });
+  });
+
+  test("an agent's fold that would hide a person's element is refused, at the top level too", () => {
+    const v0 = board([frame("el_n", 0, 0, 600, 400), sticky("el_s", 40, 64), sticky("el_p", 300, 64, mine)]);
+    expect(personTouched(v0, collapseFrameOps(v0, "el_n"), ["el_n"])).toEqual(["el_p"]);
+    expect(() => agentCollapseOps(v0, "el_n")).toThrow("left the board as it was: folding el_n would hide a person's work (el_p). A person can fold it on the board.");
+  });
+
+  test("layoutOnly: a set of position and size alone keeps the author", () => {
+    expect(layoutOnly({ x: 1, y: 2 })).toBe(true);
+    expect(layoutOnly({ w: 300, h: null })).toBe(true);
+    expect(layoutOnly({ x1: 0, y1: 0, x2: 9, y2: 9 })).toBe(true);
+    expect(layoutOnly({ x: 1, text: "hi" })).toBe(false);
+    expect(layoutOnly({ w: 260, h: 48, collapsed: { w: 1, h: 1, holds: [] } })).toBe(false);
+    expect(layoutOnly({})).toBe(false);
+  });
+});
+
+describe("heldWith", () => {
+  test("a folded frame takes what it holds, nested folds and their arrows included; anything else is itself", () => {
+    const v = board([
+      frame("el_o", 0, 0, 260, 48, { collapsed: { w: 900, h: 700, holds: ["el_i", "el_a", "el_ai"] } }),
+      frame("el_i", 40, 64, 260, 48, { collapsed: { w: 400, h: 300, holds: ["el_b"] } }),
+      sticky("el_a", 500, 64),
+      sticky("el_b", 80, 128),
+      el("el_ai", "connector", { from: "el_a", to: "el_i" }),
+      sticky("el_x", 2000, 0),
+    ]);
+    expect(heldWith(v, ["el_o"]).sort()).toEqual(["el_a", "el_ai", "el_b", "el_i", "el_o"]);
+    expect(heldWith(v, ["el_x"])).toEqual(["el_x"]);
   });
 });
