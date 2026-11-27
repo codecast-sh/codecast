@@ -15,7 +15,7 @@
     },
     "packages/cli": {
       "name": "@codecast/cli",
-      "version": "1.1.296",
+      "version": "1.1.302",
       "bin": {
         "codecast": "./dist/main.js",
         "cast": "./dist/main.js",
@@ -80,7 +80,7 @@
     },
     "packages/electron": {
       "name": "@codecast/electron",
-      "version": "1.1.132",
+      "version": "1.1.133",
       "dependencies": {
         "@platform/desktop": "file:../../platform/packages/desktop",
       },
