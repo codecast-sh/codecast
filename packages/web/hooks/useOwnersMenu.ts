@@ -93,9 +93,6 @@ export function useOwnersMenu(conversationId: string, view: SessionOwnersView, o
   // The roles it came from lead, each with why; the rest follow as before.
   const originRoleReasons = new Map<string, string>();
   if (view.read?.released_role) originRoleReasons.set(view.read.released_role.role_id, "Owned it before");
-  if (originSeatRole && !originRoleReasons.has(originSeatRole)) originRoleReasons.set(originSeatRole, fromSession);
-  const originRoles = [...originRoleReasons.keys()].map((id) => offerRoles.find((r) => r._id === id)).filter((r): r is OrgRole => !!r);
-  const otherRoles = offerRoles.filter((r) => !originRoles.includes(r));
   const releasedTitle = releasedParent ? releasedParent.title ?? `Session ${releasedParent.short_id}` : null;
   const spawnerTitle = spawnedBy ? spawnedBy.title ?? `Session ${spawnedBy.short_id}` : null;
   const originSession: Extract<OwnerCandidate, { kind: "session" }> | null =
@@ -104,6 +101,12 @@ export function useOwnersMenu(conversationId: string, view: SessionOwnersView, o
       : spawnedBy?.adoptable && !initial.parent && !releasedParent && draft.parent !== spawnedBy.conversation_id && matches(spawnerTitle!)
         ? { key: `s:${spawnedBy.conversation_id}`, kind: "session", id: spawnedBy.conversation_id, title: spawnerTitle!, adopt: true, origin: "Started it" }
         : null;
+  // That session's role, unless that session (the role's own standing
+  // session, so the same agent) is offered above or already owns it.
+  const seatOffered = originSession?.id === originSessionId || draft.parent === originSessionId;
+  if (originSeatRole && !originRoleReasons.has(originSeatRole) && !seatOffered) originRoleReasons.set(originSeatRole, fromSession);
+  const originRoles = [...originRoleReasons.keys()].map((id) => offerRoles.find((r) => r._id === id)).filter((r): r is OrgRole => !!r);
+  const otherRoles = offerRoles.filter((r) => !originRoles.includes(r));
   const sessionTitleOf = (id: string) =>
     view.parent?.id === id ? view.parent.title
       : releasedParent?.conversation_id === id ? releasedTitle!

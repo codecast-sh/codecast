@@ -286,6 +286,29 @@ describe("flag on: where it came from", () => {
   });
 });
 
+describe("flag on: where it came from, when that session is a role's own", () => {
+  const LEAD = "p".repeat(32);
+  test("the lead's standing session is offered once, not again as its role", async () => {
+    seed(true, { released_parent: { conversation_id: LEAD, short_id: "jxlead1", title: "Eval Suite lead" } });
+    useInboxStore.setState((s: any) => ({ orgTree: { ...s.orgTree, roles: [{ ...roleRow, standing: { conversation_id: LEAD } }] } }));
+    await render(<OwnersSegment conversationId={S} />);
+    await click($("[data-owners-seg]"));
+    expect($(`[data-owner-candidate="s:${LEAD}"]`)).not.toBeNull();
+    expect($(`[data-owner-candidate="r:${ROLE}"]`)?.textContent ?? "").not.toContain("Role of the session it worked for");
+  });
+
+  test("a peer's adoptable spawner is offered with its role, and adding it sends adopt_parent keeping you", async () => {
+    seed(true, { spawned_by: { conversation_id: LEAD, short_id: "jxlead1", title: "Planner", adoptable: true } });
+    await render(<OwnersSegment key="spawner" conversationId={S} />);
+    await click($("[data-owners-seg]"));
+    expect($(`[data-owner-candidate="s:${LEAD}"]`)!.textContent).toContain("Started it");
+    await click($(`[data-owner-candidate="s:${LEAD}"] .own-plus`));
+    await click($("[data-owners-save]"));
+    await settle();
+    expect(ownersSent()).toEqual([{ add: ["me"], adopt_parent: LEAD }]);
+  });
+});
+
 describe("flag on: a session not created yet", () => {
   const STUB = "stubsession01";
   test("draws the owners segment with you as the owner, read-only until it starts", async () => {
