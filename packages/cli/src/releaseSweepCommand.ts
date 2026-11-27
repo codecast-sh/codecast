@@ -2,10 +2,12 @@
 // (convex releaseSweep.ts), one line per exception with the id to act on and
 // the command that acts. Precheck semantics, so it gates the captain's hourly
 // check: exit 0 when anything needs action, 1 when the hour is quiet, 2 when
-// the sweep itself failed (never read as quiet). `--keys` prints what a
-// `changes` precheck compares, so the check wakes on a new exception only.
+// the sweep itself failed (never read as quiet). `--new` is the gate for a
+// `state` precheck: it wakes the check on an exception not seen in a week,
+// never on one that only went away, nor on one that comes back within it.
 
 import type { Command } from "commander";
+import { TRIGGER_PRECHECK_MESSAGE_CHARS, TRIGGER_PRECHECK_STATE_CHARS, TRIGGER_PRECHECK_STATE_ENV } from "@codecast/shared/contracts";
 import { apiPost, type PublishDeps } from "./castApi.js";
 import { commandGroup } from "./commandGroupLookup.js";
 
@@ -29,6 +31,10 @@ const span = (ms: number) => {
 const oneLine = (s: string, max = 120) => { const t = s.replace(/\s+/g, " ").trim(); return t.length > max ? `${t.slice(0, max - 1)}…` : t; };
 
 export const sweepCount = (s: Sweep) => s.incidents.length + s.late_targets.length + s.failed_runs.length + s.laggards.length + s.unretired.length;
+
+/** A body the server answered with: every list there, or the read failed (an empty 200 is no quiet hour). */
+const isSweep = (s: unknown): s is Sweep =>
+  !!s && typeof s === "object" && (["incidents", "late_targets", "failed_runs", "laggards", "unretired"] as const).every((k) => Array.isArray((s as any)[k]));
 
 /** One line per exception: what it is, then the command that acts on it. */
 export function formatSweep(s: Sweep, now: number): string[] {
@@ -56,10 +62,9 @@ export function formatSweep(s: Sweep, now: number): string[] {
 
 /**
  * One stable key per exception, sorted: what it is and its id, never a time
- * relative to now, so a `changes` precheck wakes the captain only when the set
- * of exceptions changes, not every hour one it cannot clear still stands. A
- * failed run carries its failure time and a laggard the floor it is below, so
- * the same run failing again or a new floor reads as new.
+ * relative to now, so the same exception reads the same every hour. A failed
+ * run carries its failure time and a laggard the floor it is below, so the
+ * same run failing again or a new floor reads as new.
  */
 export function sweepKeys(s: Sweep): string[] {
   return [
@@ -71,19 +76,65 @@ export function sweepKeys(s: Sweep): string[] {
   ].sort();
 }
 
-/** Read the sweep and print it; the exit code (precheck semantics). `read` throws on any failure. */
-export async function runSweep(o: { read: () => Promise<Sweep>; json?: boolean; keys?: boolean; quiet?: boolean; log: (line: string) => void; error: (line: string) => void; now?: () => number }): Promise<number> {
+/**
+ * How long a key stays seen after the sweep last listed it. An exception that
+ * leaves the sweep and comes back within it (failed runs age out of their 2h
+ * window, a laggard laptop sleeps and wakes) is not new; one gone longer is.
+ */
+export const SEEN_KEY_MS = 7 * 24 * 60 * 60_000;
+
+/** A `state` precheck's state: each key seen in the last SEEN_KEY_MS, with when it was first and last seen. */
+export type SweepSeen = { seen: Record<string, [first: number, last: number]> };
+
+/**
+ * The `--new` verdict for a state precheck (contracts/triggerPrecheck.ts):
+ * wake iff the sweep lists a key the previous state has not seen within
+ * SEEN_KEY_MS. A set that only shrank, or standing exceptions, never wake. The
+ * state keeps the keys seen within the window, and is cut to fit the state the
+ * trigger keeps, dropping the keys the sweep no longer lists, longest gone first.
+ */
+export function sweepVerdict(s: Sweep, previous: unknown, now: number): { wake: boolean; state: SweepSeen; message: string } {
+  const prior = previous && typeof previous === "object" && (previous as any).seen && typeof (previous as any).seen === "object" ? (previous as SweepSeen).seen : {};
+  const seen: SweepSeen["seen"] = {};
+  for (const [key, at] of Object.entries(prior)) {
+    if (Array.isArray(at) && typeof at[0] === "number" && typeof at[1] === "number" && now - at[1] <= SEEN_KEY_MS) seen[key] = [at[0], at[1]];
+  }
+  const keys = sweepKeys(s);
+  const fresh = keys.filter((k) => !(k in seen));
+  for (const k of keys) seen[k] = [seen[k]?.[0] ?? now, now];
+  const full = fresh.length ? [`New: ${fresh.join("; ")}`, ...formatSweep(s, now)].join("\n") : keys.length ? `no new exception; ${keys.length} standing` : "nothing needs the Release Captain";
+  const message = full.length > TRIGGER_PRECHECK_MESSAGE_CHARS ? `${full.slice(0, TRIGGER_PRECHECK_MESSAGE_CHARS - 1)}…` : full;
+  const verdict = { wake: fresh.length > 0, state: { seen }, message };
+  // Its whole stdout must fit what a state precheck reads, or the verdict is refused and no firing ever wakes: drop
+  // the keys the sweep no longer lists, longest gone first, then (a pathological sweep) standing ones, which then
+  // read as new on a later firing.
+  const drop = Object.keys(seen).sort((a, b) => seen[a][1] - seen[b][1] || seen[a][0] - seen[b][0]);
+  while (JSON.stringify(verdict).length >= TRIGGER_PRECHECK_STATE_CHARS && drop.length) delete seen[drop.shift()!];
+  return verdict;
+}
+
+/** Read the sweep and print it; the exit code (precheck semantics). `read` throws on any failure. With `newSince`
+ *  (the state precheck's previous state, as JSON), it prints sweepVerdict's JSON and exits 0, or 2 on a failed read. */
+export async function runSweep(o: { read: () => Promise<Sweep>; json?: boolean; newSince?: string; quiet?: boolean; log: (line: string) => void; error: (line: string) => void; now?: () => number }): Promise<number> {
   let s: Sweep;
+  let previous: unknown = null;
+  // A state it cannot read starts the seen set over, rather than skipping every firing from then on.
+  try { previous = JSON.parse(o.newSince || "null"); } catch {}
   try {
-    s = await o.read();
+    const read: unknown = await o.read();
+    if (!isSweep(read)) throw new Error("the server answered with no sweep");
+    s = read;
   } catch (err) {
     if (!o.quiet) o.error(`release sweep failed: ${err instanceof Error ? err.message : String(err)}`);
     return SWEEP_ERROR_EXIT;
   }
+  if (o.newSince !== undefined) {
+    o.log(JSON.stringify(sweepVerdict(s, previous, (o.now ?? Date.now)())));
+    return SWEEP_FOUND_EXIT;
+  }
   const code = sweepCount(s) ? SWEEP_FOUND_EXIT : SWEEP_QUIET_EXIT;
   if (o.quiet) return code;
-  if (o.keys) for (const key of sweepKeys(s)) o.log(key);
-  else if (o.json) o.log(JSON.stringify(s, null, 2));
+  if (o.json) o.log(JSON.stringify(s, null, 2));
   else if (code === SWEEP_QUIET_EXIT) o.log("Nothing needs the Release Captain: no open incident, late target, failed run, lagging machine or unretired session.");
   else for (const line of formatSweep(s, (o.now ?? Date.now)())) o.log(line);
   return code;
@@ -95,24 +146,29 @@ export function registerReleaseCommand(program: Command, deps: PublishDeps): voi
     .description("What the Release Captain must act on now: open incidents, targets past their deadline, failed runs outside an incident, machines below the floor, live sessions not retired. Exits 0 when something needs action, 1 when quiet, 2 on error (a precheck)")
     .option("--team <name|id>", "The workspace (default: your active team)")
     .option("--json", "Machine-readable output")
-    .option("--keys", "Print one stable key per exception (kind and id, no times), sorted: the gate for a changes precheck")
+    .option("--new", `The gate for a state precheck: reads the keys it saw from $${TRIGGER_PRECHECK_STATE_ENV}, prints {"wake", "state", "message"}, and wakes only on an exception not seen in 7 days`)
     .option("--quiet", "Print nothing; the exit code alone answers")
     .addHelpText("after", `
 Gate the Release Captain's hourly check on new exceptions, not on standing ones
-(a teammate's machine below the floor, an incident whose fix is in flight would
-otherwise wake it every hour): give its check this precheck, read in changes mode.
-  cast role tune @release --team <id> --precheck "cast release sweep --keys --team <id>" --why "Wake on new exceptions only"
-  cast trigger update <the check's tr-N> --precheck-mode changes
-It then wakes only when the set of keys differs from the last firing's. The first
-firing records the keys and skips; a quiet hour (exit 1) or an error (exit 2)
-skips and keeps the record. cast trigger log <tr-N> shows why a firing skipped.`)
-    .action(async (opts: { team?: string; json?: boolean; keys?: boolean; quiet?: boolean }) => {
+(a teammate's machine below the floor, an incident whose fix is in flight) nor on
+ones that only went away or came back (a failed run aging out of the sweep, a
+laggard laptop asleep for a night): give its check this precheck, read in state mode.
+  cast role tune @release --team <id> --precheck "cast release sweep --new --team <id>" --why "Wake on new exceptions only"
+  cast trigger update <the check's tr-N> --precheck-mode state
+Each firing it keeps one key per exception (kind and id, sorted, no times) with
+when it was first and last listed, and drops a key 7 days after it was last
+listed. It wakes only when the sweep lists a key not kept, and hands the run the
+new keys and the whole sweep. The first firing has kept nothing, so it wakes on
+what stands then. An error (exit 2) skips and keeps the state. cast trigger log
+<tr-N> shows why a firing skipped.`)
+    .action(async (opts: { team?: string; json?: boolean; new?: boolean; quiet?: boolean }) => {
       const read = async () => {
         const { loadWorkspaceRoster, resolveWorkspaceForRead, workspaceScope } = await import("./resolveWorkspace.js");
         // Every failure throws, so it reads as an error (2), never as a quiet hour (1).
         const roster = await loadWorkspaceRoster(async () => await apiPost(deps, "/cli/teams", {}, { read: true, exitOnError: false }));
         return await apiPost(deps, "/cli/release/sweep", workspaceScope(resolveWorkspaceForRead(roster, opts.team)), { read: true, exitOnError: false }) as Sweep;
       };
-      process.exit(await runSweep({ read, json: opts.json, keys: opts.keys, quiet: opts.quiet, log: (l) => console.log(l), error: (l) => console.error(l) }));
+      const newSince = opts.new ? (process.env[TRIGGER_PRECHECK_STATE_ENV] ?? "null") : undefined;
+      process.exit(await runSweep({ read, json: opts.json, newSince, quiet: opts.quiet, log: (l) => console.log(l), error: (l) => console.error(l) }));
     });
 }

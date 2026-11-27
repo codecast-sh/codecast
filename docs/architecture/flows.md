@@ -641,10 +641,14 @@ subject session in the run's end message, else the person whose account ran
 it, through a note posted `to_owner`.
 
 A stop of the pipeline every change goes through (main stayed red, main keeps
-moving, CI never reported, a deploy stuck or failed) is marked `shared=true`
-on its exit; a segment exit's mark rides onto the step a flow routes it by.
-Only such a stop records a fingerprint and files a held `flowstop` signal
-(convex `flowStops.ts`). Once the same stop holds runs of two different tasks,
+moving, CI never reported, a deploy stuck or failed) is marked on its exit
+with the breakage it names, `shared="main_red"` (lowercase letters, digits and
+`_`; a bare `shared=true` names it by the exit's id); a segment exit's mark
+rides onto the step a flow routes it by. Only such a stop records a
+fingerprint, `flowstop:<repository>:<breakage>`, and files a held `flowstop`
+signal (convex `flowStops.ts`). The key holds no flow, so every flow composing
+one segment, and every exit naming one breakage (the change flow's `mainred`
+and `mainred_again`), meets in one cause. Once the same breakage holds runs of two different tasks,
 it opens one cause: the workspace's @release holds it, Ground and the line
 leave it alone, and each stopped run's task waits on it. When it closes, each
 run it still stops resumes at the station its exit names in `resume=` (the

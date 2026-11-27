@@ -3,6 +3,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { parseWorkflowSource, parseWorkflowFile, validateWorkflow } from "./parser.js";
+import { graphNodesPayload } from "./graphPayload.js";
 
 // ── Parser tests ──────────────────────────────────────────────────────────────
 
@@ -267,6 +268,29 @@ describe("workflow/parser resume=", () => {
     const routed = compose(`land -> exit [condition="outcome = success"]\n    land -> stopped [condition="outcome = failure"]`);
     expect(routed.nodes.get("land__red")).toMatchObject({ segment_exit: "stop", shared: true, resume: "land__pr" });
     expect(validateWorkflow(routed)).toEqual([]);
+  });
+
+  test("shared= names the breakage, rides onto a routed stop's step, and is spelled in lowercase, digits and _", () => {
+    const named = parseWorkflowSource(`digraph c {
+      start [shape=Mdiamond]
+      land [flow="land"]
+      exit [shape=Msquare]
+      stopped [shape=Msquare, stop="$stop_reason"]
+      start -> land
+      land -> exit [condition="outcome = success"]
+      land -> stopped [condition="outcome = failure"]
+    }`, undefined, { resolveFlow: (slug) => (slug === "land" ? { src: SEG.replace("shared=true", 'shared="main_red"') } : null) });
+    expect(named.nodes.get("land__red")?.shared).toBe("main_red");
+    expect(graphNodesPayload(named).find((n) => n.id === "land__red")?.shared).toBe("main_red");
+    expect(validateWorkflow(named)).toEqual([]);
+    const g = (shared: string) => parseWorkflowSource(`digraph g {
+      start [shape=Mdiamond]
+      x [shape=Msquare, shared=${shared}, stop="red"]
+      start -> x
+    }`);
+    expect(g("true").nodes.get("x")?.shared).toBe(true);
+    expect(g("false").nodes.get("x")?.shared).toBeUndefined();
+    expect(validateWorkflow(g(`"Main Red"`))).toEqual([`x [shared="Main Red"]: name the breakage in lowercase letters, digits and _ (shared="main_red"), or shared=true for the exit's own id`]);
   });
 
   test("names a station of the flow, on a stop exit", () => {

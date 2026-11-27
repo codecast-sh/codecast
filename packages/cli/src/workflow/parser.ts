@@ -502,6 +502,8 @@ export function validateWorkflow(graph: WorkflowGraph): string[] {
         if (problem) errors.push(`${node.id} [machine_slot="${node.machine_slot}"]: ${problem}`);
       }
     }
+    // The name is the incident's key (convex flowStops.ts): one spelling, so two flows naming one breakage meet.
+    if (typeof node.shared === "string" && !/^[a-z0-9_]+$/.test(node.shared)) errors.push(`${node.id} [shared="${node.shared}"]: name the breakage in lowercase letters, digits and _ (shared="main_red"), or shared=true for the exit's own id`);
     if (node.resume !== undefined && !node.stop) errors.push(`${node.id} [resume="${node.resume}"]: only a stop exit (stop=) says where a run stopped there resumes`);
     if (node.no_slot !== undefined && node.machine_slot === undefined) errors.push(`${node.id} [no_slot="${node.no_slot}"]: only a station that takes a machine slot (machine_slot=) can end no_slot`);
     if (node.type === "call" && !node.prompt) {

@@ -32,12 +32,14 @@ const LAND = `digraph land {
   wait_main [label="Waiting for green main", shape=parallelogram, script="true"]
   review [label="Review", shape=parallelogram, script="true"]
   landed [shape=Msquare, label="Merged"]
-  red_main [shape=Msquare, label="Not merged: main stayed red", shared=true, stop="$wait_main.output"]
+  red_main [shape=Msquare, label="Not merged: main stayed red", shared="main_red", stop="$wait_main.output"]
   unread [shape=Msquare, label="Not merged: CI unread", shared=true, stop="GitHub's CI could not be read"]
+  red_again [shape=Msquare, label="Not merged: main went red again", shared="main_red", stop="main went red again under the change"]
   rejected [shape=Msquare, label="Not merged: rejected", stop="The reviewer rejected the change: $review.output"]
   start -> pr
   pr -> ci
   ci -> unread [condition="ci.json.error"]
+  ci -> red_again [condition="ci.json.again"]
   ci -> wait_main [condition="outcome = failure"]
   ci -> review
   wait_main -> red_main [condition="outcome = failure"]
@@ -56,6 +58,8 @@ const CHANGE = `digraph change {
   land -> stopped [condition="outcome = failure"]
 }`;
 const GRAPH = parseWorkflowSource(CHANGE, undefined, { resolveFlow: (slug) => (slug === "land" ? { src: LAND } : null) });
+/** Another flow composing the same segment (Union's onefix): its stops are the same breakages. */
+const ONEFIX = parseWorkflowSource(CHANGE.replace("digraph change", "digraph onefix").replace('label="Change"', 'label="One fix"'), undefined, { resolveFlow: (slug) => (slug === "land" ? { src: LAND } : null) });
 
 async function world(o: { release?: boolean; lines?: boolean } = {}) {
   const t = convexTest(schema, allModules);
@@ -131,8 +135,8 @@ describe("a pipeline stop shared by two changes is one incident", () => {
     const first: any = await get(ids.runs[0]);
     // Not the segment's exit step (land__red_main), which only echoes the exit and fails again.
     expect(first.stop_station).toBe("land__wait_main");
-    // Keyed by the shared exit it left by, never by its words.
-    expect(first.stop_fingerprint).toBe("flowstop:acme/app:change:land__red_main");
+    // Keyed by the breakage its exit names, never by its words or the flow that composed the exit.
+    expect(first.stop_fingerprint).toBe("flowstop:acme/app:main_red");
     // One stopped change is a held signal: no cause for Ground or a line to pick up.
     const held: any[] = await signals(first.stop_fingerprint);
     expect(held.map((r) => [r.attach, r.task_id])).toEqual([["held", undefined]]);
@@ -165,6 +169,44 @@ describe("a pipeline stop shared by two changes is one incident", () => {
     // A report repeated for a run already stopped is refused (workflow_runs.runOver) and files nothing again.
     expect(await report(ids.runs[1], { current_node_id: "stopped", node_id: "stopped", node_status: "failed", run_status: "failed", fail_reason: "Stopped: main CI stayed red" })).toMatchObject({ ended: { status: "failed" } });
     expect(((await get(incident._id)) as any).cause.signal_count).toBe(2);
+  });
+
+  test("one breakage is one incident across the flows composing its segment and the exits naming it", async () => {
+    const { t, ids, newRun, redMain, stopAt, get, cause } = await world();
+    const onefix = await t.run((ctx: any) => ctx.db.insert("workflows", {
+      user_id: ids.me, name: "onefix", slug: "onefix", label: "One fix", nodes: graphNodesPayload(ONEFIX), edges: graphEdgesPayload(ONEFIX), created_at: T0, updated_at: T0,
+    }));
+    await redMain(ids.runs[0]);
+    // ct-902 replaced by a onefix run, stopped at the other exit that names main red.
+    const fix = await newRun(ids.tasks[1], { workflow_id: onefix });
+    await stopAt(fix, "red_again", ["land__ci"], "main went red again under the change");
+    const [first, second]: any[] = [await get(ids.runs[0]), await get(fix)];
+    expect(second.stop_fingerprint).toBe("flowstop:acme/app:main_red");
+    expect(second.stop_fingerprint).toBe(first.stop_fingerprint);
+    const incident = await cause(fix);
+    expect(incident.cause.signal_count).toBe(2);
+    expect(String(first.incident_task_id)).toBe(String(incident._id));
+    expect(String(second.incident_task_id)).toBe(String(incident._id));
+    for (const task of ids.tasks.slice(0, 2)) expect(((await get(task)) as any).blocked_by).toEqual([incident.short_id]);
+  });
+
+  test("a run whose task is in another workspace than its stop is no part of the incident, and its stop still records", async () => {
+    const { t, ids, redMain, get, cause } = await world();
+    // ct-902 is private to Ana while its run went through the team's pipeline.
+    await t.run((ctx: any) => ctx.db.patch(ids.tasks[1], { workspace: `user:${ids.me}`, team_id: undefined }));
+    await redMain(ids.runs[0]);
+    await redMain(ids.runs[1]);
+    const second: any = await get(ids.runs[1]);
+    expect(second.stop_fingerprint).toBe("flowstop:acme/app:main_red");
+    expect(second.incident_task_id).toBeUndefined();
+    expect(await cause(ids.runs[1])).toBeNull();
+    // A second change in the stop's workspace opens it, without ct-902.
+    await redMain(ids.runs[2]);
+    const incident = await cause(ids.runs[2]);
+    expect(incident.cause.signal_count).toBe(3);
+    for (const r of [ids.runs[0], ids.runs[2]]) expect(String(((await get(r)) as any).incident_task_id)).toBe(String(incident._id));
+    expect(((await get(ids.runs[1])) as any).incident_task_id).toBeUndefined();
+    expect(((await get(ids.tasks[1])) as any).blocked_by ?? []).toEqual([]);
   });
 
   test("the incident is titled for the exit it stopped at, not the station it resumes at, with the stop text cut short", async () => {
@@ -257,15 +299,15 @@ describe("closing an incident", () => {
     expect(await t.run((ctx: any) => openFlowStopIncidents(ctx, ids.ws))).toEqual([]);
   });
 
-  test("where no line runs, even a line's run resumes at once", async () => {
+  test("with lines switched off, a person's run resumes at once and a role's run stays queued for when they are back on", async () => {
     const { ids, redMain, get, cause, close } = await world({ lines: false });
     await redMain(ids.runs[0]);
     await redMain(ids.runs[2]);
     await close((await cause(ids.runs[0]))._id);
-    for (const r of [ids.runs[0], ids.runs[2]]) {
-      expect(await get(r)).toMatchObject({ status: "running", current_node_id: "land__wait_main" });
-      expect(((await get(r)) as any).resume_queued).toBeUndefined();
-    }
+    expect(await get(ids.runs[0])).toMatchObject({ status: "running", current_node_id: "land__wait_main" });
+    expect(((await get(ids.runs[0])) as any).resume_queued).toBeUndefined();
+    expect(await get(ids.runs[2])).toMatchObject({ status: "failed" });
+    expect(((await get(ids.runs[2])) as any).resume_queued).toBeTruthy();
   });
 
   test("a run stopped since by something else is neither resumed nor listed", async () => {
@@ -330,7 +372,7 @@ describe("stopOf", () => {
       { node_id: "land__red_main", status: "failed", completed_at: 7 },
       { node_id: "stopped", status: "failed", completed_at: 8 },
     ];
-    expect(stopOf(rows, "stopped", nodes)).toEqual({ station: "land__wait_main", sharedExit: "land__red_main" });
+    expect(stopOf(rows, "stopped", nodes)).toEqual({ station: "land__wait_main", sharedExit: "land__red_main", breakage: "main_red" });
   });
   test("a stop with no station failed resumes its segment from the entry", () => {
     const rows = [
@@ -338,10 +380,10 @@ describe("stopOf", () => {
       { node_id: "land__unread", status: "failed", completed_at: 3 },
       { node_id: "stopped", status: "failed", completed_at: 4 },
     ];
-    expect(stopOf(rows, "stopped", nodes)).toEqual({ station: "land", sharedExit: "land__unread" });
+    expect(stopOf(rows, "stopped", nodes)).toEqual({ station: "land", sharedExit: "land__unread", breakage: "land__unread" });
   });
   test("a rejection is not shared; with no graph, the station that failed last", () => {
-    expect(stopOf([{ node_id: "land__review", status: "failed", completed_at: 1 }, { node_id: "land__rejected", status: "failed", completed_at: 2 }], "stopped", nodes)).toEqual({ station: "land__review", sharedExit: null });
+    expect(stopOf([{ node_id: "land__review", status: "failed", completed_at: 1 }, { node_id: "land__rejected", status: "failed", completed_at: 2 }], "stopped", nodes)).toEqual({ station: "land__review", sharedExit: null, breakage: null });
     expect(stopStationOf([{ node_id: "deploy__failed", status: "failed" }], "deploy__failed")).toBe("deploy__failed");
   });
   test("an exit that names resume= resumes there: the change flow's main-red stop at PR, not at Wait for green main", () => {
@@ -351,8 +393,8 @@ describe("stopOf", () => {
       { node_id: "wait_main", status: "failed", completed_at: 2 },
       { node_id: "mainred", status: "failed", completed_at: 3 },
     ];
-    expect(stopOf(rows, "mainred", change)).toEqual({ station: "pr", sharedExit: "mainred" });
+    expect(stopOf(rows, "mainred", change)).toEqual({ station: "pr", sharedExit: "mainred", breakage: "main_red" });
     // Without it, the station that failed.
-    expect(stopOf(rows, "mainred", change.map(({ resume: _r, ...n }) => n))).toEqual({ station: "wait_main", sharedExit: "mainred" });
+    expect(stopOf(rows, "mainred", change.map(({ resume: _r, ...n }) => n))).toEqual({ station: "wait_main", sharedExit: "mainred", breakage: "main_red" });
   });
 });
