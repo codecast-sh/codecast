@@ -126,4 +126,19 @@ describe("mintDictationToken", () => {
     expect(posted).toHaveLength(2);
     expect(posted[1]!.body.session.audio.input.transcription).toEqual({ model: LIVE_TRANSCRIBE_MODEL });
   });
+
+  test("an OpenAI failure reaches the mic as one plain line, never the raw status or quota text", async () => {
+    respond = () => new Response(JSON.stringify({ error: { message: "You exceeded your current quota" } }), { status: 429 });
+    const err = console.error;
+    console.error = () => {};
+    try {
+      const { ids, as } = await setup({ enabled: true });
+      const res = await as(ids.ann).action(api.dictation.mintDictationToken, { languages: ["en"] });
+      expect(res).toEqual({ error: "Dictation couldn't start. Try again." });
+      // A 429 is not a language problem: no second call.
+      expect(posted).toHaveLength(1);
+    } finally {
+      console.error = err;
+    }
+  });
 });

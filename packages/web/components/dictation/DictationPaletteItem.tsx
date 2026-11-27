@@ -3,12 +3,13 @@
 import { Command as CommandPrimitive } from "cmdk";
 import { Mic } from "lucide-react";
 import { useInboxStore } from "../../store/inboxStore";
+import { paletteValue } from "../../lib/paletteActions";
 
 export function DictationPaletteItem({ className, onDone }: { className?: string; onDone: () => void }) {
   const on = useInboxStore((s) => (s.currentUser as { dictation_enabled?: boolean } | null | undefined)?.dictation_enabled === true);
   return (
     <CommandPrimitive.Item
-      value={`${on ? "Turn off" : "Turn on"} dictation voice speech microphone mic speak talk type transcribe`}
+      value={paletteValue([`${on ? "Turn off" : "Turn on"} dictation`, "Dictation", "Dictate"], "voice speech microphone mic speak talk type transcribe")}
       onSelect={() => {
         onDone();
         void useInboxStore.getState().setDictationEnabled(!on).catch(() => {});

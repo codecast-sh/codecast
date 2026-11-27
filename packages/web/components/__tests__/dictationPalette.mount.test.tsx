@@ -56,3 +56,11 @@ test("Turn on dictation / Turn off dictation follows the setting and flips it", 
   await act(async () => { root.unmount(); });
   container.remove();
 });
+
+test("typing 'dictation' ranks the row as an exact name, above rows that only mention the word", async () => {
+  const { paletteItemScore, paletteValue } = await import("../../lib/paletteActions");
+  const row = paletteValue(["Turn on dictation", "Dictation", "Dictate"], "voice speech microphone mic");
+  const mention = paletteValue("Open a session about dictation", "");
+  expect(paletteItemScore(row, "dictation")).toBeGreaterThan(paletteItemScore(mention, "dictation"));
+  expect(paletteItemScore(row, "dictation")).toBe(paletteItemScore(paletteValue("Dictation"), "dictation"));
+});

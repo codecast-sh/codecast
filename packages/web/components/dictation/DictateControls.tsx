@@ -42,7 +42,10 @@ const QUIET = "text-sol-text-dim hover:text-sol-text hover:bg-sol-bg/50";
  *  off, fork), so Send, or the bare box's send arrow, stays the strongest
  *  mark in the row. A color-mix, not an alpha step like /55: Modern resolves
  *  those to the solid dim token (app/globals.css, "Translucent text"). */
-const SECONDARY = "text-[color-mix(in_srgb,var(--sol-text-dim)_40%,transparent)] hover:text-sol-text hover:bg-sol-bg/50";
+// The only controls that end a recording, so they keep readable contrast (≥3:1)
+// on the grayscale tablet rather than the row's 40% icon tint; Send stays the
+// one filled button.
+const SECONDARY = "text-[var(--sol-text-dim)] hover:text-sol-text hover:bg-sol-bg/50";
 
 const SIZES: Record<DictateSize, { button: string; caret: string; icon: string }> = {
   dock: { button: "w-7 h-7 rounded-full", caret: "w-4 h-7 rounded-full", icon: "w-3.5 h-3.5" },

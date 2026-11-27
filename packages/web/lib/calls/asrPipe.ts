@@ -51,6 +51,10 @@ import {
   type SharedCaptureContext,
 } from "./asrCapture";
 
+/** A dictation pipe's line for a start that failed before its words (the
+ *  server's DICTATION_START_FAILED, said the same way). */
+const DICTATION_START_FAILED = "Dictation couldn't start. Try again.";
+
 type AsrConvexHandle = {
   action: (fn: any, args: any) => Promise<any>;
 };
@@ -404,7 +408,7 @@ export function openAsrPcmSession(opts: AsrSessionOpts): AsrPcmSession {
             : [api.transcripts.mintAsrToken, clientTurns ? { room_key, ...args, client_turns: true } : { room_key, ...args }]) as [any, any]),
         )
         .catch((err: any) => ({
-          error: String(err?.message ?? "Could not start transcription"),
+          error: roomKey === null ? DICTATION_START_FAILED : String(err?.message ?? "Could not start transcription"),
           thrown: true,
         }));
     const first = { room_key: roomKey, ...(languages.length ? { languages } : {}) };
@@ -463,7 +467,7 @@ export function openAsrPcmSession(opts: AsrSessionOpts): AsrPcmSession {
       // pipe through the same path as a refused mint.
       hopeless = true;
       pipe.close();
-      events?.onFailed?.("Could not start transcription");
+      events?.onFailed?.(roomKey === null ? DICTATION_START_FAILED : "Could not start transcription");
       return;
     }
     ws = socket;

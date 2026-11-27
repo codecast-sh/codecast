@@ -14,6 +14,9 @@ import { requireUser } from "./lib/requireUser";
 import { vendorRefusalFromDb } from "./lib/vendorGuard";
 import { mintRealtimeSecret } from "./lib/realtimeMint";
 
+/** What the mic says when OpenAI refuses or fails a mint (< 40 characters). */
+export const DICTATION_START_FAILED = "Dictation couldn't start. Try again.";
+
 type DictationGrant = { enabled: boolean; workspace: string; refusal: string | null };
 type DictationToken = { client_secret: string; model: string; languages: string[] } | { error: string };
 
@@ -75,7 +78,9 @@ export const mintDictationToken = action({
       languages = [];
       minted = await mintRealtimeSecret(ctx, grant.workspace, asrTranscriptionSession(model, languages), "dictation");
     }
-    if ("error" in minted) return { error: minted.error };
+    // OpenAI's own words (status, quota text) are in the server log; the mic
+    // shows one plain line a person can act on.
+    if ("error" in minted) return { error: DICTATION_START_FAILED };
     return { client_secret: minted.client_secret, model, languages };
   },
 });

@@ -82,10 +82,11 @@ test("press the mic, words stream in at the end, ✓ keeps them", async () => {
   await c.unmount();
 });
 
-test("✕ and ✓ sit at the weight of the row's other secondary icons, in the bare box and the dock", async () => {
-  // The stash/hand-off/fork buttons' colour. Not an alpha step (text-sol-text-dim/55):
-  // .modern-style resolves those to the solid dim token, so the mute never applied.
-  const rowSecondary = "text-[color-mix(in_srgb,var(--sol-text-dim)_40%,transparent)]";
+test("✕ and ✓ are secondary but readable (the full dim token, never the row's 40% tint), in the bare box and the dock", async () => {
+  // Not an alpha step (text-sol-text-dim/55): .modern-style resolves those to
+  // the solid token anyway. The 40% tint the row's other icons use measured
+  // 1.7:1, too faint for the only buttons that end a recording.
+  const rowSecondary = "text-[var(--sol-text-dim)]";
   const tone = async (opts: { bare?: boolean; foot?: boolean }) => {
     const c = await mountComposer(opts);
     await c.press("Dictate");
