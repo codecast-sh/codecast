@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
-  after, attemptGroups, carriedOfAttempts, carriedOfDeploy, carriedOfQueue, fold, mineSessionIds, queueCommits, repositoryOfRun, rowsFor,
+  after, attemptGroups, branchHref, carriedOfAttempts, carriedOfDeploy, carriedOfQueue, fold, mineSessionIds, queueCommits, repositoryOfRun, rowsFor,
   recordedOf, runOwner, runState, shipperOf, shippingRuns, splitQueue, stepper, tasksOnMain, upTo, withLines, yourSessions,
   type BoardDeploy, type BoardQueueCommit,
 } from "../board";
@@ -292,8 +292,35 @@ describe("the switch's rows", () => {
     expect(rowsFor(c, "tasks", isMine)).toEqual([{ key: "ct-1", label: "Task ct-1", task: "ct-1", mine: true }, { key: "ct-2", label: "Task ct-2", task: "ct-2", mine: false }]);
     expect(rowsFor(c, "priorities", isMine).map((r) => [r.key, r.label, r.sessions])).toEqual([["p1", "Launch", ["mine2"]], ["none", null, ["theirs", "mine"]]]);
   });
+  test("a branch row carries the first PR its commits name", () => {
+    expect(rowsFor(c, "branches", isMine).map((r) => [r.key, r.pr])).toEqual([["feat", 7], ["no-branch", undefined]]);
+  });
+  test("priorities: yours by rank, then teammates' by rank, then the unranked, No priority last", () => {
+    const pri = (id: string, rank: number | null, user_id?: string) => ({ id, title: id, rank, user_id });
+    const p = carriedOfQueue([
+      commit("p7aaaaaa", 7, { session: sess("s7") }),
+      commit("p6aaaaaa", 6, { session: { ...sess("s6"), priority: { id: "pri-old", title: "Cached before ranks" } } }),
+      commit("p5aaaaaa", 5, { session: { ...sess("s5"), priority: pri("pri-5", null, "me") } }),
+      commit("p4aaaaaa", 4, { session: { ...sess("s4"), priority: pri("pri-4", 1, "them") } }),
+      commit("p3aaaaaa", 3, { session: { ...sess("s3"), priority: pri("pri-3", 2, "me") } }),
+      commit("p2aaaaaa", 2, { session: { ...sess("s2"), priority: pri("pri-2", 3, "them") } }),
+      commit("p1aaaaaa", 1, { session: { ...sess("s1"), priority: pri("pri-1", 1, "me") } }),
+    ], noRuns);
+    // The unranked keep own rows first: s5 holds one of mine.
+    const keys = (me: string | null) => rowsFor(p, "priorities", (id) => id === "s5", me).map((r) => r.key);
+    expect(keys("me")).toEqual(["pri-1", "pri-3", "pri-4", "pri-2", "pri-5", "pri-old", "none"]);
+    // Nobody's own without a viewer: every ranked row reads as a teammate's.
+    expect(keys(null)).toEqual(["pri-4", "pri-1", "pri-3", "pri-2", "pri-5", "pri-old", "none"]);
+  });
   test("branches of a deploy that never recorded them list nothing", () => {
     expect(rowsFor({ ...c, branchesKnown: false }, "branches", isMine)).toEqual([]);
+  });
+});
+
+describe("branchHref", () => {
+  test("a branch with a PR opens the PR page; without one, the branch on GitHub", () => {
+    expect(branchHref("acme/app", "jb/fix", 42)).toBe("/pr/acme/app/42");
+    expect(branchHref("acme/app", "jb/fix #2", null)).toBe("https://github.com/acme/app/tree/jb/fix%20%232");
   });
 });
 

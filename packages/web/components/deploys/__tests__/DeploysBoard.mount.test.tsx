@@ -176,11 +176,20 @@ test("the switch changes what every card lists", () => {
   click(host.querySelector('[data-deploy-view="prs"]'));
   expect(rowKeys(card(host, "next"))).toEqual(["#41", "#42"]);
   expect(rowKeys(card(host, "dp-7"))).toEqual(["#30", "c4cccccccc"]);
+  // One pill per row holding the number and the title; a commit with no PR says so before its subject.
+  const prRow = card(host, "dp-7").querySelector('[data-deploy-row="#30"]')!;
+  expect(prRow.querySelectorAll(".entity-ref")).toHaveLength(1);
+  expect(prRow.querySelector(".entity-ref")!.textContent).toContain("#30 Live change");
+  expect(card(host, "dp-7").querySelector('[data-deploy-row="c4cccccccc"]')!.textContent).toBe("No PR · Ana's change—");
+  click(host.querySelector('[data-deploy-view="shas"]'));
+  expect(card(host, "dp-7").querySelector('[data-deploy-row="c3cccccccc"] .entity-ref')!.textContent).toContain("c3ccccc Live change");
   click(host.querySelector('[data-deploy-view="tasks"]'));
   expect(rowKeys(card(host, "dp-7"))).toEqual(["ct-30"]);
   expect(card(host, "dp-7").querySelector(".dpp-lines")).toBeNull();
   click(host.querySelector('[data-deploy-view="branches"]'));
   expect(rowKeys(card(host, "dp-7"))).toEqual(["jb/live", "no-branch"]);
+  // A branch with a PR opens the PR's page.
+  expect(card(host, "dp-7").querySelector('[data-deploy-branch="jb/live"]')!.getAttribute("href")).toBe("/pr/o/r/30");
   expect(card(host, "dp-7").querySelector('[data-deploy-row="no-branch"]')!.textContent).toContain("Branch not recorded");
   expect(host.querySelector('[data-deploy-view="priorities"]')).toBeNull();
   unmount();
