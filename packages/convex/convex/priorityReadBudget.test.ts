@@ -2,12 +2,13 @@
 // db calls) at its worst: two team workspaces at the teammate cap, each
 // priority's milestones naming tasks with sessions, and the viewer's own
 // with links (priorityRead.ts listFor, TEAMMATE_LINKED); and with `all`,
-// whose bigger cap holds across every workspace together.
+// whose bigger cap holds across every workspace together; and many team
+// workspaces, which share one teammate budget.
 import { expect, setDefaultTimeout, test } from "bun:test";
 import { convexTest } from "convex-test";
 import schema from "./schema";
 import { allModules } from "./testModules.testkit";
-import { TEAMMATE_ALL_CAP, TEAMMATE_LINKED, TEAMMATE_PRIORITIES_CAP, listFor } from "./priorityRead";
+import { TEAMMATE_ALL_CAP, TEAMMATE_LINKED, TEAMMATE_PRIORITIES_CAP, TEAMMATE_TOTAL_CAP, listFor } from "./priorityRead";
 import type { Id } from "./_generated/dataModel";
 
 setDefaultTimeout(180_000);
@@ -162,4 +163,20 @@ test("many teammates, each with a big active group, stay under the read cap: num
     // Every teammate is on the page in both workspaces.
     expect(new Set(list.priorities.filter((r: any) => !r.mine).map((r: any) => `${r.user_id} ${r.workspace}`)).size).toBe(32);
   }
+});
+
+test("many team workspaces share one teammate budget, each keeping its share, so the read cap holds as workspaces grow", async () => {
+  const teams = ["Acme", "Beta", "Gamma", "Delta", "Epsilon"];
+  const { listed } = await world(TEAMMATE_PRIORITIES_CAP, teams);
+  const { list, calls } = await listed();
+  console.log(`priority list of ${teams.length} team workspaces: ${calls} db calls for ${list.priorities.length} rows`);
+  expect(calls).toBeLessThan(3_000);
+  const teammates = list.priorities.filter((r: any) => !r.mine);
+  expect(list.teammates_truncated).toBe(true);
+  expect(teammates).toHaveLength(TEAMMATE_TOTAL_CAP);
+  const perWorkspace = new Map<string, number>();
+  for (const r of teammates) perWorkspace.set(r.workspace, (perWorkspace.get(r.workspace) ?? 0) + 1);
+  expect(perWorkspace.size).toBe(teams.length);
+  for (const n of perWorkspace.values()) expect(n).toBeGreaterThanOrEqual(Math.floor(TEAMMATE_TOTAL_CAP / teams.length));
+  expect(list.priorities.filter((r: any) => r.mine)).toHaveLength(OWN);
 });

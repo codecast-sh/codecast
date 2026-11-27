@@ -33,6 +33,13 @@ const LIST_COUNT_CAP = 50;
 export const TEAMMATE_LINKED = 25;
 /** The most teammates' priorities one list judges in one workspace, the most recently active first (with `all` or a status, TEAMMATE_ALL_CAP across every workspace); past that it says `teammates_truncated`. */
 export const TEAMMATE_PRIORITIES_CAP = 60;
+/**
+ * The most teammates' priorities a list of every workspace judges in all of
+ * them together. Each judged row reads its sessions (canRead) and its owner's
+ * group (positionsFor), so a cap per workspace alone grew with the number of
+ * team workspaces and took the query past Convex's 4,096-read cap at about six.
+ */
+export const TEAMMATE_TOTAL_CAP = 150;
 export const TEAMMATE_ALL_CAP = 200;
 /** The most of one person's priorities of one status in one workspace any read takes (the active ones a rank orders, a list's own). */
 const OWN_PRIORITIES_READ = 200;
@@ -413,17 +420,29 @@ export async function echo(ctx: Ctx, viewer: Id<"users">, id: Id<"priorities">):
 }
 
 /**
+ * At most `total` of the groups' rows (each newest first): every group with
+ * rows (a personal workspace has none) its equal share of its newest, so a
+ * small workspace is never crowded out by a big one, then the rest by recency.
+ */
+function fairShare(all: Priority[][], total: number): Priority[] {
+  const groups = all.filter((g) => g.length > 0);
+  const share = Math.floor(total / Math.max(groups.length, 1));
+  const picked = groups.flatMap((g) => g.slice(0, share));
+  const rest = groups.flatMap((g) => g.slice(share)).sort((a, b) => b.last_active_at - a.last_active_at);
+  return [...picked, ...rest.slice(0, total - picked.length)];
+}
+
+/**
  * The priorities the viewer can read in one workspace (or all of theirs).
  * Merged ones only when asked for by status. Without a status or `all`, done
  * and quiet ones only from the last FINISHED_WINDOW_DAYS. The viewer's own are
  * read newest first (by_user_workspace_active, OWN_SCAN_READ rows a workspace,
  * at most OWN_PRIORITIES_READ a status), and `own_truncated` says when more
  * were there; teammates' newest first (by_workspace_status_active), at most
- * TEAMMATE_PRIORITIES_CAP judged in each workspace, so a read of every
- * workspace returns for each what a read of that one returns; with `all` or a
- * status, at most TEAMMATE_ALL_CAP across every workspace together, so the
- * bigger cap never multiplies past the read cap. `teammates_truncated` says
- * when any were left out.
+ * TEAMMATE_PRIORITIES_CAP judged in each workspace and TEAMMATE_TOTAL_CAP in
+ * all of them (fairShare); with `all` or a status, at most TEAMMATE_ALL_CAP
+ * across every workspace together, so no cap multiplies past the read cap.
+ * `teammates_truncated` says when any were left out.
  */
 export async function visiblePriorities(ctx: Ctx, r: Reader, workspace: string | undefined, status: PriorityStatus | undefined, all: boolean): Promise<{ rows: Priority[]; own_truncated: boolean; teammates_truncated: boolean }> {
   const since = Date.now() - FINISHED_WINDOW_DAYS * DAY;
@@ -435,12 +454,13 @@ export async function visiblePriorities(ctx: Ctx, r: Reader, workspace: string |
   const judged: Priority[] = [];
   let truncated = false;
   let ownTruncated = false;
-  const judge = async (theirs: Priority[]) => {
+  const newest = (theirs: Priority[], most: number) => {
     theirs.sort((a, b) => b.last_active_at - a.last_active_at);
-    if (theirs.length > cap) truncated = true;
-    for (const p of theirs.slice(0, cap)) if (await r.canRead(p)) judged.push(p);
+    if (theirs.length > most) truncated = true;
+    return theirs.slice(0, most);
   };
   const everyWorkspace: Priority[] = [];
+  const perWorkspace: Priority[][] = [];
   for (const key of keys) {
     if (!(await featureOn(key))) continue;
     // The viewer's own in this workspace, newest first, in one read split by status.
@@ -468,9 +488,11 @@ export async function visiblePriorities(ctx: Ctx, r: Reader, workspace: string |
       for (const p of rows.slice(0, limit)) if (!isOwner(r.viewer, p)) theirs.push(p);
     }
     if (status || all) everyWorkspace.push(...theirs);
-    else await judge(theirs);
+    else perWorkspace.push(newest(theirs, cap));
   }
-  if (status || all) await judge(everyWorkspace);
+  const candidates = status || all ? newest(everyWorkspace, cap) : fairShare(perWorkspace, TEAMMATE_TOTAL_CAP);
+  if (candidates.length < perWorkspace.reduce((n, g) => n + g.length, 0)) truncated = true;
+  for (const p of candidates) if (await r.canRead(p)) judged.push(p);
   return { rows: [...own, ...judged], own_truncated: ownTruncated, teammates_truncated: truncated };
 }
 
