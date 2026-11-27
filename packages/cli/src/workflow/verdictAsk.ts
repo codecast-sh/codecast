@@ -3,7 +3,10 @@
 // minutes into a test run it waited on, its last message a Bash call, and its run stopped "no review") or stopped on a
 // question nobody here answers is asked once to finish. It has until it takes that ask and settles again, or the
 // grace, before the station settles verdictless and the flow's own route for a missing verdict (a fresh reviewer, a
-// stop) decides. A hand that never ran a turn is not asked: it fails as one.
+// stop) decides. A hand that never ran a turn is not asked, nor one stopped on an error it does not come back from by
+// itself (a login, a context limit): each fails as such. The ask goes under one client_id per run and hand, so a runner
+// that took over the wait asks nothing the last one already asked.
+import { CONTINUE_BANNER_KINDS } from "@codecast/shared/contracts";
 import { c } from "../colors.js";
 
 type Call = (route: string, body: Record<string, any>) => Promise<any>;
@@ -17,20 +20,23 @@ export const VERDICT_ASK_GRACE_MS = 10 * 60_000;
 export type VerdictAsk = { at: number; count: number } | null;
 
 /**
- * Whether a reviewer's settled read is held: it pinned nothing and recorded no verdict on the task since `since`, and
- * it is asked now (the first such read) or has not taken the ask within the grace. `state.ask` keeps the ask.
+ * Whether a reviewer's settled read is held: it pinned nothing and recorded no verdict on the task since `since` (when
+ * its hand started), and it is asked now (the first such read) or has not taken the ask within the grace. `state.ask`
+ * keeps the ask; `runId` keys its client_id.
  */
 export async function holdForVerdict(call: Call, state: { ask: VerdictAsk }, o: {
-  row: { message_count?: number; is_killed?: boolean }; pinned: { status?: string } | null; taskId?: string; since: number;
-  to: string; from?: string; shortId: string; graceMs?: number;
+  row: { message_count?: number; is_killed?: boolean; blocked_on?: string | null }; pinned: { status?: string } | null; taskId?: string; since: number;
+  to: string; from?: string; shortId: string; runId?: string; graceMs?: number;
 }): Promise<boolean> {
   const count = o.row.message_count ?? 0;
   if (o.row.is_killed || count === 0 || o.pinned?.status) return false;
+  if (o.row.blocked_on && !CONTINUE_BANNER_KINDS.includes(o.row.blocked_on)) return false;
   if (o.taskId && ((await call("/cli/work/get", { short_id: o.taskId }))?.review_verdict?.at ?? 0) >= o.since) return false;
   if (!state.ask) {
     state.ask = { at: Date.now(), count };
     console.log(`${c.yellow}  ${o.shortId}: read as finished with no verdict; asking it once to finish the review${c.reset}`);
-    await call("/cli/messages/send", { to: o.to, ...(o.from ? { from: o.from } : {}), body: VERDICT_ASK, wake: true });
+    const client_id = `run:${o.runId ?? "local"}:verdict-ask:${o.to}`;
+    await call("/cli/messages/send", { to: o.to, ...(o.from ? { from: o.from } : {}), body: VERDICT_ASK, wake: true, client_id });
     return true;
   }
   return count < state.ask.count + 2 && Date.now() - state.ask.at < (o.graceMs ?? VERDICT_ASK_GRACE_MS);

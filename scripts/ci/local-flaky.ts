@@ -58,7 +58,7 @@ export function settledJobs(results: JobResult[], left: { failing: CiFailure[]; 
     const of = (list: CiFailure[]) => list.filter((f) => f.job === r.job).length;
     const [failing, flaky, unjudged] = [of(left.failing), of(left.flaky), of(left.unjudged)];
     const counts = [failing && `${failing} failing`, flaky && `${flaky} flaky (passed alone)`, unjudged && `${unjudged} not judged`].filter(Boolean);
-    const logs = r.reason?.match(/\blogs \S+$/)?.[0];
+    const logs = r.reason?.match(/\blogs .+$/)?.[0];
     return { ...r, status: failing ? "fail" : unjudged ? "no verdict" : "pass", reason: [...counts, logs].filter(Boolean).join(", ") || undefined };
   });
 }

@@ -22,8 +22,7 @@ const andCondition = (c: string | undefined, more: string) => (c ? `(${c}) and $
  *     on success, and on failure the way back a uses (the edge out of a whose
  *     condition says failure and leads to a station, not an end), or `fix=`.
  *     A second station after the same one follows the first. `before="a"`
- *     takes every edge into a instead, except an edge this file writes into a
- *     itself, which goes to a as written.
+ *     takes every edge into a instead.
  *   - `s [skip=true]` sends every edge into s to where s goes when it passes,
  *     and drops whatever the skip left unreachable.
  *   - `n [when="glob, glob"]` runs n only when $change_files touches a glob:
@@ -32,7 +31,7 @@ const andCondition = (c: string | undefined, more: string) => (c ? `(${c}) and $
  *   - `guide=` on a segment's node, and `prompt=` too, go to the one station
  *     of the segment that has a prompt (applied once it is expanded).
  */
-export function variantEdits(raw: RawGraph, own: Map<string, Record<string, Attr>>, written: Map<string, Record<string, Attr>>, baseIds: Set<string>, baseName: string, here: string, ownEdges: ReadonlySet<RawGraph["edges"][number]> = new Set()): RawGraph {
+export function variantEdits(raw: RawGraph, own: Map<string, Record<string, Attr>>, written: Map<string, Record<string, Attr>>, baseIds: Set<string>, baseName: string, here: string): RawGraph {
   const nodes = new Map([...raw.nodes].map(([id, a]) => [id, { ...a }]));
   let edges = [...raw.edges];
   const overrides = new Map(raw.overrides ?? []);
@@ -195,8 +194,7 @@ export function variantEdits(raw: RawGraph, own: Map<string, Record<string, Attr
       lastAfter.set(anchor, id);
     } else {
       on = anchor;
-      // An edge this file writes into the anchor itself goes there as written: only the base's edges pass the station.
-      edges = edges.map((e) => (e.to === anchor && !ownEdges.has(e) ? { ...e, to: id } : e));
+      edges = edges.map((e) => (e.to === anchor ? { ...e, to: id } : e));
     }
     // A person's gate offers its choices as labelled edges (runner.ts executeRemoteHumanGate): go on, or send it back.
     const gate = shapeOf(a) === "hexagon";

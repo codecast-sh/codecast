@@ -175,7 +175,7 @@ function inherit(base: RawGraph, child: RawGraph, baseFile: string, here: string
     pruned: base.pruned,
     gated: base.gated,
   };
-  return variantEdits(merged, own, child.nodes, new Set(base.nodes.keys()), path.basename(baseFile).replace(/\.cast$/, "").replace(/^flow:/, ""), here, new Set(child.edges));
+  return variantEdits(merged, own, child.nodes, new Set(base.nodes.keys()), path.basename(baseFile).replace(/\.cast$/, "").replace(/^flow:/, ""), here);
 }
 
 function buildGraph(raw: RawGraph): WorkflowGraph {

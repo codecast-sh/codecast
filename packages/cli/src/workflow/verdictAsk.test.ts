@@ -5,6 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { parseWorkflowSource } from "./parser.js";
 import { runWorkflow, type RunOptions } from "./runner.js";
+import { holdForVerdict } from "./verdictAsk.js";
 import { isolateCodecastDirEachTest } from "../test-helpers/codecastDir.js";
 isolateCodecastDirEachTest("cast-wf-verdict-");
 
@@ -89,6 +90,20 @@ describe("workflow/runner (a reviewer that settles with no verdict)", () => {
     expect(asks()).toHaveLength(1);
   }, 30000);
 
+  test("a reviewer stopped on an error it does not come back from is not asked or held: it fails as such", async () => {
+    row = { ...row, blocked_on: "auth" };
+    expect(await run()).toBe("failed");
+    expect(asks()).toHaveLength(0);
+    const failed = calls.find((c) => c.route === "/cli/workflow-runs/progress" && c.body.run_status === "failed");
+    expect(String(failed?.body.fail_reason)).toContain("stopped on an auth error");
+  }, 30000);
+
+  test("the ask goes under one client_id per run and hand, so a runner that takes over the wait asks nothing new", async () => {
+    onAsk = () => { row = { ...row, message_count: 33 }; };
+    await run();
+    expect(asks()[0]!.body.client_id).toBe("run:run-1:verdict-ask:conv_rev");
+  }, 30000);
+
   test("a reviewer that recorded its verdict on the task, or pinned one, is not asked", async () => {
     task = { status: "in_progress", review_verdict: { verdict: "approve", at: Date.now() + 60_000 } };
     expect(await run()).toBe("failed");
@@ -99,4 +114,19 @@ describe("workflow/runner (a reviewer that settles with no verdict)", () => {
     expect(await run()).toBe("completed");
     expect(asks()).toHaveLength(0);
   }, 30000);
+});
+
+describe("holdForVerdict", () => {
+  // A runner that takes over the wait passes the hand's own start (`<node>.hand_at`), so a verdict its reviewer
+  // recorded before the takeover counts.
+  test("a task verdict counts from the hand's start, not the runner's", async () => {
+    const at = 1_000_000;
+    const sends: unknown[] = [];
+    const call = async (route: string, body: Record<string, unknown>) => (route === "/cli/work/get" ? { review_verdict: { verdict: "approve", at } } : (sends.push(body), { ok: true }));
+    const o = { row: { message_count: 5 }, pinned: null, taskId: "ct-9", to: "conv_rev", shortId: "jx7rev", runId: "run-1" };
+    expect(await holdForVerdict(call, { ask: null }, { ...o, since: at - 1 })).toBe(false);
+    expect(sends).toHaveLength(0);
+    expect(await holdForVerdict(call, { ask: null }, { ...o, since: at + 1 })).toBe(true);
+    expect(sends).toHaveLength(1);
+  });
 });

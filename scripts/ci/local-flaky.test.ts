@@ -62,7 +62,8 @@ describe("suiteOf", () => {
 });
 
 describe("settledJobs", () => {
-  const logs = "logs /tmp/ci-local-x/test-cli.*.log";
+  // A temp directory with a space in it keeps its whole path.
+  const logs = "logs /tmp/My Runs/ci-local-x/test-cli.*.log";
   test("a red job's summary counts what the reruns alone left, never the count it ran with", () => {
     const flaky = failure("packages/platform/a.test.ts", "a", "test-platform");
     const red = failure("packages/cli/b.test.ts", "b", "test-cli");

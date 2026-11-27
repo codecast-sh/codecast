@@ -232,7 +232,7 @@ describe("workflow/runner (command nodes)", () => {
   test("a station the run comes back to is told which station sent it back and what it found", async () => {
     const g = parseWorkflowSource(`digraph g {
       start  [shape=Mdiamond]
-      impl   [label="Implement", shape=parallelogram, max_visits=3, script="echo impl-sees-[$sent_back]"]
+      impl   [label="Implement", shape=parallelogram, max_visits=3, script="echo impl-sees-[$sent_back]-from-[$sent_back_from]"]
       verify [label="Verify", shape=parallelogram, script="if [ -f ${tmpDir}/twice ]; then exit 0; fi; touch ${tmpDir}/twice; echo tests-failed-in-a.test.ts; exit 1"]
       exit   [shape=Msquare]
       start -> impl -> verify
@@ -241,8 +241,8 @@ describe("workflow/runner (command nodes)", () => {
     }`);
     expect(await runWorkflow(g, { cwd: tmpDir })).not.toBe("failed");
     const seen = cap.logs.filter(l => l.includes("impl-sees-") && !l.includes("$ echo"));
-    expect(seen[0]).toContain("impl-sees-[]");
-    expect(seen[1]).toContain("impl-sees-[Verify: tests-failed-in-a.test.ts]");
+    expect(seen[0]).toContain("impl-sees-[]-from-[]");
+    expect(seen[1]).toContain("impl-sees-[Verify: tests-failed-in-a.test.ts]-from-[verify]");
   });
 
   // ct-61678 (Oct 30): a Revise note went to a hold in front of Build that the run had not passed before, the hold

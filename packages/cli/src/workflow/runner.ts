@@ -827,6 +827,8 @@ async function waitOnStation(
     hand = spawned;
     context[`${node.id}.session_id`] = hand.shortId;
     context[`${node.id}.conversation_id`] = hand.conversationId;
+    // When this hand started, kept with it so a runner that takes over the wait reads its work since then (verdictAsk.ts).
+    context[`${node.id}.hand_at`] = String(Date.now());
     onSpawned?.();
     console.log(`  ${c.green}spawned${c.reset} ${c.cyan}${hand.shortId}${c.reset}`);
   }
@@ -1085,7 +1087,7 @@ async function waitOnStation(
     }
     // A reviewer that left no verdict is asked once to finish before it settles (verdictAsk.ts).
     if (node.reviewer && !subject && await holdForVerdict((route, body) => cliCall(options, route, body), verdictAsk, {
-      row, pinned, taskId: options.taskId, since: startMs - CLOCK_SKEW_MS, to: conversationId, from: options.runSession, shortId, graceMs: options.verdictAskGraceMs,
+      row, pinned, taskId: options.taskId, since: (Number(context[`${node.id}.hand_at`]) || startMs) - CLOCK_SKEW_MS, to: conversationId, from: options.runSession, shortId, runId: options.runId, graceMs: options.verdictAskGraceMs,
     })) {
       askedOnce = false;
       continue;
@@ -2928,8 +2930,14 @@ async function runNodeLoop(
     // tell that round from its first and checked its own work again (ct-58757).
     // A station that parks (a hold in front of another) is told what sent the run there even on its first visit, so it
     // can pass it on: ct-61678's Revise note was lost at a hold the run had not passed before (Oct 30).
-    if (state.completed.includes(next.id) || next.parks) state.context["sent_back"] = `${current.label}: ${state.context[`${current.id}.output`] ?? ""}`.trim();
-    else delete state.context["sent_back"];
+    // `sent_back_from` names that station by id, for a script or route that reads which one it was.
+    if (state.completed.includes(next.id) || next.parks) {
+      state.context["sent_back"] = `${current.label}: ${state.context[`${current.id}.output`] ?? ""}`.trim();
+      state.context["sent_back_from"] = current.id;
+    } else {
+      delete state.context["sent_back"];
+      delete state.context["sent_back_from"];
+    }
 
     checkpoint(next.id);
     console.log();

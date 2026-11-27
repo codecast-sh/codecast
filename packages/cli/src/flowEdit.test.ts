@@ -20,6 +20,19 @@ const edit = (root: string, req: FlowEditRequest, flow = "change") => { const pl
 const flowFile = (root: string) => fs.readFileSync(path.join(root, ".codecast/flows/change.cast"), "utf8");
 
 describe("cast flow edit change", () => {
+  test("a station added before PR on codecast's own flow runs on the way a fix that changed nothing takes", () => {
+    const own = path.resolve(import.meta.dir, "../../../.codecast/flows");
+    const root = repo({
+      ".codecast/flows/change.cast": fs.readFileSync(path.join(own, "change.cast"), "utf8"),
+      ".codecast/flows/change/local_ci_fix.md": fs.readFileSync(path.join(own, "change/local_ci_fix.md"), "utf8"),
+    });
+    edit(root, { op: "add", station: "lint", before: "pr", run: "bun run lint" });
+    const g = parseWorkflowFile(path.join(root, ".codecast/flows/change.cast"));
+    const on = (id: string) => g.edges.filter((e) => e.from === id && !/failure/.test(e.condition ?? "")).map((e) => e.to);
+    // Fix Local CI goes back to Local CI, whose pass (at once when the fix changed nothing) leads through Lint to PR.
+    expect([on("local_ci_fix"), on("local_ci"), on("lint")]).toEqual([["local_ci"], ["lint"], ["pr"]]);
+  });
+
   test("add creates the project's flow over the library's, one line, and prints the edit object", () => {
     const root = repo();
     const plan = edit(root, { op: "add", station: "lint", after: "pr", run: "bun run lint" });
