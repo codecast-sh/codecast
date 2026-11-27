@@ -2685,6 +2685,16 @@ function SessionListPanelImpl({
   const { killWithNotice, killManyWithNotice, restoreWithNotice } = useTriggerKillNotice();
   const closedKill = useKillWithReview(killManyWithNotice);
   const closedKillOf = closedKill.kill;
+  // A hidden bucket's "Kill N": the review names every running agent the
+  // button counted, and the kill sends only the rows a parent's cascade won't
+  // reach (killAllIds), so a running child of a running parent isn't killed twice.
+  const liveKill = useKillWithReview(
+    useCallback((ids: string[]) => {
+      const sessions = useInboxStore.getState().sessions;
+      killManyWithNotice(killAllIds(ids.map((id) => sessions[id]).filter((s) => !!s)));
+    }, [killManyWithNotice]),
+  );
+  const liveKillOf = liveKill.kill;
   const handleCloseShelfX = useCallback((id: string) => {
     const row = useInboxStore.getState().sessions[id];
     if (row && isClosedSession(row)) closedKillOf([id]);
@@ -2728,22 +2738,6 @@ function SessionListPanelImpl({
     },
     [openCharacterPicker],
   );
-  // "Kill all" on the Stashed header — two-step confirm (arm, then fire within
-  // 3s) since it tears down every stashed agent at once. Kills each row its
-  // parent's cascade won't reach (killAllIds), so nothing in the bucket survives.
-  const [killAllArmed, setKillAllArmed] = useState(false);
-  const killAllTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const handleKillAllStashed = useCallback(() => {
-    if (killAllTimerRef.current) clearTimeout(killAllTimerRef.current);
-    if (!killAllArmed) {
-      setKillAllArmed(true);
-      killAllTimerRef.current = setTimeout(() => setKillAllArmed(false), 3000);
-      return;
-    }
-    setKillAllArmed(false);
-    // The kill's own entry toast announces it, with its Undo.
-    killManyWithNotice(killAllIds(filteredStashed));
-  }, [killAllArmed, filteredStashed, killManyWithNotice]);
 
   // A new grouping or direction is a new list: it opens at its first row, not
   // at the scroll offset the old layout happened to have.
@@ -2767,53 +2761,13 @@ function SessionListPanelImpl({
       return;
     }
 
-    // Card not rendered — try to reveal it by uncollapsing its section. A
-    // subagent (or nested teammate) renders under its parent's card, so the
-    // parent's membership decides which section hosts the row.
+    // Card not rendered. A collapsed section already peeks the open card
+    // (renderSection), so only the hidden buckets at the bottom can still be
+    // hiding it. A subagent (or nested teammate) renders under its parent's
+    // card, so the parent's membership decides which bucket hosts the row.
     const activeRow = s.sessions[activeSessionId];
     const parentId = activeRow ? inboxNestParentOf(sortedSessions, nestWorkers)(activeRow) : null;
     const inList = (items: InboxSession[]) => items.some(i => i._id === activeSessionId || (!!parentId && i._id === parentId));
-    const sections: [InboxSession[], string][] = flatView
-      ? [[flatList, "all"]]
-      : viewMode === "bucket" && bucketView
-        ? [
-            ...bucketView.labelGroups.map(({ bucket, items }) => [items, `bucket_${bucket._id}`] as [InboxSession[], string]),
-            ...bucketView.projectGroups.map(({ name, items }) => [items, `bucketproj_${name}`] as [InboxSession[], string]),
-          ]
-        : viewMode === "plan" && planView
-        ? [
-            ...planView.planGroups.map(({ key, items }) => [items, `plan_${key}`] as [InboxSession[], string]),
-            ...planView.projectGroups.map(({ name, items }) => [items, `planproj_${name}`] as [InboxSession[], string]),
-          ]
-        : viewMode === "browser" && browserView
-        ? [[browserView, "browser"] as [InboxSession[], string]]
-        : viewMode === "machine" && machineView
-        ? [
-            ...machineView.machineGroups.map(({ deviceId, items }) => [items, `machine_${deviceId}`] as [InboxSession[], string]),
-            ...machineView.projectGroups.map(({ name, items }) => [items, `machineproj_${name}`] as [InboxSession[], string]),
-          ]
-        : orgLensView
-        ? [
-            ...orgLensView.groups.map(({ key, items }) => [items, `${orgLensView.mode}_${key}`] as [InboxSession[], string]),
-            ...orgLensView.projectGroups.map(({ name, items }) => [items, `${orgLensView.mode}proj_${name}`] as [InboxSession[], string]),
-          ]
-        : viewMode === "trigger"
-        ? [
-            // Trigger sub rows are always visible (their rows don't collapse),
-            // so only the project fallthrough tier can need a reveal here.
-            ...triggerView.projectGroups.map(({ name, items }) => [items, `trigproj_${name}`] as [InboxSession[], string]),
-          ]
-        : [
-            [statusQuestions, "questions"],
-            [statusPinned, "pinned"], [statusNew, "new"], [statusNeedsInput, "needs_input"],
-            [statusDone, "done"], [statusWorking, "working"], [statusDormant, "dormant"],
-          ];
-    for (const [items, key] of sections) {
-      if (inList(items) && s.collapsedSections[key]) {
-        s.toggleCollapsedSection(key);
-        return;
-      }
-    }
     if (inList(filteredSnoozed) && !openBuckets.snoozed) {
       setOpenBuckets((o) => ({ ...o, snoozed: true }));
       return;
@@ -2843,19 +2797,35 @@ function SessionListPanelImpl({
     variant: "stashed" | "dismissed" | "snoozed";
     onKill: (id: string) => void;
     headerAction?: React.ReactNode;
+    /** The head says "Kill N" for the bucket's running agents instead of
+     *  "N running": one control that both counts them and stops them. Idle
+     *  rows stay, except the subagents of a killed parent, which its kill
+     *  takes down with it. */
+    killLive?: boolean;
     /** Rendered under the rows once every locally-known row is shown (the
      *  Killed bucket's "Load more"). A bucket with a footer stays mounted when
      *  empty — the footer is how its rows arrive. */
     footer?: React.ReactNode;
   }) => {
-    const { label, items, expanded, onToggle, variant, onKill, headerAction, footer } = opts;
+    const { label, items, expanded, onToggle, variant, onKill, headerAction, killLive, footer } = opts;
     if (items.length === 0 && !footer) return null;
     // A hidden bucket is not a dead bucket: a stashed agent keeps running, and
     // an armed schedule can keep driving a killed/stashed conversation. Same
     // predicate as the card's green dot (isLive) so header and rows can't
     // disagree; coarseNow keeps the live derivation on the panel's ticker.
     const isBucketLive = (sess: InboxSession) => sessionLiveAt(sess, coarseNow);
-    const liveCount = items.filter(isBucketLive).length;
+    const liveRows = items.filter(isBucketLive);
+    const liveCount = liveRows.length;
+    // The reviewed Kill every kill surface shows when something is in flight.
+    const killLiveButton = killLive && liveCount > 0 ? (
+      <button
+        onClick={() => liveKillOf(liveRows.map((r) => r._id))}
+        className="px-1.5 py-0.5 rounded text-mark font-semibold uppercase tracking-wider transition-all shrink-0 text-sol-text-dim opacity-40 hover:opacity-100 hover:text-sol-red hover:bg-sol-red/10 modern:h-6 modern:rounded-control modern:px-2 modern:py-0 modern:text-meta modern:font-medium modern:normal-case modern:tracking-normal"
+        title={`Kill the ${liveCount} running ${label.toLowerCase()} session${liveCount === 1 ? "" : "s"}`}
+      >
+        Kill {liveCount}
+      </button>
+    ) : null;
     const { topLevel, subsByTop: subMap } = hiddenBucketTree(items);
     // Activity floats: running rows (or idle parents with a running subagent)
     // sort to the top of the opened bucket, so background work is one glance
@@ -2866,7 +2836,7 @@ function SessionListPanelImpl({
     if (variant !== "snoozed") topLevel.sort((a, b) => Number(rowLive(b)) - Number(rowLive(a)));
     return (
       <div className={modern ? undefined : "border-t border-sol-border/30"}>
-        <HiddenBucketHead modern={modern} label={label} count={showSubagents ? items.length : topLevel.length} variant={variant} expanded={expanded} onToggle={onToggle} liveCount={liveCount} action={headerAction} />
+        <HiddenBucketHead modern={modern} label={label} count={showSubagents ? items.length : topLevel.length} variant={variant} expanded={expanded} onToggle={onToggle} liveCount={killLiveButton ? 0 : liveCount} action={killLiveButton ?? headerAction} />
         {expanded && topLevel.length > 0 && (() => {
           // Cap the hidden bucket too — KILLED/STASHED can hold hundreds of rows
           // when expanded ("show killed/stashed" on). Same per-bucket cap + show-more
@@ -3010,6 +2980,12 @@ function SessionListPanelImpl({
     if (items.length === 0 && !(isDropTarget && sessionDragActive)) return null;
     const key = opts?.key ?? label.toLowerCase().replace(/\s+/g, "_");
     const collapsed = !!s.collapsedSections[key];
+    const hostsActive = (i: InboxSession) => i._id === activeSessionId
+      || (globalSubByParent.get(i._id) || []).some((sub) => sub._id === activeSessionId);
+    // A collapsed section still shows the open session's card (or the parent
+    // hosting it) under its header: a peek that locates the session without
+    // opening the folder, and that goes away as soon as another session opens.
+    const peek = collapsed && activeSessionId ? items.find(hostsActive) : undefined;
     const isDragOverSection = dragOverSectionKey === key;
     const dropProps = isDropTarget
       ? {
@@ -3059,25 +3035,22 @@ function SessionListPanelImpl({
           nameLabel={opts?.nameLabel}
           hideCount={opts?.nameLabel}
         />
-        {!collapsed && (() => {
+        {(!collapsed || peek) && (() => {
           const sectionCap = sectionLimits[key] ?? SECTION_RENDER_CAP;
           // Take from the shared global budget (consumed in render order, so the
           // top-priority sections fill first); the active row is force-kept below
           // even when the budget is spent.
           const globalRemaining = Math.max(0, GLOBAL_CARD_BUDGET + globalCardExtra - globalRenderedCards);
           const limit = Math.max(Math.min(sectionCap, globalRemaining), opts?.floor ? Math.min(items.length, SECTION_CARD_FLOOR) : 0);
-          let visibleItems = items.length > limit ? items.slice(0, limit) : items;
+          let visibleItems = peek ? [peek] : items.length > limit ? items.slice(0, limit) : items;
           // Never let the active row (or the parent hosting the active subagent)
           // fall past the cap — it must stay mounted for auto-scroll and so the
           // session being viewed never vanishes from the list.
           if (visibleItems.length < items.length && activeSessionId) {
-            const needed = items.find(
-              (i) => i._id === activeSessionId
-                || (globalSubByParent.get(i._id) || []).some((sub) => sub._id === activeSessionId),
-            );
+            const needed = items.find(hostsActive);
             if (needed && !visibleItems.includes(needed)) visibleItems = [...visibleItems, needed];
           }
-          const hiddenCount = items.length - visibleItems.length;
+          const hiddenCount = peek ? 0 : items.length - visibleItems.length;
           globalRenderedCards += visibleItems.length;
           // The flat views hoist a role's session under its role's card as a
           // row of its own (hoistNestedUnderParent), so it takes the small row
@@ -3092,7 +3065,7 @@ function SessionListPanelImpl({
             // The selected subagent always renders — even when subagents are
             // globally hidden or fall past the "+N more" cutoff. The row being
             // viewed must never vanish from the list.
-            const subs = showSubagents ? allSubs : allSubs.filter((sub) => sub._id === activeSessionId);
+            const subs = showSubagents && !peek ? allSubs : allSubs.filter((sub) => sub._id === activeSessionId);
             const subsExpanded = !!expandedSubSessions[session._id];
             let visibleSubs = subs.length <= 2 || subsExpanded ? subs : subs.slice(0, 2);
             if (visibleSubs.length < subs.length && !visibleSubs.some((sub) => sub._id === activeSessionId)) {
@@ -3109,7 +3082,7 @@ function SessionListPanelImpl({
               <div
                 key={session._id}
                 style={holdStyleOf(session._id)}
-                className={`relative border-b border-sol-border/30${holdLeft > 0 ? " inbox-held" : ""}${justStarted ? " animate-inbox-row-in" : ""}${landedIds.has(session._id) ? " inbox-landed" : ""}`}
+                className={`relative border-b border-sol-border/30${holdLeft > 0 ? " inbox-held" : ""}${justStarted ? " animate-inbox-row-in" : ""}${landedIds.has(session._id) ? " inbox-landed" : ""}${peek ? " inbox-peek" : ""}`}
                 onDragOver={(e) => {
                   if (!e.dataTransfer.types.includes("codecast/session-id")) return;
                   const draggedId = adoptDrag.draggedRef.current;
@@ -3701,19 +3674,7 @@ function SessionListPanelImpl({
           onToggle: () => setOpenBuckets((o) => ({ ...o, stashed: !o.stashed })),
           variant: "stashed",
           onKill: handleKillStashed,
-          headerAction: (
-            <button
-              onClick={handleKillAllStashed}
-              className={`px-1.5 py-0.5 rounded text-mark font-semibold uppercase tracking-wider transition-all shrink-0 modern:h-6 modern:rounded-control modern:px-2 modern:py-0 modern:text-meta modern:font-medium modern:normal-case modern:tracking-normal ${
-                killAllArmed
-                  ? "text-sol-bg bg-sol-red hover:bg-sol-red/90"
-                  : "text-sol-text-dim opacity-40 hover:opacity-100 hover:text-sol-red hover:bg-sol-red/10"
-              }`}
-              title="Kill all stashed"
-            >
-              {killAllArmed ? `Kill ${filteredStashed.length}?` : "Kill all"}
-            </button>
-          ),
+          killLive: true,
         })}
         {renderHiddenBucket({
           // "Closed" names the card's own gesture, Close, which files the
@@ -3734,6 +3695,7 @@ function SessionListPanelImpl({
           // A closed row's X is a Kill like the menu's (its review, a role seat's retire
           // question); a killed row's X only takes it off the list, as before.
           onKill: handleCloseShelfX,
+          killLive: true,
           // The rows above are this replica's cached kills (recent by kill time)
           // plus what the shelf already paged in; older or never-cached kills
           // are one click away. Chip filters apply to shelf rows like any other.
@@ -3790,6 +3752,7 @@ function SessionListPanelImpl({
         {(rows) => <CharacterPicker rows={rows} onDone={closeCharacterPicker} />}
       </CursorPopover>
       {closedKill.dialog}
+      {liveKill.dialog}
       <ContextMenu state={sessionCtxMenu}>
         {({ session, isForeign, sessions }) => sessions.length > 1 ? (
           <BulkSessionMenuItems
