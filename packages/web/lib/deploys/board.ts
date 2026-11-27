@@ -585,24 +585,27 @@ export function yourSessions(next: Carried | null, cards: ReadonlyArray<DeployCa
 
 /**
  * The queue around the newest unfinished deploy: what it is sending (its sha and older) and what is left for Next
- * deploy. With none going, or one at a sha no longer waiting, everything is next.
+ * deploy. With none going, or one at a sha no longer waiting, everything is next. `head`: main's newest commit as the
+ * queue counted it (queue.head_sha), which may touch none of the target's paths and so go unlisted.
  */
-export function splitQueue(queue: ReadonlyArray<BoardQueueCommit>, deploys: ReadonlyArray<BoardDeploy>): { going: BoardDeploy | null; sending: BoardQueueCommit[]; next: BoardQueueCommit[] } {
+export function splitQueue(queue: ReadonlyArray<BoardQueueCommit>, deploys: ReadonlyArray<BoardDeploy>, head?: string | null): { going: BoardDeploy | null; sending: BoardQueueCommit[]; next: BoardQueueCommit[] } {
   // One asked for before the live deploy never went out (targets openOf): it sends nothing, so everything waits for Next deploy.
   const live = deploys.filter((d) => d.status === "live").sort((a, b) => (b.live_at ?? b.created_at) - (a.live_at ?? a.created_at))[0] ?? null;
   const going = [...deploys].sort((a, b) => b.created_at - a.created_at).find((d) => isOpen(d) && d.sha && !supersededBy(d, live)) ?? null;
   if (!going) return { going, sending: [], next: [...queue] };
-  // A deploy at a commit the queue does not list (one that touched none of the target's paths) sends what its own
+  // A deploy at main's head sends the whole queue, listed or not (a push target's build of main, a marker with no
+  // commits). One at another commit the queue does not list (it touched none of the target's paths) sends what its own
   // records name, and everything older on main.
+  if (head && sameSha(going.sha!, head) && !queue.some((c) => sameSha(c.sha, going.sha!))) return { going, sending: [...queue], next: [] };
   const at = queue.some((c) => sameSha(c.sha, going.sha!)) ? going.sha! : queue.find((c) => going.commit_rows?.some((r) => sameSha(r.sha, c.sha)))?.sha;
   if (!at) return { going, sending: [], next: [...queue] };
   return { going, sending: upTo(queue, at), next: after(queue, at) };
 }
 
 /** Each task's newest place on main: waiting ("next"), going out in an unfinished deploy, else the newest deploy that carried it. */
-export function tasksOnMain(queue: ReadonlyArray<BoardQueueCommit>, deploys: ReadonlyArray<BoardDeploy>): Map<string, CardId> {
+export function tasksOnMain(queue: ReadonlyArray<BoardQueueCommit>, deploys: ReadonlyArray<BoardDeploy>, head?: string | null): Map<string, CardId> {
   const out = new Map<string, CardId>();
-  const { going, sending, next } = splitQueue(queue, deploys);
+  const { going, sending, next } = splitQueue(queue, deploys, head);
   for (const c of next) for (const t of c.tasks) if (t.short_id && !out.has(t.short_id)) out.set(t.short_id, "next");
   for (const c of sending) for (const t of c.tasks) if (t.short_id && !out.has(t.short_id)) out.set(t.short_id, going!.short_id);
   for (const d of [...deploys].sort((a, b) => b.created_at - a.created_at)) {

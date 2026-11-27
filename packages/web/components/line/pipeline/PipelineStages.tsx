@@ -25,7 +25,7 @@ function Figures({ model, stuckCheckouts }: { model: PipelineModel; stuckCheckou
   return (
     <span className="rpl-figs">
       <span className="rpl-fig" data-on={model.change.inFlight ? "" : undefined}><b className="lw-num">{model.change.inFlight}</b> in flight</span>
-      <span className="rpl-fig" data-on={model.main.waiting ? "" : undefined}><b className="lw-num">{model.main.waiting}</b> waiting on main</span>
+      <span className="rpl-fig" data-on={model.main.waiting ? "" : undefined}><b className="lw-num">{model.main.reading && !model.main.waiting ? "…" : model.main.waiting}</b> waiting on main</span>
       <span className="rpl-fig" data-on={going ? "" : undefined}><b className="lw-num">{going}</b> going out</span>
       {stuck ? <span className="rpl-fig" data-tone="bad"><b className="lw-num">{stuck}</b> {stuck === 1 ? "deploy" : "deploys"} stuck</span> : null}
       {failed ? <span className="rpl-fig" data-tone="bad"><b className="lw-num">{failed}</b> failed</span> : null}

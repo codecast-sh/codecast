@@ -154,9 +154,11 @@ describe("readQueue: what waits reads as of the live deploy the store holds (pl-
   });
 
   test("a queue that lists the live commit drops it and everything older, whatever it was counted after", () => {
-    const q = readQueue(counted(undefined, [c("f35e9c60", 9), c("094c875f", 8), c("39dd65b0", 7)]), [older, newer]).queue;
+    const cut = counted(undefined, [c("f35e9c60", 9), c("094c875f", 8), c("39dd65b0", 7)]);
+    const q = readQueue({ ...cut, queue: { ...cut.queue, truncated: true, untouched: 4, commits: 40 } }, [older, newer]).queue;
     expect(q.groups.flatMap((g) => g.commits.map((x) => x.sha))).toEqual(["f35e9c60"]);
-    expect(q).toMatchObject({ commits: 1, shown: 1 });
+    // What is left is listed whole: no "1+" from a cut that was older than the live commit.
+    expect(q).toMatchObject({ commits: 1, shown: 1, truncated: false, untouched: 0 });
     expect(q.reading).toBeUndefined();
   });
 

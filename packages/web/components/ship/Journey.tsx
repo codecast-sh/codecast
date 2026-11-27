@@ -462,7 +462,7 @@ export function SessionTargets({ teamId, conversationId, line, known: reached, f
       {mine.map((t) => {
         const row = targets.find((x) => x.name === t.name);
         // Red CI on what a deploy would send is never offered as the press here; the target's link opens the Deploys page.
-        const canPress = t.state === "waiting" && !!row && row.runs === "here" && row.can_deploy && row.queue.head_ci !== "failed" && !targetNow(row, deploys).open;
+        const canPress = t.state === "waiting" && !!row && row.runs === "here" && row.can_deploy && row.queue.head_ci !== "failed" && !row.queue.reading && !targetNow(row, deploys).open;
         return (
           <li key={t.name} className="sj-target-item">
             <Link className="sj-target" data-state={t.state} href={deploysFocusHref({ team: teamId, target: t.name, focus: focus ?? { kind: "session", id: conversationId }, open: t.deploy })} data-session-target={t.name}>

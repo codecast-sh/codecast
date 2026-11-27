@@ -311,6 +311,14 @@ describe("the queue in main's order", () => {
     const partly = deploy("dp-6", 6, { status: "running", sha: "b8193370", commit_rows: [{ sha: "c2aaaaaa", subject: "x" }] });
     expect(splitQueue(q, [partly]).next.map((c) => c.sha)).toEqual(["c4aaaaaa", "c3aaaaaa"]);
   });
+  test("a deploy at main's head with no records of its own (a push target's build, a bare marker) sends the whole queue", () => {
+    const bare = deploy("dp-7", 7, { status: "running", sha: "beadbeef", commit_rows: [] });
+    expect(splitQueue(q, [bare], "beadbeef0000")).toMatchObject({ next: [] });
+    expect(splitQueue(q, [bare], "beadbeef0000").sending).toHaveLength(4);
+    // Without main's head the commit cannot be placed, and nothing is claimed.
+    expect(splitQueue(q, [bare]).next).toHaveLength(4);
+    expect(splitQueue(q, [bare], "0123abcd").next).toHaveLength(4);
+  });
 });
 
 describe("a running run's track is at its station (pl-1077 polish 3)", () => {

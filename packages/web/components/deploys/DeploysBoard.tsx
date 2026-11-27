@@ -118,7 +118,7 @@ export function DeploysBoard(p: DeploysBoardProps) {
   const lines = p.linesByDeploy;
   const board = useMemo(() => {
     const credit = shipperOf(shippers ?? []);
-    const { going, sending, next: nextCommits } = splitQueue(queue, history);
+    const { going, sending, next: nextCommits } = splitQueue(queue, history, mixed ? null : t.queue.head_sha);
     // The commits the queue counted but did not list are the oldest waiting: Next deploy's while nothing is going out,
     // else the going-out deploy's (it sends everything up to its own commit).
     const older = mixed ? 0 : Math.max(0, t.queue.commits - t.queue.shown);
@@ -138,8 +138,8 @@ export function DeploysBoard(p: DeploysBoardProps) {
     for (const x of next?.commits ?? []) land(t.repository, x.pr);
     for (const c of cards) for (const x of c.carried.commits) land(c.deploys[0].repository || t.repository, x.pr);
     for (const c of queue) land(t.repository, c.pr_number);
-    return { queue, going, nextCommits, next, unlisted, cards, mineIds, landedPrs, your: yourSessions(next, cards, mineIds), onMain: tasksOnMain(queue, history) };
-  }, [queue, history, shippers, lines, mixed, t.repository, t.queue.commits, t.queue.shown, me]);
+    return { queue, going, nextCommits, next, unlisted, cards, mineIds, landedPrs, your: yourSessions(next, cards, mineIds), onMain: tasksOnMain(queue, history, mixed ? null : t.queue.head_sha) };
+  }, [queue, history, shippers, lines, mixed, t.repository, t.queue.commits, t.queue.shown, t.queue.head_sha, me]);
 
   // Where the linked thing is: waiting in the queue, or on the deploys that took it out (reach names the one that holds
   // a PR or commit; anything else is matched on what each deploy carried), or on a Ship run on its way.

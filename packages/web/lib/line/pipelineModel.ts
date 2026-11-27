@@ -61,6 +61,8 @@ export type MainTarget = {
   tone: TargetTone | "stuck";
   /** Commits on main not live there yet, and whose sessions wrote them. */
   waiting: number;
+  /** What waits is being read again (deploys/targets readQueue): `waiting` is not a count yet. */
+  reading?: true;
   groups: QueueGroup[];
   live: { deploy: string; version: string | null; at: number } | null;
   /** `stuck`: how long it has been open without going live, when that is too long. */
@@ -76,7 +78,8 @@ export type PipelineModel = {
   /** `inFlight`: this repo's change runs not finished. `flight` splits them so the parts add up to it: working at a
    *  station, waiting for the deploy that carries them (a station that waits), paused, and not at any station. */
   change: PipelineLane & { inFlight: number; flight: Flight; runs: PipelineRun[] };
-  main: { targets: MainTarget[]; waiting: number };
+  /** `reading`: a target's queue is being read again, so `waiting` may be short. */
+  main: { targets: MainTarget[]; waiting: number; reading: boolean };
   release: PipelineLane & {
     /** The deploy going out now, as a run of the release flow; null when none is. */
     run: { status: string; current_node_id: string | null; node_statuses: Array<{ node_id: string; status: string }> } | null;
@@ -280,6 +283,7 @@ export function pipelineModel(p: Pipeline, runs: readonly PipelineRun[] = [], ta
       runs: cfg.runs,
       tone: stuck ? "stuck" : row ? targetTone(row, at) : at.open ? "going" : at.failed ? "failed" : "unknown",
       waiting: row?.queue.known ? row.queue.commits : 0,
+      ...(row?.queue.reading ? { reading: true as const } : {}),
       groups: row?.queue.groups ?? [],
       // A version that is only a commit hash says nothing a person reads: the age says it.
       live: at.live ? { deploy: at.live.short_id, version: at.live.version && !/^[0-9a-f]{7,40}$/i.test(at.live.version) ? at.live.version : null, at: at.live.live_at ?? at.live.created_at } : null,
@@ -304,7 +308,7 @@ export function pipelineModel(p: Pipeline, runs: readonly PipelineRun[] = [], ta
     repository: p.repository,
     name: repoName(p.repository),
     change: { ...change, inFlight: live.length, flight: flightOf(p.change, live), runs: changeRuns },
-    main: { targets: mainTargets, waiting: Math.max(0, ...mainTargets.map((t) => t.waiting)) },
+    main: { targets: mainTargets, waiting: Math.max(0, ...mainTargets.map((t) => t.waiting)), reading: mainTargets.some((t) => !!t.reading) },
     release: { ...release, run, outside: open && !steps.length ? outsideWords(open) : null, stuck: stuckOpen, targets: p.release.targets },
   };
 }

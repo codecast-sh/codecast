@@ -159,6 +159,7 @@ export function targetWords(t: MainTarget, now: number): string {
   if (t.going) return t.going.step ? `going out · ${t.going.step}` : "going out";
   if (t.tone === "failed") return "last deploy failed";
   const live = t.live ? `live ${agoWords(t.live.at, now)}` : null;
+  if (t.reading) return ["reading what waits", live].filter(Boolean).join(" · ");
   if (t.waiting) return [`${t.waiting} to ship`, live].filter(Boolean).join(" · ");
   if (t.tone === "current") return "up to date";
   return live ?? (t.runs === "push" ? "builds on push" : "not read yet");
@@ -170,7 +171,7 @@ export function statTiles(model: PipelineModel, now: number): StatTile[] {
   const flight = model.change.flight;
   const tiles: StatTile[] = [
     { key: "flight", value: String(model.change.inFlight), small: null, label: `changes in flight${flight.paused ? ` · ${flight.paused} paused` : ""}`, tone: "plain", open: model.change.inFlight ? { kind: "flight" } : null },
-    { key: "main", value: String(model.main.waiting), small: null, label: model.main.waiting === 1 ? "commit on main waiting to ship" : "commits on main waiting to ship", tone: "plain", open: { kind: "main" } },
+    { key: "main", value: model.main.reading && !model.main.waiting ? "…" : String(model.main.waiting), small: null, label: model.main.reading && !model.main.waiting ? "reading what waits on main" : model.main.waiting === 1 ? "commit on main waiting to ship" : "commits on main waiting to ship", tone: "plain", open: { kind: "main" } },
   ];
   const [first, ...rest] = model.main.targets;
   if (first) {

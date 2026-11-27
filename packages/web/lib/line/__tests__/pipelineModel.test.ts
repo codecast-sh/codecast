@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { PIPELINE_FIXTURES } from "./pipelines.fixture.generated";
 import { changesHere, pipelineModel, spanWords, pipelineStation, runInRepo, stationRuns, whenWords, type PipelineRun } from "../pipelineModel";
 import type { Pipeline } from "../pipelineTypes";
+import { statTiles, targetWords } from "../pipelineView";
 import type { DeployTargetRow, TeamDeployRow } from "../../deploys/targets";
 
 const example = PIPELINE_FIXTURES.find((p) => p.repository === "example-org/example-app")!;
@@ -70,6 +71,15 @@ describe("pipeline model on the real flows", () => {
     // A version that is only a commit hash is not shown.
     expect(pipelineModel(example, [], [targetRow({})], [deploy({ version: "ca5afca75" })]).main.targets[0].live?.version).toBeNull();
     expect(pipelineModel(example, [], [targetRow({})], [deploy({ version: "1.1.230" })]).main.targets[0].live?.version).toBe("1.1.230");
+  });
+  test("a queue being read again is held, never read as nothing waiting (deploys readQueue)", () => {
+    const reading = targetRow({ queue: { known: true, truncated: false, commits: 0, untouched: 0, head_sha: "abc", head_ci: "passed", head_ci_url: null, shown: 0, groups: [], reading: true } });
+    const m = pipelineModel(example, [], [reading], [deploy({})]);
+    expect(m.main.targets[0]).toMatchObject({ reading: true, tone: "unknown", waiting: 0 });
+    expect(m.main.reading).toBe(true);
+    expect(targetWords(m.main.targets[0], 0)).toStartWith("reading what waits");
+    expect(statTiles(m, 0).find((t) => t.key === "main")).toMatchObject({ value: "…", label: "reading what waits on main" });
+    expect(pipelineModel(example, [], [targetRow({})], [deploy({})]).main.reading).toBe(false);
   });
 });
 

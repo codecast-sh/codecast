@@ -259,7 +259,9 @@ export function readQueue(t: DeployTargetRow, deploys: ReadonlyArray<TeamDeployR
     const keep = (c: { main_at?: number; at: number }) => (c.main_at ?? c.at) > (at.main_at ?? at.at);
     const groups = t.queue.groups.map((g) => ({ ...g, commits: g.commits.filter(keep) })).filter((g) => g.commits.length);
     const left = groups.reduce((n, g) => n + g.commits.length, 0);
-    return { ...t, queue: { ...t.queue, groups, commits: left, shown: left, after_sha: live.sha } };
+    // Every commit left is listed (the cut, and anything the read did not reach, was older), and the commits that
+    // touch nothing here were counted from the older base, so neither count survives.
+    return { ...t, queue: { ...t.queue, groups, commits: left, shown: left, truncated: false, untouched: 0, after_sha: live.sha } };
   }
   const base = t.queue.after_sha;
   if (base === undefined || sameSha(base, live.sha)) return t;
