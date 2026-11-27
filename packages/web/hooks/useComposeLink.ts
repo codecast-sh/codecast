@@ -116,7 +116,6 @@ export function useComposeLink(active: boolean): void {
       ...(link.agent ? { agentType: link.agent } : {}),
       ...(linked ? { linkedTask: { _id: String(linked._id), short_id: linked.short_id, title: linked.title, status: linked.status } } : {}),
       ...(Object.keys(start).length ? { start } : {}),
-      ...(startFolder?.visibility ? { visibility: startFolder.visibility } : {}),
     });
     // What the link asked for and did not get is said, never dropped quietly:
     // a task the session will not be linked to, a folder it will not start in.

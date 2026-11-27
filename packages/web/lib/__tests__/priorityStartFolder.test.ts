@@ -19,9 +19,9 @@ test("with no recent folder under it, the rule's own folder; a private lock insi
   expect(startFolderFor("team:codecast", RULES, ["/code/codecast/secret/x"])).toEqual({ path: "/code/codecast" });
 });
 
-test("no auto-share folder: one mapped without it, with Summary preselected", () => {
+test("no auto-share folder: one mapped without it, its sharing left as the folder keeps it", () => {
   const rules = RULES.filter((r) => r.path_prefix !== "/code/codecast");
-  expect(startFolderFor("team:codecast", rules, ["/code/cc-docs/site"])).toEqual({ path: "/code/cc-docs/site", visibility: "summary" });
+  expect(startFolderFor("team:codecast", rules, ["/code/cc-docs/site"])).toEqual({ path: "/code/cc-docs/site" });
 });
 
 test("nothing mapped to the team, a personal priority, or a folder off the person's machines: no choice", () => {

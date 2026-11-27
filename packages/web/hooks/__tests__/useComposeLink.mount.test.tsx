@@ -190,7 +190,7 @@ test("a milestone's Start opens its brief as the draft and carries the priority,
   expect(toasts.at(-1)).toBe("dismiss");
 });
 
-test("a Start on a team priority opens in a folder its owner maps to that team: an auto-share one, else one with Summary preselected", async () => {
+test("a Start on a team priority opens in a folder its owner maps to that team: an auto-share one, else a mapped one, never a preselected share", async () => {
   const { milestoneStartHref } = await import("../../lib/priorities");
   const { settingsDataKey } = await import("../../lib/settingsData");
   const key = settingsDataKey("directoryMappings", "me")!;
@@ -210,7 +210,8 @@ test("a Start on a team priority opens in a folder its owner maps to that team: 
   expect(opened.at(-1)!.context).toEqual({ projectPath: "/Users/me/code/codecast/web", gitRoot: "/Users/me/code/codecast/web", start: { priority: "pri-58", priority_step: "s1" } });
   useInboxStore.setState({ settingsData: { [key]: { _id: key, value: rules(false) } } } as any);
   await open(href);
-  expect(opened.at(-1)!.context).toMatchObject({ projectPath: "/Users/me/code/codecast/web", visibility: "summary" });
+  // Mapped without auto-share: the same folder, and nothing preselected, so the session is as private as the folder keeps it.
+  expect(opened.at(-1)!.context).toEqual({ projectPath: "/Users/me/code/codecast/web", gitRoot: "/Users/me/code/codecast/web", start: { priority: "pri-58", priority_step: "s1" } });
   // A personal priority keeps the composer's usual folder.
   useInboxStore.setState({ priorities: { p58: { _id: "p58", short_id: "pri-58", workspace: "user:me" } } } as any);
   await open(href);

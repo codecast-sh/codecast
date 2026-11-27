@@ -32,8 +32,6 @@ export type ComposeContext = {
   agentType?: string;
   linkedTask?: { _id: string; short_id: string; title?: string; status?: string };
   start?: SessionStart;
-  /** What the team sees of the session, preselected (a Start in a folder mapped to its team without auto-share: lib/priorityStartFolder). */
-  visibility?: "summary";
 };
 
 /** What a new session is born linked to besides its task: createSession's
@@ -81,15 +79,13 @@ export function bindComposeTask(
 }
 
 /** A composer opened from a milestone's Start: the stub keeps what the create
- *  links (createSessionFromStub), so a heal that re-issues it links the same,
- *  and what the team sees when the Start preselects it (lib/priorityStartFolder). */
+ *  links (createSessionFromStub), so a heal that re-issues it links the same. */
 export function bindComposeStart(
   store: { syncRecord: (field: string, id: string, record: any) => void },
   stubId: string,
   start: SessionStart,
-  visibility?: ComposeContext["visibility"],
 ): void {
-  store.syncRecord("sessions", stubId, { _start: start, ...(visibility ? { _visibility: visibility } : {}) });
+  store.syncRecord("sessions", stubId, { _start: start });
 }
 
 /** The draft content held for a compose stub, or null when there is none worth

@@ -2,9 +2,10 @@
 // where its link to a team priority can hold (dispatch createSession keeps a
 // session in the team its folder rule names, and never widens sharing): a
 // folder the person maps to the priority's team with auto-share, the most
-// recently used first; else one mapped to that team without auto-share, with
-// Summary preselected so the person sees what will be shared before sending;
-// else nothing, and the composer starts where it always does. Both apps.
+// recently used first; else one mapped to that team without auto-share (its
+// session stays as private as the folder keeps it: sharing is the person's
+// own pick, never a default this sets); else nothing, and the composer starts
+// where it always does. Both apps.
 import { matchDirectoryMapping } from "@codecast/shared/team/directoryRules";
 import { lookup } from "./liveEntities";
 import { pathOnMyMachines, type MachineCandidate } from "./machinePicker";
@@ -13,7 +14,7 @@ import { settingsDataKey } from "./settingsData";
 /** A folder rule as getDirectoryTeamMappings answers it. */
 export type FolderRule = { path_prefix: string; team_id?: string | null; auto_share: boolean; private?: boolean; repository?: string };
 
-export type StartFolder = { path: string; visibility?: "summary" };
+export type StartFolder = { path: string };
 
 /**
  * `recentPaths`: the person's folders, most recently used first; the rules'
@@ -38,7 +39,7 @@ export function startFolderFor(
   const shared = candidates.find((p) => mappedHere(p, true));
   if (shared) return { path: shared };
   const mapped = candidates.find((p) => mappedHere(p, false));
-  return mapped ? { path: mapped, visibility: "summary" } : null;
+  return mapped ? { path: mapped } : null;
 }
 
 /** What the store reads for it: the priority's row, the person's folder rules and recent folders, their machines. */
