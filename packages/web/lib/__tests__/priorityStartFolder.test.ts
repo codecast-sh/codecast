@@ -30,3 +30,18 @@ test("nothing mapped to the team, a personal priority, or a folder off the perso
   expect(startFolderFor("team:codecast", [], ["/code/codecast/web"])).toBeNull();
   expect(startFolderFor("team:union", RULES, ["/code/union/app"], (p) => !p.startsWith("/code/union"))).toBeNull();
 });
+
+test("off the store, a priority the list does not hold reads its workspace off its detail", async () => {
+  const { startFolderInStore } = await import("../priorityStartFolder");
+  const { settingsDataKey } = await import("../settingsData");
+  const st = {
+    priorities: {},
+    priorityDetails: { p7: { _id: "p7", short_id: "pri-7", base: { workspace: "team:codecast" } } },
+    settingsData: { [settingsDataKey("directoryMappings", "me")!]: { value: RULES } },
+    currentUser: { _id: "me" },
+    recentProjects: [{ path: "/code/codecast/web" }],
+    machineRoster: [{ local_project_roots: ["/code"] }],
+  };
+  expect(startFolderInStore(st as any, "pri-7")).toEqual({ path: "/code/codecast/web" });
+  expect(startFolderInStore({ ...st, priorityDetails: {} } as any, "pri-7")).toBeNull();
+});

@@ -16,6 +16,27 @@ test("a session its folder keeps in another team says whose folder it is", () =>
   expect(startLinkVerdict({ priority_id: null, team_id: "union", is_private: false }, start, "user:me", names)).toMatch(/belongs to Union/);
 });
 
+test("a priority the store holds no row of gets plain words, never a folder's team it cannot know", () => {
+  expect(startLinkVerdict({ priority_id: null, team_id: "union", is_private: false }, start, undefined, () => "Union")).toBe("This session isn't on pri-7");
+  expect(startLinkVerdict({ priority_id: null, is_private: true }, start, undefined)).toBe("This session isn't on pri-7");
+});
+
+test("the toast reads the priority's workspace off its detail when the list does not hold it (opened from its page or a pill)", async () => {
+  const { sayIfStartUnlinked } = await import("../priorityStartLink");
+  const { useInboxStore } = await import("../../store/inboxStore");
+  useInboxStore.setState({
+    priorities: {},
+    priorityDetails: { p7: { _id: "p7", short_id: "pri-7", corrections: [], other_sessions: [], base: { _id: "p7", short_id: "pri-7", workspace: "team:union" } } },
+    teams: [{ _id: "union", name: "Union" }],
+    sessions: { ...useInboxStore.getState().sessions, linkverdict1: { _id: "linkverdict1", priority_id: null, team_id: "union", is_private: false } },
+  } as any);
+  const said: string[] = [];
+  await sayIfStartUnlinked(Promise.resolve("linkverdict1"), start, (m) => said.push(m));
+  await new Promise((r) => setTimeout(r, 0));
+  // The session is in the priority's own team, so the folder is not the reason.
+  expect(said).toEqual(["This session isn't on pri-7: that milestone can't take it"]);
+});
+
 test("a refused link says why: a private session cannot sit on a team priority; anything else names the priority", () => {
   expect(startLinkVerdict({ priority_id: null, is_private: true }, start, "team:t1")).toMatch(/private.*pri-7/);
   expect(startLinkVerdict({ priority_id: null, is_private: false }, start, "team:t1")).toMatch(/isn't on pri-7/);

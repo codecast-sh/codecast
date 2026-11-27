@@ -2,10 +2,12 @@
 // the session would not land where its priority is (lib/priorityStartLink
 // startLinkForecast), one line saying so, and where sharing would fix it, one
 // press that shares a summary with the priority's team. The person presses it;
-// nothing is shared by default.
+// nothing is shared by default. When it lands on a team other than the active
+// one, one line says which.
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
-import { lookup } from "../../lib/liveEntities";
+import { activeTeamIdOf } from "../../lib/activeTeam";
+import { priorityWorkspaceIn } from "../../lib/priorityStartFolder";
 import { startLinkForecast, type StartDestination } from "../../lib/priorityStartLink";
 import { TOUCH_AREA } from "../../lib/priorityList";
 import { cn } from "../../lib/utils";
@@ -17,15 +19,18 @@ export function StartLinkNotice({ conversationId }: { conversationId: string }) 
   const sig = useInboxStore((st) => {
     const row: any = st.sessions[conversationId];
     const priority: string = row?._start?.priority ?? "";
-    const workspace = priority ? (lookup(st.priorities as Record<string, any>, priority) as { workspace?: string } | undefined)?.workspace ?? "" : "";
-    return [priority, workspace, row?._visibility ?? "", row?._team === "team" ? "1" : "", row?.git_root || row?.project_path || ""].join("\u0001");
+    const workspace = priority ? priorityWorkspaceIn(st as any, priority) ?? "" : "";
+    return [priority, workspace, row?._visibility ?? "", row?._team === "team" ? "1" : "", row?.git_root || row?.project_path || "", activeTeamIdOf(st) ?? ""].join("\u0001");
   });
-  const [priority, workspace, picked, team, path] = sig.split("\u0001");
+  const [priority, workspace, picked, team, path, activeTeam] = sig.split("\u0001");
   // The same args as the visibility picker's (NewSessionVisibilityPicker): one subscription.
   const destination = useQueryNoThrow(api.sessionVisibilityPreview.creationTeam, priority ? { path: path || undefined, priority } : "skip").data as StartDestination;
   if (!priority || isConvexId(conversationId)) return null;
   const forecast = startLinkForecast(workspace || undefined, destination, { visibility: picked || undefined, team: !!team });
-  if (!forecast) return null;
+  if (!forecast) {
+    if (!destination || workspace !== `team:${destination.team_id}` || destination.team_id === activeTeam) return null;
+    return <span data-start-link-notice="shared" className="truncate text-meta text-sol-text-dim">Shared with {destination.team_name} · on {priority}</span>;
+  }
   const words = forecast.kind === "folder"
     ? `This folder belongs to ${forecast.team}: not on ${priority}`
     : forecast.kind === "locked" ? `This folder is private: not on ${priority}` : `Private: not on ${priority}`;

@@ -6,7 +6,7 @@
 // Both apps: web says it in a toast, the phone in an alert (`say`).
 import { useInboxStore } from "../store/inboxStore";
 import type { SessionStart } from "../store/composeSlice";
-import { lookup } from "./liveEntities";
+import { priorityWorkspaceIn } from "./priorityStartFolder";
 
 /** How long after the create a refusal is still told: the server's row lands well within it. */
 const WATCH_MS = 60_000;
@@ -27,6 +27,8 @@ export function startLinkVerdict(
   if (!row || row.priority_id === undefined) return null;
   if (row.priority_id) return "linked";
   const what = start.priority ?? "the priority";
+  // A priority the store holds no row of: why is unknown here, so say only what happened.
+  if (!priorityWorkspace) return `This session isn't on ${what}`;
   if (row.team_id && priorityWorkspace !== `team:${row.team_id}`) return `This folder belongs to ${teamName(String(row.team_id)) ?? "another team"}, so the session isn't on ${what}`;
   if (row.is_private && priorityWorkspace?.startsWith("team:")) return `This session is private, so it isn't on ${what}: share it with the team to link it`;
   return `This session isn't on ${what}: that milestone can't take it`;
@@ -39,7 +41,7 @@ export function sayIfStartUnlinked<T>(created: Promise<T>, start: SessionStart |
     if (typeof id !== "string") return;
     const settle = (s: ReturnType<typeof useInboxStore.getState>): boolean => {
       const row = (s.sessions as Record<string, any>)[id];
-      const workspace = (lookup(s.priorities, start.priority!) as { workspace?: string } | undefined)?.workspace;
+      const workspace = priorityWorkspaceIn(s as any, start.priority!);
       const teamName = (teamId: string) => (s.teams ?? []).find((t: any) => String(t._id) === teamId)?.name as string | undefined;
       const verdict = startLinkVerdict(row, start, workspace, teamName);
       if (verdict && verdict !== "linked") say(verdict);

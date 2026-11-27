@@ -42,9 +42,19 @@ export function startFolderFor(
   return mapped ? { path: mapped } : null;
 }
 
-/** What the store reads for it: the priority's row, the person's folder rules and recent folders, their machines. */
-type StartFolderState = {
+/** The store's rows a priority's workspace comes from: the list's, else the detail's own copy (lib/priorityDetail `base`). */
+type PriorityRowsState = {
   priorities?: Record<string, { workspace?: string } | undefined>;
+  priorityDetails?: Record<string, { base?: { workspace?: string } } | undefined>;
+};
+
+/** A priority's workspace from whichever row the store holds: the list's, else its detail's (one opened from its page or a pill, off the list). */
+export function priorityWorkspaceIn(st: PriorityRowsState, ref: string): string | undefined {
+  return ((lookup(st.priorities as Record<string, any>, ref) ?? lookup(st.priorityDetails as Record<string, any>, ref)?.base) as { workspace?: string } | undefined)?.workspace;
+}
+
+/** What the store reads for it: the priority's row, the person's folder rules and recent folders, their machines. */
+type StartFolderState = PriorityRowsState & {
   settingsData?: Record<string, { value?: unknown } | undefined>;
   currentUser?: { _id?: unknown } | null;
   recentProjects?: ReadonlyArray<{ path: string }>;
@@ -53,9 +63,8 @@ type StartFolderState = {
 
 /** The Start folder for priority `shortId` off the store, or null (lib/priorityStartFolder startFolderFor). */
 export function startFolderInStore(st: StartFolderState, shortId: string): StartFolder | null {
-  const priority = lookup(st.priorities as Record<string, any>, shortId) as { workspace?: string } | undefined;
   const key = settingsDataKey("directoryMappings", st.currentUser?._id ? String(st.currentUser._id) : null);
   const rules = (key ? st.settingsData?.[key]?.value : undefined) as FolderRule[] | undefined;
   const roster = (st.machineRoster ?? []) as MachineCandidate[];
-  return startFolderFor(priority?.workspace, rules, (st.recentProjects ?? []).map((p) => p.path), (p) => pathOnMyMachines(roster, p));
+  return startFolderFor(priorityWorkspaceIn(st, shortId), rules, (st.recentProjects ?? []).map((p) => p.path), (p) => pathOnMyMachines(roster, p));
 }

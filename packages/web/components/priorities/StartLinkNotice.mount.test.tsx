@@ -1,5 +1,6 @@
 // The Start composer's line before Send (components/priorities/StartLinkNotice):
-// silent when the session will land on its priority's team; when it would stay
+// silent when the session will land on its priority's team, the active one (else
+// it names that team); when it would stay
 // private there, it says so and offers one press that shares a summary with
 // that team; when its folder belongs to another team, it says that.
 // Run: cd packages/web && bun test --isolate components/priorities/StartLinkNotice.mount.test.tsx
@@ -58,13 +59,37 @@ test("private on the priority's team: it says so, and one press shares a summary
   expect(share.textContent).toBe("Share summary with Codecast");
   await act(async () => { share.click(); });
   expect(row()._visibility).toBe("summary");
-  expect(notice()).toBeNull();
+  // The personal workspace is active, so the line now says where the session goes.
+  expect(notice()?.textContent).toBe("Shared with Codecast · on pri-9");
 });
 
-test("shared with the priority's team already: nothing to say", async () => {
+const activeTeam = (id: string | undefined) => useInboxStore.setState((st: any) => ({ clientState: { ...st.clientState, ui: { ...st.clientState?.ui, active_team_id: id } } }));
+
+test("shared with the priority's team, the active one: nothing to say", async () => {
+  activeTeam("cc");
   destination = { team_id: "cc", team_name: "Codecast", team_sessions: true, visibility: "full" };
   await render();
   expect(notice()).toBeNull();
+  activeTeam(undefined);
+});
+
+test("shared with the priority's team while another is active: one line says where it goes", async () => {
+  activeTeam("un");
+  destination = { team_id: "cc", team_name: "Codecast", team_sessions: true, visibility: "full" };
+  await render();
+  expect(notice()?.getAttribute("data-start-link-notice")).toBe("shared");
+  expect(notice()?.textContent).toBe("Shared with Codecast · on pri-9");
+  activeTeam(undefined);
+});
+
+test("a priority the list does not hold (opened from its page or a pill) is read off its detail", async () => {
+  useInboxStore.setState({
+    priorities: {},
+    priorityDetails: { p9: { _id: "p9", short_id: "pri-9", corrections: [], other_sessions: [], base: { _id: "p9", short_id: "pri-9", workspace: "team:cc" } } },
+  } as any);
+  destination = { team_id: "un", team_name: "Union", team_sessions: true, visibility: "full" };
+  await render();
+  expect(notice()?.textContent).toBe("This folder belongs to Union: not on pri-9");
 });
 
 test("a folder that belongs to another team: it says so, with nothing to press", async () => {
