@@ -2248,6 +2248,12 @@ diffs-container {
   border-radius: 0;
   background: var(--sv-card-bg) !important;
 }
+/* Shipping and Sleeping are compact sections inside a floating-card list:
+   their rows keep the cards' 6px inset, so the icon and title columns run
+   straight down the rail. */
+:root:not(.minimal-style) .simple-view:not(.inbox-compact) .inbox-compact [data-sv-rail] [data-session-id] {
+  margin-inline: 6px;
+}
 :root .inbox-compact [data-sv-rail] [data-session-id]:hover {
   --sv-card-bg: var(--sv-row-hover-bg);
 }

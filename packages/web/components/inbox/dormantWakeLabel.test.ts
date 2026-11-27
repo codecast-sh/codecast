@@ -15,7 +15,7 @@ describe("dormantWakeLabel", () => {
     expect(dormantWakeLabel({ kind: "workers" }, NOW)).toEqual({ what: "its subagents are still working", when: "when they finish", warn: null });
     expect(dormantWakeLabel({ kind: "trigger_unloaded" }, NOW)).toEqual({ what: "a trigger fires into it", when: "armed", warn: null });
     expect(dormantWakeLabel({ kind: "parked" }, NOW)).toEqual({ what: "parked by you", when: "on next activity", warn: null });
-    expect(dormantWakeLabel({ kind: "snoozed", at: NOW + 3_600_000 }, NOW).what).toBe("snoozed");
+    expect(dormantWakeLabel({ kind: "snoozed", at: NOW + 3_600_000 }, NOW).what).toBe("snoozed until");
   });
 
   test("a trigger carries its task for the live countdown badge", () => {
