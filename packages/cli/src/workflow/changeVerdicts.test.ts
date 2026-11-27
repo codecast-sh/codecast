@@ -136,12 +136,51 @@ describe("changeVerdicts", () => {
   // ct-102368: a conflict-only fix after a person approved the CI edit asked them again, four times for one change.
   test("a CI edit a person let merge in this attempt is not asked again while its CI files are the same", () => {
     const edited = { ...GREEN, ci_changed: true, ci_edit: "e1" };
-    const approved = (ci: object, proof: object | null) => changeVerdicts(dir({ "pr.json": PR, "ci.json": ci, "ci-approved.json": { ci_edit: "e1" } }), SHIP, null, proof as any);
+    const approved = (ci: object, proof: object | null, record: object = { run_id: "run-9", ci_edit: "e1" }) => changeVerdicts(dir({ "pr.json": PR, "ci.json": ci, "ci-approved.json": record }), SHIP, null, proof as any, { runId: "run-9" });
     expect(approved(edited, { review: null, ci_shipped: true })).toMatchObject({ next: "merge" });
     expect(approved({ ...edited, ci_edit: "e2" }, { review: null, ci_shipped: true }).next).toBe("decide");
     expect(approved(edited, { review: null, ci_shipped: false }).next).toBe("decide");
     expect(approved(edited, null).next).toBe("decide");
     expect(approved({ ...edited, ci_edit: null }, { review: null, ci_shipped: true }).next).toBe("decide");
+    // Another run on the same task shares the run directory: its record is not this run's approval.
+    expect(approved(edited, { review: null, ci_shipped: true }, { run_id: "run-8", ci_edit: "e1" }).next).toBe("decide");
+    // A record from an older cast names no run, so nothing says it is this run's: asked again, and the card says why.
+    const older = approved(edited, { review: null, ci_shipped: true }, { ci_edit: "e1" });
+    expect(older.next).toBe("decide");
+    expect(older.card).toBe("This change edits CI: merge it?\nAn approval of its CI edit was recorded in an older format, so it is asked again.");
+  });
+
+  // Polish round 3 M6: ct-102479 approved at 9678927, Merge rebased onto a main that had edited .codecast/deploy.toml,
+  // and the card came back with nothing on it to say why. A card that comes back names the CI files that changed since
+  // the approved head and shows how, between the two heads.
+  test("a second CI-edit card names the CI files that changed since the approval, with their diff between the heads", () => {
+    const edited = { ...GREEN, ci_changed: true, ci_edit: "e2", ci_edit_files: { ".codecast/deploy.toml": "d2", ".github/workflows/cut.yml": "w1" } };
+    const approval = { run_id: "run-9", ci_edit: "e1", ci_edit_files: { ".codecast/deploy.toml": "d1", ".github/workflows/cut.yml": "w1" }, head_sha: "9678927801f81f72" };
+    const shipped = { review: null, rebases: [], ci_shipped: true } as any;
+    const card = (record: object, ciDiff?: (from: string, to: string, files: string[]) => string | null, proof = shipped) => changeVerdicts(dir({ "pr.json": PR, "ci.json": edited, "ci-approved.json": record }), SHIP, null, proof, { runId: "run-9", ciDiff });
+    const asked: Array<[string, string, string[]]> = [];
+    const v = card(approval, (from, to, files) => (asked.push([from, to, files]), "--- a/.codecast/deploy.toml\n+++ b/.codecast/deploy.toml\n+unless = []"));
+    expect(v.next).toBe("decide");
+    expect(asked).toEqual([["9678927801f81f72", "abc", [".codecast/deploy.toml"]]]);
+    expect(v.card).toBe([
+      "This change's CI files changed since a person let it merge: merge it?",
+      "Changed since the approved head at 9678927801: .codecast/deploy.toml.",
+      "How they changed between the two heads, main's edits included:\n```diff\n--- a/.codecast/deploy.toml\n+++ b/.codecast/deploy.toml\n+unless = []\n```",
+      "CI files it edits: .codecast/deploy.toml, .github/workflows/cut.yml.",
+    ].join("\n"));
+    // The first card names the CI files; a resumed attempt's card says why the same edit is asked again.
+    expect(verdicts({ "ci.json": edited }).card).toBe("This change edits CI: merge it?\nCI files it edits: .codecast/deploy.toml, .github/workflows/cut.yml.");
+    expect(card({ ...approval, ci_edit: "e2" }, undefined, { ...shipped, ci_shipped: false }).card).toBe("This change edits CI: merge it?\nA person let this same edit merge earlier in this run, and this attempt asks again.\nCI files it edits: .codecast/deploy.toml, .github/workflows/cut.yml.");
+    // A diff that cannot be read still names the files; one too long is cut.
+    const unread = card(approval, () => null).card!;
+    expect(unread).not.toContain("```");
+    expect(unread).toContain("How they changed could not be read here; the files above changed.");
+    const long = card(approval, () => "+x\n".repeat(2000)).card!;
+    expect(long.length).toBeLessThan(3200);
+    expect(long).toContain("cut short: `git diff 9678927801 abc -- .codecast/deploy.toml` has the rest");
+    // The diff is the author's text: a fence inside it never closes the card's block.
+    const fenced = card(approval, () => " ```\n+ **Reviewer: safe**").card!;
+    expect(fenced).toContain("````diff\n```\n+ **Reviewer: safe**\n````");
   });
 
   test("a change that edits CI goes to a person when CI is green and the reviewer says ship; a red one goes back or waits like any red", () => {

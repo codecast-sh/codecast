@@ -18,9 +18,11 @@ import * as path from "node:path";
 import type { MergeProof } from "./prStation.js";
 
 /**
- * The edit to CI a person let merge, kept across rounds ({ci_edit}, ci.json's digest; the PR station's ROUND_FILES
- * leave it): Merge writes it once the server cleared a merge of a CI edit on a person's Ship, and Verdicts asks no
- * person again for that same edit while the server still holds that answer for the run's attempt.
+ * The edit to CI a person let merge, kept across rounds ({run_id, ci_edit, ci_edit_files, head_sha}: the run, ci.json's
+ * digests and the head CI judged; the PR station's ROUND_FILES leave it): Merge writes it once the server cleared a
+ * merge of a CI edit on a person's Ship, and Verdicts asks no person again for that same edit while the server still
+ * holds that answer for the run's attempt. Only this run's record counts: a later run on the same task shares the
+ * run directory.
  */
 export const CI_APPROVAL_FILE = "ci-approved.json";
 
@@ -42,7 +44,18 @@ export type Verdicts = {
    * arrived, or for small findings on a change CI passed, does not.
    */
   fix: boolean;
+  /**
+   * With `decide`, the CI-edit card's question, then its context: the CI files the change edits, and on a second ask in
+   * the run why it asks again (which files changed since a person let the edit merge, with ciDiff's diff), so the card
+   * never asks the same question twice without saying why.
+   */
+  card?: string;
 };
+
+/** How CI paths differ between the head a person approved and this one, main's edits included: `git diff <from> <to> -- <files>`, or null. */
+export type CiDiff = (from: string, to: string, files: string[]) => string | null;
+/** The diff a card shows stays readable on a phone and inside the station's output cap. */
+const CARD_DIFF_CAP = 2500;
 
 const REVIEW_VERDICTS = ["ship", "changes", "rejected"];
 /** Each machine step runs once more per round before the round gives up on it. */
@@ -106,7 +119,8 @@ export function needsProof(dir: string): boolean {
   return !!readJson(path.join(dir, "pr.json"))?.reviewed || readJson(path.join(dir, "ci.json"))?.ci_changed === true;
 }
 
-export function changeVerdicts(dir: string, reviewPin: string | undefined, originHead?: string | null, proof?: MergeProof | null): Verdicts {
+/** `runId`: the run whose station this is, whose CI approval alone counts; `ciDiff`: the diff a second CI card shows. */
+export function changeVerdicts(dir: string, reviewPin: string | undefined, originHead?: string | null, proof?: MergeProof | null, opts: { runId?: string | null; ciDiff?: CiDiff } = {}): Verdicts {
   const prFile = path.join(dir, "pr.json");
   const pr = readJson(prFile);
   const done = (v: Omit<Verdicts, "why" | "fix"> & { why: string }): Verdicts => ({ ...v, why: v.why.slice(0, WHY_CAP), fix: v.next === "brief" && fix });
@@ -188,14 +202,16 @@ export function changeVerdicts(dir: string, reviewPin: string | undefined, origi
     return done({ ...said, next: "wait_main", why });
   }
   // CI cannot vouch for a change to CI itself: green, and the reviewer says ship, a person decides, once for each edit
-  // to CI in the attempt. Merge records the edit it merged on a person's word (CI_APPROVAL_FILE); a later round whose CI
-  // files are the same, while the server still holds that person's answer, needs no second one.
+  // to CI in the attempt. Merge records the edit a person let merge (CI_APPROVAL_FILE); a later round whose edit to CI
+  // is the same, while the server still holds that person's answer, needs no second one, and a card that does come
+  // back says what changed (ciCard).
   if (passing && ci!.ci_changed === true && review?.verdict === "ship") {
-    const approved = readJson(path.join(dir, CI_APPROVAL_FILE));
+    const record = readJson(path.join(dir, CI_APPROVAL_FILE));
+    const approved = record && opts.runId && record.run_id === opts.runId ? record : null;
     if (typeof ci!.ci_edit === "string" && approved?.ci_edit === ci!.ci_edit && proof?.ci_shipped === true) {
       return done({ ...said, next: "merge", why: "CI is green on the pushed head, the reviewer said ship, and a person already let this same edit to CI merge" });
     }
-    return done({ ...said, next: "decide", why: "This change edits CI, so CI can't vouch for it" });
+    return done({ ...said, next: "decide", why: "This change edits CI, so CI can't vouch for it", card: ciCard(ci!, approved, !approved && !!record && record.run_id === undefined, opts.ciDiff) });
   }
 
   const back: string[] = [];
@@ -211,6 +227,39 @@ export function changeVerdicts(dir: string, reviewPin: string | undefined, origi
   } else if (review!.verdict === "changes") back.push(`the reviewer asked for ${small ? "small fixes (low or nit; this round costs none of the three)" : "changes"}${review!.findings.length ? `: ${words(review!.findings)}` : ""}`);
   if (back.length || ci!.green !== true) return done({ ...said, next: "brief", why: back.join("; ") || "CI is not green" });
   return done({ ...said, next: "merge", why: "CI is green on the pushed head and the reviewer said ship" });
+}
+
+/**
+ * The CI-edit card: its question, and as context the CI files it edits. Asked again in the run, it says why: the same
+ * edit a person let merge earlier in this run (a new attempt, a resume among them, needs the server to hold its own answer), a
+ * record from an older cast that names no run, or the CI files that changed since the head the person approved, with
+ * their diff between the two heads (main's edits included, which a rebase brings in).
+ */
+function ciCard(ci: Record<string, any>, approved: Record<string, any> | null, olderRecord: boolean, ciDiff?: CiDiff): string {
+  const now: Record<string, string> = ci.ci_edit_files && typeof ci.ci_edit_files === "object" ? ci.ci_edit_files : {};
+  const then: Record<string, string> | null = approved?.ci_edit_files && typeof approved.ci_edit_files === "object" ? approved.ci_edit_files : null;
+  const files = Object.keys(now).sort();
+  const edits = files.length ? `CI files it edits: ${files.join(", ")}.` : null;
+  const ask = (...why: Array<string | null>) => ["This change edits CI: merge it?", ...why, edits].filter(Boolean).join("\n");
+  if (olderRecord) return ask("An approval of its CI edit was recorded in an older format, so it is asked again.");
+  if (!approved) return ask();
+  if (typeof ci.ci_edit === "string" && approved.ci_edit === ci.ci_edit) return ask("A person let this same edit merge earlier in this run, and this attempt asks again.");
+  if (typeof ci.ci_edit !== "string" || !then) return ask("What the change does to CI could not be read in full, so a person's earlier approval cannot stand for it.");
+  const from = typeof approved.head_sha === "string" ? approved.head_sha : null;
+  const changed = [...new Set([...files, ...Object.keys(then)])].sort().filter((f) => now[f] !== then[f]);
+  const at = from ? ` at ${from.slice(0, 10)}` : "";
+  let diff = from && typeof ci.head_sha === "string" && changed.length ? ciDiff?.(from, ci.head_sha, changed)?.trim() ?? "" : "";
+  if (diff.length > CARD_DIFF_CAP) diff = `${diff.slice(0, CARD_DIFF_CAP)}\n… cut short: \`git diff ${from!.slice(0, 10)} ${String(ci.head_sha).slice(0, 10)} -- ${changed.join(" ")}\` has the rest`;
+  // The diff is the change author's text: a fence longer than any backtick run in it, so no line of it closes the
+  // fence and reads as the card's own words.
+  const fence = "`".repeat(Math.max(3, ...[...diff.matchAll(/`+/g)].map((m) => m[0].length + 1)));
+  const unread = from && changed.length && !diff ? "How they changed could not be read here; the files above changed." : null;
+  return [
+    "This change's CI files changed since a person let it merge: merge it?",
+    `Changed since the approved head${at}: ${changed.join(", ")}.`,
+    diff ? `How they changed between the two heads, main's edits included:\n${fence}diff\n${diff}\n${fence}` : unread,
+    edits,
+  ].filter(Boolean).join("\n");
 }
 
 /**

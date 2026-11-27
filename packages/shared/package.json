@@ -115,6 +115,7 @@
     "./contracts/flowPool": "./contracts/flowPool.ts",
     "./contracts/flowStagePlan": "./contracts/flowStagePlan.ts",
     "./contracts/runRestart": "./contracts/runRestart.ts",
+    "./contracts/deployStop": "./contracts/deployStop.ts",
     "./contracts/runSender": "./contracts/runSender.ts",
     "./contracts/ownResults": "./contracts/ownResults.ts",
     "./contracts/repoFlows": "./contracts/repoFlows.ts",

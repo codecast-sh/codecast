@@ -50,6 +50,8 @@ export interface CiResult {
    * head. An approval of the edit holds while this is the same; null when it could not be read.
    */
   ci_edit: string | null;
+  /** Each of those CI paths' own digest, by path, so a second card can name which of them changed. */
+  ci_edit_files: Record<string, string> | null;
   /** What was still running, or never started, when the deadline passed. */
   pending: string[];
   /** Of `pending`, the workflows that never started on the head. */
@@ -220,7 +222,7 @@ export async function runCiStation(o: CiStationOptions): Promise<{ result: CiRes
   const file = path.join(o.dir, "ci.json");
   // A verdict left by an earlier visit, perhaps on another head, must never stand in for this one.
   try { fs.rmSync(file, { force: true }); } catch {}
-  const result: CiResult = { green: false, head_sha: null, tested_main_sha: null, failing: [], preexisting: [], unjudged: [], blocked_by_main: false, ci_changed: false, ci_edit: null, pending: [], not_started: [], reran: false, timed_out: false, no_ci: false, head_moved: false, observed_head: null };
+  const result: CiResult = { green: false, head_sha: null, tested_main_sha: null, failing: [], preexisting: [], unjudged: [], blocked_by_main: false, ci_changed: false, ci_edit: null, ci_edit_files: null, pending: [], not_started: [], reran: false, timed_out: false, no_ci: false, head_moved: false, observed_head: null };
   let summary: string;
   try {
     if (!(o.deadlineMs > 0)) throw new Error("--deadline is not a duration (90s, 60m, 2h, 1h30m)");
@@ -581,16 +583,19 @@ class Station {
   /**
    * A digest of the CI paths the pull request touches, each as the head's tree holds it (its mode and blob sha, or
    * absent when the change removed it), or null when the tree could not be read whole: what a person approves when
-   * they let a CI edit merge. A mode-only change keeps the blob sha, so the mode counts too.
+   * they let a CI edit merge. A mode-only change keeps the blob sha, so the mode counts too. Strict on purpose: the
+   * person approved the edit in its context, so any change to such a file (main's edits a rebase brings in, a step
+   * moved to another job) asks again. `files` holds each path's own digest, so a second card can name what changed.
    */
-  private ciEdit(ciFiles: string[], head: string): string | null {
+  private ciEdit(ciFiles: string[], head: string): { digest: string; files: Record<string, string> } | null {
     const r = this.call(["api", `repos/${this.repo}/git/trees/${head}?recursive=1`, "--jq", `(if .truncated then "truncated" else empty end), (.tree[] | select(.type != "tree") | "\\(.mode) \\(.sha) \\(.path)")`]);
     if (r.code !== 0) return null;
     const lines = r.out.split("\n").map((l) => l.trim()).filter(Boolean);
     if (lines.includes("truncated")) return null;
     const at = new Map(lines.map((l) => { const [mode, sha, ...p] = l.split(" "); return [p.join(" "), `${mode} ${sha}`] as const; }));
-    const entries = [...new Set(ciFiles)].sort().map((f) => `${at.get(f) ?? "absent"} ${f}`);
-    return createHash("sha256").update(entries.join("\n")).digest("hex").slice(0, 16);
+    const hash = (text: string) => createHash("sha256").update(text).digest("hex").slice(0, 16);
+    const entries = [...new Set(ciFiles)].sort().map((f) => [f, `${at.get(f) ?? "absent"} ${f}`] as const);
+    return { digest: hash(entries.map(([, e]) => e).join("\n")), files: Object.fromEntries(entries.map(([f, e]) => [f, hash(e)])) };
   }
 
   /**
@@ -650,7 +655,9 @@ class Station {
     const ciPatterns = [...ALWAYS_CI, ...this.baseCiPaths(tested ?? base)];
     const ciFiles = files ? files.filter((f) => ciPatterns.some((p) => filterMatches(f, p))) : null;
     result.ci_changed = !files || ciFiles!.length > 0;
-    result.ci_edit = ciFiles?.length ? this.ciEdit(ciFiles, pr.headRefOid) : null;
+    const edit = ciFiles?.length ? this.ciEdit(ciFiles, pr.headRefOid) : null;
+    result.ci_edit = edit?.digest ?? null;
+    result.ci_edit_files = edit?.files ?? null;
     for (const run of failedRuns) {
       const workflow = run.workflowName ?? `run ${run.databaseId}`;
       const bad = this.jobsOf(run.databaseId).filter((j) => j.status === "completed" && !JOB_PASSED.has(j.conclusion));

@@ -18,7 +18,7 @@ async function station(gh: Gh, opts: { deadlineMs?: number; dir?: string; head?:
   if (out.written) expect(JSON.parse(fs.readFileSync(path.join(dir, "ci.json"), "utf-8"))).toEqual(out.result);
   return { ...out, lines };
 }
-const verdict = (r: Partial<CiResult>): CiResult => ({ green: false, head_sha: HEAD, tested_main_sha: null, failing: [], preexisting: [], unjudged: [], blocked_by_main: false, ci_changed: false, ci_edit: null, pending: [], not_started: [], reran: false, timed_out: false, no_ci: false, head_moved: false, observed_head: null, ...r });
+const verdict = (r: Partial<CiResult>): CiResult => ({ green: false, head_sha: HEAD, tested_main_sha: null, failing: [], preexisting: [], unjudged: [], blocked_by_main: false, ci_changed: false, ci_edit: null, ci_edit_files: null, pending: [], not_started: [], reran: false, timed_out: false, no_ci: false, head_moved: false, observed_head: null, ...r });
 /** CI red on its first run (each job id one lower), then the rollup given, after the station's rerun. */
 const redAfterRerun = (rollup2: Rollup[], extra: Partial<Parameters<typeof fakeGh>[0]>) =>
   fakeGh({ polls: [{ rollup: rollup2.map((c) => ({ ...c, detailsUrl: c.detailsUrl.replace(/job\/(\d+)/, (_: string, n: string) => `job/${Number(n) - 1}`) })) }, { rollup: rollup2 }], ...extra });
@@ -297,9 +297,20 @@ describe("cast flow ci: splitting a red head (routing only, never green)", () =>
     // A different content, a mode-only change (same blob), and the file removed are each another edit.
     const others = [await edit(at("100644", "222")), await edit(at("100755", "111")), await edit(["100644 aaa src/app.ts"])].map((r) => r.ci_edit);
     expect(new Set([a.ci_edit, ...others]).size).toBe(4);
+    // Each CI path keeps its own digest, so a second card can name the file that changed.
+    expect(Object.keys(a.ci_edit_files!)).toEqual([".github/workflows/ci.yml"]);
     // A tree GitHub cut short, or no tree at all, names no edit: a person is asked.
     expect((await edit(["truncated", ...at("100644", "111")])).ci_edit).toBeNull();
     expect((await edit(undefined)).ci_edit).toBeNull();
+  });
+
+  // Polish round 3, refuted digest: hashing only the added and removed lines let a step moved from an unprivileged job
+  // into the one holding production secrets keep its approval. The person approved the edit in its context.
+  test("a CI edit whose file changed anywhere is another edit: main's edits around it, or a step moved to another job, ask again", async () => {
+    const pass = { polls: [{ rollup: [check("lint", "SUCCESS", 1)] }], files: [".github/workflows/ci.yml"] };
+    const edit = (sha: string) => station(fakeGh({ ...pass, tree: [`100644 ${sha} .github/workflows/ci.yml`] })).then((s) => s.result.ci_edit);
+    // The same step, once added to `lint` and once to `release`: the same added line, another file.
+    expect(await edit("1111111")).not.toBe(await edit("2222222"));
   });
 
   test("the real ci.yml's summary job is no failure of its own beside a matrix job's (`test-web (1/4)`, `typecheck (web)`)", async () => {

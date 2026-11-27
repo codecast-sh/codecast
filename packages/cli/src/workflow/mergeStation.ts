@@ -179,9 +179,12 @@ async function mergeStation(args: MergeStationArgs): Promise<MergeStationResult>
   } catch (err) {
     return refuse(message(err));
   }
-  // The server cleared a CI edit only on a person's Ship: a later round with the same edit asks nobody again.
+  // The server cleared a CI edit only on a person's Ship: a later round with the same edit asks nobody again. The record
+  // names this run, so a later run on the same task (same run directory) never reads it as its own, and the head the
+  // person saw, so a second card can show what changed since.
   if (ci.ci_changed === true && typeof ci.ci_edit === "string") {
-    try { fs.writeFileSync(path.join(runDir, CI_APPROVAL_FILE), JSON.stringify({ ci_edit: ci.ci_edit }) + "\n"); } catch {}
+    const approval = { run_id: args.runId, ci_edit: ci.ci_edit, ...(ci.ci_edit_files ? { ci_edit_files: ci.ci_edit_files } : {}), head_sha: head };
+    try { fs.writeFileSync(path.join(runDir, CI_APPROVAL_FILE), JSON.stringify(approval) + "\n"); } catch {}
   }
 
   // A merge an earlier attempt made whose station ended before it said so: what landed, and its deploys again.

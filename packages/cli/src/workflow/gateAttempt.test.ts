@@ -66,6 +66,15 @@ describe("a person's answer at a gate", () => {
     const builds = fs.readFileSync(path.join(dir, "builds.log"), "utf8").trim().split("\n");
     expect(builds[2]).toMatch(/^Revise it first: find why it goes silent on garbled calls\|Decide:/);
   }, 30000);
+
+  // Polish round 3: a card's option label came back as the answer's words ("S: Approve merge"), and a later brief
+  // carried "Approve merge" after its findings as if the person had written it.
+  test("picked by its key with only the option's label hands on no note", async () => {
+    answers = [{ gate_response: "R", gate_answer: "Revise" }, "S"];
+    expect(await run()).toBe("completed");
+    const builds = fs.readFileSync(path.join(dir, "builds.log"), "utf8").trim().split("\n");
+    expect(builds[2]).toMatch(/^\|Decide:/);
+  }, 30000);
 });
 
 // Oct 26: with no card standing, the gate asked its own Ship / Revise / Drop

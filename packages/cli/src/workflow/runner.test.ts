@@ -3,7 +3,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { parseWorkflowSource, parseWorkflowFile, validateWorkflow } from "./parser.js";
-import { runWorkflow, reportRunStopped, refreshedOnResume, graphToPushPayload, parseGateEdgeLabel, gatePayload, stationTitle, runRegistrationIsFatal, buildNodePrompt, PRESENTER_BASE, type RunOptions } from "./runner.js";
+import { runWorkflow, reportRunStopped, refreshedOnResume, graphToPushPayload, parseGateEdgeLabel, gatePayload, stationTitle, runRegistrationIsFatal, buildNodePrompt, expandScriptVars, PRESENTER_BASE, type RunOptions } from "./runner.js";
 import { BUILTIN_WORKFLOW_TEMPLATES } from "./templates.js";
 import { handTimeouts } from "./handWatch.js";
 import { isolateCodecastDirEachTest } from "../test-helpers/codecastDir.js";
@@ -1403,12 +1403,37 @@ describe("gatePayload asker", () => {
   });
   // A card about one repository's change, asked from a session in another, never said which repository it merges into.
   test("a run that merges a change names the repository first; a question that names it, or a run with no change, stands", () => {
-    const g = parseWorkflowSource(src);
+    // A run lands a change when its graph has a landing station (Merge, Ship, Land), whatever it declares it takes.
+    const merging = src.replace("exit [shape=Msquare]; start -> card_write -> decide; decide -> exit", 'ship [shape=parallelogram, script="true"]; exit [shape=Msquare]; start -> card_write -> decide; decide -> ship -> exit');
+    const g = parseWorkflowSource(merging);
     const node = g.nodes.get("decide")!;
     expect(gatePayload(node, g, { repo_name: "acme-app", branch: "codecast/change-ct-1" }).prompt).toBe("In acme-app: Ship?");
-    const named = parseWorkflowSource(src.replace('prompt="Ship?"', 'prompt="Ship this acme-app fix?"'));
+    const named = parseWorkflowSource(merging.replace('prompt="Ship?"', 'prompt="Ship this acme-app fix?"'));
     expect(gatePayload(named.nodes.get("decide")!, named, { repo_name: "acme-app", branch: "b" }).prompt).toBe("Ship this acme-app fix?");
     expect(gatePayload(node, g, { repo_name: "acme-app" }).prompt).toBe("Ship?");
+    // A flow with no landing station lands nothing, though its run has a worktree and so a branch, and even when it
+    // takes one (a review or intent run); an exit named Ship is not a station.
+    const plain = parseWorkflowSource(src.replace("digraph g { ", 'digraph g { graph [takes="task,branch"]; '));
+    expect(gatePayload(plain.nodes.get("decide")!, plain, { repo_name: "acme-app", branch: "codecast/review-ct-1" }).prompt).toBe("Ship?");
+    const exitNamedShip = parseWorkflowSource(src.replace("exit [shape=Msquare]", "ship [shape=Msquare]; exit [shape=Msquare]"));
+    expect(gatePayload(exitNamedShip.nodes.get("decide")!, exitNamedShip, { repo_name: "acme-app", branch: "b" }).prompt).toBe("Ship?");
+    // The shipped line lands through its Ship station and declares no takes: its Decide card names the repository.
+    const line = parseWorkflowSource(BUILTIN_WORKFLOW_TEMPLATES.line);
+    expect(line.takes ?? []).not.toContain("branch");
+    expect(gatePayload(line.nodes.get("decide")!, line, { repo_name: "acme-app", branch: "codecast/line-ct-1" }).prompt).toMatch(/^In acme-app: /);
+  });
+  // Polish round 3: the change flow's CI-edit card is a segment's gate; cards from cast 1.1.316 named no repository, and
+  // its reviewer's note opened with an answer ("Yes, and nothing new is in the way") to a question the card dropped.
+  test("the change flow's CI-edit card names the repository, then Verdicts' card, then the reviewer's own question", () => {
+    const g = parseWorkflowSource(BUILTIN_WORKFLOW_TEMPLATES.change);
+    const bin = fs.mkdtempSync(path.join(os.tmpdir(), "ci-card-"));
+    fs.writeFileSync(path.join(bin, "cast"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    const card = "This change edits CI: merge it?\nCI files it edits: .github/workflows/ci.yml.";
+    const context: Record<string, string> = { task_id: "ct-1", "verdicts.json": JSON.stringify({ next: "decide", card }), review_question: "Can a release go out from any machine?", repo_name: "acme-app", branch: "codecast/change-ct-1" };
+    const said = Bun.spawnSync(["bash", "-c", expandScriptVars(g.nodes.get("ci_card")!.script!, context)], { env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } });
+    fs.rmSync(bin, { recursive: true, force: true });
+    context["ci_card.output"] = said.stdout.toString().trim();
+    expect(gatePayload(g.nodes.get("decide__decide")!, g, context).prompt).toBe(`In acme-app: ${card}\n**The reviewer's question:** Can a release go out from any machine?`);
   });
 });
 

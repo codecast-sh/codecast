@@ -7,6 +7,7 @@
 import { SEGMENT_SEP, takesSessionChange, type FlowEdgeIn, type FlowNodeIn } from "@codecast/shared/contracts/flowPool";
 import { entityRoute } from "@codecast/shared/entities";
 import { verdictOnHead } from "@codecast/shared/contracts/deployTargets";
+import { failedDeploysOf } from "@codecast/shared/contracts/deployStop";
 import { journeyStages, targetsFromLine, withRunDeploys, type Journey, type TargetState } from "./journey";
 import { gateWaitWords, holdWords, journeyWords, sentBackWords, stopTitle, type JourneyTone } from "./journeyWords";
 import { landedSha } from "./runRecord";
@@ -159,16 +160,6 @@ function stopDetail(run: ChangeRun, graph: ChangeGraph, title: string, landed: b
   return parts.length ? parts.map((p, i) => (i ? lower(p) : p)).join(" · ") : null;
 }
 
-/** The deploys a Deploy stop names as failed (awaitDeploy.ts failedWords: "The deploy that carried 929c5d8 failed: desktop
- *  dp-3559 (Stopped at Gate: …), web dp-12.", or "No deploy took 929c5d8 out: cli dp-3789 stopped at Send before sending
- *  anything (…)."), by target, each once. */
-function failedDeploys(reason: string | null | undefined): Array<{ target: string; deploy: string; unsent: boolean }> {
-  const list = reason?.match(/(?:deploy that carried \S+ failed|No deploy took \S+ out):\s*([\s\S]*)$/)?.[1].replace(/\([^)]*\)/g, "") ?? "";
-  const out = new Map<string, { deploy: string; unsent: boolean }>();
-  for (const m of list.matchAll(/\b([a-z][a-z0-9-]{0,31}) (dp-\d+)\b( stopped at \S+ before sending anything)?/g)) if (!out.has(m[1])) out.set(m[1], { deploy: m[2], unsent: !!m[3] });
-  return [...out].map(([target, f]) => ({ target, ...f }));
-}
-
 /**
  * A change on main whose deploy failed: it is landed, and for each target that deploy failed on, where the change
  * stands there now from the deploy records (`targets`, deploy reach): live in a later deploy, going out in one, else
@@ -176,7 +167,7 @@ function failedDeploys(reason: string | null | undefined): Array<{ target: strin
  * the target carries it). Without reach, the failed deploys the reason names.
  */
 function deployFailedWords(run: ChangeRun, targets: ReadonlyArray<TargetState>): { words: string; notSent: boolean } | null {
-  const failed = failedDeploys(run.fail_reason);
+  const failed = failedDeploysOf(run.fail_reason);
   if (!failed.length) return null;
   const now = failed.map((f) => ({ ...f, at: targets.find((t) => t.name === f.target) }));
   const live = now.filter((f) => f.at?.state === "live");

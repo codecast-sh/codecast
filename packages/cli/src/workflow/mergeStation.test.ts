@@ -178,15 +178,19 @@ describe("cast flow merge", () => {
     const s = setup();
     try {
       const head = s.branch(".github/workflows/ci.yml", "on: push\n");
-      s.ci(head, s.main(), { ci_changed: true });
+      s.ci(head, s.main(), { ci_changed: true, ci_edit: "e1", ci_edit_files: { ".github/workflows/ci.yml": "w1" } });
       const refusal = "this change edits CI; a person must answer Ship on this run's card";
       s.answers["/cli/workflow-runs/clear"] = () => { throw new Error(refusal); };
       expect(await s.run()).toEqual({ code: 2, line: refusal });
       expect(s.posts.find((p) => p.path === "/cli/workflow-runs/clear")!.body).toMatchObject({ head_sha: head, ci_changed: true });
       expect(s.merged()).toBe(false);
+      // A refused clearance records no approval: only the server's clearance says a person let the edit merge.
+      expect(existsSync(join(s.runDir, "ci-approved.json"))).toBe(false);
       // Once a person has answered Ship, the server clears it and it merges; green is still required.
       s.answers["/cli/workflow-runs/clear"] = () => ({ node_id: "merge" });
       expect((await s.run()).code).toBe(0);
+      // What a person let merge, for Verdicts: this run's, the edit and each CI file's, and the head they approved.
+      expect(JSON.parse(readFileSync(join(s.runDir, "ci-approved.json"), "utf-8"))).toEqual({ run_id: "run_1", ci_edit: "e1", ci_edit_files: { ".github/workflows/ci.yml": "w1" }, head_sha: head });
     } finally { s.done(); }
   }, T);
 
