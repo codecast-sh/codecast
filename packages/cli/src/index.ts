@@ -122,7 +122,6 @@ import {
   type Workspace,
 } from "./resolveWorkspace.js";
 import { listProfiles, saveProfile, verifyActiveIdentity, switchFleetTo, launchProfileName, deleteProfile, getAccountsHeartbeatPayload, CcAccountError, accountLaunchInfo, accountTokenInfo, writeAccountToken, removeAccountToken, ensureProfileStore, profileStoreDir, adoptProfileStoreCredential, auditProfileIdentities, repairProfileIdentities, credentialHealth, readActiveCredential, type ProfileAudit } from "./ccAccounts.js";
-import { setReserved } from "./ccProfileFlags.js";
 import { buildAccountUsage, buildUsageReport, loadLocalUsageProfiles, renderAccountUsage, renderUsageReport } from "./usageCommand.js";
 import { recoveryModeOf, titleLine, type RecoveryMode } from "@codecast/shared/contracts";
 import { TRIGGER_PRECHECK_MODES, triggerPrecheckMode, type TriggerPrecheckMode } from "@codecast/shared/contracts";
@@ -4484,6 +4483,7 @@ accountsCmd
   .requiredOption("--for <job>", "what they are kept for, e.g. reviews")
   .action(async (names: string[], opts: { for: string }) => {
     try {
+      const { setReserved } = await import("./ccProfileFlags.js");
       const changed = setReserved(names, opts.for.trim());
       console.log(changed.length ? `${c.green}✓${c.reset} reserved ${changed.map((n) => `${c.cyan}${n}${c.reset}`).join(", ")} for ${opts.for.trim()}` : `${c.dim}already reserved for ${opts.for.trim()}${c.reset}`);
     } catch (err) {
@@ -4498,6 +4498,7 @@ accountsCmd
   .description("Give reserved profiles back to auto-switch")
   .action(async (names: string[]) => {
     try {
+      const { setReserved } = await import("./ccProfileFlags.js");
       const changed = setReserved(names, null);
       console.log(changed.length ? `${c.green}✓${c.reset} released ${changed.map((n) => `${c.cyan}${n}${c.reset}`).join(", ")}` : `${c.dim}none of them was reserved${c.reset}`);
     } catch (err) {
@@ -5720,28 +5721,6 @@ program
   .action(async (o: { json?: boolean }) => {
     const { runQueueCommand } = await import("./queueCommand.js");
     await runQueueCommand(o);
-  });
-
-const slotCmd = program
-  .command("slot")
-  .description("Named slots on this machine: at most a few holders of one name at once, none while memory is short (cast config <name>.per_machine <n>)");
-slotCmd
-  .command("run")
-  .description("Run a command once it holds a place in a slot, and give the place back when it ends; a wait that runs out exits 75")
-  .requiredOption("--name <name>", "The slot, e.g. local_ci (cast slot ls lists them)")
-  .option("--wait <dur>", "Longest to wait for a place (90s, 15m, 1h); default: until one frees")
-  .argument("<cmd...>", "The command, after --")
-  .action(async (cmd: string[], o: { name: string; wait?: string }) => {
-    const { runSlotRun } = await import("./slotCommand.js");
-    await runSlotRun(cmd, o);
-  });
-slotCmd
-  .command("ls")
-  .description("Each slot's cap, holders and waiters")
-  .option("--json", "Print them as JSON")
-  .action(async (o: { json?: boolean }) => {
-    const { runSlotLs } = await import("./slotCommand.js");
-    runSlotLs(o);
   });
 
 program
@@ -13134,55 +13113,6 @@ program
       console.log("No desktop update applied (already current, app running, or unavailable). Use --force to reinstall.");
     }
     process.exit(applied ? 0 : 1);
-  });
-
-program
-  .command("force-update")
-  .description("Set the minimum CLI version machines update to: every machine (platform staff) or a team's (its admins and its Release Captain raise it, its admins lower or clear it)")
-  .argument("[version]", "Minimum version required (e.g., 1.0.12)")
-  .option("--team <team>", "Move this team's floor; without it only platform staff may run this, and it sets every machine's floor")
-  .option("--deploy <deploy>", "A live CLI release's deploy (dp-N): raise its team's floor only when the daemon changed since the release the team was last forced onto, wait for the team's machines, and record both on the deploy")
-  .option("--wait <minutes>", "With --deploy: how long to wait for the team's online machines to run it", "20")
-  .option("--lower-to <version>", "With --team: lower the team's floor to this version (team admins)")
-  .option("--clear", "With --team: clear the team's floor (team admins)")
-  .action(async (version: string | undefined, options: { team?: string; deploy?: string; wait: string; lowerTo?: string; clear?: boolean }) => {
-    const config = readConfig();
-    if (!config?.auth_token || !config?.convex_url) {
-      console.error("Not authenticated. Run: cast auth");
-      process.exit(1);
-    }
-    const { convex_url: convexUrl, auth_token: authToken, user_id: userId } = config;
-    const setGlobal = async (v: string) => {
-      const sync = new SyncService({ convexUrl, authToken, userId });
-      try { await sync.getClient().mutation("systemConfig:setMinCliVersion" as any, { version: v, api_token: authToken }); return true; }
-      catch (err) { if (String(err instanceof Error ? err.message : err).includes("Admin access required")) return false; throw err; }
-    };
-    const [{ runForceUpdate }, { updater }] = await Promise.all([import("./forceUpdate.js"), import("./update.js")]);
-    try {
-      const code = await runForceUpdate(version, options, {
-        latest: async () => (await updater.fetchManifest())?.version ?? null,
-        setGlobal,
-        team: async (name) => { const ws = await writeWorkspace(name, { teamRequired: true }); return ws.kind === "team" ? { teamId: ws.teamId, name: ws.name ?? name } : null; },
-        activeTeam: async () => { const ws = resolveWorkspaceForRead(await workspaceRoster()); return ws.kind === "team" ? (ws.name ?? null) : null; },
-        post: (p, body) => cliPost(p, body, { throwOnError: true }),
-        finish: async (v) => {
-          const { finishCliRelease } = await import("./releaseFinish.js");
-          return finishCliRelease({
-            root: process.cwd(), deploy: options.deploy!, version: v, waitMs: (Number(options.wait) || 0) * 60_000,
-            post: (p, body) => cliPost(p, body, { throwOnError: true }), fromSession: callingSession(), setGlobal,
-            // No token: the global floor alone, not the caller's teams' raised over it.
-            globalFloor: async () => (await new SyncService({ convexUrl, authToken, userId }).getClient().query("systemConfig:getMinCliVersion" as any, {})) as string | null,
-          });
-        },
-        fromSession: callingSession(),
-        log: (l) => console.log(l),
-        error: (l) => console.error(l),
-      });
-      process.exit(code);
-    } catch (err) {
-      console.error(`${options.deploy ? "Release finish" : "force-update"} failed: ${err instanceof Error ? err.message : String(err)}`);
-      process.exit(1);
-    }
   });
 
 program
