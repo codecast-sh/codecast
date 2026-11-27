@@ -85,8 +85,11 @@ describe("milestoneStateOf", () => {
     expect(orderByState([s("working", 20, false, "mine"), theirs]).map((x) => x.id)).toEqual(["theirs", "mine"]);
   });
 
-  test("done is done, whatever still asks on it", () => {
-    expect(milestoneStateOf(m([s("needs_you", 1)], true), OWN)).toEqual({ kind: "done" });
+  test("needs you outranks done: a done milestone asks while a session of its asks, and is done once it stops", () => {
+    const ask = s("needs_you", 1);
+    expect(milestoneStateOf(m([s("working", 9), ask], true), OWN)).toEqual({ kind: "needs_you", session: ask });
+    expect(milestoneStateOf(m([s("working", 9), s("idle", 1)], true), OWN)).toEqual({ kind: "done" });
+    expect(milestoneStateOf(m([], true), OWN)).toEqual({ kind: "done" });
   });
 
   test("no live session: start on the owner's own active priority, else nothing", () => {

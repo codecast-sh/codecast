@@ -92,7 +92,10 @@ const ASKING_SECTIONS: ReadonlySet<InboxSectionKey> = new Set(["questions", "nee
  * asks where the inbox counts it (nestedSectionOf), or when its own ask is
  * what lifted its lead into Questions. A role's session riding
  * its lead is the role's to triage: it wears the lead's mark, and the lead's
- * conversation is where to answer. On the sidebar a session with an ask in
+ * conversation is where to answer, unless the session has an ask of its own
+ * in the Decisions queue: then it asks, answered in itself. A row the inbox
+ * lifts into Questions is drawn there even while a hidden bucket also holds
+ * it. On the sidebar a session with an ask in
  * its Decisions section (the viewer's queue) asks wherever it sits, and one
  * the inbox does not otherwise draw is drawn there as an ask; the phone's
  * Decisions are its placed Questions. On the sidebar a hosted conversation that
@@ -122,14 +125,16 @@ export function inboxMarkOf(
   if (inbox === "phone") live.stopped = false;
   const stopped = inbox === "sidebar" && !!hostedStopOf(row as any, state.messages?.[id] as any);
   const hosted = isHostedAgentType(row.agent_type);
-  if (queued && (drawnHiddenOf(placed, id) || (!drawnSectionOf(placed, id) && !drawnParentOf(placed, id)))) return asked;
-  const hidden = drawnHiddenOf(placed, id);
-  if (hidden) return { mark: sessionStatusOf({ row, section: cardSectionOf(hidden, undefined), now, live, hosted }), asks: false, target: id };
   const section = drawnSectionOf(placed, id);
+  // A row the inbox lifts into Questions (an ask on a stashed or snoozed session) is drawn there, whatever bucket also holds it.
+  const hidden = section === "questions" ? null : drawnHiddenOf(placed, id);
+  if (queued && (hidden || (!section && !drawnParentOf(placed, id)))) return asked;
+  if (hidden) return { mark: sessionStatusOf({ row, section: cardSectionOf(hidden, undefined), now, live, hosted }), asks: false, target: id };
   if (!section) {
     const parent = drawnParentOf(placed, id);
     if (!parent) return null;
-    if (isUnderRole(row)) return inboxMarkOf(state, parent, { inbox, now, focusedId });
+    // A role's session rides its lead's card, except for an ask of its own in Decisions: the answer is in the session itself.
+    if (isUnderRole(row)) return queued ? asked : inboxMarkOf(state, parent, { inbox, now, focusedId });
     // Counted where the inbox counts it nested, or the ask its lead was lifted into Questions for (askingChildParents).
     const counted = placed.nestedSectionOf.get(id);
     const asks = queued || (!!counted && ASKING_SECTIONS.has(counted) && !stopped) || (drawnSectionOf(placed, parent) === "questions" && !!live.asking);

@@ -2,7 +2,8 @@
 // each workspace the viewer belongs to with Priorities on, its typing per day
 // (convex priorities.history, an enrichment read: other workspaces' typing is
 // not in the store) split by where the viewer's priorities rank today (the
-// store's priorityRanks, every held workspace, fed here).
+// store's priorityRanks, every held workspace, fed by the sync host:
+// DashboardLayout HostFeeders, useSyncPriorityRanks).
 import { useMemo } from "react";
 import { useQueries } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";

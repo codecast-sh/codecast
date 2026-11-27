@@ -78,6 +78,10 @@ export const MILESTONE_STATE_WORD: Record<Exclude<MilestoneStateKind, "none">, s
  * nobody on it: a milestone whose only live sessions are stashed offers a New
  * session to its owner. Rows always draw the inbox's own mark.
  *
+ * Needs you outranks done. A done milestone with a session the inbox counts
+ * as needing you reads Needs you and sits with the open milestones, never in
+ * the DONE fold, until the ask is answered. Then it returns to DONE.
+ *
  * `live` answers what the inbox draws (hooks/usePriorityModels liveMarkOf
  * over store/inboxMark inboxMarkOf), or undefined when it draws nothing: then
  * the server's state stands, a needs_you there read as idle whoever owns it

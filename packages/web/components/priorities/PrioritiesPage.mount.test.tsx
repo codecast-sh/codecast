@@ -250,7 +250,10 @@ test("DONE n and POLISH x/y: closed they share one line, Done first; open, the c
     await act(async () => { (b.querySelector('[data-section="polish"]') as HTMLElement).click(); });
     // Polish open: its head on its own line over its milestones; Done stays before it, nothing repeated below.
     const polish = b.querySelector('[data-section-open="polish"]')!;
-    expect(polish.querySelector('[data-section="polish"]')!.getAttribute("aria-expanded")).toBe("true");
+    const polishHead = b.querySelector('[data-section="polish"]')!;
+    expect(polishHead.getAttribute("aria-expanded")).toBe("true");
+    // The head comes right before its milestones (a line break between them is CSS).
+    expect(polishHead.nextElementSibling).toBe(polish);
     expect([...polish.querySelectorAll("li[data-milestone]")].map((li) => li.getAttribute("data-milestone"))).toEqual(["p1", "p2"]);
     expect(states(b)).toEqual({ s1: "start", p1: "done", p2: "start" });
     expect(heads()).toEqual(["done:Done 2:false", "polish:Polish 1/2:true"]);
@@ -258,6 +261,33 @@ test("DONE n and POLISH x/y: closed they share one line, Done first; open, the c
     expect([...b.querySelectorAll("li[data-milestone]")].map((li) => li.getAttribute("data-milestone"))).toEqual(["s1", "s2", "s3", "p1", "p2"]);
     expect(b.querySelector('[data-milestone="s2"] [data-status-mark="done"]')).not.toBeNull();
   } finally {
+    await page.unmount();
+  }
+}, 60_000);
+
+test("needs you outranks done: a done milestone whose session asks sits with the open ones, out of DONE, until the ask is answered", async () => {
+  const r = row(12, "Landed but asking", 1, [
+    step("s1", "Open one", "critical"),
+    step("s2", "Landed, still asking", "critical", true, { done_at: NOW - DAY }),
+    step("s3", "Landed two", "critical", true, { done_at: NOW - 2 * DAY }),
+  ], { links: [links("s2", [sess("relpipe", "Codecast release pipeline", "needs_you", 1)])] });
+  const unseed = seedNeedsYou("relpipe");
+  const page = await mount(view({ rows: [r] }));
+  try {
+    const b = block(page.container, "pri-12");
+    const head = () => b.querySelector('[data-section="done"]')!;
+    const openRows = () => [...b.querySelectorAll("li[data-milestone]")].filter((li) => !li.closest("[data-section-open]")).map((li) => li.getAttribute("data-milestone"));
+    expect(openRows()).toEqual(["s1", "s2"]);
+    expect(states(b)).toEqual({ s1: "start", s2: "needs_you" });
+    expect(head().textContent).toBe("Done 1");
+    expect(b.querySelector('[data-milestone="s2"] [data-state-action="needs_you"]')!.getAttribute("href")).toBe(`/conversation/${fixtureId("relpipe")}`);
+    // Answered: the inbox no longer holds it as asking, and the milestone goes back into DONE.
+    await (React as any).act(async () => { unseed(); });
+    await page.waitFor(() => openRows().length === 1, 2000);
+    expect(openRows()).toEqual(["s1"]);
+    expect(head().textContent).toBe("Done 2");
+  } finally {
+    unseed();
     await page.unmount();
   }
 }, 60_000);
@@ -338,7 +368,7 @@ test("the legend behind the ⓘ in the page header names every mark", async () =
     await act(async () => { legend.click(); });
     const words = [...document.querySelectorAll("[data-legend-row]")].map((r) => r.getAttribute("data-legend-row"));
     expect(words).toEqual([
-      "Needs you", "New session", "Working", "Sleeping", "Idle", "Done", "Closed", "Starting", "Error", "Stashed", "Workflow run",
+      "Needs you", "Needs you (session)", "New session", "Working", "Sleeping", "Idle", "Done", "Closed", "Starting", "Error", "Stashed", "Workflow run",
       "Backlog", "Open", "In Progress", "In Review", "Done", "Dropped", "Not loaded yet",
       "Pull request, open", "Pull request, merged", "Pull request, closed", "Branch", "Plan", "Deploy, live", "Deploy, failed", "Deploy, not live yet",
     ]);

@@ -104,15 +104,15 @@ export function orderByState<S extends ActionSession>(list: readonly S[]): S[] {
 
 /**
  * A milestone's one state (the same function for the list, the card, the
- * page and the phone), from its sessions' final verdicts. Done is done;
- * otherwise the best of its live sessions: needs you > working > dormant >
- * idle, the session to answer being the most recent ask. With no live
- * session, `canStart` (the owner's own active priority) makes it a new
- * session to start, else nothing.
+ * page and the phone), from its sessions' final verdicts: the best of its
+ * live sessions, needs you > working > dormant > idle, the session to answer
+ * being the most recent ask. Needs you outranks done: a done milestone reads
+ * Done unless one of its sessions asks. With no live session, `canStart` (the
+ * owner's own active priority) makes it a new session to start, else nothing.
  */
 export function milestoneStateOf<S extends ActionSession>(m: { done: boolean; sessions: readonly S[] }, { canStart }: { canStart: boolean }): MilestoneState<S> {
-  if (m.done) return { kind: "done" };
   const best = orderByState(m.sessions.filter((s) => !isClosedSession(s)))[0];
+  if (m.done) return best?.state === "needs_you" ? { kind: "needs_you", session: best } : { kind: "done" };
   if (!best) return { kind: canStart ? "start" : "none" };
   return { kind: best.state as MilestoneStateKind, session: best };
 }

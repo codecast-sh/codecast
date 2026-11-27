@@ -186,6 +186,37 @@ test("an ask queued for the viewer in the sidebar's Decisions needs you wherever
   expect(drawn(absent, "phone")).toBeNull();
 });
 
+test("a stashed session the inbox lifts into Decisions (its own question, or a decide) asks on the phone too, never New session", () => {
+  const auq = fixtureId("stashauq");
+  const dq = fixtureId("stashdq");
+  put({
+    [auq]: { ...asking(), thread_state_status: undefined, awaiting_input: true, inbox_stashed_at: NOW - 5 * MIN },
+    [dq]: { ...asking(), thread_state_status: "dormant", inbox_stashed_at: NOW - 5 * MIN },
+  });
+  useInboxStore.setState({ sessionDecisions: { ds: { _id: "ds", conversation_id: dq, status: "pending", blocking: true, in_queue: true, created_at: NOW - MIN, updated_at: NOW - MIN, question: "?", options: [] } } } as any);
+  for (const id of [auq, dq]) for (const inbox of ["phone", "sidebar"] as const) {
+    expect([inbox, drawn(id, inbox)]).toEqual([inbox, { mark: "needs_you", asks: true, target: id }]);
+    expect([inbox, milestone(id, { inbox, server: "idle" })]).toEqual([inbox, "needs_you"]);
+  }
+});
+
+test("a role's session with an ask of its own in the sidebar's Decisions asks there, answered in itself; the phone, whose Decisions do not list it, shows its lead", () => {
+  const lead = fixtureId("rqlead");
+  const ridden = fixtureId("rqsess");
+  const base = { message_count: 4, status: "completed", updated_at: NOW - 10 * MIN, last_turn_at: NOW - 11 * MIN, user_id: VIEWER_ID, thread_state_at: NOW - 10 * MIN };
+  const working = { thread_state_status: "working", agent_status: "working", agent_status_updated_at: NOW - 5000, last_heartbeat: NOW - 1000, daemon_alive_until: NOW + 60_000 };
+  // A decide asked of the viewer, then the session's own question.
+  for (const own of [{}, { awaiting_input: true }]) {
+    put({ [lead]: { ...base, standing_role_id: "rq", ...working }, [ridden]: { ...base, org_role_id: "rq", thread_state_status: "dormant", ...own } });
+    useInboxStore.setState({ sessionDecisions: "awaiting_input" in own ? {} : { dq: { _id: "dq", conversation_id: ridden, status: "pending", blocking: true, in_queue: true, created_at: NOW - MIN, updated_at: NOW - MIN, question: "Ship it?", options: [] } } } as any);
+    expect(drawn(ridden)).toEqual({ mark: "needs_you", asks: true, target: ridden });
+    const m = model(ridden, { server: "idle" });
+    expect([m.state.kind, m.sessions[0].target]).toEqual(["needs_you", ridden]);
+    expect(drawn(ridden, "phone")).toEqual({ mark: "working", asks: false, target: lead });
+    expect(milestone(ridden, { inbox: "phone", server: "idle" })).toBe("working");
+  }
+});
+
 test("not in the store: no mark; the server's needs_you reads idle, never sleeping, whoever owns it", () => {
   const absent = fixtureId("absent1");
   expect(mark(absent)).toBeNull();
@@ -278,8 +309,8 @@ test("the wake reads a digest of what a mark reads: streamed messages on a worki
 }, 60_000);
 
 test("a decision reassigned to or away from the viewer repaints the milestone at once", async () => {
+  // Not in the store: only the Decisions queue says whether it asks.
   const id = fixtureId("reassigned");
-  put({ [id]: { ...asking(), thread_state_status: "dormant", inbox_stashed_at: NOW - MIN } });
   const decide = (asked: string[]) => (React as any).act(async () => {
     useInboxStore.setState({ sessionDecisions: { dr: { _id: "dr", conversation_id: id, status: "pending", blocking: true, in_queue: true, asked_user_ids: asked, created_at: NOW - MIN, updated_at: NOW - MIN, question: "Which?", options: [] } } } as any);
   });

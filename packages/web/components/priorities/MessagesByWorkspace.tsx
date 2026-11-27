@@ -3,8 +3,8 @@
 // one row per workspace on the priority rows' own day columns, busiest first.
 // Each day is a stack of priorities 1–3, 4+ and no priority (lib/priorityBreakdown),
 // each part with a hover card; on a touch screen a row is one tap target
-// whose card lists every day (parts StripTap). Every workspace's history and list are
-// enrichment reads: one that fails or has not answered draws as no messages.
+// whose card lists every day (parts StripTap). Every workspace's history is an
+// enrichment read: one that fails or has not answered draws as no messages.
 import { useWorkspaceDays } from "../../hooks/useWorkspaceDays";
 import { HoverCard } from "../ui/HoverCard";
 import {

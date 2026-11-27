@@ -43,7 +43,7 @@ const CARD_MILESTONES = 3;
 /** The card a reference opens: what it is, its open milestones and their states, where it stands, Share and Open. `tall`: 44px rows and buttons, for a finger. */
 export function PriorityCard({ row, onOpen, tall }: { row: PriorityRow; onOpen?: () => void; tall?: boolean }) {
   const model = usePriorityModel(row, undefined, undefined, "sidebar", useSidebarFocusId());
-  const open = model.milestones.filter((m) => m.tier === "critical" && !m.done);
+  const open = model.milestones.filter((m) => m.tier === "critical" && m.state.kind !== "done");
   const why = rankProvenance(row);
   // "#1 Sarah Chen placed it" already names a teammate who placed it.
   const owner = !row.mine && row.rank != null && row.rank_source === "person" ? null : row.mine ? "You" : row.owner;

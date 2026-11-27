@@ -43,6 +43,8 @@ export function Legend() {
             <Head className="mt-0">Milestones and sessions</Head>
             <ul>
               <Row icon={<NeedsYouMark />} word={MILESTONE_STATE_WORD.needs_you} />
+              {/* The same ask on a session's own row inside an opened milestone: the mark alone, no border. */}
+              <Row icon={<SessionStatusMark status="needs_you" size={13} />} word={`${MILESTONE_STATE_WORD.needs_you} (session)`} />
               <Row icon={<NewSessionMark />} word={MILESTONE_STATE_WORD.start} />
               <Row icon={<SessionStatusMark status="working" size={13} />} word={MILESTONE_STATE_WORD.working} />
               <Row icon={<SessionStatusMark status="dormant" size={13} />} word={MILESTONE_STATE_WORD.dormant} />

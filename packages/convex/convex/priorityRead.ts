@@ -31,7 +31,7 @@ const OWN_PRIORITIES_READ = 200;
 export const OWN_SCAN_READ = 1_000;
 /** The most mapped sessions `show` reads. */
 const SHOW_SESSIONS = 200;
-/** A list's links: the newest mapped sessions it reads per priority, a task's newest sessions, and how many closed ones a step shows besides its live ones (a live one is never cut). */
+/** A list's links: the newest mapped sessions it reads per priority, a task's newest sessions, and how many closed ones a step shows besides its live ones (the server never cuts a live session from what it reads: the LINK_MAPPED_READ newest mapped per priority). */
 const LINK_MAPPED_READ = 10;
 const LINK_TASK_SESSIONS = 2;
 const LINK_STEP_SESSIONS = 6;
@@ -326,7 +326,8 @@ async function linksFor(r: Reader, reads: LinkReads, p: Priority, steps: Priorit
         last_active_at: Math.floor(c.updated_at / LINK_ACTIVE_ROUND_MS) * LINK_ACTIVE_ROUND_MS,
       });
     }
-    // The cap never cuts a live session: every one is sent (a milestone has few), and only the closed fill what room is left.
+    // The server never cuts a live session from what it reads (the LINK_MAPPED_READ newest mapped per priority, and
+    // each task's newest): every live one read is sent, and only the closed fill what room is left.
     const ordered = orderSessions(sessions);
     const live = ordered.filter((x) => !isClosedSession(x));
     const closed = ordered.filter(isClosedSession);

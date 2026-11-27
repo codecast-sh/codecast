@@ -5,7 +5,6 @@
 import { useState, type ReactNode } from 'react';
 import { ScrollView, StyleSheet, TouchableOpacity, View as RNView } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
-import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Text as RNText } from '@/components/Themed';
 import { CHROME_FONT_CAP, themedStyles, useTheme } from '@/constants/Theme';
 import { MILESTONE_STATE_WORD } from '@codecast/web/lib/priorityList';
@@ -13,6 +12,7 @@ import { SESSION_STATUS } from '@codecast/web/lib/sessionStatus';
 import { BottomSheet } from '@/components/BottomSheet';
 import { STATUS_CONFIG } from '@/components/TaskItem';
 import { SessionStatusMark } from '@/components/SessionStatusMark';
+import { TaskStatusMark } from '@/components/marks';
 import { NeedsYouBox, NewSessionBox } from '@/components/priorities/MilestoneMark';
 import { KIND_ICON, PR_LOOK } from '@/components/priorities/PriorityParts';
 
@@ -61,8 +61,7 @@ export function Legend() {
             <RNView style={styles.column}>
               <Head>Tasks</Head>
               {TASK_STATES.map((k) => {
-                const { icon: name, color, label } = STATUS_CONFIG[k];
-                return <Row key={k} icon={<FontAwesome name={name} size={14} color={color} />} word={label} />;
+                return <Row key={k} icon={<TaskStatusMark status={k} size={14} />} word={STATUS_CONFIG[k].label} />;
               })}
             </RNView>
           </RNView>
