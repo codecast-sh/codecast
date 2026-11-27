@@ -19,6 +19,7 @@ import { newConversationAgentType } from "../lib/defaultAgent";
 import { bindComposeStart, bindComposeTask, composeDraftContent, findKeptComposeDraft, type ComposeContext, type ComposeInstance } from "../store/composeSlice";
 import { flushDraftWrite } from "../lib/pendingDraftWrites";
 import { settleHostedStart } from "../lib/startHostedConversation";
+import { sayIfStartUnlinked } from "../lib/priorityStartLink";
 import { useOnlyHostedAgent } from "../hooks/usePinnedAgents";
 import { ComposeRolePicker, useRoleRecipient } from "./ComposeRolePicker";
 import { Minus, Maximize2, ChevronUp, X } from "lucide-react";
@@ -163,7 +164,11 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
       // to the stub row) must be what we create with.
       // A hosted stub's first message rides the create (hostedFirstRef, set
       // by the hosted gate below a tick before materialize fires).
-      create: (stubId) => store.createSessionFromStub(stubId, { agentType, projectPath: path, gitRoot: path || undefined, firstMessage: hostedFirstRef.current ?? undefined }),
+      // A Start's create says so when the server could not put the session on its milestone.
+      create: (stubId) => sayIfStartUnlinked(
+        store.createSessionFromStub(stubId, { agentType, projectPath: path, gitRoot: path || undefined, firstMessage: hostedFirstRef.current ?? undefined }),
+        useInboxStore.getState().sessions[stubId]?._start,
+      ),
     });
     materializeRef.current = materialize;
     stubIdRef.current = sid;
