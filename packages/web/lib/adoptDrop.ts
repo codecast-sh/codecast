@@ -123,8 +123,11 @@ export function adoptChange(facts: SessionOwnerFacts | null, read: SessionOwners
   // A parent a person released it from still links it: undo nests it back
   // there released, so a later Put back can still find it, and its role
   // returns in a step of its own (an adopt cannot carry one).
-  // The open conversation's read names it; a card's row keeps the link too.
-  const released = !was.parentSession ? read?.released_parent?.conversation_id ?? releasedLink : null;
+  // The open conversation's read names it, or says none can take it back
+  // (null); without that read, a card's row keeps the link.
+  const released = was.parentSession ? null
+    : read && read.released_parent !== undefined ? read.released_parent?.conversation_id ?? null
+      : releasedLink;
   const reNest = !!released && mayHandTo(released);
   const back: SessionOwnersChange = was.parentSession
     ? { adopt_parent: was.parentSession }

@@ -128,6 +128,8 @@ describe("adoptChange", () => {
   test("a parent a person released it from: undo nests it back released, then puts its role back", () => {
     const released = { ...read, released_parent: { conversation_id: "old", short_id: "o1", title: "Old" } } as unknown as SessionOwnersRow;
     expect(adoptChange(facts({ org_role_id: "r1" }), released, ME, "b", () => true).inverse).toEqual([{ adopt_parent: "old", release_parent: true, restore: [mine] }, { role: "r1" }]);
+    // An open read that says no parent can take it back wins over the card's link.
+    expect(adoptChange(facts(), { ...read, released_parent: null } as unknown as SessionOwnersRow, ME, "b", () => true, "old").inverse).toEqual([{ detach_parent: true, restore: [mine] }]);
     // A card's row keeps the link when no open read names it.
     expect(adoptChange(facts(), read, ME, "b", () => true, "old").inverse).toEqual([{ adopt_parent: "old", release_parent: true, restore: [mine] }]);
     // One the viewer may not hand work to: the link is let go, as before.
