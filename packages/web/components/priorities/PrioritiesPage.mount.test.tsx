@@ -326,6 +326,48 @@ test("the inbox's live verdict for a session the store holds wins over the serve
   }
 }, 60_000);
 
+test("a blocked session in someone else's inbox never waits on you: Waiting on you is your sidebar's Needs You", async () => {
+  // The server reads pri-1's ask off its blocked pin; under the owners model the session is a teammate's (its card goes to them), so your inbox does not hold it.
+  useInboxStore.setState((s: any) => ({ sessions: { ...s.sessions, [fixtureId("crflow")]: { _id: fixtureId("crflow"), title: "Change requests flow design", message_count: 4, status: "completed", updated_at: NOW - 10 * 60_000, last_turn_at: NOW - 11 * 60_000, owners_model: true, owned_by_me: false, implicit_owner: "someone-else", thread_state_status: "blocked", thread_state_at: NOW - 10 * 60_000 } } }));
+  const page = await mount(view());
+  try {
+    expect([...page.container.querySelectorAll("[data-waiting-item]")].map((a) => a.getAttribute("data-waiting-item"))).not.toContain(fixtureId("crflow"));
+    expect(primaries(block(page.container, "pri-1")).map((a) => a.getAttribute("data-action"))).not.toContain("answer");
+  } finally {
+    await page.unmount();
+    useInboxStore.setState((s: any) => {
+      const { [fixtureId("crflow")]: _, ...rest } = s.sessions;
+      return { sessions: rest };
+    });
+  }
+}, 60_000);
+
+test("a session nested under a Needs You lead still waits on you, as the sidebar's Needs You counts it", async () => {
+  const { VIEWER_ID } = await import("../../test-helpers/missingBackend");
+  const { placeInboxRows } = await import("../../store/inboxStore");
+  const lead = "leadhandoff00000000000000000000x";
+  const blocked = { message_count: 4, status: "completed", updated_at: NOW - 10 * 60_000, last_turn_at: NOW - 11 * 60_000, user_id: VIEWER_ID, thread_state_status: "blocked", thread_state_at: NOW - 10 * 60_000 };
+  // pri-1's ask is a plan handoff from a lead that waits on you too: the sidebar draws it under the lead's card, in Needs You.
+  useInboxStore.setState((s: any) => ({ sessions: { ...s.sessions,
+    [lead]: { _id: lead, title: "Handoff lead", ...blocked },
+    [fixtureId("crflow")]: { _id: fixtureId("crflow"), title: "Change requests flow design", ...blocked, parent_conversation_id: lead, parent_message_uuid: "m-handoff" },
+  } }));
+  const page = await mount(view());
+  try {
+    const placed = placeInboxRows(useInboxStore.getState() as any, { scope: "mine", now: Date.now() });
+    expect(placed.needsInput.map((r) => r._id)).toContain(lead);
+    expect(placed.needsInput.map((r) => r._id)).not.toContain(fixtureId("crflow"));
+    expect(placed.subsByParent.get(lead)?.map((r) => r._id)).toContain(fixtureId("crflow"));
+    expect([...page.container.querySelectorAll("[data-waiting-item]")].map((a) => a.getAttribute("data-waiting-item"))).toContain(fixtureId("crflow"));
+  } finally {
+    await page.unmount();
+    useInboxStore.setState((s: any) => {
+      const { [fixtureId("crflow")]: _, [lead]: __, ...rest } = s.sessions;
+      return { sessions: rest };
+    });
+  }
+}, 60_000);
+
 test("phone, Daylight and desktop: the list's own width picks the layout", async () => {
   // A 402px phone's list is ~370px; Daylight's 947px window beside the inbox leaves ~550px; a 1280px desktop ~840px.
   expect([layoutForWidth(370), layoutForWidth(550), layoutForWidth(840)]).toEqual(["phone", "wide", "wide"]);
