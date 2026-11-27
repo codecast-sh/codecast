@@ -267,6 +267,8 @@ export default function RunScreen() {
               <RNText style={styles.changeWords} testID="run-change-words">{head.words}</RNText>
             </RNView>
             {head.waits ? <RNText style={styles.changeWaits} numberOfLines={3} testID="run-change-waits">{head.waits}</RNText> : null}
+            {/* A stop whose words name its one restart (a worktree something moved) shows them whole, as the web's bar does. */}
+            {journey && (journey.now.kind === 'stopped' || journey.now.kind === 'failed') && journey.now.whole && journey.now.why ? <RNText style={styles.changeWaits} testID="run-change-why">{journey.now.why}</RNText> : null}
             {links.length ? (
               <RNView style={objectStyles.chips}>
                 {links.map((l) => <FactChip key={`${l.kind}:${l.label}`} label={l.label} color={toneColor(l.tone, Theme)} onPress={() => void openLink(l.href)} link testID={`run-change-${l.kind}`} />)}

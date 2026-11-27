@@ -97,12 +97,9 @@ export function flowSegmentSlugs(source: string | null | undefined): string[] {
 /**
  * Whether a flow's source takes a session's change, for a reader holding no parser: it takes a branch and is either a
  * whole flow (`kind="line"`) or lands the branch itself (a station runs the ship segment), as a flow a session writes
- * for its own change does. A repo's variant of a library flow that takes one (`extends="change"`, as codecast's own
- * change.cast) takes one too: its source holds only its edits, never the base's `takes` (ct-102477 read as none).
+ * for its own change does.
  */
 export function sourceTakesSessionChange(source: string | null | undefined): boolean {
-  const base = flowBase({ source });
-  if (base === CHANGE_FLOW_SLUG || base === PERSONAL_FLOW_SLUG) return true;
   if (!/\bbranch\b/.test(flowGraphAttr(source, "takes") ?? "")) return false;
   return flowGraphAttr(source, "kind") === "line" || /\bflow\s*=\s*"?ship(?:"|[\s,;\]])/.test(source ?? "");
 }

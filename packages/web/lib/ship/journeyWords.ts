@@ -36,10 +36,12 @@ export function stopWhy(raw: string | null | undefined): string | null {
   return !before ? said : /[.!?]$/.test(before) ? `${before} ${said}` : `${before}: ${said}`;
 }
 
-/** Whether a personal Ship's bar shows its reason whole, never clamped: a stop's, whose last words are what the person
- *  does next, and an end short of Live's (Deployed, unverified; Landed). Every other flow's clamps. */
+/** Whether a bar shows its reason whole, never clamped: a personal Ship's stop, whose last words are what the person
+ *  does next, and its end short of Live (Deployed, unverified; Landed); and any flow's stop whose runner words name its
+ *  one restart (`whole`: a worktree something moved). Every other one clamps. */
 export const wholeWhy = (j: Journey): boolean =>
-  !!j.personal && (j.now.kind === "stopped" || j.now.kind === "failed" || j.now.kind === "unlanded" || (j.now.kind === "merged" && !!j.now.end));
+  ((j.now.kind === "stopped" || j.now.kind === "failed") && !!j.now.whole)
+  || (!!j.personal && (j.now.kind === "stopped" || j.now.kind === "failed" || j.now.kind === "unlanded" || (j.now.kind === "merged" && !!j.now.end)));
 
 /** Why a run stopped or ended short of Live, whole, as its bar says it: a list row's reason. */
 export function journeyWhy(j: Journey): string | null {

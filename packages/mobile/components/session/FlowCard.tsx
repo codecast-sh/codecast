@@ -189,7 +189,7 @@ function nowAction(now: JourneyNow, run: RunRow): { label: string; href: string 
   return { label: 'Open run', href: `/run/${run._id}` };
 }
 
-/** `whole`: a personal Ship's stop or end short of Live, whose reason shows whole (journeyWords.ts wholeWhy). */
+/** `whole`: a reason that shows whole (journeyWords.ts wholeWhy): a personal Ship's stop or end short of Live, or a stop naming its one restart. */
 function NowLine({ now, run, whole }: { now: JourneyNow; run: RunRow; whole: boolean }) {
   const Theme = useTheme();
   const router = useRouter();

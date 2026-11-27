@@ -36,10 +36,6 @@ test("a flow takes a session's change when it takes a branch and is a whole flow
   expect(sourceTakesSessionChange(`digraph check {\n  graph [kind="segment", takes="branch"]\n  verify [flow="checker"]\n}`)).toBe(false);
   expect(sourceTakesSessionChange(`digraph line {\n  graph [kind="line", takes="task"]\n  ship [flow="ship"]\n}`)).toBe(false);
   expect(sourceTakesSessionChange(null)).toBe(false);
-  // A repo's variant of the library's change (or personal) flow holds only its edits, and takes the base's change.
-  expect(sourceTakesSessionChange(`digraph change {\n  graph [extends="change"]\n  local_ci [before="pr", label="Local CI"]\n}`)).toBe(true);
-  expect(sourceTakesSessionChange(`digraph x { graph [extends="../personal.cast"] }`)).toBe(true);
-  expect(sourceTakesSessionChange(`digraph x { graph [extends="check"] }`)).toBe(false);
 });
 
 // A station a variant placed after Check (parser.ts variantEdits) as the expanded graph holds it: Check's passing
