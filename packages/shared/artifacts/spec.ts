@@ -52,8 +52,13 @@ export type ArtifactVerb = {
   summary: string;
   usage: string;
   stdin?: boolean;
-  run(view: ArtifactView, args: string[], stdin?: string): VerbResult;
+  /** Codecast ids (ct-N, pl-N…) named in `args` whose titles the verb wants; the CLI reads them into `ctx.titles` first. */
+  refs?(args: string[]): string[];
+  run(view: ArtifactView, args: string[], stdin?: string, ctx?: VerbContext): VerbResult;
 };
+
+/** What the caller knows that a pure verb can't: whether an agent session is writing, and titles read for `refs`. */
+export type VerbContext = { agent?: boolean; titles?: Record<string, string> };
 
 export type ArtifactSpec = {
   type: ArtifactType;

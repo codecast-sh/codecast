@@ -7,6 +7,7 @@ import {
   collapseFrameOps,
   describeBoard,
   elementBox,
+  enclosingFrameKeys,
   expandFrameOps,
   FRAME_GAP,
   FRAME_PAD,
@@ -195,6 +196,29 @@ describe("collapse and expand", () => {
     expect(inside(box(v4, "el_i"), box(v4, "el_s1"))).toBe(true);
     expect(inside(box(v4, "el_o"), box(v4, "el_i"))).toBe(true);
     expect(overlaps(box(v4, "el_i"), box(v4, "el_s2"))).toBe(false);
+  });
+
+  test("reflowParent: false folds and unfolds the inner frame and leaves the outer one and its stickies as they were", () => {
+    const v0 = board([
+      frame("el_o", 0, 0, 1000, 800),
+      frame("el_i", 40, 64, 500, 400),
+      sticky("el_s1", 80, 128),
+      sticky("el_s2", 700, 128),
+    ]);
+    expect(enclosingFrameKeys(v0, "el_i")).toEqual(["el_o"]);
+    expect(enclosingFrameKeys(v0, "el_s1")).toEqual(["el_i", "el_o"]);
+    expect(enclosingFrameKeys(v0, "el_o")).toEqual([]);
+    const ops = collapseFrameOps(v0, "el_i", { reflowParent: false });
+    expect(ops.map((o) => o.k)).toEqual(["el_i"]);
+    const v1 = apply(v0, ops);
+    expect([...hiddenKeys(v1)]).toEqual(["el_s1"]);
+    expect(box(v1, "el_i")).toMatchObject({ x: 40, y: 64, h: FRAME_PILL_H });
+    expect(box(v1, "el_o")).toEqual(box(v0, "el_o"));
+    expect(pos(v1, "el_s2")).toEqual({ x: 700, y: 128 });
+
+    const v2 = apply(v1, expandFrameOps(v1, "el_i", { reflowParent: false }));
+    expect(hiddenKeys(v2).size).toBe(0);
+    for (const k of ["el_o", "el_i", "el_s1", "el_s2"]) expect(box(v2, k)).toEqual(box(v0, k));
   });
 
   test("refuses frames in the wrong state", () => {
