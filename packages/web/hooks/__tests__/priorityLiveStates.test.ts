@@ -6,18 +6,20 @@
 // dismissed session behind its header, a parent lifted into Questions by its
 // child's ask, a role's session riding its lead, a Done row's check, the
 // focused session held in place, a session the store does not hold, and a
-// workflow run asking through its parent's question.
+// workflow run asking through its parent's question, an error filed in Needs
+// You, a role's lead asking, and a heartbeat that places nothing.
 // Run: cd packages/web && bun test --isolate hooks/__tests__/priorityLiveStates.test.ts
 import { afterEach, expect, test } from "bun:test";
 import { fixtureId, installDom, installMissingBackend, seedViewer, TEAM_ID, VIEWER_ID } from "../../test-helpers/missingBackend";
 
-installDom("https://app.test/priorities");
+const { mountSurface } = installDom("https://app.test/priorities");
 await installMissingBackend({ answers: {} });
 await seedViewer();
 
-const { useInboxStore } = await import("../../store/inboxStore");
+const React = await import("react");
+const { useInboxStore, placedInboxVersion } = await import("../../store/inboxStore");
 const { inboxMarkOf } = await import("../../store/inboxMark");
-const { liveMarkOf } = await import("../usePriorityModels");
+const { liveMarkOf, usePriorityLiveStates } = await import("../usePriorityModels");
 const { buildModels, lastDays } = await import("../../lib/priorityList");
 const { NOW, links, row, sess, step } = await import("../../test-helpers/prioritiesList");
 
@@ -35,7 +37,8 @@ afterEach(() => useInboxStore.setState((s: any) => ({
 } as any)));
 
 const st = () => useInboxStore.getState() as any;
-const mark = (id = ID, inbox: "sidebar" | "phone" = "sidebar") => inboxMarkOf(st(), id, { inbox, now: NOW, focusedId: st().currentSessionId ?? null });
+const drawn = (id = ID, inbox: "sidebar" | "phone" = "sidebar") => inboxMarkOf(st(), id, { inbox, now: NOW, focusedId: st().currentSessionId ?? null });
+const mark = (id = ID, inbox: "sidebar" | "phone" = "sidebar") => drawn(id, inbox)?.mark ?? null;
 /** The milestone whose one link is `id` (the server saying `server`, the link `mine` or not), as `inbox` draws it. */
 const model = (id = ID, { inbox = "sidebar", server = "needs_you", mine = true }: { inbox?: "sidebar" | "phone"; server?: string; mine?: boolean } = {}) => {
   const r = row(70, "Linked", 1, [step("s1", "The milestone", "critical")], { links: [links("s1", [{ ...sess("linked1", "Linked", server, 1, { mine }), conversation_id: id }])] });
@@ -121,12 +124,44 @@ test("a role's session riding its lead wears the lead's mark, never Needs you of
   expect(milestone(ridden)).not.toBe("needs_you");
 });
 
+test("an API error the inbox files in Needs You draws the error mark and still needs you, on the sidebar and the phone", () => {
+  put({ [ID]: { ...asking(), pending_api_error: "rate limited", pending_api_error_kind: "usage_limit" } });
+  for (const inbox of ["sidebar", "phone"] as const) {
+    expect(drawn(ID, inbox)).toEqual({ mark: "error", asks: true, target: ID });
+    const m = model(ID, { inbox });
+    expect([m.state.kind, m.sessions[0].mark]).toEqual(["needs_you", "error"]);
+  }
+});
+
+test("a role's lead asking: the session riding it needs you through the lead, and opens the lead's conversation", () => {
+  const lead = fixtureId("askinglead");
+  const ridden = fixtureId("riddensess");
+  const base = { message_count: 4, status: "completed", updated_at: NOW - 10 * MIN, last_turn_at: NOW - 11 * MIN, user_id: VIEWER_ID, thread_state_at: NOW - 10 * MIN };
+  put({
+    [lead]: { ...base, standing_role_id: "role2", thread_state_status: "blocked" },
+    [ridden]: { ...base, org_role_id: "role2", thread_state_status: "working", agent_status: "working", agent_status_updated_at: NOW - 5000, last_heartbeat: NOW - 1000, daemon_alive_until: NOW + 60_000 },
+  });
+  expect(drawn(ridden)).toEqual({ mark: "needs_you", asks: true, target: lead });
+  const m = model(ridden, { server: "working" });
+  expect(m.state.kind).toBe("needs_you");
+  expect(m.state.session!.href).toBe(`/conversation/${lead}`);
+  expect(m.sessions[0].href).toBe(`/conversation/${lead}`);
+});
+
 test("a session the sidebar draws under Done keeps its Done check on its row, while the milestone reads it as idle", () => {
   put({ [ID]: { ...asking(), thread_state_status: "done" } });
   expect(mark()).toBe("done");
   const m = model(ID, { server: "done" });
   expect(m.state.kind).toBe("idle");
   expect([m.sessions[0].state, m.sessions[0].mark]).toEqual(["idle", "done"]);
+});
+
+test("stashed: its row draws the stash tray, and the milestone has nobody on it (New session for its owner)", () => {
+  put({ [ID]: { ...asking(), inbox_stashed_at: NOW - MIN } });
+  expect(drawn()).toEqual({ mark: "stashed", asks: false, target: ID });
+  const m = model(ID, { server: "idle" });
+  expect(m.state.kind).toBe("start");
+  expect(m.sessions[0].mark).toBe("stashed");
 });
 
 test("not in the store: no mark; the server's needs_you falls back to sleeping if yours, idle if someone else's", () => {
@@ -146,3 +181,38 @@ test("a workflow run asking through its parent's question: Needs you", () => {
   expect(mark()).toBe("needs_you");
   expect(milestone()).toBe("needs_you");
 });
+
+test("a heartbeat that moves nothing placement reads places nothing: no new answer, no render, no placed-inbox bump", async () => {
+  put({ [ID]: asking() });
+  const answers: unknown[] = [];
+  function Probe() {
+    const live = usePriorityLiveStates([ID], NOW);
+    answers.push(live);
+    return React.createElement("span", { "data-mark": live(ID)?.mark ?? "" });
+  }
+  const page = await mountSurface(React.createElement(Probe));
+  try {
+    expect(page.container.querySelector("[data-mark]")!.getAttribute("data-mark")).toBe("needs_you");
+    const renders = answers.length;
+    const version = placedInboxVersion();
+    // A liveness heartbeat: the sessions ref and the row flip, every structural field the same.
+    await (React as any).act(async () => {
+      useInboxStore.setState((s: any) => ({ sessions: { ...s.sessions, [ID]: { ...s.sessions[ID], last_heartbeat: NOW + 1000, updated_at: s.sessions[ID].updated_at } } }));
+    });
+    expect(answers.length).toBe(renders);
+    expect(placedInboxVersion()).toBe(version);
+    // A change of the row's own facts answers anew, with what the inbox draws for it now.
+    await (React as any).act(async () => {
+      useInboxStore.setState((s: any) => ({ sessions: { ...s.sessions, [ID]: { ...s.sessions[ID], thread_state_status: "dormant" } } }));
+    });
+    expect(answers.length).toBeGreaterThan(renders);
+    expect(page.container.querySelector("[data-mark]")!.getAttribute("data-mark")).toBe(mark() ?? "");
+    // And a structural change places again.
+    await (React as any).act(async () => {
+      useInboxStore.setState((s: any) => ({ sessions: { ...s.sessions, [ID]: { ...s.sessions[ID], inbox_dismissed_at: NOW } } }));
+    });
+    expect(page.container.querySelector("[data-mark]")!.getAttribute("data-mark")).toBe("killed");
+  } finally {
+    await page.unmount();
+  }
+}, 60_000);

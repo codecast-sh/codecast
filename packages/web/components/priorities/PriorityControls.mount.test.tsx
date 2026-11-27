@@ -639,3 +639,18 @@ test("Move to… lists this priority's milestones under its name, polish after a
     await merge.unmount();
   }
 }, 60_000);
+
+test("the row's ⋯ draws no separator over an empty group: a sole priority has no moves, so none follows who placed it", async () => {
+  useInboxStore.getState().syncTable("priorities", [{ ...rows()[2], rank: 1, ai_rank: 1 }] as any);
+  const page = await mount(<Live />);
+  try {
+    await key(priorityMenu("pri-3"), "Enter");
+    const menu = document.querySelector('[role="menu"]')!;
+    // What a mouse sees: the touch-only Rename is hidden on a fine pointer.
+    const seen = [...menu.children].filter((n) => !n.className.includes("[@media(pointer:fine)]:hidden"))
+      .map((n) => (n.getAttribute("role") === "separator" ? "|" : n.getAttribute("data-act") ?? (n.hasAttribute("data-menu-rank-by") ? "rank-by" : "?")));
+    expect(seen).toEqual(["rank-by", "mark-done", "set-aside", "correct", "|", "copy-link"]);
+  } finally {
+    await page.unmount();
+  }
+}, 60_000);

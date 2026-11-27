@@ -6,6 +6,7 @@
 import type { PriorityHistory, PriorityLinkedSession, PriorityPlanRef, PriorityRow, PrioritySessionState, PriorityStep } from "@codecast/shared/contracts/priorities";
 import { milestoneStateOf, orderSessions, type MilestoneState, type MilestoneStateKind } from "@codecast/shared/contracts/priorityDerive";
 import type { SessionStatus } from "./sessionStatus";
+import type { DrawnMark } from "../store/inboxMark";
 
 export const LIST_DAYS = 10;
 const DAY = 86_400_000;
@@ -42,17 +43,17 @@ export function ago(ts: number, now: number): string {
 }
 
 /**
- * A mark an inbox draws (lib/sessionStatus) in the milestone vocabulary, for
- * the milestone's state and the order of its sessions; the session's own row
- * still draws the mark itself (SessionLine.mark). A mark outside the
- * vocabulary (the error mark of a hosted stop, a done check, a stashed tray)
- * reads as idle; starting is working; a dismissed row is closed.
+ * A drawn mark in the milestone vocabulary, for a session that does not ask:
+ * working › dormant › idle (a stashed one counts toward no milestone:
+ * buildModels). A mark outside it (done, stashed, error) reads as
+ * idle; starting is working; a dismissed row is closed. A needs-you glyph
+ * where the inbox does not count it as needing the viewer waits on someone
+ * else: sleeping.
  */
 function stateOfMark(s: SessionStatus): PrioritySessionState {
   switch (s) {
-    case "needs_you": return "needs_you";
     case "working": case "starting": return "working";
-    case "dormant": return "dormant";
+    case "dormant": case "needs_you": return "dormant";
     case "killed": return "killed";
     default: return "idle";
   }
@@ -68,30 +69,31 @@ export const MILESTONE_STATE_WORD: Record<Exclude<MilestoneStateKind, "none">, s
 };
 
 /**
- * A linked session's mark on a milestone is the mark its inbox draws for it.
- * Web uses the sidebar (GlobalSessionPanel); the phone uses its inbox. A
- * session the inbox doesn't draw (not in the store, or folded below the
- * old-session fold) has no inbox mark, and falls back to its own state with
- * needs_you demoted (dormant if yours, idle if someone else's). A drawn mark
- * outside the milestone vocabulary (the error mark of a hosted stop, a
- * done/delivered check) reads as idle. The milestone takes the most urgent of
- * its live sessions' marks: needs_you › working › dormant › idle.
+ * A milestone reads Needs you exactly when one of its sessions sits where its
+ * inbox counts it as needing you: Questions, Needs You, or a pinned card
+ * waiting on the viewer. Otherwise it takes the most urgent of its live
+ * sessions' drawn marks (working › dormant › idle). Marks outside that
+ * vocabulary (done, error) read as idle: a done session's results wait to be
+ * read, so it still counts as someone on it. A stashed session counts as
+ * nobody on it: a milestone whose only live sessions are stashed offers a New
+ * session to its owner. Rows always draw the inbox's own mark.
  *
- * `live` answers the drawn mark (hooks/usePriorityModels liveMarkOf over
- * store/inboxMark inboxMarkOf), or undefined when the inbox draws none; the
- * server's state is the session's own.
+ * `live` answers what the inbox draws (hooks/usePriorityModels liveMarkOf
+ * over store/inboxMark inboxMarkOf), or undefined when it draws nothing: then
+ * the server's state stands, a needs_you there demoted (sleeping if yours,
+ * idle if someone else's). A session riding its role's lead opens at the
+ * lead (`target`), where the answer is.
  */
-const lineOf = (s: PriorityLinkedSession, live: (conversationId: string) => SessionStatus | undefined): SessionLine => {
-  const mark = live(s.conversation_id);
-  const href = `/conversation/${s.conversation_id}`;
-  if (mark) return { ...s, state: stateOfMark(mark), mark, href };
-  return { ...s, state: s.state !== "needs_you" ? s.state : s.mine === false ? "idle" : "dormant", href };
+const lineOf = (s: PriorityLinkedSession, live: (conversationId: string) => DrawnMark | undefined): SessionLine => {
+  const drawn = live(s.conversation_id);
+  if (drawn) return { ...s, state: drawn.asks ? "needs_you" : stateOfMark(drawn.mark), mark: drawn.mark, href: `/conversation/${drawn.target}` };
+  return { ...s, state: s.state !== "needs_you" ? s.state : s.mine === false ? "idle" : "dormant", href: `/conversation/${s.conversation_id}` };
 };
 
 /**
  * A linked session as the list draws it: its state in the milestone
  * vocabulary, the mark its inbox draws when it draws one (its row shows that
- * mark), and where it opens.
+ * mark), and where it opens (its own conversation, or the lead it rides).
  */
 export type SessionLine = PriorityLinkedSession & { href: string; mark?: SessionStatus };
 
@@ -129,13 +131,13 @@ export type PriorityModel = {
 };
 
 /**
- * Every priority's model. `live` answers the mark its inbox draws for a
- * session (by conversation id); the server's state stands for the rest.
+ * Every priority's model. `live` answers what its inbox draws for a session
+ * (by conversation id); the server's state stands for the rest.
  */
 export function buildModels(
   rows: readonly PriorityRow[],
   history: PriorityHistory | undefined,
-  live: (conversationId: string) => SessionStatus | undefined,
+  live: (conversationId: string) => DrawnMark | undefined,
   days: readonly string[],
 ): PriorityModel[] {
   const lanes = new Map((history?.lanes ?? []).map((l) => [l.short_id ?? l.key, l]));
@@ -152,7 +154,8 @@ export function buildModels(
         tier: step.tier,
         done: step.done,
         step,
-        state: milestoneStateOf({ done: step.done, sessions }, { canStart }),
+        // A stashed session is set aside: nobody is on the milestone through it.
+        state: milestoneStateOf({ done: step.done, sessions: sessions.filter((x) => x.mark !== "stashed") }, { canStart }),
         sessions,
         more: l?.sessions_more ?? 0,
         looksDone: !!l?.looks_done && !step.done,

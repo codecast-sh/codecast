@@ -22,7 +22,15 @@ describe("buildModels: each milestone's state", () => {
   } as any)], undefined, live, lastDays(10, NOW))[0].milestones[0].state;
   test("the inbox's live verdict sets the state; with nobody on it, the owner's active priority offers New session", () => {
     expect(model({}, [sess("dormant")]).kind).toBe("dormant");
-    expect(model({}, [sess("dormant")], () => "needs_you").kind).toBe("needs_you");
+    // Where the inbox counts it as needing you, whatever its glyph: an error in Needs You asks too.
+    expect(model({}, [sess("dormant")], () => ({ mark: "needs_you", asks: true, target: "c-dormant" })).kind).toBe("needs_you");
+    expect(model({}, [sess("dormant")], () => ({ mark: "error", asks: true, target: "c-dormant" })).kind).toBe("needs_you");
+    // Not counted there: a hosted stop's error, a done check read as idle.
+    expect(model({}, [sess("dormant")], () => ({ mark: "error", asks: false, target: "c-dormant" })).kind).toBe("idle");
+    expect(model({}, [sess("dormant")], () => ({ mark: "done", asks: false, target: "c-dormant" })).kind).toBe("idle");
+    // A stashed session is nobody on it: the owner's milestone offers a New session. A done one's results wait to be read: idle.
+    expect(model({}, [sess("dormant")], () => ({ mark: "stashed", asks: false, target: "c-dormant" })).kind).toBe("start");
+    expect(model({ mine: false }, [sess("dormant")], () => ({ mark: "stashed", asks: false, target: "c-dormant" })).kind).toBe("none");
     expect(model({}, []).kind).toBe("start");
   });
   test("a teammate's or a past priority offers nothing to start, and a teammate's ask never needs the viewer", () => {

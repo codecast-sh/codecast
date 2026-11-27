@@ -83,7 +83,7 @@ test("one row per workspace with messages, busiest first, each day stacked 1–3
     expect(busyDays.map((d) => d.getAttribute("aria-label"))).toEqual([
       "Tue, Nov 24: 2 messages, 1–3 2, 4+ 0, no priority 0",
       "Wed, Nov 25: 0 messages, 1–3 0, 4+ 0, no priority 0",
-      "Today: 10 messages, 1–3 6, 4+ 2, no priority 2",
+      "Thu, Nov 26: 10 messages, 1–3 6, 4+ 2, no priority 2",
     ]);
   } finally {
     await page.unmount();
@@ -98,7 +98,9 @@ test("hovering a segment shows its tier, workspace, date and shares", async () =
     await act(async () => { top.parentElement!.dispatchEvent(new window.MouseEvent("mouseover", { bubbles: true })); });
     await page.waitFor(() => document.body.textContent!.includes("Priorities 1–3"), 2_000);
     const text = document.body.textContent!;
-    expect(text).toContain("Busy Co · Today");
+    // Today's card names its date, as every other day's does.
+    expect(text).toContain("Busy Co · Thu, Nov 26");
+    expect(text).not.toContain("Today");
     // 6 of Busy Co's 10 today, and of the 10 typed anywhere today.
     expect(text).toContain("Messages6");
     expect(text).toContain("Of Busy Co that day60%");
@@ -116,7 +118,7 @@ test("a tap on a segment (focus, as a touch screen gives it) opens the same card
     expect(rest.getAttribute("tabindex")).toBe("-1");
     await act(async () => { rest.focus(); });
     await page.waitFor(() => document.body.textContent!.includes("Priorities 4+"), 2_000);
-    expect(document.body.textContent).toContain("Busy Co · Today");
+    expect(document.body.textContent).toContain("Busy Co · Thu, Nov 26");
   } finally {
     await page.unmount();
   }

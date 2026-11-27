@@ -55,7 +55,7 @@ export function Connected({ model, m, now, lookups }: {
     ...m.partOf.map((plan) => ({ plan, partOf: true })),
   ];
   const branches = branchesOf(m, lookups);
-  const deploys = lookups.deploysOf(m);
+  const deploys = lookups.deploysOf(m, model.row.workspace);
   const menu = (s: SessionLine) => (model.row.mine && s.mine ? <SessionMenu row={model.row} s={s} stepKey={m.key} /> : undefined);
   const nSessions = sessions.length + m.more;
   const empty = nSessions + m.tasks.length + m.prs.length + branches.length + plans.length + deploys.length === 0;

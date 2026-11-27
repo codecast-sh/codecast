@@ -277,6 +277,8 @@ test("the page: title, Correct…, Share and ⋯; ten days; the plan once; miles
     expect(plans[0].getAttribute("href")).toBe("/plans/pl-1075");
     expect(plans[0].textContent).toContain(PLAN.title);
     expect(plans[0].textContent).toContain("5/6");
+    // Its title wraps to two lines on a phone or a touch screen, one on a wide page under a mouse.
+    for (const cls of ["truncate", "[@container(max-width:40rem)]:line-clamp-2", "[@media(pointer:coarse)]:line-clamp-2"]) expect(plans[0].querySelector("[data-priority-plan-title]")!.className).toContain(cls);
     const list = el.querySelector("[data-milestones]")!;
     expect(list.querySelector('[data-group="plans"]')).toBeNull();
     expect(list.textContent).not.toContain(PLAN.title);
@@ -366,6 +368,9 @@ test("the owner double-clicks the page's title to rename it in place: Enter save
     await keyIn("Escape", "Not this");
     expect(input()).toBeNull();
     expect(el.querySelector("h1")!.textContent).toBe(DETAIL.title);
+    // Focus goes back to the title, never to the page.
+    await act(async () => { await new Promise((r) => setTimeout(r, 10)); });
+    expect(document.activeElement).toBe(el.querySelector("h1"));
     await dbl();
     await keyIn("Enter", "Priorities for Union, calibrated");
     expect(input()).toBeNull();

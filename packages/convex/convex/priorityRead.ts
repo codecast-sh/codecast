@@ -11,7 +11,7 @@ import { activeGroup, positionOf, positionsOf } from "./lib/priorityGroup";
 import { passTiming } from "./priorityPassSweep";
 import { isSessionOwner } from "./sessionOwners";
 import { rowPinPredatesTurn } from "@codecast/shared/contracts/inboxPlacement";
-import { attributePlans, isWorkflowSession, orderSessions, type PlanFacts } from "@codecast/shared/contracts/priorityDerive";
+import { attributePlans, isClosedSession, isWorkflowSession, orderSessions, type PlanFacts } from "@codecast/shared/contracts/priorityDerive";
 import type { PriorityCorrection, PriorityDetail, PriorityLinkedSession, PriorityLinkWhy, PriorityList, PriorityMilestoneLinks, PriorityPlanRef, PriorityRow, PrioritySession, PrioritySessionState, PriorityStatus, PriorityStep } from "@codecast/shared/contracts/priorities";
 import type { Doc, Id } from "./_generated/dataModel";
 import { planFactsOf } from "./lib/priorityLinks";
@@ -30,7 +30,7 @@ const OWN_PRIORITIES_READ = 200;
 export const OWN_SCAN_READ = 1_000;
 /** The most mapped sessions `show` reads. */
 const SHOW_SESSIONS = 200;
-/** A list's links: the newest mapped sessions it reads per priority, a task's newest sessions, and how many a step shows. */
+/** A list's links: the newest mapped sessions it reads per priority, a task's newest sessions, and how many closed ones a step shows besides its live ones (a live one is never cut). */
 const LINK_MAPPED_READ = 10;
 const LINK_TASK_SESSIONS = 2;
 const LINK_STEP_SESSIONS = 6;
@@ -324,11 +324,15 @@ async function linksFor(r: Reader, reads: LinkReads, p: Priority, steps: Priorit
         last_active_at: Math.floor(c.updated_at / LINK_ACTIVE_ROUND_MS) * LINK_ACTIVE_ROUND_MS,
       });
     }
+    // The cap never cuts a live session: every one is sent (a milestone has few), and only the closed fill what room is left.
     const ordered = orderSessions(sessions);
+    const live = ordered.filter((x) => !isClosedSession(x));
+    const closed = ordered.filter(isClosedSession);
+    const closedShown = Math.max(0, LINK_STEP_SESSIONS - live.length);
     links.push({
       key: s.key,
-      sessions: ordered.slice(0, LINK_STEP_SESSIONS),
-      sessions_more: Math.max(0, ordered.length - LINK_STEP_SESSIONS),
+      sessions: [...live, ...closed.slice(0, closedShown)],
+      sessions_more: Math.max(0, closed.length - closedShown),
       plan: own?.plan ? planRef(own.plan) : null,
       part_of: (own?.part_of ?? []).map(planRef),
       looks_done: !s.done && !!tasksDone.get(s.key),

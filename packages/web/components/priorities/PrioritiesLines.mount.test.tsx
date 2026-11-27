@@ -169,6 +169,31 @@ test("a task whose row has not loaded draws a neutral dot under its id, never th
   }
 }, 60_000);
 
+test("a milestone's deploys come only from its priority's own workspace; with none of that workspace's held, no Deploys group", async () => {
+  seedKinds();
+  // Another workspace's deploy that shipped the same task: never this milestone's.
+  useInboxStore.getState().syncTable("teamDeploys", [{ _id: "dep8002", workspace: "team:elsewhere", target: "cli", status: "live", live_at: NOW - 30 * 60_000, created_at: NOW - HOUR, sessions: [], tasks: [{ short_id: "ct-8001" }] }] as any, { isDelta: true });
+  const page = await mount(view({ rows: [KINDS] }));
+  try {
+    const c = await openLine(block(page.container, "pri-9"), "s1");
+    expect(c.querySelector('[data-group="deploys"] div')!.textContent).toBe("Deploys1");
+    const targets = [...c.querySelectorAll('[data-group="deploys"] li')].map((li) => li.textContent);
+    expect(targets.some((t) => t!.startsWith("web"))).toBe(true);
+    expect(targets.some((t) => t!.startsWith("cli"))).toBe(false);
+  } finally {
+    await page.unmount();
+  }
+  // The same priority in a workspace whose deploys the store does not hold: no Deploys group at all.
+  const away = await mount(view({ rows: [{ ...KINDS, workspace: "team:unloaded" }] }));
+  try {
+    const c = await openLine(block(away.container, "pri-9"), "s1");
+    expect(c.querySelector('[data-group="deploys"]')).toBeNull();
+  } finally {
+    await away.unmount();
+    useInboxStore.setState({ tasks: {} } as any);
+  }
+}, 60_000);
+
 test("a dropped task is struck through; a done one is quiet", async () => {
   useInboxStore.setState({ tasks: {
     tk1: { _id: "tk1", short_id: "ct-8101", title: "Dropped idea", status: "dropped" },

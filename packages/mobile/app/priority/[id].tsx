@@ -74,7 +74,7 @@ function PriorityBody({ row }: { row: PriorityView }) {
   // Needs you exactly when the phone's own inbox files a session under Needs You.
   const model = usePriorityModel(row, history, days, 'phone');
   const linked = useMemo(() => ({ ids: linkedSessionIds([row]), prs: linkedPrRefs([row]) }), [row]);
-  const lookups = usePriorityLookups(linked.ids, linked.prs);
+  const lookups = usePriorityLookups(linked.ids, linked.prs, [row.workspace]);
   // The owner's active priorities in this workspace, from the list the store holds: where a move, a merge or a session can go.
   const listed = useWorkspaceCollection<PriorityRow>('priorities', prioritySig);
   const own = useCallback<OwnOf>((r) => effectivePriorityOrder(listed.filter((x) => x.mine && x.workspace === r.workspace && x.status === 'active')), [listed]);

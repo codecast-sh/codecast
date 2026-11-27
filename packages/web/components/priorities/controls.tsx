@@ -206,7 +206,8 @@ function OwnerPriorityItems({ row, onCorrect, onMerge }: { row: PriorityRow; onC
           </DropdownMenuSubContent>
         </DropdownMenuSub>
       )}
-      {rank != null && <DropdownMenuSeparator />}
+      {/* Only a group that has a move in it ends in a separator. */}
+      {rank != null && count > 1 && <DropdownMenuSeparator />}
       {row.status !== "done" && <DropdownMenuItem data-act="mark-done" onSelect={() => writes.markDone(row.short_id)}>Mark done</DropdownMenuItem>}
       {row.status === "active" && <DropdownMenuItem data-act="set-aside" onSelect={() => writes.setAside(row.short_id)}>Set aside</DropdownMenuItem>}
       {(row.status === "set_aside" || row.status === "done") && <DropdownMenuItem data-act="restore" onSelect={() => writes.restore(row.short_id)}>Restore</DropdownMenuItem>}
@@ -367,7 +368,24 @@ export function LooksDone({ row, step }: { row: PriorityRow; step: Pick<Priority
   );
 }
 
-/** A milestone's (or, with its `label`, a priority's) title being renamed in place: Enter or leaving keeps it, Escape takes it back. Uncontrolled, so typing commits nothing. */
+/**
+ * Where focus goes once a rename ends by key: the title the input stood in
+ * for when it can hold focus (`data-rename-return`), else the row around it.
+ * Read from the input's parent, which outlives the input.
+ */
+function returnFocus(host: HTMLElement | null) {
+  setTimeout(() => {
+    const target = host?.querySelector<HTMLElement>("[data-rename-return]") ?? host?.closest<HTMLElement>("[tabindex], a[href], button");
+    target?.focus();
+  }, 0);
+}
+
+/**
+ * A milestone's (or, with its `label`, a priority's) title being renamed in
+ * place: Enter or leaving keeps it, Escape takes it back. Uncontrolled, so
+ * typing commits nothing. Ended by Enter or Escape, focus goes back to the
+ * title (returnFocus), never to the page.
+ */
 export function MilestoneTitleInput({ title, onDone, className, label = "Milestone title" }: { title: string; onDone: (title: string | null) => void; className?: string; label?: string }) {
   const done = useRef(false);
   const finish = (value: string | null) => {
@@ -387,8 +405,10 @@ export function MilestoneTitleInput({ title, onDone, className, label = "Milesto
       onClick={stop}
       onKeyDown={(e) => {
         e.stopPropagation();
-        if (e.key === "Enter") finish(e.currentTarget.value);
-        else if (e.key === "Escape") finish(null);
+        if (e.key !== "Enter" && e.key !== "Escape") return;
+        const host = e.currentTarget.parentElement;
+        finish(e.key === "Enter" ? e.currentTarget.value : null);
+        returnFocus(host);
       }}
       onBlur={(e) => finish(e.currentTarget.value)}
       className={cn("min-w-0 flex-1 rounded-control border border-sol-border bg-sol-bg px-1.5 py-0.5 text-[16px] text-sol-text focus:border-sol-text-dim focus:outline-none sm:text-ui", className)}

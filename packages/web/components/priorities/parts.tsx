@@ -4,6 +4,7 @@
 // as the sidebar files it) opens the session to answer, and New session (the
 // New session button's pen, filled primary) opens the composer seeded with
 // the milestone's brief.
+import type { ReactNode } from "react";
 import Link from "next/link";
 import { SquarePen } from "lucide-react";
 import type { PriorityRow } from "@codecast/shared/contracts/priorities";
@@ -11,6 +12,7 @@ import type { MilestoneStateKind } from "@codecast/shared/contracts/priorityDeri
 import { SessionStatusMark } from "../inbox/SessionStatusMark";
 import { Button } from "../ui/button";
 import { HoverCard } from "../ui/HoverCard";
+import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { lookup } from "../../lib/liveEntities";
 import { milestoneStartHref } from "../../lib/priorities";
 import { dayDate } from "../../lib/priorityBreakdown";
@@ -24,12 +26,36 @@ const stop = (e: React.MouseEvent) => e.stopPropagation();
 const NO_TASKS: string[] = [];
 
 /**
+ * On a coarse pointer a whole strip is one tap target: at least 44px tall,
+ * across the strip's width, laid over its bars (so they never move), opening
+ * one card for all its days. A fine pointer never sees it and keeps each
+ * day's own hover card. Its parent is the strip, positioned.
+ */
+export function StripTap({ label, card }: { label: string; card: ReactNode }) {
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          data-strip-tap
+          aria-label={label}
+          className="absolute inset-x-0 top-1/2 z-10 hidden h-full min-h-11 -translate-y-1/2 rounded-control [@media(pointer:coarse)]:block"
+        />
+      </PopoverTrigger>
+      <PopoverContent side="bottom" align="end" collisionPadding={8} className="w-auto max-w-[calc(100vw-16px)] p-0" data-strip-card>
+        {card}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/**
  * Ten days as bars on the page's one scale (`peak`), shaded by how much was
  * typed, today outlined. Hovering a day opens its card: the date and the
  * messages. A list row's bars are 20px (7px on a narrow list), the day
  * columns "Where your messages went" draws under the list; `page` spreads
- * them across the page with a date under each. A tap focuses a day, which
- * opens its card on a touch screen. `pending`: the typing has not
+ * them across the page with a date under each. On a touch screen the strip
+ * is one tap target listing all ten days (StripTap). `pending`: the typing has not
  * arrived, so every day is its empty baseline and no day opens a card (it
  * would say 0 messages).
  */
@@ -38,7 +64,22 @@ export function DayStrip({ counts, days, todayIndex, peak, page, pending }: { co
   const top = Math.max(1, peak);
   const column = cn("flex flex-col items-center justify-end", page ? "min-w-0 flex-1" : "w-[20px] [@container(max-width:40rem)]:w-[7px]");
   return (
-    <span data-day-strip data-pending={pending || undefined} className={cn("flex items-end", page ? "w-full gap-1.5" : "gap-1 [@container(max-width:40rem)]:gap-[2px]")}>
+    <span data-day-strip data-pending={pending || undefined} className={cn("relative flex items-end", page ? "w-full gap-1.5" : "gap-1 [@container(max-width:40rem)]:gap-[2px]")}>
+      {!pending && (
+        <StripTap
+          label="Messages typed, last ten days"
+          card={
+            <ul className="px-3 py-2 text-ui">
+              {counts.map((c, i) => (
+                <li key={days[i]} data-strip-day={days[i]} className="flex items-baseline justify-between gap-6 py-0.5">
+                  <span className={i === todayIndex ? "font-semibold text-sol-text" : "text-sol-text-muted"}>{dayDate(days[i])}</span>
+                  <span className="tabular-nums text-sol-text">{c} {c === 1 ? "message" : "messages"}</span>
+                </li>
+              ))}
+            </ul>
+          }
+        />
+      )}
       {counts.map((n, i) => {
         const c = pending ? 0 : n;
         const share = Math.sqrt(Math.min(c, top) / top);

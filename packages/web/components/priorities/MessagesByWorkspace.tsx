@@ -2,7 +2,8 @@
 // The bottom of /priorities: where the viewer's last days of messages went,
 // one row per workspace on the priority rows' own day columns, busiest first.
 // Each day is a stack of priorities 1–3, 4+ and no priority (lib/priorityBreakdown),
-// each part with a hover card. Every workspace's history and list are
+// each part with a hover card; on a touch screen a row is one tap target
+// whose card lists every day (parts StripTap). Every workspace's history and list are
 // enrichment reads: one that fails or has not answered draws as no messages.
 import { useWorkspaceDays } from "../../hooks/useWorkspaceDays";
 import { HoverCard } from "../ui/HoverCard";
@@ -11,6 +12,7 @@ import {
   type BreakdownDay, type WorkspaceDays,
 } from "../../lib/priorityBreakdown";
 import { cn } from "../../lib/utils";
+import { StripTap } from "./parts";
 
 /** A bar's full height in px. */
 const BAR = 28;
@@ -29,9 +31,10 @@ export function MessagesByWorkspace({ days, todayIndex }: { days: string[]; toda
           <span className="truncate pb-0.5 text-ui text-sol-text">
             {s.name} <span data-workspace-total className="text-meta tabular-nums text-sol-text-dim">{s.total}</span>
           </span>
-          <span className="flex items-end gap-1 [@container(max-width:40rem)]:gap-[2px]">
+          <span className="relative flex items-end gap-1 [@container(max-width:40rem)]:gap-[2px]">
+            <StripTap label={`Where your messages went in ${s.name}, last ten days`} card={<WorkspaceDaysCard space={s} days={days} todayIndex={todayIndex} />} />
             {s.days.map((d, i) => (
-              <DayBar key={days[i]} space={s} day={d} label={i === todayIndex ? "Today" : dayDate(days[i])} today={i === todayIndex} allThatDay={totals[i]} peak={peak} />
+              <DayBar key={days[i]} space={s} day={d} label={dayDate(days[i])} today={i === todayIndex} allThatDay={totals[i]} peak={peak} />
             ))}
           </span>
         </div>
@@ -82,5 +85,39 @@ function DayBar({ space, day, label, today, allThatDay, peak }: { space: Workspa
         </span>
       )}
     </span>
+  );
+}
+
+const TIER_SHORT: Record<(typeof TIERS)[number]["key"], string> = { top: "1–3", rest: "4+", none: "None" };
+
+/** A workspace's ten days in one card (the touch screen's tap on its row): each day's date, messages and its three parts. */
+function WorkspaceDaysCard({ space, days, todayIndex }: { space: WorkspaceDays; days: string[]; todayIndex: number }) {
+  const parts = [...TIERS].reverse();
+  return (
+    <div className="px-3 py-2">
+      <div className="mb-1 text-ui font-semibold text-sol-text">{space.name}</div>
+      <table className="text-meta tabular-nums">
+        <thead>
+          <tr className="text-sol-text-dim">
+            <th className="pr-4 text-left font-normal">Day</th>
+            <th className="pr-3 text-right font-normal">All</th>
+            {parts.map((t) => (
+              <th key={t.key} className="pr-3 text-right font-normal last:pr-0">
+                <span className="inline-flex items-center gap-1"><i aria-hidden className="block size-2 rounded-[2px]" style={{ background: t.fill, opacity: t.opacity }} />{TIER_SHORT[t.key]}</span>
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {space.days.map((d, i) => (
+            <tr key={days[i]} data-strip-day={days[i]}>
+              <td className={cn("pr-4", i === todayIndex ? "font-semibold text-sol-text" : "text-sol-text-muted")}>{dayDate(days[i])}</td>
+              <td className="pr-3 text-right text-sol-text">{d.total}</td>
+              {parts.map((t) => <td key={t.key} className="pr-3 text-right text-sol-text-muted last:pr-0">{d[t.key]}</td>)}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }

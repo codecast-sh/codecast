@@ -101,3 +101,62 @@ test("where your messages went sits at the bottom of the list, its day bars on t
     }
   }
 }, 60_000);
+
+test("on a touch screen a priority's strip is one 44px tap target over its bars, opening one card for all ten days; a mouse keeps each day's card", async () => {
+  const { act } = React as any;
+  const page = await mount(view());
+  try {
+    const strip = block(page.container, "pri-1").querySelector("[data-priority-head] [data-day-strip]")!;
+    const taps = strip.querySelectorAll("[data-strip-tap]");
+    expect(taps).toHaveLength(1);
+    const tap = taps[0] as HTMLElement;
+    expect(tap.tagName).toBe("BUTTON");
+    // Laid over the bars (absolute in the positioned strip), so they never move; shown only to a coarse pointer, 44px or taller.
+    expect(strip.className.split(/\s+/)).toContain("relative");
+    for (const cls of ["absolute", "inset-x-0", "hidden", "[@media(pointer:coarse)]:block", "min-h-11", "h-full"]) expect(tap.className.split(/\s+/)).toContain(cls);
+    await act(async () => { tap.click(); });
+    await page.waitFor(() => !!document.querySelector("[data-strip-card]"), 2000);
+    const rows = [...document.querySelectorAll("[data-strip-card] [data-strip-day]")];
+    expect(rows.map((r) => r.getAttribute("data-strip-day"))).toEqual(days);
+    expect(rows[9].textContent).toContain("4 messages");
+    expect(rows[8].textContent).toContain("0 messages");
+    // A mouse still opens each day on its own.
+    const bars = [...strip.querySelectorAll("[data-day]")];
+    expect(bars).toHaveLength(days.length);
+    expect(bars.every((d) => d.getAttribute("tabindex") === "-1")).toBe(true);
+  } finally {
+    await page.unmount();
+  }
+}, 60_000);
+
+test("on a touch screen each breakdown row is one tap target whose card lists every day with its three parts", async () => {
+  const { act } = React as any;
+  const prev = { history: answers["priorities:history"], list: answers["priorities:list"] };
+  answers["priorities:history"] = HISTORY;
+  answers["priorities:list"] = listOf(ROWS);
+  const page = await mount(view());
+  try {
+    await page.waitFor(() => !!page.container.querySelector("[data-messages-by-workspace] [data-workspace]"));
+    const row = page.container.querySelector("[data-messages-by-workspace] [data-workspace]")!;
+    const tap = row.querySelector("[data-strip-tap]") as HTMLElement;
+    expect(row.querySelectorAll("[data-strip-tap]")).toHaveLength(1);
+    expect(tap.parentElement!.className.split(/\s+/)).toContain("relative");
+    // The segments keep their own hover cards for a mouse.
+    expect(row.querySelectorAll("[data-tier]").length).toBeGreaterThan(0);
+    await act(async () => { tap.click(); });
+    await page.waitFor(() => !!document.querySelector("[data-strip-card]"), 2000);
+    const card = document.querySelector("[data-strip-card]")!;
+    expect([...card.querySelectorAll("[data-strip-day]")].map((r) => r.getAttribute("data-strip-day"))).toEqual(days);
+    expect(card.textContent).toContain("1–3");
+    expect(card.textContent).toContain("4+");
+    expect(card.textContent).toContain("None");
+    // Each day is named by its date, today too.
+    expect(card.textContent).not.toContain("Today");
+  } finally {
+    await page.unmount();
+    for (const [k, v] of [["priorities:history", prev.history], ["priorities:list", prev.list]] as const) {
+      if (v === undefined) delete answers[k];
+      else answers[k] = v;
+    }
+  }
+}, 60_000);
