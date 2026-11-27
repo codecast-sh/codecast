@@ -137,5 +137,9 @@ describe("a release's own version bump (isLiveVersionBump)", () => {
     expect(isLiveVersionBump(cli, { subject: "chore(deps): bump zod from 1.1.0 to 1.1.323", files: ["packages/cli/package.json"] }, "1.1.323")).toBe(false);
     expect(isLiveVersionBump(cli, { subject: "fix(cli): read 1.1.323 config", files: ["packages/cli/package.json"] }, "1.1.323")).toBe(false);
     expect(isLiveVersionBump(cli, { subject: "chore(cli): bump version to 1.1.323", files: [] }, "1.1.323")).toBe(false);
+    // Only the package the release bumps: another manifest under the target's paths is a dependency change it ships.
+    expect(isLiveVersionBump(cli, { subject: "chore(cli): bump version to 1.1.323", files: ["packages/cli/package.json", "packages/shared/package.json"] }, "1.1.323")).toBe(false);
+    expect(isLiveVersionBump(cli, { subject: "chore(cli): bump version to 1.1.323", files: ["packages/shared/package.json"] }, "1.1.323")).toBe(false);
+    expect(isLiveVersionBump(cli, { subject: "chore: bump version to 1.1.323", files: ["packages/cli/package.json"] }, "1.1.323")).toBe(false);
   });
 });

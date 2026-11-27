@@ -358,14 +358,18 @@ export function commitTouchesTarget(t: TargetPaths, files: readonly string[] | n
  * A release target's own version bump for the version live there now: the release workflow commits it to main after
  * the cut it records (finalize-cli-release.yml's `chore(cli): bump version to X`, cut-desktop-release.yml's
  * `chore(electron): bump desktop to vX`), so it carries nothing the live deploy lacks. Precisely: its subject names that
- * version as a release, and every file it changes that ships to the target is a package.json (the version it bumps).
+ * version as a release, and the only file it changes that ships to the target is the package.json of the package its
+ * scope names (`packages/cli/package.json` for `chore(cli)`), the version it bumps. Any other manifest (a shared
+ * package's dependencies) is work.
  */
 export function isLiveVersionBump(t: TargetPaths, c: { subject: string; files: readonly string[] | null | undefined }, liveVersion: string | null | undefined): boolean {
   const live = liveVersion?.trim().replace(/^v/i, "");
   if (!live || !c.files?.length) return false;
-  if (parseRelease(c.subject.split("\n")[0])?.version !== live) return false;
+  const release = parseRelease(c.subject.split("\n")[0]);
+  if (!release?.scope || release.version !== live) return false;
+  const own = (f: string) => f === `${release.scope}/package.json` || f.endsWith(`/${release.scope}/package.json`);
   const shipped = c.files.filter((f) => fileShipsTo(t, f));
-  return shipped.length > 0 && shipped.every((f) => f === "package.json" || f.endsWith("/package.json"));
+  return shipped.length > 0 && shipped.every(own);
 }
 
 // ── CI per commit ────────────────────────────────────────────────────────────

@@ -368,6 +368,17 @@ describe("cast line deploy targets", () => {
     expect(idle).toContain("    +2 older");
   });
 
+  // cli dp-3802 went out at b8193372b, a head touching none of cli's paths: its records name what it sends.
+  test("an open deploy at a head touching none of the target's paths sends the commits its records name", () => {
+    const c1 = { sha: "c1".repeat(6), subject: "change 1", at: NOW - 3_000, main_at: NOW - 3_000, ci: "passed", tasks: [], session: null, conversation_id: null };
+    const q = { known: true, commits: 1, untouched: 2, groups: [{ key: "none", session: null, ci: "passed", commits: [c1] }], shown: 1, head_ci: "passed", head_sha: "h2".repeat(6) };
+    const open = { short_id: "dp-11", status: "running", sha: "h1".repeat(6), created_at: NOW - 500, commit_rows: [{ sha: c1.sha }] };
+    const text = formatTargets({ targets: [{ name: "cli", live, open, queue: q, history: [{ ...open, commit_rows: undefined }], dev_push: null }] }, NOW);
+    expect(text).toContain("  1 commit going out in dp-11\n  nothing else waiting");
+    // An older server's open row names no commits: it reads as before.
+    expect(formatTargets({ targets: [{ name: "cli", live, open: { ...open, commit_rows: undefined }, queue: q, history: [], dev_push: null }] }, NOW)).toContain("  1 commit waiting");
+  });
+
   test("with no dev push, nothing is added", () => {
     expect(formatTargets({ targets: [{ name: "backend", live, open: null, queue, dev_push: null }] }, NOW)).not.toContain("push");
   });

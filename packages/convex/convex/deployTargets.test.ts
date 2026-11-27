@@ -212,7 +212,6 @@ describe("the waiting queue (DP12)", () => {
     const { t, ctx } = await published();
     await pushMain(t, ctx, [{ n: 1, files: ["cli/a.ts"] }], NOW - 10_000);
     await (recordLiveRead as any)._handler(ctx, { target_id: t.deploy_targets.find((r) => r.name === "cli")._id, sha: sha(1), version: "1.2.0" });
-    // The finalize workflow's bump for 1.2.0 lands after the cut it recorded; then one that also changes shipped code.
     await pushMain(t, ctx, [{ n: 2, files: ["cli/package.json"] }], NOW - 5_000);
     const bump = (n: number, version: string) => (t.commits.find((c) => c.sha === sha(n)).message = `chore(cli): bump version to ${version}`);
     const waiting = async () => (await viewOf(ctx, "cli"))[0].queue.groups.flatMap((g: any) => g.commits.map((c: any) => c.sha.slice(0, 2)));
@@ -335,6 +334,7 @@ describe("deploying a target from codecast (DP13)", () => {
     expect(r).toMatchObject({ short_id: "dp-1", action: "deploy", commits: 1 });
     expect(t.deploys[0]).toMatchObject({ status: "requested", target: "backend", action: "deploy", repository: REPO });
     expect(t.deploys[0].commits[0].conversation_id).toBe("conv_api_work");
+    expect((await viewOf(ctx, "backend"))[0].open.commit_rows).toEqual([{ sha: sha(1) }]); // what it sends, by sha (splitQueue)
     expect(JSON.parse(t.daemon_commands[0].args)).toEqual({ deploy: "dp-1", root: "/repo" });
     expect(t.daemon_commands[0]).toMatchObject({ command: "line_deploy", target_device_id: "ana-mac" });
     await expect((request as any)._handler(ctx, { api_token: TOKEN, team_id: TEAM, target: "backend" })).rejects.toThrow(/already going out/);

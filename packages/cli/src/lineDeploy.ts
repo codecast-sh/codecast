@@ -108,7 +108,7 @@ export function formatDeploy(d: any): string {
   const cause = stopped ? deployNoteHeadline(d.note) : null;
   if (cause) out.push(cause);
   out.push(
-    `went live ${when(d.live_at)} · started by ${d.started_by?.name ?? d.source} (${d.trigger}) · reported by ${d.source}${d.url ? ` · ${d.url}` : ""}`,
+    `${d.live_at ? `went live ${when(d.live_at)} · ` : ""}started by ${d.started_by?.name ?? d.source} (${d.trigger}) · reported by ${d.source}${d.url ? ` · ${d.url}` : ""}`,
   );
   if (d.pushed_via || d.machine || d.dirty) {
     const from = [d.pushed_via ? `pushed by ${d.pushed_via}` : "pushed", d.machine ? `on ${d.machine}` : null].filter(Boolean).join(" ");
@@ -611,7 +611,8 @@ export function formatTargets(view: { targets: any[] }, now: number = Date.now()
     // What an open deploy is sending is not waiting: split as the Deploys page splits it (splitQueue). The older
     // commits the queue counted but did not list go with it when it sends any.
     const listed: QueueCommit[] = q.groups.flatMap((g: any) => g.commits).sort((a: QueueCommit, b: QueueCommit) => (b.main_at ?? b.at) - (a.main_at ?? a.at));
-    const deploys = [t.open, t.live, ...(t.history ?? [])].filter(Boolean);
+    // The open row first: it alone carries its commits' shas (commit_rows), which history's copy of it lacks.
+    const deploys = [t.open, t.live, ...(t.history ?? [])].filter((d, i, all) => d && all.findIndex((x) => x?.short_id === d.short_id) === i);
     const { going, sending, next } = splitQueue(listed, deploys, q.head_sha);
     const older = Math.max(0, q.commits - q.shown);
     const sent = sending.length ? sending.length + older : 0;

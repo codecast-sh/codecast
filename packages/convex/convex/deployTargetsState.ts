@@ -375,7 +375,9 @@ export async function targetState(ctx: any, t: Doc<"deploy_targets">, viewer?: I
     publisher: await publisherOf(ctx, t),
     live: live ? await deployLine(ctx, live, caches, countsOf(live), reader) : null,
     dev_push: await devPushOver(ctx, t, live),
-    open: open ? { ...(await deployLine(ctx, open, caches, undefined, reader)), steps: open.run_id ? await deployStepsOf(ctx, open.run_id) : [] } : null,
+    // Its commits' shas too: one sent at a commit that touches none of the target's paths says what it sends by these
+    // (splitQueue), as the Deploys page reads them from the team's deploys.
+    open: open ? { ...(await deployLine(ctx, open, caches, undefined, reader)), steps: open.run_id ? await deployStepsOf(ctx, open.run_id) : [], commit_rows: (open.commits ?? []).map((c) => ({ sha: c.sha })) } : null,
     history: await Promise.all(history.map((d) => deployLine(ctx, d, caches, countsOf(d), reader))),
     last_read: t.last_read ?? null,
     queue: {
