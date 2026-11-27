@@ -93,7 +93,7 @@ const SHA = /^[0-9a-f]{7,40}$/;
 const isCancelled = (failReason: string | undefined) => /^cancell?ed\b/i.test(failReason ?? "");
 
 /** A target that may be late: where its wait is measured from, and until when a commit merged is overdue. */
-type LateStart = { target: string; repository: string; paths: string[]; after: number; until: number; deadline_ms: number; open: LateTarget["open"] };
+type LateStart = { target: string; repository: string; paths: string[]; unless: string[]; after: number; until: number; deadline_ms: number; open: LateTarget["open"] };
 type LatePage = { late: Array<{ sha: string; main_at: number }>; read: number; cursor: string; done: boolean };
 
 /** Each live, not dormant target, with its live deploy's place in main's order. Reads no commit past the live one. */
@@ -111,7 +111,7 @@ export const lateStarts = internalQuery({
       if (from?.main_at == null) continue;
       // The target's own `deadline` stays on the CLI (CLI_ONLY_TARGET_KEYS); the server holds it to the default for its kind.
       const deadline = deployDeadlineMs(t, t.runs === "here" && t.policy === "press");
-      out.push({ target: t.name, repository: t.repository, paths: t.paths, after: from.main_at, until: now - deadline, deadline_ms: deadline, open: open ? { short_id: open.short_id, status: open.status } : null });
+      out.push({ target: t.name, repository: t.repository, paths: t.paths, unless: t.unless ?? [], after: from.main_at, until: now - deadline, deadline_ms: deadline, open: open ? { short_id: open.short_id, status: open.status } : null });
     }
     return out;
   },
@@ -119,13 +119,13 @@ export const lateStarts = internalQuery({
 
 /** One page of the commits merged after a target's live one and before its deadline, oldest first: those touching its paths. */
 export const lateCommitsPage = internalQuery({
-  args: { repository: v.string(), paths: v.array(v.string()), after: v.number(), until: v.number(), cursor: v.union(v.string(), v.null()) },
+  args: { repository: v.string(), paths: v.array(v.string()), unless: v.array(v.string()), after: v.number(), until: v.number(), cursor: v.union(v.string(), v.null()) },
   handler: async (ctx, a): Promise<LatePage> => {
     const page = await ctx.db
       .query("commits")
       .withIndex("by_repository_main", (q) => q.eq("repository", a.repository).gt("main_at", a.after).lte("main_at", a.until))
       .paginate({ cursor: a.cursor, numItems: LATE_PAGE });
-    const late = page.page.filter((c) => commitTouchesTarget(a.paths, (c.files ?? []).map((f) => f.filename))).map((c) => ({ sha: c.sha, main_at: c.main_at! }));
+    const late = page.page.filter((c) => commitTouchesTarget({ paths: a.paths, unless: a.unless }, (c.files ?? []).map((f) => f.filename))).map((c) => ({ sha: c.sha, main_at: c.main_at! }));
     return { late, read: page.page.length, cursor: page.continueCursor, done: page.isDone };
   },
 });
@@ -136,7 +136,7 @@ async function lateTargets(ctx: ActionCtx, workspace: string, now: number): Prom
     const late: LatePage["late"] = [];
     let cursor: string | null = null;
     for (let read = 0; read < LATE_COMMITS_READ;) {
-      const page: LatePage = await ctx.runQuery(internal.releaseSweep.lateCommitsPage, { repository: s.repository, paths: s.paths, after: s.after, until: s.until, cursor });
+      const page: LatePage = await ctx.runQuery(internal.releaseSweep.lateCommitsPage, { repository: s.repository, paths: s.paths, unless: s.unless, after: s.after, until: s.until, cursor });
       late.push(...page.late);
       read += page.read;
       if (page.done) break;
