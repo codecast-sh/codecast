@@ -13,6 +13,7 @@ import { MentionStrip, type MentionCandidate } from './MentionStrip';
 import { composerAttachments, type ChatAttachmentArg } from './chatUpload';
 import { useComposerField, nativeComposerText } from '@/lib/composerField';
 import { MessageComposer, ComposerTool, useComposerImages } from '@/components/session/MessageComposer';
+import { useUndoBarAnchor } from '@/hooks/useUndoBarAnchor';
 
 // The one chat composer on mobile — channel floor and thread alike. It draws
 // the session screen's composer card (MessageComposer), as web chat draws the
@@ -94,6 +95,9 @@ export function ChatComposerBar({
   const insets = useSafeAreaInsets();
   const keyboardUp = useKeyboardUp(!!atScreenBottom);
   const bottomPad = atScreenBottom && !keyboardUp ? Math.max(8, insets.bottom) : 8;
+  // At the screen's bottom the undo bar (dictation's notices included) sits
+  // above this bar, not over the box's first line.
+  const undoAnchor = useUndoBarAnchor(!!atScreenBottom);
 
   // ── Edit mode ─────────────────────────────────────────────────────────────
   // Entering an edit REPLACES the box (the previous draft is small on mobile
@@ -231,7 +235,7 @@ export function ChatComposerBar({
   );
 
   return (
-    <RNView style={[styles.bar, { paddingBottom: bottomPad }]}>
+    <RNView ref={undoAnchor.ref} onLayout={undoAnchor.onLayout} collapsable={false} style={[styles.bar, { paddingBottom: bottomPad }]}>
       <MessageComposer
         field={{ ...field, onChangeText }}
         images={images}

@@ -57,8 +57,10 @@ mock.module('convex/react', () => ({ useConvex: () => ({}) }));
 // The real host opens the microphone; every test hands in a fake through the
 // dev seam instead, so this one must never be reached.
 const NEEDS_MIC = 'Codecast needs the microphone to dictate. Turn it on in Settings.';
+const NEEDS_UPDATE = 'Dictation needs a newer app version';
 mock.module('@/lib/dictationHost', () => ({
   DICTATION_NEEDS_MIC: NEEDS_MIC,
+  DICTATION_NEEDS_UPDATE: NEEDS_UPDATE,
   phoneDictationHost: () => ({ open: () => Promise.reject(new Error('real host reached')) }),
 }));
 
@@ -120,7 +122,7 @@ afterEach(async () => {
 const sent: string[] = [];
 // What the native box was told to select (createNodeMock stands in for it).
 const nativeSelections: [number, number][] = [];
-function Box({ initial }: { initial: string }) {
+function Box({ initial, look }: { initial: string; look?: 'quiet' | 'bare' }) {
   const [value, setValue] = React.useState(initial);
   const inputRef = React.useRef<any>(null);
   const d = useDictation({ value, onChangeText: setValue, inputRef });
@@ -128,13 +130,13 @@ function Box({ initial }: { initial: string }) {
   send.current = () => { if (value.trim()) sent.push(value.trim()); setValue(''); };
   return React.createElement('View', null,
     React.createElement('TextInput', { testID: 'box', ref: inputRef, value, onChangeText: setValue, onSelectionChange: d.onSelectionChange, placeholder: d.placeholder('Add a comment...') }),
-    React.createElement(DictateControls, { dictation: d }),
+    React.createElement(DictateControls, { dictation: d, look }),
     React.createElement('TouchableOpacity', { testID: 'send', onPress: () => d.send(() => send.current()) }),
   );
 }
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
-async function mount(initial = '') {
+async function mount(initial = '', look?: 'quiet' | 'bare') {
   sent.length = 0;
   let r!: import('react-test-renderer').ReactTestRenderer;
   nativeSelections.length = 0;
@@ -143,7 +145,7 @@ async function mount(initial = '') {
   await TestRenderer.act(async () => {
     r = TestRenderer.create(
       <NavigationContext.Provider value={navigation}>
-        <Box initial={initial} />
+        <Box initial={initial} look={look} />
       </NavigationContext.Provider>,
       { createNodeMock },
     );
@@ -275,30 +277,43 @@ test('typing into the box mid-recording stops it and keeps what was typed', asyn
   await m.act(() => fake.events!.onPartial('hello world'));
   expect(m.value()).toBe('hello!!');
   expect(m.byLabel('Dictate').length).toBe(1);
-  expect(notices).toEqual(['Dictation stopped: the text changed']);
+  // Their own typing stopped it: no notice.
+  expect(notices).toEqual([]);
 });
 
 test('a start that failed says why at once, tints the mic, and a tap says it again and can try again', async () => {
-  (globalThis as any).__dictationTestHost = { open: () => Promise.reject(new Error('Dictation needs a newer app version')) };
+  const BUSY = 'Leave the huddle first — a call is using the microphone.';
+  (globalThis as any).__dictationTestHost = { open: () => Promise.reject(new Error(BUSY)) };
   const m = await mount('');
   await m.press('Dictate');
   // At once, in the bar the auto-stop line uses, with no second tap.
-  expect(notices).toEqual(['Dictation needs a newer app version']);
+  expect(notices).toEqual([BUSY]);
   expect(alerts).toEqual([]);
   const mic = m.byLabel('Dictate')[0]!;
-  expect(mic.props.accessibilityHint).toBe('Dictation needs a newer app version');
+  expect(mic.props.accessibilityHint).toBe(BUSY);
   // Failed reads without colour too: the struck-through mic.
   expect(mic.findByType('Feather' as any).props.color).toBe(THEME.red);
   expect(mic.findByType('Feather' as any).props.name).toBe('mic-off');
   await m.press('Dictate');
   expect(alerts.map((a) => [a.title, a.message, a.buttons?.map((b) => b.text)])).toEqual([
-    ["Dictation didn't start", 'Dictation needs a newer app version', ['OK', 'Try again']],
+    ["Dictation didn't start", BUSY, ['OK', 'Try again']],
   ]);
   installHost();
   await m.act(() => alerts[0]!.buttons![1]!.onPress!());
   expect(m.byLabel('Finish dictation').length).toBe(1);
   // The retry's success says nothing more.
   expect(notices.length).toBe(1);
+});
+
+test('an app too old for dictation offers no Try again: only an update helps', async () => {
+  (globalThis as any).__dictationTestHost = { open: () => Promise.reject(new Error(NEEDS_UPDATE)) };
+  const m = await mount('');
+  await m.press('Dictate');
+  expect(notices).toEqual([NEEDS_UPDATE]);
+  await m.press('Dictate');
+  expect(alerts.map((a) => [a.title, a.message, a.buttons?.map((b) => b.text)])).toEqual([
+    ["Dictation didn't start", NEEDS_UPDATE, ['OK']],
+  ]);
 });
 
 test('a refused microphone says so at once with the way to Settings, and again from the struck mic', async () => {
@@ -338,7 +353,8 @@ test("a team without OpenAI under its BAA gets a dimmed mic that says why", asyn
   await m.press('Dictate');
   expect(fake.events).toBe(null);
   // Whole, in a dialog: the sentence is longer than the one-line notice bar.
-  expect(alerts.map((a) => [a.title, a.message])).toEqual([['Dictation is off', why]]);
+  // Not "off": the person's own switch is on; the team is what stops it.
+  expect(alerts.map((a) => [a.title, a.message])).toEqual([["Dictation isn't available", why]]);
   // The chevron stays, dimmed with the mic, and says the same.
   await m.press('Dictation settings');
   expect(sheets).toEqual([]);
@@ -502,6 +518,28 @@ test('✓ is quiet like ✕; a send waiting on the last words shows on Send, not
   expect(m.dictationOf().sendWaiting).toBe(true);
   await m.press('Cancel dictation');
   expect(m.dictationOf().sendWaiting).toBe(false);
+});
+
+test('beside a bare send glyph (the task box) ✕ and ✓ are bare glyphs; beside a filled send they are quiet circles', async () => {
+  const flat = (st: any): any => (Array.isArray(st) ? Object.assign({}, ...st.filter(Boolean).map(flat)) : st ?? {});
+  const look = async (variant?: 'quiet' | 'bare') => {
+    const m = await mount('', variant);
+    await m.press('Dictate');
+    const out = ['Cancel dictation', 'Finish dictation'].map((label) => {
+      const st = flat(m.byLabel(label)[0]!.props.style);
+      return [label, st.backgroundColor ?? null, st.borderWidth ?? 0, st.width, st.height];
+    });
+    await m.press('Cancel dictation');
+    return out;
+  };
+  expect(await look('bare')).toEqual([
+    ['Cancel dictation', null, 0, 32, 32],
+    ['Finish dictation', null, 0, 32, 32],
+  ]);
+  expect(await look()).toEqual([
+    ['Cancel dictation', THEME.bgAlt, 1, 32, 32],
+    ['Finish dictation', THEME.bgAlt, 1, 32, 32],
+  ]);
 });
 
 test('text typed before the first word is kept, and Cancel leaves it', async () => {
