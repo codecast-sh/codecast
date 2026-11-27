@@ -8,6 +8,11 @@ import { ORG_SYNC_COLLECTIONS } from "./clientSyncRegistry.org";
 import { POOL_SYNC_COLLECTIONS } from "./clientSyncRegistry.pool";
 import { DATA_SCOPE } from "./clientSyncRegistry.scope";
 import { thinPullRequestRow, thinTaskRow } from "../lib/detailRows";
+import type { PriorityRow } from "@codecast/shared/contracts/priorities";
+
+type ObjectFieldOf<T> = { [K in keyof T]-?: NonNullable<T[K]> extends object ? K : never }[keyof T];
+/** Each object a priority row joins (steps, counts, sessions, links, mapped_links, plan), typed over the row: a new object field fails the typecheck until it is listed here, and so a deep field. */
+export const PRIORITY_OBJECT_FIELDS: Record<ObjectFieldOf<PriorityRow>, true> = { steps: true, counts: true, sessions: true, links: true, mapped_links: true, plan: true };
 export { DATA_SCOPE, EPHEMERAL_SLOT_SCOPE, SCOPED_READ_KEYS, type DataScope } from "./clientSyncRegistry.scope";
 
 export type PersistenceKind = "collection" | "meta";
@@ -430,15 +435,14 @@ export const CLIENT_SYNC_REGISTRY = {
   // positions on the owner's other rows, which the server's own ordering may
   // place differently, so a field lock could never retire; the server's push
   // settles the paint, and a refused write is put back by its caller
-  // (store/prioritiesSlice). steps, counts, sessions, links (each step's
-  // sessions and plans), mapped_links (a teammate's, past the link budget)
-  // and plan are joined objects: a push that changes only one of them must
+  // (store/prioritiesSlice). Every object the row joins is a deep field
+  // (PRIORITY_OBJECT_FIELDS): a push that changes only one of them must
   // still land (store/__tests__/prioritiesSync.test.ts).
   priorities: {
     persistence: { kind: "collection", key: "priorities" },
     indexes: "_id, workspace",
     hydration: { phase: "deferred" },
-    sync: { deepFields: ["steps", "counts", "sessions", "links", "mapped_links", "plan"] },
+    sync: { deepFields: Object.keys(PRIORITY_OBJECT_FIELDS) },
     feeds: ["priorities.list"],
   },
   // The rank, id and title of each of the viewer's active priorities in

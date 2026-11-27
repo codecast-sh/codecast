@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { CLIENT_SYNC_REGISTRY } from "../clientSyncRegistry";
+import { CLIENT_SYNC_REGISTRY, PRIORITY_OBJECT_FIELDS } from "../clientSyncRegistry";
 import { applySyncTable } from "../syncProtocol";
 
 // A priority row joins objects (steps, sessions, links, a teammate's
@@ -26,9 +26,10 @@ describe("priorities sync", () => {
     expect((second as any).p1.owner_image).toBe("https://faces.test/sam.png");
   });
 
-  test("every object a row joins is a deep field", () => {
+  test("every object a row joins is a deep field: the list comes from the row's type (PRIORITY_OBJECT_FIELDS), and a pushed row has no other", () => {
+    expect([...opts.deepFields].sort()).toEqual(Object.keys(PRIORITY_OBJECT_FIELDS).sort());
     const objects = Object.entries(row("working", { links: [], plan: { short_id: "pl-1", title: "P", done: 0, total: 1, size: 1 } }))
-      .filter(([, v]) => v !== null && typeof v === "object").map(([k]) => k).sort();
-    expect([...opts.deepFields].sort()).toEqual(expect.arrayContaining(objects));
+      .filter(([, v]) => v !== null && typeof v === "object").map(([k]) => k);
+    expect(opts.deepFields).toEqual(expect.arrayContaining(objects));
   });
 });
