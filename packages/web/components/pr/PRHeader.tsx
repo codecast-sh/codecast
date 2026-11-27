@@ -21,7 +21,8 @@ import { RepoWindowControl } from "../repo/RepoWindowControl";
 import { CommentAvatar } from "../comments/CommentAvatar";
 import { EntityIdPill } from "../EntityIdPill";
 import { PRLinked, PRReviewers } from "./PRLinked";
-import { PRDeployBand, PRReachChip, PRShipsTo } from "./PRDeploy";
+import { PRDeployBand, PRReachChip } from "./PRDeploy";
+import { PRShipStrip } from "./PRShipStrip";
 import { usePrDeploy } from "../../hooks/usePrDeploy";
 import { copyToClipboard, relTimeShort } from "../../lib/utils";
 import { withShortcut } from "../../shortcuts/registry";
@@ -411,7 +412,6 @@ export function PRHeader({
         </span>
         {pr.head_ref && pr.base_ref && <CopyRef text={`${pr.head_ref} -> ${pr.base_ref}`} />}
         <MetaChips pr={pr} />
-        <ShepherdControl pr={pr} sessionChoices={sessionChoices} onSetShepherd={onSetShepherd} />
         <PRLinked pr={pr} sessionIds={linkedSessionIds} />
       </div>
 
@@ -422,7 +422,8 @@ export function PRHeader({
         <Figure label="Checks" href={checksHref} title="Open the checks">
           <ChecksBar checks={pr.checks} />
         </Figure>
-        <Figure label="Review">
+        {/* GitHub's reviews; the Ship run's own review is the strip's Review step. */}
+        <Figure label="GitHub review">
           {decision && <span style={{ color: accentVar(decision.accent) }}>{decision.label}</span>}
           {PRReviewers({ pr, reviews }) ?? (!decision && <span className="text-sol-text-dim">Nobody has reviewed yet</span>)}
         </Figure>
@@ -438,12 +439,6 @@ export function PRHeader({
             <span className="text-sol-text-dim">GitHub has not said yet</span>
           )}
         </Figure>
-        {/* Only once the files are in: until then where it ships is unknown, not empty. */}
-        {deploy.open && deploy.declares && deploy.shipsTo && (
-          <Figure label="Ships to">
-            <PRShipsTo model={deploy} />
-          </Figure>
-        )}
         <Figure label="Open comments" onClick={openComments > 0 ? onOpenComments : undefined} title={withShortcut("Go to the first open thread", "pr.nextThread")}>
           <span className={openComments > 0 ? "text-sol-yellow" : "text-sol-text-muted"}>
             <CircleDot className="w-3 h-3 inline mr-1 -mt-px" />
@@ -461,6 +456,12 @@ export function PRHeader({
           </span>
         </Figure>
       </div>
+      <PRShipStrip
+        pr={pr}
+        model={deploy}
+        authed={authed}
+        shepherd={<ShepherdControl pr={pr} sessionChoices={sessionChoices} onSetShepherd={onSetShepherd} />}
+      />
       <PRDeployBand model={deploy} />
     </header>
   );

@@ -163,6 +163,13 @@ export function PRDeployBand({ model }: { model: PrDeployModel }) {
           </li>
         ))}
       </ul>
+      {model.teamId ? (
+        <span className="pr-deploy-foot">
+          <Link href={deploysHrefOf(model, rows[0]?.target ?? null)} className="pr-ship-deploys" data-pr-deploy-deploys>
+            Open on Deploys<ArrowUpRight className="w-3.5 h-3.5" aria-hidden />
+          </Link>
+        </span>
+      ) : null}
       {press.review}
     </section>
   );
