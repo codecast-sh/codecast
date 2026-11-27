@@ -6,7 +6,7 @@ import * as Haptics from 'expo-haptics';
 import { useTheme } from '@/constants/Theme';
 import { DrawerHeading, DrawerRow } from '@/components/nav/DrawerRow';
 import { LivePulse, useCallsOn, useLiveRooms } from '@/components/calls/LiveRooms';
-import { useWorkspaceFeatureState } from '@/lib/teamFeatures';
+import { useAnyWorkspaceFeatureState, useWorkspaceFeatureState } from '@/lib/teamFeatures';
 import { useDecisionQueue } from '@codecast/web/hooks/useDecisionQueue';
 
 /** What waits in the app menu: the decisions on you and whether a huddle is
@@ -24,7 +24,8 @@ export function Places({ onLeave }: { onLeave: () => void }) {
   const Theme = useTheme();
   const router = useRouter();
   const orgOn = useWorkspaceFeatureState('org');
-  const prioritiesOn = useWorkspaceFeatureState('priorities');
+  // Priorities lists every workspace the viewer holds: its row shows while any has it on.
+  const prioritiesOn = useAnyWorkspaceFeatureState('priorities');
   const { waiting, live } = useMenuSignals();
 
   const go = (route: string) => {

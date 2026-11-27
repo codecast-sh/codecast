@@ -1,14 +1,15 @@
 // The phone Priorities list's data (app/priorities.tsx) and the inbox's
 // Priorities view feeder: priorities.list over every workspace the viewer
-// holds, the active one's pass timing riding the same answer (one
-// subscription: same query, same args), read across every workspace, each
-// rank read live from its place; and the viewer's view of the list (hidden
-// workspaces, Group by, Compact) from clientState.ui.priorities_view, so it
-// follows them to every device. Web's hooks/usePriorities is the twin, with
-// the same args and prefs key, but imports sonner, which the phone lacks.
+// holds (one subscription: same query, same args), read across every
+// workspace, each rank read live from its place; the active workspace's pass
+// timing from its own small query (priorities.timing); and the viewer's view
+// of the list (hidden workspaces, Group by, Compact) from
+// clientState.ui.priorities_view, so it follows them to every device. Web's
+// hooks/usePriorities is the twin, with the same args and prefs key, but
+// imports sonner, which the phone lacks.
 import { useCallback, useMemo } from 'react';
 import { api as _api } from '@codecast/convex/convex/_generated/api';
-import type { PriorityList, PriorityRow } from '@codecast/shared/contracts/priorities';
+import type { PriorityRow } from '@codecast/shared/contracts/priorities';
 import { useSyncCollection } from '@codecast/web/hooks/useSyncCollection';
 import { useQueryNoThrow } from '@codecast/web/hooks/useQueryNoThrow';
 import { useActiveWorkspaceKey, useWorkspacesCollection } from '@codecast/web/hooks/useWorkspaceCollection';
@@ -18,16 +19,12 @@ import { useInboxStore } from '@codecast/web/store/inboxStore';
 
 const api = _api as any;
 
-/** The list's args: every workspace, the active one's pass timing. Every reader passes these, so they share one subscription. */
-function useListArgs(): { timing_for: string } | null {
-  const workspace = useActiveWorkspaceKey();
-  return useMemo(() => (workspace ? { timing_for: workspace } : null), [workspace]);
-}
+/** The list's args, the same object for every caller: every workspace, one subscription. */
+const EVERY_WORKSPACE = {};
 
 /** Feeder: the priorities the viewer can read in every workspace they hold, a snapshot of all of them. */
 export function useSyncPriorities(on = true) {
-  const args = useListArgs();
-  return useSyncCollection('priorities', api.priorities.list, on && args ? args : 'skip', { select: listRows });
+  return useSyncCollection('priorities', api.priorities.list, on ? EVERY_WORKSPACE : 'skip', { select: listRows });
 }
 
 /** Every workspace the viewer holds: each of their teams, and their own. */
@@ -38,11 +35,12 @@ function useHeldWorkspaceKeys(): string[] {
 }
 
 export function usePriorityList(): { feed: ReturnType<typeof useSyncCollection>; rows: PriorityRow[]; meta: PriorityListMeta } {
-  const args = useListArgs();
+  const workspace = useActiveWorkspaceKey();
   const feed = useSyncPriorities();
   const stored = useWorkspacesCollection<PriorityRow>('priorities', prioritySig, useHeldWorkspaceKeys());
   const rows = useMemo(() => withLiveRanks(stored), [stored]);
-  const meta = listMeta(useQueryNoThrow(api.priorities.list, args ?? 'skip', { remember: true }).data as PriorityList | null | undefined);
+  // When the active workspace's pass runs: its own query, so a workspace switch never re-runs the list.
+  const meta = listMeta(useQueryNoThrow(api.priorities.timing, workspace ? { workspace } : 'skip', { remember: true }).data as PriorityListMeta | null | undefined);
   return { feed, rows, meta };
 }
 

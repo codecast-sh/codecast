@@ -3,7 +3,7 @@
 // in the priority's workspace). The server can still refuse the link (the
 // person picked Hidden, the folder is locked private, the priority went
 // away); then the person is told so, instead of finding the session unlinked.
-import { toast } from "sonner";
+// Both apps: web says it in a toast, the phone in an alert (`say`).
 import { useInboxStore } from "../store/inboxStore";
 import type { SessionStart } from "../store/composeSlice";
 import { lookup } from "./liveEntities";
@@ -28,8 +28,8 @@ export function startLinkVerdict(
   return `This session isn't on ${what}: that milestone can't take it`;
 }
 
-/** Passes `created` through; once it resolves, tells the person if the server's row came back without the Start's link. */
-export function sayIfStartUnlinked<T>(created: Promise<T>, start: SessionStart | undefined): Promise<T> {
+/** Passes `created` through; once it resolves, says (`say`) if the server's row came back without the Start's link. */
+export function sayIfStartUnlinked<T>(created: Promise<T>, start: SessionStart | null | undefined, say: (message: string) => void): Promise<T> {
   if (!start?.priority) return created;
   created.then((id) => {
     if (typeof id !== "string") return;
@@ -37,7 +37,7 @@ export function sayIfStartUnlinked<T>(created: Promise<T>, start: SessionStart |
       const row = (s.sessions as Record<string, any>)[id];
       const workspace = (lookup(s.priorities, start.priority!) as { workspace?: string } | undefined)?.workspace;
       const verdict = startLinkVerdict(row, start, workspace);
-      if (verdict && verdict !== "linked") toast(verdict);
+      if (verdict && verdict !== "linked") say(verdict);
       return verdict != null;
     };
     if (settle(useInboxStore.getState())) return;

@@ -168,6 +168,7 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
       create: (stubId) => sayIfStartUnlinked(
         store.createSessionFromStub(stubId, { agentType, projectPath: path, gitRoot: path || undefined, firstMessage: hostedFirstRef.current ?? undefined }),
         useInboxStore.getState().sessions[stubId]?._start,
+        (message) => toast(message),
       ),
     });
     materializeRef.current = materialize;

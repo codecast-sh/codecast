@@ -23,6 +23,7 @@ import { appAlert, showActionSheet } from '@/lib/popups';
 import { SettingsSwitch } from '@/components/settings/SettingsUI';
 import { useAgentsByUse, useDefaultAgentType, useOnlyHostedAgent, usePinnedPickerOptions } from '@codecast/web/hooks/usePinnedAgents';
 import { startHostedConversation } from '@codecast/web/lib/startHostedConversation';
+import { sayIfStartUnlinked } from '@codecast/web/lib/priorityStartLink';
 import { AssistantStart } from '@/components/hosted/AssistantStart';
 import { RecentScreenshots } from '@/components/session/RecentScreenshots';
 import { checkoutMatches, displayPath, expandHome, newFolderPath } from '@/lib/folderSearch';
@@ -352,8 +353,9 @@ function NewSessionSheet({ visible, seed, sharedImages, start, task, onClose, on
     const path = projectPath.trim() || undefined;
     // Bound to this render's picks, so a retry after the sheet has reset still
     // re-sends exactly what the user launched with.
+    // A Start's create says so when the server could not put the session on its milestone (web's toast, an alert here).
     const create = (stubId: string) =>
-      store.createSession({
+      sayIfStartUnlinked(store.createSession({
         agent_type,
         project_path: path,
         git_root: path,
@@ -361,7 +363,7 @@ function NewSessionSheet({ visible, seed, sharedImages, start, task, onClose, on
         ...launchStampsForCreate(),
         // A milestone's Start (lib/compose): linked to its priority, milestone, plan and first open task at creation, as on web.
         ...linkedCreateArgs(start ?? null, task ?? null),
-      });
+      }), start, (message) => appAlert("Not on the milestone", message));
     let stubId: string;
     try {
       const started = store.beginOptimisticSession({
