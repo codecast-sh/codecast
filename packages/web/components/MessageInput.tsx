@@ -838,6 +838,23 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   const dismissLightbox = useCallback(() => { setLightboxImageIndex(null); textareaRef.current?.focus(); }, []);
   useWatchEffect(() => { onLightboxChange?.(lightboxImageIndex !== null); }, [lightboxImageIndex, onLightboxChange]);
   const lightboxSwipe = useSwipeToDismiss(dismissLightbox);
+  // The composer's top edge while the lightbox is up, re-read every frame:
+  // the surface around the composer re-lays itself out once the lightbox
+  // opens (the new-session popup drops to the bottom of the screen), and the
+  // box grows as you type about the picture. The picture fills what is above.
+  const lightboxOpen = lightboxImageIndex !== null;
+  const [lightboxComposerTop, setLightboxComposerTop] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    if (!lightboxOpen) { setLightboxComposerTop(null); return; }
+    let frame = 0;
+    const read = () => {
+      const top = composerRootRef.current?.getBoundingClientRect().top;
+      if (top != null) setLightboxComposerTop((prev) => (prev === top ? prev : top));
+      frame = requestAnimationFrame(read);
+    };
+    read();
+    return () => cancelAnimationFrame(frame);
+  }, [lightboxOpen]);
   // Durable send: routes through the store's dispatch outbox so a reload
   // mid-send survives and is redriven on next load (idempotent on client_id).
   const sendMessage = useInboxStore((s) => s.sendMessage);
@@ -3131,10 +3148,10 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         // keep typing), and a viewport-centered tall image would run behind and
         // past it — worst in the compose dialog, where the composer sits
         // mid-screen. paddingBottom pushes the centering box up to the
-        // composer's top edge; the img maxHeight clamps to that space so a
-        // vertical image fits it instead of 70vh of viewport.
+        // composer's top edge; the img maxHeight clamps to that space, so a
+        // picture shows at its own size, or shrinks to fit above the composer.
         (() => {
-          const composerTop = composerRootRef.current?.getBoundingClientRect().top;
+          const composerTop = lightboxComposerTop;
           const reserved = composerTop != null ? Math.max(0, window.innerHeight - composerTop) : 0;
           const available = composerTop != null ? Math.max(120, composerTop - 24) : undefined;
           return (
