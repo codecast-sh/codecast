@@ -19,7 +19,9 @@ import { DecisionOptionList } from "./DecisionOptionList";
 import { acceptLabel, toggleTicked } from "../../lib/priorityCardTicks";
 import { priorityCardHeadline } from "../../lib/priorityCardDecision";
 import { MilestoneMark } from "../priorities/parts";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
+import { TooltipProvider } from "../ui/tooltip";
+import { LegendButton, Mark } from "../Mark";
+import { changeMarkId } from "../../lib/marks/changes";
 import { Button } from "../ui/button";
 import { Textarea } from "../ui/textarea";
 import "./changeCard.css";
@@ -52,8 +54,10 @@ const ICON: Record<PriorityChangeKind, { icon: LucideIcon; tone: string }> = {
   drop_milestone: { icon: CircleX, tone: "red" },
 };
 
+const movesDown = (c: PriorityChange) => c.kind === "move" && Number(c.to) > Number(c.from);
+
 function iconOf(c: PriorityChange) {
-  if (c.kind === "move" && Number(c.to) > Number(c.from)) return { icon: ArrowDown, tone: "down" };
+  if (movesDown(c)) return { icon: ArrowDown, tone: "down" };
   return ICON[c.kind];
 }
 
@@ -133,12 +137,9 @@ function ChangeRow({ c, card, on, quotes, onToggle, after }: {
       data-kind={c.kind}
       {...(onToggle ? { role: "checkbox", "aria-checked": on, tabIndex: 0, onClick: onToggle, onKeyDown: press } : {})}
     >
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <span className={`pcc-icon pcc-tone-${tone}`} aria-label={CHANGE_NAME[c.kind]} data-pcc-icon><Icon aria-hidden /></span>
-        </TooltipTrigger>
-        <TooltipContent side="left">{CHANGE_NAME[c.kind]}</TooltipContent>
-      </Tooltip>
+      <Mark id={changeMarkId(c.kind, movesDown(c))} side="left">
+        <span className={`pcc-icon pcc-tone-${tone}`} aria-label={CHANGE_NAME[c.kind]} data-pcc-icon><Icon aria-hidden /></span>
+      </Mark>
       <div className="pcc-text">
         <span className="pcc-line" data-pcc-line>
           {prefix && <b className="pcc-prefix">{prefix}:</b>}{prefix && " "}{rowBody(c, card)}
@@ -349,6 +350,7 @@ export function PriorityChangeCard({ card, ticked, onToggle, answered, onAnswer,
                   <Quote aria-hidden />Quotes
                 </button>
               )}
+              <LegendButton lead="Priorities pass" />
             </div>
             {answered ? (
               <>
