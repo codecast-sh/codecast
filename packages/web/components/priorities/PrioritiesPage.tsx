@@ -23,8 +23,9 @@ import { Button } from "../ui/button";
 import { SwitchReview, type SwitchLedger } from "../consequential/ConsequentialSwitch";
 import { EmptyState } from "../ui/empty-state";
 import { SkeletonRows } from "../ui/skeleton";
-import { PageFrame, PageHeader } from "../ui/page-header";
-import { LegendButton, Mark } from "../Mark";
+import { PageFrame } from "../ui/page-header";
+import { LegendButton } from "../Mark";
+import { LIST_COLUMN, PrioritiesHeader } from "./PrioritiesHeader";
 import { effectivePriorityOrder } from "@codecast/shared/contracts/priorities";
 import { useServerAuthSettled } from "../../hooks/useServerAuthSettled";
 import { useInboxStore } from "../../store/inboxStore";
@@ -89,11 +90,9 @@ export default function PrioritiesPage() {
     body = <PrioritiesView rows={rows} history={history} now={now} layout={layout} />;
   }
 
-  // The header's row sits in the list's column: the same max width, centred, its edges on the list's; the glyph centred in a
-  // 20px box (the rank column) and the 8px gap after it put the title on the text edge.
   return (
     <PageFrame
-      header={<PageHeader legacy={legacy} title="Priorities" glyph={<span className="flex w-5 justify-center"><Mark id="entity.priority" labeled><Target className="size-4 shrink-0 text-sol-text-muted" aria-hidden /></Mark></span>} count={rows.length ? listed : null} status={behindChip} actions={<LegendButton lead="Priorities" />} className={HEAD_IN_COLUMN} />}
+      header={<PrioritiesHeader legacy={legacy} count={rows.length ? listed : null} status={behindChip} />}
       legacyColumn={LIST_COLUMN}
       column="w-full pb-16 [container-type:inline-size]"
     >
@@ -105,9 +104,6 @@ export default function PrioritiesPage() {
   );
 }
 
-const LIST_COLUMN = "mx-auto w-full max-w-[1280px]";
-/** The header bar's first row (components/ui/page-header) held to the list's column. */
-const HEAD_IN_COLUMN = "[&>div:first-child]:mx-auto [&>div:first-child]:w-full [&>div:first-child]:max-w-[1280px]";
 
 /** A touch screen at least 900px wide: Daylight gets the desktop grid whatever its sidebars leave the list. */
 const isTablet = () => typeof window !== "undefined" && !!window.matchMedia?.(TABLET_QUERY).matches;
