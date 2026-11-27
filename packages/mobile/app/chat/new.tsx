@@ -5,8 +5,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, Stack, useLocalSearchParams } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import { Ionicons } from '@expo/vector-icons';
-import { dmRoomKey } from '@codecast/shared/contracts';
 import { startHuddle } from '@/lib/calls/callManager';
+import { peopleHuddle } from '@/lib/calls/callsGate';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
@@ -21,7 +21,8 @@ import { teamMembersOf } from '@codecast/web/lib/activeTeam';
 //
 // With `huddle=1` the same picker starts a call instead: one person rings
 // their 1:1 room, several ring the group's room (the same keys web's chips
-// use), and the call stage opens.
+// use), and the call stage opens. "Just me" heads the list: your room of one
+// (`dm:<you>`), ringing nobody, the quick start for talking on a walk.
 
 export default function NewMessageScreen() {
   const Theme = useTheme();
@@ -29,7 +30,8 @@ export default function NewMessageScreen() {
   const { huddle } = useLocalSearchParams<{ huddle?: string }>();
   const huddleMode = huddle === '1';
   // The active team's roster, off the store the sync bridge feeds.
-  const viewerId = useInboxStore((s) => (s.currentUser?._id ? String(s.currentUser._id) : ''));
+  const me = useInboxStore((s) => s.currentUser) as any;
+  const viewerId = me?._id ? String(me._id) : '';
   const teamMembers = useInboxStore(teamMembersOf) as any[];
 
   const [q, setQ] = useState('');
@@ -55,7 +57,7 @@ export default function NewMessageScreen() {
     if (ids.length === 0) return;
     if (huddleMode) {
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-      void startHuddle({ roomKey: dmRoomKey(viewerId, ids), toUserIds: ids });
+      void startHuddle(peopleHuddle(viewerId, ids));
       router.replace('/call');
       return;
     }
@@ -109,6 +111,15 @@ export default function NewMessageScreen() {
         // A teammate row acts on the first tap; a tap below the rows puts
         // the keyboard away.
         keyboardShouldPersistTaps="handled"
+        ListHeaderComponent={huddleMode && viewerId && picked.length === 0 && !q.trim() ? (
+          <TouchableOpacity style={styles.row} activeOpacity={0.7} onPress={() => open([viewerId])} testID="huddle-just-me">
+            <ChatAvatar author={{ id: viewerId, name: me?.name || 'Me', avatarUrl: me?.github_avatar_url || me?.image }} size={44} />
+            <RNView style={styles.rowMain}>
+              <RNText style={styles.name} numberOfLines={1}>Just me</RNText>
+            </RNView>
+            <Ionicons name="headset-outline" size={20} color={Theme.violet} />
+          </TouchableOpacity>
+        ) : null}
         renderItem={({ item: m }: { item: any }) => {
           const id = String(m._id);
           const on = picked.includes(id);

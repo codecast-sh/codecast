@@ -1,4 +1,4 @@
-import { useEffect, useRef, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import { Animated, Pressable, StyleSheet, View as RNView } from "react-native";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
@@ -13,6 +13,7 @@ import { SolarizedLight, Spacing, themedStyles, useTheme } from "@/constants/The
 import { ChatAvatar } from "@/components/chat/MessageRow";
 import { getCallSnapshot, joinCall, subscribeCall } from "@/lib/calls/callManager";
 import { useActiveTeam } from "@/hooks/useWorkspaceArgs";
+import { callsOnInWorkspace, personalLiveRoom } from "@/lib/calls/callsGate";
 
 // Live now, phone-shaped: the huddles running anywhere in your teams, listed
 // where you would walk past them. A room is a door — one tap walks into a
@@ -25,21 +26,26 @@ import { useActiveTeam } from "@/hooks/useWorkspaceArgs";
 
 export type { LiveRoomRow };
 
-/** Whether the active team has huddles. Calls are a per-team opt-in:
- *  callConfig lists the caller's teams that have them, and is false outright
- *  when the deployment has no LiveKit. */
+/** Whether the active workspace has huddles: a team reads its own opt-in,
+ *  Personal borrows when any of my teams has calls on (callsOnInWorkspace). */
 export function useCallsOn(): boolean {
   const { teamId } = useActiveTeam();
-  const callConfig = useInboxStore((s) => s.callConfig) as { enabled: boolean; teams?: string[] } | null;
-  return callConfig?.enabled === true && !!teamId && (callConfig.teams ?? []).includes(String(teamId));
+  return useInboxStore((s) => callsOnInWorkspace(s.callConfig, teamId));
 }
 
 /** The live huddles off the store (the sync bridge feeds calls.getLiveRooms),
- *  through web's own derivation, with "mine" meaning my call plane's room. */
+ *  through web's own derivation, with "mine" meaning my call plane's room.
+ *  Personal lists no team's huddles: only my room of one and rooms I sit in. */
 export function useLiveRooms(enabled: boolean): LiveRoomRow[] {
   const myRoomKey = useSyncExternalStore(subscribeCall, () => getCallSnapshot().roomKey, () => null);
   const rows = useLiveRoomRows(myRoomKey);
-  return enabled ? rows : NO_ROWS;
+  const { teamId } = useActiveTeam();
+  const meId = useInboxStore((s) => (s.currentUser?._id ? String(s.currentUser._id) : null));
+  return useMemo(() => {
+    if (!enabled) return NO_ROWS;
+    if (teamId) return rows;
+    return rows.filter((r) => personalLiveRoom(r.roomKey, r.members.map((m) => String(m.user_id)), meId));
+  }, [enabled, teamId, rows, meId]);
 }
 
 const NO_ROWS: LiveRoomRow[] = [];

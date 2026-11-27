@@ -9,7 +9,7 @@ import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { goToTab } from '@/lib/tabNavigation';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Ionicons } from '@expo/vector-icons';
-import { teamFeatureEnabled } from '@codecast/shared/contracts';
+import { dmRoomKey, teamFeatureEnabled } from '@codecast/shared/contracts';
 import { personRefOf } from '@codecast/shared/entities';
 import { isActiveTask } from '@codecast/shared/tasks';
 import { useInboxStore, useTrackedStore, sessionsWithPendingSend, pendingSendWakeSig, teamInboxIdsOf, type TaskItem } from '@codecast/web/store/inboxStore';
@@ -151,6 +151,10 @@ export default function PersonScreen() {
   }
 
   const canReach = !isMe && !!userId && !member?.is_bot;
+  // Your own page huddles too: a room of one, ringing nobody. Its button
+  // joins that room, never whichever huddle you sit in elsewhere.
+  const canHuddle = callsOn && !!userId && !member?.is_bot;
+  const huddleRoom = isMe ? liveRooms.find((r) => r.roomKey === dmRoomKey(userId!)) ?? null : inRoom;
 
   return (
     <>
@@ -174,18 +178,18 @@ export default function PersonScreen() {
           </RNView>
         </RNView>
 
-        {canReach && (chatOn || callsOn) && (
+        {((canReach && chatOn) || canHuddle) && (
           <RNView style={styles.actions}>
-            {chatOn && (
+            {canReach && chatOn && (
               <TouchableOpacity style={[styles.action, styles.actionPrimary]} onPress={() => openDmWith(router, userId!)} testID="person-message">
                 <Ionicons name="chatbubble-outline" size={16} color={Theme.bg} />
                 <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={[styles.actionText, { color: Theme.bg }]}>Message</RNText>
               </TouchableOpacity>
             )}
-            {callsOn && (
-              <TouchableOpacity style={[styles.action, inRoom && { borderColor: Theme.green }]} onPress={() => huddleWith(router, String(me?._id ?? ''), userId!, inRoom)} testID="person-huddle">
-                <Ionicons name={inRoom ? 'headset' : 'headset-outline'} size={16} color={inRoom ? Theme.green : Theme.violet} />
-                <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={[styles.actionText, { color: inRoom ? Theme.green : Theme.text }]}>{inRoom ? 'Join huddle' : 'Huddle'}</RNText>
+            {canHuddle && (
+              <TouchableOpacity style={[styles.action, huddleRoom && { borderColor: Theme.green }]} onPress={() => huddleWith(router, String(me?._id ?? ''), userId!, huddleRoom)} testID="person-huddle">
+                <Ionicons name={huddleRoom ? 'headset' : 'headset-outline'} size={16} color={huddleRoom ? Theme.green : Theme.violet} />
+                <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={[styles.actionText, { color: huddleRoom ? Theme.green : Theme.text }]}>{huddleRoom ? 'Join huddle' : 'Huddle'}</RNText>
               </TouchableOpacity>
             )}
           </RNView>

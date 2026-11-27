@@ -8,6 +8,7 @@ import { Text } from "@/components/Themed";
 import { Theme, themedStyles, useTheme } from "@/constants/Theme";
 import { joinCall, startHuddle } from "@/lib/calls/callManager";
 import { appAlert } from "@/lib/popups";
+import { callsOnForRoom } from "@/lib/calls/callsGate";
 
 type HuddleTarget = {
   roomKey: string;
@@ -25,10 +26,8 @@ export function useHuddleAction({ roomKey, teamId, ring, anchorTitle, channelMem
   // Both off the store the sync bridge feeds: whether calling is on for the
   // team, and who is in this room (every live room in my teams carries its
   // members), so the affordance paints its final state on the first frame.
-  const enabled = useInboxStore((s) => {
-    const config = s.callConfig as { enabled: boolean; teams?: string[] } | null;
-    return config?.enabled === true && !!teamId && (config.teams ?? []).includes(String(teamId));
-  });
+  const enabled = useInboxStore((s) =>
+    callsOnForRoom(s.callConfig, teamId, ((s.teams ?? []) as any[]).filter(Boolean).map((t) => String(t._id))));
   const inRoom = useInboxStore((s) => s.liveRooms.find((r: any) => r.room_key === roomKey)?.members.length ?? 0);
   const isChannel = parseRoomKey(roomKey)?.kind === "channel";
   const start = () => {
@@ -70,8 +69,8 @@ export function useHuddleAction({ roomKey, teamId, ring, anchorTitle, channelMem
 // thread rings its people). When teammates are already in it, the button
 // shows their count so it reads as "join them", not "start something".
 // Renders nothing when calling is not configured, or when calls are off for
-// the room's team (a per-team opt-in; callConfig lists the caller's teams that
-// have it on) — no dead affordance.
+// the room's team (callsOnForRoom: a room with no team of mine borrows one of
+// my teams with calls on) — no dead affordance.
 export function HuddleButton(target: HuddleTarget) {
   const Theme = useTheme();
   const huddle = useHuddleAction(target);
