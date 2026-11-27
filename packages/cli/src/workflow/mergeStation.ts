@@ -219,7 +219,6 @@ async function mergeStation(args: MergeStationArgs): Promise<MergeStationResult>
   // The repository's lease across machines, from before the rebase through the landed sha: merges land one at a time
   // in the order they asked, each rebased on the last, and no other station's or ship checkout's deploy lands between
   // this one's deploy and its merge. Taken before the checkout's lock, so a station's place in line is its arrival.
-  if (!args.repository) return refuse("no GitHub repository is named for this checkout, so its merge cannot take its turn");
   // The wait has a budget of its own (exit 4): a long line spent the station's timeout, and the runner killed a
   // station granted the lease late in the middle of its deploy. The graph runs it again with the place this one kept.
   // The change flow's Merge timeout is this budget plus the hour the merge itself had.
@@ -228,28 +227,32 @@ async function mergeStation(args: MergeStationArgs): Promise<MergeStationResult>
   try { kept = fs.readFileSync(tokenFile, "utf-8").trim(); } catch { /* no place kept: a first visit */ }
   fs.rmSync(tokenFile, { force: true });
   const stopping = new AbortController();
-  const holding = holdRepoLease(args.post, { repository: args.repository, holder: leaseHolder(`the merge of PR #${pr} (run ${args.runId})`), runId: args.runId, log, signal: stopping.signal, waitMs: args.leaseLineMs ?? LEASE_LINE_MS, keepPlace: true, ...(kept ? { token: kept } : {}) });
-  const offSignals = stopOnSignal(args, stopping, () => holding.then((l) => l.release(), () => {}));
-  let lease: RepoLease;
+  let holding: Promise<RepoLease> | null = null;
+  const offSignals = stopOnSignal(args, stopping, async () => { await holding?.then((l) => l.release(), () => {}); });
+  let lease: RepoLease = { assertHeld: async () => true, retake: async () => true, release: async () => {} };
   // Why the merge goes on without the lease: the server will not lease this repository to the run's workspace (a
-  // personal one with no GitHub App, published checkout or deploy targets for it), or has no lease at all. The lease
+  // personal one with no GitHub App, published checkout or deploy targets for it), has no lease at all, or the
+  // checkout's origin names no GitHub repository to lease (an SSH host alias such as git@github-work:o/r). The lease
   // orders deploys, so such a merge goes on only when it sends none; one with a before-merge step still refuses.
   let unleased: string | null = null;
-  try { lease = await holding; }
-  catch (err) {
-    if (err instanceof LeaseLineWait) {
-      offSignals();
-      fs.writeFileSync(tokenFile, err.token);
-      return { code: 4, line: `${err.message}; nothing was done, and the run asks again in the same place` };
+  if (!args.repository) unleased = "no GitHub repository is named for this checkout's origin";
+  else {
+    holding = holdRepoLease(args.post, { repository: args.repository, holder: leaseHolder(`the merge of PR #${pr} (run ${args.runId})`), runId: args.runId, log, signal: stopping.signal, waitMs: args.leaseLineMs ?? LEASE_LINE_MS, keepPlace: true, ...(kept ? { token: kept } : {}) });
+    try { lease = await holding; }
+    catch (err) {
+      if (err instanceof LeaseLineWait) {
+        offSignals();
+        fs.writeFileSync(tokenFile, err.token);
+        return { code: 4, line: `${err.message}; nothing was done, and the run asks again in the same place` };
+      }
+      if (!leaseAccessRefused(err, args.repository) && !leaseRouteMissing(err)) {
+        offSignals();
+        return refuse(`could not take the lease on ${args.repository}'s deploys: ${message(err)}`);
+      }
+      unleased = message(err);
     }
-    if (!leaseAccessRefused(err, args.repository) && !leaseRouteMissing(err)) {
-      offSignals();
-      return refuse(`could not take the lease on ${args.repository}'s deploys: ${message(err)}`);
-    }
-    unleased = message(err);
-    lease = { assertHeld: async () => true, retake: async () => true, release: async () => {} };
   }
-  const needsLease = (steps: ShipDeployStep[]) => `${steps.map((s) => s.name).join(", ")} must go out before the merge, and only under the lease on ${args.repository}'s deploys, which could not be taken: ${unleased}`;
+  const needsLease = (steps: ShipDeployStep[]) => `${steps.map((s) => s.name).join(", ")} must go out before the merge, and only under the lease on ${args.repository ?? "the repository"}'s deploys, which could not be taken: ${unleased}`;
   // The checkout's lock still matters under the lease: a lease lost without its holder dying (a laptop asleep past it)
   // goes to the next in line, and two stations of one checkout must still never share a scratch sweep or deploy at once.
   let unlock: () => void;
