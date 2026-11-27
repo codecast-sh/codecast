@@ -2259,6 +2259,8 @@ export default defineSchema({
     .index("by_scope_user", ["scope_user_id"])
     .index("by_team_handle", ["team_id", "handle"])
     .index("by_scope_user_handle", ["scope_user_id", "handle"])
+    // Every team's @release, for a CLI release telling other teams (teamCliFloor.tellOtherTeams).
+    .index("by_handle", ["handle"])
     .index("by_short_id", ["short_id"]),
 
   // The audit trail of a role's scope (docs/architecture/scopes-and-feed.md

@@ -71,6 +71,33 @@ describe("cast repo lease", () => {
     expect(s.ops.filter((o) => o !== "take")).toEqual(["release"]);
   });
 
+  // As the Merge station merges unleased: a workspace refused the repository, or a server with no lease, runs the
+  // command without the lease, saying so once; --require keeps the refusal, and so does any other refusal.
+  const unleasable = {
+    "the server will not lease the repository to the workspace": "Run run_1 cannot lease o/r: neither its workspace nor any of your teams works on it.",
+    "the server has no lease route": "this codecast server has no /cli/repo-lease route — it needs a newer deployment.",
+  };
+  for (const [why, refusal] of Object.entries(unleasable)) {
+    test(`${why}: the command runs without the lease, saying so once, and exits with its code; --require refuses`, async () => {
+      const refuse = async () => { throw new Error(refusal); };
+      const said: string[] = [];
+      expect(await runUnderLease({ post: refuse, repository: "o/r", holder: "x", log: (l) => said.push(l), cmd: ["sh", "-c", "exit 5"] })).toBe(5);
+      expect(said).toEqual([`running without the repository's turn: ${refusal}`]);
+      const strict = await runUnderLease({ post: refuse, repository: "o/r", holder: "x", log: () => {}, require: true, cmd: ["sh", "-c", "exit 0"] }).then(() => null, (e: Error) => e);
+      expect(strict?.message).toBe(refusal);
+    });
+  }
+
+  test("any other refusal of the lease still refuses, starting nothing", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "repo-lease-"));
+    try {
+      const refuse = async () => { throw new Error("No run run_1 you can lease a repository for."); };
+      const err = await runUnderLease({ post: refuse, repository: "o/r", holder: "x", log: () => {}, cmd: ["sh", "-c", `touch ${join(dir, "ran")}`] }).then(() => null, (e: Error) => e);
+      expect(err?.message).toBe("No run run_1 you can lease a repository for.");
+      expect(() => readFileSync(join(dir, "ran"))).toThrow();
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
   test("a lease lost while the command runs is said loudly; with --strict the command is ended", async () => {
     // The renewal finds another holder: the lease went to the next in line while this one ran.
     const lostServer = () => {

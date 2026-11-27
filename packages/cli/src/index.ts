@@ -13168,6 +13168,8 @@ program
           return finishCliRelease({
             root: process.cwd(), deploy: options.deploy!, version: v, waitMs: (Number(options.wait) || 0) * 60_000,
             post: (p, body) => cliPost(p, body, { throwOnError: true }), fromSession: callingSession(), setGlobal,
+            // No token: the global floor alone, not the caller's teams' raised over it.
+            globalFloor: async () => (await new SyncService({ convexUrl, authToken, userId }).getClient().query("systemConfig:getMinCliVersion" as any, {})) as string | null,
           });
         },
         fromSession: callingSession(),
