@@ -3,7 +3,7 @@
 // working, sleeping, idle, then the most recent), closed ones folded under
 // "› n closed"; tasks in the app's task-status vocabulary (dropped struck
 // through); then pull requests, branches, plans and deploys. Each row opens
-// its thing; the owner fixes a session's link from its ⋯.
+// its thing; the session's owner or the priority's fixes its link from its ⋯.
 import { useState, type ReactNode } from "react";
 import Link from "next/link";
 import { ChevronRight, GitBranch, GitMerge, GitPullRequest, GitPullRequestClosed, Map as MapIcon, Workflow } from "lucide-react";
@@ -59,7 +59,8 @@ export function Connected({ model, m, now, lookups }: {
   ];
   const branches = branchesOf(m, lookups);
   const deploys = lookups.deploysOf(m, model.row.workspace);
-  const menu = (s: SessionLine) => (model.row.mine && s.mine ? <SessionMenu row={model.row} s={s} stepKey={m.key} /> : undefined);
+  // The session's owner or the priority's may unlink it; moving it between milestones needs both to be the viewer's.
+  const menu = (s: SessionLine) => (model.row.mine || s.mine ? <SessionMenu row={model.row} s={s} stepKey={m.key} unlinkOnly={!(model.row.mine && s.mine)} /> : undefined);
   const nSessions = sessions.length + m.more;
   const empty = nSessions + m.tasks.length + m.prs.length + branches.length + plans.length + deploys.length === 0;
   return (

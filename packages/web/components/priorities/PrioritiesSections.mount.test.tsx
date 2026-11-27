@@ -222,3 +222,21 @@ test("a teammate's session that asks reads Needs you on their milestone, as the 
   }
 }, 60_000);
 
+
+test("the session menu on a teammate's milestone: the viewer's own session may leave their priority, and nothing else; a teammate's session on it has no menu", async () => {
+  const theirs = row(10, "Shared grader", 1, [step("s1", "Pair on it", "critical")], {
+    ...mate,
+    mapped_links: [links("s1", [sess("minesess", "My pairing", "dormant", 1), sess("samsess", "Sam's run", "dormant", 2, { mine: false })])],
+  });
+  const page = await mount(view({ rows: [...ROWS, theirs] }));
+  try {
+    const b = block(page.container, "pri-10");
+    await press(b.querySelector('[data-milestone="s1"] [role=button]')!);
+    const menus = [...b.querySelectorAll("[data-session-menu]")].map((m) => m.getAttribute("data-session-menu"));
+    expect(menus).toEqual([sess("minesess", "", "dormant", 0).short_id]);
+    await act(async () => { b.querySelector("[data-session-menu]")!.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+    expect([...document.querySelectorAll('[role="menuitem"]')].map((n) => n.getAttribute("data-act"))).toEqual(["not-priority"]);
+  } finally {
+    await page.unmount();
+  }
+}, 60_000);
