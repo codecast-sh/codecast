@@ -5,7 +5,7 @@
 import { afterEach, expect, setDefaultTimeout, setSystemTime, test } from "bun:test";
 import { convexTest } from "convex-test";
 import { anyApi } from "convex/server";
-import { dmRoomKey, HUDDLE_REBRIEF_EVERY, HUDDLE_REPLY_NOTE, HUDDLE_WORK_NOTE, SCRIBE_CLAIM_TTL_MS, SCRIBE_REMINDER } from "@codecast/shared/contracts";
+import { dmRoomKey, HUDDLE_REBRIEF_EVERY, HUDDLE_REPLY_NOTE, HUDDLE_WORK_NOTE, SCRIBE_CLAIM_TTL_MS, SCRIBE_REMINDER, scribeStatus } from "@codecast/shared/contracts";
 import schema from "./schema";
 import { allModules } from "./testModules.testkit";
 import { internal } from "./_generated/api";
@@ -121,7 +121,7 @@ test("giving back a failed claim frees the slot without touching someone else's"
   expect((await call()).scribe_claim?.at).toBe(bens.claim_id);
 });
 
-test("anyone in the call removes Scribe: its route, its feed and any claim go", async () => {
+test("anyone in the call removes Scribe: its route and feed go, and the removal is on record", async () => {
   const { ana, ben, room, anaAgent, as, seat, call, feeds } = await seed();
   const claim = await as(String(ana)).mutation(api.transcripts.inviteScribe, { room_key: room });
   await seat(String(ana), String(anaAgent), claim.claim_id);
@@ -130,9 +130,41 @@ test("anyone in the call removes Scribe: its route, its feed and any claim go", 
   await as(String(ben)).mutation(api.transcripts.removeScribe, { room_key: room });
   const after = await call();
   expect(after.routes).toEqual([]);
-  expect(after.scribe_claim).toBeUndefined();
+  expect(after.scribe_claim).toEqual({ by: ben, at: expect.any(Number), removed: true });
   expect(await feeds()).toEqual([]);
-  expect((await as(String(ben)).mutation(api.transcripts.inviteScribe, { room_key: room })).claimed).toBe(true);
+  // Every client reads it as gone, and the removal as such.
+  const live = await as(String(ana)).query(api.transcripts.getLive, { room_key: room });
+  expect(live.scribe_claim).toEqual({ by: String(ben), at: after.scribe_claim.at, removed: true });
+  expect(scribeStatus(live, Date.now())).toBe("absent");
+});
+
+test("after a removal, automatic invites are refused for the call; a person's invite brings Scribe back", async () => {
+  const { ana, ben, room, anaAgent, benAgent, as, seat, call } = await seed();
+  const first = await as(String(ana)).mutation(api.transcripts.inviteScribe, { room_key: room, auto: true });
+  expect(first.claimed).toBe(true);
+  await seat(String(ana), String(anaAgent), first.claim_id);
+  await as(String(ben)).mutation(api.transcripts.removeScribe, { room_key: room });
+
+  // Ana reloads, or Ben joins late with the setting on: both refused.
+  expect(await as(String(ana)).mutation(api.transcripts.inviteScribe, { room_key: room, auto: true })).toEqual({ claimed: false, existing: "removed" });
+  expect(await as(String(ben)).mutation(api.transcripts.inviteScribe, { room_key: room, auto: true })).toEqual({ claimed: false, existing: "removed" });
+  // Even past the claim's lifetime.
+  setSystemTime(Date.now() + SCRIBE_CLAIM_TTL_MS + 1000);
+  expect((await as(String(ana)).mutation(api.transcripts.inviteScribe, { room_key: room, auto: true })).claimed).toBe(false);
+  // The old claim's agent cannot sit in the removed slot.
+  await expect(seat(String(ana), String(anaAgent), first.claim_id)).rejects.toThrow(/no longer holds/);
+
+  // A press: the removal clears and Scribe joins.
+  const manual = await as(String(ben)).mutation(api.transcripts.inviteScribe, { room_key: room });
+  expect(manual.claimed).toBe(true);
+  expect((await call()).scribe_claim).toEqual({ by: ben, at: manual.claim_id });
+  await seat(String(ben), String(benAgent), manual.claim_id);
+  expect((await call()).routes).toEqual([expect.objectContaining({ target: String(benAgent), role: "scribe" })]);
+});
+
+test("an automatic invite with nobody having removed Scribe claims as usual", async () => {
+  const { ana, room, as } = await seed();
+  expect((await as(String(ana)).mutation(api.transcripts.inviteScribe, { room_key: room, auto: true })).claimed).toBe(true);
 });
 
 test("someone outside the call can neither invite nor remove Scribe", async () => {
