@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { useInboxStore } from "../../store/inboxStore";
-import { behindRelease } from "../latestCliRelease";
+import { behindRelease, newestRelease } from "../latestCliRelease";
 
 describe("behindRelease (Settings > Daemon, ct-102439)", () => {
   it("compares the running version to the manifest's release by number", () => {
@@ -14,6 +14,21 @@ describe("behindRelease (Settings > Daemon, ct-102439)", () => {
     expect(behindRelease("1.1.300", null)).toBe(false);
     expect(behindRelease(undefined, "1.1.305")).toBe(false);
     expect(behindRelease("dev", "1.1.305")).toBe(false);
+  });
+});
+
+describe("newestRelease (what Settings > Daemon's Update sends)", () => {
+  it("a window's kept read older than the device's own check sends the device's, so the request is not cleared", () => {
+    expect(newestRelease("1.1.305", "1.1.310")).toBe("1.1.310");
+    expect(newestRelease("1.1.310", "1.1.305")).toBe("1.1.310");
+    expect(newestRelease("1.1.100", "1.1.99")).toBe("1.1.100");
+  });
+
+  it("skips what is no release, and names none when nothing is", () => {
+    expect(newestRelease("1.1.305", undefined)).toBe("1.1.305");
+    expect(newestRelease(null, "1.1.305")).toBe("1.1.305");
+    expect(newestRelease("dev", "1.1.305")).toBe("1.1.305");
+    expect(newestRelease(undefined, null)).toBeNull();
   });
 });
 
