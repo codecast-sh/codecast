@@ -140,15 +140,16 @@ describe("a card two changes wait on is escalated to its people", () => {
   });
 });
 
-// The incident end to end: Union's change shape, where every failure of the land segment routes to one `stopped` exit.
+// The incident end to end: Union's change shape, where every failure of the land segment routes to one `stopped` exit,
+// marked shared so its stop is the pipeline's (flowStops.ts keys only those).
 const node = (id: string, type: string, label = id) => ({ id, label, shape: "box", type });
 const GRAPH = {
-  nodes: [node("start", "start"), node("land__pr", "command"), node("land__ci", "command", "CI"), node("stopped", "exit", "Not merged"), node("exit", "exit")],
+  nodes: [node("start", "start"), node("land__pr", "command"), node("land__ci", "command", "CI"), { ...node("stopped", "exit", "Not merged"), shared: true }, node("exit", "exit")],
   edges: [],
 };
 
 describe("an incident's fix reaches a person fast", () => {
-  test("two runs stopped by one cause: the approval card on the cause escalates once, naming both", async () => {
+  test("runs stopped by one cause: the approval card on the cause escalates once, naming both, and a third only updates the count", async () => {
     const { t, ids, task, get, notices } = await world();
     const { wf, runs } = await t.run(async (ctx: any) => {
       await ctx.db.insert("org_roles", { name: "Release", handle: "release", host_user_id: ids.me, team_id: ids.team, scope: { project_ids: [], plan_ids: [] }, status: "active", created_at: T0, updated_at: T0 });
@@ -159,7 +160,7 @@ describe("an incident's fix reaches a person fast", () => {
       user_id: ids.me, workflow_id: wf, task_id: taskId, workspace: ids.ws, team_id: ids.team, status: "running", current_node_id: "land__pr",
       node_statuses: [], spawner_conversation_id: ids.conv, primary_conversation_id: ids.conv, runner_device: "laptop", created_at: T0, updated_at: T0,
     }));
-    runs.push(await run(await task("ct-901")), await run(await task("ct-902")));
+    runs.push(await run(await task("ct-901")), await run(await task("ct-902")), await run(await task("ct-903")));
     const report = (runId: any, body: Record<string, unknown>) => t.mutation(api.workflow_runs.updateProgress, { api_token: TOKEN, run_id: runId, ...body });
     const stop = async (runId: any) => {
       await report(runId, { current_node_id: "land__ci", node_id: "land__ci", node_status: "running" });
@@ -169,26 +170,27 @@ describe("an incident's fix reaches a person fast", () => {
       await t.finishInProgressScheduledFunctions();
     };
 
+    // The first stop is held; the second, on another change, opens the incident and both tasks wait on its cause.
     await stop(runs[0]);
-    const causeOf = async () => {
-      const r: any = await get(runs[0]);
-      const sig = await t.run((ctx: any) => ctx.db.query("signals").withIndex("by_workspace_fingerprint", (q: any) => q.eq("workspace", ids.ws).eq("fingerprint", r.stop_fingerprint)).first());
-      return (await get(sig.task_id)) as any;
-    };
-    const cause = await causeOf();
-    // The fix, shipped on the cause, waits for a person's approval before any run is held by it.
+    await stop(runs[1]);
+    const r: any = await get(runs[0]);
+    expect(r.incident_task_id).toBeDefined();
+    expect(((await get(runs[1])) as any).incident_task_id).toEqual(r.incident_task_id);
+    const cause: any = await get(r.incident_task_id);
+    // The fix, shipped on the cause, waits for a person's approval: asked, it is escalated at once, naming both.
     const fixRun = await run(cause._id);
     const posted = await t.run(async (ctx: any) => postApprovalCard(ctx, {
       repository: "acme/app", pr_number: 7, head_sha: "a".repeat(40), key: "k1", judged: [], reason: "judged",
       to: { user_id: ids.me, name: "Ana" }, run: await ctx.db.get(fixRun), pr: null, title: "Fix CI", now: Date.now(), words: "Looks right.",
     }));
     expect(posted).not.toBeNull();
-    expect(((await get(posted!.card_id)) as any).escalated).toBeUndefined();
+    expect(((await get(posted!.card_id)) as any).escalated).toMatchObject({ note: "2 changes wait on this", waiting: 2, to: [ids.me] });
 
-    await stop(runs[1]);
-    expect(((await get(runs[1])) as any).incident_task_id).toEqual(cause._id);
+    // A third change stopped the same way updates the count without another push.
+    await stop(runs[2]);
+    expect(((await get(runs[2])) as any).incident_task_id).toEqual(cause._id);
     const card: any = await get(posted!.card_id);
-    expect(card.escalated).toMatchObject({ note: "2 changes wait on this", waiting: 2, to: [ids.me] });
+    expect(card.escalated).toMatchObject({ note: "3 changes wait on this", waiting: 3, to: [ids.me] });
     // Still the person's to approve: nobody else was asked.
     expect(card.approval.asked).toEqual([ids.me]);
     const { bell, push } = await notices();

@@ -237,3 +237,50 @@ describe("workflow/validateWorkflow", () => {
     expect(errs.some(e => e.includes("ghost"))).toBe(true);
   });
 });
+
+describe("workflow/parser resume=", () => {
+  const SEG = `digraph land {
+    graph [kind="segment"]
+    start [shape=Mdiamond]
+    pr [shape=parallelogram, script="true"]
+    wait [shape=parallelogram, script="true"]
+    done [shape=Msquare]
+    red [shape=Msquare, shared=true, resume="pr", stop="main stayed red"]
+    start -> pr
+    pr -> wait
+    wait -> done [condition="outcome = success"]
+    wait -> red
+  }`;
+  const compose = (edges: string) => parseWorkflowSource(`digraph c {
+    start [shape=Mdiamond]
+    land [flow="land"]
+    exit [shape=Msquare]
+    stopped [shape=Msquare, stop="$stop_reason"]
+    start -> land
+    ${edges}
+  }`, undefined, { resolveFlow: (slug) => (slug === "land" ? { src: SEG } : null) });
+
+  test("a segment's stop names its own station, renamed with it, on the exit and on the step a routed stop leaves by", () => {
+    const kept = compose(`land -> exit`);
+    expect(kept.nodes.get("land__red")?.resume).toBe("land__pr");
+    expect(validateWorkflow(kept)).toEqual([]);
+    const routed = compose(`land -> exit [condition="outcome = success"]\n    land -> stopped [condition="outcome = failure"]`);
+    expect(routed.nodes.get("land__red")).toMatchObject({ segment_exit: "stop", shared: true, resume: "land__pr" });
+    expect(validateWorkflow(routed)).toEqual([]);
+  });
+
+  test("names a station of the flow, on a stop exit", () => {
+    const g = (attrs: string) => parseWorkflowSource(`digraph g {
+      start [shape=Mdiamond]
+      s [shape=parallelogram, script="true"]
+      x [shape=Msquare, ${attrs}]
+      exit [shape=Msquare]
+      start -> s
+      s -> exit [condition="outcome = success"]
+      s -> x
+    }`);
+    expect(validateWorkflow(g(`resume="s", stop="red"`))).toEqual([]);
+    expect(validateWorkflow(g(`resume="nowhere", stop="red"`))).toEqual([`x [resume="nowhere"] names no station of this flow`]);
+    expect(validateWorkflow(g(`resume="s"`))).toEqual([`x [resume="s"]: only a stop exit (stop=) says where a run stopped there resumes`]);
+  });
+});

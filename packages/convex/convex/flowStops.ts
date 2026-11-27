@@ -41,7 +41,7 @@ export const isFlowStop = (failReason: string | undefined): boolean => !!failRea
 
 type StationRow = { node_id: string; status: string; outcome?: string; completed_at?: number };
 /** What a stop reads of the run's graph (cli graphPayload.ts); a graph pushed before these were sent has none. */
-type StopNode = { id: string; type?: string; shared?: boolean; segment?: string; segment_exit?: string; fold?: boolean };
+type StopNode = { id: string; type?: string; shared?: boolean; resume?: string; segment?: string; segment_exit?: string; fold?: boolean };
 
 const latest = <N extends StationRow>(rows: N[]): N | undefined =>
   rows.reduce<N | undefined>((best, n) => (!best || (n.completed_at ?? 0) >= (best.completed_at ?? 0) ? n : best), undefined);
@@ -50,7 +50,8 @@ const latest = <N extends StationRow>(rows: N[]): N | undefined =>
  * Where a run stopped, read against its graph. `shared`: the exit it ended at
  * is marked shared, or (a flow that routes every segment stop to one generic
  * exit, as Union's `stopped`) the segment exit step it left by is. `station`:
- * where a resume starts, the station that failed last, never the end, a
+ * where a resume starts, the station that exit (or that step) names in
+ * `resume`, else the station that failed last, never the end, a
  * segment's exit step (it only echoes the exit and fails again), an exit, a
  * fan-in or a bookkeeping station, nor one the run's end closed; else the
  * segment the stop came out of, from its entry; else the station it reached
@@ -67,7 +68,7 @@ export function stopOf(rows: ReadonlyArray<StationRow>, endNodeId: string, graph
     const g = byId.get(n.node_id);
     return !g || (!g.segment_exit && g.type !== "exit" && g.type !== "parallel_fanin" && !g.fold);
   };
-  const station = latest(failed.filter(resumable))?.node_id ?? via?.segment ?? end?.segment ?? latest(visited.filter(resumable))?.node_id ?? endNodeId;
+  const station = end?.resume ?? via?.resume ?? latest(failed.filter(resumable))?.node_id ?? via?.segment ?? end?.segment ?? latest(visited.filter(resumable))?.node_id ?? endNodeId;
   return { station, shared: !!end?.shared || !!via?.shared };
 }
 

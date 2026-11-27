@@ -18,6 +18,7 @@ import { isUngroundedCause } from "./lineGround";
 import { rankedCandidates } from "./orgLine";
 import { parseWorkflowSource } from "../../cli/src/workflow/parser";
 import { graphEdgesPayload, graphNodesPayload } from "../../cli/src/workflow/graphPayload";
+import { BUILTIN_WORKFLOW_TEMPLATES } from "../../cli/src/workflow/templates";
 
 const api = anyApi as any;
 const TOKEN = "s".repeat(64);
@@ -288,5 +289,16 @@ describe("stopOf", () => {
   test("a rejection is not shared; with no graph, the station that failed last", () => {
     expect(stopOf([{ node_id: "land__review", status: "failed", completed_at: 1 }, { node_id: "land__rejected", status: "failed", completed_at: 2 }], "stopped", nodes)).toEqual({ station: "land__review", shared: false });
     expect(stopStationOf([{ node_id: "deploy__failed", status: "failed" }], "deploy__failed")).toBe("deploy__failed");
+  });
+  test("an exit that names resume= resumes there: the change flow's main-red stop at PR, not at Wait for green main", () => {
+    const change = graphNodesPayload(parseWorkflowSource(BUILTIN_WORKFLOW_TEMPLATES.change));
+    const rows = [
+      { node_id: "pr", status: "completed", completed_at: 1 },
+      { node_id: "wait_main", status: "failed", completed_at: 2 },
+      { node_id: "mainred", status: "failed", completed_at: 3 },
+    ];
+    expect(stopOf(rows, "mainred", change)).toEqual({ station: "pr", shared: true });
+    // Without it, the station that failed.
+    expect(stopOf(rows, "mainred", change.map(({ resume: _r, ...n }) => n))).toEqual({ station: "wait_main", shared: true });
   });
 });
