@@ -347,16 +347,36 @@ export async function originTip(root: string, branch: string): Promise<string> {
 }
 
 /**
- * The commit a run of a named branch starts from, and that branch made local when it lives only on origin. A branch
- * pushed from another machine has no local ref here; without one, the worktree the run makes would create the branch
- * fresh from this checkout's HEAD, and the change would vanish (a rebase of it onto the default branch is empty, which
- * reads as "already landed"). Empty when neither this checkout nor origin has the branch.
+ * Whether origin's `remote` tip of `branch` is a newer copy of `sha`, so taking it drops nothing only this checkout
+ * has: `sha` is under it, or origin once held `sha` (a tip this checkout fetched or pushed, in its remote-tracking
+ * reflog) and was rewritten past it since, by the change's author rebasing and pushing from elsewhere. A commit the
+ * checkout lacks, or a reflog git cannot read, says no.
+ */
+async function originSupersedes(root: string, branch: string, sha: string, remote: string): Promise<boolean> {
+  const under = (a: string, b: string) => isAncestor(root, a, b).catch(() => false);
+  if (await under(sha, remote)) return true;
+  const held = ((await gitTry(root, ["reflog", "show", "--format=%H", `refs/remotes/origin/${branch}`])) ?? "").split("\n").filter(Boolean);
+  for (const h of new Set(held)) if (await under(sha, h)) return true;
+  return false;
+}
+
+/**
+ * The commit a run of a named branch starts from, the local branch moved to it. A branch pushed from another machine
+ * has no local ref here; without one, the worktree the run makes would create the branch fresh from this checkout's
+ * HEAD, and the change would vanish (a rebase of it onto the default branch is empty, which reads as "already
+ * landed"). A local branch origin has superseded (behind origin, or a tip origin held before the author rebased and
+ * force-pushed it from another worktree) starts from origin's tip: run from the stale copy, the PR station found
+ * origin holding commits the run never had and stopped the run (ct-102399, ct-102339, ct-101957). A local branch with
+ * commits of its own keeps them. Empty when neither this checkout nor origin has the branch.
  */
 export async function branchHead(root: string, branch: string): Promise<{ head: string; remote_tip: string }> {
   const remote_tip = await originTip(root, branch);
   let head = await git(root, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).catch(() => "");
   if (!head && remote_tip) {
     await git(root, ["branch", "--quiet", "--no-track", branch, remote_tip]);
+    head = remote_tip;
+  } else if (head && remote_tip && head !== remote_tip && (await originSupersedes(root, branch, head, remote_tip))) {
+    await git(root, ["update-ref", `refs/heads/${branch}`, remote_tip, head]);
     head = remote_tip;
   }
   return { head, remote_tip };
@@ -623,7 +643,13 @@ async function branchCarry(root: string, runDir: string, before: FrozenChange, h
   const remote = await originTip(root, before.branch);
   if (!remote) return { tip: top };
   const seen = { remote_tip: remote };
-  if (!(await isAncestor(root, before.tip, head))) return { tip: top, ...seen };
+  if (!(await isAncestor(root, before.tip, head))) {
+    // Rewritten off the last freeze: the worktree is the change, unless origin has superseded it since. Union's PR
+    // station moves the worktree onto origin's tip without a freeze; the session then rebases and pushes again from its
+    // own checkout, and the worktree's copy is the stale one (ct-102179).
+    if (!(await originSupersedes(root, before.branch, head, remote))) return { tip: top, ...seen };
+    return { tip: top === head ? remote : await replayCarry(root, head, top, remote, `origin's ${before.branch} at ${remote.slice(0, 10)}`), ...seen };
+  }
   const recorded = [...new Set([...(before.remote_tip ? [before.remote_tip] : []), ...pushedHeads(runDir, before.branch)])];
   // What this checkout fetched since the last freeze; with no time recorded for it, nothing counts.
   const since = before.frozen_at ? Math.floor(before.frozen_at / 1000) : Infinity;

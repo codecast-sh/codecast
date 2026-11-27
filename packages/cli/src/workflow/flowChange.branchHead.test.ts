@@ -40,11 +40,48 @@ describe("branchHead", () => {
     expect(git(here, "rev-parse", "HEAD")).not.toBe(tip);
   });
 
-  test("a local branch keeps its own head", async () => {
+  test("a local branch with commits of its own keeps them", async () => {
     const { here, tip } = world();
-    git(here, "branch", "ashot/feature", "HEAD");
+    git(here, "fetch", "-q", "origin", "+refs/heads/ashot/feature:refs/remotes/origin/ashot/feature");
+    git(here, "checkout", "-q", "-b", "ashot/feature", tip);
+    fs.writeFileSync(path.join(here, "b.txt"), "mine\n");
+    git(here, "add", "b.txt");
+    git(here, "commit", "-q", "-m", "mine");
     const local = git(here, "rev-parse", "HEAD");
     expect(await branchHead(here, "ashot/feature")).toEqual({ head: local, remote_tip: tip });
+  });
+
+  test("a local branch behind origin starts from origin's tip", async () => {
+    const { here, tip } = world();
+    git(here, "branch", "ashot/feature", "HEAD");
+    expect(await branchHead(here, "ashot/feature")).toEqual({ head: tip, remote_tip: tip });
+    expect(git(here, "rev-parse", "refs/heads/ashot/feature")).toBe(tip);
+  });
+
+  // ct-102399: the session rebased the branch in another worktree and force-pushed it; this checkout's branch still
+  // pointed at the copy it had pushed before. The run froze that stale copy and its PR station stopped it.
+  test("a local branch origin was force-pushed past starts from origin's rewritten tip", async () => {
+    const { other, here, tip } = world();
+    git(here, "fetch", "-q", "origin", "+refs/heads/ashot/feature:refs/remotes/origin/ashot/feature");
+    git(here, "branch", "ashot/feature", tip);
+    git(other, "commit", "-q", "--amend", "-m", "the change, rebased");
+    git(other, "push", "-q", "--force", "origin", "ashot/feature");
+    const rewritten = git(other, "rev-parse", "HEAD");
+    expect(await branchHead(here, "ashot/feature")).toEqual({ head: rewritten, remote_tip: rewritten });
+    expect(git(here, "rev-parse", "refs/heads/ashot/feature")).toBe(rewritten);
+  });
+
+  test("a local commit origin never held keeps the local branch when origin was rewritten too", async () => {
+    const { other, here, tip } = world();
+    git(here, "fetch", "-q", "origin", "+refs/heads/ashot/feature:refs/remotes/origin/ashot/feature");
+    git(here, "checkout", "-q", "-b", "ashot/feature", tip);
+    fs.writeFileSync(path.join(here, "b.txt"), "mine\n");
+    git(here, "add", "b.txt");
+    git(here, "commit", "-q", "-m", "mine, never pushed");
+    const local = git(here, "rev-parse", "HEAD");
+    git(other, "commit", "-q", "--amend", "-m", "the change, rebased");
+    git(other, "push", "-q", "--force", "origin", "ashot/feature");
+    expect((await branchHead(here, "ashot/feature")).head).toBe(local);
   });
 
   test("a branch nowhere is empty, not its own name", async () => {
