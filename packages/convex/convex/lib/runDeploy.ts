@@ -28,6 +28,7 @@ import { LINE_DEPLOY_GRAPH } from "@codecast/shared/contracts/lineDeploy";
 import { runWorkflowOf } from "./runGraph";
 import { NOTE_MAX, onDeployStatus, recordDeployMarker } from "../deploys";
 import { findDeployTeam } from "../changesDeploy";
+import { performRequestRepoIcon } from "../repoIcons";
 import { commitBySha } from "../deployTargetsState";
 
 type Ctx = { db: any };
@@ -243,6 +244,8 @@ export async function recordRunDeploy(ctx: Ctx, run: Doc<"workflow_runs">, opts:
     ...(opts.quiet ? { quiet: true as const } : {}),
     at: run.updated_at ?? Date.now(),
   });
+  // The project's face is asked for here, once it has a deploy, so the Deploys page never asks itself (repoIcons.ts).
+  await performRequestRepoIcon(ctx as any, run.user_id, run.workspace, repository);
   return { recorded: end.status, deploy };
 }
 

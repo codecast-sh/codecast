@@ -1,11 +1,12 @@
 // A repository's face on the Deploys page: a drawing in the role icon
 // language, made by the same generator from the repository's name and stored
-// per workspace in repo_icons. Modeled on sessionIcons.ts: a face that paints
-// without one asks, the server draws once, and an ask inside the retry window
+// per workspace in repo_icons. Modeled on sessionIcons.ts, but the server asks:
+// a personal run that records a deploy asks for its repository's face
+// (lib/runDeploy.ts), the server draws once, and an ask inside the retry window
 // after a failed drawing does nothing.
 
 import { v } from "convex/values";
-import { internalAction, internalMutation, internalQuery, mutation, query } from "./functions";
+import { internalAction, internalMutation, internalQuery, query } from "./functions";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { getAuthenticatedUserId } from "./pendingMessages";
@@ -72,15 +73,6 @@ export async function performRequestRepoIcon(ctx: Ctx, userId: Id<"users">, work
   await ctx.scheduler.runAfter(0, internal.repoIcons.drawRepoIcon, { id });
   return true;
 }
-
-// A RepoFace asks for this when it paints with no drawing.
-export const request = mutation({
-  args: { api_token: v.optional(v.string()), workspace: v.string(), repository: v.string() },
-  handler: async (ctx, args): Promise<void> => {
-    const userId = await getAuthenticatedUserId(ctx, args.api_token);
-    if (userId) await performRequestRepoIcon(ctx, userId, args.workspace, args.repository);
-  },
-});
 
 /** The brief for a repository: its name, kept clear of the workspace's other repository faces. */
 export const repoIconBrief = internalQuery({

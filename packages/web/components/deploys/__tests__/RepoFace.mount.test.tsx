@@ -38,7 +38,6 @@ mock.module("convex/react", () => ({
 const { createRoot } = await import("react-dom/client");
 const { useInboxStore } = await import("../../../store/inboxStore");
 const { RepoFace } = await import("../RepoFace");
-const { _resetRepoIconAsks } = await import("../../../hooks/useSyncRepoIcons");
 
 afterAll(() => {
   closeDomWindow(dom);
@@ -59,11 +58,10 @@ function mount(repository: string) {
 describe("RepoFace", () => {
   beforeEach(() => {
     asks.length = 0;
-    _resetRepoIconAsks();
     useInboxStore.setState({ repoIcons: {} } as any);
   });
 
-  test("a monogram in the name's accent until drawn, asked for once; the drawn icon when its row arrives", async () => {
+  test("a monogram in the name's accent until drawn, never asking; the drawn icon when its row arrives", async () => {
     const { host, unmount } = mount("Acme/Web-App");
     const tiles = host.querySelectorAll("[data-role-tile]");
     expect(tiles).toHaveLength(2);
@@ -72,8 +70,8 @@ describe("RepoFace", () => {
     expect(tile.textContent).toBe("W");
     expect(tile.getAttribute("aria-label")).toBe("Web-App");
     expect(tile.style.getPropertyValue("--rt-accent")).toBe(`var(--sol-${pickRoleIconAccent([], "acme/web-app")})`);
-    // Two faces of one repository ask once between them.
-    expect(asks).toEqual([{ workspace: WS, repository: "acme/web-app" }]);
+    // A face never asks the server for a drawing: the run that records a deploy does (convex lib/runDeploy.ts).
+    expect(asks).toEqual([]);
 
     await act(async () => {
       useInboxStore.getState().syncTable("repoIcons", [{ _id: "ri_1", workspace: WS, repository: "acme/web-app", icon: wrench }], { isDelta: true });
@@ -83,7 +81,7 @@ describe("RepoFace", () => {
     expect(drawn.getAttribute("data-role-tile")).toBe("wrench");
     expect(drawn.querySelector("svg")).not.toBeNull();
     expect(drawn.style.getPropertyValue("--rt-accent")).toBe(`var(--sol-${wrench.accent})`);
-    expect(asks).toHaveLength(1);
+    expect(asks).toEqual([]);
     unmount();
   });
 
