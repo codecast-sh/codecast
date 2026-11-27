@@ -92,7 +92,7 @@ import { runningSubagents } from "../lib/runningSubagents";
 import { StopConfirm, type StopRequest } from "./conversation/StopConfirm";
 import { stopNeedsConfirm } from "../lib/stopNeedsConfirm";
 import { lazyNamed } from "../lib/lazyNamed";
-import { AttachedImage } from "./ImageGallery";
+import { AttachedImage, AttachedImageNotes, AttachedImagePinCount } from "./ImageGallery";
 
 const api = _typedApi as any;
 const ComposeEditor = lazyNamed(() => import("./editor/ComposeEditor"), "ComposeEditor");
@@ -3061,8 +3061,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                 </div>
               )}
               {branchMapNode}
-              {/* Hidden under the image preview: the preview fits the space above
-                  the composer, so a tray growing with each note shrank the image. */}
+              {/* Hidden under the image preview, which a growing tray shrank; AttachedImageNotes lists its notes instead. */}
               {!bareComposer && lightboxImageIndex === null && <ReviewBar conversationId={conversationId} />}
               {!bareComposer && queuedMessages.length > 0 && (
                 <div className="flex flex-col gap-1 pb-2 mb-2 border-b border-sol-border/50">
@@ -3155,6 +3154,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                     >
                       <div className={`relative h-16 w-16 rounded-lg overflow-hidden bg-sol-bg shrink-0 transition-all ${selectedImageIndex === idx ? "ring-2 ring-sol-blue ring-offset-1 ring-offset-sol-bg" : ""}`}>
                         <img src={img.previewUrl} alt="Pasted" className="h-full w-full object-cover" />
+                        {!bareComposer && <AttachedImagePinCount conversationId={conversationId} picture={img} />}
                         {img.uploading && (
                           <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
                             <svg className="w-5 h-5 animate-spin text-white" fill="none" viewBox="0 0 24 24">
@@ -3171,6 +3171,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                       </button>
                     </div>
                   ))}
+                  {!bareComposer && <AttachedImageNotes conversationId={conversationId} picture={lightboxImageIndex === null ? undefined : pastedImages[lightboxImageIndex]} />}
                   {selectedImageIndex !== null && (
                     <span className="text-meta text-sol-text-dim ml-1 flex items-center gap-2">
                       <span className="inline-flex items-center gap-1"><KeyCap size="xs">←</KeyCap><KeyCap size="xs">→</KeyCap> navigate</span>

@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { useEventListener } from "../hooks/useEventListener";
 import { createPortal } from "react-dom";
 import { copyToClipboard } from "../lib/utils";
+import { useShallow } from "zustand/react/shallow";
 import { useInboxStore } from "../store/inboxStore";
 import { addImagePin, composerPictureIndex, type ComposerPicture } from "../lib/reviewActions";
 import { pinNumbers, type PendingComment } from "../lib/quoteFormat";
@@ -534,6 +535,63 @@ export function AttachedImage({ conversationId, picture, className, style, onNot
         />
       ))}
     </div>
+  );
+}
+
+const EMPTY_COMMENTS: PendingComment[] = [];
+
+// The notes pinned on one of the composer's pictures.
+function pinsOn(comments: readonly PendingComment[], pictures: readonly ComposerPicture[]): PendingComment[] {
+  return comments.filter((c) => c.image?.point && composerPictureIndex(pictures, c.image) >= 0);
+}
+
+// How many notes are pinned on a composer picture, in the corner of its
+// thumbnail, the way the gallery's strip marks a picture with pins.
+export function AttachedImagePinCount({ conversationId, picture }: { conversationId: string; picture: ComposerPicture }) {
+  const count = useInboxStore((s) => pinsOn(s.reviewComments[conversationId] ?? EMPTY_COMMENTS, [picture]).length);
+  if (!count) return null;
+  return (
+    <span
+      className="absolute bottom-0 right-0 flex h-4 min-w-4 items-center justify-center rounded-tl bg-sol-yellow px-0.5 text-meta font-bold leading-none text-black"
+      aria-label={`${count} pinned note${count === 1 ? "" : "s"}`}
+    >
+      {count}
+    </span>
+  );
+}
+
+// The notes pinned on the composer picture that is open large, listed beside
+// the thumbnails. The tray that lists them is hidden then (growing with each
+// note, it shrank the picture), and without this nothing in the composer
+// showed the notes go with the send. The list stays within the thumbnail
+// row's height, so it takes no room from the picture. A click on a note opens
+// its editor on the picture. No picture open, no list.
+export function AttachedImageNotes({ conversationId, picture }: { conversationId: string; picture: ComposerPicture | undefined }) {
+  const comments = useInboxStore(useShallow((s) => (picture ? s.reviewComments[conversationId] ?? EMPTY_COMMENTS : EMPTY_COMMENTS)));
+  const pins = picture ? pinsOn(comments, [picture]) : EMPTY_COMMENTS;
+  if (!pins.length) return null;
+  const numbers = pinNumbers(comments);
+  return (
+    <ol className="flex max-h-16 min-w-0 flex-1 flex-col gap-0.5 overflow-y-auto" aria-label="Pinned notes">
+      {pins.map((c) => (
+        <li key={c.id} className="min-w-0">
+          <button
+            type="button"
+            className="flex w-full min-w-0 items-center gap-1.5 rounded px-1 text-left text-meta text-sol-text-secondary hover:bg-sol-bg-alt hover:text-sol-text"
+            title={c.body || undefined}
+            onClick={(e) => {
+              e.stopPropagation();
+              useInboxStore.getState().setReviewEditingId(c.id);
+            }}
+          >
+            <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-sol-yellow text-meta font-bold leading-none text-black">
+              {numbers.get(c.id) ?? ""}
+            </span>
+            <span className={`truncate ${c.body ? "" : "italic text-sol-text-dim"}`}>{c.body || "No note yet"}</span>
+          </button>
+        </li>
+      ))}
+    </ol>
   );
 }
 

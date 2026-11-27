@@ -3,9 +3,10 @@ import { afterAll, afterEach, expect, test } from "bun:test";
 import { act } from "react";
 import { JSDOM } from "jsdom";
 import { replaceGlobals } from "../../test-helpers/globals";
-import { ImageGalleryProvider, GalleryMessageScope, useImageGallery, useGalleryMessageId, type GalleryImage } from "../ImageGallery";
+import { AttachedImageNotes, AttachedImagePinCount, ImageGalleryProvider, GalleryMessageScope, useImageGallery, useGalleryMessageId, type GalleryImage } from "../ImageGallery";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useInboxStore } from "../../store/inboxStore";
+import { addImagePin } from "../../lib/reviewActions";
 
 import { closeDomWindow } from "../../test-helpers/domGlobals";
 // The lightbox provider outlives a conversation switch: the inbox keeps one
@@ -185,4 +186,34 @@ test("an image still mounted when the conversation id arrives stays clickable", 
   await act(() => root!.render(view("A")));
   await clickSrc("a2");
   expect(counter()).toBe("2 / 2");
+});
+
+test("notes pinned on the open composer picture list beside its thumbnail, numbered, and reopen on click", async () => {
+  useInboxStore.setState({ reviewComments: {}, reviewEditingId: null } as any);
+  const one = { previewUrl: "blob:one" };
+  addImagePin("C", { src: "blob:two", attached: true }, { x: 0.5, y: 0.5 });
+  const first = addImagePin("C", { src: "blob:one", attached: true }, { x: 0.1, y: 0.1 });
+  const second = addImagePin("C", { src: "blob:one", attached: true }, { x: 0.9, y: 0.9 });
+  await act(() => {
+    useInboxStore.getState().commitReviewComment("C", first, "space above polish");
+    useInboxStore.getState().setReviewEditingId(null);
+  });
+  await mount(
+    <>
+      <span data-thumb="one"><AttachedImagePinCount conversationId="C" picture={one} /></span>
+      <AttachedImageNotes conversationId="C" picture={one} />
+    </>,
+  );
+  const rows = Array.from(container!.querySelectorAll('ol[aria-label="Pinned notes"] button')) as HTMLElement[];
+  // Only this picture's notes, by the numbers its markers carry.
+  expect(rows.map((r) => r.textContent)).toEqual(["1space above polish", "2No note yet"]);
+  expect(container!.querySelector('[data-thumb="one"] [aria-label="2 pinned notes"]')).not.toBeNull();
+
+  await act(() => rows[1].click());
+  expect(useInboxStore.getState().reviewEditingId).toBe(second);
+
+  // A picture with no notes shows neither, and with no picture open there is no list.
+  const three = { previewUrl: "blob:three" };
+  await act(() => root!.render(<><AttachedImagePinCount conversationId="C" picture={three} /><AttachedImageNotes conversationId="C" picture={three} /><AttachedImageNotes conversationId="C" picture={undefined} /></>));
+  expect(container!.innerHTML).toBe("");
 });
