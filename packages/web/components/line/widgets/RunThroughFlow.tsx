@@ -200,8 +200,10 @@ function RunPanel({ conversationId, run, flow, journey, targets, notice, onAgain
       <JourneyView journey={journey} run={run} now_ms={now} targets={targets}
         actions={live
           ? <button type="button" className="sj-btn" data-quiet onClick={() => void useInboxStore.getState().stopLineRun(run._id)} data-flow-stop={run._id}>Stop</button>
-          // A stop's bar places Ship again itself; a finished run offers it plainly, a landed one only with new edits.
-          : stop || spent ? null : <button type="button" className="sj-btn" onClick={onAgain} data-ship-again>Ship again</button>}
+          // A stop's bar places Ship again itself; a finished run offers it plainly, a landed one only with new edits. A
+          // deliberate stop's bar has none (a re-run stops the same way), so here, where the session ships from once it
+          // has taken the step the stop names, it is offered plainly.
+          : (stop && (stop.fix !== "run" || stop.landed || stop.mayHaveLanded)) || spent ? null : <button type="button" className="sj-btn" onClick={onAgain} data-ship-again>Ship again</button>}
         again={(primary) => <button type="button" className="sj-btn" data-primary={primary ? "" : undefined} data-quiet={primary ? undefined : ""} onClick={onAgain} data-ship-again>Ship again</button>} />
     </div>
   );

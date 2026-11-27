@@ -82,9 +82,22 @@ describe("the Ship panel's links into Deploys", () => {
       expect(html).toContain(`href="/workflows/runs/${stopped._id}"`);
       expect(html).toContain(">Resume at Land</button>");
     }
-    // A stop where shipping again is the way on still offers it.
-    const rejected = end(replay("a session that drops its change when briefed"));
-    expect(renderToStaticMarkup(<JourneyView journey={journeyOf(flowBySlug(appPool(), "personal") as any, rejected as any)} run={rejected} now_ms={0} again={again} />)).toContain("data-ship-again");
+    // A stop where shipping again is the way on (an unplanned one) still offers it.
+    const unjudged = end(replay("a reviewer that pins no verdict for the round twice"));
+    expect(renderToStaticMarkup(<JourneyView journey={journeyOf(flowBySlug(appPool(), "personal") as any, unjudged as any)} run={unjudged} now_ms={0} again={again} />)).toContain("data-ship-again");
+  });
+
+  // ct-102100: Union's Land stopped with "bring the change level with origin and send it again", and its card offered Ship
+  // again, which stops the same way until the branch is levelled. A deliberate stop offers its session, where that step is taken.
+  test("a deliberate stop offers its session and the run, never Ship again", () => {
+    const again = () => <button data-ship-again>Ship again</button>;
+    const stopped: any = { kind: "stopped", stage: "Land", why: "The pull request could not be opened: origin's branch holds commits this checkout never had; bring the change level with origin and send it again", fix: "run", session: "conv1", briefAt: null, end: null };
+    const html = renderToStaticMarkup(<JourneyView journey={{ stages: [], now: stopped }} run={run({ status: "failed" })} now_ms={0} again={again} />);
+    expect(html).not.toContain("data-ship-again");
+    expect(html).toContain(`href="/workflows/runs/r1"`);
+    expect(html).toContain(`<a href="/conversation/conv1" class="sj-act" data-journey-open-session="true">Open session</a>`);
+    // An unplanned stop of the same change still runs again.
+    expect(renderToStaticMarkup(<JourneyView journey={{ stages: [], now: { ...stopped, fix: "again" } }} run={run({ status: "failed" })} now_ms={0} again={again} />)).toContain("data-ship-again");
   });
 
   test("with no landed commit known, a target opens with the session highlighted and its deploy open", () => {

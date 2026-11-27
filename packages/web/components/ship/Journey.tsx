@@ -346,12 +346,13 @@ export function JourneyNowBar({ now, run, now_ms, children, again, personal = fa
           {now.fix === "deploy" ? <Link className="sj-act" data-primary href={deploysHref(run, now.why)} data-journey-deploys>Open {now.why?.match(/\b([a-z][a-z0-9-]{0,31}) dp-\d+/)?.[1] ?? "Deploys"}</Link>
             : now.fix === "session" && !inSession && now.session ? <Link className="sj-act" data-primary href={`/conversation/${now.session}`} data-journey-open-session>Open session</Link>
             : now.fix === "session" && briefId ? <button type="button" className="sj-act" data-primary onClick={() => useInboxStore.getState().requestNavigate(here!, { scrollToMessageId: briefId })} data-journey-open-brief>Open the brief</button>
-            : now.fix === "run" ? openRun
+            : now.fix === "run" ? <>{openRun}{now.session && now.session !== here && !now.landed ? <Link className="sj-act" href={`/conversation/${now.session}`} data-journey-open-session>Open session</Link> : null}</>
             : null}
           {/* Ship again, never for a deploy (it would land the change again); it leads when re-running is the fix, or when nothing else here can. */}
+          {/* A deliberate stop (fix "run") stops the same way if run again: its words name the step first, done in the session (ct-102100). */}
           {/* A change already on main lands nothing if shipped again: the run is the way on. */}
           {/* A change that may be on main (Landing unknown) could land twice: resuming the run at Land is the way on. */}
-          {now.fix !== "deploy" && again && !now.landed && !now.mayHaveLanded ? again(now.fix === "again" || (inSession && !briefId)) : null}
+          {now.fix !== "deploy" && now.fix !== "run" && again && !now.landed && !now.mayHaveLanded ? again(now.fix === "again" || (inSession && !briefId)) : null}
           {children}
           {/* A stop's reason is whole: its last words are what the person does next. */}
           {now.why ? <p className="sj-note" data-whole={personal || undefined} data-journey-why>{now.why}</p> : null}
