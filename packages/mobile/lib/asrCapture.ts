@@ -156,10 +156,17 @@ export async function startAsrCapture(opts: {
   events?: AsrCaptureEvents;
   /** The recognizer's language allowlist; the device's languages when left out. */
   languages?: string[];
+  /** True once nobody wants the capture (dictation cancelled while the tap
+   *  opened): the tap closes and no key is minted. Resolves null then. */
+  signal?: { readonly aborted: boolean };
 }): Promise<AsrCapture | null> {
   const opened = await openMicTap();
   if (!("tap" in opened)) return null;
   const tap = opened.tap;
+  if (opts.signal?.aborted) {
+    tap.close();
+    return null;
+  }
 
   let session: AsrPcmSession | null = null;
   let closed = false;

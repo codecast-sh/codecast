@@ -13,6 +13,8 @@ import { optionalNative } from './optionalNative';
 
 export const DICTATION_NEEDS_UPDATE = 'Dictation needs a newer app version';
 export const DICTATION_NEEDS_MIC = 'Codecast needs the microphone to dictate. Turn it on in Settings.';
+/** What a start nobody wants any more rejects with (the controller ignores it). */
+export const DICTATION_ABANDONED = 'Dictation was cancelled';
 
 // expo-audio only for the permission prompt and the audio session, loaded the
 // way lib/recorder.ts does. Without it the recognizer's own getUserMedia asks.
@@ -43,10 +45,15 @@ function releaseAudioSession() {
 
 export function phoneDictationHost(convex: ConvexReactClient, languages: string[]): DictationHost {
   return {
-    async open(events) {
+    async open(events, signal) {
       if (!micTapSupported()) throw new Error(DICTATION_NEEDS_UPDATE);
       const busy = micBusy();
       if (busy) throw new Error(busy);
+      // Cancelled, or a huddle took the microphone, during a slow step: stop
+      // there, before the audio session flips, a tap opens or a key is minted.
+      const abandon = () => {
+        if (signal.aborted) throw new Error(DICTATION_ABANDONED);
+      };
       const a = getAudio();
       if (a) {
         let granted = false;
@@ -55,10 +62,15 @@ export function phoneDictationHost(convex: ConvexReactClient, languages: string[
             (await a.getRecordingPermissionsAsync()).granted ||
             (await a.requestRecordingPermissionsAsync()).granted;
         } catch {}
+        abandon();
         if (!granted) throw new Error(DICTATION_NEEDS_MIC);
         try {
           await a.setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
         } catch {}
+        if (signal.aborted) {
+          releaseAudioSession();
+          abandon();
+        }
       }
       const startedAt = Date.now();
       const capture = await startAsrCapture({
@@ -66,6 +78,7 @@ export function phoneDictationHost(convex: ConvexReactClient, languages: string[
         roomKey: null,
         clock: () => Math.max(0, Date.now() - startedAt),
         languages,
+        signal,
         events: {
           onPartial: events.onPartial,
           onUtterance: events.onUtterance,
@@ -73,6 +86,11 @@ export function phoneDictationHost(convex: ConvexReactClient, languages: string[
           onDropped: events.onDropped,
         },
       });
+      if (signal.aborted) {
+        capture?.close();
+        releaseAudioSession();
+        abandon();
+      }
       if (!capture) {
         releaseAudioSession();
         // The binary can tap PCM (checked above), so the OS refused the

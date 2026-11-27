@@ -52,7 +52,8 @@ const host: DictationHost = {
     events = e;
     return Promise.resolve({
       finish: () => new Promise<void>((r) => { finishing = true; endFinish = r; }),
-      close() {},
+      // As asrPipe does: closing releases a finish still waiting.
+      close() { endFinish?.(); },
     });
   },
 };
@@ -160,5 +161,54 @@ test("from the title: Cmd+Enter finishes the recording and creates; Esc cancels 
   await flush();
   expect(created.length).toBe(1);
   expect(created[0].description).toBe("keep this");
+  await m.unmount();
+});
+
+test("Create pressed twice while finishing makes one task", async () => {
+  const m = await mountModal();
+  await m.setTitle("Fix login");
+  await act(async () => { m.button("Dictate")!.click(); });
+  await flush();
+  await m.say((e) => e.onPartial("the redirect loops"));
+  await act(async () => { m.create().click(); });
+  await m.keyOnTitle("Enter", { metaKey: true });
+  await act(async () => { m.create().click(); });
+  await flush();
+  await act(async () => { endFinish!(); });
+  await flush();
+  await flush();
+  expect(created.length).toBe(1);
+  expect(created[0].description).toBe("the redirect loops");
+  await m.unmount();
+});
+
+test("closing the dialog while finishing creates nothing", async () => {
+  const m = await mountModal();
+  await m.setTitle("Fix login");
+  await act(async () => { m.button("Dictate")!.click(); });
+  await flush();
+  await m.say((e) => e.onPartial("never mind"));
+  await act(async () => { m.create().click(); });
+  await flush();
+  expect(finishing).toBe(true);
+  // The parent unmounts the dialog on close; the pipe closes with it.
+  await m.unmount();
+  await new Promise((r) => setTimeout(r, 20));
+  expect(created).toEqual([]);
+});
+
+test("Create then Esc while finishing creates nothing and keeps the dialog", async () => {
+  const m = await mountModal();
+  await m.setTitle("Fix login");
+  await act(async () => { m.button("Dictate")!.click(); });
+  await flush();
+  await m.say((e) => e.onPartial("scratch that"));
+  await act(async () => { m.create().click(); });
+  await flush();
+  await m.keyOnTitle("Escape");
+  await flush();
+  expect(created).toEqual([]);
+  expect(m.closed()).toBe(0);
+  expect(m.editor().getText()).toBe("");
   await m.unmount();
 });
