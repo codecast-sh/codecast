@@ -10,6 +10,7 @@ import schema from "./schema";
 import { allModules } from "./testModules.testkit";
 import { OWN_LINKED, TEAMMATE_ALL_CAP, TEAMMATE_LINKED, TEAMMATE_PRIORITIES_CAP, TEAMMATE_TOTAL_CAP, listFor, showFor } from "./priorityRead";
 import { sessionPriorityReader } from "./lib/sessionPriority";
+import { ACCESS_SESSIONS_READ, ACCESS_SESSIONS_WIDE, ACCESS_WIDEN_BUDGET } from "./lib/priorityAccess";
 import type { Id } from "./_generated/dataModel";
 
 setDefaultTimeout(180_000);
@@ -436,6 +437,81 @@ test("a priority whose owner's sessions turn up only past the newest 40 is still
   console.log(`crowded priority list, the owner's sessions past 40 on each #1: ${calls} db calls, ${docs} documents for ${list.priorities.length} rows`);
   expect(docs).toBeLessThan(DENSE_BUDGET);
   listsTop(list, 8, 1);
+});
+
+/**
+ * Eve floods: in two team workspaces, every one of `owners` teammates' `per`
+ * priorities has its owner's one session and then `starts` of Eve's Starts,
+ * so each judgment pages to its widest window. Clean's five priorities in
+ * each workspace have only Clean's own session, and are as recently active as
+ * the flooded ones ranked 10 and 11, so the list judges them after the
+ * widening budget is spent.
+ */
+async function flood(owners: number, per: number, starts: number) {
+  const t = convexTest(schema, allModules);
+  const ids = await t.run(async (ctx: any) => {
+    const bea = await ctx.db.insert("users", { name: "Bea" });
+    const eve = await ctx.db.insert("users", { name: "Eve" });
+    const clean = await ctx.db.insert("users", { name: "Clean" });
+    const users: Id<"users">[] = [];
+    for (let m = 0; m < owners; m++) users.push(await ctx.db.insert("users", { name: `Owner ${m}` }));
+    let n = 0;
+    let team: Id<"teams"> | null = null;
+    const flooded: Id<"conversations">[] = [];
+    for (const name of ["Acme", "Beta"]) {
+      team = await ctx.db.insert("teams", { name, created_at: NOW, features: { priorities: true } });
+      for (const u of [bea, eve, clean, ...users]) await ctx.db.insert("team_memberships", { user_id: u, team_id: team, role: "member", joined_at: 1 });
+      const conv = (u: Id<"users">, fields: Record<string, unknown>) => {
+        const sid = `jx7c${n++}`;
+        return ctx.db.insert("conversations", {
+          user_id: u, team_id: team, agent_type: "claude_code", session_id: sid, short_id: sid, title: sid,
+          started_at: NOW, updated_at: NOW, message_count: 1, is_private: false, team_visibility: "full", status: "active", ...fields,
+        });
+      };
+      const priority = (owner: Id<"users">, rank: number, at: number) => ctx.db.insert("priorities", {
+        user_id: owner, workspace: `team:${team}`, short_id: `pri-${n++}`, title: `${name}:${rank}`, summary: "", status: "active", ai_rank: rank,
+        steps: [{ key: "s1", title: "M", tier: "critical", tier_set_by: "pass", refs: [], done: false }],
+        first_seen_at: NOW, last_active_at: at, pass_at: NOW, created_at: NOW, updated_at: NOW,
+      });
+      for (let m = 0; m < owners; m++) {
+        for (let rank = 1; rank <= per; rank++) {
+          const p = await priority(users[m], rank, NOW - rank * 10 - m);
+          const own = await conv(users[m], { priority_id: p, priority_step_key: "s1" });
+          if (name === "Beta") flooded.push(own);
+          for (let s = 0; s < starts; s++) await conv(eve, { priority_id: p, priority_step_key: "s1", priority_set_by: "link" });
+        }
+      }
+      for (let rank = 1; rank <= 5; rank++) await conv(clean, { priority_id: await priority(clean, rank, NOW - 105 - rank / 10), priority_step_key: "s1" });
+    }
+    return { bea, clean, team: team!, flooded };
+  });
+  const listed = await t.run(async (ctx: any) => {
+    const counted = counting(ctx);
+    const list = await listFor(counted.ctx, ids.bea, {});
+    return { list, calls: counted.calls(), docs: counted.docs() };
+  });
+  // The Deploys board over every flooded priority's session in one team: the same reader, the same budget.
+  const board = await t.run(async (ctx: any) => {
+    const counted = counting(ctx);
+    const priorityOf = await sessionPriorityReader(counted.ctx, ids.bea, ids.team);
+    let named = 0;
+    for (const id of ids.flooded) if (await priorityOf(await ctx.db.get(id))) named++;
+    return { named, docs: counted.docs() };
+  });
+  return { ...ids, ...listed, board };
+}
+
+test("Starts stacked on every teammate's priority spend one widening budget: the list stays under the read cap and uncrowded priorities stay on it", async () => {
+  const { list, calls, docs, clean, board } = await flood(3, 25, 49);
+  const flooded = list.priorities.filter((r: any) => r.user_id !== String(clean));
+  console.log(`flooded priority list: ${calls} db calls, ${docs} documents for ${list.priorities.length} rows (${flooded.length} flooded); deploys board: ${board.docs} documents, ${board.named} named`);
+  expect(docs).toBeLessThan(DENSE_BUDGET);
+  // Clean's five in each workspace, judged after the budget ran out, need no widening.
+  expect(list.priorities.filter((r: any) => r.user_id === String(clean))).toHaveLength(10);
+  // Each flooded priority pages 10 to 50: the budget reads that far for 20 of them, the rest are hidden.
+  expect(flooded).toHaveLength(ACCESS_WIDEN_BUDGET / (ACCESS_SESSIONS_WIDE - ACCESS_SESSIONS_READ));
+  expect(board.docs).toBeLessThan(DENSE_BUDGET);
+  expect(board.named).toBe(ACCESS_WIDEN_BUDGET / (ACCESS_SESSIONS_WIDE - ACCESS_SESSIONS_READ));
 });
 
 /**

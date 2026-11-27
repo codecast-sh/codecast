@@ -33,6 +33,14 @@ export const TEAMMATE_SESSIONS = 4;
 export const ACCESS_SESSIONS_READ = 10;
 /** The widest window access reads, ACCESS_SESSIONS_READ more at a time, while teammates' Starts leave fewer than TEAMMATE_SESSIONS of the owner's among the newest; past it, hidden. */
 export const ACCESS_SESSIONS_WIDE = 50;
+/**
+ * The most sessions one call's judgments read past each priority's newest
+ * ACCESS_SESSIONS_READ. Teammates' Starts stacked on every priority would otherwise make
+ * each judgment page to ACCESS_SESSIONS_WIDE and take a list past Convex's
+ * read cap; once it is spent, a priority that needs to look further back is
+ * hidden (failing closed), and every other verdict is as without it.
+ */
+export const ACCESS_WIDEN_BUDGET = 800;
 /** The windows a judgment reads in turn, `first` before them (each goes on from the last: Reader.sessionsOf). */
 const accessWindows = (first: number): number[] => {
   const out = [first];
@@ -82,7 +90,7 @@ export type Reader = {
    * pass has written it, so its title, summary and milestones hold nothing
    * from the owner's sessions), or, in a team, sees at least one of the
    * owner's own newest TEAMMATE_SESSIONS sessions on it listed to that team
-   * (a teammate's session on it never counts). Judged once a call per priority.
+   * (a teammate's session on it never counts). Judged once a call per priority, looking further back within the call's ACCESS_WIDEN_BUDGET.
    * `narrow` reads TEAMMATE_SESSIONS + 1 sessions first instead of
    * ACCESS_SESSIONS_READ, for a rank judging a whole group (lib/priorityGroup
    * positionOf) whose sessions nothing else reads; the verdict is the same.
@@ -119,6 +127,7 @@ export async function readerFor(ctx: Ctx, viewer: Id<"users">): Promise<Reader> 
     return isSessionOwner(ctx, c._id, viewer, c);
   };
   const judged = new Map<string, Promise<boolean>>();
+  let widenLeft = ACCESS_WIDEN_BUDGET;
   const judge = async (p: Priority, first: number) => {
     if (String(p.user_id) === String(viewer)) return true;
     if (p.needs_rewrite || !authorizedFor(accessStampFromDoc("priorities", p), String(viewer), held)) return false;
@@ -130,7 +139,14 @@ export async function readerFor(ctx: Ctx, viewer: Id<"users">): Promise<Reader> 
     if (ws?.type !== "team") return false;
     // Teammates' Starts crowd the newest: while they leave fewer than TEAMMATE_SESSIONS of the owner's in a full window, look ten further back.
     let owners: Doc<"conversations">[] = [];
+    let wide = ACCESS_SESSIONS_READ;
     for (const n of accessWindows(first)) {
+      // Past the first ACCESS_SESSIONS_READ each step spends the call's widening budget; with too little left, hidden.
+      if (n > wide) {
+        if (widenLeft < n - wide) return false;
+        widenLeft -= n - wide;
+        wide = n;
+      }
       const window = await sessionsOf(p, n);
       owners = window.filter((c) => String(c.user_id) === String(p.user_id));
       if (owners.length >= TEAMMATE_SESSIONS || window.length < n) break;
