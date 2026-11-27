@@ -4,79 +4,38 @@
 // requests and deploys (lib/priorityList builds the models from them).
 import { useMemo } from "react";
 import type { PriorityHistory, PriorityRow, PrioritySessionState } from "@codecast/shared/contracts/priorities";
-import { buildModels, stateOfStatus, type MilestoneModel, type PriorityModel } from "../lib/priorityList";
-import { sessionStatusOf } from "../lib/sessionStatus";
+import { buildModels, stateOfMark, type MilestoneModel, type PriorityModel } from "../lib/priorityList";
 import type { TeamDeployRow } from "../lib/deploys/targets";
-import { isUnderRole } from "@codecast/shared/contracts";
-import { placeInboxRows, railRowPlacement, useInboxStore, waitsOnViewer, type InboxSession } from "../store/inboxStore";
+import { useInboxStore } from "../store/inboxStore";
+import { inboxMarkOf, type MarkInbox } from "../store/inboxMark";
 import { useWorkspaceCollection } from "./useWorkspaceCollection";
 import { useCoarseNow } from "./useCoarseNow";
-import { hostedStopOf, splitHostedStops } from "../lib/hostedNotice";
 import type { DeployInfo } from "../lib/priorityList";
 
-type PlaceState = Parameters<typeof placeInboxRows>[0];
-
 /**
- * Whose Needs You a session's needs you follows. Both place the rows as
- * their inbox does: in the viewer's chosen inbox scope, the focused session
- * held in place, on the wall clock (GlobalSessionPanel; packages/mobile
- * hooks/useInboxPlacement). They differ in one rule: the "sidebar" (web's)
- * files a hosted conversation that ended on a stop apart, under "Couldn't
- * finish" (lib/hostedNotice splitHostedStops); the "phone" keeps it under
- * Needs You.
+ * Whose inbox a milestone's marks follow: web's sidebar, or the phone's inbox
+ * (store/inboxMark inboxMarkOf).
  */
-export type LiveInbox = "sidebar" | "phone";
+export type LiveInbox = MarkInbox;
 
-const asksYouByState: Record<LiveInbox, WeakMap<object, (row: InboxSession) => boolean>> = { sidebar: new WeakMap(), phone: new WeakMap() };
-
-/**
- * Whether `inbox` files a row under Questions or Needs You, flat or nested
- * under a Needs You lead, as that section's count reads it: placed
- * needs_input, waiting on you (else it sits in Dormant), not a role's
- * session (the role triages those), and on the sidebar not a hosted
- * conversation that ended on a stop. Placed once per store state, however
- * many priority cards ask.
- */
-function inboxAsksYou(s: PlaceState & { messages?: Record<string, any[] | undefined>; currentSessionId?: string | null }, now: number, inbox: LiveInbox): (row: InboxSession) => boolean {
-  let hit = asksYouByState[inbox].get(s);
-  if (!hit) {
-    const phone = inbox === "phone";
-    const placed = placeInboxRows(s, { focusedId: s.currentSessionId ?? null, now: Math.max(now, Date.now()) });
-    const meId = s.currentUser?._id?.toString?.() ?? null;
-    const messagesOf = (id: string) => s.messages?.[id];
-    const stopped = (row: InboxSession) => !phone && !!hostedStopOf(row, messagesOf(row._id));
-    const flat = new Set((phone ? placed.needsInput : splitHostedStops(placed.needsInput, messagesOf).asks).map((r) => r._id));
-    hit = (row) => placed.isQuestion(row) || flat.has(row._id)
-      || (placed.placements.get(row._id)?.bucket === "needs_input" && waitsOnViewer(row, meId) && !isUnderRole(row) && !stopped(row));
-    asksYouByState[inbox].set(s, hit);
-  }
-  return hit;
-}
-
-/** One session's state as `inbox` reads it (usePriorityLiveStates), or undefined when the store does not hold it. */
-export function liveStateOf(s: Parameters<typeof inboxAsksYou>[0], id: string, now: number, inbox: LiveInbox = "sidebar"): PrioritySessionState | undefined {
-  const row = (s.sessions as Record<string, any>)[id];
-  if (!row) return undefined;
-  const own = stateOfStatus(sessionStatusOf({ row, placement: railRowPlacement(row, now), now }));
-  return inboxAsksYou(s, now, inbox)(row) ? "needs_you" : own === "needs_you" ? "dormant" : own;
+/** One session's state as `inbox` draws it (usePriorityLiveStates), or undefined when that inbox does not draw it. */
+export function liveStateOf(s: Parameters<typeof inboxMarkOf>[0], id: string, now: number, inbox: LiveInbox = "sidebar"): PrioritySessionState | undefined {
+  const mark = inboxMarkOf(s, id, { inbox, now });
+  return mark ? stateOfMark(mark) : undefined;
 }
 
 /**
- * The inbox's verdict for each linked session the store holds, by
- * conversation id. A session needs you exactly when your inbox (`inbox`:
- * web's sidebar by default, or the phone's) files it under Needs You or
- * Questions; a row's own facts say how it is otherwise, never that it waits
- * on you, since a wait that belongs to someone else (a card addressed to a
- * teammate, a session another person owns) sits in your Dormant. One
- * subscription to a signature of just those rows' states, so a heartbeat
- * elsewhere wakes nothing.
+ * The mark each linked session's inbox draws for it, by conversation id, as
+ * the milestone vocabulary reads it (lib/priorityList buildModels states the
+ * whole rule). One subscription to a signature of just those rows' states,
+ * so a heartbeat elsewhere wakes nothing.
  */
 export function usePriorityLiveStates(ids: readonly string[], now: number, inbox: LiveInbox = "sidebar"): (conversationId: string) => PrioritySessionState | undefined {
   const key = ids.join(",");
   const sig = useInboxStore((s) => {
     const out: string[] = [];
     for (const id of key.split(",")) {
-      const state = id ? liveStateOf(s as any, id, now, inbox) : undefined;
+      const state = id ? liveStateOf(s as any, id, Math.max(now, Date.now()), inbox) : undefined;
       if (state) out.push(`${id}:${state}`);
     }
     return out.join(",");

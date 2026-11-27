@@ -60,7 +60,7 @@ export default function PriorityPage({ id }: { id: string }) {
 
 function PriorityBody({ row }: { row: PriorityView }) {
   const now = useCoarseNow(30_000);
-  // Opened at a milestone (`?milestone=`, the list's "+N older sessions"): that milestone in view.
+  // Opened at a milestone (`?milestone=`): that milestone, and the section that holds it, in view.
   const focus = useSearchParams()?.get("milestone") ?? null;
   useMountEffect(() => {
     if (!focus) return;
@@ -75,12 +75,8 @@ function PriorityBody({ row }: { row: PriorityView }) {
     { remember: true },
   ).data as PriorityHistory | undefined;
   const model = usePriorityModel(row, history, days);
-  // The priority's plan shows once, above the milestones: none of them repeats it.
+  // The priority's plan shows once, above the milestones; a milestone lists only a plan of its own (Connected).
   const plan = model.plan;
-  const milestones = useMemo(
-    () => ({ ...model, plan: null, milestones: model.milestones.map((m) => (plan && m.plan?.short_id === plan.short_id ? { ...m, plan: null } : m)) }),
-    [model, plan],
-  );
   const linked = useMemo(() => ({ ids: linkedSessionIds([row]), prs: linkedPrRefs([row]) }), [row]);
   const lookups = usePriorityLookups(linked.ids, linked.prs);
   const corrections = row.corrections;
@@ -135,7 +131,7 @@ function PriorityBody({ row }: { row: PriorityView }) {
       )}
 
       <section data-milestones className="mt-4">
-        <Milestones model={milestones} layout="wide" now={now} lookups={lookups} expand focus={focus} />
+        <Milestones model={model} layout="wide" now={now} lookups={lookups} expand focus={focus} />
       </section>
 
       {corrections.length > 0 && (
@@ -180,7 +176,7 @@ function CorrectButton({ row }: { row: PriorityView }) {
   return (
     <CorrectPopover open={open} onOpenChange={setOpen} subject={row.title} onSave={(text) => writes.correct(row.short_id, text, null)}>
       <button type="button" data-correct-priority onClick={() => setOpen(true)} className="inline-flex h-8 items-center justify-center gap-1.5 rounded-control px-2.5 text-meta text-sol-text-muted hover:bg-sol-bg-alt hover:text-sol-text max-sm:h-11 [@media(pointer:coarse)]:h-11 [@media(pointer:coarse)]:min-w-11">
-        <PencilLine className="size-3.5" aria-hidden /> <span className="max-sm:hidden">Correct…</span>
+        <PencilLine className="size-3.5" aria-hidden /> <span className="max-sm:sr-only">Correct…</span>
       </button>
     </CorrectPopover>
   );

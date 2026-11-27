@@ -255,7 +255,11 @@ test("the page: title, Correct…, Share and ⋯; ten days; the plan once; miles
 
     // Correct…, Share and ⋯ in the header; on a phone they take a row of their own above the title, which gets the whole width.
     const actions = el.querySelector("header [data-priority-actions]")!;
-    expect(actions.querySelector("[data-correct-priority]")).not.toBeNull();
+    // On a phone Correct… is its pencil, its name kept for a screen reader rather than removed.
+    const correct = actions.querySelector("[data-correct-priority]")!;
+    expect(correct.textContent).toContain("Correct…");
+    expect(correct.querySelector("span")!.className).toContain("max-sm:sr-only");
+    expect(correct.innerHTML).not.toContain("max-sm:hidden");
     expect(actions.querySelector("[data-share-trigger]")?.getAttribute("aria-label")).toBe("Share priority");
     expect(actions.querySelector('[data-priority-menu="pri-60"]')).not.toBeNull();
     expect(actions.className).toContain("max-sm:order-first");

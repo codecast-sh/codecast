@@ -108,6 +108,20 @@ test("hovering a segment shows its tier, workspace, date and shares", async () =
   }
 }, 30_000);
 
+test("a tap on a segment (focus, as a touch screen gives it) opens the same card; the segment is no Tab stop", async () => {
+  seed([{ _id: QUIET, name: "Quiet Co", features: ON }, { _id: BUSY, name: "Busy Co", features: ON }]);
+  const page = await mountSurface(<MessagesByWorkspace days={DAYS} todayIndex={2} />);
+  try {
+    const rest = page.container.querySelector(`[data-workspace="team:${BUSY}"]`)!.querySelectorAll("[data-day]")[2].querySelector('[data-tier="rest"]') as HTMLElement;
+    expect(rest.getAttribute("tabindex")).toBe("-1");
+    await act(async () => { rest.focus(); });
+    await page.waitFor(() => document.body.textContent!.includes("Priorities 4+"), 2_000);
+    expect(document.body.textContent).toContain("Busy Co · Today");
+  } finally {
+    await page.unmount();
+  }
+}, 30_000);
+
 test("renders nothing when no workspace has messages, or none has Priorities on", async () => {
   seed([{ _id: SILENT, name: "Silent Co", features: ON }, { _id: DARK, name: "Dark Co" }]);
   const page = await mountSurface(<MessagesByWorkspace days={DAYS} todayIndex={2} />);

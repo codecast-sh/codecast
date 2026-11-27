@@ -101,8 +101,9 @@ test("orderByState: the sidebar's order, then the most recent; closed last", () 
   expect(orderByState(list).map((x) => x.id)).toEqual(["ask", "work", "run", "idle", "closed"]);
 });
 
-test("orderSessions: a person's session ranks above a workflow run, and a closed run last", () => {
+test("orderSessions: a person's session ranks above a workflow run, and every closed session last, a person's included", () => {
   expect(orderSessions([s("killed", 9, true, "closed-run"), s("working", 1, true, "run"), s("idle", 1, false, "mine")]).map((x) => x.id)).toEqual(["mine", "run", "closed-run"]);
+  expect(orderSessions([s("done", 99, false, "closed-mine"), s("idle", 1, true, "run")]).map((x) => x.id)).toEqual(["run", "closed-mine"]);
 });
 
 test("orderSessions orders the server's own states: someone else's needs_you there ranks as idle", () => {

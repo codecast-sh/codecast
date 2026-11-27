@@ -21,7 +21,8 @@ function Row({ icon, word }: { icon: ReactNode; word: string }) {
   );
 }
 
-const Head = ({ children }: { children: ReactNode }) => <div className="mb-1 mt-4 text-mark font-semibold uppercase tracking-wide text-sol-text-dim first:mt-0">{children}</div>;
+/** A section head, 16px below the section before it; `className` takes that gap away where a head starts a column. */
+const Head = ({ children, className }: { children: ReactNode; className?: string }) => <div data-legend-head className={cn("mb-1 mt-4 text-mark font-semibold uppercase tracking-wide text-sol-text-dim", className)}>{children}</div>;
 
 export function Legend() {
   return (
@@ -35,7 +36,7 @@ export function Legend() {
         <DialogTitle>What the icons mean</DialogTitle>
         <div className="grid gap-x-8 px-1 pb-2 sm:grid-cols-2">
           <div>
-            <Head>Milestones and sessions</Head>
+            <Head className="mt-0">Milestones and sessions</Head>
             <ul>
               <Row icon={<NeedsYouMark />} word={MILESTONE_STATE_WORD.needs_you} />
               <Row icon={<NewSessionMark />} word={MILESTONE_STATE_WORD.start} />
@@ -48,7 +49,8 @@ export function Legend() {
             </ul>
           </div>
           <div>
-            <Head>Tasks</Head>
+            {/* Two columns side by side: Tasks heads the second. One column (a phone): it follows the first. */}
+            <Head className="sm:mt-0">Tasks</Head>
             <ul>
               {TASK_STATES.map((k) => {
                 const { icon: Icon, color, label } = TASK_STATUS[k];

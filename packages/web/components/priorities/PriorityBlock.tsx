@@ -9,7 +9,7 @@
 import { useLayoutEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
 import Link from "next/link";
 import { ChevronRight } from "lucide-react";
-import { milestoneHref, pastBadge, priorityHref, rankProvenance, type PriorityRow } from "../../lib/priorities";
+import { pastBadge, priorityHref, rankProvenance, type PriorityRow } from "../../lib/priorities";
 import type { ListLayout, MilestoneModel, PriorityModel } from "../../lib/priorityList";
 import { TOUCH_AREA } from "../../lib/priorityList";
 import { cn } from "../../lib/utils";
@@ -94,7 +94,7 @@ export function PriorityBlock({ model, layout, days, todayIndex, peak, typingPen
         <DayStrip counts={model.counts} days={days} todayIndex={todayIndex} peak={peak} pending={typingPending} />
       </div>
       <div className={wide ? "ml-[28px] mt-1" : "ml-[24px] mt-1"}>
-        <Milestones model={model} layout={layout} now={now} lookups={lookups} olderHref={(key) => milestoneHref(row.short_id, key)} />
+        <Milestones model={model} layout={layout} now={now} lookups={lookups} />
       </div>
     </li>
   );
@@ -237,12 +237,11 @@ type Section = { kind: string; head: ReactNode; open: boolean; rows: MilestoneMo
  * every open milestone (the priority's page); `focus` opens the one a link
  * named, and the section that holds it.
  */
-export function Milestones({ model, layout, now, lookups, olderHref, expand, focus }: {
+export function Milestones({ model, layout, now, lookups, expand, focus }: {
   model: PriorityModel;
   layout: ListLayout;
   now: number;
   lookups: LinkLookups;
-  olderHref?: (key: string) => string;
   expand?: boolean;
   focus?: string | null;
 }) {
@@ -251,7 +250,7 @@ export function Milestones({ model, layout, now, lookups, olderHref, expand, foc
   const done = critical.filter((m) => m.done);
   const [doneOpen, setDoneOpen] = useState(() => done.some((m) => m.key === focus));
   const [polishOpen, setPolishOpen] = useState(() => polish.some((m) => m.key === focus));
-  const line = (m: MilestoneModel) => <MilestoneRow key={m.key} model={model} m={m} layout={layout} now={now} lookups={lookups} olderHref={olderHref?.(m.key)} defaultOpen={(expand && !m.done) || m.key === focus} />;
+  const line = (m: MilestoneModel) => <MilestoneRow key={m.key} model={model} m={m} layout={layout} now={now} lookups={lookups} defaultOpen={(expand && !m.done) || m.key === focus} />;
   const sections: Section[] = [];
   if (done.length) sections.push({ kind: "done", open: doneOpen, rows: done, head: <SectionHead key="done" kind="done" label="Done" count={`${done.length}`} open={doneOpen} onClick={() => setDoneOpen((o) => !o)} /> });
   if (polish.length) sections.push({ kind: "polish", open: polishOpen, rows: polish, head: <SectionHead key="polish" kind="polish" label="Polish" count={`${polish.filter((m) => m.done).length}/${polish.length}`} open={polishOpen} onClick={() => setPolishOpen((o) => !o)} /> });
@@ -277,13 +276,12 @@ export function Milestones({ model, layout, now, lookups, olderHref, expand, foc
   );
 }
 
-function MilestoneRow({ model, m, layout, now, lookups, olderHref, defaultOpen = false }: {
+function MilestoneRow({ model, m, layout, now, lookups, defaultOpen = false }: {
   model: PriorityModel;
   m: MilestoneModel;
   layout: ListLayout;
   now: number;
   lookups: LinkLookups;
-  olderHref?: string;
   defaultOpen?: boolean;
 }) {
   const { row } = model;
@@ -300,7 +298,12 @@ function MilestoneRow({ model, m, layout, now, lookups, olderHref, defaultOpen =
         tabIndex={0}
         aria-expanded={open}
         onClick={toggle}
-        onKeyDown={(e) => { if (e.key === "Enter" && e.target === e.currentTarget) toggle(); }}
+        // A button's keys: Enter and Space toggle it, Space without scrolling the page.
+        onKeyDown={(e) => {
+          if (e.target !== e.currentTarget || (e.key !== "Enter" && e.key !== " ")) return;
+          e.preventDefault();
+          toggle();
+        }}
         className={cn(
           "group/line -mx-1.5 flex cursor-pointer items-center gap-2 rounded-control px-1.5 hover:bg-sol-bg-alt/60",
           wide ? "min-h-8 [@media(pointer:coarse)]:min-h-11" : "min-h-11 py-0.5",
@@ -317,6 +320,8 @@ function MilestoneRow({ model, m, layout, now, lookups, olderHref, defaultOpen =
               <span
                 data-milestone-title
                 title={step.title}
+                // A double-click's second click would close what its first opened: only the first toggles, then the double-click renames.
+                onClick={(e) => { if (e.detail > 1) e.stopPropagation(); }}
                 onDoubleClick={row.mine ? (e) => { e.stopPropagation(); setRenaming(true); } : undefined}
                 className={cn(
                   "min-w-0 text-ui",
@@ -338,7 +343,7 @@ function MilestoneRow({ model, m, layout, now, lookups, olderHref, defaultOpen =
         </span>
         <ChevronRight aria-hidden data-line-chevron className={cn("size-3.5 shrink-0 text-sol-text-dim opacity-0 transition group-hover/line:opacity-100", open && "rotate-90 opacity-100")} />
       </div>
-      {open && <Connected model={model} m={m} now={now} lookups={lookups} olderHref={olderHref} />}
+      {open && <Connected model={model} m={m} now={now} lookups={lookups} />}
     </li>
   );
 }

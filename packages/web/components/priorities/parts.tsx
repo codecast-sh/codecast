@@ -28,7 +28,8 @@ const NO_TASKS: string[] = [];
  * typed, today outlined. Hovering a day opens its card: the date and the
  * messages. A list row's bars are 20px (7px on a narrow list), the day
  * columns "Where your messages went" draws under the list; `page` spreads
- * them across the page with a date under each. `pending`: the typing has not
+ * them across the page with a date under each. A tap focuses a day, which
+ * opens its card on a touch screen. `pending`: the typing has not
  * arrived, so every day is its empty baseline and no day opens a card (it
  * would say 0 messages).
  */
@@ -46,7 +47,8 @@ export function DayStrip({ counts, days, todayIndex, peak, page, pending }: { co
         const date = dayDate(days[i]);
         const day = (
           <>
-            <span data-day={days[i]} data-count={pending ? undefined : c} className="flex w-full flex-col justify-end" style={{ height: max + 2 }}>
+            {/* Focusable by a tap (never a Tab stop), so a touch screen opens the day's card. */}
+            <span data-day={days[i]} data-count={pending ? undefined : c} tabIndex={pending ? undefined : -1} className="flex w-full flex-col justify-end outline-none" style={{ height: max + 2 }}>
               <i
                 className={cn("block w-full rounded-[2px]", today && "border border-sol-green/80", c > 0 ? "bg-sol-green" : "bg-sol-text/10")}
                 style={{ height: h, opacity: c > 0 ? 0.45 + 0.55 * share : 1 }}
@@ -68,6 +70,7 @@ export function DayStrip({ counts, days, todayIndex, peak, page, pending }: { co
             align="center"
             className="w-auto"
             triggerClassName={column}
+            focusable
             card={
               <div data-day-card className="flex items-baseline gap-3 whitespace-nowrap px-2.5 py-1.5 text-ui">
                 <span className="font-semibold text-sol-text">{date}</span>

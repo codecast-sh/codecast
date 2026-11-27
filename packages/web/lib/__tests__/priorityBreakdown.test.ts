@@ -76,3 +76,29 @@ test("percent, dayDate and a day column's accessible text", () => {
   expect(dayAriaLabel("Today", day(6, 4, 2))).toBe("Today: 12 messages, 1–3 6, 4+ 4, no priority 2");
   expect(dayAriaLabel("Wed, Nov 25", day(0, 0, 1))).toBe("Wed, Nov 25: 1 message, 1–3 0, 4+ 0, no priority 1");
 });
+
+describe("TIERS in grayscale", () => {
+  // A grayscale screen (Daylight) sees each part as its luma composited on the page. Every pair of neighbours (page,
+  // no priority, 4+, 1–3) stays apart enough to tell, in every built-in theme, light and dark.
+  test("each tier is at least 45 grey levels from its neighbour, and no priority 30 from the page", async () => {
+    const { BUILTIN_THEMES } = await import("../theme/builtinThemes");
+    const { TIERS } = await import("../priorityBreakdown");
+    const rgb = (h: string) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+    const luma = ([r, g, b]: number[]) => 0.299 * r + 0.587 * g + 0.114 * b;
+    const on = (fill: string, opacity: number, bg: string) => luma(rgb(fill).map((c, i) => c * opacity + rgb(bg)[i] * (1 - opacity)));
+    const tier = (k: string) => TIERS.find((t) => t.key === k)!;
+    const misses: string[] = [];
+    for (const theme of BUILTIN_THEMES) {
+      for (const mode of ["light", "dark"] as const) {
+        const p = theme[mode] as Record<string, string> | undefined;
+        if (!p?.bg || !p.green || !p["text-dim"]) continue;
+        const fill = (t: (typeof TIERS)[number]) => (t.fill.includes("green") ? p.green : p["text-dim"]);
+        const [page, none, rest, top] = [luma(rgb(p.bg)), ...(["none", "rest", "top"] as const).map((k) => on(fill(tier(k)), tier(k).opacity, p.bg))];
+        if (Math.abs(top - rest) < 45 || Math.abs(rest - none) < 45 || Math.abs(none - page) < 30) {
+          misses.push(`${theme.id} ${mode}: page ${Math.round(page)} none ${Math.round(none)} 4+ ${Math.round(rest)} 1–3 ${Math.round(top)}`);
+        }
+      }
+    }
+    expect(misses).toEqual([]);
+  });
+});
