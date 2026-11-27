@@ -145,6 +145,7 @@ const { createRoot } = await import("react-dom/client");
 const { useInboxStore } = await import("../../store/inboxStore");
 const { TeamAvatarBar } = await import("../TeamAvatarBar");
 const { BAR_FACES } = await import("../../lib/faces/layout");
+const { idleSelfFaceSig } = await import("../../lib/faces/faceRow");
 const { getCallStageOpen, closeCallStage, takeCallThreadRequest } = await import("../../lib/calls/callStage");
 
 afterAll(() => {
@@ -390,9 +391,34 @@ describe("your own face", () => {
     const h = await mount();
     expect(h.all("[data-face-id]").map((el) => el.dataset.faceId)).toEqual([ME]);
     expect(h.q("[data-overflow]")).toBeNull();
+    // You alone are not something happening: the minimal style still hides the bar.
+    expect(h.q(".people-bar")?.getAttribute("data-live")).toBeNull();
     const card = await openCard(h, ME);
     expect(card.querySelector('.face-card-status[data-on="busy"]')).not.toBeNull();
     expect(Array.from(card.querySelectorAll(".face-card-self .face-action-word")).map((w) => w.textContent)).toEqual(["Huddle"]);
+  });
+
+  test("your face wakes the bar on what it draws, never on a heartbeat of your user doc or roster row", () => {
+    const st = useInboxStore.getState();
+    const before = idleSelfFaceSig(st);
+    expect(before).not.toBe("");
+    // A heartbeat: a new user doc and roster row, nothing a face draws moved.
+    const beat = {
+      ...st,
+      currentUser: { ...st.currentUser, last_heartbeat: Date.now() },
+      teamMembers: st.teamMembers.map((m: any) => ({ ...m, last_heartbeat: Date.now() })),
+    };
+    expect(idleSelfFaceSig(beat)).toBe(before);
+    // Your status and your picture do move it.
+    const busy = { ...st, teamMembers: st.teamMembers.map((m: any) => (m._id === ME ? { ...m, status: "busy" } : m)) };
+    expect(idleSelfFaceSig(busy)).not.toBe(before);
+    const photo = { ...st, teamMembers: st.teamMembers.map((m: any) => (m._id === ME ? { ...m, image: "https://x/me.png" } : m)) };
+    expect(idleSelfFaceSig(photo)).not.toBe(before);
+    // In Personal, read off the user doc the same way.
+    const personal = { ...st, teamMembers: [], clientState: { ...st.clientState, ui: { ...st.clientState.ui, active_team_id: null } } };
+    const p0 = idleSelfFaceSig(personal);
+    expect(idleSelfFaceSig({ ...personal, currentUser: { ...st.currentUser, last_heartbeat: 1 } })).toBe(p0);
+    expect(idleSelfFaceSig({ ...personal, currentUser: { ...st.currentUser, status: "away" } })).not.toBe(p0);
   });
 
   test("in Personal with calls on in none of your teams, nothing is drawn", async () => {

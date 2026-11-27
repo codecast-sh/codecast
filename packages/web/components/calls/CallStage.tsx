@@ -759,7 +759,7 @@ const DOOR_CHROME: Record<RoomDoor, { icon: typeof Users; label: string; hint: s
 };
 
 function DoorMenu({ roomKey }: { roomKey: string }) {
-  const { door, setDoor } = useRoomDoor(roomKey);
+  const { door, fixed, setDoor } = useRoomDoor(roomKey);
   const now = DOOR_CHROME[door];
   return (
     <DropdownMenu>
@@ -785,7 +785,8 @@ function DoorMenu({ roomKey }: { roomKey: string }) {
         {DOOR_ORDER.map((key) => {
           const chrome = DOOR_CHROME[key];
           const current = key === door;
-          const reachable = current || key === "team" || (key === "locked" && door === "team");
+          // A room only its owner may enter stays private: nothing opens it.
+          const reachable = current || (!fixed && (key === "team" || (key === "locked" && door === "team")));
           return (
             <DropdownMenuItem
               key={key}

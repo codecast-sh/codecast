@@ -3,6 +3,8 @@
 import { describe, expect, test } from "bun:test";
 import { callsAvailableIn } from "../teamFeatures";
 import { callIsPrivate, callOnlyMine, liveRoomOnlyMine } from "../calls/personalCalls";
+import { roomIsOwnerOnly, roomIsPrivate } from "../faces/faceRowSigs";
+import { ownRouteHeldFrom } from "../calls/ownRoute";
 
 const ME = "u-me";
 const ANN = "u-ann";
@@ -75,5 +77,34 @@ describe("Personal's Live now", () => {
   test("not a team room, nor a private room with somebody else in it", () => {
     expect(liveRoomOnlyMine(room({ roomKey: "session:c1" }), ME)).toBe(false);
     expect(liveRoomOnlyMine(room({ roomKey: "session:c1", private: true, members: [{ user_id: ME }, { user_id: ANN }] }), ME)).toBe(false);
+  });
+});
+
+describe("a room only its owner may enter", () => {
+  const SOLO = "session:c1";
+  // getLiveRooms' flags, as applyLiveRoomsPush files them in callRooms.
+  const st = (over: Record<string, unknown> = {}) => ({
+    currentUser: { _id: ME },
+    callRooms: { [SOLO]: { private: true, locked: false } },
+    sessions: { c1: { _id: "c1", user_id: ME } },
+    ...over,
+  });
+
+  test("private with no lock: only its owner's, and its door is fixed", () => {
+    expect(roomIsOwnerOnly(st(), SOLO)).toBe(true);
+    expect(roomIsPrivate(st(), SOLO)).toBe(true);
+  });
+  test("a huddle started private is locked, so never owner-only; opened, it is ordinary", () => {
+    expect(roomIsOwnerOnly(st({ callRooms: { [SOLO]: { private: true, locked: true } } }), SOLO)).toBe(false);
+    expect(roomIsPrivate(st({ callRooms: { [SOLO]: { private: true, locked: true } } }), SOLO)).toBe(true);
+    expect(roomIsPrivate(st({ callRooms: { [SOLO]: { private: false, locked: false } } }), SOLO)).toBe(false);
+  });
+  test("the session's own route is held from everyone but its owner", () => {
+    expect(ownRouteHeldFrom(st(), SOLO)).toBeNull();
+    expect(ownRouteHeldFrom(st({ currentUser: { _id: ANN } }), SOLO)).toBe("c1");
+    // Somebody rung in who cannot read the session has no row for it.
+    expect(ownRouteHeldFrom(st({ currentUser: { _id: ANN }, sessions: {} }), SOLO)).toBe("c1");
+    // A team-visible session's room holds nothing back.
+    expect(ownRouteHeldFrom(st({ currentUser: { _id: ANN }, callRooms: {} }), SOLO)).toBeNull();
   });
 });

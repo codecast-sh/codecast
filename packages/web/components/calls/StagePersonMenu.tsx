@@ -10,6 +10,8 @@ import { removeGuest } from "../../lib/calls/guestDoorActions";
 import { sayRefusal } from "../../lib/calls/sayRefusal";
 import { serverErrorText } from "../../lib/errorCause";
 import { firstName } from "./speakers";
+import { useInboxStore } from "../../store/inboxStore";
+import { OWN_ROUTE_HELD, ownRouteHeldFrom } from "../../lib/calls/ownRoute";
 
 export type StagePerson = { identity: string; name: string };
 
@@ -21,6 +23,7 @@ export function StagePersonMenu({ roomKey, state, selfId }: { roomKey: string; s
   const removeAgent = useAction(api.callFace.removeAgent);
   const putOutOfCall = useAction(api.calls.putOutOfCall);
   const { canInvite } = useGuestLinks(roomKey);
+  const heldRoute = useInboxStore((st) => ownRouteHeldFrom(st, roomKey));
   return (
     <ContextMenu state={state}>
       {({ identity, name }) => {
@@ -30,11 +33,13 @@ export function StagePersonMenu({ roomKey, state, selfId }: { roomKey: string; s
         const kind = callParticipantKind(identity);
         if (kind === "agent") {
           const conversationId = agentFaceConversationId(identity);
+          const held = !!conversationId && conversationId === heldRoute;
           return (
             <CtxItem
               icon={UserMinus}
               danger
-              disabled={!conversationId}
+              disabled={!conversationId || held}
+              title={held ? OWN_ROUTE_HELD : undefined}
               onSelect={() => conversationId && void removeAgent({ room_key: roomKey, conversation_id: conversationId }).catch(fail)}
             >
               Remove {who} from the call

@@ -718,6 +718,13 @@ export function deriveFaceRow(raw: FaceRowInput, prev: FaceRow | null): FaceRow 
   return { entries, links, card, me, room };
 }
 
+/** What the idle self face draws, as one string: the bar's wake signature,
+ *  so a heartbeat that moves none of it re-renders nothing. */
+export function idleSelfFaceSig(st: any): string {
+  const f = idleSelfFaceOf(st);
+  return f ? `${f.id}|${f.name}|${f.image ?? ""}|${f.state}|${f.tier}` : "";
+}
+
 /** Your own face while nothing engages it (`row.me` is null outside a call
  *  or a ring): the header leads with it in every workspace, so your own card,
  *  with the status switch and Huddle, is one click away. Drawn from your

@@ -201,11 +201,12 @@ describe("every state in the vocabulary", () => {
     const row = deriveFaceRow(input({ call: call("channel:c1"), occupancy, roomPrivate: true }), null);
     expect(row.card).toMatchObject({ kind: "live", private: true });
 
-    const live = [{ room_key: "channel:c1", members: [], private: true }];
-    expect(roomIsPrivate({ liveRooms: live, callRooms: { "channel:c1": { locked: true } } }, "channel:c1")).toBe(true);
-    // Opening the door (a local flip of the lock) makes it ordinary at once.
-    expect(roomIsPrivate({ liveRooms: live, callRooms: { "channel:c1": { locked: false } } }, "channel:c1")).toBe(false);
-    expect(roomIsPrivate({ liveRooms: [{ ...live[0], private: false }], callRooms: { "channel:c1": { locked: true } } }, "channel:c1")).toBe(false);
+    expect(roomIsPrivate({ callRooms: { "dm:a:b": { locked: true, private: true } } }, "dm:a:b")).toBe(true);
+    // Opening the door (a local flip of the lock, which clears private) makes it ordinary at once.
+    expect(roomIsPrivate({ callRooms: { "dm:a:b": { locked: false, private: false } } }, "dm:a:b")).toBe(false);
+    expect(roomIsPrivate({ callRooms: { "dm:a:b": { locked: true } } }, "dm:a:b")).toBe(false);
+    // A room only its owner may enter is private with no lock.
+    expect(roomIsPrivate({ callRooms: { "dm:me": { locked: false, private: true } } }, "dm:me")).toBe(true);
   });
 });
 

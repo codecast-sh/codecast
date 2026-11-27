@@ -6,6 +6,7 @@ import { guestsStillWaiting } from "../lib/calls/knockToasts";
 import { useNowWhen } from "./useCoarseNow";
 import { useFaceRow } from "./useFaceRow";
 import { liveRoomOnlyMine, personalViewerOf } from "../lib/calls/personalCalls";
+import { roomIsOwnerOnly } from "../lib/faces/faceRowSigs";
 
 // The live-rooms read layer lives in ./liveRoomRows (platform-neutral); this
 // file binds it to the face row, web's answer to "which room am I in".
@@ -101,14 +102,18 @@ export type RoomDoor = "team" | "locked" | "private";
  *  (callRooms), the echo reconciles. */
 export function useRoomDoor(roomKey: string | null): {
   door: RoomDoor;
+  /** Only its owner may enter (roomIsOwnerOnly): private, and no gesture opens it. */
+  fixed: boolean;
   setDoor: (door: Exclude<RoomDoor, "private">) => void;
 } {
+  const fixed = useInboxStore((st: any) => !!roomKey && roomIsOwnerOnly(st, roomKey));
   const door = useInboxStore((st: any) => {
     const r = roomKey ? st.callRooms?.[roomKey] : undefined;
-    return r?.private && r?.locked ? "private" : r?.locked ? "locked" : "team";
+    return r?.private ? "private" : r?.locked ? "locked" : "team";
   }) as RoomDoor;
   return {
     door,
+    fixed,
     setDoor: (next) => {
       if (roomKey && next !== door) useInboxStore.getState().setRoomLocked(roomKey, next === "locked");
     },
