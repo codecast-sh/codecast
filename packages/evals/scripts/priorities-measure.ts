@@ -36,8 +36,8 @@
 // never inside the repo. Judge calls go out on the evals' API key.
 
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 import { STRONG_MODEL, modelCost, parseJsonBlock, postMessages, replyText } from '../../convex/convex/lib/anthropic';
@@ -374,10 +374,16 @@ type EvalResult = {
 
 /** A staff run of an internal function against prod (packages/convex/run.sh), its JSON result. */
 function convexRun<T>(fn: string, args: Record<string, unknown>): T {
-  const r = Bun.spawnSync([join(REPO_ROOT, 'packages/convex/run.sh'), fn, JSON.stringify(args)], { stdout: 'pipe', stderr: 'inherit' });
-  const out = r.stdout.toString();
-  if (r.exitCode !== 0) throw new Error(`${fn} failed (exit ${r.exitCode})`);
-  return JSON.parse(out.slice(out.search(/^[{[]/m)));
+  // Into a file, not a pipe: the convex CLI exits before a pipe drains, which cuts a large reply off near 64 KB.
+  const file = join(tmpdir(), `priorities-measure-${process.pid}-${Date.now()}.json`);
+  try {
+    const r = Bun.spawnSync([join(REPO_ROOT, 'packages/convex/run.sh'), fn, JSON.stringify(args)], { stdout: Bun.file(file), stderr: 'inherit' });
+    if (r.exitCode !== 0) throw new Error(`${fn} failed (exit ${r.exitCode})`);
+    const out = readFileSync(file, 'utf8');
+    return JSON.parse(out.slice(out.search(/^[{[]/m)));
+  } finally {
+    rmSync(file, { force: true });
+  }
 }
 
 const DAY = 86_400_000;
