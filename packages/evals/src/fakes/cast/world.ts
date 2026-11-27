@@ -89,8 +89,8 @@ export interface FakeWorld {
   board?: FakeBoard;
   call?: FakeCall;
   listings?: FakeListings;
-  plans: Record<string, { id: string; title: string; goal?: string; from_call?: string }>;
-  priorities: Record<string, { id: string; title: string; owner?: string; from_call?: string }>;
+  plans: Record<string, { id: string; title: string; goal?: string; from_call?: string; status?: string }>;
+  priorities: Record<string, { id: string; title: string; owner?: string; from_call?: string; status?: string }>;
 }
 
 export interface WorldSeed {

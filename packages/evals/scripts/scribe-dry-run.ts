@@ -42,6 +42,8 @@ const HARNESS = join(REPO, 'packages/cli/scripts/prompt-dry-run.ts');
 /** What the room calls Scribe: its character name and its brand (agentSpokenNames for a Claude session). */
 const NAMES = ['Scribe', 'Claude'];
 const BOARD_DOC = 's97fakeboardscribeeval0000000001';
+/** What Scribe hears when the call stops (the ended header convex sends then; ct-102408 follow-up). */
+export const CALL_ENDED = 'The call has ended: do your final pass now (see Pace), then end with [pass].';
 /** The one element a person wrote before Scribe joined: placed where the second theme frame of a 3-across grid would land. */
 export const PERSON_KEY = 'el_person_note';
 const PERSON_BY = 'u:person_seed';
@@ -109,6 +111,10 @@ function prepare() {
     writeFileSync(join(out, file), body);
     return { file, lines: `${c[0]!.seq}-${c.at(-1)!.seq}`, lane, full };
   });
+  // The call's end: one last message, as convex sends Scribe when the call stops.
+  const endFile = `chunk${String(chunks.length + 1).padStart(2, '0')}.md`;
+  writeFileSync(join(out, endFile), CALL_ENDED);
+  meta.push({ file: endFile, lines: 'end', lane: 'context', full: false });
   const lines = (f: string) => readFileSync(join(listings, f), 'utf8').split('\n').filter((l) => /\b(pri|pl|ct)-\d+/.test(l));
   const seed: WorldSeed = {
     self: 'jx7scrb',
@@ -160,8 +166,23 @@ export function gradeWorld(w: FakeWorld, callsLog: string, said: Array<{ turn: n
   const themes = els.filter(isTheme);
   const checks: Check[] = [];
 
-  // (a) every theme frame is titled by an object.
-  const noRef = themes.filter((f) => !frameRef(f));
+  // The objects this call created, and which of them the final pass dropped.
+  const made = [
+    ...Object.values(w.tasks).filter((t) => t.from_call === callId).map((t) => ({ id: t.id, title: t.title, dropped: t.status === 'dropped' })),
+    ...Object.values(w.plans).filter((x) => x.from_call === callId).map((x) => ({ id: x.id, title: x.title, dropped: x.status === 'abandoned' })),
+    ...Object.values(w.priorities).filter((x) => x.from_call === callId).map((x) => ({ id: x.id, title: x.title, dropped: x.status === 'set_aside' || x.status === 'done' })),
+  ];
+  const dropped = new Set(made.filter((m) => m.dropped).map((m) => m.id));
+  // Every ref each frame ever carried, from the write log: a frame retitled in plain text once held its object's ref.
+  const refsOf = new Map<string, string[]>();
+  for (const l of w.board!.log) for (const o of l.ops as any[]) {
+    const ref = o.put?.ref ?? o.set?.ref;
+    if (typeof ref === 'string') refsOf.set(o.k, [...(refsOf.get(o.k) ?? []), ref.toLowerCase()]);
+  }
+  const retitled = (f: ArtifactElement) => !frameRef(f) && (refsOf.get(f.key) ?? []).some((r) => dropped.has(r));
+
+  // (a) every theme frame is titled by an object, or was retitled when the final pass dropped its object.
+  const noRef = themes.filter((f) => !frameRef(f) && !retitled(f));
   checks.push({ name: '(a) every theme frame has a ref', pass: themes.length > 0 && noRef.length === 0, detail: `${themes.length} theme frames${noRef.length ? `; without ref: ${noRef.map((f) => `${f.key} "${f.title}"`).join(', ')}` : ''}; refs ${themes.map((f) => frameRef(f) ?? '-').join(', ')}` });
 
   // (b) a resolved theme: a collapsed Working notes frame inside it, plus a filed card; with its summary and its --from-call task.
@@ -174,6 +195,9 @@ export function gradeWorld(w: FakeWorld, callsLog: string, said: Array<{ turn: n
     const cards = els.filter((e) => e.kind === 'card' && inside(e.key, f.key) && filed.some((t) => t.id === e.ref));
     const summary = els.some((e) => e.kind === 'text' && /to summarize/i.test(String(e.text ?? '')) && inside(e.key, f.key));
     const ref = frameRef(f);
+    // When the frame's object is the task filed from this call, its chip stands for the card (the prompt places none).
+    const chip = !!ref && filed.some((t) => t.id === ref && t.status !== 'dropped');
+    if (chip && !cards.some((c) => c.ref === ref)) cards.push(f);
     const tasks = cards.map((c) => filed.find((t) => t.id === c.ref)!);
     // --under applies when the frame's object is not itself the filed task (a goal's frame just holds the card).
     const underOk = tasks.every((t) => t.id === ref || !ref || ref.startsWith('in-') || t.under === ref);
@@ -201,9 +225,30 @@ export function gradeWorld(w: FakeWorld, callsLog: string, said: Array<{ turn: n
   const outward = callsLog.split('\n').filter((l) => /\bcast\s+(publish|chat\s+(send|dm|reply)|send|call\s+(say|speak|voice)|voice|anchor)\b/.test(l));
   checks.push({ name: '(e) no publish, voice or chat posts', pass: outward.length === 0 && w.sent.length === 0, detail: `${outward.length} outward calls${outward.length ? `: ${outward.join(' | ')}` : ''}; sent ${w.sent.length}` });
 
+  // (f) the final pass: a title line, an "Open:" sticky closing each open theme, the call's dead objects dropped.
+  const title = els.some((e) => e.kind === 'text' && /huddle\s*·/i.test(String(e.text ?? '')) && !hidden.has(e.key));
+  const resolvedKeys = new Set(folded.map((r) => r.frame));
+  const open = themes.filter((f) => !resolvedKeys.has(f.key) && !retitled(f));
+  const openSticky = (f: ArtifactElement) => els.some((e) => e.kind === 'sticky' && e.color === 'violet' && /^\s*open:/i.test(String(e.text ?? '')) && inside(e.key, f.key));
+  const missingOpen = open.filter((f) => !openSticky(f));
+  // Dead: created this call, its theme never resolved, two stickies or fewer in it and nothing from a person.
+  const stickiesIn = (f: ArtifactElement) => els.filter((e) => e.kind === 'sticky' && (inside(e.key, f.key) || hidden.has(e.key) && enclosingFrameKeys(view, e.key).includes(f.key)));
+  const personIn = (f: ArtifactElement) => els.some((e) => !String(e.by ?? '').startsWith('s:') && inside(e.key, f.key));
+  const frameFor = (id: string) => els.find((e) => e.kind === 'frame' && ((refsOf.get(e.key) ?? []).includes(id) || frameRef(e) === id));
+  const dead = made.filter((m) => {
+    const f = frameFor(m.id);
+    if (!f) return false;
+    return !resolvedKeys.has(f.key) && stickiesIn(f).length <= 2 && !personIn(f);
+  });
+  const deadLeft = dead.filter((m) => !m.dropped || (frameFor(m.id) && frameRef(frameFor(m.id)!) === m.id));
+  const overDropped = made.filter((m) => m.dropped && !dead.some((d) => d.id === m.id));
+  checks.push({ name: '(f) final pass: title line', pass: title, detail: title ? 'present' : 'no "Huddle ·" text' });
+  checks.push({ name: '(f) final pass: every open theme ends with a violet "Open:" sticky', pass: missingOpen.length === 0, detail: `${open.length} open theme(s)${missingOpen.length ? `; missing in ${missingOpen.map((f) => frameRef(f) ?? f.title).join(', ')}` : ''}` });
+  checks.push({ name: "(f) final pass: Scribe's dead objects dropped, frames retitled", pass: deadLeft.length === 0 && overDropped.length === 0, detail: `dead ${dead.map((d) => d.id).join(' ') || 'none'}; left alive or still titled ${deadLeft.map((d) => d.id).join(' ') || 'none'}; dropped but not dead ${overDropped.map((d) => d.id).join(' ') || 'none'}` });
+
   const facts = {
     themes: themes.map((f) => ({ key: f.key, ref: frameRef(f), title: f.title })),
-    tasks: Object.values(w.tasks).map((t) => ({ id: t.id, title: t.title, from_call: t.from_call, under: t.under, assignee: t.assignee })),
+    tasks: Object.values(w.tasks).map((t) => ({ id: t.id, title: t.title, status: t.status, from_call: t.from_call, under: t.under, assignee: t.assignee })),
     plans: Object.values(w.plans),
     priorities: Object.values(w.priorities),
     writes: w.board!.log.length,
