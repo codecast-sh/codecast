@@ -166,7 +166,8 @@ import { openSessionAtMessage } from "../lib/openSessionAtMessage";
 import type { MentionItem } from "./editor/MentionList";
 import { HeaderPinMenuItem } from "./anchor/AnchorPanel";
 import { Headphones, MessageSquare, CornerDownRight, Split, Workflow, Loader2, Bot, Forward, ArrowRightLeft, Cpu, FolderTree, ChevronLeft } from "lucide-react";
-import { openInEditor } from "../lib/filesPane";
+import { filesHref } from "../lib/vault/vaultHref";
+import { openFiles } from "../lib/filesPane";
 import { openForwardToChat } from "../lib/forwardToChat";
 import { useCallsAvailable, useTeamFeature } from "../lib/teamFeatures";
 import { CursorPopover, useContextMenu } from "./ui/context-menu";
@@ -4909,9 +4910,9 @@ const ConversationViewInner = (
                       </DropdownMenuSubContent>
                     </DropdownMenuSub>
                     {filePathBase && !guest && (
-                      <DropdownMenuItem onSelect={() => setTimeout(() => openInEditor({ path: filePathBase, ctx: filePathCtx }))}>
+                      <DropdownMenuItem onSelect={() => setTimeout(() => openFiles(filesHref({ localPath: filePathBase })))}>
                         <FolderTree className="w-3 h-3 mr-1.5" />
-                        Open project in editor
+                        Browse project files
                       </DropdownMenuItem>
                     )}
                     {hasAnyThinking && (

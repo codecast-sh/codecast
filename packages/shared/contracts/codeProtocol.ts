@@ -114,11 +114,6 @@ export interface CodeBlameHunk {
   /** The codecast session that wrote these lines, from the Codecast-Session
    *  trailer or, for uncommitted lines, a content match against session edits. */
   session?: CodeBlameSession;
-  /** Set when the commit is a sweep naming this many sessions in its
-   *  Codecast-Session trailers and no single one of them could be matched to
-   *  these lines; `session` is then absent rather than the session that ran
-   *  the commit. */
-  sweep_sessions?: number;
 }
 
 export interface CodeBlameResponse {

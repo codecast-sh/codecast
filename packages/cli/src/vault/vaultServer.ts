@@ -168,9 +168,6 @@ async function handleGetFile(
     return sendJson(res, 413, headers, { error: "too large", size: stat.size });
   }
   const data = await fsp.readFile(target.abs);
-  // A file its mode refuses to write (0444) says so up front, so the editor can
-  // show the lock before a save is refused, and confirm the force-overwrite.
-  const writable = await fsp.access(target.abs, fs.constants.W_OK).then(() => true, () => false);
   res.writeHead(200, {
     ...headers,
     ...vaultResponseSecurityHeaders(target.rel),
@@ -180,7 +177,6 @@ async function handleGetFile(
     ETag: vaultContentHash(data),
     "X-Vault-Mtime": String(Math.round(stat.mtimeMs)),
     "X-Vault-Size": String(stat.size),
-    ...(writable ? {} : { "X-Vault-Writable": "0", "X-Vault-Mode": (stat.mode & 0o7777).toString(8).padStart(4, "0") }),
   });
   res.end(data);
 }

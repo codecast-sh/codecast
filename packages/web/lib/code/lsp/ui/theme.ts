@@ -4,7 +4,7 @@
 // every overlay is mounted inside the view's own DOM.
 
 import { EditorView } from "@codemirror/view";
-import { EDITOR_FONT, HIGHLIGHT, OVERLAY } from "../../theme";
+import { EDITOR_FONT } from "../../theme";
 import { LINT_GUTTER_COLUMN } from "../../gutterSlots";
 
 const mix = (color: string, pct: number) => `color-mix(in srgb, var(${color}) ${pct}%, transparent)`;
@@ -49,9 +49,13 @@ export const lspTheme = EditorView.theme({
 
   // ── overlays mounted in the editor ──────────────────────────────────────
   ".cm-lsp-overlay": {
-    ...OVERLAY,
     position: "absolute",
     zIndex: "300",
+    background: "var(--sol-bg)",
+    color: "var(--sol-text)",
+    border,
+    borderRadius: "6px",
+    boxShadow: `0 8px 24px ${mix("--sol-text", 14)}`,
     fontFamily: EDITOR_FONT,
     fontSize: "12px",
     overflow: "hidden",
@@ -106,10 +110,10 @@ export const lspTheme = EditorView.theme({
   ".cm-lsp-peek-close": { marginLeft: "auto", background: "none", border: "none", color: "inherit", font: "inherit", cursor: "pointer", padding: "0 4px" },
   ".cm-lsp-peek-close:hover": { color: "var(--sol-text)" },
   ".cm-lsp-code": { color: "var(--sol-text-muted)", overflow: "hidden", textOverflow: "ellipsis", minWidth: "0" },
-  ".cm-lsp-code strong": { color: "var(--sol-text)", fontWeight: "600", background: HIGHLIGHT.match, borderRadius: "2px" },
+  ".cm-lsp-code strong": { color: "var(--sol-text)", fontWeight: "600", background: mix("--sol-yellow", 22), borderRadius: "2px" },
 
   // ── rename ──────────────────────────────────────────────────────────────
-  ".cm-tooltip.cm-lsp-rename": { padding: "3px", borderColor: "var(--sol-cyan)" },
+  ".cm-tooltip.cm-lsp-rename": { padding: "3px", border: `1px solid var(--sol-cyan)`, borderRadius: "4px" },
   ".cm-lsp-rename input": { font: "inherit", fontFamily: EDITOR_FONT, fontSize: "12px", border: "none", outline: "none", background: "transparent", color: "var(--sol-text)", padding: "1px 4px", width: "220px" },
 
   // ── notices ─────────────────────────────────────────────────────────────

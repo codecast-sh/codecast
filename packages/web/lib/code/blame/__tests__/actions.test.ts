@@ -6,7 +6,7 @@ let stageOpens = false;
 const calls: string[] = [];
 
 mock.module("../../../stage", () => ({
-  sessionPanePath: (id: string, msg?: string | null) => `/conversation/${id}${msg ? `#msg-${msg}` : ""}`,
+  sessionPanePath: (id: string) => `/conversation/${id}`,
   openBeside: (p: string) => { calls.push(`beside ${p}`); return stageOpens; },
 }));
 mock.module("../../../openSessionAtMessage", () => ({
@@ -17,7 +17,7 @@ mock.module("../../../openIntent", () => ({
   navigateHere: (p: string) => { calls.push(`go ${p}`); },
 }));
 
-const { openBlameSession, openConversationHere } = await import("../actions");
+const { openBlameMessage, openBlameSession, openConversationHere } = await import("../actions");
 
 const session = { conversation_id: "c1", message_id: "m1" } as never;
 const noMessage = { conversation_id: "c1" } as never;
@@ -25,23 +25,32 @@ const noMessage = { conversation_id: "c1" } as never;
 beforeEach(() => { calls.length = 0; path = "/files"; stageOpens = false; });
 
 describe("blame actions", () => {
-  test("the bar opens the session beside the editor, at the message that made the edit", () => {
+  test("At message from the editor page follows the deep link, leaving no request in the store", () => {
+    expect(openBlameMessage(session)).toBe(true);
+    expect(calls).toEqual(["go /conversation/c1#msg-m1"]);
+  });
+
+  test("At message on a thread route uses the store's navigate request", () => {
+    path = "/inbox";
+    openBlameMessage(session);
+    expect(calls).toEqual(["store c1 m1"]);
+  });
+
+  test("At message without a message id or conversation does nothing", () => {
+    expect(openBlameMessage(noMessage)).toBe(false);
+    expect(openBlameMessage(undefined)).toBe(false);
+    expect(calls).toEqual([]);
+  });
+
+  test("the bar opens the session beside the editor when the stage has room", () => {
     stageOpens = true;
     expect(openBlameSession(session)).toBe(true);
-    expect(calls).toEqual(["beside /conversation/c1#msg-m1"]);
-    calls.length = 0;
-    openBlameSession(noMessage);
     expect(calls).toEqual(["beside /conversation/c1"]);
   });
 
   test("with no room beside, the bar opens the conversation in the main view at the message", () => {
     openBlameSession(session);
-    expect(calls).toEqual(["beside /conversation/c1#msg-m1", "go /conversation/c1#msg-m1"]);
-  });
-
-  test("nothing to open without a conversation", () => {
-    expect(openBlameSession(undefined)).toBe(false);
-    expect(calls).toEqual([]);
+    expect(calls).toEqual(["beside /conversation/c1", "go /conversation/c1#msg-m1"]);
   });
 
   test("with no message id, the main view opens the conversation itself", () => {

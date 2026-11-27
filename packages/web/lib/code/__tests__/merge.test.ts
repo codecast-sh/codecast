@@ -37,26 +37,24 @@ describe("threeWayMerge", () => {
     expect(threeWayMerge(kit, base, disk, mine)).toEqual({
       text: base.replace("return 1;", "return 10;").replace("return 2;", "return 20;"),
       conflicts: 0,
-      regions: [],
     });
   });
 
   it("takes an identical change once", () => {
     const both = base.replace("import a", "import b");
-    expect(threeWayMerge(kit, base, both, both)).toEqual({ text: both, conflicts: 0, regions: [] });
+    expect(threeWayMerge(kit, base, both, both)).toEqual({ text: both, conflicts: 0 });
   });
 
   it("keeps mine where both changed the same lines differently, and counts it", () => {
     const disk = base.replace("return 1;", "return 'disk';");
     const mine = base.replace("return 1;", "return 'mine';").replace("import a", "import z");
-    const at = mine.indexOf("  return 'mine';");
-    expect(threeWayMerge(kit, base, disk, mine)).toEqual({ text: mine, conflicts: 1, regions: [{ from: at, to: at + "  return 'mine';\n".length }] });
+    expect(threeWayMerge(kit, base, disk, mine)).toEqual({ text: mine, conflicts: 1 });
   });
 
   it("merges an append on one side with an edit elsewhere on the other", () => {
     const disk = base + L("", "function three() {}");
     const mine = base.replace("import a", "import a, b");
-    expect(threeWayMerge(kit, base, disk, mine)).toEqual({ text: mine + L("", "function three() {}"), conflicts: 0, regions: [] });
+    expect(threeWayMerge(kit, base, disk, mine)).toEqual({ text: mine + L("", "function three() {}"), conflicts: 0 });
   });
 
   it("treats edits on adjacent lines as a conflict, as git does", () => {
@@ -67,7 +65,7 @@ describe("threeWayMerge", () => {
 
   it("short-circuits when a side did not move", () => {
     const moved = base.replace("two", "dos");
-    expect(threeWayMerge(kit, base, base, moved)).toEqual({ text: moved, conflicts: 0, regions: [] });
-    expect(threeWayMerge(kit, base, moved, base)).toEqual({ text: moved, conflicts: 0, regions: [] });
+    expect(threeWayMerge(kit, base, base, moved)).toEqual({ text: moved, conflicts: 0 });
+    expect(threeWayMerge(kit, base, moved, base)).toEqual({ text: moved, conflicts: 0 });
   });
 });

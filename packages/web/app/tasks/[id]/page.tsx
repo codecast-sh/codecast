@@ -77,7 +77,6 @@ import { useNavClose } from "../../../hooks/useNavTrail";
 import { useIsModernStyle } from "../../../hooks/useVisualStyle";
 import { TaskHeadIdRow, TaskHeadTitle, TaskModernHeader, TaskParentLine, type TaskTitleEdit } from "./TaskHead";
 import { modernPill, modernPillShape } from "../../../components/ui/modernLook";
-import { FilePathContext, useFolderPathContext } from "../../../lib/filePathLinks";
 
 const PRIORITY_OPTIONS = [
   { key: "urgent", icon: AlertTriangle, label: "Urgent", color: "text-sol-red" },
@@ -288,7 +287,6 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen, c
   // writes the thread to the store, and a task opened before paints it from
   // the cache.
   const comments = useTaskComments(data?._id);
-  const taskFileCtx = useFolderPathContext(data?.project_path);
   const taskTeamId = data?.team_id as string | undefined;
   // A blocking question outranks the description: nothing in the body can be
   // acted on until it is answered, so the body folds and the card comes up
@@ -820,10 +818,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen, c
             </div>
           )}
 
-          {/* A path a comment cites (`lib/x.ts:38`) is relative to the task's project. */}
-          <FilePathContext.Provider value={taskFileCtx}>
-            <TaskTimeline task={data as any} comments={comments} sessions={linkedConversations} externalEvents={externalEvents} openLinkedSession={openLinkedSession} />
-          </FilePathContext.Provider>
+          <TaskTimeline task={data as any} comments={comments} sessions={linkedConversations} externalEvents={externalEvents} openLinkedSession={openLinkedSession} />
 
           {/* Comment input */}
           <TaskCommentComposer shortId={data.short_id} dropFilesRef={commentDropRef} owner={ownerSession ? { sessionId: ownerSession._id } : null} />

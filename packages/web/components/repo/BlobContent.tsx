@@ -18,8 +18,11 @@ import { BlobView } from "./BlobView";
 import { useCodeComments, useSyncFileCodeComments } from "../../hooks/useSyncCodeComments";
 import { useAttributedSession, useLineComments } from "../../hooks/useLineComments";
 import { useEventListener } from "../../hooks/useEventListener";
-import { useRepoBlame, useRepoBlameSessions, useRepoBlob, useRepoLog } from "../../hooks/useRepoBrowse";
-import { LocalEditButton } from "./LocalEditButton";
+import { useRepoBlame, useRepoBlameSessions, useRepoBlob, useRepoLog, useRepoWorktrees } from "../../hooks/useRepoBrowse";
+import { localCheckoutFile } from "../../lib/filesPane";
+import { OpenInEditorButton } from "../OpenInEditorButton";
+import { useInboxStore } from "../../store/inboxStore";
+import { localDeviceIdOf } from "../../hooks/useLocalDeviceId";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { serverCommentId, type CodeCommentRow } from "../../lib/prView";
 import {
@@ -298,6 +301,22 @@ export function BlobContent({
 
       </div>
     </div>
+  );
+}
+
+// "Open in editor": the same file at the same line in this machine's own
+// checkout of the repository, when it has one.
+function LocalEditButton({ repository, refName, path, line }: { repository: string; refName: string; path: string; line?: number }) {
+  const checkouts = useRepoWorktrees(repository).data?.checkouts;
+  const deviceId = useInboxStore(localDeviceIdOf);
+  const local = checkouts ? localCheckoutFile(checkouts, deviceId, refName, path) : null;
+  if (!local) return null;
+  return (
+    <OpenInEditorButton
+      target={{ path: local, line }}
+      label="Open in editor"
+      className="h-7 rounded-md border border-sol-border/60 px-2 text-[12px] text-sol-text-muted"
+    />
   );
 }
 

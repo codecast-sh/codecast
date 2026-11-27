@@ -1,12 +1,12 @@
 // Session blame's model: hunks placed on the document, carried through edits
 // (vim's dd, o, J, typing inside a line, Enter mid-line), the runs the gutter
 // draws, and the labels on them.
-import { sessionColor } from "../../agent/sessions";
 import { describe, expect, test } from "bun:test";
 import { EditorState, type TransactionSpec } from "@codemirror/state";
 import type { CodeBlameHunk } from "@codecast/shared/contracts";
 import {
   NEUTRAL_HUE,
+  SESSION_BLAME_HUES,
   UNCOMMITTED_LABEL,
   blameRuns,
   hueOf,
@@ -218,14 +218,11 @@ describe("labels", () => {
     expect(inlineText("edited", null, now)).toBe(UNCOMMITTED_LABEL);
   });
 
-  test("each session takes its own color, the one live edits use; lines without one are neutral", () => {
+  test("colors rank sessions by lines written; lines without one are neutral", () => {
     const big = { ...B, start: 6, end: 20, session: { id: "jx7cccc", conversation_id: "conv-c", title: "Big" } };
-    const hues = sessionHues([A, B, C, big], (id) => (id === "conv-c" ? "magenta" : undefined));
-    expect(hueOf(big, hues)).toBe(sessionColor({ _id: "conv-c", icon_color: "magenta" }));
-    expect(hueOf(big, hues)).toBe("var(--sol-magenta)");
-    // Whatever else is in the file, a session keeps its color.
-    expect(hueOf(A, hues)).toBe(sessionColor(A.session!.conversation_id ?? A.session!.id));
-    expect(hueOf(A, sessionHues([A]))).toBe(hueOf(A, hues));
+    const hues = sessionHues([A, B, C, big]);
+    expect(hueOf(big, hues)).toBe(SESSION_BLAME_HUES[0]);
+    expect(hueOf(A, hues)).toBe(SESSION_BLAME_HUES[1]);
     expect(hueOf(B, hues)).toBe(NEUTRAL_HUE);
     expect(hueOf(null, hues)).toBe(NEUTRAL_HUE);
   });

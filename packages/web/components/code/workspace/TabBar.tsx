@@ -3,11 +3,8 @@
 // at the left with a pin and no close button. A dirty tab shows a dot where
 // its close button is, and the button on hover. Middle click closes; tabs drag
 // to reorder and between groups; the strip scrolls sideways with the active
-// tab kept in view. Pinned tabs stay put at the left, outside the scroll, and
-// a count of the tabs scrolled out of view opens the group's tab list.
+// tab kept in view.
 
-import { FileStateMark } from "./FileStateMark";
-import { deletedNameClass, fileStateWords } from "../../../lib/code/workspace/fileState";
 import { memo, useMemo, useRef, useState } from "react";
 import { File, FileStack, FileText, Image as ImageIcon, Pin, SquareSplitHorizontal, X } from "lucide-react";
 import { isVaultAssetPath, isVaultMarkdownPath } from "@codecast/shared/contracts";
@@ -19,8 +16,6 @@ import { ContextMenu, CtxItem, CtxSeparator, useContextMenu } from "../../ui/con
 import { withShortcut } from "../../../shortcuts";
 import type { WsGroup, WsTab } from "../../../lib/code/workspace/model";
 import { PresenceDot } from "../agent/PresenceDot";
-import { focusGroup } from "../../../lib/code/workspace/groupRegistry";
-import { useCodeGroup } from "./groupContext";
 import { endTabDrag, isDraggingTab, startTabDrag, takeTabDrag } from "../../../lib/code/workspace/tabDrag";
 
 const DRAG_TYPE = "application/x-codecast-tab";
@@ -33,8 +28,6 @@ export interface TabBarProps {
   leftInset: boolean;
   rightInset: boolean;
   canSplit: boolean;
-  /** Its number among the groups, when there are several. */
-  groupNumber?: number;
   /** Each takes the group, so one stable set serves every group. */
   onActivate(groupId: string, path: string): void;
   onClose(groupId: string, path: string): void;
@@ -42,8 +35,6 @@ export interface TabBarProps {
   onMove(fromGroupId: string, path: string, toGroupId: string, toIndex: number): void;
   onMenu(groupId: string, action: TabMenuAction, path: string): void;
   onSplit(groupId: string): void;
-  /** List this group's tabs (the strip hides some). */
-  onListTabs(groupId: string): void;
 }
 
 /** A tab's handlers: one object per strip that never changes, so a tab
@@ -52,9 +43,7 @@ interface TabEvents {
   activate(path: string): void;
   close(path: string): void;
   keep(path: string): void;
-  context(e: React.MouseEvent | React.KeyboardEvent, path: string): void;
-  /** Back to the group's editor (a press on a tab leaves focus there). */
-  focusView(): void;
+  context(e: React.MouseEvent, path: string): void;
   dragStart(e: React.DragEvent, path: string): void;
   dragOver(e: React.DragEvent, path: string): void;
   drop(e: React.DragEvent, path: string): void;
@@ -75,31 +64,10 @@ const nameOf = (path: string) => (isVirtualTab(path) ? virtualTabTitle(path) : p
 /** Width of the fade over a clipped edge of the strip. */
 const FADE_PX = 28;
 
-/** A name's tail that stays whole when the name is cut: its extension, with a
- *  test or spec marker before it. */
-const NAME_TAIL = /(?:\.(?:test|spec|stories|mount\.test|d))?\.[^.]+$/;
-
-/** Fade whichever edges hide tabs, and count the tabs not wholly in view. */
-function paintClip(strip: HTMLElement, chip: HTMLElement | null): void {
+/** Fade whichever edges hide tabs. */
+function paintClip(strip: HTMLElement): void {
   const left = strip.scrollLeft > 1;
   const right = strip.scrollLeft + strip.clientWidth < strip.scrollWidth - 1;
-  if (chip) {
-    let hidden = 0;
-    if (left || right) {
-      const from = strip.scrollLeft;
-      const to = from + strip.clientWidth;
-      for (const el of strip.children) {
-        const t = el as HTMLElement;
-        if (t.dataset.tabPath && (t.offsetLeft < from - 1 || t.offsetLeft + t.offsetWidth > to + 1)) hidden++;
-      }
-    }
-    const label = hidden ? `+${hidden}` : "";
-    if (chip.textContent !== label) {
-      chip.textContent = label;
-      chip.setAttribute("aria-label", `${hidden} more tabs`);
-    }
-    chip.hidden = !hidden;
-  }
   const clip = left && right ? "both" : left ? "left" : right ? "right" : "";
   if ((strip.dataset.clip ?? "") === clip) return;
   if (clip) strip.dataset.clip = clip;
@@ -121,18 +89,6 @@ function revealTab(strip: HTMLElement, tab: HTMLElement): void {
   else if (end + (last ? 0 : FADE_PX) > strip.scrollLeft + strip.clientWidth) strip.scrollLeft = last ? strip.scrollWidth : end + FADE_PX - strip.clientWidth;
 }
 
-/** The name, at most 22ch: the middle goes, the extension stays. */
-function TabName({ name, italic, className = "" }: { name: string; italic: boolean; className?: string }) {
-  const tail = NAME_TAIL.exec(name)?.[0] ?? "";
-  const stem = tail && tail.length < name.length ? name.slice(0, -tail.length) : name;
-  return (
-    <span className={`flex min-w-0 max-w-[22ch] whitespace-nowrap ${italic ? "italic" : ""} ${className}`}>
-      <span className="min-w-0 truncate">{stem}</span>
-      {stem !== name && <span className="shrink-0">{tail}</span>}
-    </span>
-  );
-}
-
 const Tab = memo(function Tab({
   vaultId,
   tab,
@@ -140,11 +96,9 @@ const Tab = memo(function Tab({
   focused,
   duplicateName,
   dropBefore,
-  panelId,
   events,
 }: {
   vaultId: string;
-  panelId: string;
   tab: WsTab;
   active: boolean;
   focused: boolean;
@@ -153,33 +107,17 @@ const Tab = memo(function Tab({
   events: TabEvents;
 }) {
   const dirty = useCodeStore((s) => !!s.dirty[bufferKey(vaultId, tab.path)]);
-  const conflict = useCodeStore((s) => s.conflicts[bufferKey(vaultId, tab.path)]);
   const isNew = useIsNewFile(bufferKey(vaultId, tab.path));
   const name = nameOf(tab.path);
   const dir = duplicateName ? tab.path.slice(0, Math.max(0, tab.path.length - name.length - 1)).split("/").pop() : null;
-  const state = fileStateWords(conflict, dirty);
-  // Anything pending holds the close button's slot, as a dirty dot does.
-  const marked = !!state;
-  const label = [dir ? `${name} (${dir})` : name, state, tab.pinned && "pinned", tab.preview && "preview", isNew && "new file"].filter(Boolean).join(", ");
-  const pressed = useRef(false);
   return (
     <div
       role="tab"
       aria-selected={active}
-      aria-label={label}
-      aria-controls={panelId}
-      // One stop in the Tab order, on the active tab; arrows walk the rest.
-      tabIndex={active ? 0 : -1}
       data-tab-path={tab.path}
       draggable
       title={isNew ? `${tab.path} (new file, created on save)` : tab.path}
       data-new-file={isNew || undefined}
-      onPointerDown={() => void (pressed.current = true)}
-      // A press focuses the editor, as in Zed; only keys stop on the tab.
-      onFocus={() => {
-        if (pressed.current) events.focusView();
-        pressed.current = false;
-      }}
       onMouseDown={(e) => {
         if (e.button === 0) events.activate(tab.path);
       }}
@@ -195,7 +133,7 @@ const Tab = memo(function Tab({
       onDragOver={(e) => events.dragOver(e, tab.path)}
       onDrop={(e) => events.drop(e, tab.path)}
       onDragEnd={endTabDrag}
-      className={`group/tab relative flex h-full shrink-0 cursor-default select-none items-center gap-1.5 border-r border-sol-border/30 pl-2.5 pr-1 text-meta outline-none transition-colors focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-sol-cyan ${
+      className={`group/tab relative flex h-full shrink-0 cursor-default select-none items-center gap-1.5 border-r border-sol-border/30 pl-2.5 pr-1 text-meta transition-colors ${
         active ? "bg-sol-bg text-sol-text" : "text-sol-text-dim hover:bg-sol-bg/50 hover:text-sol-text-muted"
       }`}
     >
@@ -203,11 +141,11 @@ const Tab = memo(function Tab({
       {active && <span className="absolute inset-x-0 -bottom-px h-px bg-sol-bg" />}
       {dropBefore && <span className="absolute inset-y-1 -left-px w-0.5 rounded bg-sol-cyan" />}
       {tab.pinned ? <Pin className="h-3 w-3 shrink-0 -rotate-45 text-sol-text-dim" /> : tabIcon(tab.path)}
-      <TabName name={name} italic={!!tab.preview} className={deletedNameClass(conflict)} />
+      <span className={`whitespace-nowrap ${tab.preview ? "italic" : ""}`}>{name}</span>
       {dir && <span className="max-w-[12ch] truncate text-sol-text-dim/80">{dir}</span>}
-      {isNew && <span className="shrink-0 rounded-sm bg-sol-green/15 px-1 text-meta leading-4 text-sol-green">new</span>}
+      {isNew && <span className="shrink-0 rounded-sm bg-sol-green/15 px-1 text-mark leading-4 text-sol-green">new</span>}
       {!isVirtualTab(tab.path) && <PresenceDot vaultId={vaultId} path={tab.path} />}
-      {tab.pinned && !marked ? (
+      {tab.pinned && !dirty ? (
         <span className="w-1" />
       ) : (
         <button
@@ -221,8 +159,8 @@ const Tab = memo(function Tab({
           }}
           className="relative flex size-[18px] shrink-0 items-center justify-center rounded text-sol-text-dim hover:bg-sol-bg-alt hover:text-sol-text"
         >
-          {marked && <FileStateMark conflict={conflict} dirty={dirty} className="absolute group-hover/tab:hidden" />}
-          <X className={`h-3 w-3 ${marked ? "invisible group-hover/tab:visible" : active ? "" : "invisible group-hover/tab:visible"}`} />
+          {dirty && <span className="absolute size-2 rounded-full bg-sol-text-muted group-hover/tab:hidden" />}
+          <X className={`h-3 w-3 ${dirty ? "invisible group-hover/tab:visible" : active ? "" : "invisible group-hover/tab:visible"}`} />
         </button>
       )}
     </div>
@@ -236,19 +174,14 @@ export const TabBar = memo(function TabBar({
   leftInset,
   rightInset,
   canSplit,
-  groupNumber,
   onActivate,
   onClose,
   onKeep,
   onMove,
   onMenu,
   onSplit,
-  onListTabs,
 }: TabBarProps) {
-  const groupCtx = useCodeGroup();
-  const groupKey = groupCtx?.key ?? group.id;
   const stripRef = useRef<HTMLDivElement | null>(null);
-  const chipRef = useRef<HTMLButtonElement | null>(null);
   const [dropAt, setDropAt] = useState<number | null>(null);
   const menu = useContextMenu<string>();
 
@@ -261,7 +194,7 @@ export const TabBar = memo(function TabBar({
     const el = [...tabs].find((t) => t.dataset.tabPath === group.active);
     const reveal = () => {
       if (el) revealTab(strip, el);
-      paintClip(strip, chipRef.current);
+      paintClip(strip);
     };
     reveal();
     // The tab can grow after it is shown (its "new" or dirty mark arriving).
@@ -275,7 +208,7 @@ export const TabBar = memo(function TabBar({
   useWatchEffect(() => {
     const strip = stripRef.current;
     if (!strip) return;
-    const paint = () => paintClip(strip, chipRef.current);
+    const paint = () => paintClip(strip);
     paint();
     strip.addEventListener("scroll", paint, { passive: true });
     const ro = typeof ResizeObserver === "function" ? new ResizeObserver(paint) : null;
@@ -306,36 +239,14 @@ export const TabBar = memo(function TabBar({
     if (d) onMove(d.groupId, d.path, group.id, index);
   };
 
-  const pinned = group.tabs.filter((t) => t.pinned);
-  const rest = pinned.length ? group.tabs.filter((t) => !t.pinned) : group.tabs;
-  const tabProps = (t: WsTab) => ({
-    vaultId,
-    tab: t,
-    active: t.path === group.active,
-    focused,
-    duplicateName: (names.get(nameOf(t.path)) ?? 0) > 1,
-    dropBefore: dropAt === indexOf(t.path),
-    panelId: `${groupKey}:panel`,
-  });
-
-  const latest = useRef({ group, groupKey, accept, drop, dropIndex, menu, onActivate, onClose, onKeep });
-  latest.current = { group, groupKey, accept, drop, dropIndex, menu, onActivate, onClose, onKeep };
+  const latest = useRef({ group, accept, drop, dropIndex, menu, onActivate, onClose, onKeep });
+  latest.current = { group, accept, drop, dropIndex, menu, onActivate, onClose, onKeep };
   const events = useMemo<TabEvents>(
     () => ({
       activate: (path) => latest.current.onActivate(latest.current.group.id, path),
       close: (path) => latest.current.onClose(latest.current.group.id, path),
       keep: (path) => latest.current.onKeep(latest.current.group.id, path),
-      context: (e, path) => {
-        // From the keyboard (Shift-F10, the menu key) the menu opens under
-        // the tab; a click opens it at the pointer.
-        if ("key" in e || (e.clientX === 0 && e.clientY === 0)) {
-          e.preventDefault();
-          const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-          return latest.current.menu.openAt(r.left, r.bottom + 2, path);
-        }
-        latest.current.menu.open(e, path, { force: true });
-      },
-      focusView: () => focusGroup(latest.current.groupKey),
+      context: (e, path) => latest.current.menu.open(e, path, { force: true }),
       dragStart: (e, path) => {
         startTabDrag({ groupId: latest.current.group.id, path });
         e.dataTransfer.effectAllowed = "move";
@@ -358,40 +269,8 @@ export const TabBar = memo(function TabBar({
   return (
     <div
       role="tablist"
-      aria-label={groupNumber ? `Editor tabs, group ${groupNumber}` : "Editor tabs"}
-      onKeyDown={(e) => {
-        const el = e.target as HTMLElement;
-        const path = el.getAttribute("role") === "tab" ? el.dataset.tabPath : undefined;
-        if (!path) return;
-        const tabs = [...e.currentTarget.querySelectorAll<HTMLElement>("[role=tab]")];
-        const i = tabs.indexOf(el);
-        const to = (j: number) => tabs[(j + tabs.length) % tabs.length]?.focus();
-        if (e.key === "ArrowRight") to(i + 1);
-        else if (e.key === "ArrowLeft") to(i - 1);
-        else if (e.key === "Home") to(0);
-        else if (e.key === "End") to(tabs.length - 1);
-        else if (e.key === "Enter" || e.key === " ") {
-          onActivate(group.id, path);
-          requestAnimationFrame(() => focusGroup(groupKey));
-        } else if (e.key === "Escape") focusGroup(groupKey);
-        else if (e.key === "Delete" || e.key === "Backspace") {
-          onClose(group.id, path);
-          // Focus stays in the strip, on the tab that took its place.
-          requestAnimationFrame(() => stripRef.current?.parentElement?.querySelector<HTMLElement>("[role=tab][tabindex='0']")?.focus());
-        } else if (e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey)) events.context(e, path);
-        else return;
-        e.preventDefault();
-        e.stopPropagation();
-      }}
       className={`flex h-8 shrink-0 items-stretch border-b border-sol-border/30 bg-sol-bg-alt/50 ${leftInset ? "pl-9" : ""} ${rightInset ? "pr-9" : ""}`}
     >
-      {pinned.length > 0 && (
-        <div className="flex shrink-0 items-stretch border-r border-sol-border/40">
-          {pinned.map((t) => (
-            <Tab key={t.path} {...tabProps(t)} events={events} />
-          ))}
-        </div>
-      )}
       <div
         ref={stripRef}
         className="relative flex min-w-0 flex-1 items-stretch overflow-x-auto overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
@@ -411,20 +290,20 @@ export const TabBar = memo(function TabBar({
           drop(e.target === e.currentTarget ? group.tabs.length : (dropAt ?? group.tabs.length));
         }}
       >
-        {rest.map((t) => (
-          <Tab key={t.path} {...tabProps(t)} events={events} />
+        {group.tabs.map((t, i) => (
+          <Tab
+            key={t.path}
+            vaultId={vaultId}
+            tab={t}
+            active={t.path === group.active}
+            focused={focused}
+            duplicateName={(names.get(nameOf(t.path)) ?? 0) > 1}
+            dropBefore={dropAt === i}
+            events={events}
+          />
         ))}
         {dropAt === group.tabs.length && <span className="my-1 w-0.5 shrink-0 rounded bg-sol-cyan" />}
       </div>
-      {/* Filled in by paintClip; React never renders the count. */}
-      <button
-        ref={chipRef}
-        type="button"
-        hidden
-        aria-label="All tabs in this group"
-        onClick={() => onListTabs(group.id)}
-        className="my-auto ml-1 h-5 shrink-0 rounded px-1.5 text-meta tabular-nums text-sol-text-dim transition-colors hover:bg-sol-bg hover:text-sol-text"
-      />
       {canSplit && group.active && (
         <>
           <span className="my-auto h-4 w-px shrink-0 bg-sol-border/40" />

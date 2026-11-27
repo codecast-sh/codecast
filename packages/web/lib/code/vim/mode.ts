@@ -2,7 +2,7 @@
 // from the engine's own events.
 
 import type { EditorView } from "@codemirror/view";
-import { getCM, Vim } from "@replit/codemirror-vim";
+import { getCM } from "@replit/codemirror-vim";
 import { asVimCM } from "./engine";
 import { hasPendingKeys, onHeldKeysSettled } from "./keyLayer";
 import type { VimMode } from "./types";
@@ -82,16 +82,4 @@ export function pendingVimKeys(view: EditorView): string {
  *  unsubscribe. */
 export function onPendingVimKeysChange(view: EditorView, cb: (keys: string) => void): () => void {
   return onVimEngineChange(view, () => pendingVimKeys(view), cb);
-}
-
-/** The register a macro is being recorded into (`qa` → "a"), or "". */
-export function recordingRegister(): string {
-  const macro = (Vim.getVimGlobalState_() as { macroModeState?: { isRecording?: boolean; latestRegister?: string } }).macroModeState;
-  return macro?.isRecording ? (macro.latestRegister ?? "") : "";
-}
-
-/** Call `cb` with the recording register now and whenever it changes.
- *  Returns the unsubscribe. */
-export function onVimRecordingChange(view: EditorView, cb: (register: string) => void): () => void {
-  return onVimEngineChange(view, recordingRegister, cb);
 }

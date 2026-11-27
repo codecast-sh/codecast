@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { extractSessionTrailer, sessionTrailerCount, sessionTrailerValue, SESSION_TRAILER_KEY, splitSessionTrailer } from "./index";
+import { extractSessionTrailer, sessionTrailerValue, SESSION_TRAILER_KEY, splitSessionTrailer } from "./index";
 
 const ID = "jx7bq5kz13a2eypp4a6vdqznas7zvrw2";
 const trailer = `${SESSION_TRAILER_KEY}: ${sessionTrailerValue(ID)}`;
@@ -82,14 +82,5 @@ describe("splitSessionTrailer", () => {
     for (const m of [`a\n\n${link}`, "a", `a\n\nCodecast-Session: not-an-id`]) {
       expect(splitSessionTrailer(m).session).toBe(extractSessionTrailer(m));
     }
-  });
-});
-
-describe("sessionTrailerCount", () => {
-  test("counts every trailer in the last paragraph, short ids included; quoted ones don't count", () => {
-    expect(sessionTrailerCount(`fix: a\n\n${trailer}`)).toBe(1);
-    expect(sessionTrailerCount("feat: sweep\n\nCodecast-Session: jx70369\nCodecast-Session: jx70e0f\nCodecast-Session: jx70gmc")).toBe(3);
-    expect(sessionTrailerCount(`feat: about trailers\n\n${trailer}\n\nmore prose`)).toBe(0);
-    expect(sessionTrailerCount(undefined)).toBe(0);
   });
 });

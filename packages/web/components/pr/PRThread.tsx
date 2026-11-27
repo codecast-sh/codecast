@@ -193,10 +193,7 @@ export function PRLineThread({
   linkHref,
   onSelectLines,
   placement,
-  editAction,
 }: {
-  /** Opens the thread's lines in this machine's checkout, where there is one. */
-  editAction?: ReactNode;
   /** Where the thread's passage is now, when it moved or is gone. */
   placement?: AnchorPlacement | null;
   /** The address of the lines this thread is on, and selecting them. */
@@ -260,7 +257,6 @@ export function PRLineThread({
           <div className="text-mark uppercase tracking-wider text-sol-text-dim">{span}</div>
         ))}
         <AnchorPlacementChip placement={placement} />
-        {editAction}
         {noteMode && onNoteMode && (comments.length === 0 || replying) && (
           <span className="ml-auto"><NoteModePill mode={noteMode} onChange={onNoteMode} pendingCount={pendingCount} /></span>
         )}

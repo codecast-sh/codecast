@@ -8,15 +8,13 @@
 // a region both sides changed differently opens the merge view, where each
 // chunk is kept or taken and the save writes the result.
 //
-// A change on disk lands as the smallest line edits, annotated
-// `externalChange` so features (agent highlights) can color exactly what
-// moved. Over unsaved edits it merges at once: lines only disk changed come
-// in and the person's own edits stay unsaved; a region both changed opens the
-// merge view. Only when the diff code cannot load does it wait, marked stale.
+// A change on disk while the buffer is clean lands as the smallest line edits,
+// annotated `externalChange` so features (agent highlights) can color exactly
+// what moved. While the buffer is dirty it waits, marked stale, for the save.
 
 import { Annotation, Compartment, type Extension, type TransactionSpec } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { isVaultUnreachable, readVaultFile, vaultOp, writeVaultFile, VaultRequestError, VaultWriteConflict } from "../vault/client";
+import { readVaultFile, vaultOp, writeVaultFile, VaultWriteConflict } from "../vault/client";
 import { requestEndpointOf, setCodeBodyHolder, useVaultStore } from "../../store/vaultStore";
 import { useCodeStore } from "../../store/codeStore";
 import {
@@ -24,14 +22,12 @@ import {
   codeBuffers,
   currentState,
   decodeFileText,
-  diskLockField,
   encodeFileText,
   fileFormatField,
   isDirty,
   savedDocField,
   setFileFormat,
   setSavedDoc,
-  syncDiskLock,
   textToDoc,
   updateBuffer,
   utf8Length,
@@ -41,7 +37,7 @@ import {
 import { featureContext, LARGE_FILE_BYTES } from "./features";
 import { clearHotExit, flushHotExit, loadHotExit, scheduleHotExit, type HotExitDraft } from "./hotExit";
 import { clearNewFile, isNewFile } from "./newFiles";
-import { lineChanges, loadMergeKit, mergeChunkCount, mergeViewExtension, openConflicts, threeWayMerge, type MergeKit } from "./merge";
+import { lineChanges, loadMergeKit, mergeChunkCount, mergeViewExtension, threeWayMerge, type MergeKit } from "./merge";
 
 /** Marks a transaction that brought in a version someone else wrote. */
 export const externalChange = Annotation.define<{ etag: string }>();
@@ -52,9 +48,8 @@ const mergeSlot = new Compartment();
 type Written = { etag: string; mtime: number; size: number };
 
 export interface DiskIO {
-  /** Throws VaultWriteConflict when disk is no longer at `baseEtag`. `force`
-   *  writes a file whose mode refuses writes, keeping the mode. */
-  write(buffer: CodeBuffer, content: string, baseEtag: string, opts?: { force?: boolean }): Promise<Written>;
+  /** Throws VaultWriteConflict when disk is no longer at `baseEtag`. */
+  write(buffer: CodeBuffer, content: string, baseEtag: string): Promise<Written>;
   /** Create the file empty; refused (throws) when it already exists. */
   createEmpty(buffer: CodeBuffer): Promise<void>;
   read(buffer: CodeBuffer): Promise<DiskVersion | null>;
@@ -65,9 +60,7 @@ export interface DiskIO {
 function connectedEndpoint() {
   // Any endpoint will do: the request is routed by the buffer's vault.
   const endpoint = requestEndpointOf(useVaultStore.getState());
-  // A TypeError, as loopbackFetch throws for a daemon it cannot reach: the
-  // save waits for the reconnect rather than failing (isVaultUnreachable).
-  if (!endpoint) throw new TypeError("Files is not connected to this machine");
+  if (!endpoint) throw new Error("Files is not connected to this machine");
   return endpoint;
 }
 
@@ -79,10 +72,10 @@ function writeOptions(b: CodeBuffer) {
 }
 
 const vaultIO: DiskIO = {
-  write: (b, content, baseEtag, opts) => {
+  write: (b, content, baseEtag) => {
     // An empty etag would turn into a PUT without If-Match: an overwrite.
     if (!baseEtag) throw new Error("No disk version to save over");
-    return writeVaultFile(connectedEndpoint(), b.vaultId, b.path, content, baseEtag, { ...writeOptions(b), force: !!opts?.force });
+    return writeVaultFile(connectedEndpoint(), b.vaultId, b.path, content, baseEtag, writeOptions(b));
   },
   createEmpty: async (b) => {
     await vaultOp(connectedEndpoint(), b.vaultId, { op: "create", path: b.path, content: "" }, writeOptions(b));
@@ -95,10 +88,6 @@ let io: DiskIO = vaultIO;
 
 // A file that leaves disk and returns comes back into any editor still open on it.
 setCodeBodyHolder((vaultId, path) => !!codeBuffers.get(bufferKey(vaultId, path)));
-// A buffer gone from the cache takes the store's copy of its text with it:
-// the store would otherwise hold every file opened this session, and keep
-// reading each one again on every agent write. Shown again, it is read again.
-codeBuffers.onDrop = (b) => useVaultStore.getState().releaseCodeBody(b.vaultId, b.path);
 
 /** Tests: swap the disk. Returns the restore. */
 export function _setDiskIOForTests(next: DiskIO): () => void {
@@ -142,8 +131,7 @@ function noteChange(b: CodeBuffer, docChanged: boolean): void {
     if (!dirty) {
       void clearHotExit(b.key);
       // A failed save of text that is no longer there is not news.
-      const kind = useCodeStore.getState().conflicts[b.key]?.kind;
-      if (kind === "error" || kind === "offline" || kind === "readonly") chrome().setConflict(b.key, null);
+      if (useCodeStore.getState().conflicts[b.key]?.kind === "error") chrome().setConflict(b.key, null);
     }
   }
   // A large file's text is megabytes to encode and clone: hold it less often.
@@ -209,34 +197,23 @@ function isBaseVersion(b: CodeBuffer, disk: DiskVersion): boolean {
   return encodeFileText(state, state.field(savedDocField)) === disk.content;
 }
 
-/** Someone else wrote the file. A clean buffer takes it in; a dirty one
- *  merges with it at once (a conflict opens the merge view); a merging one
- *  already has a newer question to answer. A save in flight answers it by its
- *  compare-and-swap: the version may be that save's own write landing. */
+/** Someone else wrote the file. A clean buffer takes it in; a dirty one waits
+ *  for its save; a merging one already has a newer question to answer. */
 export async function applyDiskVersion(b: CodeBuffer, disk: DiskVersion): Promise<void> {
   // A version on disk means the file is back, whatever it holds.
   if (chrome().conflicts[b.key]?.kind === "deleted") chrome().setConflict(b.key, null);
   if (isBaseVersion(b, disk) || b.merging) return;
-  const saving = inflight.get(b.key);
-  if (saving) {
-    // Decided once the save lands: its own write is the base by then.
-    const again = () => applyDiskVersion(b, disk);
-    void saving.then(again, again);
-    return;
-  }
   const before = currentState(b);
-  const kit = await loadMergeKit().catch(() => null);
-  // Typing while the diff code loaded: decide again on the text as it is now.
-  if (currentState(b).doc !== before.doc) return applyDiskVersion(b, disk);
-  if (isBaseVersion(b, disk) || b.merging) return;
-  if (inflight.has(b.key)) return applyDiskVersion(b, disk);
-  if (!isDirty(before)) return adopt(b, disk, kit);
-  if (!kit) {
+  if (isDirty(before)) {
     b.stale = disk;
     chrome().setConflict(b.key, { kind: "stale" });
     return;
   }
-  await mergeWithDisk(b, disk);
+  const kit = await loadMergeKit().catch(() => null);
+  // Typing while the diff code loaded: decide again on the text as it is now.
+  if (currentState(b).doc !== before.doc) return applyDiskVersion(b, disk);
+  if (isBaseVersion(b, disk) || b.merging) return;
+  adopt(b, disk, kit);
 }
 
 /** The file left disk. Unsaved edits wait for a Recreate. A clean buffer has
@@ -260,29 +237,19 @@ function rebaseOnto(b: CodeBuffer, disk: DiskVersion): void {
   chrome().setConflict(b.key, null);
 }
 
-/** The merge strip's numbers: chunks still differing from disk, and how many
- *  of them sit in a region both sides wrote. */
-function mergeCounts(kit: MergeKit, b: CodeBuffer) {
-  const state = currentState(b);
-  return { kind: "merge" as const, remaining: mergeChunkCount(kit, state), conflicts: openConflicts(kit, state).length };
-}
-
 async function refreshMergeCount(b: CodeBuffer): Promise<void> {
   const kit = await loadMergeKit();
-  if (!b.merging || useCodeStore.getState().conflicts[b.key]?.kind !== "merge") return;
-  chrome().setConflict(b.key, mergeCounts(kit, b));
+  const current = useCodeStore.getState().conflicts[b.key];
+  if (!b.merging || current?.kind !== "merge") return;
+  chrome().setConflict(b.key, { ...current, remaining: mergeChunkCount(kit, currentState(b)) });
 }
-
-/** The person's own text from before a merge view opened, and the document the
- *  merge left, so "Keep mine" can put it back while the merge is untouched. */
-const premerge = new WeakMap<CodeBuffer, { mine: string; merged: EditorView["state"]["doc"] }>();
 
 /**
  * Three-way merge the buffer with a disk version, its saved text as the base.
  * Without a conflict the merged text simply becomes the buffer, rebased onto
  * disk ("merged"); with one, the editor turns into a merge view ("merging").
  */
-export async function mergeWithDisk(b: CodeBuffer, disk: DiskVersion, opts: { restoring?: boolean } = {}): Promise<"merged" | "merging"> {
+export async function mergeWithDisk(b: CodeBuffer, disk: DiskVersion): Promise<"merged" | "merging"> {
   clearNewFile(b.key);
   const kit = await loadMergeKit();
   const state = currentState(b);
@@ -291,27 +258,23 @@ export async function mergeWithDisk(b: CodeBuffer, disk: DiskVersion, opts: { re
   const mine = state.doc.toString();
   const result = threeWayMerge(kit, base, diskText, mine);
   const changes = lineChanges(kit, mine, result.text);
-  // The lines this brings in are disk's: marked as someone else's change
-  // (agent edit marks), except a reload's own text coming back.
-  const annotations = opts.restoring ? [] : [externalChange.of({ etag: disk.etag })];
   if (result.conflicts === 0) {
-    applyToBuffer(b, { changes, userEvent: "merge", annotations });
+    applyToBuffer(b, { changes, userEvent: "merge" });
     rebaseOnto(b, disk);
     return "merged";
   }
   b.stale = null;
   b.merging = disk;
-  applyToBuffer(b, { changes, userEvent: "merge", annotations, effects: mergeSlot.reconfigure(mergeViewExtension(kit, diskText, result.regions)) });
-  premerge.set(b, { mine, merged: currentState(b).doc });
-  chrome().setConflict(b.key, mergeCounts(kit, b));
+  applyToBuffer(b, { changes, userEvent: "merge", effects: mergeSlot.reconfigure(mergeViewExtension(kit, diskText)) });
+  chrome().setConflict(b.key, {
+    kind: "merge",
+    remaining: mergeChunkCount(kit, currentState(b)),
+    conflicts: result.conflicts,
+  });
   return "merging";
 }
 
-/** `readonly`: the editor holds the text read-only (a mirror, text that did
- *  not decode) and wrote nothing. `locked`: the file's mode refused the write
- *  and the person has not confirmed an overwrite. `offline`: the daemon was
- *  not reached; the save runs again on reconnect. */
-export type SaveOutcome = "unchanged" | "saved" | "merging" | "adopted" | "deleted" | "readonly" | "locked" | "offline" | "error";
+export type SaveOutcome = "unchanged" | "saved" | "merging" | "adopted" | "deleted" | "readonly" | "error";
 
 const inflight = new Map<string, Promise<SaveOutcome>>();
 
@@ -351,68 +314,9 @@ async function discard(b: CodeBuffer, run: () => Promise<void>): Promise<void> {
 
 /** Save a buffer. Saves of one buffer queue behind each other, so a second
  *  Cmd-S during a slow write writes again only if there is something new. */
-export function saveBuffer(b: CodeBuffer, opts: { recreate?: boolean; force?: boolean } = {}): Promise<SaveOutcome> {
+export function saveBuffer(b: CodeBuffer, opts: { recreate?: boolean } = {}): Promise<SaveOutcome> {
   const custom = vaultSavers.get(b.vaultId);
-  return queueSave(b, () => (custom ? custom(b) : writeBuffer(b, !!opts.recreate, !!opts.force)));
-}
-
-/** Write a file its mode refuses (0444), the mode kept: the person confirmed
- *  the overwrite. Still compare-and-swap, so disk that moved merges first. */
-export function overwriteLocked(b: CodeBuffer): Promise<SaveOutcome> {
-  return saveBuffer(b, { force: true });
-}
-
-/** Buffers whose save never reached the daemon: saved again, in one pass,
- *  once Files is connected again. */
-const unsent = new Set<string>();
-
-function retryUnsent(): void {
-  for (const key of [...unsent]) {
-    unsent.delete(key);
-    const b = codeBuffers.get(key);
-    if (b && chrome().conflicts[key]?.kind === "offline") void saveBuffer(b);
-  }
-}
-
-// Files is back: the socket reconnected (a daemon restart, a dropped WS) or a
-// new endpoint was found. Each save is still compare-and-swap, so disk that
-// moved meanwhile merges rather than being written over.
-let lastEndpoint = requestEndpointOf(useVaultStore.getState());
-let lastConnection = useVaultStore.getState().connection;
-useVaultStore.subscribe((s) => {
-  const endpoint = requestEndpointOf(s);
-  const back = (endpoint !== lastEndpoint && !!endpoint) || (s.connection === "connected" && lastConnection !== "connected");
-  lastEndpoint = endpoint;
-  lastConnection = s.connection;
-  if (back && unsent.size) retryUnsent();
-});
-
-/** Tests: run the reconnect retry as if the endpoint had come back. */
-export const _retryUnsentForTests = retryUnsent;
-
-/** Write the person's text over the disk version they were shown changed
- *  (the strip's Keep mine): their text from before the merge view opened, or
- *  what the editor holds once they worked in the merge. Still compare-and-swap,
- *  on that version's etag, so a newer write is merged with, never lost. */
-export function keepMine(b: CodeBuffer): Promise<SaveOutcome> {
-  return queueSave(b, async () => {
-    const disk = b.merging ?? b.stale;
-    if (!disk) return writeBuffer(b, false);
-    const held = premerge.get(b);
-    premerge.delete(b);
-    if (b.merging && held && currentState(b).doc === held.merged) {
-      const kit = await loadMergeKit();
-      applyToBuffer(b, { changes: lineChanges(kit, currentState(b).doc.toString(), held.mine), userEvent: "merge" });
-    }
-    rebaseOnto(b, disk);
-    if (!isDirty(currentState(b))) return "unchanged";
-    return writeOut(b, (content) => io.write(b, content, disk.etag));
-  });
-}
-
-/** Saves of one buffer run one after another. */
-function queueSave(b: CodeBuffer, save: () => Promise<SaveOutcome>): Promise<SaveOutcome> {
-  const run = (inflight.get(b.key) ?? Promise.resolve("unchanged" as SaveOutcome)).then(save);
+  const run = (inflight.get(b.key) ?? Promise.resolve("unchanged" as SaveOutcome)).then(() => (custom ? custom(b) : writeBuffer(b, !!opts.recreate)));
   inflight.set(b.key, run);
   void run.finally(() => {
     if (inflight.get(b.key) === run) inflight.delete(b.key);
@@ -433,7 +337,7 @@ export function recreateFile(b: CodeBuffer): Promise<SaveOutcome> {
   return saveBuffer(b, { recreate: true });
 }
 
-async function writeBuffer(b: CodeBuffer, recreate: boolean, force = false): Promise<SaveOutcome> {
+async function writeBuffer(b: CodeBuffer, recreate: boolean): Promise<SaveOutcome> {
   const start = currentState(b);
   if (start.readOnly || start.field(fileFormatField).lossy) return "readonly";
   // A new file (`:e newfile.ts`) is created on its first save, empty or not,
@@ -452,7 +356,7 @@ async function writeBuffer(b: CodeBuffer, recreate: boolean, force = false): Pro
     if (merged === "merging") return "merging";
   }
   const base = b.baseEtag;
-  return writeOut(b, (content) => io.write(b, content, base, { force }), force);
+  return writeOut(b, (content) => io.write(b, content, base));
 }
 
 /** Write a file deleted on disk back, never over a file that has returned.
@@ -472,7 +376,7 @@ async function recreateWrite(b: CodeBuffer, content: string): Promise<Written> {
   return io.write(b, content, disk.etag);
 }
 
-async function writeOut(b: CodeBuffer, write: (content: string) => Promise<Written>, force = false): Promise<SaveOutcome> {
+async function writeOut(b: CodeBuffer, write: (content: string) => Promise<Written>): Promise<SaveOutcome> {
   const state = currentState(b);
   const doc = state.doc;
   const content = encodeFileText(state);
@@ -493,33 +397,18 @@ async function writeOut(b: CodeBuffer, write: (content: string) => Promise<Writt
         return "adopted";
       }
       const merged = await mergeWithDisk(b, disk);
-      return merged === "merging" ? "merging" : writeBuffer(b, false, force);
+      return merged === "merging" ? "merging" : writeBuffer(b, false);
     }
-    if (e instanceof VaultRequestError && e.reason === "read-only") {
-      const mode = currentState(b).field(diskLockField) ?? "read-only";
-      syncDiskLock(b, mode);
-      chrome().setConflict(b.key, { kind: "readonly", mode });
-      return "locked";
-    }
-    if (isVaultUnreachable(e)) {
-      unsent.add(b.key);
-      chrome().setConflict(b.key, { kind: "offline" });
-      return "offline";
-    }
-    const reason = e instanceof VaultRequestError ? (e.reason ?? `Error ${e.status}`) : e instanceof Error ? e.message : String(e);
-    chrome().setConflict(b.key, { kind: "error", message: reason });
+    chrome().setConflict(b.key, { kind: "error", message: e instanceof Error ? e.message : String(e) });
     return "error";
   }
-  unsent.delete(b.key);
   // The text written is the saved version, even if typing continued meanwhile.
   b.baseEtag = res.etag;
   b.stale = null;
   applyToBuffer(b, { effects: setSavedDoc.of(doc) });
   chrome().setConflict(b.key, null);
   clearNewFile(b.key);
-  // The daemon keeps the mode bits, so a forced write leaves the file locked.
-  const lockedMode = currentState(b).field(diskLockField) ?? undefined;
-  io.adopt(b, { content, etag: res.etag, mtime: res.mtime, size: res.size, ...(lockedMode ? { lockedMode } : {}) });
+  io.adopt(b, { content, etag: res.etag, mtime: res.mtime, size: res.size });
   return "saved";
 }
 
@@ -566,7 +455,7 @@ export async function restoreHotExit(b: CodeBuffer): Promise<"none" | "restored"
   if (sameBase) return "restored";
   b.baseEtag = rec.baseEtag;
   applyToBuffer(b, { effects: setSavedDoc.of(textToDoc(rec.base)) });
-  return (await mergeWithDisk(b, disk, { restoring: true })) === "merging" ? "merging" : "restored";
+  return (await mergeWithDisk(b, disk)) === "merging" ? "merging" : "restored";
 }
 
 let guarded = false;

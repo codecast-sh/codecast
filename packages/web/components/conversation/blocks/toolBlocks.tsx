@@ -813,13 +813,14 @@ export function ToolBlock({ tool, result, changeIndex, changeRange, shareSelecti
   const startLine = getStartLine();
 
   // Where the card's "Open in editor" lands: the lines a Read read, the lines
-  // an Edit wrote (flashed on arrival, and found again by their text when the
-  // file has moved under them since), the top of a written file, a patch's
+  // an Edit wrote (flashed on arrival), the top of a written file, a patch's
   // first file at its first hunk. A deleted file has nothing to open.
   const editorTarget = useMemo(() => {
     if (isApplyPatch) {
       const first = applyPatchDiffs.find((d) => d.operation !== "Delete");
-      return first ? patchSectionTarget(first) : null;
+      if (!first) return null;
+      const at = first.hunks.find((h) => h.newStart > 0)?.newStart;
+      return { path: first.filePath, ...(at ? { line: at } : {}) };
     }
     if (!filePath || (!isStandardEdit && !isMultiEdit && !isRead)) return null;
     if (isRead) {
@@ -832,7 +833,7 @@ export function ToolBlock({ tool, result, changeIndex, changeRange, shareSelecti
     const range = result && !result.is_error ? editedLineRange(safeString(result.content), newTexts[0]) : undefined;
     // A result with no line numbers (MultiEdit's "Applied N edits") leaves the
     // editor to find the edit's new text in the file once it shows.
-    return { path: filePath, ...range, ...(newTexts.length ? { find: newTexts } : {}) };
+    return { path: filePath, ...(range ?? (newTexts.length ? { find: newTexts } : {})) };
   }, [isApplyPatch, applyPatchDiffs, filePath, isStandardEdit, isMultiEdit, isRead, parsedInput, tool.name, result]);
 
   const toolColor = toolColorClass(isApplyPatch ? "apply_patch" : tool.name);
@@ -919,8 +920,7 @@ export function ToolBlock({ tool, result, changeIndex, changeRange, shareSelecti
           </span>
         )}
         {editorTarget && (
-          // An edit opens with what it replaced peeked inline at its lines.
-          <OpenInEditorButton target={editorTarget} peek={isApplyPatch || isStandardEdit || isMultiEdit} className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100" />
+          <OpenInEditorButton target={editorTarget} className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100" />
         )}
         {browserTab && <BrowserTabPill tab={browserTab} />}
         {gitOutcome && <GitOutcomeRow outcome={gitOutcome} repository={outcomeRepository} />}
@@ -1092,11 +1092,8 @@ export function ToolBlock({ tool, result, changeIndex, changeRange, shareSelecti
                   const diffStartLine = diff.hunks[0]?.oldStart || diff.hunks[0]?.newStart || 1;
                   return (
                     <div key={`${diff.filePath}-${idx}`} className={idx > 0 ? "border-t border-sol-border/20" : ""}>
-                      <div className="flex items-center gap-1 px-2 py-1 border-b border-sol-border/20 bg-sol-bg-highlight/20">
-                        <span className="block min-w-0 text-xs font-mono text-sol-text-dim truncate" title={getRelativePath(diff.filePath)}>{getRelativePath(diff.filePath)}</span>
-                        {isApplyPatch && "operation" in diff && diff.operation !== "Delete" && (
-                          <OpenInEditorButton target={patchSectionTarget(diff)} peek />
-                        )}
+                      <div className="px-2 py-1 border-b border-sol-border/20 bg-sol-bg-highlight/20">
+                        <span className="block text-xs font-mono text-sol-text-dim truncate" title={getRelativePath(diff.filePath)}>{getRelativePath(diff.filePath)}</span>
                       </div>
                       <DiffView
                         oldStr={diff.oldContent}
@@ -1659,9 +1656,3 @@ export function SkillBlock({ tool }: { tool: ToolCall }) {
 
 // ── StructuredOutput: its own file (StructuredResultBlock.tsx), re-exported for the callers that import it here.
 export { StructuredResultBlock } from "./StructuredResultBlock";
-
-/** Where a patch's file opens in the editor: at its first hunk in the new file. */
-function patchSectionTarget(section: { filePath: string; hunks: ReadonlyArray<{ newStart: number }> }): { path: string; line?: number } {
-  const at = section.hunks.find((h) => h.newStart > 0)?.newStart;
-  return { path: section.filePath, ...(at ? { line: at } : {}) };
-}

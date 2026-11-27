@@ -6,8 +6,7 @@
 // (features.ts), so a buffer that was off screen when the theme flipped, or
 // whose parser was still loading, catches up the moment it is shown.
 
-import { jumpTo } from "./jump";
-import { Compartment, EditorState, type Extension } from "@codemirror/state";
+import { Compartment, EditorSelection, EditorState, type Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { bufferFields, bufferKey, codeBuffers, currentState, decodeFileText, fileFormatField, updateBuffer, type CodeBuffer, type FileFormat } from "./buffers";
 import {
@@ -19,7 +18,7 @@ import {
   syncEditorFeatures,
   type EditorFeatureContext,
 } from "./features";
-import { describeLanguage, languageByName, loadedLanguage, loadLanguage, lspLanguageId } from "./languages";
+import { describeLanguage, languageByName, loadLanguage, lspLanguageId } from "./languages";
 import { detectIndent } from "./indent";
 import { codeSetup, DEFAULT_EDITOR_OPTIONS, editorSettingsExtension, readOnlyEffect, type CodeEditorOptions } from "./setup";
 import { editorSetting, explicitEditorSettings, onEditorSettingsChange, registerEditorSettingsCommands } from "./editorSettings";
@@ -46,7 +45,7 @@ function registerCoreFeatures(): void {
   // transaction as the buffer's first paint; only a first use waits on a chunk.
   registerEditorFeature("core.language", (ctx) => {
     const desc = languageByName(ctx.languageName);
-    return loadedLanguage(desc) ?? loadLanguage(desc);
+    return desc?.support ?? loadLanguage(desc);
   });
   observeCodeTheme(() => reconfigureEditorFeature("core.theme"));
   // Settings > Editor, live: a change (here or on another device) reaches
@@ -169,27 +168,21 @@ export interface CursorTarget {
   column?: number;
   /** The last line of a range that flashes on arrival (an agent's edit). */
   endLine?: number;
-  /** The line to put at the top of the view (a reload restoring where a tab
-   *  was scrolled); the cursor's line is centered when absent. */
-  top?: number;
 }
 
 /** `12`, `12:3`, `L12`, `12-20` / `12:3-20` (a range: cursor on its first
  *  line, the range flashed) as a cursor target. The spelling filesHref
- *  (lib/vault/vaultHref cursorParam) writes. A restored tab adds `@400`, the
- *  line at the top of its view. */
+ *  (lib/vault/vaultHref cursorParam) writes. */
 export function parseCursorTarget(raw: string | null | undefined): CursorTarget | null {
-  const m = raw ? /^L?(\d+)(?:[:.,](\d+))?(?:-L?(\d+))?(?:@(\d+))?/.exec(raw.trim()) : null;
+  const m = raw ? /^L?(\d+)(?:[:.,](\d+))?(?:-L?(\d+))?/.exec(raw.trim()) : null;
   if (!m) return null;
   const line = parseInt(m[1], 10);
   if (!(line > 0)) return null;
   const end = m[3] ? parseInt(m[3], 10) : 0;
-  const top = m[4] ? parseInt(m[4], 10) : 0;
   return {
     line,
     column: m[2] ? Math.max(1, parseInt(m[2], 10)) : undefined,
     ...(end > line ? { endLine: end } : {}),
-    ...(top > 0 ? { top } : {}),
   };
 }
 
@@ -198,8 +191,11 @@ export function revealTarget(view: EditorView, target: CursorTarget): void {
   const doc = view.state.doc;
   const line = doc.line(Math.min(target.line, doc.lines));
   const col = target.column ? target.column - 1 : (/^\s*/.exec(line.text)?.[0].length ?? 0);
-  const top = target.top ? doc.line(Math.min(target.top, doc.lines)).from : undefined;
-  jumpTo(view, line.from + Math.min(col, line.length), { scrollTop: top });
+  const pos = line.from + Math.min(col, line.length);
+  view.dispatch({
+    selection: EditorSelection.cursor(pos),
+    effects: EditorView.scrollIntoView(pos, { y: "center" }),
+  });
   if (target.endLine) flashLines(view, line.number, target.endLine);
 }
 

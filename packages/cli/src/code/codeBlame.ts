@@ -60,14 +60,12 @@ export function blameHunks(parsed: ParsedBlame, resolution: BlameResolution): Co
     const meta = parsed.commits.get(line.sha);
     const uncommitted = line.sha === ZERO_SHA;
     const session = hunkSession(ref);
-    const sweep = !session && !uncommitted ? resolution.sweeps?.get(line.sha) : undefined;
     hunks.push({
       start: line.finalLine,
       end: line.finalLine,
       ...(uncommitted ? { uncommitted: true } : { sha: line.sha, author: meta?.author, summary: meta?.summary }),
       ...(meta?.authorTime ? { time: meta.authorTime * 1000 } : {}),
       ...(session ? { session } : {}),
-      ...(sweep ? { sweep_sessions: sweep } : {}),
     });
   }
   return hunks;

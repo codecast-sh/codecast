@@ -1,7 +1,6 @@
 import { useRef, useState } from "react";
 import { usePanelRef } from "react-resizable-panels";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-import { useOnRequest } from "../../hooks/useOnRequest";
 import { collapsePanelSoon } from "../../lib/vault/collapsePanelSoon";
 import { useVaultStore } from "../../store/vaultStore";
 
@@ -21,7 +20,13 @@ export function useVaultSidePanel(inSplitPane: boolean, showGraph: boolean, conn
   const [paneRightPanelOpen, setPaneRightPanelOpen] = useState(false);
   const rightPanelOpen = inSplitPane ? paneRightPanelOpen : storeRightPanelOpen;
   const setRightPanelOpen = inSplitPane ? setPaneRightPanelOpen : setStoreRightPanelOpen;
-  useOnRequest(useVaultStore((s) => s.tagPaneRequest), () => setRightPanelOpen(true));
+  const tagPaneRequest = useVaultStore((s) => s.tagPaneRequest);
+  const seenTagPaneRequest = useRef(tagPaneRequest);
+  useWatchEffect(() => {
+    if (seenTagPaneRequest.current === tagPaneRequest) return;
+    seenTagPaneRequest.current = tagPaneRequest;
+    setRightPanelOpen(true);
+  }, [tagPaneRequest]);
   const sidePanelRef = usePanelRef();
   const sideAppliedRef = useRef<boolean | null>(null);
   useWatchEffect(() => {

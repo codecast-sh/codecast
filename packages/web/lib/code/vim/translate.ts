@@ -3,11 +3,10 @@
 // reported as skipped with the reason.
 
 import { applySetArg, defaultOptionState, editorValues, isKnownOption, splitSetArgs, type OptionState, type SetResult } from "./options";
-import { classifyEx, EXPAND_EX, isExCommandName, PROMPT_CARET, windowCommand, windowEngineKey } from "./exAdapters";
+import { classifyEx, EXPAND_EX, isExCommandName, PROMPT_CARET, windowCommand } from "./exAdapters";
 import { lhsKeys, tokenizeKeys, vimStringValue, type KeyToken } from "./keys";
 import { stripMapComment } from "./lines";
-import { plugKeys } from "./plugins";
-import { withGdefault } from "./gdefault";
+import { commandKeyName, plugKeys } from "./plugins";
 import { evaluateCondition, UnknownCondition } from "./expr";
 import type { VimEffect, VimEnvironment, VimMapContext, VimOptionValues } from "./types";
 
@@ -80,8 +79,6 @@ function setEffects(r: SetResult, state: OptionState): VimEffect[] {
       return [{ kind: "engineOption", name: "textwidth", value: Number(r.value) }];
     case "langmap":
       return [{ kind: "engineOption", name: "langmap", value: String(r.value) }];
-    case "gdefault":
-      return [{ kind: "engineOption", name: "gdefault", value: !!r.value }];
     case "timeout":
     case "timeoutlen":
       return [{ kind: "timeout", ms: state.get("timeout") ? Number(state.get("timeoutlen")) : null }];
@@ -205,8 +202,6 @@ interface Rhs {
   translated: string[];
   skip?: string;
   usesCommandKeys: boolean;
-  /** Why parts of a right side that otherwise runs do nothing here. */
-  missing?: string[];
 }
 
 function keyString(tok: KeyToken, ctx: TranslateCtx): string | { skip: string } {
@@ -271,13 +266,9 @@ function translateEx(text: string, closed: boolean, ctx: TranslateCtx): { keys: 
   const cls = classifyEx(body, ctx.aliases);
   if (cls.kind === "skip") return { skip: cls.reason === "runs vimscript" ? `runs vimscript (:${cls.name})` : cls.reason };
   const end = closed ? "<CR>" : "";
-  // A substitute runs through Vim.handleEx too, where gdefault applies.
-  const needsExpand = closed && cls.kind !== "adapter" && (/<C-r>/i.test(body) || withGdefault(body) !== body);
+  const needsExpand = /<C-r>/i.test(body) && cls.kind !== "adapter" && closed;
   const keys = needsExpand ? `:${EXPAND_EX} ${body}${end}` : `:${body}${end}`;
-  // An absolute path opens only when it sits inside the folder the editor has
-  // open, which the report can't know.
-  const outside = cls.kind === "adapter" && cls.command === "file.open" && String(cls.args?.path ?? "").startsWith("/");
-  return { keys, translated: cls.kind === "adapter" ? (outside ? "file.open (inside the open folder only)" : cls.command) : cls.kind === "alias" ? `:${cls.name}` : undefined };
+  return { keys, translated: cls.kind === "adapter" ? cls.command : cls.kind === "alias" ? `:${cls.name}` : undefined };
 }
 
 export function translateRhs(raw: string, insert: boolean, ctx: TranslateCtx): Rhs {
@@ -289,26 +280,13 @@ export function translateRhs(raw: string, insert: boolean, ctx: TranslateCtx): R
   let op: string | null = null;
   let usesCommandKeys = false;
   let segment: string[] | null = null;
-  const missing: string[] = [];
 
-  // The quickfix window a `:copen` just opened, which a `:q` right after it
-  // closes in vim. Here the results open in the search pane and stay; the
-  // `:q` would close the file instead, so it is dropped.
-  let quickfixOpen = false;
   const closeSegment = (closed: boolean): string | null => {
-    const line = promptKeys(segment!, closed);
+    const r = translateEx(promptKeys(segment!, closed), closed, ctx);
     segment = null;
-    const word = /^[\s:]*([A-Za-z]+)/.exec(line)?.[1] ?? "";
-    if (quickfixOpen && closed && /^(q(u(it?)?)?|clo(se?)?)$/.test(word)) {
-      quickfixOpen = false;
-      missing.push(`:${word} after the quickfix list closes nothing here`);
-      return null;
-    }
-    const r = translateEx(line, closed, ctx);
     if ("skip" in r) return r.skip;
     out.push(r.keys);
     if (r.translated) translated.push(r.translated);
-    quickfixOpen = /^(cope(n)?|cw(indow)?|lop(en)?|lw(indow)?)$/.test(word);
     return null;
   };
 
@@ -332,20 +310,16 @@ export function translateRhs(raw: string, insert: boolean, ctx: TranslateCtx): R
       oneNormal = false;
       continue;
     }
-    // `<C-w>x` becomes its window binding's engine key (plugins.ts), which a
-    // count before it reaches; a noremap only sees the engine's own keys, so
-    // the right side is played as a map. A key with no command plays nothing.
     if (normalHere && k === "<C-w>" && i + 1 < toks.length) {
       const next = keyString(toks[i + 1], ctx);
-      if (typeof next !== "string") return { keys: "", translated, skip: next.skip, usesCommandKeys };
-      const win = windowCommand(next);
-      if ("command" in win) {
+      const win = typeof next === "string" ? windowCommand(next) : null;
+      if (win && "command" in win) {
+        out.push(commandKeyName(win.command));
         translated.push(win.command);
-        out.push(windowEngineKey(next)!);
-      } else missing.push(win.skip);
-      usesCommandKeys = true;
-      i++;
-      continue;
+        usesCommandKeys = true;
+        i++;
+        continue;
+      }
     }
     if (k.startsWith("<Cc")) usesCommandKeys = true;
     out.push(k);
@@ -372,11 +346,7 @@ export function translateRhs(raw: string, insert: boolean, ctx: TranslateCtx): R
     const skip = closeSegment(false);
     if (skip) return { keys: "", translated, skip, usesCommandKeys };
   }
-  // Only window keys, none of them here: the map would do nothing.
-  if (missing.length && !translated.length && out.every((o) => /^\d+$/.test(o))) {
-    return { keys: "", translated, skip: missing[0], usesCommandKeys };
-  }
-  return { keys: out.join(""), translated, usesCommandKeys, missing };
+  return { keys: out.join(""), translated, usesCommandKeys };
 }
 
 function displayKeys(raw: string): string {
@@ -429,7 +399,6 @@ export function handleMap(word: string, f: MapFamily, args: string, text: string
   if (!rhsRaw) return skipped(text, "only lists the map");
   const rhs = translateRhs(rhsRaw, contexts.every((c) => c === "insert"), ctx);
   if (rhs.skip) return skipped(text, rhs.skip);
-  const missing = rhs.missing ?? [];
   // A noremap's right side only sees built-in keys; the window and plugin
   // keys here are maps, so let it reach them.
   // A map whose right side starts with its left side (`map O O<Space><BS>`)
@@ -441,7 +410,6 @@ export function handleMap(word: string, f: MapFamily, args: string, text: string
   for (const c of contexts) ctx.mapped.add(`${c ?? ""}|${lhs}`);
   const notes: string[] = [];
   if (rhs.translated.length) notes.push(`→ ${[...new Set(rhs.translated)].join(", ")}`);
-  if (missing.length) notes.push(`(${[...new Set(missing)].join(", ")})`);
   if (dropped.length) notes.push(`(${UNSUPPORTED_MODE[dropped[0]] ?? "some modes dropped"})`);
   const status = notes.length ? "translated" : "applied";
   return entry(text, status, `${label(contexts)}: ${displayKeys(lhsRaw)}${notes.length ? ` ${notes.join(" ")}` : ""}`, effects);

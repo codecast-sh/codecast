@@ -11,7 +11,7 @@ import { reviveWorkspace, serializeWorkspace, type Workspace } from "./model";
 
 const KEY = (vaultId: string) => `codecast:code-workspace:v1:${vaultId}`;
 
-type CursorReader = (vaultId: string, path: string) => { line: number; col: number; top?: number } | null;
+type CursorReader = (vaultId: string, path: string) => { line: number; col: number } | null;
 let readCursor: CursorReader | null = null;
 
 /** The editor chunk tells persistence where each open buffer's cursor is. */

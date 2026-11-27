@@ -302,20 +302,6 @@ test("search.project fills the query and opens the Search tab", async () => {
   projectSearch.set({ options: { regex: false } });
 });
 
-test("search.project with no text still asks the page for the pane and the box", async () => {
-  registerProjectSearchCommands();
-  const { runCodeCommand } = await import("../../commands");
-  useVaultStore.setState({ leftPaneTab: "search", searchQuery: "kept" });
-  const before = useVaultStore.getState().searchPaneRequest;
-  const focus = projectSearch.focusRequest;
-  // The Search tab already chosen behind a hidden tree: the request is what
-  // opens the tree, so it must move even though the tab does not.
-  runCodeCommand("search.project", {});
-  expect(useVaultStore.getState().searchPaneRequest).toBe(before + 1);
-  expect(useVaultStore.getState().searchQuery).toBe("kept");
-  expect(projectSearch.focusRequest).toBe(focus + 1);
-});
-
 test("F4 does nothing with results from another vault", async () => {
   registerProjectSearchCommands();
   const r = new SearchResults("another-worktree");

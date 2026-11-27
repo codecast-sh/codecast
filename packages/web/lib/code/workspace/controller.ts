@@ -45,7 +45,7 @@ function scheduleFlush(): void {
 
 /** Only which tab is active (and the recency list) changed. */
 function onlyActiveChanged(a: M.Workspace, b: M.Workspace): boolean {
-  if (a.groups.length !== b.groups.length || a.activeGroup !== b.activeGroup || a.closed !== b.closed || a.sizes !== b.sizes || a.orientation !== b.orientation || a.lanes !== b.lanes) return false;
+  if (a.groups.length !== b.groups.length || a.activeGroup !== b.activeGroup || a.closed !== b.closed || a.sizes !== b.sizes || a.orientation !== b.orientation) return false;
   return a.groups.every((g, i) => {
     const h = b.groups[i];
     return g.id === h.id && g.tabs.length === h.tabs.length && g.tabs.every((t, j) => t.path === h.tabs[j].path && t.preview === h.tabs[j].preview && t.pinned === h.tabs[j].pinned);
@@ -104,11 +104,5 @@ export const workspaceActions = {
   focusGroup: (vaultId: string, groupId: string) => update(vaultId, (w) => M.focusGroupId(w, groupId)),
   cycle: (vaultId: string, delta: number) => update(vaultId, (w) => M.cycleTab(w, delta)),
   goto: (vaultId: string, index: number) => update(vaultId, (w) => M.gotoTab(w, index)),
-  sizes: (vaultId: string, lane: number | null, sizes: number[]) => update(vaultId, (w) => M.setSizes(w, lane, sizes)),
-  resize: (vaultId: string, axis: "width" | "height", by: number) => update(vaultId, (w) => M.resizeGroup(w, axis, by)),
-  maximize: (vaultId: string, axis: "width" | "height") => update(vaultId, (w) => M.maximizeGroup(w, axis)),
-  equalize: (vaultId: string) => update(vaultId, (w) => M.equalizeGroups(w)),
-  exchange: (vaultId: string) => update(vaultId, (w) => M.exchangeGroup(w)),
-  rotate: (vaultId: string, delta: 1 | -1) => update(vaultId, (w) => M.rotateGroups(w, delta)),
-  moveToEdge: (vaultId: string, edge: M.GroupEdge) => update(vaultId, (w) => M.moveGroupToEdge(w, edge)),
+  sizes: (vaultId: string, sizes: number[]) => update(vaultId, (w) => M.setSizes(w, sizes)),
 };

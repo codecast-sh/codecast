@@ -27,8 +27,6 @@ export interface TerminalSessionInfo {
   command: string;
   created: number;
   attached: number;
-  /** Where the session's shell is now (absent from an older daemon). */
-  cwd?: string;
 }
 
 // Discovery is capped tighter when we already know which machine the pane is
@@ -166,18 +164,6 @@ export async function probeEndpoint(
   timeoutMs: number = PROBE_TIMEOUT_MS,
 ): Promise<TerminalSessionInfo[] | null> {
   lastProbeMiss = null;
-  const { sessions, miss } = await fetchSessions(ep, timeoutMs);
-  lastProbeMiss = miss;
-  return sessions;
-}
-
-/** The daemon's terminal sessions, read without touching the probe state the
- *  panel's unreachable message comes from. Null when it does not answer. */
-export async function readTerminalSessions(ep: TerminalEndpoint, timeoutMs: number): Promise<TerminalSessionInfo[] | null> {
-  return (await fetchSessions(ep, timeoutMs)).sessions;
-}
-
-async function fetchSessions(ep: TerminalEndpoint, timeoutMs: number): Promise<{ sessions: TerminalSessionInfo[] | null; miss: ProbeMiss | null }> {
   const deadline = Date.now() + timeoutMs;
   try {
     while (Date.now() < deadline) {
@@ -188,18 +174,28 @@ async function fetchSessions(ep: TerminalEndpoint, timeoutMs: number): Promise<{
       if (res.status === 503) {
         const body = await res.json();
         if (body.unavailable === true) {
+          lastProbeMiss = "timeout";
           await new Promise(resolve => setTimeout(resolve, Math.min(200, Math.max(0, deadline - Date.now()))));
           continue;
         }
       }
-      if (!res.ok) return { sessions: null, miss: "rejected" };
+      if (!res.ok) {
+        lastProbeMiss = "rejected";
+        return null;
+      }
       const body = (await res.json()) as { sessions?: TerminalSessionInfo[]; tmux?: boolean };
-      if (!body.tmux) return { sessions: null, miss: "rejected" };
-      return { sessions: body.sessions ?? [], miss: null };
+      if (!body.tmux) {
+        lastProbeMiss = "rejected";
+        return null;
+      }
+      lastProbeMiss = null;
+      return body.sessions ?? [];
     }
-    return { sessions: null, miss: "timeout" };
+    lastProbeMiss = "timeout";
+    return null;
   } catch (e) {
-    return { sessions: null, miss: isTimeoutError(e) ? "timeout" : "rejected" };
+    lastProbeMiss = isTimeoutError(e) ? "timeout" : "rejected";
+    return null;
   }
 }
 

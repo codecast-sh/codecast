@@ -22,8 +22,6 @@ import {
   type ViewUpdate,
 } from "@codemirror/view";
 import type { Chunk } from "@codemirror/merge";
-import { highlightingFor, language as languageFacet } from "@codemirror/language";
-import { highlightTree } from "@lezer/highlight";
 import { bufferKey, codeBuffers, savedDocField, textToDoc, decodeFileText } from "../buffers";
 import type { MergeKit } from "../merge";
 import { holdGitStatusFeed, requestGitStatusRefresh } from "./status";
@@ -41,20 +39,13 @@ import {
   type Hunk,
 } from "./hunks";
 import { mountSplit, splitTheme, type SplitHandle } from "./split";
-export { splitOwner } from "./split";
 import { gitTheme } from "./gitTheme";
-import { formatAcceleratorParts, isMac } from "../../../shortcuts/registry";
-
-/** A button title with the key that does the same, as the platform writes it. */
-const withKey = (title: string, accelerator: string) => `${title} (${formatAcceleratorParts(accelerator).join(isMac ? "" : "+")})`;
 
 export interface GitDiffTarget {
   /** Anything `git rev-parse` takes that names a commit: HEAD, a sha, a branch. */
   ref: string;
   /** What the picker shows; the ref when absent. */
   label?: string;
-  /** A dot in the picker: the color of the session the ref belongs to. */
-  color?: string;
 }
 
 export type DiffLayout = "unified" | "split";
@@ -65,14 +56,10 @@ export interface GitEditorConfig {
   path: string;
   /** The file at HEAD, decoded the way the buffer is. */
   base: Text;
-  /** Nothing at HEAD (untracked or added): `base` is empty, there is no
-   *  gutter and no hunk to step outside the diff, and the diff against HEAD
-   *  reads as a new file. */
-  newFile?: boolean;
   /** The file's text at a ref, null when it does not exist there. */
   fetchBase: (ref: string) => Promise<string | null>;
-  /** Refs the picker offers besides HEAD, for the editor's current state. */
-  targets: (state: EditorState) => GitDiffTarget[];
+  /** Refs the picker offers besides HEAD. */
+  targets: () => GitDiffTarget[];
 }
 
 const gitConfig = Facet.define<GitEditorConfig, GitEditorConfig | null>({ combine: (v) => v[0] ?? null });
@@ -170,29 +157,6 @@ function button(label: string, title: string, onPress: () => void, cls = ""): HT
   return b;
 }
 
-/** Past this the old lines show plain: a peek never stalls on a huge hunk. */
-const PEEK_HIGHLIGHT_MAX = 20_000;
-
-/** The old lines as the editor would color them: parsed with the buffer's
- *  language and painted by its highlight styles. */
-function oldLinesPre(view: EditorView, text: string): HTMLElement {
-  const pre = el("pre", "cm-git-peek-old");
-  const lang = view.state.facet(languageFacet);
-  if (!lang || text.length > PEEK_HIGHLIGHT_MAX) {
-    pre.textContent = text;
-    return pre;
-  }
-  let pos = 0;
-  // The way @codemirror/merge paints deleted lines (syntaxHighlightDeletions).
-  highlightTree(lang.parser.parse(text), { style: (tags) => highlightingFor(view.state, tags) }, (from, to, cls) => {
-    if (from > pos) pre.append(text.slice(pos, from));
-    pre.append(el("span", cls, text.slice(from, to)));
-    pos = to;
-  });
-  if (pos < text.length) pre.append(text.slice(pos));
-  return pre;
-}
-
 class PeekWidget extends WidgetType {
   constructor(
     readonly hunk: Hunk,
@@ -215,8 +179,8 @@ class PeekWidget extends WidgetType {
     // The actions sit beside the counts: the widget is as wide as the longest
     // line, so anything pushed to its right edge can land out of view.
     head.append(
-      button("↑", withKey("Previous change", "Shift+Alt+F5"), () => stepGitHunk(view, -1, true)),
-      button("↓", withKey("Next change", "Alt+F5"), () => stepGitHunk(view, 1, true)),
+      button("↑", "Previous change", () => stepGitHunk(view, -1, true)),
+      button("↓", "Next change", () => stepGitHunk(view, 1, true)),
       button("Revert", "Put the old lines back", () => revertGitHunk(view)),
       button("Copy", "Copy the old lines", () => void navigator.clipboard?.writeText(this.old).catch(() => {})),
       button("×", "Close", () => {
@@ -225,7 +189,7 @@ class PeekWidget extends WidgetType {
       }, "cm-git-btn-icon"),
     );
     box.append(head);
-    if (this.old) box.append(oldLinesPre(view, this.old));
+    if (this.old) box.append(el("pre", "cm-git-peek-old", this.old));
     return box;
   }
   ignoreEvent() {
@@ -253,7 +217,7 @@ function buildPeek(state: EditorState, value: Pick<GitDiffValue, "chunks" | "pen
 
 function initialValue(state: EditorState): GitDiffValue {
   const config = state.facet(gitConfig);
-  const chunks = config && !config.newFile ? buildChunks(config.kit, config.base, state.doc) : [];
+  const chunks = config ? buildChunks(config.kit, config.base, state.doc) : [];
   return {
     chunks,
     pending: null,
@@ -310,7 +274,7 @@ const gitDiffField = StateField.define<GitDiffValue>({
 function recompute(view: EditorView): void {
   const config = view.state.facet(gitConfig);
   const value = view.state.field(gitDiffField, false);
-  if (!config || config.newFile || !value?.pending) return;
+  if (!config || !value?.pending) return;
   const chunks = updateChunks(config.kit, value.chunks, config.base, view.state.doc, value.pending);
   view.dispatch({ effects: recomputed.of(chunks) });
 }
@@ -327,18 +291,10 @@ function unifiedDiff(kit: MergeKit, original: Text): Extension {
     highlightChanges: true,
     syntaxHighlightDeletions: true,
     diffConfig: GIT_DIFF_CONFIG,
-    // Revert is the one per-hunk action. The engine's "accept" only folds the
-    // hunk into this in-memory original (nothing staged, nothing kept), so it
-    // draws as nothing.
     mergeControls: (type, action) => {
-      if (type === "accept") {
-        const none = document.createElement("span");
-        none.hidden = true;
-        return none;
-      }
-      const b = el("button", "cm-git-merge-reject", "Revert");
+      const b = el("button", `cm-git-merge-${type}`, type === "accept" ? "Keep" : "Revert");
       b.type = "button";
-      b.title = "Put the old lines back";
+      b.title = type === "accept" ? "Keep this change and hide it" : "Put the old lines back";
       b.onmousedown = action;
       return b;
     },
@@ -448,7 +404,6 @@ export function stepGitHunk(view: EditorView, dir: 1 | -1, keepPeek = false): bo
     if (split) return split.step(dir);
     return (dir === 1 ? config.kit.goToNextChunk : config.kit.goToPreviousChunk)(view);
   }
-  if (config.newFile) return false;
   const doc = view.state.doc;
   const hunks = liveHunks(value.chunks, value.pending, doc.length);
   const line = doc.lineAt(view.state.selection.main.head).number;
@@ -482,7 +437,6 @@ export function revertGitHunk(view: EditorView): boolean {
     if (value.diff.layout === "split") return view.plugin(splitPlugin)?.handle?.revertAtCursor() ?? false;
     return config.kit.rejectChunk(view);
   }
-  if (config.newFile) return false;
   if (view.state.readOnly) return true;
   const h = hunkAtCursor(view);
   if (!h) return true;
@@ -495,7 +449,7 @@ export function revertGitHunk(view: EditorView): boolean {
 /** Show or hide the old lines of the hunk under the cursor. */
 export function toggleGitPeek(view: EditorView, at?: number): boolean {
   const value = view.state.field(gitDiffField, false);
-  if (!value || value.diff || view.state.facet(gitConfig)?.newFile) return false;
+  if (!value || value.diff) return false;
   if (at === undefined && value.peek !== null) {
     view.dispatch({ effects: setPeek.of(null) });
     return true;
@@ -509,17 +463,6 @@ export function toggleGitPeek(view: EditorView, at?: number): boolean {
   return true;
 }
 
-/** Show the old lines of the change at `pos`, leaving an open peek of it
- *  open. False while the diff view is open (it shows them already). */
-export function showGitPeek(view: EditorView, pos: number): boolean {
-  const value = view.state.field(gitDiffField, false);
-  if (!value || value.diff || view.state.facet(gitConfig)?.newFile) return false;
-  const doc = view.state.doc;
-  const h = hunkAtLine(liveHunks(value.chunks, value.pending, doc.length), doc, doc.lineAt(Math.min(pos, doc.length)).number);
-  if (h && value.peek !== h.fromB) view.dispatch({ effects: setPeek.of(h.fromB) });
-  return true;
-}
-
 // ── the diff panel ──────────────────────────────────────────────────────────
 
 function createDiffPanel(view: EditorView): Panel {
@@ -530,8 +473,8 @@ function createDiffPanel(view: EditorView): Panel {
   const refLabel = el("span", "", "");
   refButton.append(el("span", "cm-git-dim", "vs"), refLabel, el("span", "cm-git-caret", "▾"));
   const count = el("span", "cm-git-count");
-  const prev = button("↑", withKey("Previous change", "Shift+Alt+F5"), () => stepGitHunk(view, -1));
-  const next = button("↓", withKey("Next change", "Alt+F5"), () => stepGitHunk(view, 1));
+  const prev = button("↑", "Previous change", () => stepGitHunk(view, -1));
+  const next = button("↓", "Next change", () => stepGitHunk(view, 1));
   const unified = button("Inline", "Inline diff", () => setGitDiffLayout(view, "unified"), "cm-git-seg");
   const split = button("Side by side", "Side by side", () => setGitDiffLayout(view, "split"), "cm-git-seg");
   const seg = el("span", "cm-git-segs");
@@ -561,8 +504,7 @@ function createDiffPanel(view: EditorView): Panel {
     const config = view.state.facet(gitConfig);
     if (!config || menu) return;
     const current = view.state.field(gitDiffField, false)?.diff?.ref;
-    const seen = new Set<string>();
-    const targets = [{ ref: "HEAD" } as GitDiffTarget, ...config.targets(view.state)].filter((t) => !seen.has(t.ref) && !!seen.add(t.ref));
+    const targets: GitDiffTarget[] = [{ ref: "HEAD" }, ...config.targets()];
     menu = el("div", "cm-git-menu");
     menu.setAttribute("role", "listbox");
     // Typing filters the listed refs; text matching none is taken as a ref.
@@ -592,11 +534,6 @@ function createDiffPanel(view: EditorView): Panel {
         item.type = "button";
         item.tabIndex = -1;
         item.setAttribute("role", "option");
-        if (t.color) {
-          const dot = el("span", "cm-git-menu-dot");
-          dot.style.background = t.color;
-          item.append(dot);
-        }
         item.append(el("span", "", t.label ?? t.ref));
         if (t.label && t.label !== t.ref) item.append(el("span", "cm-git-dim", t.ref));
         item.onmousedown = (e) => e.preventDefault();
@@ -643,8 +580,7 @@ function createDiffPanel(view: EditorView): Panel {
     let n: number | null = null;
     if (diff.layout === "split") n = view.plugin(splitPlugin)?.handle?.count() ?? null;
     else if (config && diff.original) n = config.kit.getChunks(state)?.chunks.length ?? null;
-    const created = diff.ref === "HEAD" && !!config?.newFile;
-    count.textContent = diff.error ? diff.error.state : !diff.original ? "Loading…" : created ? "New file" : n === null ? "" : n === 0 ? "No changes" : n === 1 ? "1 change" : `${n} changes`;
+    count.textContent = diff.error ? diff.error.state : !diff.original ? "Loading…" : n === null ? "" : n === 0 ? "No changes" : n === 1 ? "1 change" : `${n} changes`;
     count.title = diff.error?.message ?? "";
     count.classList.toggle("cm-git-error", !!diff.error);
     prev.disabled = next.disabled = !n;
@@ -793,6 +729,5 @@ const peekKeys = Prec.high(
 export function gitEditorExtension(config: GitEditorConfig): Extension {
   // Lowest precedence puts the change bars last among the gutters, against
   // the text, whichever feature (lint, folding) happened to load first.
-  // A new file draws no gutter: every bar would be green.
-  return [gitConfig.of(config), gitDiffField, diffSlot.of([]), runner, splitPlugin, config.newFile ? [] : Prec.lowest(gitGutter), peekKeys, gitTheme, splitTheme];
+  return [gitConfig.of(config), gitDiffField, diffSlot.of([]), runner, splitPlugin, Prec.lowest(gitGutter), peekKeys, gitTheme, splitTheme];
 }

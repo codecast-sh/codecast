@@ -14,9 +14,6 @@ import { PaneStreamFilter } from "./paneStreamFilter";
 import { setLiveScreenReader } from "./liveScreen";
 import { bump, fitInstance, instances, reg, type OpenTerminalOptions, type TermInstance, type TermTabState } from "./termRegistry";
 import { closeTab, connect, getHelloLog } from "./termConnection";
-import { readTerminalSessions } from "./endpoint";
-import { cwdFromOsc7, installTerminalFileLinks, terminalPathContext, type TerminalPathLink } from "./fileLinks";
-import type { FilePathContextValue } from "../filePathLinks";
 
 export type { OpenTerminalOptions, TermStatus, TermTabState } from "./termRegistry";
 export { subscribeTerminals, getTerminalsVersion } from "./termRegistry";
@@ -160,20 +157,6 @@ export function openTerminal(opts: OpenTerminalOptions): string {
     // Plain click opens; keeps text selection unaffected.
     if (!event.defaultPrevented) window.open(uri, "_blank", "noopener");
   }));
-  // File paths in the output open the editor (fileLinks.ts). The directory a
-  // relative one resolves against is read at click time: the shell's cwd as
-  // OSC 7 last reported it, else where it started, else the project of the
-  // conversation whose pane this is.
-  term.parser.registerOscHandler(7, (data) => {
-    const cwd = cwdFromOsc7(data);
-    if (cwd) inst.state.cwd = cwd;
-    return false;
-  });
-  installTerminalFileLinks(
-    term,
-    () => terminalPathContext({ cwd: inst.state.cwd, deviceId: opts.remote?.deviceId ?? opts.endpoint?.deviceId }),
-    (hit, ctx) => void openTerminalPath(hit, ctx, inst),
-  );
   // Unicode 11 width tables: without these, the glyphs agent TUIs lean on
   // (spinners, emoji, ambiguous-width ornaments) measure one cell narrower
   // than in VS Code's terminal and every divider drifts.
@@ -221,31 +204,6 @@ export function openTerminal(opts: OpenTerminalOptions): string {
   connect(inst, opts);
   bump();
   return id;
-}
-
-/** Open a path the output named. A relative one with no cwd resolves in
- *  the project of the conversation whose pane this is; the store and the
- *  editor door load here, on the click, not with the terminal. */
-async function openTerminalPath(hit: TerminalPathLink, ctx: FilePathContextValue, inst: TermInstance): Promise<void> {
-  const [{ openInEditor }, { useInboxStore }] = await Promise.all([import("../filesPane"), import("../../store/inboxStore")]);
-  let at = ctx;
-  const conversationId = inst.opts.conversationId ?? inst.opts.remote?.conversationId;
-  // A relative path names a file where the shell is now. Most shells never
-  // report a cd (OSC 7), so ask the daemon, which reads tmux's pane cwd. It
-  // is on loopback and answers in milliseconds; a short cap keeps a stalled
-  // daemon from holding the click, which then falls back to OSC 7 / the start.
-  if (!hit.path.startsWith("/") && !hit.path.startsWith("~") && inst.state.kind === "shell" && inst.state.sessionName && inst.opts.endpoint) {
-    const sessions = await readTerminalSessions(inst.opts.endpoint, 400);
-    const cwd = sessions?.find((s) => s.name === inst.state.sessionName)?.cwd;
-    if (cwd) at = terminalPathContext({ cwd, deviceId: ctx.deviceId });
-  }
-  if (!at.base && conversationId) {
-    const st = useInboxStore.getState();
-    const meta = (st.conversations[conversationId] ?? st.sessions[conversationId]) as { project_path?: string; git_root?: string } | undefined;
-    const cwd = meta?.project_path || meta?.git_root;
-    if (cwd) at = terminalPathContext({ cwd, deviceId: ctx.deviceId });
-  }
-  openInEditor({ path: hit.path, line: hit.line, column: hit.column, ctx: at });
 }
 
 function newViewId(): string {

@@ -119,8 +119,6 @@ export interface DiskVersion {
   etag: string;
   mtime: number;
   size?: number;
-  /** The mode, when it refuses writes (VaultFileContent.lockedMode). */
-  lockedMode?: string;
 }
 
 export interface CodeBuffer {
@@ -173,26 +171,8 @@ export interface OpenBufferInput {
 
 /** The fields every state showing a file carries (the status bar and saving
  *  read them): the text as last saved, and the file's format. */
-/** The file's mode refuses writes ("0444"): the editor still edits it, as vim
- *  does, and a save asks before forcing the write (fileSync, kind "readonly"). */
-export const setDiskLock = StateEffect.define<string | null>();
-
-export const diskLockField = StateField.define<string | null>({
-  create: () => null,
-  update: (lock, tr) => {
-    for (const e of tr.effects) if (e.is(setDiskLock)) return e.value;
-    return lock;
-  },
-});
-
 export function bufferFields(format: FileFormat): Extension {
-  return [savedDocField, fileFormatField.init(() => format), diskLockField];
-}
-
-/** Follow what disk says of the file's mode; writes nothing when unchanged. */
-export function syncDiskLock(buffer: CodeBuffer, lock: string | null | undefined): void {
-  if (currentState(buffer).field(diskLockField) === (lock ?? null)) return;
-  updateBuffer(buffer, { effects: setDiskLock.of(lock ?? null) });
+  return [savedDocField, fileFormatField.init(() => format)];
 }
 
 export const MAX_CLEAN_BUFFERS = 40;
@@ -210,9 +190,6 @@ export const MAX_BUFFER_CHARS = 64 * 1024 * 1024;
 export class BufferCache {
   private buffers = new Map<string, CodeBuffer>();
   private clock = 0;
-  /** A buffer left the cache (closed or evicted): whatever else holds its
-   *  text for it can let go (fileSync drops the vault store's copy). */
-  onDrop: ((buffer: CodeBuffer) => void) | null = null;
 
   constructor(
     private readonly limit = MAX_CLEAN_BUFFERS,
@@ -268,13 +245,8 @@ export class BufferCache {
     buffer.lastUsed = ++this.clock;
   }
 
-  /** `keepText`: what else holds this path's text stays (a file renamed onto
-   *  the path brought it, and the next buffer opens from it). */
-  close(key: string, opts?: { keepText?: boolean }): void {
-    const buffer = this.buffers.get(key);
-    if (!buffer) return;
+  close(key: string): void {
     this.buffers.delete(key);
-    if (!opts?.keepText) this.onDrop?.(buffer);
   }
 
   /** Drop clean, off-screen buffers, oldest first, until both limits hold
@@ -292,7 +264,6 @@ export class BufferCache {
     for (const b of candidates) {
       if (count <= this.limit && chars <= this.charLimit) break;
       this.buffers.delete(b.key);
-      this.onDrop?.(b);
       count--;
       chars -= size(b);
     }

@@ -11,13 +11,11 @@ import { ChangeSet, Facet, Prec, RangeSet, RangeSetBuilder, StateEffect, StateFi
 import { Decoration, EditorView, GutterMarker, ViewPlugin, WidgetType, gutter, type DecorationSet, type ViewUpdate } from "@codemirror/view";
 import type { CodeBlameHunk, CodeBlameResponse } from "@codecast/shared/contracts";
 import { useVaultStore } from "../../../store/vaultStore";
-import { useInboxStore } from "../../../store/inboxStore";
 import { bufferKey, codeBuffers, savedDocField } from "../buffers";
 import { featureContext } from "../features";
 import { lineChanges, loadMergeKit } from "../merge";
-import { BLAME_EDITOR_CONTAINER, BLAME_GUTTER_COLUMN, BLAME_NARROW, BLAME_NARROW_COLUMN } from "../gutterSlots";
+import { BLAME_GUTTER_COLUMN } from "../gutterSlots";
 import { ensureGitStatus, useGitStatusStore } from "../git/status";
-import { whenVisible } from "../idle";
 import { NOT_CONNECTED, blameAvailability, blameFailure, blameKey, forgetBlame, loadBlame } from "./data";
 import { closeBlameHover, hoverBlameRun, hoverStays, leaveBlameHover, pinBlameRun } from "./hover";
 import { openBlameSession } from "./actions";
@@ -40,9 +38,6 @@ import {
   type PlacedHunk,
   type RunKind,
 } from "./model";
-
-/** A session's own icon color, when the inbox holds its row. */
-const iconColorOf = (id: string): string | undefined => (useInboxStore.getState().sessions[id] as { icon_color?: string } | undefined)?.icon_color;
 
 export type BlameStatus = "idle" | "loading" | "ready" | "unavailable";
 
@@ -216,7 +211,7 @@ export const blameField = StateField.define<BlameValue>({
       }
       else if (e.is(setData)) {
         next = deriveBlame(
-          { ...EMPTY, status: "ready", key: e.value.key, hunks: e.value.hunks, placed: e.value.placed, edits: e.value.edits, hues: sessionHues(e.value.hunks, iconColorOf) },
+          { ...EMPTY, status: "ready", key: e.value.key, hunks: e.value.hunks, placed: e.value.placed, edits: e.value.edits, hues: sessionHues(e.value.hunks) },
           tr.state.doc,
         );
       } else if (e.is(rederive) && (next.stale || (e.value.force && next.status === "ready"))) next = deriveBlame(next, tr.state.doc);
@@ -280,11 +275,6 @@ const AGE_REFRESH_MS = 10 * 60_000;
 const runner = ViewPlugin.fromClass(
   class {
     private refetchTimer: ReturnType<typeof setTimeout> | null = null;
-    private cancelVisible: (() => void) | null = null;
-    /** One blame request at a time per editor: versions that move while one
-     *  runs cost one more request after it, for the newest version. */
-    private inflight = false;
-    private again: { fresh: boolean } | null = null;
     private settleTimer: ReturnType<typeof setTimeout> | null = null;
     private retryTimer: ReturnType<typeof setTimeout> | null = null;
     private failures = 0;
@@ -330,18 +320,11 @@ const runner = ViewPlugin.fromClass(
       });
     }
 
-    /** A save or an agent's write moved the version: ask again once writes
-     *  pause, and not while the page is hidden (a blame costs the daemon a
-     *  `git blame` of the whole file). */
     private refetchSoon() {
       if (this.refetchTimer) clearTimeout(this.refetchTimer);
       this.refetchTimer = setTimeout(() => {
         this.refetchTimer = null;
-        if (this.cancelVisible) return;
-        this.cancelVisible = whenVisible(() => {
-          this.cancelVisible = null;
-          this.kick(true);
-        });
+        this.kick(true);
       }, REFETCH_MS);
     }
 
@@ -399,31 +382,17 @@ const runner = ViewPlugin.fromClass(
       const key = blameKey(ctx.vaultId, ctx.path, etag, head);
       const v = this.view.state.field(blameField);
       if (v.key === key && (v.status === "ready" || v.status === "loading") && !fresh) return;
-      if (this.inflight) {
-        this.again = { fresh: fresh || !!this.again?.fresh };
-        return;
-      }
       if (fresh) forgetBlame(key);
       if (v.key !== key || v.status !== "ready") this.dispatchSoon(setLoading.of(key));
-      this.inflight = true;
-      loadBlame(key, ctx.vaultId, ctx.path)
-        .then(
-          (res) => this.land(key, res),
-          (e: unknown) => {
-            if (!this.current(key)) return;
-            const { reason, transient } = blameFailure(e);
-            if (transient) this.failSoftly(null, reason);
-            else this.dispatchSoon(setUnavailable.of({ key, reason }));
-          },
-        )
-        // A broken land path still shows up, and the runner is freed either way.
-        .catch((e: unknown) => console.error("[blame] landing failed", e))
-        .finally(() => {
-          this.inflight = false;
-          const next = this.again;
-          this.again = null;
-          if (next && !this.destroyed) this.kick(next.fresh);
-        });
+      loadBlame(key, ctx.vaultId, ctx.path).then(
+        (res) => void this.land(key, res),
+        (e: unknown) => {
+          if (!this.current(key)) return;
+          const { reason, transient } = blameFailure(e);
+          if (transient) this.failSoftly(null, reason);
+          else this.dispatchSoon(setUnavailable.of({ key, reason }));
+        },
+      );
     }
 
     /** Still showing the file version `key` names. */
@@ -448,7 +417,6 @@ const runner = ViewPlugin.fromClass(
     destroy() {
       this.destroyed = true;
       if (this.refetchTimer) clearTimeout(this.refetchTimer);
-      this.cancelVisible?.();
       if (this.settleTimer) clearTimeout(this.settleTimer);
       if (this.retryTimer) clearTimeout(this.retryTimer);
       this.offGit();
@@ -566,9 +534,7 @@ const HATCH = "repeating-linear-gradient(-45deg, var(--blame-hue) 0 1.5px, trans
 const blameTheme = EditorView.theme({
   // A fixed column: labels truncate inside it, so nothing moves as lines
   // with longer or shorter names scroll past.
-  ...BLAME_EDITOR_CONTAINER,
   ".cm-blame-gutter": { ...BLAME_GUTTER_COLUMN, cursor: "default" },
-  [BLAME_NARROW]: { ".cm-blame-gutter": BLAME_NARROW_COLUMN, ".cm-blame-name, .cm-blame-age": { display: "none" } },
   ".cm-blame-gutter .cm-gutterElement": { position: "relative", overflow: "hidden", padding: "0" },
   ".cm-blame-line": { cursor: "pointer" },
   ".cm-blame-cell": {

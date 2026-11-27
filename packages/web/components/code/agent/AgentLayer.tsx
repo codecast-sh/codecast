@@ -15,8 +15,6 @@ import { Link2Off } from "lucide-react";
 import { useInboxStore } from "../../../store/inboxStore";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useAgentStore } from "../../../lib/code/agent/agentStore";
-import { openBeside, sessionPanePath } from "../../../lib/stage";
-import { openConversationHere } from "../../../lib/code/blame/actions";
 import { computeVaultAgentState, vaultAgentSig, vaultMachineOf } from "../../../lib/code/agent/live";
 import { InlineInstruction } from "./InlineInstruction";
 import { SessionMark } from "./SessionMark";
@@ -32,7 +30,6 @@ function useAgentLinking(vaultId: string, root: string | null): void {
       useAgentStore.getState().setLink(vaultId, { sessionId: null, source: "none" });
       return;
     }
-    useAgentStore.getState().restoreOverride(vaultId);
     let lastSig = "";
     let lastOverride: unknown = undefined;
     const recompute = (force: boolean) => {
@@ -65,61 +62,38 @@ function useAgentLinking(vaultId: string, root: string | null): void {
   }, [vaultId, root]);
 }
 
-/** Open the linked session's composer beside the editor, where its queued
- *  quotes wait in the tray. A pane that opens takes focus into its composer;
- *  one already beside is focused and its composer focused after. Where the
- *  stage has no room the conversation opens in the main view. */
-function openComposerBeside(sessionId: string): void {
-  if (!openBeside(sessionPanePath(sessionId))) {
-    openConversationHere(sessionId);
-    return;
-  }
-  requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>(".stage-cell--focused [data-chat-input]")?.focus());
-}
-
-/** The status bar chip: the linked session, drawn dim while it is only the
- *  folder's latest (no pick, nothing beside), and how many quotes wait in its
- *  composer, which opens it. A press on the session opens the picker. */
+/** The status bar chip: the linked session, and how many quotes wait in its
+ *  composer. A press opens the picker. */
 const AgentChip = memo(function AgentChip({ vaultId, host, newSession }: { vaultId: string; host: HTMLElement; newSession?: () => boolean }) {
   const link = useAgentStore((s) => s.links[vaultId]);
   const id = link?.sessionId ?? null;
   const queued = useInboxStore((s) => (id ? (s.reviewComments[id]?.length ?? 0) : 0));
-  const guessed = link?.source === "folder";
-  const how = link?.source === "picked" ? "Picked" : link?.source === "beside" ? "Open beside" : "Latest in this folder";
+  const how = link?.source === "picked" ? "picked" : link?.source === "beside" ? "open beside" : "latest in this folder";
   return (
-    <span className="inline-flex items-center gap-0.5">
-      <button
-        type="button"
-        data-agent-chip
-        data-link-source={link?.source ?? "none"}
-        title={id ? how : "Pick a session"}
-        onClick={() => {
-          const rect = host.getBoundingClientRect();
-          useAgentStore.getState().openPicker({ vaultId, anchor: { left: rect.left, top: rect.top, bottom: rect.bottom }, newSession });
-        }}
-        className={`inline-flex max-w-[220px] items-center gap-1.5 rounded px-1 transition-colors hover:bg-sol-bg-alt hover:text-sol-text hover:opacity-100 ${guessed ? "text-sol-text-dim opacity-60" : "text-sol-text-muted"}`}
-      >
-        {id ? (
-          <SessionMark id={id} />
-        ) : (
-          <>
-            <Link2Off className="h-3 w-3 shrink-0" />
-            <span>No session</span>
-          </>
-        )}
-      </button>
-      {id && queued > 0 && (
-        <button
-          type="button"
-          data-agent-queued
-          onClick={() => openComposerBeside(id)}
-          className="shrink-0 rounded-sm bg-sol-cyan/15 px-1 tabular-nums leading-4 text-sol-cyan transition-colors hover:bg-sol-cyan/25"
-          title={`${queued} quote${queued === 1 ? "" : "s"} in its composer`}
-        >
-          {queued}
-        </button>
+    <button
+      type="button"
+      data-agent-chip
+      title={id ? `Linked session (${how}). Click to change` : "No linked session. Click to pick one"}
+      onClick={() => {
+        const rect = host.getBoundingClientRect();
+        useAgentStore.getState().openPicker({ vaultId, anchor: { left: rect.left, top: rect.top, bottom: rect.bottom }, newSession });
+      }}
+      className="inline-flex max-w-[220px] items-center gap-1.5 rounded px-1 text-sol-text-dim transition-colors hover:bg-sol-bg-alt hover:text-sol-text"
+    >
+      {id ? (
+        <SessionMark id={id} />
+      ) : (
+        <>
+          <Link2Off className="h-3 w-3 shrink-0" />
+          <span>No session</span>
+        </>
       )}
-    </span>
+      {queued > 0 && (
+        <span className="shrink-0 rounded-sm bg-sol-cyan/15 px-1 tabular-nums leading-4 text-sol-cyan" title={`${queued} quote${queued === 1 ? "" : "s"} waiting in its composer`}>
+          {queued}
+        </span>
+      )}
+    </button>
   );
 });
 

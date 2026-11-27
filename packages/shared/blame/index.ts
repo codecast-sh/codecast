@@ -209,18 +209,6 @@ export function extractSessionTrailer(message: string | null | undefined): strin
 }
 
 /**
- * How many Codecast-Session trailers a commit message's last paragraph carries,
- * whatever their values (short ids included). More than one marks a sweep: one
- * session committed several sessions' work, so the commit alone does not say
- * which of them wrote a given line.
- */
-export function sessionTrailerCount(message: string | null | undefined): number {
-  if (!message) return 0;
-  const paragraphs = message.replace(/\r\n/g, "\n").trimEnd().split(/\n[ \t]*\n/);
-  return (paragraphs[paragraphs.length - 1] ?? "").split("\n").filter((line) => TRAILER_LINE.test(line.trim())).length;
-}
-
-/**
  * A commit message with the Codecast-Session trailer lines that
  * extractSessionTrailer reads taken out (a paragraph left empty goes with
  * them), and the session they name, for a reader that shows the session as a

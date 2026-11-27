@@ -5,19 +5,16 @@ import { afterAll, beforeEach, describe, expect, it } from "bun:test";
 import { indexedDB, IDBKeyRange } from "fake-indexeddb";
 import { EditorState, type Transaction } from "@codemirror/state";
 import { history } from "@codemirror/commands";
-import { VaultRequestError, VaultWriteConflict } from "../../vault/client";
+import { VaultWriteConflict } from "../../vault/client";
 import { useCodeStore } from "../../../store/codeStore";
-import { codeBuffers, currentState, diskLockField, encodeFileText, fileFormatField, isDirty, syncDiskLock, type CodeBuffer } from "../buffers";
+import { codeBuffers, currentState, encodeFileText, fileFormatField, isDirty, type CodeBuffer } from "../buffers";
 import { featureBase } from "../features";
 import {
-  _retryUnsentForTests,
   _setDiskIOForTests,
   applyDiskVersion,
-  overwriteLocked,
   applyToBuffer as updateBuffer,
   externalChange,
   fileSyncExtensions,
-  keepMine,
   recreateFile,
   restoreHotExit,
   revertBuffer,
@@ -36,12 +33,6 @@ interface Disk {
   etag: string;
   writes: string[];
   deleted?: boolean;
-  /** The mode refuses writes (0444): the daemon's 403 unless forced. */
-  locked?: boolean;
-  /** The daemon is not answering (restarting). */
-  down?: boolean;
-  /** Each write's force flag and If-Match, in order. */
-  sent?: { force: boolean; etag: string }[];
 }
 let disk: Disk;
 let n = 0;
@@ -54,10 +45,7 @@ function land(content: string) {
   return { etag: disk.etag, mtime: n, size: content.length };
 }
 const fakeIO: DiskIO = {
-  write: async (_b, content, baseEtag, opts) => {
-    (disk.sent ??= []).push({ force: !!opts?.force, etag: baseEtag });
-    if (disk.down) throw new TypeError("Failed to fetch");
-    if (disk.locked && !opts?.force) throw new VaultRequestError("vault write: 403 read-only", 403, "read-only");
+  write: async (_b, content, baseEtag) => {
     // The daemon's answer for a guarded write to a file that is gone.
     if (disk.deleted) throw new VaultWriteConflict({ content: '{"error":"conflict"}', etag: "", mtime: 0, size: 0 });
     if (baseEtag !== disk.etag) throw conflict();
@@ -320,59 +308,6 @@ describe("save", () => {
   });
 });
 
-describe("read-only on disk and offline", () => {
-  it("a 0444 file refuses the save, then overwrites on confirm, still guarded by the etag", async () => {
-    const b = openBuffer(base);
-    disk.locked = true;
-    type(b, 0, "x");
-    expect(await saveBuffer(b)).toBe("locked");
-    expect(useCodeStore.getState().conflicts[b.key]).toEqual({ kind: "readonly", mode: "read-only" });
-    expect(currentState(b).field(diskLockField)).toBe("read-only");
-    expect(disk.writes).toEqual([]);
-    const etag = b.baseEtag;
-    expect(await overwriteLocked(b)).toBe("saved");
-    expect(disk.sent?.at(-1)).toEqual({ force: true, etag });
-    expect(disk.content).toBe(`x${base}`);
-    expect(useCodeStore.getState().conflicts[b.key]).toBeUndefined();
-    // The mode is kept: the lock stays shown.
-    expect(currentState(b).field(diskLockField)).toBe("read-only");
-  });
-
-  it("shows the mode the read reported", async () => {
-    const b = openBuffer(base);
-    syncDiskLock(b, "0444");
-    disk.locked = true;
-    type(b, 0, "x");
-    await saveBuffer(b);
-    expect(useCodeStore.getState().conflicts[b.key]).toEqual({ kind: "readonly", mode: "0444" });
-  });
-
-  it("a save the daemon never received waits, and goes once Files is back", async () => {
-    const b = openBuffer(base);
-    disk.down = true;
-    type(b, 0, "x");
-    expect(await saveBuffer(b)).toBe("offline");
-    expect(useCodeStore.getState().conflicts[b.key]).toEqual({ kind: "offline" });
-    disk.down = false;
-    type(b, 1, "y");
-    _retryUnsentForTests();
-    await new Promise((r) => setTimeout(r, 0));
-    await saveBuffer(b);
-    expect(disk.content).toBe(`xy${base}`);
-    expect(useCodeStore.getState().conflicts[b.key]).toBeUndefined();
-  });
-
-  it("a refusal names the daemon's reason, not the request", async () => {
-    const b = openBuffer(base);
-    const io = _setDiskIOForTests({ ...fakeIO, write: async () => { throw new VaultRequestError("vault write src/x: 415 binary", 415, "binary"); } });
-    type(b, 0, "x");
-    expect(await saveBuffer(b)).toBe("error");
-    expect(useCodeStore.getState().conflicts[b.key]).toEqual({ kind: "error", message: "binary" });
-    io();
-    _setDiskIOForTests(fakeIO);
-  });
-});
-
 describe("external change", () => {
   it("lands in a clean buffer as line edits, annotated, cursor kept", async () => {
     const b = openBuffer(base);
@@ -396,88 +331,17 @@ describe("external change", () => {
     expect(external.length).toBe(0);
   });
 
-  it("merges into a dirty buffer at once: disk's lines land as an external change, mine stay unsaved", async () => {
+  it("marks a dirty buffer stale and merges at the save", async () => {
     const b = openBuffer(base);
     type(b, 0, "// mine\n");
     const theirs = agentWrites(base.replace("return 2;", "return 22;"));
     await applyDiskVersion(b, theirs);
-    expect(text(b)).toBe(`// mine\n${theirs.content}`);
-    expect(b.stale).toBeNull();
-    expect(b.baseEtag).toBe(theirs.etag);
-    expect(b.dirty).toBe(true);
-    expect(useCodeStore.getState().conflicts[b.key]).toBeUndefined();
-    // Only disk's line moved in that transaction: what agent marks color.
-    expect(external.length).toBe(1);
-    expect(external[0].annotation(externalChange)).toEqual({ etag: theirs.etag });
-    const changed: string[] = [];
-    external[0].changes.iterChanges((_a, _b, _fromB, _toB, inserted) => changed.push(inserted.toString()));
-    expect(changed.join("")).toContain("return 22;");
-    expect(changed.join("")).not.toContain("// mine");
+    expect(text(b)).toBe(`// mine\n${base}`);
+    expect(b.stale?.etag).toBe(theirs.etag);
+    expect(useCodeStore.getState().conflicts[b.key]).toEqual({ kind: "stale" });
     expect(await saveBuffer(b)).toBe("saved");
-    expect(disk.content).toBe(`// mine\n${theirs.content}`);
+    expect(disk.content).toBe(`// mine\n${base.replace("return 2;", "return 22;")}`);
   });
-
-  it("opens the merge view at once on a conflict, counting conflicts apart from my clean edits", async () => {
-    const b = openBuffer(base);
-    type(b, 0, "// mine\n");
-    const one = text(b).indexOf("1;");
-    updateBuffer(b, { changes: { from: one, to: one + 1, insert: "'mine'" } });
-    const theirs = agentWrites(base.replace("return 1;", "return 'disk';"));
-    await applyDiskVersion(b, theirs);
-    expect(b.merging?.etag).toBe(theirs.etag);
-    expect(useCodeStore.getState().conflicts[b.key]).toEqual({ kind: "merge", remaining: 2, conflicts: 1 });
-    // Taking disk's side of the conflict resolves it; my clean edit still differs.
-    const at = text(b).indexOf("return 'mine';");
-    updateBuffer(b, { changes: { from: at, to: at + "return 'mine';".length, insert: "return 'disk';" } });
-    await Promise.resolve();
-    await new Promise((r) => setTimeout(r, 0));
-    expect(useCodeStore.getState().conflicts[b.key]).toEqual({ kind: "merge", remaining: 1, conflicts: 0 });
-    expect(await saveBuffer(b)).toBe("saved");
-    expect(disk.content).toBe(`// mine\n${theirs.content}`);
-  });
-
-  it("Keep mine writes my text over disk's version, on its etag", async () => {
-    const b = openBuffer(base);
-    const one = base.indexOf("1;");
-    updateBuffer(b, { changes: { from: one, to: one + 1, insert: "'mine'" } });
-    const mine = text(b);
-    agentWrites(base.replace("return 1;", "return 'disk';").replace("import a", "import disk"));
-    await applyDiskVersion(b, { content: disk.content, etag: disk.etag, mtime: n });
-    expect(b.merging).not.toBeNull();
-    // The merge view took disk's clean line in; Keep mine leaves it out.
-    expect(text(b)).toContain("import disk");
-    expect(await keepMine(b)).toBe("saved");
-    expect(disk.content).toBe(mine);
-    expect(text(b)).toBe(mine);
-    expect(b.merging).toBeNull();
-    expect(b.dirty).toBe(false);
-    expect(useCodeStore.getState().conflicts[b.key]).toBeUndefined();
-  });
-
-  it("decides a disk version that arrives during a save once the save lands", async () => {
-    const b = openBuffer(base);
-    type(b, 0, "x");
-    // The save's own write, reported before the PUT answers: nothing to merge.
-    const saving = saveBuffer(b);
-    const own = { content: `x${base}`, etag: `e${n + 1}`, mtime: n + 1 };
-    await applyDiskVersion(b, own);
-    expect(await saving).toBe("saved");
-    await new Promise((r) => setTimeout(r, 0));
-    expect(b.merging).toBeNull();
-    expect(external.length).toBe(0);
-    expect(useCodeStore.getState().conflicts[b.key]).toBeUndefined();
-    // Someone else's write reported during a save comes in after it.
-    type(b, text(b).length, "// tail\n");
-    const again = saveBuffer(b);
-    const theirs = { content: `x${base}`.replace("return 1;", "return 10;"), etag: "e-theirs", mtime: 99 };
-    await applyDiskVersion(b, theirs);
-    await again;
-    await new Promise((r) => setTimeout(r, 0));
-    await new Promise((r) => setTimeout(r, 0));
-    expect(text(b)).toContain("return 10;");
-    expect(b.baseEtag).toBe("e-theirs");
-  });
-
 });
 
 describe("hot exit", () => {

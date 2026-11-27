@@ -12,7 +12,6 @@ import { create } from "zustand";
 import type { CodeGitFileState, CodeGitStatusResponse } from "@codecast/shared/contracts";
 import { useVaultStore } from "../../../store/vaultStore";
 import { fetchGitStatus } from "../daemonClient";
-import { whenVisible } from "../idle";
 
 export interface VaultGitStatus {
   repo: boolean;
@@ -159,12 +158,9 @@ export function ensureGitStatus(vaultId: string): Promise<VaultGitStatus | undef
 }
 
 const timers = new Map<string, ReturnType<typeof setTimeout>>();
-/** A refresh a hidden page asked for, held until it is visible: one per vault. */
-const heldUntilVisible = new Map<string, { fresh: boolean }>();
 
 /** Refresh after a quiet moment: watcher bursts (a checkout, a formatter run)
- *  cost one status, and a hidden page waits until it is looked at. `fresh`
- *  skips the daemon's cache (a save just landed). */
+ *  cost one status. `fresh` skips the daemon's cache (a save just landed). */
 export function requestGitStatusRefresh(vaultId: string, opts: { fresh?: boolean; delayMs?: number } = {}): void {
   const t = timers.get(vaultId);
   if (t) clearTimeout(t);
@@ -172,17 +168,7 @@ export function requestGitStatusRefresh(vaultId: string, opts: { fresh?: boolean
     vaultId,
     setTimeout(() => {
       timers.delete(vaultId);
-      const held = heldUntilVisible.get(vaultId);
-      if (held) {
-        held.fresh ||= !!opts.fresh;
-        return;
-      }
-      const entry = { fresh: !!opts.fresh };
-      heldUntilVisible.set(vaultId, entry);
-      whenVisible(() => {
-        heldUntilVisible.delete(vaultId);
-        void refreshGitStatus(vaultId, { fresh: entry.fresh });
-      });
+      void refreshGitStatus(vaultId, { fresh: opts.fresh });
     }, opts.delayMs ?? 300),
   );
 }

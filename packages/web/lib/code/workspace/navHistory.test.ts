@@ -1,5 +1,5 @@
 import { beforeEach, expect, test } from "bun:test";
-import { _navHistory, _resetNavHistory, forgetPath, noteJump, noteLocation, peekHistory, renameInHistory, stepHistory } from "./navHistory";
+import { _navHistory, _resetNavHistory, forgetPath, noteLocation, peekHistory, renameInHistory, stepHistory } from "./navHistory";
 
 const at = (path: string, line: number) => ({ vaultId: "v", path, line, col: 1 });
 
@@ -40,24 +40,4 @@ test("peek never moves; a rename follows, a delete removes the stops", () => {
   forgetPath("v", "bb");
   expect(_navHistory().stack.map((l) => l.path)).toEqual(["a", "c"]);
   expect(peekHistory(-1)?.path).toBe("a");
-});
-
-test("under vim, jumps make the stops: a near jump adds one, a far plain move does not", () => {
-  const vim = { byDistance: false };
-  noteLocation(at("a", 1), 0, vim);
-  noteLocation(at("a", 40), 0, vim);
-  noteJump();
-  noteLocation(at("a", 43), 0, vim);
-  noteLocation(at("a", 44), 0, vim);
-  expect(_navHistory().stack.map((l) => `${l.path}:${l.line}`)).toEqual(["a:40", "a:44"]);
-});
-
-test("an explicit jump is a stop however near, with or without vim", () => {
-  for (const opts of [{}, { byDistance: false }]) {
-    _resetNavHistory();
-    noteLocation(at("a", 100), 0, opts);
-    noteJump();
-    noteLocation(at("a", 95), 0, opts);
-    expect(stepHistory(-1, 0)?.line).toBe(100);
-  }
 });

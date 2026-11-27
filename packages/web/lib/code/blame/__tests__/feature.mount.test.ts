@@ -10,14 +10,12 @@ installEditorDom();
 localStorage.removeItem("codecast.code.blameGutter");
 
 import type { CodeBlameHunk } from "@codecast/shared/contracts";
-import { Text } from "@codemirror/state";
 
 let repo = true;
 let hunks: CodeBlameHunk[] = [];
 const calls = { blame: 0, status: 0 };
 let statusFails = false;
 let blameFails: Error | null = null;
-let blameHold: Promise<void> | null = null;
 
 const realClient = { ...(await import("../../daemonClient")) };
 mock.module("../../daemonClient", () => ({
@@ -30,7 +28,6 @@ mock.module("../../daemonClient", () => ({
   fetchGitBase: async (_ep: unknown, _v: string, path: string) => ({ path, ref: "HEAD", exists: true, content: "" }),
   fetchBlame: async (_ep: unknown, _v: string, path: string) => {
     calls.blame++;
-    if (blameHold) await blameHold;
     if (blameFails) throw blameFails;
     return { path, hunks };
   },
@@ -40,7 +37,7 @@ const { useVaultStore } = await import("../../../../store/vaultStore");
 const { EditorHost, openCodeBuffer } = await import("../../editorHost");
 const { runCodeCommand } = await import("../../commands");
 const { refreshGitStatus, useGitStatusStore } = await import("../../git/status");
-const { setSavedDoc, savedDocField, codeBuffers, bufferKey } = await import("../../buffers");
+const { setSavedDoc, codeBuffers, bufferKey } = await import("../../buffers");
 const { setEditorSetting } = await import("../../editorSettings");
 const { _clearBlameCache } = await import("../data");
 const blame = await import("../gutter");
@@ -148,54 +145,6 @@ test("a save asks again, and an edited buffer's unsaved lines start uncommitted"
     [2, 2, "session"],
     [3, 5, "uncommitted"],
   ]);
-});
-
-test("an agent writing the open file: one blame in flight, none while the page is hidden", async () => {
-  const buffer = codeBuffers.get(bufferKey("v1", "src/a.ts"))!;
-  // A write the buffer took in: a new saved version, same text, so the tests
-  // after this one see the document they expect.
-  const write = (etag: string) => {
-    buffer.baseEtag = etag;
-    view.dispatch({ effects: setSavedDoc.of(Text.of(view.state.doc.toJSON())) });
-  };
-  const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
-  const saved = { doc: view.state.field(savedDocField), etag: buffer.baseEtag };
-  let release!: () => void;
-  blameHold = new Promise((r) => (release = r));
-  const before = calls.blame;
-  // Five writes, each past the refetch delay, while the first blame is held.
-  for (let i = 0; i < 5; i++) {
-    write(`agent-${i}`);
-    await wait(450);
-  }
-  expect(calls.blame - before).toBe(1);
-  blameHold = null;
-  release();
-  await until(() => calls.blame - before === 2, "the one follow-up");
-  await wait(450);
-  expect(calls.blame - before).toBe(2);
-
-  let visibility = "hidden";
-  Object.defineProperty(document, "visibilityState", { configurable: true, get: () => visibility });
-  try {
-    const hiddenFrom = calls.blame;
-    write("agent-hidden-1");
-    await wait(450);
-    write("agent-hidden-2");
-    await wait(450);
-    expect(calls.blame).toBe(hiddenFrom);
-    visibility = "visible";
-    document.dispatchEvent(new Event("visibilitychange"));
-    await until(() => calls.blame === hiddenFrom + 1, "the refetch on show");
-    await wait(450);
-    expect(calls.blame).toBe(hiddenFrom + 1);
-  } finally {
-    delete (document as { visibilityState?: unknown }).visibilityState;
-  }
-  // Back to the version the tests after this one start from.
-  buffer.baseEtag = saved.etag;
-  view.dispatch({ effects: setSavedDoc.of(saved.doc) });
-  await until(() => runsView()[0]?.[2] === "edited", "restored");
 });
 
 test("inline blame follows the cursor without React", async () => {

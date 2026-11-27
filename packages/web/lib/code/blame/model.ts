@@ -13,8 +13,7 @@
 import type { ChangeDesc, ChangeSet, Text } from "@codemirror/state";
 import type { CodeBlameHunk } from "@codecast/shared/contracts";
 import { relTimeShort, formatRelative } from "@codecast/shared/time";
-import { SESSION_BLAME_HUES } from "../../repoView";
-import { sessionColor } from "../agent/sessions";
+import { SESSION_BLAME_HUES, sessionBlameColors, summarizeSessionBlame, type SessionBlameRange } from "../../repoView";
 
 /** A range of whole lines: from a line start to the next line's start (or the
  *  document's end). */
@@ -210,7 +209,6 @@ export function runName(kind: RunKind, hunk: CodeBlameHunk | null): string {
   const s = hunk.session;
   if (s) return s.title?.trim() || `Session ${s.id}`;
   if (hunk.uncommitted) return UNCOMMITTED_LABEL;
-  if (hunk.sweep_sessions) return `${hunk.sweep_sessions} sessions`;
   return hunk.author?.trim() || hunk.sha?.slice(0, 7) || "Unknown";
 }
 
@@ -236,20 +234,23 @@ export function inlineText(kind: RunKind, hunk: CodeBlameHunk | null, now: numbe
 export const NEUTRAL_HUE = "var(--sol-text-dim)";
 
 /**
- * Session id to color for one file: each session's own color (sessionColor:
- * its icon color, else a hue fixed by its id), the one every agent surface in
- * the editor draws it in, so a line's blame bar matches the live edit bar,
- * the presence dot and the chip of the session that wrote it. `iconOf` reads
- * a session's icon color where the caller has the rows.
+ * Session id to color for one file, the repo page's way: sessions ranked by
+ * how many lines they wrote, each taking the next accent (SESSION_BLAME_HUES).
  */
-export function sessionHues(hunks: readonly CodeBlameHunk[], iconOf: (id: string) => string | undefined = () => undefined): Map<string, string> {
-  const hues = new Map<string, string>();
+export function sessionHues(hunks: readonly CodeBlameHunk[]): Map<string, string> {
+  const ranges: SessionBlameRange[] = [];
   for (const h of hunks) {
     const s = h.session;
     const id = s?.conversation_id ?? s?.id;
-    if (id && !hues.has(id)) hues.set(id, sessionColor({ _id: id, icon_color: iconOf(id) }));
+    ranges.push({
+      start_line: h.start,
+      end_line: h.end,
+      session: s && id ? { conversation_id: id, title: s.title ?? id, via: h.uncommitted ? "edit" : "trailer" } : null,
+      git: undefined,
+      newest_at: h.time ?? 0,
+    });
   }
-  return hues;
+  return sessionBlameColors(summarizeSessionBlame(ranges));
 }
 
 export function hueOf(hunk: CodeBlameHunk | null, hues: ReadonlyMap<string, string>): string {

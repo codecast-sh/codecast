@@ -3257,8 +3257,6 @@ function buildAppMenu() {
         { label: "Tasks", click: () => routeToWindow("/tasks") },
         { label: "Docs", click: () => routeToWindow("/docs") },
         { label: "Plans", click: () => routeToWindow("/plans") },
-        // The code editor (Files); Cmd-P inside it goes to a file.
-        { label: "Files", click: () => routeToWindow("/files") },
         { type: "separator" },
         // Same chords as the renderer's nav.back/nav.forward, following the
         // person's rebinding (menuKeys.js): the page handles the key first and

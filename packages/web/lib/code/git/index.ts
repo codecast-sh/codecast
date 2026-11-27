@@ -9,18 +9,16 @@
 // in the same transaction as its first paint.
 
 import type { EditorView } from "@codemirror/view";
-import type { EditorState } from "@codemirror/state";
 import { CODE_GIT_MERGE_BASE_REF as MERGE_BASE_REF } from "@codecast/shared/contracts";
 import { useVaultStore } from "../../../store/vaultStore";
 import { registerCodeCommands, type CodeCommandContext } from "../commands";
 import { fetchGitBase } from "../daemonClient";
-import { featureContext, focusedEditorView, nameStatusItem, reconfigureEditorFeature, registerEditorFeature, registerStatusItem, type EditorFeatureContext, type StatusItemView } from "../features";
+import { featureContext, focusedEditorView, reconfigureEditorFeature, registerEditorFeature, registerStatusItem, type EditorFeatureContext, type StatusItemView } from "../features";
 import { decodeFileText, textToDoc } from "../buffers";
 import { loadMergeKit, type MergeKit } from "../merge";
 import { gitGutterStandIn } from "../gutterSlots";
 import { ensureGitStatus, gitStatusOf, lastNoHeadPaths, onGitHeadChange, useGitStatusStore, type VaultGitStatus } from "./status";
 import type { DiffLayout, GitDiffTarget } from "./gutter";
-import { lineIcon } from "../icons";
 
 export type { DiffLayout, GitDiffTarget };
 
@@ -90,52 +88,36 @@ function dropBases(vaultId: string): void {
 
 // ── diff targets ────────────────────────────────────────────────────────────
 
-/** `state` is the editor's, for providers that read its other features. */
-type TargetProvider = (ctx: { vaultId: string; path: string; state: EditorState }) => GitDiffTarget[];
+type TargetProvider = (ctx: { vaultId: string; path: string }) => GitDiffTarget[];
 const targetProviders = new Set<TargetProvider>();
 
-/** Offer more refs in the diff picker (a session's base commit, say). A
- *  provider that throws offers nothing. */
+/** Offer more refs in the diff picker (a session's base commit, say). */
 export function addGitDiffTargets(provider: TargetProvider): () => void {
   targetProviders.add(provider);
   return () => targetProviders.delete(provider);
 }
 
-function targetsFor(vaultId: string, path: string, state: EditorState): GitDiffTarget[] {
+function targetsFor(vaultId: string, path: string): GitDiffTarget[] {
   const status = gitStatusOf(vaultId);
   const out: GitDiffTarget[] = [{ ref: "HEAD~1", label: "Previous commit" }];
   if (status?.upstream) out.push({ ref: "@{u}", label: "Upstream" });
   // Everything this branch changed since it left the default branch.
   out.push({ ref: MERGE_BASE_REF, label: "Merge base" });
-  for (const p of targetProviders) {
-    try {
-      out.push(...p({ vaultId, path, state }));
-    } catch {
-      // One provider's failure never empties the picker.
-    }
-  }
+  for (const p of targetProviders) out.push(...p({ vaultId, path }));
   return out;
 }
 
 // ── the feature ─────────────────────────────────────────────────────────────
 
-/** Whether a file gets git, and how: "tracked" (the gutter against HEAD),
- *  "new" (untracked or added: nothing at HEAD, so no gutter, whose bars would
- *  all be green, but the diff opens against nothing or an older ref), or
- *  false. */
-function eligibility(ctx: EditorFeatureContext, status: VaultGitStatus | undefined): "tracked" | "new" | false {
+function eligible(ctx: EditorFeatureContext, status: VaultGitStatus | undefined): boolean {
   const vault = useVaultStore.getState();
   if (!vault.endpoint || vault.isRemote || vault.activeVaultId !== ctx.vaultId) return false;
   if (!status?.repo) return false;
   // Ignored files never appear in the status and have nothing at HEAD.
   if (vault.files[ctx.path]?.ignored) return false;
   const state = status.files[ctx.path];
-  return state === "untracked" || state === "added" ? "new" : "tracked";
-}
-
-/** The file gets the change gutter. */
-function eligible(ctx: EditorFeatureContext, status: VaultGitStatus | undefined): boolean {
-  return eligibility(ctx, status) === "tracked";
+  // Nothing at HEAD to compare with: the tree's color says it is new.
+  return state !== "untracked" && state !== "added";
 }
 
 /** The gutter's column while its module, the status and HEAD's copy load:
@@ -151,39 +133,29 @@ export function gitPlaceholder(ctx: EditorFeatureContext) {
   return gitGutterStandIn;
 }
 
-function build(ctx: EditorFeatureContext, m: GutterModule, k: MergeKit, base: string | null, newFile = false) {
-  if (base === null && !newFile) return null;
+function build(ctx: EditorFeatureContext, m: GutterModule, k: MergeKit, base: string | null) {
+  if (base === null) return null;
   return m.gitEditorExtension({
     kit: k,
     vaultId: ctx.vaultId,
     path: ctx.path,
-    newFile,
-    base: textToDoc(decodeFileText(base ?? "").text),
+    base: textToDoc(decodeFileText(base).text),
     fetchBase: (ref) => readBase(ctx.vaultId, ctx.path, ref).promise,
-    targets: (state) => targetsFor(ctx.vaultId, ctx.path, state),
+    targets: () => targetsFor(ctx.vaultId, ctx.path),
   });
 }
 
 function gitFeature(ctx: EditorFeatureContext) {
   const held = gitStatusOf(ctx.vaultId);
-  const kind = held ? eligibility(ctx, held) : undefined;
-  if (kind === false) return null;
-  // A new file reads nothing at HEAD: it has no gutter to wait for.
-  if (kind === "new" && gutterModule && kit) return build(ctx, gutterModule, kit, null, true);
+  if (held && !eligible(ctx, held)) return null;
   // Everything already loaded: land with the file's first paint.
-  if (kind === "tracked" && gutterModule && kit) {
+  if (held && gutterModule && kit) {
     const base = readBase(ctx.vaultId, ctx.path, "HEAD");
     if (base.value !== undefined) return build(ctx, gutterModule, kit, base.value);
   }
   return (async () => {
     const status = held ?? (await ensureGitStatus(ctx.vaultId));
-    const now = eligibility(ctx, status);
-    if (!now) return null;
-    if (now === "new") {
-      const [m, k] = await Promise.all([loadGutter(), loadMergeKit()]);
-      kit = k;
-      return build(ctx, m, k, null, true);
-    }
+    if (!eligible(ctx, status)) return null;
     // No HEAD yet (a repo with no commits) or a file too large to diff: no gutter.
     const head = readBase(ctx.vaultId, ctx.path, "HEAD").promise.catch((e: { status?: number }) => {
       if (e?.status === 404 || e?.status === 413) return null;
@@ -198,10 +170,7 @@ function gitFeature(ctx: EditorFeatureContext) {
 // ── commands ────────────────────────────────────────────────────────────────
 
 function viewFor(ctx: CodeCommandContext): EditorView | null {
-  const at = ctx.view ?? focusedEditorView();
-  // The side-by-side diff's right pane runs vim and keys of its own; its
-  // commands act on the editor it mirrors, which holds the git state.
-  const view = at && gutterModule ? gutterModule.splitOwner(at) : at;
+  const view = ctx.view ?? focusedEditorView();
   return view && gutterModule?.hasGitGutter(view.state) ? view : null;
 }
 
@@ -214,7 +183,8 @@ function withView(fn: (m: GutterModule, view: EditorView, args: Record<string, u
 
 // ── status bar: branch and ahead/behind ─────────────────────────────────────
 
-const BRANCH_ICON = '<line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>';
+const BRANCH_SVG =
+  '<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>';
 
 /** "main", "main ↑2 ↓1", or a detached HEAD's short sha. */
 export function branchLabel(status: VaultGitStatus | undefined): string {
@@ -229,7 +199,7 @@ function branchItem(view: EditorView): StatusItemView {
   const dom = document.createElement("button");
   dom.type = "button";
   dom.className = "cm-git-branch";
-  dom.append(lineIcon(BRANCH_ICON));
+  dom.innerHTML = BRANCH_SVG;
   const text = document.createTextNode("");
   dom.append(text);
   dom.hidden = true;
@@ -242,8 +212,7 @@ function branchItem(view: EditorView): StatusItemView {
     const label = branchLabel(status);
     if (text.nodeValue !== label) text.nodeValue = label;
     dom.hidden = !label;
-    const title = status?.upstream ? `${status.branch ?? "HEAD"}: ${status.ahead} ahead, ${status.behind} behind upstream` : (status?.branch ?? "");
-    nameStatusItem(dom, `Branch ${title}, toggle changes`, title);
+    dom.title = status?.upstream ? `${status.branch ?? "HEAD"}: ${status.ahead} ahead, ${status.behind} behind upstream` : (status?.branch ?? "");
   };
   const follow = () => {
     vaultId = view.state.facet(featureContext)?.vaultId ?? null;
@@ -308,11 +277,6 @@ export function registerGitFeature(): void {
     "git.nextHunk": withView((m, view) => m.stepGitHunk(view, 1)),
     "git.prevHunk": withView((m, view) => m.stepGitHunk(view, -1)),
     "git.revertHunk": withView((m, view) => m.revertGitHunk(view)),
-    // args: {line}: show that line's change (opening, never toggling it off).
-    "git.peekHunk": withView((m, view, args) => {
-      const line = typeof args?.line === "number" ? args.line : undefined;
-      if (line === undefined) return m.toggleGitPeek(view);
-      return m.showGitPeek(view, view.state.doc.line(Math.max(1, Math.min(line, view.state.doc.lines))).from);
-    }),
+    "git.peekHunk": withView((m, view) => m.toggleGitPeek(view)),
   });
 }

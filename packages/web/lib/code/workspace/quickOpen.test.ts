@@ -11,72 +11,6 @@ describe("parseQuickOpenQuery", () => {
     expect(parseQuickOpenQuery(":12")).toEqual({ text: "", line: 12, column: undefined });
     expect(parseQuickOpenQuery("plain")).toEqual({ text: "plain" });
   });
-
-  test("pasted locations: quotes, GitHub, tsc, grep, a trailing number", () => {
-    const at = (q: string) => {
-      const p = parseQuickOpenQuery(q);
-      return [p.text, p.line, p.column, p.endLine];
-    };
-    expect(at("lib/a.ts:L120-130")).toEqual(["lib/a.ts", 120, undefined, 130]);
-    expect(at("lib/a.ts:L120")).toEqual(["lib/a.ts", 120, undefined, undefined]);
-    expect(at("lib/a.ts:120-130")).toEqual(["lib/a.ts", 120, undefined, 130]);
-    expect(at("lib/a.ts#L120")).toEqual(["lib/a.ts", 120, undefined, undefined]);
-    expect(at("lib/a.ts#L120-L130")).toEqual(["lib/a.ts", 120, undefined, 130]);
-    expect(at("lib/a.ts(120,5)")).toEqual(["lib/a.ts", 120, 5, undefined]);
-    expect(at("lib/a.ts:120:5:")).toEqual(["lib/a.ts", 120, 5, undefined]);
-    expect(at("navigation 120")).toEqual(["navigation", 120, undefined, undefined]);
-    expect(at("#L12")).toEqual(["", 12, undefined, undefined]);
-  });
-
-  test("an absolute path inside the root becomes relative; outside it is marked", () => {
-    const root = "/Users/me/src/app/";
-    expect(parseQuickOpenQuery("/Users/me/src/app/lib/x.ts:12", { root })).toEqual({ text: "lib/x.ts", line: 12 });
-    expect(parseQuickOpenQuery("/etc/hosts", { root })).toEqual({ text: "/etc/hosts", outside: true });
-    expect(parseQuickOpenQuery("./lib/x.ts", { root }).text).toBe("lib/x.ts");
-  });
-
-  test("a diff's a/ and b/ prefixes go when the rest is a file", () => {
-    const files = new Set(["lib/x.ts", "a/real.ts"]);
-    const isFile = (p: string) => files.has(p);
-    expect(parseQuickOpenQuery("b/lib/x.ts", { isFile }).text).toBe("lib/x.ts");
-    expect(parseQuickOpenQuery("a/real.ts", { isFile }).text).toBe("a/real.ts");
-  });
-});
-
-describe("rankFiles in a monorepo", () => {
-  // The shapes this repo has: every path under packages/, many index.ts and page.tsx.
-  const repo = quickOpenIndex(
-    table([
-      "packages/cli/src/index.ts",
-      "packages/cli/src/agents/index.ts",
-      "packages/convex/convex/index.ts",
-      "packages/web/lib/code/vim/index.ts",
-      "packages/web/lib/code/vim/plugins.ts",
-      "packages/web/lib/code/git/index.ts",
-      "packages/web/lib/code/index.ts",
-      "packages/web/app/files/page.tsx",
-      "packages/web/app/conversation/[id]/page.tsx",
-      "packages/web/components/heroFly/fixtures/conversation.ts",
-      "playground/convex/lib/files.ts",
-      "packages/web/store/codeStore.ts",
-      "packages/web/lib/code/agent/agentStore.ts",
-    ]),
-  );
-  const top = (q: string, activePath?: string) => rankFiles(repo, q, [], { activePath })[0]?.target.path;
-
-  test("each word but the name must be in the path as written", () => {
-    expect(top("cli index")).toBe("packages/cli/src/index.ts");
-    expect(top("index cli")).toBe("packages/cli/src/index.ts");
-    expect(top("files page")).toBe("packages/web/app/files/page.tsx");
-    expect(top("conversation page")).toBe("packages/web/app/conversation/[id]/page.tsx");
-    expect(top("code store")).toBe("packages/web/store/codeStore.ts");
-    expect(rankFiles(repo, "cli page", []).length).toBe(0);
-  });
-
-  test("among equal names, the file beside the active one comes first", () => {
-    expect(top("index.ts", "packages/web/lib/code/vim/plugins.ts")).toBe("packages/web/lib/code/vim/index.ts");
-    expect(top("index.ts", "packages/cli/src/agents/x.ts")).toBe("packages/cli/src/agents/index.ts");
-  });
 });
 
 describe("rankFiles", () => {
@@ -116,11 +50,11 @@ describe("rankFiles", () => {
     const recent = paths.slice(0, 20);
     // Warm the JIT the way a session would after the first few keys.
     for (const q of ["s", "st", "sto"]) rankFiles(big, q, recent);
-    const queries = ["c", "co", "cod", "code", "codes", "codest", "codesto", "codestor", "codestore", "vault/ed", "edhook", "zzzq", "code store", "vault editor hooks", "lib s"];
+    const queries = ["c", "co", "cod", "code", "codes", "codest", "codesto", "codestor", "codestore", "vault/ed", "edhook", "zzzq"];
     const times: number[] = [];
     for (const q of queries) {
       const t0 = performance.now();
-      rankFiles(big, q, recent, { activePath: paths[5] });
+      rankFiles(big, q, recent);
       times.push(performance.now() - t0);
     }
     times.sort((a, b) => a - b);

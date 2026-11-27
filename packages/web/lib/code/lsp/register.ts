@@ -9,7 +9,7 @@
 
 import { registerEditorFeature } from "../features";
 import { lintGutterStandIn } from "../gutterSlots";
-import { registerCodeCommands, type CodeCommandContext, type CodeCommandHandler } from "../commands";
+import { registerCodeCommands, type CodeCommandHandler } from "../commands";
 
 export type LspCommandId =
   | "lsp.definition"
@@ -24,11 +24,8 @@ export type LspCommandId =
   | "goto.workspaceSymbol";
 
 const IDS: LspCommandId[] = ["lsp.definition", "lsp.references", "lsp.hover", "lsp.rename", "lsp.format", "lsp.codeAction", "diagnostic.next", "diagnostic.prev", "goto.symbol", "goto.workspaceSymbol"];
-/** Commands that work with no server (the Lezer outline, the declaration search). */
-const SERVERLESS = new Set<LspCommandId>(["goto.symbol", "goto.workspaceSymbol"]);
-/** Where a person asked by hand: a command that cannot run says so there.
- *  Vim declines instead, so its own fallback (gd's word search) runs. */
-const ASKED = new Set<CodeCommandContext["source"]>(["keymap", "palette", "shortcut", "menu"]);
+/** Commands that work with no server (the Lezer outline). */
+const SERVERLESS = new Set<LspCommandId>(["goto.symbol"]);
 
 type FeatureModule = typeof import("./feature");
 let loaded: FeatureModule | null = null;
@@ -94,16 +91,9 @@ export function registerLspFeature(): void {
   const route =
     (id: LspCommandId): CodeCommandHandler =>
     (args, ctx) => {
-      if (loaded) {
-        if (loaded.lspCommandHandlers[id](args, ctx)) return true;
-        if (!ASKED.has(ctx.source)) return false;
-        loaded.showNoServer(ctx);
-        return true;
-      }
-      if (!SERVERLESS.has(id) && !ASKED.has(ctx.source)) return false;
-      void load().then((m) => {
-        if (!m.lspCommandHandlers[id](args, ctx)) m.showNoServer(ctx);
-      });
+      if (loaded) return loaded.lspCommandHandlers[id](args, ctx);
+      if (!SERVERLESS.has(id)) return false;
+      void load().then((m) => m.lspCommandHandlers[id](args, ctx));
       return true;
     };
   registerCodeCommands(Object.fromEntries(IDS.map((id) => [id, route(id)])));

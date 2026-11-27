@@ -315,11 +315,6 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 'ctrl+.', action: 'ui.zenToggle', skipInputCheck: true, description: 'Toggle zen mode' },
   { key: 'ctrl+,', action: 'inbox.toggleFlatView', skipInputCheck: true, description: 'Cycle inbox view (grouped / time / label)' },
   { key: '?', action: 'ui.toggleShortcutsHelp', description: 'Toggle shortcuts help' },
-  // The same from inside a field or a focused code editor, where "?" is typed
-  // text (or vim's backward search). shift+slash arrives as '/' or '?'
-  // depending on browser/layout: both spellings.
-  { key: 'ctrl+shift+/', mac: 'meta+shift+/', action: 'ui.toggleShortcutsHelp', skipInputCheck: true, description: 'Toggle shortcuts help' },
-  { key: 'ctrl+shift+?', mac: 'meta+shift+?', action: 'ui.toggleShortcutsHelp', skipInputCheck: true, description: 'Toggle shortcuts help' },
   // meta+, is the OS settings convention on mac; ctrl+, is taken by the inbox
   // view cycle above, so non-mac gets the shifted variant. shift+comma arrives
   // as ',' or '<' depending on browser/layout — register both spellings.

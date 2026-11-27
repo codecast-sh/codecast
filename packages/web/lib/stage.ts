@@ -27,7 +27,6 @@ import { DEFAULT_TAB_PATH, isNonTabRoute } from "./tabRoutes";
 import { inboxTabSessionId, pathLabel, tabNeedsUrlRestore } from "./pathLabel";
 import { borrowsTabShell } from "./desktop";
 import { directConversationId } from "./desktopHandoff";
-import { formatMessageHash, parseMessageHash } from "./messageHash";
 import { routeElsewhere, routeOwner } from "./desktopApps";
 import { browserRoutePath, hasPaneHost, postToPaneHost, type BrowserSource } from "./browserPane";
 import { registerSplitOpener } from "./openIntent";
@@ -115,20 +114,8 @@ export function readPaneDrop(dt: DataTransfer): PaneDragPayload | null {
 /** The route a session renders at inside a pane. The pane renderer intercepts
  *  this spelling (no redirect fires); a tab that collapses onto it converts to
  *  /inbox?s= (see stageCloseLeaf). */
-export function sessionPanePath(sessionId: string, messageId?: string | null): string {
-  return `/conversation/${sessionId}${messageId ? formatMessageHash(messageId) : ""}`;
-}
-
-/** A pane path without its `#msg-<id>` anchor. */
-function withoutMessageAnchor(path: string): string {
-  const at = path.indexOf("#");
-  return at !== -1 && parseMessageHash(path.slice(at)) ? path.slice(0, at) : path;
-}
-
-/** The message a conversation pane path is anchored at (`#msg-<id>`), if any. */
-function paneTargetMessageId(path: string): string | undefined {
-  const at = path.indexOf("#");
-  return at === -1 ? undefined : parseMessageHash(path.slice(at))?.messageId;
+export function sessionPanePath(sessionId: string): string {
+  return `/conversation/${sessionId}`;
 }
 
 /** The session a pane path names, or null when the path is not the bare pane
@@ -142,15 +129,6 @@ function paneTargetMessageId(path: string): string | undefined {
  *  logged out) or reads a short id as an id and finds nothing. */
 export function paneSessionId(path: string): string | null {
   return directConversationId(path);
-}
-
-/** A stage leaf's conversation: the pane spelling, or that spelling with a
- *  `#msg-<id>` anchor (sessionPanePath with a message), which the leaf opens
- *  scrolled to that message. paneSessionId alone keeps an anchored path a page
- *  entry everywhere else (the reveal band follows it to the host's route). */
-export function stageLeafSession(path: string): { sessionId: string; messageId?: string } | null {
-  const sessionId = directConversationId(withoutMessageAnchor(path));
-  return sessionId ? { sessionId, messageId: paneTargetMessageId(path) } : null;
 }
 
 /** The spelling a route takes as a pane. A session link may arrive in the
@@ -442,16 +420,6 @@ export function openBeside(path: string, opts?: { reuse?: boolean }): boolean {
     const existing = leavesOf(tab.layout).find((l) => l.path === path);
     if (existing) {
       st.stageFocusLeaf(existing.id);
-      syncUrl();
-      return true;
-    }
-    // The conversation is already beside, at another message: that pane
-    // moves to this one rather than a second pane opening.
-    const sid = stageLeafSession(path)?.sessionId;
-    const same = sid ? leavesOf(tab.layout).find((l) => stageLeafSession(l.path)?.sessionId === sid) : undefined;
-    if (same) {
-      st.stageSetLeafPath(same.id, path);
-      st.stageFocusLeaf(same.id);
       syncUrl();
       return true;
     }

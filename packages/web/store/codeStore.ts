@@ -16,20 +16,8 @@ export type CodeConflict =
   | { kind: "merge"; remaining: number; conflicts: number }
   /** A save found the file deleted on disk; the buffer still holds its text. */
   | { kind: "deleted" }
-  /** The file's mode refuses writes (0444); the daemon writes it only when
-   *  the person confirms an overwrite (fileSync saveBuffer `force`). */
-  | { kind: "readonly"; mode: string }
-  /** The save never reached the daemon (restarting, unreachable). The text
-   *  is held and saved again once Files reconnects. */
-  | { kind: "offline" }
-  /** The daemon refused the save; `message` is its reason in a word or two. */
+  /** The last save failed for a reason other than a conflict. */
   | { kind: "error"; message: string };
-
-/** Conflict kinds that wait on the person, and how loudly a tab marks them. */
-export function conflictTone(c: CodeConflict | undefined): "alarm" | "warn" | null {
-  if (!c) return null;
-  return c.kind === "error" || c.kind === "deleted" ? "alarm" : "warn";
-}
 
 /** A buffer's identity: one per file per vault. Here rather than in
  *  lib/code/buffers so Files can ask about a buffer without loading the editor. */

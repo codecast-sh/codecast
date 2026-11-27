@@ -388,13 +388,6 @@ describe("readSessionTrailers", () => {
       // More shas than fit on a command line (ARG_MAX is 1 MiB on macOS).
       const many = [...Array.from({ length: 30_000 }, (_, i) => i.toString(16).padStart(40, "0")), trailed];
       expect([...(await readSessionTrailers(many, dir))]).toEqual([[trailed, id]]);
-      // A sweep (several sessions' work in one commit) names no one session.
-      fs.writeFileSync(path.join(dir, "a.txt"), "three\n");
-      git("commit", "-q", "-am", "sweep", "--trailer", `Codecast-Session: ${id}`, "--trailer", "Codecast-Session: jx70e0f");
-      const sweep = git("rev-parse", "HEAD");
-      const sweeps = new Map<string, number>();
-      expect([...(await readSessionTrailers([trailed, sweep], dir, sweeps))]).toEqual([[trailed, id]]);
-      expect([...sweeps]).toEqual([[sweep, 2]]);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

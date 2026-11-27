@@ -471,10 +471,6 @@ describe("PUT /vault/file", () => {
     const locked = path.join(root, "notes/generated.ts");
     fs.writeFileSync(locked, "old\n");
     fs.chmodSync(locked, 0o444);
-    // The read says so first, so the editor shows the lock before a save.
-    const read = await api(filePath("notes/generated.ts"));
-    expect(read.headers.get("X-Vault-Writable")).toBe("0");
-    expect(read.headers.get("X-Vault-Mode")).toBe("0444");
     const refused = await api(filePath("notes/generated.ts"), { method: "PUT", body: "new\n" });
     expect(refused.status).toBe(403);
     expect((await refused.json()).error).toBe("read-only");

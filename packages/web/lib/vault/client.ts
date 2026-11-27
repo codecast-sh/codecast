@@ -131,29 +131,9 @@ async function loopbackFetchAt(ep: VaultEndpoint, path: string, init?: RequestIn
 /** Carries the HTTP status so a caller can distinguish a daemon that has no
  *  vault routes (404) from one that refused the request (403) or failed. */
 export class VaultRequestError extends Error {
-  /** `reason`: the daemon's own word for a refusal ("read-only", "binary"). */
-  constructor(message: string, public status: number, public reason?: string) {
+  constructor(message: string, public status: number) {
     super(message);
   }
-}
-
-/** The request never got an answer: no daemon known, a refused connection, a
- *  timeout. Unlike a refusal, sending it again later can succeed. */
-export function isVaultUnreachable(e: unknown): boolean {
-  return e instanceof TypeError || (e instanceof DOMException && (e.name === "TimeoutError" || e.name === "AbortError"));
-}
-
-/** Why a file read came back with nothing, in a word or two a status line
- *  can show: the HTTP status the daemon answered, or that it never did. */
-export function readFailureLabel(e: unknown): string {
-  if (e instanceof VaultRequestError) {
-    if (e.status === 403) return "No permission";
-    if (e.status === 404) return "Not found";
-    if (e.status === 413) return "Too large";
-    return `Daemon error ${e.status}`;
-  }
-  if (e instanceof DOMException && (e.name === "TimeoutError" || e.name === "AbortError")) return "Timed out";
-  return "Daemon unreachable";
 }
 
 export async function listVaults(ep: VaultEndpoint): Promise<VaultInfo[]> {
@@ -262,14 +242,6 @@ export interface VaultFileContent {
   mtime: number;
   size: number;
   etag: string;
-  /** The file's permission bits ("0444") when the daemon says it cannot be
-   *  written as it stands; absent for a writable file or an older daemon. */
-  lockedMode?: string;
-}
-
-/** X-Vault-Writable: 0 with the mode beside it (vaultServer handleGetFile). */
-function lockedModeOf(res: Response): string | undefined {
-  return res.headers.get("X-Vault-Writable") === "0" ? (res.headers.get("X-Vault-Mode") ?? "read-only") : undefined;
 }
 
 export async function readVaultFile(
@@ -282,14 +254,12 @@ export async function readVaultFile(
     `/vault/file?vault=${encodeURIComponent(vaultId)}&path=${encodeURIComponent(path)}`,
   );
   if (res.status === 404) return null;
-  if (!res.ok) throw new VaultRequestError(`vault file ${path}: ${res.status}`, res.status);
-  const lockedMode = lockedModeOf(res);
+  if (!res.ok) throw new Error(`vault file ${path}: ${res.status}`);
   return {
     content: await res.text(),
     mtime: parseInt(res.headers.get("X-Vault-Mtime") ?? "0", 10),
     size: parseInt(res.headers.get("X-Vault-Size") ?? "0", 10),
     etag: res.headers.get("ETag") ?? "",
-    ...(lockedMode ? { lockedMode } : {}),
   };
 }
 
@@ -333,7 +303,7 @@ export async function writeVaultFile(
 ): Promise<VaultWriteResponse> {
   const res = await loopbackFetch(
     ep,
-    `/vault/file?vault=${encodeURIComponent(vaultId)}&path=${encodeURIComponent(path)}${ignoredParam(opts)}${opts.force ? "&force=1" : ""}`,
+    `/vault/file?vault=${encodeURIComponent(vaultId)}&path=${encodeURIComponent(path)}${ignoredParam(opts)}`,
     {
       method: "PUT",
       body: content,
@@ -354,7 +324,7 @@ export async function writeVaultFile(
   if (!res.ok) {
     // The daemon names why ("read-only", "binary", "bad path"); say it.
     const body = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new VaultRequestError(`vault write ${path}: ${res.status}${body.error ? ` ${body.error}` : ""}`, res.status, body.error);
+    throw new Error(`vault write ${path}: ${res.status}${body.error ? ` ${body.error}` : ""}`);
   }
   return (await res.json()) as VaultWriteResponse;
 }
@@ -363,9 +333,6 @@ export interface VaultWriteOptions {
   /** The path is one the scan flags ignored (a gitignored file opened from
    *  the tree or a link): the daemon writes those only when asked to. */
   ignored?: boolean;
-  /** Write a file whose mode refuses writes (0444), keeping that mode: the
-   *  person confirmed the overwrite. Still compare-and-swap on If-Match. */
-  force?: boolean;
 }
 
 const ignoredParam = (opts: VaultWriteOptions) => (opts.ignored ? "&ignored=1" : "");

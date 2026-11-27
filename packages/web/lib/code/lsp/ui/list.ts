@@ -58,16 +58,6 @@ export class VirtualList<R extends ListRow> {
     this.draw();
   }
 
-  /** The same rows with fresher content (line text that arrived): redrawn
-   *  where they are, selection and scroll kept. */
-  redrawRows(rows: R[]): void {
-    if (rows.length !== this.rows.length) return this.setRows(rows);
-    this.rows = rows;
-    for (const el of this.drawn.values()) el.remove();
-    this.drawn.clear();
-    this.draw();
-  }
-
   select(i: number): void {
     if (i < 0 || i >= this.rows.length || this.rows[i].group) {
       if (this.selected !== -1 && i === -1) this.selected = -1;

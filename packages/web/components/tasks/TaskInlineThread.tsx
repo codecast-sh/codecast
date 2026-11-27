@@ -8,7 +8,6 @@
 // reconciles exactly as it does on the task page.
 
 import type { ReactNode } from "react";
-import { FilePathContext, useFolderPathContext } from "../../lib/filePathLinks";
 import { useSyncTaskDetail, useTaskComments } from "../../hooks/useSyncTasks";
 import { useTaskRow } from "../../hooks/useThreadPreviews";
 import { TaskCommentStream, type TaskOwnerRef } from "./TaskCommentStream";
@@ -29,10 +28,8 @@ export function TaskInlineThread({ taskId, newSince, focusComposer = false, owne
   const task = useTaskRow(taskId);
   const comments = useTaskComments(taskId);
   const desc = (task?.description ?? "").trim();
-  // A path the description or a comment cites is relative to the task's project.
-  const fileCtx = useFolderPathContext(task?.project_path);
   return (
-    <FilePathContext.Provider value={fileCtx}>
+    <>
       {desc && (
         <details className="th-task-desc">
           <summary>Description</summary>
@@ -41,6 +38,6 @@ export function TaskInlineThread({ taskId, newSince, focusComposer = false, owne
       )}
       {children}
       <TaskCommentStream shortId={task?.short_id} comments={comments} composerAutoOpen composerAutoFocus={focusComposer} newSince={newSince} clampComments owner={owner} />
-    </FilePathContext.Provider>
+    </>
   );
 }

@@ -75,15 +75,6 @@ export function filesHref(
   return query ? `${FILES_ROUTE}?${query}` : FILES_ROUTE;
 }
 
-/** Go to a Files link in this tab without a reload (the app's router listens
- *  for popstate). */
-export function navigateToFiles(href: string): boolean {
-  if (typeof window === "undefined") return false;
-  window.history.pushState(null, "", href);
-  window.dispatchEvent(new PopStateEvent("popstate"));
-  return true;
-}
-
 /**
  * The `l` value: where the cursor lands and what flashes. `12` a line, `12:4`
  * a line and column, `12-20` lines 12 to 20 flashed with the cursor on 12,

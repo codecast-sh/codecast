@@ -1,7 +1,7 @@
 // The linked session's rules: a pick wins, then the conversation beside Files on
 // the stage, then the most recently active session working in the folder.
 import { describe, expect, it } from "bun:test";
-import { besideSessionId, blameSessionBases, candidateSessions, sessionGitRefs, matchesSessionQuery, pathWithin, resolveLink, sessionColor, sessionOfPanePath, sessionShortTitle, steerable, type AgentSessionRow } from "../sessions";
+import { besideSessionId, candidateSessions, pathWithin, resolveLink, sessionColor, sessionOfPanePath, sessionShortTitle, steerable, type AgentSessionRow } from "../sessions";
 
 const row = (id: string, over: Partial<AgentSessionRow> = {}): AgentSessionRow => ({ _id: id, agent_type: "claude_code", updated_at: 0, project_path: "/r/app", ...over });
 
@@ -159,51 +159,5 @@ describe("faces", () => {
     expect(sessionColor({ _id: "a", icon_color: "#123456" })).toBe("#123456");
     expect(sessionColor("abc")).toBe(sessionColor({ _id: "abc" }));
     expect(sessionColor(null)).toBe("var(--sol-text-dim)");
-  });
-
-  it("never hashes a session to git's added, deleted or modified color", () => {
-    const seen = new Set(Array.from({ length: 200 }, (_, i) => sessionColor(`session-${i}`)));
-    expect(seen.size).toBe(5);
-    for (const git of ["var(--sol-green)", "var(--sol-red)", "var(--sol-blue)"]) expect(seen.has(git)).toBe(false);
-  });
-});
-
-describe("the picker's filter", () => {
-  it("matches every word in the title or short title, any case", () => {
-    const s = row("a", { title: "Fix the auth race in the sync host", short_title: "Auth race" });
-    expect(matchesSessionQuery(s, "")).toBe(true);
-    expect(matchesSessionQuery(s, "AUTH race")).toBe(true);
-    expect(matchesSessionQuery(s, "sync auth")).toBe(true);
-    expect(matchesSessionQuery(s, "parser")).toBe(false);
-  });
-
-  it("searches past the recent cap", () => {
-    const rows = Array.from({ length: 30 }, (_, i) => row(`s${i}`, { updated_at: 100 - i, title: i === 29 ? "Oldest one" : `Session ${i}` }));
-    expect(candidateSessions(rows, "/r/app", null, null)).toHaveLength(12);
-    expect(candidateSessions(rows, "/r/app", null, null, Infinity).filter((r) => matchesSessionQuery(r, "oldest")).map((r) => r._id)).toEqual(["s29"]);
-  });
-});
-
-describe("a session's git refs", () => {
-  it("stands on HEAD until it commits, then on its first commit's parent", () => {
-    expect(sessionGitRefs([{ changeType: "edit" }])).toEqual({ committed: false, base: "HEAD", last: null });
-    expect(sessionGitRefs([{ changeType: "commit", commitHash: "abc1234" }, { changeType: "commit", commitHash: "def5678" }])).toEqual({ committed: true, base: "abc1234^", last: "def5678" });
-    // A hash the commit's output never named (or a garbled one) gives no ref.
-    expect(sessionGitRefs([{ changeType: "commit", commitHash: "not a sha" }])).toEqual({ committed: true, base: null, last: null });
-  });
-
-  it("reads each writer's base off the file's blame: the parent of its oldest standing commit", () => {
-    const s1 = { id: "jx1", conversation_id: "c1", title: "Fix parser" };
-    const bases = blameSessionBases([
-      { sha: "bbbbbbb", time: 20, session: s1 },
-      { sha: "aaaaaaa", time: 10, session: s1 },
-      { sha: "ccccccc", time: 5, session: { id: "jx2" } },
-      { uncommitted: true, session: { id: "jx3" } },
-      { sha: "ddddddd", time: 1 },
-    ]);
-    expect([...bases]).toEqual([
-      ["c1", { ref: "aaaaaaa^", title: "Fix parser" }],
-      ["jx2", { ref: "ccccccc^", title: undefined }],
-    ]);
   });
 });

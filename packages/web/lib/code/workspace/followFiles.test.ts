@@ -5,7 +5,7 @@ import { codeBuffers, currentState } from "../buffers";
 import { featureBase } from "../features";
 import { applyToBuffer, fileSyncExtensions, restoreHotExit } from "../fileSync";
 import { _useHotExitDbForTests, flushHotExit, loadHotExit } from "../hotExit";
-import { _reconcileForTests, _setRenameReaderForTests, _settleRenamesForTests, adoptMovedEdits, isFolderPath } from "./followFiles";
+import { _reconcileForTests, _settleRenamesForTests, adoptMovedEdits, isFolderPath } from "./followFiles";
 import { emptyWorkspace, openTab, type Workspace } from "./model";
 
 _useHotExitDbForTests({ indexedDB, IDBKeyRange });
@@ -29,35 +29,13 @@ test("a saved folder tab goes when the scan lands; a scan never closes a file it
   expect(useCodeStore.getState().workspaces.v.groups[0].tabs.map((t) => t.path)).toEqual(["big/past-the-cap.ts"]);
 });
 
-test("the person's own delete closes a clean tab; a dirty one stays", () => {
+test("outside a rescan, a row leaving is a delete: its clean tab closes, a dirty one stays", () => {
   let ws = openTab(emptyWorkspace(), "a.ts");
   ws = openTab(ws, "b.ts");
   useCodeStore.setState({ workspaces: { v: ws }, dirty: { "v\u0000b.ts": true } });
   const prev = { "a.ts": row("a.ts"), "b.ts": row("b.ts"), "c.ts": row("c.ts") };
-  _reconcileForTests("v", { "c.ts": row("c.ts") }, prev, false, () => null, () => true);
+  _reconcileForTests("v", { "c.ts": row("c.ts") }, prev, false, () => null);
   expect(useCodeStore.getState().workspaces.v.groups[0].tabs.map((t) => t.path)).toEqual(["b.ts"]);
-});
-
-test("a file leaving disk under the app keeps its tab, marked deleted, and the mark goes when it returns", () => {
-  const W = "v-gone";
-  const b = codeBuffers.open({
-    vaultId: W,
-    path: "a.ts",
-    content: "one\n",
-    etag: "e1",
-    extensions: () => [featureBase({ vaultId: W, path: "a.ts", languageId: "typescript", languageName: "TypeScript", sizeBytes: 0, largeFile: false }), fileSyncExtensions()],
-  });
-  useCodeStore.setState({ workspaces: { [W]: openTab(emptyWorkspace(), "a.ts") }, dirty: {}, conflicts: {} });
-  const both = { "a.ts": row("a.ts"), "c.ts": row("c.ts") };
-  const after = { "c.ts": row("c.ts") };
-  // An agent's `git stash`: the watcher reports the file removed.
-  _reconcileForTests(W, after, both, false, () => null, () => false);
-  expect(useCodeStore.getState().workspaces[W].groups[0].tabs.map((t) => t.path)).toEqual(["a.ts"]);
-  expect(useCodeStore.getState().conflicts[b.key]).toEqual({ kind: "deleted" });
-  // `git stash pop`: back into the same tab.
-  _reconcileForTests(W, both, after, false, () => null, () => false);
-  expect(useCodeStore.getState().conflicts[b.key]).toBeUndefined();
-  codeBuffers.close(b.key);
 });
 
 // ── renames: unsaved text moves at once, and a refused rename moves back ─────
@@ -218,56 +196,4 @@ test("a refused rename back returns text that never reached a buffer", () => {
   const shown = openOffscreen("b.ts", "one\n");
   adoptMovedEdits(shown);
   expect(currentState(shown).doc.toString()).toBe("edited one\n");
-});
-
-test("a rename onto a path with a leftover buffer keeps the moved text the store holds there", async () => {
-  const { useVaultStore } = await import("../../../store/vaultStore");
-  const prevVault = useVaultStore.getState();
-  reset(openTab(emptyWorkspace(), "a.ts"));
-  const leftover = openOffscreen("b.ts", "an earlier file\n", "old");
-  dirtyBuffer("a.ts");
-  // The store already moved a.ts's body to b.ts (applyMoves).
-  useVaultStore.setState({ activeVaultId: V, bodies: { ...prevVault.bodies, "b.ts": { content: "one\n", mtime: 2, etag: "moved" } } });
-  try {
-    // b.ts was deleted earlier; its clean buffer stayed in the cache.
-    _reconcileForTests(V, { "b.ts": row("b.ts") }, { "a.ts": row("a.ts") }, false, (p) => (p === "a.ts" ? "b.ts" : null));
-    expect(codeBuffers.get(leftover.key)).not.toBe(leftover);
-    expect(useVaultStore.getState().bodies["b.ts"]?.etag).toBe("moved");
-  } finally {
-    useVaultStore.setState({ activeVaultId: prevVault.activeVaultId, bodies: prevVault.bodies });
-  }
-});
-
-test("an agent's `git mv` (removed, then an add of the same bytes) moves the tab and the unsaved text", async () => {
-  const W = "v-mv";
-  const b = codeBuffers.open({
-    vaultId: W,
-    path: "old.ts",
-    content: "one\n",
-    etag: "e-one",
-    extensions: () => [featureBase({ vaultId: W, path: "old.ts", languageId: "typescript", languageName: "TypeScript", sizeBytes: 0, largeFile: false }), fileSyncExtensions()],
-  });
-  useCodeStore.setState({ workspaces: { [W]: openTab(emptyWorkspace(), "old.ts") }, dirty: {}, conflicts: {} });
-  applyToBuffer(b, { changes: { from: 0, insert: "edited " } });
-  const reads: string[] = [];
-  const restore = _setRenameReaderForTests(async (_v, p) => {
-    reads.push(p);
-    return p === "new.ts" ? "e-one" : "e-other";
-  });
-  try {
-    const before = { "old.ts": row("old.ts"), "z.ts": row("z.ts") };
-    const removed = { "z.ts": row("z.ts") };
-    await _reconcileForTests(W, removed, before, false, () => null, () => false);
-    expect(useCodeStore.getState().conflicts[b.key]).toEqual({ kind: "deleted" });
-    // The add lands in the next batch; a file of another size is never read.
-    const added = { "z.ts": row("z.ts"), "new.ts": { path: "new.ts", mtime: 2, size: 4 }, "other.ts": { path: "other.ts", mtime: 2, size: 9 } };
-    await _reconcileForTests(W, added, removed, false, () => null, () => false);
-    expect(reads).toEqual(["new.ts"]);
-    expect(useCodeStore.getState().workspaces[W].groups[0].tabs.map((t) => t.path)).toEqual(["new.ts"]);
-    expect(useCodeStore.getState().dirty[bufferKey(W, "new.ts")]).toBe(true);
-    expect(useCodeStore.getState().conflicts[b.key]).toBeUndefined();
-  } finally {
-    restore();
-    for (const x of codeBuffers.all()) if (x.vaultId === W) codeBuffers.close(x.key);
-  }
 });

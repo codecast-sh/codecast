@@ -46,17 +46,11 @@ async function render() {
   const root = createRoot(host);
   roots.push(root);
   await act(async () => root.render(<SessionPicker request={req} root="/r/app" />));
-  // Keys go to the filter, which has focus while the picker is open.
-  const input = host.querySelector("input[aria-label='Filter sessions']") as HTMLInputElement;
-  const press = (key: string, opts: KeyboardEventInit = {}) => act(() => void input.dispatchEvent(new window.KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...opts })));
-  const type = (text: string) =>
-    act(() => {
-      Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!.call(input, text);
-      input.dispatchEvent(new window.Event("input", { bubbles: true }));
-    });
+  const list = host.querySelector("[role=listbox]") as HTMLElement;
+  const press = (key: string) => act(() => void list.dispatchEvent(new window.KeyboardEvent("keydown", { key, bubbles: true, cancelable: true })));
   const titles = () => [...host.querySelectorAll("[role=option]")].map((o) => o.textContent ?? "");
   const highlighted = () => host.querySelector("[aria-selected=true]")?.textContent ?? "";
-  return { press, type, titles, highlighted };
+  return { press, titles, highlighted };
 }
 
 describe("the session picker", () => {
@@ -90,24 +84,5 @@ describe("the session picker", () => {
     press("Enter");
     expect(picked).toEqual([]);
     expect(useAgentStore.getState().picker).not.toBeNull();
-  });
-
-  it("typing filters every session in the folder by title, past the recent cap, and Enter takes the best match", async () => {
-    const many = Object.fromEntries(Array.from({ length: 20 }, (_, i) => [`s${i}`, row(`s${i}`, `Session ${i}`, 100 + i)]));
-    useInboxStore.setState((s) => ({ sessions: { ...s.sessions, ...many } }) as never);
-    const { press, type, titles, highlighted } = await render();
-    // Alpha (updated 20) is past the twelve most recent.
-    expect(titles().some((t) => t.includes("Alpha"))).toBe(false);
-    type("alp");
-    expect(titles().filter((t) => !/New session|None/.test(t)).map((t) => t.includes("Alpha"))).toEqual([true]);
-    expect(highlighted()).toContain("Alpha");
-    // j and k are letters of the query, never moves.
-    press("j");
-    expect(highlighted()).toContain("Alpha");
-    press("n", { ctrlKey: true });
-    expect(highlighted()).toContain("New session");
-    press("p", { ctrlKey: true });
-    press("Enter");
-    expect(picked).toEqual(["a"]);
   });
 });

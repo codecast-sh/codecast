@@ -27,7 +27,7 @@ import {
   type StageNode,
 } from "../../store/stageSplit";
 import { StageRail } from "./StageRail";
-import { stageLeafSession, stageClose, stageExpand, stageFocus, stageNavigateLeaf, startPaneDrag } from "../../lib/stage";
+import { paneSessionId, stageClose, stageExpand, stageFocus, stageNavigateLeaf, startPaneDrag } from "../../lib/stage";
 import { pathLabel } from "../../lib/pathLabel";
 import { browserPathLabel, isBrowserRoutePath, subscribeBrowserTitles } from "../../lib/browserPane";
 import { isSimulatorRoutePath } from "../../lib/simulatorPane";
@@ -151,8 +151,7 @@ const StageCell = memo(function StageCell({
   solo: boolean;
   rail: "left" | "right" | null;
 }) {
-  const leafSession = stageLeafSession(path);
-  const sessionId = leafSession?.sessionId ?? null;
+  const sessionId = paneSessionId(path);
   const title = usePaneTitle(path);
   const restore = useCallback(() => {
     useInboxStore.getState().setStageWide(null);
@@ -193,7 +192,7 @@ const StageCell = memo(function StageCell({
               expand, so the drag handle is a grip that surfaces on hover. */}
           {!solo && <PaneGrip leafId={leafId} path={path} />}
           <TabParamsCtx.Provider value={sessionScope}>
-            <SessionPane sessionId={sessionId} onClose={handleClose} onExpand={handleExpand} targetMessageId={leafSession?.messageId} />
+            <SessionPane sessionId={sessionId} onClose={handleClose} onExpand={handleExpand} />
           </TabParamsCtx.Provider>
         </>
       ) : ownsHeader ? (

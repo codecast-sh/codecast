@@ -3,8 +3,6 @@ import { EditorState } from "@codemirror/state";
 import { history, undo } from "@codemirror/commands";
 import {
   BufferCache,
-  MAX_BUFFER_CHARS,
-  MAX_CLEAN_BUFFERS,
   bufferKey,
   decodeFileText,
   utf8Length,
@@ -48,29 +46,6 @@ describe("BufferCache", () => {
     expect(cache.get(b.key)).toBeUndefined();
     expect(cache.get(a.key)).toBe(a);
     expect(cache.get(c.key)).toBe(c);
-  });
-
-  it("30 tabs with three 12M-character files, then 40 more: both bounds hold and every eviction lets go", () => {
-    const cache = new BufferCache();
-    const dropped: string[] = [];
-    cache.onDrop = (b) => dropped.push(b.path);
-    const chars = () => cache.all().reduce((n, b) => n + b.state.doc.length, 0);
-    const big = "x".repeat(120) + "\n";
-    const heapBefore = process.memoryUsage().heapUsed;
-    for (let i = 0; i < 30; i++) open(cache, `f${i}.ts`, i % 10 === 0 ? big.repeat(100_000) : "y".repeat(50_000));
-    // 36M characters in 30 buffers: inside both limits, nothing goes.
-    expect(cache.all().length).toBe(30);
-    expect(dropped).toEqual([]);
-    for (let i = 30; i < 70; i++) open(cache, `f${i}.ts`, i % 10 === 0 ? big.repeat(100_000) : "y".repeat(50_000));
-    expect(cache.all().length).toBeLessThanOrEqual(MAX_CLEAN_BUFFERS);
-    expect(chars()).toBeLessThanOrEqual(MAX_BUFFER_CHARS);
-    expect(dropped.length).toBe(70 - cache.all().length);
-    // The oldest went first.
-    expect(dropped[0]).toBe("f0.ts");
-    const heapMb = (process.memoryUsage().heapUsed - heapBefore) / 1024 / 1024;
-    console.log(`[buffers] ${cache.all().length} held, ${(chars() / 1e6).toFixed(1)}M chars, heap +${heapMb.toFixed(0)} MB`);
-    cache.close("missing");
-    expect(dropped.length).toBe(70 - cache.all().length);
   });
 
   it("evicts clean off-screen buffers past the total document size, oldest first", () => {

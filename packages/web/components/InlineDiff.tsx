@@ -1,9 +1,7 @@
 import { useContext, useMemo, useState, memo } from "react";
 import type { ReactNode } from "react";
 import { getFileStatus } from "../lib/patchParser";
-import { DIFF_FENCE, firstChangedNewLine, parseCastDiff, type DiffFileSection } from "../lib/castDiff";
-import { FilePathContext } from "../lib/filePathLinks";
-import { OpenInEditorButton } from "./OpenInEditorButton";
+import { DIFF_FENCE, parseCastDiff, type DiffFileSection } from "../lib/castDiff";
 import { DiffView } from "./DiffView";
 import { CodeBlock } from "./CodeBlock";
 import { MessageIdentity } from "../lib/conversationBlockContexts";
@@ -88,9 +86,6 @@ function DiffFileCard({
   identity: { conversationId: string; messageId: string; live?: boolean } | null;
 }) {
   const [expanded, setExpanded] = useState(false);
-  // A git diff names files from the checkout's root, not the session's cwd.
-  const fileCtx = useContext(FilePathContext);
-  const editCtx = useMemo(() => (fileCtx?.gitRoot ? { ...fileCtx, base: fileCtx.gitRoot } : fileCtx), [fileCtx]);
   const statusMeta = getFileStatus(file.status);
   const language = languageFromPath(file.path);
   const commentContext = identity && !identity.live
@@ -109,7 +104,6 @@ function DiffFileCard({
         </span>
         <span className="text-sol-text-muted truncate">{file.path}</span>
         <span className="ml-auto flex items-center gap-2 shrink-0">
-          {editCtx && file.status !== "deleted" && <OpenInEditorButton target={{ path: file.path, line: firstChangedNewLine(file), ctx: editCtx }} />}
           {file.additions > 0 && <span className="text-sol-green">+{file.additions}</span>}
           {file.deletions > 0 && <span className="text-sol-red">−{file.deletions}</span>}
           {file.fullContext && (

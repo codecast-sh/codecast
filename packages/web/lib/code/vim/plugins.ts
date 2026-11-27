@@ -12,12 +12,11 @@ import type { EditorView } from "@codemirror/view";
 import { CharCategory, EditorSelection } from "@codemirror/state";
 import { ensureSyntaxTree, matchBrackets, syntaxTree } from "@codemirror/language";
 import { SearchCursor } from "@codemirror/search";
-import { jumpTo } from "../jump";
 import { toggleComment, toggleLineComment } from "@codemirror/commands";
 import { CODE_COMMAND_IDS, runCodeCommand, type CodeCommandId } from "../commands";
-import { addMap, holdPrefixKey, readKeys, type LayerMap } from "./keyLayer";
-import { runResolution, windowCommand, windowEngineKey, WINDOW_KEYS } from "./exAdapters";
-import { asVimCM, notify } from "./engine";
+import { addMap, readKeys, type LayerMap } from "./keyLayer";
+import { windowCommand } from "./exAdapters";
+import { asVimCM } from "./engine";
 import type { VimMapContext } from "./types";
 
 type Pos = { line: number; ch: number };
@@ -62,7 +61,7 @@ const FALLBACKS: Partial<Record<CodeCommandId, (view: EditorView) => void>> = {
     for (const cursor = new SearchCursor(state.doc, state.sliceDoc(word.from, word.to)); !cursor.next().done; ) {
       const { from, to } = cursor.value;
       if (wordAt(from - 1) || wordAt(to)) continue;
-      jumpTo(view, from);
+      view.dispatch({ selection: { anchor: from }, scrollIntoView: true });
       return;
     }
   },
@@ -267,15 +266,6 @@ function defineEngine(): void {
     const view = viewOf(cm);
     const id = (args as { command?: CodeCommandId }).command;
     if (id && !runCodeCommand(id, undefined, { view, source: "vim" })) FALLBACKS[id]?.(view);
-  });
-
-  Vim.defineAction("codecastWindow", (cm, args) => {
-    const a = args as { key?: string; selectedCharacter?: string; repeat?: number; repeatIsExplicit?: boolean };
-    const key = a.key ?? a.selectedCharacter;
-    if (!key) return;
-    const r = windowCommand(key, a.repeatIsExplicit ? a.repeat : undefined);
-    if ("skip" in r) notify(cm, r.skip);
-    else if (!runResolution(r, viewOf(cm))) notify(cm, r.declined ?? `<C-w>${key} isn't available in this view`);
   });
 
   // Commentary: line comments where the language has them, block otherwise.
@@ -504,6 +494,14 @@ export const DEFAULT_KEYS: Array<{ lhs: string; command: CodeCommandId; context?
   { lhs: "<leader>l", command: "agent.quoteSelection", context: "visual" },
 ];
 
+const WINDOW_KEYS = ["h", "j", "k", "l", "w", "W", "p", "v", "s", "c", "q", "o", "<C-h>", "<C-j>", "<C-k>", "<C-l>", "<C-w>", "<C-v>", "<C-s>", "<C-o>", "<Left>", "<Down>", "<Up>", "<Right>"];
+
+/** The command key a `<C-w>x` window command runs, or null. */
+export function windowKey(letter: string): string | null {
+  const r = windowCommand(letter);
+  return r && "command" in r ? commandKeyName(r.command) : null;
+}
+
 let installed = false;
 const builtinMaps: LayerMap[] = [];
 
@@ -531,19 +529,8 @@ export function installPlugins(): void {
     builtinMaps.push(addMap(lhs, rhs, context));
   };
   bind("S", "<CcSurroundVisual>", "visual");
-
-  // Every key after <C-w> is a window command, so none falls through to the
-  // engine as an ordinary one (`<C-w>x` deleting a character). The key layer
-  // hands a typed pair over as one key: any single character meets
-  // `<C-w><character>`, a special key its own entry (added after, so it
-  // matches first). A map's right side plays each pair as its engine key.
-  holdPrefixKey("<C-w>");
-  Vim.mapCommand("<C-w><character>", "action", "codecastWindow", {}, { context: "normal" });
-  for (const key of WINDOW_KEYS) {
-    if (key.length > 1) Vim.mapCommand(`<C-w>${key}`, "action", "codecastWindow", { key }, { context: "normal" });
-    // A right side's pair runs wherever the map does, as command keys do.
-    Vim.mapCommand(windowEngineKey(key)!, "action", "codecastWindow", { key }, {});
+  for (const letter of WINDOW_KEYS) {
+    const key = windowKey(letter);
+    if (key) bind(`<C-w>${letter}`, key, "normal");
   }
-  // The alternate file: <C-^>, which the browser reports as Ctrl-6.
-  for (const key of ["<C-6>", "<C-S-^>", "<C-^>"]) Vim.mapCommand(key, "action", "codecastCommand", { command: "tabs.alternate" }, { context: "normal" });
 }

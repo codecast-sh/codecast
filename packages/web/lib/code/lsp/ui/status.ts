@@ -4,7 +4,7 @@
 // their own DOM from subscriptions; a keystroke never reaches them.
 
 import type { EditorView } from "@codemirror/view";
-import { featureContext, liveStatusItem, nameStatusItem, type StatusItemView } from "../../features";
+import { featureContext, liveStatusItem, type StatusItemView } from "../../features";
 import { subscribeLspState, restartLsp, retryLsp, lspServerDetails, lspClientsFor, onLspPoolChange, type LspPoolState } from "../pool";
 import { chipDetail, chipStatus, leadTask, type LspChipStatus } from "../progress";
 import { countDiagnostics, onVaultDiagnostics, vaultDiagnostics, type FileDiagnostics } from "../diagnostics";
@@ -13,7 +13,6 @@ import { closePeek, peekShown, showPeek, type PeekRow } from "./peek";
 import { el } from "./list";
 import { openVaultFile, showOutside } from "../host";
 import { pluginOf } from "../navigation";
-import { lineIcon } from "../../icons";
 
 // ── server chip ─────────────────────────────────────────────────────────────
 
@@ -132,7 +131,7 @@ export function serverChip(view: EditorView): StatusItemView | null {
     const d = chipDetail(status, state.tasks ?? new Map());
     if (detail.textContent !== d) detail.textContent = d;
     detail.hidden = !d;
-    nameStatusItem(dom, `${label}: ${LABEL[status]}`);
+    dom.title = `${label}: ${LABEL[status]}`;
   };
   // The card describes one file's server: it goes when the editor shows
   // another file (a tab switch rebuilds the status bar) or reconfigures.
@@ -172,8 +171,17 @@ const SEV_PATHS = [
   '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
   '<circle cx="12" cy="12" r="3" fill="currentColor"/>',
 ];
-/** A severity icon. */
-const sevIcon = (sev: number): SVGElement => lineIcon(SEV_PATHS[sev] ?? SEV_PATHS[1]);
+const sevTemplates: (SVGElement | null)[] = [];
+/** A severity icon, built once and cloned. */
+function sevIcon(sev: number): SVGElement {
+  let t = sevTemplates[sev];
+  if (!t) {
+    const holder = document.createElement("span");
+    holder.innerHTML = `<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${SEV_PATHS[sev] ?? SEV_PATHS[1]}</svg>`;
+    t = sevTemplates[sev] = holder.firstElementChild as SVGElement;
+  }
+  return t.cloneNode(true) as SVGElement;
+}
 
 function problemRows(view: EditorView, vaultId: string): PeekRow[] {
   const here = (() => {
@@ -263,7 +271,7 @@ export function diagnosticsItem(view: EditorView): StatusItemView | null {
       wN.nodeValue = String(c.warnings);
       errors.toggleAttribute("data-zero", c.errors === 0);
       warnings.toggleAttribute("data-zero", c.warnings === 0);
-      nameStatusItem(dom, `${c.errors} errors, ${c.warnings} warnings, show problems`, `${c.errors} errors, ${c.warnings} warnings`);
+      dom.title = `${c.errors} errors, ${c.warnings} warnings`;
     };
     render();
     const offDiagnostics = onVaultDiagnostics(ctx.vaultId, render);

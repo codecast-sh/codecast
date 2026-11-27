@@ -7,7 +7,6 @@ import { useRepoCompare } from "../../hooks/useRepoBrowse";
 import { commitPageHref, repoCompareHref, type RepoRouteFamily } from "../../lib/repoView";
 import { serverErrorText } from "../../lib/errorCause";
 import { useDiffAddress } from "../../hooks/useDiffAddress";
-import { useLocalEditAction } from "../../hooks/useLocalEdit";
 
 export function RepoCompareContent({ repository, base, head, family }: {
   repository: string; base: string; head: string; family: RepoRouteFamily;
@@ -20,9 +19,6 @@ export function RepoCompareContent({ repository, base, head, family }: {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const diffHref = useCallback((hash: string) => repoCompareHref(repository, base, head, family) + hash, [repository, base, head, family]);
   const { flow } = useDiffAddress({ diffHref, here: true, ready: files.length > 0, rootRef, stickyTop: 0 });
-  // Each file's "Edit": the file in this machine's checkout of the head, with
-  // the editor's diff against the base, when a worktree sits on the head.
-  const editAction = useLocalEditAction(repository, head, (c) => (c.onRef ? { ref: base, label: base } : null));
   return <div ref={rootRef} className="flex flex-col">
     <form key={`${base}:${head}`} className="flex flex-wrap gap-2 px-4 py-3 border-b border-sol-border/40 text-xs" onSubmit={(event) => {
       event.preventDefault(); const fields = new FormData(event.currentTarget);
@@ -53,7 +49,7 @@ export function RepoCompareContent({ repository, base, head, family }: {
           <span className="text-sol-text-dim">{commit.author_login || commit.author_name}</span>
         </li>)}</ol>
       </details>}
-      {files.length ? <FileDiffLayout files={files} flow={flow} fileAction={editAction} /> : <p className="p-8 text-sm text-sol-text-muted">No file changes between these refs.</p>}
+      {files.length ? <FileDiffLayout files={files} flow={flow} /> : <p className="p-8 text-sm text-sol-text-muted">No file changes between these refs.</p>}
     </>}
   </div>;
 }

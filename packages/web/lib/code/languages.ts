@@ -7,7 +7,6 @@
 
 import { LanguageDescription, LanguageSupport, StreamLanguage, type StreamParser } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
-import { registerCodeLanguage } from "./theme";
 
 /** A legacy-modes parser. That package types its parsers against
  *  @codemirror/streamparser, whose StringStream repeats @codemirror/language's
@@ -96,21 +95,11 @@ export function describeLanguage(path: string, firstLine = ""): LanguageDescript
   );
 }
 
-function registered(desc: LanguageDescription, support: LanguageSupport): LanguageSupport {
-  registerCodeLanguage(desc.name, support.language);
-  return support;
-}
-
-/** The language's support when it has already loaded, else null. */
-export function loadedLanguage(desc: LanguageDescription | null): LanguageSupport | null {
-  return desc?.support ? registered(desc, desc.support) : null;
-}
-
 /** The language's CodeMirror support, loaded once per language. */
 export async function loadLanguage(desc: LanguageDescription | null): Promise<LanguageSupport | null> {
   if (!desc) return null;
   try {
-    return registered(desc, desc.support ?? (await desc.load()));
+    return desc.support ?? (await desc.load());
   } catch {
     // A parser chunk that fails to load leaves the file readable as plain text.
     return null;

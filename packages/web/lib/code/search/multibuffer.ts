@@ -26,7 +26,7 @@ import { bufferFields, savedDocField, setSavedDoc } from "../buffers";
 import { featureBase } from "../features";
 import { runCodeCommand } from "../commands";
 import { statusBar } from "../statusBar";
-import { HIGHLIGHT, solCodeTheme } from "../theme";
+import { solCodeTheme } from "../theme";
 import {
   changedExcerpts,
   clipChanges,
@@ -43,7 +43,6 @@ import {
   type Region,
 } from "./excerpts";
 import { editFiles, type FileEditOutcome, type WriteBackIO } from "./writeBack";
-import { excerptHighlight } from "./excerptHighlight";
 
 /** Replace the regions wholesale (a new layout). */
 const setRegions = StateEffect.define<Region[]>();
@@ -170,9 +169,6 @@ export function locationAt(state: EditorState, pos: number): SourceLocation | nu
   return next && next.kind === "excerpt" ? { path: paths[next.file], line: next.srcStart, column: 1 } : null;
 }
 
-/** Each excerpt in its own file's syntax colors. */
-const excerptColors = excerptHighlight({ regions: (s) => s.field(regionsField), paths: (s) => s.field(pathsField) });
-
 /** The app's code theme, reconfigured when the palette changes. */
 const themeSlot = new Compartment();
 export const refreshMultibufferTheme = () => themeSlot.reconfigure(solCodeTheme());
@@ -187,7 +183,7 @@ const multibufferTheme = EditorView.theme({
   },
   ".cm-mb-header .cm-mb-dir": { color: "var(--sol-text-dim)", fontWeight: "400" },
   ".cm-mb-gap": { color: "var(--sol-text-dim)" },
-  ".cm-mb-match": { backgroundColor: HIGHLIGHT.match, borderRadius: "2px" },
+  ".cm-mb-match": { backgroundColor: "color-mix(in srgb, var(--sol-yellow) 28%, transparent)", borderRadius: "2px" },
   ".cm-lineNumbers .cm-gutterElement": { minWidth: "5ch" },
   // Line ending, indent and language describe one file; this is many.
   ".cm-code-status-static": { display: "none" },
@@ -228,7 +224,6 @@ export function multibufferState(sources: ExcerptSource[], config: MultibufferCo
       multibufferCore(layout, config.vaultId),
       decorationsField,
       sourceLineNumbers,
-      excerptColors,
       config.matcher ? matchHighlighter(config.matcher) : [],
       highlightSpecialChars(),
       history(),

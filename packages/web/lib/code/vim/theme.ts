@@ -3,7 +3,7 @@
 
 import { EditorView } from "@codemirror/view";
 import { Prec } from "@codemirror/state";
-import { CODE_CURSOR_BLOCK_VAR, CODE_CURSOR_TEXT_VAR, EDITOR_FONT, HIGHLIGHT } from "../theme";
+import { CODE_CURSOR_BLOCK_VAR, CODE_CURSOR_TEXT_VAR, EDITOR_FONT } from "../theme";
 
 const mix = (token: string, pct: number) => `color-mix(in srgb, var(${token}) ${pct}%, transparent)`;
 // The core theme sets the block's colors (theme.ts blockCursorColors); the
@@ -30,10 +30,10 @@ export const vimTheme = Prec.highest(
       outline: `1px solid ${block}`,
       color: "transparent !important",
     },
-    // Visual mode draws through CodeMirror's selection layer, in the
-    // selection's own color (theme.ts HIGHLIGHT), grey once focus leaves.
-    ".cm-vimMode .cm-selectionLayer .cm-selectionBackground": { background: HIGHLIGHT.selectionBlurred },
-    "&.cm-focused .cm-vimMode .cm-selectionLayer .cm-selectionBackground": { background: HIGHLIGHT.selection },
+    // Visual mode draws through CodeMirror's selection layer.
+    ".cm-vimMode .cm-selectionLayer .cm-selectionBackground, &.cm-focused .cm-vimMode .cm-selectionLayer .cm-selectionBackground": {
+      background: mix("--sol-cyan", 24),
+    },
     // The `:` and `/` command line, and engine messages.
     ".cm-panels .cm-vim-panel": {
       padding: "2px 10px",
@@ -51,20 +51,6 @@ export const vimTheme = Prec.highest(
       caretColor: "var(--sol-cyan)",
       background: "transparent",
     },
-    // The command line's completions (complete.ts): one row above the line,
-    // the chosen one lit.
-    ".cm-vim-wild": {
-      display: "flex",
-      gap: "12px",
-      overflow: "hidden",
-      whiteSpace: "pre",
-      paddingBottom: "2px",
-      marginBottom: "2px",
-      color: "var(--sol-text-muted)",
-      borderBottom: `1px solid ${mix("--sol-border", 40)}`,
-    },
-    ".cm-vim-wild > span": { flexShrink: "0" },
-    ".cm-vim-wild > .cm-vim-wild-on": { color: "var(--sol-bg)", background: "var(--sol-cyan)", borderRadius: "2px", padding: "0 3px", margin: "0 -3px" },
     // `set list` and `set colorcolumn`.
     ".cm-vimListTab": {
       backgroundImage: `linear-gradient(to right, transparent calc(100% - 1px), ${mix("--sol-text-dim", 35)} 0)`,

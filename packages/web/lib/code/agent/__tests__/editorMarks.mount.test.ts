@@ -12,7 +12,7 @@ const { EditorView } = await import("@codemirror/view");
 const { featureBase } = await import("../../features");
 const { externalChange } = await import("../../fileSync");
 const marks = await import("../editorMarks");
-const { addSentMark, agentMarks, agentMarksExtension, clearSentMarks, dismissAgentEdits, dropFlashes, setAgentMarkHooks, setSentState, stepAgentEdit } = marks;
+const { addSentMark, agentMarks, agentMarksExtension, clearSentMarks, dismissAgentEdits, dropFlashes, setAgentMarkHooks, stepAgentEdit } = marks;
 
 const writers: Record<string, string | null> = { "src/a.ts": "s1" };
 const restore = setAgentMarkHooks({
@@ -40,7 +40,7 @@ const lineOf = (view: InstanceType<typeof EditorView>, pos: number) => view.stat
 const editLines = (view: InstanceType<typeof EditorView>) => agentMarks(view.state).edits.map((e) => [lineOf(view, e.from), lineOf(view, e.to)]);
 
 describe("external changes", () => {
-  it("are marked in the color of the session that wrote them, with a fading flash", async () => {
+  it("are marked in the color of the session that wrote them, with a fading flash", () => {
     const view = mount();
     const two = view.state.doc.line(2);
     adopt(view, two.from, two.to, "TWO\nTWO-b");
@@ -51,10 +51,6 @@ describe("external changes", () => {
     expect(st.flashes[0]).toMatchObject({ kind: "edit", color: "c-s1" });
     expect(view.dom.querySelector(".cm-agentFlash")).not.toBeNull();
     expect(view.dom.querySelector(".cm-agentBar")).not.toBeNull();
-    // The fade's clock starts once the view has drawn it.
-    expect(st.flashes[0].until).toBe(0);
-    await Promise.resolve();
-    expect(agentMarks(view.state).flashes[0].until).toBeGreaterThan(Date.now());
     // Flashes drop once faded; the gutter mark stays.
     view.dispatch({ effects: dropFlashes.of(Date.now() + 10_000) });
     expect(agentMarks(view.state).flashes).toEqual([]);
@@ -140,38 +136,11 @@ describe("mapping and dismissal", () => {
     view.destroy();
   });
 
-  it("Escape leaves them: vim presses it on every return to normal mode", () => {
+  it("Escape dismisses all edits", () => {
     const view = mount();
     adopt(view, 0, 3, "ONE");
     view.contentDOM.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    expect(agentMarks(view.state).edits).toHaveLength(1);
-    view.destroy();
-  });
-
-  it("an edit that lands in a background buffer keeps its fade until the buffer is shown", async () => {
-    let state = EditorState.create({ doc: DOC, extensions: [featureBase(ctx()), agentMarksExtension()] });
-    state = state.update({ changes: { from: 0, to: 3, insert: "ONE" }, annotations: externalChange.of({ etag: "e" }) }).state;
-    // Hours later, still unshown: nothing is due.
-    state = state.update({ effects: dropFlashes.of(Date.now() + 3_600_000) }).state;
-    expect(agentMarks(state).flashes).toHaveLength(1);
-    const parent = document.createElement("div");
-    document.body.append(parent);
-    const view = new EditorView({ parent, state });
-    expect(view.dom.querySelector(".cm-agentFlash")).not.toBeNull();
-    await Promise.resolve();
-    expect(agentMarks(view.state).flashes[0].until).toBeGreaterThan(Date.now() + 1000);
-    view.destroy();
-  });
-
-  it("draws a scrollbar tick per edit, by line, in the writer's color", () => {
-    const view = mount();
-    adopt(view, view.state.doc.line(6).from, view.state.doc.line(6).to, "SIX");
-    const ticks = [...view.dom.querySelectorAll<HTMLElement>(".cm-agentTicks .cm-agentTick")];
-    expect(ticks).toHaveLength(1);
-    expect(ticks[0].style.top).toBe(`${(5 / 7) * 100}%`);
-    expect(ticks[0].style.getPropertyValue("--agent-c")).toBe("c-s1");
-    view.dispatch({ effects: dismissAgentEdits.of("all") });
-    expect(view.dom.querySelector(".cm-agentTicks")).toBeNull();
+    expect(agentMarks(view.state).edits).toEqual([]);
     view.destroy();
   });
 });
@@ -222,30 +191,14 @@ describe("sent marker", () => {
     view.destroy();
   });
 
-  it("ends when its own lines change, on disk or by the person; a write elsewhere maps it", () => {
-    const view = mount();
-    sent(view, 3, "c1");
-    sent(view, 6, "c2");
-    // An agent rewrites line 1: both markers hold, on their text.
-    adopt(view, 0, 3, "ONE\nONE-b");
-    expect(agentMarks(view.state).sent.map((x) => view.state.sliceDoc(x.from, x.to))).toEqual(["three", "six"]);
-    // It then writes line 3 (the first instruction's range): only that one ends.
-    const three = view.state.doc.line(4);
-    adopt(view, three.from, three.to, "THREE");
-    expect(agentMarks(view.state).sent.map((x) => x.key)).toEqual(["c2"]);
-    view.dispatch({ changes: { from: view.state.doc.line(7).from, insert: "x" } });
-    expect(agentMarks(view.state).sent).toEqual([]);
-    view.destroy();
-  });
-
-  it("shows where the message is: queued, then worked on", () => {
+  it("ends when the file changes on disk, or the person edits the quoted text", () => {
     const view = mount();
     sent(view, 3);
-    const note = () => view.dom.querySelector<HTMLElement>(".cm-agentSentNote");
-    expect(note()?.dataset.sentState).toBe("queued");
-    expect(note()?.querySelector(".cm-agentSentDot")).not.toBeNull();
-    view.dispatch({ effects: setSentState.of({ key: "c1", state: "working" }) });
-    expect(note()?.dataset.sentState).toBe("working");
+    adopt(view, 0, 3, "ONE");
+    expect(agentMarks(view.state).sent).toEqual([]);
+    sent(view, 3);
+    view.dispatch({ changes: { from: view.state.doc.line(3).from, insert: "x" } });
+    expect(agentMarks(view.state).sent).toEqual([]);
     view.destroy();
   });
 

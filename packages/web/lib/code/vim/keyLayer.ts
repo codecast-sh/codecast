@@ -109,15 +109,6 @@ function lookup(seq: string[], ctx: VimMapContext): { exact?: LayerMap; longer: 
   return { exact, longer };
 }
 
-/** Keys that always take one more (`<C-w>`): held until it comes, then
- *  handed to the engine together as one key. The engine alone would run the
- *  first as a whole command and the second as another. */
-const prefixKeys = new Set<string>();
-
-export function holdPrefixKey(key: string): void {
-  prefixKeys.add(key);
-}
-
 let original: typeof Vim.handleKey | null = null;
 
 function engine(cm: CM, key: string, origin: string): boolean | undefined {
@@ -173,11 +164,9 @@ function handle(cm: CM, key: string, origin: string): boolean | undefined {
   const seq = [...st.keys, key];
   const ctx = contextOf(vim!);
   const { exact, longer } = lookup(seq, ctx);
-  const prefixed = ctx === "normal" && prefixKeys.has(seq[0]);
-  if ((longer || (prefixed && seq.length === 1)) && !exact?.nowait) {
+  if (longer && !exact?.nowait) {
     st.keys = seq;
-    // A prefix waits for its key however long it takes, as vim's <C-w> does.
-    if (timeoutMs !== null && !(prefixed && seq.length === 1)) {
+    if (timeoutMs !== null) {
       st.timer = setTimeout(() => {
         st.timer = null;
         const held = st.keys;
@@ -189,7 +178,7 @@ function handle(cm: CM, key: string, origin: string): boolean | undefined {
     return true;
   }
   st.keys = [];
-  if (exact || seq.length === 1 || (prefixed && seq.length === 2)) return engine(cm, seq.join(""), origin);
+  if (exact || seq.length === 1) return engine(cm, seq.join(""), origin);
   flush(cm, seq, origin);
   return true;
 }

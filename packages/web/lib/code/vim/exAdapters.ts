@@ -35,9 +35,6 @@ const adapters: ExAdapter[] = [];
 const run = (command: CodeCommandId, args?: Record<string, unknown>): ExResolution => ({ command, args });
 const fixed = (command: CodeCommandId, args?: Record<string, unknown>): Resolver => () => run(command, args);
 const skip = (reason: string): ExResolution => ({ skip: reason });
-/** A split, and what vim says when the workspace has no room for it. */
-const NO_ROOM = "E36: Not enough room";
-const splitRun = (dir: "right" | "down"): ExResolution => ({ command: dir === "right" ? "split.right" : "split.down", declined: NO_ROOM });
 
 function ex(names: string, resolve: Resolver, opts: { ranged?: boolean } = {}) {
   for (const n of names.split(" ")) {
@@ -53,13 +50,9 @@ const hasPath = (arg: string) => arg.trim().length > 0;
 /** `:e $MYVIMRC` and friends mean "edit my vim config". */
 const isVimrc = (arg: string) => /^(\$MYVIMRC|~\/\.vimrc|~\/\.vim\/vimrc|~\/\.config\/nvim\/init\.(vim|lua)|\$MYGVIMRC)$/.test(arg.trim());
 
-/** `#`, vim's name for the alternate file. */
-const isAlternate = (arg: string) => arg.trim() === "#";
-
 function openFile(arg: string, split?: "right" | "down"): ExResolution {
   const path = arg.trim();
   if (isVimrc(path)) return run("settings.open", { section: "editor" });
-  if (isAlternate(path) && !split) return run("tabs.alternate");
   if (/(^|[^\\])[%#<]/.test(path)) return skip("uses vim's filename expansion");
   const typed = path.replace(/\\ /g, " ");
   // A relative path is checked here; an absolute one only file.open can
@@ -67,8 +60,7 @@ function openFile(arg: string, split?: "right" | "down"): ExResolution {
   const absolute = typed.startsWith("/");
   const checked = resolveVaultPath(typed, null);
   if (!absolute && "refused" in checked) return skip(`${typed} ${checked.refused}`);
-  const declined = absolute ? `${typed} is outside this folder` : split ? NO_ROOM : undefined;
-  return { command: "file.open", args: { path: typed, ...(split ? { split } : {}) }, ...(declined ? { declined } : {}) };
+  return { command: "file.open", args: { path: typed, ...(split ? { split } : {}) }, ...(absolute ? { declined: `${typed} is outside this folder` } : {}) };
 }
 
 /** The pattern a grep-like command was given, without its flags and paths. */
@@ -94,10 +86,9 @@ function search(query: string, regex = true): ExResolution {
 
 // ── files and windows ──────────────────────────────────────────────────────
 // The engine leaves a space before `!` in `:w !sudo tee %` and none in `:w! file`.
-ex("w[rite]", (arg, bang) => {
+ex("w[rite]", (arg) => {
   const a = arg.trim();
-  // `:w!` writes a file its mode refuses, as in vim, after the confirm.
-  if (!a) return run(bang ? "file.overwrite" : "file.save");
+  if (!a) return run("file.save");
   return skip(a.startsWith("!") ? "runs a shell command" : "saving under another name isn't supported");
 });
 ex("up[date]", fixed("file.save"));
@@ -109,17 +100,17 @@ ex("wqa[ll] xa[ll]", fixed("file.saveAll"));
 ex("e[dit]", (arg, bang) => (hasPath(arg) ? openFile(arg) : bang ? run("file.revert") : skip("reloading happens on its own")));
 ex("tabe[dit] tabnew", (arg) => (hasPath(arg) ? openFile(arg) : run("quickOpen")));
 ex("tabf[ind] fin[d]", (arg) => run("quickOpen", hasPath(arg) ? { query: arg.trim() } : undefined));
-ex("sp[lit] new", (arg) => (hasPath(arg) ? openFile(arg, "down") : splitRun("down")));
-ex("vs[plit] vne[w]", (arg) => (hasPath(arg) ? openFile(arg, "right") : splitRun("right")));
+ex("sp[lit] new", (arg) => (hasPath(arg) ? openFile(arg, "down") : run("split.down")));
+ex("vs[plit] vne[w]", (arg) => (hasPath(arg) ? openFile(arg, "right") : run("split.right")));
 ex("vert[ical]", (arg, _, ctx) => {
   const inner = /^\s*(\w+)!?\s*([\s\S]*)$/.exec(arg);
   if (!inner) return skip("needs a command");
-  if (/^(s(p(l(i(t)?)?)?)?|new)$/.test(inner[1])) return hasPath(inner[2]) ? openFile(inner[2], "right") : splitRun("right");
+  if (/^(s(p(l(i(t)?)?)?)?|new)$/.test(inner[1])) return hasPath(inner[2]) ? openFile(inner[2], "right") : run("split.right");
   return resolveEx(inner[1], inner[2], false, ctx);
 });
 ex("on[ly]", fixed("split.only"));
 ex("hid[e]", fixed("split.close"));
-ex("winc[md]", (arg) => windowCommand(arg.trim()));
+ex("winc[md]", (arg) => windowCommand(arg.trim()) ?? skip(`no window command ${arg.trim()}`));
 ex("bn[ext] tabn[ext]", (arg) => (/^\d+$/.test(arg.trim()) ? run("tabs.goto", { index: Number(arg) - 1 }) : run("tabs.next")));
 ex("bp[revious] bN[ext] tabp[revious] tabN[ext]", fixed("tabs.prev"));
 ex("bd[elete] bw[ipeout] bun[load] tabc[lose]", fixed("file.close"));
@@ -128,7 +119,6 @@ ex("bf[irst] br[ewind] tabfir[st] tabr[ewind]", fixed("tabs.goto", { index: 0 })
 ex("b[uffer]", (arg) => {
   const a = arg.trim();
   if (/^\d+$/.test(a)) return run("tabs.goto", { index: Number(a) - 1 });
-  if (isAlternate(a)) return run("tabs.alternate");
   return a ? run("quickOpen", { query: a }) : run("tabs.switcher");
 });
 ex("ls buffers", fixed("tabs.switcher"));
@@ -276,12 +266,10 @@ ex("lua", (arg, _, ctx) => {
 
 // ── agents ──────────────────────────────────────────────────────────────────
 // The vim way into Cmd-K and Cmd-L, which a vimrc may map to something else:
-// `:Ask fix this` sends the instruction about the selection or line to the
-// linked session (bare `:Ask`, or no link, opens the box), `:Quote` quotes it
-// to the linked session, `:AgentClear` clears the agent edit marks.
+// `:Ask` opens the inline instruction box on the selection or line (prefilled
+// with what follows), `:Quote` quotes it to the linked session.
 ex("Ask", (arg) => run("agent.inlineInstruction", arg.trim() ? { text: arg.trim() } : undefined), { ranged: true });
 ex("Quote", fixed("agent.quoteSelection"), { ranged: true });
-ex("AgentClear", fixed("agent.dismissEdits"));
 
 // ── classification ──────────────────────────────────────────────────────────
 
@@ -340,11 +328,6 @@ export function classifyEx(line: string, aliases: ReadonlySet<string>): ExClass 
   if (nativeNames.some((n) => matches(word, n))) return { kind: "native", name: word };
   for (const [re, reason] of PLUGIN_REASONS) if (re.test(word)) return { kind: "skip", name: word, reason };
   return { kind: "skip", name: word, reason: `:${word} isn't available here` };
-}
-
-/** Every command name the command line knows, full length, for completion. */
-export function exCommandNames(): string[] {
-  return [...adapters.map((a) => a.name), ...nativeNames.map((n) => n.name)];
 }
 
 export function isExCommandName(word: string, aliases: ReadonlySet<string>): boolean {
@@ -447,66 +430,51 @@ export function installExAdapters(): void {
   for (const a of adapters) Vim.defineEx(a.name, a.prefix, (cm, params) => runAdapter(a, cm, params.argString ?? "", params as ExLines));
   Vim.defineEx(EXPAND_EX, EXPAND_EX, (cm, params) => {
     const view = asVimCM(cm).cm6;
-    // A range typed ahead of it (visual mode's '<,'>) belongs to the line it runs.
-    const { line, lineEnd } = params as ExLines;
-    const range = typeof line === "number" ? `${line + 1},${(lineEnd ?? line) + 1}` : "";
-    Vim.handleEx(cm, range + expandCommandLine(view, (params.argString ?? "").trimStart()));
+    Vim.handleEx(cm, expandCommandLine(view, params.argString ?? ""));
   });
 }
 
-/** Every `<C-w>` second key, as the command it runs here. A key with no
- *  counterpart resolves to a skip, so it is never left for the engine to read
- *  as an ordinary command (`<C-w>x` deleting a character). */
-const WINDOW: Record<string, ExResolution> = {};
-const win = (keys: string, r: ExResolution) => keys.split(" ").forEach((k) => (WINDOW[k] = r));
-win("h <C-h> <Left> <BS>", run("focus.left"));
-win("j <C-j> <Down>", run("focus.down"));
-win("k <C-k> <Up>", run("focus.up"));
-win("l <C-l> <Right>", run("focus.right"));
-win("w <C-w>", run("focus.cycle", { delta: 1 }));
-win("W", run("focus.cycle", { delta: -1 }));
-win("t <C-t>", run("focus.cycle", { to: "first" }));
-win("b <C-b>", run("focus.cycle", { to: "last" }));
-win("p <C-p>", run("focus.previous"));
-win("v <C-v>", splitRun("right"));
-win("s S <C-s> n <C-n>", splitRun("down"));
-win("c q <C-q>", run("split.close"));
-win("o <C-o>", run("split.only"));
-win("=", run("split.equalize"));
-win("_ <C-_>", run("split.maximize", { axis: "height" }));
-win("|", run("split.maximize", { axis: "width" }));
-win("x <C-x>", run("split.exchange"));
-win("r <C-r>", run("split.rotate", { delta: 1 }));
-win("R", run("split.rotate", { delta: -1 }));
-win("H", run("split.moveToEdge", { edge: "left" }));
-win("L", run("split.moveToEdge", { edge: "right" }));
-win("K", run("split.moveToEdge", { edge: "top" }));
-win("J", run("split.moveToEdge", { edge: "bottom" }));
-win("^ <C-6>", run("tabs.alternate"));
-
-const RESIZE: Record<string, { axis: "width" | "height"; sign: 1 | -1 }> = {
-  "+": { axis: "height", sign: 1 },
-  "-": { axis: "height", sign: -1 },
-  ">": { axis: "width", sign: 1 },
-  "<": { axis: "width", sign: -1 },
-};
-
-/** Every `<C-w>` second key that runs something here. */
-export const WINDOW_KEYS = [...Object.keys(WINDOW), ...Object.keys(RESIZE)];
-
-/** The one engine key a map's right side plays for `<C-w>{key}`: the
- *  engine splits a played right side into keys and runs a lone `<C-w>` as
- *  nothing, so the pair travels as one. Null for a key with no command. */
-export function windowEngineKey(key: string): string | null {
-  const k = key === "<lt>" ? "<" : key;
-  if (!(k in WINDOW) && !(k in RESIZE)) return null;
-  return `<CcWin${[...k].map((c) => c.charCodeAt(0).toString(16)).join("")}>`;
-}
-
-/** `:wincmd` and `<C-w>` keys to commands. `count` is the count typed before
- *  `<C-w>`: one step of a resize is one percent of the workspace. */
-export function windowCommand(key: string, count?: number): ExResolution {
-  const resize = RESIZE[key === "<lt>" ? "<" : key];
-  if (resize) return run("split.resize", { axis: resize.axis, by: resize.sign * Math.max(1, count ?? 1) });
-  return WINDOW[key] ?? skip(`<C-w>${key} isn't here`);
+/** `:wincmd` and `<C-w>` letters to commands. */
+export function windowCommand(letter: string): ExResolution | null {
+  switch (letter) {
+    case "h":
+    case "<C-h>":
+    case "<Left>":
+      return run("focus.left");
+    case "j":
+    case "<C-j>":
+    case "<Down>":
+      return run("focus.down");
+    case "k":
+    case "<C-k>":
+    case "<Up>":
+      return run("focus.up");
+    case "l":
+    case "<C-l>":
+    case "<Right>":
+    case "w":
+    case "<C-w>":
+    case "p":
+      return run("focus.right");
+    case "W":
+      return run("focus.left");
+    case "v":
+    case "<C-v>":
+      return run("split.right");
+    case "s":
+    case "S":
+    case "<C-s>":
+    case "n":
+    case "<C-n>":
+      return run("split.down");
+    case "c":
+    case "q":
+    case "<C-q>":
+      return run("split.close");
+    case "o":
+    case "<C-o>":
+      return run("split.only");
+    default:
+      return null;
+  }
 }

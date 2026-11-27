@@ -1,19 +1,16 @@
 // Tabs follow the files they show. A rename in the tree moves every tab, the
 // closed-tab stack and the cursor history onto the new path, and unsaved
-// edits move with it; the person's own delete closes the file's clean tabs
-// and forgets it, while a file that leaves disk under the app (an agent's rm,
-// a branch switch, a stash) keeps its tabs, marked deleted, so it comes back
-// into them when it returns; a folder never holds a tab. Driven by the vault store's file table and its
+// edits move with it; a delete closes the file's clean tabs and forgets it;
+// a folder never holds a tab. Driven by the vault store's file table and its
 // move ledger (resolveRecentMove), the way bookmarks follow their files
 // (lib/vault/bookmarksHost.ts), so the store's own file operations stay as
 // they are.
 
 import type { Text } from "@codemirror/state";
 import { bufferKey, useCodeStore } from "../../../store/codeStore";
-import { requestEndpointOf, resolveRecentDelete, resolveRecentMove, useVaultStore } from "../../../store/vaultStore";
-import { readVaultFile } from "../../vault/client";
-import { codeBuffers, currentState, encodeFileText, isDirty, savedDocField, utf8Length, type CodeBuffer } from "../buffers";
-import { applyToBuffer, diskRemoved } from "../fileSync";
+import { resolveRecentMove, useVaultStore } from "../../../store/vaultStore";
+import { codeBuffers, currentState, encodeFileText, isDirty, savedDocField, type CodeBuffer } from "../buffers";
+import { applyToBuffer } from "../fileSync";
 import { clearHotExit, scheduleHotExit } from "../hotExit";
 import { forgetPath, renameInHistory } from "./navHistory";
 import * as M from "./model";
@@ -45,92 +42,9 @@ const update = (vaultId: string, fn: (w: M.Workspace) => M.Workspace) => useCode
 /** A path is gone: clean tabs close, and nothing reopens it. A tab with
  *  unsaved edits stays, showing the deleted strip and its Recreate. */
 export function forgetFile(vaultId: string, path: string): void {
-  const key = bufferKey(vaultId, path);
-  const dirty = !!useCodeStore.getState().dirty[key];
+  const dirty = !!useCodeStore.getState().dirty[bufferKey(vaultId, path)];
   update(vaultId, (w) => M.forgetPath(w, path, { keepTabs: dirty }));
-  if (!dirty) {
-    forgetPath(vaultId, path);
-    useCodeStore.getState().setConflict(key, null);
-  }
-}
-
-/** The file left disk under the app: its tabs, closed-tab entry and cursor
- *  history stay, and an open buffer is marked deleted (the tab strikes its
- *  name). A version arriving clears the mark (applyDiskVersion, and
- *  `returned` below for a buffer not on screen). */
-function markGone(vaultId: string, path: string): void {
-  const b = codeBuffers.get(bufferKey(vaultId, path));
-  if (!b) return;
-  diskRemoved(b, { evenIfClean: true });
-  // Kept a moment: a file that appears elsewhere with these bytes is this one,
-  // renamed by something outside the app (an agent's `git mv`).
-  const state = currentState(b);
-  if (b.baseEtag) gone.set(b.key, { vaultId, path, etag: b.baseEtag, bytes: utf8Length(encodeFileText(state, state.field(savedDocField))), at: Date.now() });
-}
-
-// ── renames made outside the app ─────────────────────────────────────────────
-// The watcher reports `mv a b` as a removed and an add, often in separate
-// batches. A file that left disk while open is held here briefly; an added
-// file of the same size whose bytes hash to the buffer's base etag is the
-// same file, and its tabs, unsaved text, hot exit and history follow it as
-// they follow a rename in the tree. The daemon is asked only for a candidate
-// of the exact size, once.
-
-interface Gone {
-  vaultId: string;
-  path: string;
-  etag: string;
-  bytes: number;
-  at: number;
-}
-
-const gone = new Map<string, Gone>();
-const GONE_MS = 3000;
-
-let readAt = async (vaultId: string, path: string): Promise<string | null> => {
-  const ep = requestEndpointOf(useVaultStore.getState());
-  if (!ep) return null;
-  return (await readVaultFile(ep, vaultId, path).catch(() => null))?.etag ?? null;
-};
-
-/** Tests: read a file's etag from a stand-in disk. */
-export function _setRenameReaderForTests(next: typeof readAt): () => void {
-  const was = readAt;
-  readAt = next;
-  return () => {
-    readAt = was;
-  };
-}
-
-function followOutsideRenames(vaultId: string, files: FileTable, prev: FileTable): Promise<void> | null {
-  const now = Date.now();
-  const waiting: Gone[] = [];
-  for (const [k, g] of gone) {
-    if (now - g.at > GONE_MS || files[g.path]) gone.delete(k);
-    else if (g.vaultId === vaultId) waiting.push(g);
-  }
-  if (!waiting.length) return null;
-  const added: { path: string; size: number }[] = [];
-  for (const p in files) {
-    const row = files[p] as { dir?: boolean; size?: number } | undefined;
-    if (!prev[p] && row && !row.dir && typeof row.size === "number") added.push({ path: p, size: row.size });
-  }
-  if (!added.length) return null;
-  return Promise.all(
-    waiting.map(async (g) => {
-      const candidates = added.filter((a) => a.size === g.bytes);
-      for (const c of candidates) {
-        if ((await readAt(vaultId, c.path)) !== g.etag) continue;
-        const key = bufferKey(vaultId, g.path);
-        if (gone.get(key) !== g || useVaultStore.getState().files[g.path]) return;
-        gone.delete(key);
-        // On disk already: the rename stands, nothing to wait for.
-        beginRename(vaultId, g.path, c.path, false);
-        settleRename(key);
-        return;
-      }
-    }),
-  ).then(() => {});
+  if (!dirty) forgetPath(vaultId, path);
 }
 
 // ── unsaved edits follow a rename ─────────────────────────────────────────────
@@ -197,9 +111,8 @@ function carryEdits(vaultId: string, from: string, to: string): void {
   scheduleHotExit(key, () => ({ key, vaultId, path: to, mine: edits.mine, base: () => edits.base, baseEtag: edits.baseEtag, savedAt: Date.now() }), 0);
   const existing = codeBuffers.get(key);
   // A buffer left from an earlier file at this path describes text that is
-  // gone: a fresh one is built from disk and takes the edits. The store's
-  // text at this path is the moved file's, kept for that fresh buffer.
-  if (existing && !existing.view && !existing.dirty) codeBuffers.close(key, { keepText: true });
+  // gone: a fresh one is built from disk and takes the edits.
+  if (existing && !existing.view && !existing.dirty) codeBuffers.close(key);
   const target = codeBuffers.get(key);
   if (target) applyEdits(target, edits.doc);
   else pendingEdits.set(key, edits);
@@ -317,14 +230,7 @@ function movedOnto(path: string, files: FileTable, prev: FileTable, movedTo: (pa
 }
 
 /** What the file table's change did to the paths a workspace names. */
-function reconcile(
-  vaultId: string,
-  files: FileTable,
-  prev: FileTable,
-  scanned: boolean,
-  movedTo: (path: string) => string | null = resolveRecentMove,
-  deletedHere: (path: string) => boolean = resolveRecentDelete,
-): void {
+function reconcile(vaultId: string, files: FileTable, prev: FileTable, scanned: boolean, movedTo: (path: string) => string | null = resolveRecentMove): void {
   // A row back at a rename's old path: a refused rename (the store forgot the
   // move), a rename back onto it (beginRename below undoes the first), or a
   // new file made there, which means the rename stood.
@@ -340,16 +246,10 @@ function reconcile(
   const folders: string[] = [];
   const unseen: string[] = [];
   const booting = !nonEmpty(prev);
-  const conflicts = useCodeStore.getState().conflicts;
   for (const path of namedPaths(vaultId, ws)) {
     const row = files[path];
     if (row) {
       if (row.dir) folders.push(path);
-      // Back on disk: a tab not on screen drops its deleted mark now; the
-      // editor that shows it reads the new version then.
-      else if (!prev[path] && conflicts[bufferKey(vaultId, path)]?.kind === "deleted" && !codeBuffers.get(bufferKey(vaultId, path))?.view) {
-        useCodeStore.getState().setConflict(bufferKey(vaultId, path), null);
-      }
       continue;
     }
     if (prev[path]) {
@@ -369,10 +269,7 @@ function reconcile(
   // exist (its cap, its filters, show-all-files turned off), so it closes
   // nothing. Asking the daemon instead races the delete itself: the store
   // drops the row before the file leaves disk.
-  if (!scanned) {
-    for (const path of left) (deletedHere(path) ? forgetFile : markGone)(vaultId, path);
-    lastFollow = followOutsideRenames(vaultId, files, prev);
-  }
+  if (!scanned) for (const path of left) forgetFile(vaultId, path);
   // The first table after a reload: tabs saved for files the scan does not
   // list may be past its cap, or deleted while the page was closed. No delete
   // is in flight now, so the daemon's answer is the truth.
@@ -386,15 +283,8 @@ function reconcile(
   }
 }
 
-let lastFollow: Promise<void> | null = null;
-
-/** Tests: run one file-table change through, with a stand-in move ledger;
- *  resolves once any outside rename it noticed has been followed. */
-export const _reconcileForTests = (...args: Parameters<typeof reconcile>): Promise<void> => {
-  lastFollow = null;
-  reconcile(...args);
-  return lastFollow ?? Promise.resolve();
-};
+/** Tests: run one file-table change through, with a stand-in move ledger. */
+export const _reconcileForTests = reconcile;
 
 let started = false;
 

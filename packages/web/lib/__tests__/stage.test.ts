@@ -2,7 +2,7 @@ import { replaceGlobals } from "../../test-helpers/globals";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { useInboxStore, type AppTab } from "../../store/inboxStore";
 import { besideLeafId, leavesOf, seedLeafId } from "../../store/stageSplit";
-import { openBeside, openBrowserPane, openSessionInFocusedPane, paneSessionId, performStageDrop, sessionPanePath, stageLeafSession, stageRenderLayout } from "../stage";
+import { openBeside, openBrowserPane, openSessionInFocusedPane, paneSessionId, performStageDrop, stageRenderLayout } from "../stage";
 import { parseBrowserRoute } from "../browserPane";
 
 // performStageDrop is the one entry point every drag source funnels into;
@@ -265,14 +265,6 @@ describe("openBeside — the reused Option-click target", () => {
     expect(t.path).toBe("/tasks");
   });
 
-  it("a conversation already beside moves to the message instead of opening twice", () => {
-    const id = "jx78ksdh85pw088a1d2ce6ndgx83z42a";
-    expect(openBeside(sessionPanePath(id))).toBe(true);
-    expect(openBeside(sessionPanePath(id, "m9"))).toBe(true);
-    const paths = leavesOf(activeTab().layout!).map((l) => l.path);
-    expect(paths).toEqual(["/tasks", `/conversation/${id}#msg-m9`]);
-  });
-
   it("a path already on stage opens nothing and moves nothing", () => {
     state().stageInsertLeaf("root", "right", "/docs");
     const before = activeTab();
@@ -382,18 +374,5 @@ describe("paneSessionId", () => {
     // "no longer available" for a session the viewer could open.
     expect(paneSessionId("/conversation/jx7etg8")).toBeNull();
     expect(paneSessionId("/conversation/3f2c9a1e-7b1d-4c55-9a0e-1c2d3e4f5a6b")).toBeNull();
-  });
-});
-
-describe("stageLeafSession", () => {
-  const id = "jx78ksdh85pw088a1d2ce6ndgx83z42a";
-  it("a leaf at a message is that conversation, opened at the message", () => {
-    expect(sessionPanePath(id, "m1")).toBe(`/conversation/${id}#msg-m1`);
-    expect(stageLeafSession(sessionPanePath(id, "m1"))).toEqual({ sessionId: id, messageId: "m1" });
-    expect(stageLeafSession(sessionPanePath(id))).toEqual({ sessionId: id, messageId: undefined });
-  });
-  it("keeps share links and short ids page entries", () => {
-    expect(stageLeafSession(`/conversation/${id}?share=t#msg-m1`)).toBeNull();
-    expect(stageLeafSession("/conversation/jx7etg8#msg-m1")).toBeNull();
   });
 });

@@ -11,8 +11,8 @@
 // at a directory real machines have, and anything glued to a URL or a dotted
 // host is skipped by the boundary rule.
 
-import { createContext, useContext, useMemo } from "react";
-import { inferHomeDir, resolveCustomPath } from "./utils";
+import { createContext } from "react";
+import { resolveCustomPath } from "./utils";
 import { filesHref } from "./vault/vaultHref";
 
 // One path segment: the usual file-name characters, plus Next.js-style
@@ -193,27 +193,10 @@ export function resolveMentionPath(path: string, ctx: FilePathContextValue | nul
   return [...candidates][0];
 }
 
-/** The context of a folder with no conversation around it: a terminal's
- *  directory, a task's or plan's project. Relative mentions resolve in it, on
- *  `deviceId` when one is known. */
-export function folderPathContext(folder: string | null | undefined, deviceId?: string | null): FilePathContextValue {
-  const base = folder || undefined;
-  return { base, home: inferHomeDir([base]), deviceId: deviceId ?? null };
-}
-
 /** Provided once per conversation (ConversationView) with the session's
  *  working directory and home. Null outside a conversation — absolute and
  *  `~/` mentions still link; relative ones ride to the page as written. */
 export const FilePathContext = createContext<FilePathContextValue | null>(null);
-
-/** The context for a task's or plan's project folder, or the one already
- *  around it when the row names none (a thread drawn inside a conversation
- *  keeps the conversation's). Task and plan rows carry no machine, so the
- *  folder resolves on the vault the editor opens by default. */
-export function useFolderPathContext(folder: string | null | undefined): FilePathContextValue | null {
-  const outer = useContext(FilePathContext);
-  return useMemo(() => (folder ? folderPathContext(folder) : outer), [folder, outer]);
-}
 
 /**
  * The Files-surface link for a mention. With context, the path is made absolute

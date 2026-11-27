@@ -14,8 +14,6 @@ import { splitEngineKeys } from "./keys";
 import { commandKeyName, ensureCommandKeys, installPlugins, DEFAULT_KEYS } from "./plugins";
 import { clipboardSyncEnabled, setClipboardSync } from "./clipboard";
 import { installRuntimeOptions } from "./editorOptions";
-import { installGdefault } from "./gdefault";
-import { setExAliasNames } from "./complete";
 import { parseVimrc, type VimrcSourceInput } from "./parse";
 import type { ParsedVimrc, VimConfigReport, VimDirectiveReport, VimReportCounts } from "./types";
 
@@ -29,7 +27,6 @@ export function installVimEngine(): void {
   installExAdapters();
   installPlugins();
   installRuntimeOptions();
-  installGdefault();
 }
 
 interface Applied {
@@ -43,7 +40,6 @@ interface Applied {
 let applied: Applied | null = null;
 
 const aliasBodies = new Map<string, string>();
-setExAliasNames(() => aliasBodies.keys());
 const aliasesDefined = new Set<string>();
 let aliasDepth = 0;
 

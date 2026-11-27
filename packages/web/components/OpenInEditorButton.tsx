@@ -22,7 +22,6 @@ import { cn } from "../lib/utils";
 export function OpenInEditorButton({
   target,
   diffAgainst,
-  peek,
   label,
   editorOnly,
   className,
@@ -30,8 +29,6 @@ export function OpenInEditorButton({
   /** `ctx` resolves a relative path; the conversation's own when absent. */
   target: EditorTarget;
   diffAgainst?: OpenInEditorOptions["diffAgainst"];
-  /** Peek the change at the landed line once the file shows (an edit card). */
-  peek?: boolean;
   /** Shown beside the icon; icon only when absent. */
   label?: string;
   /** Not drawn when the editor cannot reach the file (a surface that already
@@ -62,7 +59,7 @@ export function OpenInEditorButton({
       aria-label={label ? undefined : reachable ? "Open in editor" : "Open in session changes"}
       onClick={(e) => {
         e.stopPropagation();
-        openConversationPath({ ...target, ctx }, { fromLeaf, diffAgainst, peek });
+        openConversationPath({ ...target, ctx }, { fromLeaf, diffAgainst });
       }}
       className={cn(
         "inline-flex items-center gap-1 shrink-0 rounded px-0.5 text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-colors",

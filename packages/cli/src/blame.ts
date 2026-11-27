@@ -13,7 +13,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import open from "open";
 import { cliFetchRead } from "./cliHttp.js";
-import { contentLinesToMatch as selectContentLines, extractSessionTrailer, overlapLinesBySha, sessionTrailerCount, type ContentLine } from "@codecast/shared/blame";
+import { contentLinesToMatch as selectContentLines, extractSessionTrailer, overlapLinesBySha, type ContentLine } from "@codecast/shared/blame";
 import { git } from "./code/codeGit.js";
 import { defaultConfigDir } from "./config/configDir.js";
 import { webBaseUrl } from "./config/readLocalConfig.js";
@@ -71,11 +71,6 @@ export interface BlameResolution {
   // is a bot organizing other sessions' work — the authoring session is the
   // one whose reasoning you want to read.
   byLine: Map<string, SessionRef>;
-  // sha → how many sessions a sweep commit names in its Codecast-Session
-  // trailers. Such a commit carries several sessions' work, so the session
-  // that ran `git commit` (found by hash, commit row or subject) wrote none
-  // of it in particular and is never the answer for its lines.
-  sweeps?: Map<string, number>;
 }
 
 export const EMPTY_RESOLUTION: BlameResolution = {
@@ -303,7 +298,7 @@ export interface CommitDescriptor {
 // commit objects in one `git cat-file --batch`. The shas go in on stdin, so a
 // file with any number of blamed commits fits, and a commit git cannot read (a
 // shallow clone missing it) answers "missing" and costs only itself.
-export async function readSessionTrailers(shas: string[], cwd: string, sweeps?: Map<string, number>): Promise<Map<string, string>> {
+export async function readSessionTrailers(shas: string[], cwd: string): Promise<Map<string, string>> {
   const found = new Map<string, string>();
   const wanted = [...new Set(shas)].filter((sha) => /^[0-9a-f]{4,64}$/i.test(sha));
   if (wanted.length === 0) return found;
@@ -326,13 +321,7 @@ export async function readSessionTrailers(shas: string[], cwd: string, sweeps?: 
     if (type !== "commit") continue;
     const text = body.toString("utf-8");
     const headerEnd = text.indexOf("\n\n");
-    const message = headerEnd < 0 ? "" : text.slice(headerEnd + 2);
-    const count = sessionTrailerCount(message);
-    if (count > 1) {
-      sweeps?.set(sha, count);
-      continue;
-    }
-    const session = extractSessionTrailer(message);
+    const session = extractSessionTrailer(headerEnd < 0 ? "" : text.slice(headerEnd + 2));
     if (session) found.set(sha, session);
   }
   return found;
@@ -406,8 +395,7 @@ export async function resolveFromParsed(
 ): Promise<BlameResolution> {
   if (!config.auth_token || !config.convex_url) return EMPTY_RESOLUTION;
   const shas = [...new Set(parsed.lines.map((l) => l.sha))].filter((s) => s !== ZERO_SHA);
-  const sweeps = new Map<string, number>();
-  const trailers = await readSessionTrailers(shas, path.dirname(absFilePath), sweeps);
+  const trailers = await readSessionTrailers(shas, path.dirname(absFilePath));
   const overlapLines = overlapLinesBySha(
     parsed.lines
       .filter((line) => line.sha !== ZERO_SHA && !trailers.has(line.sha))
@@ -427,12 +415,7 @@ export async function resolveFromParsed(
   const contentLines = contentLinesToMatch(parsed, Date.now());
   const siteUrl = config.convex_url.replace(".cloud", ".site");
   try {
-    const resolution = await resolveSessions(siteUrl, config.auth_token, commits, absFilePath, contentLines);
-    if (sweeps.size === 0) return resolution;
-    // A sweep's lines belong to whoever wrote them: keep an overlap match,
-    // drop an answer that only found the session that committed the sweep.
-    const bySha = new Map([...resolution.bySha].filter(([sha, ref]) => !sweeps.has(sha) || ref.via === "overlap"));
-    return { ...resolution, bySha, sweeps };
+    return await resolveSessions(siteUrl, config.auth_token, commits, absFilePath, contentLines);
   } catch (error) {
     console.error(
       `cast blame: session resolution unavailable (${error instanceof Error ? error.message : error})`,

@@ -74,7 +74,7 @@ export type VimMapContext = "normal" | "visual" | "operatorPending" | "insert" |
 export type VimEffect =
   | { kind: "map"; context: VimMapContext; lhs: string; rhs: string; noremap: boolean; nowait: boolean }
   | { kind: "unmap"; context: VimMapContext; lhs: string }
-  | { kind: "engineOption"; name: "textwidth" | "langmap" | "gdefault"; value: string | number | boolean }
+  | { kind: "engineOption"; name: "textwidth" | "langmap"; value: string | number }
   | { kind: "timeout"; ms: number | null }
   | { kind: "clipboard"; on: boolean }
   | { kind: "exAlias"; name: string; body: string };

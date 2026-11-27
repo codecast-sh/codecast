@@ -16,10 +16,6 @@ const { EditorState } = await import("@codemirror/state");
 const { EditorView } = await import("@codemirror/view");
 const { indentUnit } = await import("@codemirror/language");
 const { CODE_CURSOR_TEXT_VAR } = await import("../../theme");
-const { Vim } = await import("@replit/codemirror-vim");
-const { withGdefault } = await import("../gdefault");
-const { exCompletions } = await import("../complete");
-const { registerExCompletionSource } = await import("../completionSource");
 
 const fixture = (name: string) => readFileSync(new URL(`../__fixtures__/${name}`, import.meta.url), "utf8");
 const mac = { platform: "mac" } as const;
@@ -117,56 +113,6 @@ describe("a vimrc's maps drive the editor", () => {
     e.keys("<C-w>h");
     e.keys("'v");
     expect(calls.map((c) => c.id)).toEqual(["focus.left", "split.right"]);
-  });
-
-  it("gives every <C-w> second key a window command, never an engine command", () => {
-    const ids = ["split.exchange", "split.rotate", "split.equalize", "split.maximize", "split.resize", "split.moveToEdge", "focus.previous", "focus.cycle", "tabs.alternate"] as const;
-    apply("");
-    const calls = recordCommands([...ids]);
-    const e = mount("abc def\nghi\n");
-    e.keys("<C-w>x<C-w>r<C-w>=<C-w>_<C-w>|5<C-w><<C-w>><C-w>-3<C-w>+<C-w>H<C-w>J<C-w>p<C-w>w<C-w>W<C-w>t<C-6>");
-    // A key with no counterpart is spent too: `<C-w>T` leaves no operator waiting.
-    e.keys("<C-w>Tx");
-    expect(e.doc).toBe("bc def\nghi\n");
-    expect(calls.map((c) => [c.id, c.args])).toEqual([
-      ["split.exchange", undefined],
-      ["split.rotate", { delta: 1 }],
-      ["split.equalize", undefined],
-      ["split.maximize", { axis: "height" }],
-      ["split.maximize", { axis: "width" }],
-      ["split.resize", { axis: "width", by: -5 }],
-      ["split.resize", { axis: "width", by: 1 }],
-      ["split.resize", { axis: "height", by: -1 }],
-      ["split.resize", { axis: "height", by: 3 }],
-      ["split.moveToEdge", { edge: "left" }],
-      ["split.moveToEdge", { edge: "bottom" }],
-      ["focus.previous", undefined],
-      ["focus.cycle", { delta: 1 }],
-      ["focus.cycle", { delta: -1 }],
-      ["focus.cycle", { to: "first" }],
-      ["tabs.alternate", undefined],
-    ]);
-  });
-
-  it("runs a vimrc's maps onto window keys with their counts, and :b# as the alternate file", () => {
-    apply("nnoremap <c-q> <C-W>=\nnnoremap <a-up> 5<c-w>-\nnnoremap <a-left> 5<c-w><\nnnoremap <C-j> <C-W>j<C-W>_\nmap Q <c-w>p\nnoremap q :b#<cr>");
-    const calls = recordCommands(["split.equalize", "split.resize", "split.maximize", "focus.down", "focus.previous", "tabs.alternate", "quickOpen"]);
-    const e = mount("one\ntwo\n");
-    e.keys("<C-q><A-Up><A-Left><C-j>Qq");
-    e.ex("e#");
-    e.ex("bu #");
-    expect(e.doc).toBe("one\ntwo\n");
-    expect(calls.map((c) => [c.id, c.args])).toEqual([
-      ["split.equalize", undefined],
-      ["split.resize", { axis: "height", by: -5 }],
-      ["split.resize", { axis: "width", by: -5 }],
-      ["focus.down", undefined],
-      ["split.maximize", { axis: "height" }],
-      ["focus.previous", undefined],
-      ["tabs.alternate", undefined],
-      ["tabs.alternate", undefined],
-      ["tabs.alternate", undefined],
-    ]);
   });
 
   it("composes <Plug> commentary maps", () => {
@@ -454,114 +400,6 @@ describe("built-in plugins", () => {
     const e = mount("let total = 0;\ntotal += 1;\n");
     e.keys("2Ggd");
     expect(e.head).toBe(4);
-  });
-});
-
-const directives = (report: ReturnType<typeof apply>) => report.sources.flatMap((s) => s.directives.map((d) => [d.text, d.status, d.detail]));
-
-describe("the report of window keys and chained maps", () => {
-  it("names the parts of a map that do nothing here", () => {
-    const report = apply(
-      [
-        "nnoremap <leader>f <C-W>H",
-        "nnoremap ,T <C-w>T",
-        "nnoremap ≤ :sp<CR>:copen<CR><C-W>_<C-W>T",
-        "nnoremap ,de :copen<cr>:q<cr><C-W>_",
-        "nnoremap \\m :sp /Users/me/notes/scratch.md<CR>",
-      ].join("\n"),
-    );
-    expect(directives(report).map(([, status, detail]) => [status, detail])).toEqual([
-      ["translated", "normal: <leader>f → split.moveToEdge"],
-      ["skipped", "<C-w>T isn't here"],
-      ["translated", "normal: ≤ → split.down, search.project, split.maximize (<C-w>T isn't here)"],
-      ["translated", "normal: ,de → search.project, split.maximize (:q after the quickfix list closes nothing here)"],
-      ["translated", "normal: \\m → file.open (inside the open folder only)"],
-    ]);
-    const calls = recordCommands(["search.project", "split.maximize", "file.close"]);
-    mount("x\n").keys(",de");
-    expect(calls.map((c) => c.id)).toEqual(["search.project", "split.maximize"]);
-  });
-});
-
-describe("command-line completion", () => {
-  const files = { "src/code.ts": {}, "src/core/a.ts": {}, "src/core/b.ts": {}, "README.md": {}, "my notes.md": {} };
-
-  it("completes command names, paths a folder at a time, and tabs for :b", () => {
-    const src = { commands: ["Gvdiffsplit", "Gdiffsplit", "vsplit", "edit"], files, tabs: ["src/code.ts", "README.md"] };
-    expect(exCompletions("Gvd", src)).toEqual({ start: 0, items: ["Gvdiffsplit"] });
-    expect(exCompletions("e src/co", src)).toEqual({ start: 2, items: ["src/core/", "src/code.ts"] });
-    expect(exCompletions("vs src/core/", src)).toEqual({ start: 3, items: ["src/core/a.ts", "src/core/b.ts"] });
-    expect(exCompletions("e my", src)).toEqual({ start: 2, items: ["my\\ notes.md"] });
-    expect(exCompletions("b read", src)).toEqual({ start: 2, items: ["README.md"] });
-    expect(exCompletions("%s/a/b/", src)).toBeNull();
-  });
-
-  it("Tab fills in the shared part and lists the rest, then steps through them", () => {
-    const off = registerExCompletionSource(() => ({ files: () => files, tabs: () => [] }));
-    apply("");
-    const e = mount("x\n");
-    e.keys(":");
-    const dialog = e.view.dom.querySelector<HTMLElement>(".cm-vim-panel")!;
-    const input = dialog.querySelector("input")!;
-    const tab = (shiftKey = false) => input.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", shiftKey, bubbles: true, cancelable: true }));
-    input.value = "e src/co";
-    tab();
-    expect(input.value).toBe("e src/co");
-    const strip = () => [...dialog.querySelectorAll(".cm-vim-wild > span")].map((s) => (s.className ? `[${s.textContent}]` : s.textContent));
-    expect(strip()).toEqual(["core/", "code.ts"]);
-    tab();
-    expect(input.value).toBe("e src/core/");
-    expect(strip()).toEqual(["[core/]", "code.ts"]);
-    tab();
-    expect(input.value).toBe("e src/code.ts");
-    tab(true);
-    expect(input.value).toBe("e src/core/");
-    input.dispatchEvent(new (input.ownerDocument.defaultView as unknown as { Event: typeof Event }).Event("input"));
-    expect(dialog.querySelector(".cm-vim-wild")).toBeNull();
-    input.value = "e src/core/a";
-    tab();
-    expect(input.value).toBe("e src/core/a.ts");
-    off();
-  });
-});
-
-describe("gdefault", () => {
-  it("flips :s's g flag, typed, through a map, inside :g, and back off with :set nogd", () => {
-    expect(withGdefault("%s/a/b/")).toBe("%s/a/b/g");
-    expect(withGdefault("'<,'>s#a#b#gc")).toBe("'<,'>s#a#b#c");
-    expect(withGdefault("s/a\\/x/b")).toBe("s/a\\/x/b/g");
-    expect(withGdefault("g/x/s/a/b/")).toBe("g/x/s/a/b/g");
-    expect(withGdefault("sort u")).toBe("sort u");
-
-    const report = apply("set gdefault\nnnoremap ,r :%s/a/b/<CR>");
-    expect(directives(report)).toEqual([
-      ["set gdefault", "applied", ":s replaces every match on a line; /g the first"],
-      ["nnoremap ,r :%s/a/b/<CR>", "applied", "normal: ,r"],
-    ]);
-    const e = mount("a a a\na a a\n");
-    e.ex("s/a/b/");
-    expect(e.doc).toBe("b b b\na a a\n");
-    e.ex("2s/a/b/g");
-    expect(e.doc).toBe("b b b\nb a a\n");
-    const m = mount("a a\na a\n");
-    m.keys(",r");
-    expect(m.doc).toBe("b b\nb b\n");
-    e.ex("set nogd");
-    e.ex("%s/b/c/");
-    expect(e.doc).toBe("c b b\nc a a\n");
-  });
-
-  it("applies to a line typed at the : prompt, and history keeps it as typed", () => {
-    apply("set gd");
-    const e = mount("a a a\n");
-    e.keys(":");
-    const input = e.view.dom.querySelector<HTMLInputElement>(".cm-vim-panel input, input")!;
-    input.value = "s/a/b/";
-    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", keyCode: 13, bubbles: true }));
-    expect(e.doc).toBe("b b b\n");
-    const history = (Vim.getVimGlobalState_() as unknown as { exCommandHistoryController: { historyBuffer: string[] } }).exCommandHistoryController.historyBuffer;
-    expect(history.at(-1)).toBe("s/a/b/");
-    apply("");
   });
 });
 

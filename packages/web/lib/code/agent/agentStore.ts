@@ -78,8 +78,6 @@ interface AgentStoreState {
   addChip(el: HTMLElement, vaultId: string, newSession?: () => boolean): void;
   removeChip(el: HTMLElement): void;
   setOverride(vaultId: string, value: LinkOverride): void;
-  /** Read the vault's saved pick into the store, once. */
-  restoreOverride(vaultId: string): void;
   setLink(vaultId: string, link: AgentLink): void;
   /** `digest` names the evidence; an unchanged digest writes nothing. */
   setPresence(vaultId: string, root: string, index: EditIndex, digest: string): void;
@@ -93,29 +91,6 @@ interface AgentStoreState {
 }
 
 let inlineIds = 0;
-
-// The person's pick per vault outlives a reload, beside the vault's code
-// workspace (lib/code/workspace/persist): a vault is one folder on one
-// machine, so the pick is this browser's. A pick whose session is gone is
-// passed over by resolveLink until the person picks again.
-const OVERRIDE_KEY = (vaultId: string) => `codecast:code-agent-link:v1:${vaultId}`;
-
-function readOverride(vaultId: string): LinkOverride {
-  try {
-    return (typeof localStorage === "undefined" ? null : localStorage.getItem(OVERRIDE_KEY(vaultId))) ?? undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function writeOverride(vaultId: string, value: LinkOverride): void {
-  try {
-    if (value) localStorage.setItem(OVERRIDE_KEY(vaultId), value);
-    else localStorage.removeItem(OVERRIDE_KEY(vaultId));
-  } catch {
-    // Storage full or blocked: the pick lasts for this page.
-  }
-}
 
 const sameLink = (a: AgentLink | undefined, b: AgentLink) => !!a && a.sessionId === b.sessionId && a.source === b.source;
 
@@ -137,12 +112,6 @@ export const useAgentStore = create<AgentStoreState>((set, get) => ({
   },
   setOverride: (vaultId, value) => {
     if (get().overrides[vaultId] === value) return;
-    writeOverride(vaultId, value);
-    set((s) => ({ overrides: { ...s.overrides, [vaultId]: value } }));
-  },
-  restoreOverride: (vaultId) => {
-    if (vaultId in get().overrides) return;
-    const value = readOverride(vaultId);
     set((s) => ({ overrides: { ...s.overrides, [vaultId]: value } }));
   },
   setLink: (vaultId, link) => {
