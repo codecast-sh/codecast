@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setSystemTime, test } from "bun:test";
 import { CAUSE_WINDOW, LINE_CARD_GATE_NODE, LINE_RUNS_PER_RUNNER, MAX_STARTS_PER_SWEEP, claimSlot, lineCandidates, lineLoadFor, lineQueueFor, planSweep, startPlanned, sweepCore } from "./orgLine";
 import { HEAD_OF_PEOPLE_HANDLE } from "@codecast/shared/contracts/orgLead";
 import { normalizeGitOrigin } from "@codecast/shared/contracts";
@@ -207,6 +207,12 @@ describe("orgLine admission (LE6)", () => {
   });
 
   describe("a pool of machines that offer the role's checkout", () => {
+    // The starts here read the real clock, and the fixtures' NOW was taken when
+    // orgLine.testkit first loaded, which in one bun process over the whole
+    // suite can be minutes earlier: past the 2 minute window the hosts'
+    // last_seen: NOW would read as offline. Run them at NOW.
+    beforeEach(() => setSystemTime(new Date(NOW)));
+    afterEach(() => setSystemTime());
     const ORIGIN = normalizeGitOrigin("git@github.com:Acme/Growth.git")!;
     // The laptop holds the role's folder (/srv/growth) inside the repository at /srv.
     const laptop = { _id: "devices_laptop", user_id: HOST, device_id: "dev-laptop", last_seen: NOW, git_plane: [{ root: "/srv", origin: "git@github.com:Acme/Growth.git", origin_ok: true }] };
