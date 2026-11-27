@@ -26,7 +26,6 @@ import {
   type ThreadStateStatus,
 } from "@codecast/shared/contracts";
 import { parseServesHint } from "@codecast/shared/contracts/priorities";
-import { parseWaitingOnRef, personWaitNeedsAsk, prWaitingRef } from "@codecast/shared/contracts/waitingOn";
 import { clearThreadStatePulse, writeThreadStatePulse } from "./threadStateStamp.js";
 import { commandGroup } from "./commandGroupLookup.js";
 
@@ -59,6 +58,8 @@ export async function waitingOnArg(
 ): Promise<{ on?: string; error?: string }> {
   if (on === undefined) return {};
   if (status !== "dormant") return { error: `--on names what a dormant session waits on: cast state --status dormant --on '${on}' "<text>"` };
+  // Loaded on use: only a pin with --on needs it, and the CLI's boot graph has a ceiling (bench/bootGraph.guard).
+  const { parseWaitingOnRef, prWaitingRef } = await import("@codecast/shared/contracts/waitingOn");
   const parsed = parseWaitingOnRef(on);
   if (!parsed.ok) return { error: parsed.error };
   if (parsed.kind !== "pr") return { on: parsed.ref };
@@ -70,9 +71,9 @@ export async function waitingOnArg(
 /** The question a wait on a person asks them, or the refusal to print:
  * `--on @handle` needs `--ask`, and `--ask` and `-o` go with nothing else.
  * `on` is waitingOnArg's stored ref. */
-export function personAskArg(on: string | undefined, ask: string | undefined, options: string[]): { ask?: string; error?: string } {
+export async function personAskArg(on: string | undefined, ask: string | undefined, options: string[]): Promise<{ ask?: string; error?: string }> {
   const person = !!on?.startsWith("@");
-  if (person && !ask?.trim()) return { error: personWaitNeedsAsk(on!) };
+  if (person && !ask?.trim()) return { error: (await import("@codecast/shared/contracts/waitingOn")).personWaitNeedsAsk(on!) };
   if (!person && (ask !== undefined || options.length > 0)) return { error: `--ask and -o go with a wait on a person: cast state --status dormant --on @handle --ask "<question>" "<text>"` };
   if (options.length > 9) return { error: "At most nine options (they map to keys 1-9)" };
   return person ? { ask: ask!.trim() } : {};
@@ -282,7 +283,7 @@ EOF
         console.error(waiting.error);
         process.exit(1);
       }
-      const person = personAskArg(waiting.on, options.ask, options.option ?? []);
+      const person = await personAskArg(waiting.on, options.ask, options.option ?? []);
       if (person.error) {
         console.error(person.error);
         process.exit(1);

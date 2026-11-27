@@ -41,13 +41,13 @@ block by "everything to end of file" destroys this paragraph.
 
 ## Thread state
 
-Pin a short state saying where the work stands. The human sees it above the composer and on the inbox card, so they learn the situation without reading back.
+Pin a short state on this session saying where the work stands. The human sees it above the composer and on the inbox card, so they learn the situation without reading back.
 
 **End every turn by declaring who acts next** with `--status`. It decides where the session files in the human's inbox:
 
 - `blocked`: a human must act first, or you offer them named work, even optional (a choice, a follow-up, a step outside the session). Files under **Needs You**.
 - `done`: delivered, no work for them ("shout if you want changes" is fine); read at leisure.
-- `dormant`: a machine wakes you (a trigger you armed, a background task, a blocker on the task you hold, a wait you set with `cast task dep`, or what `--on jx7c6zk|ct-12|'#42'|@handle --ask "<q>"` names). Only when you can **name the wake** in the text; if you can't say what resumes you, you are `blocked`.
+- `dormant`: a machine wakes you (a trigger you armed, a background task, another session's reply, a blocker on the task you hold: a PR, a decision, a time, or a wait you set on another task while holding yours). Only when you can **name the wake** in the text; if you can't say what resumes you, you are `blocked`.
 - `working` (the default): still moving.
 
 `done` and `dormant` cover only the turn that declares them, and a message from the human takes the pin down, so declare again at the end of each turn. Never park an ask in prose and go dormant: queue it with `cast decide`, then declare dormant.
@@ -62,10 +62,10 @@ Leave IDs, hashes, branches, paths and UTC stamps in the transcript unless the h
 
 ```bash
 cast state --status done "Shipped: all four fixes verified in the browser"
-cast state --status dormant --on '#42' - <<'EOF'   # multi-line, exact newlines preserved
-Waiting on #42 for the sync fix
+cast state --status dormant - <<'EOF'   # multi-line, exact newlines preserved
+Waiting on CI for the sync fix
 Done: fix pushed · unit tests green
-Next: deploy once it merges
+Next: 3 PM re-check, then merge if green
 EOF
 cast state --status blocked - <<'EOF'
 Release is waiting on a signing key

@@ -205,12 +205,12 @@ describe("waitingOnArg", () => {
 });
 
 describe("personAskArg", () => {
-  test("a person needs the question; nothing else takes one", () => {
-    expect(personAskArg("@ashot", "  Which?  ", [])).toEqual({ ask: "Which?" });
-    expect(personAskArg("@ashot", "  ", []).error).toContain("--ask");
-    expect(personAskArg("ct-12", undefined, [])).toEqual({});
-    expect(personAskArg(undefined, "Q", []).error).toContain("go with a wait on a person");
-    expect(personAskArg("@ashot", "Q", Array.from({ length: 10 }, (_, i) => `o${i}`)).error).toContain("nine");
+  test("a person needs the question; nothing else takes one", async () => {
+    expect(await personAskArg("@ashot", "  Which?  ", [])).toEqual({ ask: "Which?" });
+    expect((await personAskArg("@ashot", "  ", [])).error).toContain("--ask");
+    expect(await personAskArg("ct-12", undefined, [])).toEqual({});
+    expect((await personAskArg(undefined, "Q", [])).error).toContain("go with a wait on a person");
+    expect((await personAskArg("@ashot", "Q", Array.from({ length: 10 }, (_, i) => `o${i}`))).error).toContain("nine");
   });
 });
 

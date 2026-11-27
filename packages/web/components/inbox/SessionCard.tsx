@@ -156,6 +156,11 @@ export const SessionCard = memo(function SessionCard({
   // publish. The deps are the same narrow projections as before, so the card
   // still wakes on exactly the fields it draws and on nothing else; only the
   // number of subscribers changed. Same pattern as SessionListPanel.
+  // Where no section decides the word (a flat view, a row nested under its
+  // card), a Dormant row reads the rail's split (lib/railActivity), so it says
+  // Working or Shipping as its grouped card would. Its dep below returns a
+  // string, so the card wakes only when the split moves.
+  const splitHere = modern && (!!rest.underParent || (!rest.sectionStatus && (!rest.variant || rest.variant === "default")));
   const st = useTrackedStore([
     (s) => s.blockedReviveRequestedAt[cardId],
     (s) => convHasPendingSend(s.pendingMessages[cardId]),
@@ -203,6 +208,10 @@ export const SessionCard = memo(function SessionCard({
     // Modern only: a pending `cast decide` on this session, so the card in
     // Decisions says Needs you. Constant (false) in Classic and Minimal.
     (s) => (modern && !hosted ? awaitingOkIds(s.sessionDecisions).has(cardId) : false),
+    // The rail's split for a Dormant row drawn outside a section (splitHere):
+    // a wake signal only, read at publish time; the body reads it again at the
+    // card's coarse clock.
+    (s) => (splitHere ? dormantActivityOf(s, s.sessions[cardId] ?? session, railRowPlacement(session, Date.now()).bucket, Date.now()) : null),
   ]);
   const liveTitle = liveCardTitle(st, cardId, hosted, session);
   const prSig = sessionPullRequestsSig(st as any, cardId);
@@ -261,12 +270,7 @@ export const SessionCard = memo(function SessionCard({
   // needs-input. Past the trust TTL (keyed on updated_at, which a real working
   // agent bumps far more often) the pulse goes dark — the dot and the bucket now
   // read the SAME staleness check, so they can't disagree.
-  // Where no section decides the word (a flat view, a row nested under its
-  // card), a Dormant row reads the rail's split (lib/railActivity), so it says
-  // Working or Shipping as its grouped card would. A string, so the card wakes
-  // only when the split moves.
-  const splitHere = modern && (!!rest.underParent || (!rest.sectionStatus && (!rest.variant || rest.variant === "default")));
-  const activity = useInboxStore((s) => (splitHere ? dormantActivityOf(s, s.sessions[cardId] ?? session, railRowPlacement(session, coarseNow).bucket, coarseNow) : null));
+  const activity = splitHere ? dormantActivityOf(st, st.sessions[cardId] ?? session, railRowPlacement(session, coarseNow).bucket, coarseNow) : null;
   const isLive = sessionLiveAt(session, Date.now());
   // Clears when the daemon reports or the session is confirmed back; a command
   // nothing ever answers expires at its deadline (the coarse clock above).
