@@ -512,7 +512,7 @@ export async function listFor(ctx: Ctx, viewer: Id<"users">, args: { workspace?:
   const now = Date.now();
   for (const p of rows) {
     const steps = await r.stepsFor(p);
-    // Links on every active priority, a teammate's too: the rows a next action is drawn on. Full `links` for the viewer's own and TEAMMATE_LINKED teammates' (the read cap); the rest `mapped_links`, so a client never takes them for full ones.
+    // Links on every active priority, a teammate's too: the rows whose milestones show a state. Full `links` for the viewer's own and TEAMMATE_LINKED teammates' (the read cap); the rest `mapped_links`, so a client never takes them for full ones.
     const full = isOwner(viewer, p) || fullLinks.has(String(p._id));
     const linked = p.status === "active" ? await linksFor(r, reads, p, steps, now, full) : null;
     const row = rowFor(viewer, p, ownerOf(people, p), positions.get(String(p._id)) ?? null, steps, await mappedSessions(r, p, listRead(viewer, p)), await correctionPending(ctx, viewer, p), LIST_SESSIONS);
