@@ -246,9 +246,9 @@ class FrameLayout {
         const on = solids.filter((s) => inBox(c, s.box)).sort((a, b) => area(a.box) - area(b.box))[0];
         if (on) { on.riders.push(n.key); continue; }
       }
-      // A frame can hold another frame only if it is bigger (or the same size and earlier), so equal boxes never hold each other.
+      // Strict between frames: a frame holds another only if it is bigger, so two frames with the same box are siblings (whatever their keys).
       const holder = frames
-        .filter((f) => f !== n && contains(f.box, n.box) && (n.el.kind !== "frame" || area(f.box) > area(n.box) || (area(f.box) === area(n.box) && f.key < n.key)))
+        .filter((f) => f !== n && contains(f.box, n.box) && (n.el.kind !== "frame" || area(f.box) > area(n.box)))
         .sort((a, b) => area(a.box) - area(b.box) || (a.key < b.key ? -1 : 1))[0];
       n.parent = holder ?? root;
       n.parent.kids.push(n);
@@ -362,8 +362,10 @@ class FrameLayout {
   collapse(n: Node) {
     const before = { ...n.box };
     const holds = new Set<string>();
+    // Never itself, nor a frame whose box equals or contains its own (one around it).
+    const around = (k: Node) => k.key === n.key || (k.el.kind === "frame" && contains(k.box, before));
     const walk = (x: Node) => {
-      for (const k of x.kids) { holds.add(k.key); walk(k); }
+      for (const k of x.kids) { if (around(k)) continue; holds.add(k.key); walk(k); }
       for (const r of x.riders) holds.add(r);
     };
     walk(n);
