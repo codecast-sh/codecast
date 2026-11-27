@@ -166,16 +166,20 @@ function stopDetail(run: ChangeRun, graph: ChangeGraph, title: string, landed: b
  * that deploy failed (or sent nothing) and the target's next deploy takes it live (it is on main, so any later deploy of
  * the target carries it). Without reach, the failed deploys the reason names.
  */
-function deployFailedWords(run: ChangeRun, targets: ReadonlyArray<TargetState>): { words: string; notSent: boolean } | null {
+function deployFailedWords(run: ChangeRun, targets: ReadonlyArray<TargetState>, reading = false): { words: string; notSent: boolean } | null {
   const failed = failedDeploysOf(run.fail_reason);
   if (!failed.length) return null;
+  // Reach not answered yet: what an earlier visit cached may say failed where a deploy since took it live.
+  if (reading) return { words: "Landed · reading where it is live", notSent: false };
   const now = failed.map((f) => ({ ...f, at: targets.find((t) => t.name === f.target) }));
+  // A target the stop does not name that is still sending the change holds it as much as a failed one.
+  const sending = targets.filter((t) => t.state === "deploying" && !failed.some((f) => f.target === t.name));
   const live = now.filter((f) => f.at?.state === "live");
   const going = now.filter((f) => f.at?.state === "deploying");
   const waiting = now.filter((f) => f.at?.state !== "live" && f.at?.state !== "deploying");
   const parts = [
     ...live.map((f) => `live on ${f.target}${f.at!.deploy ? ` ${f.at!.deploy}` : ""}`),
-    ...going.map((f) => `going out to ${f.target}${f.at!.deploy ? ` in ${f.at!.deploy}` : ""}`),
+    ...[...going.map((f) => ({ name: f.target, deploy: f.at!.deploy })), ...sending].map((t) => `going out to ${t.name}${t.deploy ? ` in ${t.deploy}` : ""}`),
     ...(["failed", "not sent"] as const).flatMap((word) => {
       const these = waiting.filter((f) => (word === "not sent") === f.unsent);
       return these.length ? [`${these.map((f) => `${f.target} ${f.deploy}`).join(", ")} ${word}`] : [];
@@ -183,11 +187,11 @@ function deployFailedWords(run: ChangeRun, targets: ReadonlyArray<TargetState>):
     ...(waiting.length ? [`goes live with the next ${listWords(waiting.map((f) => f.target))} deploy${waiting.length > 1 ? "s" : ""}`] : []),
   ];
   // Not sent: every deploy it names stopped before sending anything, and none has taken it out since.
-  return { words: ["Landed", ...parts].join(" · "), notSent: !live.length && !going.length && waiting.every((f) => f.unsent) };
+  return { words: ["Landed", ...parts].join(" · "), notSent: !live.length && !going.length && !sending.length && waiting.every((f) => f.unsent) };
 }
 
 /** The page's headline for a change run: where the change stands now, and what it waits on. */
-export function changeHeadline(j: Journey, run: ChangeRun, graph: ChangeGraph, ctx: { pr?: PrState; targets?: ReadonlyArray<TargetState> } = {}): ChangeHeadline {
+export function changeHeadline(j: Journey, run: ChangeRun, graph: ChangeGraph, ctx: { pr?: PrState; targets?: ReadonlyArray<TargetState>; reading?: boolean } = {}): ChangeHeadline {
   const n = j.now;
   const { tone } = journeyWords(j);
   const head = (words: string, waits: string | null = null, t: JourneyTone = tone): ChangeHeadline => ({ words, waits, tone: t });
@@ -235,7 +239,7 @@ export function changeHeadline(j: Journey, run: ChangeRun, graph: ChangeGraph, c
       const title = stopTitle(n);
       const onMain = onMainByRun(run, j);
       if (n.fix === "deploy" && onMain) {
-        const said = deployFailedWords(run, ctx.targets ?? []);
+        const said = deployFailedWords(run, ctx.targets ?? [], ctx.reading);
         if (said) return head(said.notSent ? "Not sent" : title, said.words);
       }
       return head(title, ctx.pr?.merged && !onMain ? "PR merged on GitHub" : stopDetail(run, graph, title, onMain));

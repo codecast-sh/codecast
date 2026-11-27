@@ -11,7 +11,7 @@ import { useRouter } from "next/navigation";
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { CheckCircle2, ChevronLeft, ChevronRight, Circle, CircleDot, GitBranch, Loader2, Pause, X, XCircle } from "lucide-react";
 import { flowName } from "@codecast/shared/contracts/flowPool";
-import { useRunGraph, useSessionRun, useWorkflowRun } from "../hooks/useSyncWorkflows";
+import { useRunWorkflow, useSessionRun, useWorkflowRun } from "../hooks/useSyncWorkflows";
 import { flowContext, flowOrigin, runStanding, stepTarget, type FlowFocus, type FlowOrigin, type FlowStation, type StationState } from "../lib/flowContext";
 import { formatRunDuration } from "../lib/workflowRun";
 import { useCoarseNow } from "../hooks/useCoarseNow";
@@ -48,7 +48,8 @@ export function FlowContextOf({ run: given, focus: givenFocus, className }: { ru
   const run: any = runs.find((r: any) => r._id === pickedId) ?? given;
   const runIndex = runs.findIndex((r: any) => r._id === run._id);
   const focus = run._id === given._id ? givenFocus : undefined;
-  const graph = useRunGraph(run._id, run.workflow_id);
+  // The graph the run executes (its pinned version): its stations' names, and whether the flow changed under it.
+  const graph = useRunWorkflow(run);
   const ctx = useMemo(() => flowContext(run, graph, focus), [run, graph, focus?.conversationId, focus?.decisionId, focus?.nodeId]);
   const originId: string | undefined = run.task_origin_conversation_id;
   const originTitle = useInboxStore((s) => (originId ? ((s.sessions as any)[originId]?.title ?? (s.conversations as any)[originId]?.title) : undefined) as string | undefined);

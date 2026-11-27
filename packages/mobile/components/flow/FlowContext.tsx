@@ -18,7 +18,7 @@ import { useTaskRuns } from '@codecast/web/hooks/useSyncRuns';
 import { mobileRouteForUrl } from '@/lib/linkRoutes';
 import { openAppRoute } from '@/lib/links';
 import { flowName } from '@codecast/shared/contracts/flowPool';
-import { useRunGraph, useSessionRun, useWorkflowRun } from '@codecast/web/hooks/useSyncWorkflows';
+import { useRunWorkflow, useSessionRun, useWorkflowRun } from '@codecast/web/hooks/useSyncWorkflows';
 import { flowContext, flowOrigin, runStanding, stepTarget, type FlowFocus, type FlowOrigin, type FlowStation, type StationState } from '@codecast/web/lib/flowContext';
 import { formatRunDuration } from '@codecast/web/lib/workflowRun';
 import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
@@ -76,7 +76,8 @@ export function FlowContextOf({ run: given, focus: givenFocus, style }: { run: a
   const runIndex = runs.findIndex((r: any) => r._id === run._id);
   // The screen's own place in the flow applies only to the run the screen is about.
   const focus = run._id === given._id ? givenFocus : undefined;
-  const graph = useRunGraph(run._id, run.workflow_id);
+  // The graph the run executes (its pinned version): its stations' names, and whether the flow changed under it.
+  const graph = useRunWorkflow(run);
   const ctx = useMemo(() => flowContext(run, graph, focus), [run, graph, focus?.conversationId, focus?.decisionId, focus?.nodeId]);
   const originId: string | undefined = run.task_origin_conversation_id;
   const originTitle = useInboxStore((s) => (originId ? ((s.sessions as any)[originId]?.title ?? (s.conversations as any)[originId]?.title) : undefined) as string | undefined);

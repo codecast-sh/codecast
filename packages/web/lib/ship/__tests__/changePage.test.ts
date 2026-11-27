@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { onPrHead } from "@codecast/shared/contracts/deployTargets";
 import { journeyOf } from "../journey";
 import { stopTitle } from "../journeyWords";
 import { changeAction, changeHeadline, changeLinks, changePr, changeStations, currentHead, deployLine, endedStages, reviewOnHead, shipsChange } from "../changePage";
@@ -246,6 +247,11 @@ describe("C: truth", () => {
     // CI green on a change that edits CI, current: shown, but not as a pass.
     const r3 = run({ pr: { number: 217, repository: "acme/app", head_sha: "bbb" }, ci_verdict: { green: true, ci_changed: true, head_sha: "bbb" }, node_statuses: ROUND });
     expect(changeLinks(r3, change).find((l) => l.kind === "ci")).toMatchObject({ label: "CI green, not counted", tone: "default" });
+    // Resolve conflict force-pushed ddd, which GitHub has and the run has not recorded: judged on the PR's real head, the
+    // run's verdicts on bbb say nothing, as the PR's header says nobody has reviewed it.
+    const r4 = run({ pr: { number: 217, repository: "acme/app", head_sha: "bbb" }, ci_verdict: { green: true, ci_changed: true, head_sha: "bbb" }, review_verdict: { verdict: "ship", head_sha: "bbb" }, node_statuses: [st("pr", "completed", 1), st("ci", "completed", 2), st("review", "completed", 2, { session: { _id: "r" } }), st("merge", "failed", 3), st("fix_conflict", "completed", 4)] });
+    expect(changeLinks(r4, change).map((l) => l.label)).toEqual(["PR #217", "CI green, not counted", "Review passed"]);
+    expect(changeLinks(onPrHead(r4, "ddd"), change).map((l) => l.label)).toEqual(["PR #217", "CI", "Review"]);
   });
 
   test("Union's runs record no verdicts: CI and Review are plain links, no state", () => {
@@ -315,6 +321,16 @@ describe("D: a stop always has one way on, and never one that cannot help", () =
     const words = (targets: any[]) => changeHeadline(journeyOf(change, two, [], null), two, change, { targets }).waits;
     expect(words([{ name: "desktop", state: "live", deploy: "dp-3601" }, { name: "web", state: "deploying", deploy: "dp-14" }])).toBe("Landed · live on desktop dp-3601 · going out to web in dp-14");
     expect(words([{ name: "desktop", state: "live", deploy: "dp-3601" }, { name: "web", state: "failed" }])).toBe("Landed · live on desktop dp-3601 · web dp-12 failed · goes live with the next web deploy");
+  });
+
+  // pl-1077 polish 4: mobile dp-3857 failed, dp-3858 took it live, and cli was still going out; the head named only mobile,
+  // and before reach answered it said mobile failed from what an earlier visit had cached.
+  test("a stop at Deploy names a target still sending the change, and says it is reading until reach answers", () => {
+    const r = run({ status: "failed", current_node_id: "deploy__failed", merge: { sha: "65d54feb1c", pr_url: "https://github.com/acme/app/pull/333" }, fail_reason: "Stopped: The deploy that carried 65d54fe failed: mobile dp-3857 (Stopped at Send.).", node_statuses: [...MERGED, st("deploy__wait", "failed", 16), st("deploy__failed", "failed", 17)] });
+    const said = (ctx: Record<string, unknown>) => changeHeadline(journeyOf(change, r, [], null), r, change, ctx as any);
+    const targets = [{ name: "mobile", state: "live", deploy: "dp-3858" }, { name: "cli", state: "deploying", deploy: "dp-3856" }];
+    expect(said({ targets })).toMatchObject({ words: "Stopped at Deploy", waits: "Landed · live on mobile dp-3858 · going out to cli in dp-3856" });
+    expect(said({ targets: [{ name: "mobile", state: "failed", deploy: "dp-3857" }], reading: true }).waits).toBe("Landed · reading where it is live");
   });
 
   // ct-102396: dp-3789 stopped at Send on a refusal before anything went out; the head said "cli dp-3789 failed".

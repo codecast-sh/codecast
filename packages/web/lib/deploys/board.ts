@@ -2,11 +2,11 @@
 // main; on the right, Next deploy and each deploy card, with what each carried listed by session, PR, SHA, task,
 // branch or priority. Every commit is credited to the session that pressed Ship, the same on both columns.
 // Pure: no store, no React.
-import { verdictOnHead, type QueueCommit, type QueueGroup, type ShippingRun, type ShippingShipper } from "@codecast/shared/contracts/deployTargets";
+import { after, sameSha, splitQueue, upTo, verdictOnHead, type QueueCommit, type QueueGroup, type ShippingRun, type ShippingShipper } from "@codecast/shared/contracts/deployTargets";
 import type { CheckoutRow } from "@codecast/shared/contracts/checkouts";
 import type { SessionPriorityRef } from "@codecast/shared/contracts/priorities";
 import { entityRoute } from "@codecast/shared/entities";
-import { isOpen, prOfSubject, sessionsOf, supersededBy, type DeploySession, type TeamDeployRow } from "./targets";
+import { isOpen, prOfSubject, sessionsOf, type DeploySession, type TeamDeployRow } from "./targets";
 import { ageShort } from "../lineFlow";
 
 /* ───────────── What the page reads ───────────── */
@@ -138,17 +138,21 @@ type RunFacts = Pick<ShippingRun, "node_statuses" | "current_node_id" | "pr" | "
 /** What each step's facts say, else its stations: done, in trouble (red verdict, failed station), running, or not reached. */
 type Read = "done" | "trouble" | "active" | "idle";
 /** What each step's facts say on their own (a verdict on the PR's head, the PR, the merge), null where none speaks. */
-function stepFacts(run: RunFacts, steps: readonly Step[]): { facts: Array<Read | null>; staleReview: boolean; reviewAt: number } {
+function stepFacts(run: RunFacts, steps: readonly Step[]): { facts: Array<Read | null>; stale: boolean[] } {
   // A review binds to the head it read: once a fix round pushed another, the verdict (and the review station's earlier
   // pass) says nothing of the head the PR is on, as the PR's header says (changePage reviewOnHead).
   const v = run.review_verdict;
   const staleReview = !!(v?.head_sha && run.pr?.head_sha && !verdictOnHead(v.head_sha, run.pr.head_sha, run.station_rebases));
   const reviewAt = steps.findIndex((s) => s.word === "Review");
   const review: Read | null = v && !staleReview ? (v.verdict === "ship" ? "done" : "trouble") : null;
+  // CI binds to its head the same way, and does not hold across a rebase: it reruns there (changePage current).
+  const ci = run.ci_verdict;
+  const staleCi = !!(ci?.head_sha && run.pr?.head_sha && !verdictOnHead(ci.head_sha, run.pr.head_sha));
+  const ciAt = steps === CHANGE_STEPS ? steps.findIndex((s) => s.word === "CI") : -1;
   const facts: Array<Read | null> = steps === CHANGE_STEPS
-    ? [run.pr ? "done" : null, run.ci_verdict ? (run.ci_verdict.green ? "done" : "trouble") : null, review, run.merge ? "done" : null]
+    ? [run.pr ? "done" : null, ci && !staleCi ? (ci.green ? "done" : "trouble") : null, review, run.merge ? "done" : null]
     : [run.check_verdict ? (run.check_verdict.green ? "done" : "trouble") : null, review, isMerged(run) ? "done" : null];
-  return { facts, staleReview, reviewAt };
+  return { facts, stale: steps.map((_, i) => (i === reviewAt && staleReview) || (i === ciAt && staleCi)) };
 }
 
 function readSteps(run: RunFacts, steps: readonly Step[] = stepsFor(run)): Read[] {
@@ -163,11 +167,12 @@ function readSteps(run: RunFacts, steps: readonly Step[] = stepsFor(run)): Read[
       if (status === "completed" && s.passes?.includes(leafOf(id))) passed[j] = true;
     });
   }
-  const { facts, staleReview, reviewAt } = stepFacts(run, steps);
+  const { facts, stale } = stepFacts(run, steps);
   // A station's status says it ran, not what it found: a completed CI station without a verdict counts as done.
   return facts.map((fact, i) => {
     if (fact) return fact;
-    if (i === reviewAt && staleReview) return byStep[i].includes("running") ? "active" : "idle";
+    // A verdict on another head: the step's earlier pass says nothing of this one either.
+    if (stale[i]) return byStep[i].includes("running") ? "active" : "idle";
     const st = passed[i] ? byStep[i].filter((x) => x !== "failed") : byStep[i];
     if (st.includes("failed")) return "trouble";
     if (st.includes("running") || forked[i]) return "active";
@@ -356,7 +361,6 @@ export function prState(pr: Pick<OpenPr, "draft" | "checks_state" | "review_deci
 
 /* ───────────── Crediting: the session that pressed Ship ───────────── */
 
-const sameSha = (a: string, b: string) => a.length >= 7 && b.length >= 7 && (a.startsWith(b) || b.startsWith(a));
 
 export type SessionRef = { id: string; short_id: string | null; title: string | null; user_id: string | null; priority: SessionPriorityRef | null };
 
@@ -402,18 +406,6 @@ const refOf = (s: Pick<DeploySession, "conversation_id" | "short_id" | "title" |
 export function queueCommits(groups: ReadonlyArray<BoardQueueGroup>): BoardQueueCommit[] {
   const at = (c: BoardQueueCommit) => c.main_at ?? c.at;
   return groups.flatMap((g) => g.commits).sort((a, b) => at(b) - at(a));
-}
-
-/** What an unfinished deploy at `sha` sends: that commit and everything older. Nothing when it is not waiting. */
-export function upTo(commits: ReadonlyArray<BoardQueueCommit>, sha: string): BoardQueueCommit[] {
-  const i = commits.findIndex((c) => sameSha(c.sha, sha));
-  return i < 0 ? [] : commits.slice(i);
-}
-
-/** What remains for Next deploy once a deploy at `sha` goes: everything newer. All of it when `sha` is not waiting. */
-export function after(commits: ReadonlyArray<BoardQueueCommit>, sha: string): BoardQueueCommit[] {
-  const i = commits.findIndex((c) => sameSha(c.sha, sha));
-  return i < 0 ? [...commits] : commits.slice(0, i);
 }
 
 /* ───────────── What a deploy carried ───────────── */
@@ -590,25 +582,6 @@ export function yourSessions(next: Carried | null, cards: ReadonlyArray<DeployCa
     buckets[bucket].card ??= card;
   }
   return { buckets, bySession, newer };
-}
-
-/**
- * The queue around the newest unfinished deploy: what it is sending (its sha and older) and what is left for Next
- * deploy. With none going, or one at a sha no longer waiting, everything is next. `head`: main's newest commit as the
- * queue counted it (queue.head_sha), which may touch none of the target's paths and so go unlisted.
- */
-export function splitQueue(queue: ReadonlyArray<BoardQueueCommit>, deploys: ReadonlyArray<BoardDeploy>, head?: string | null): { going: BoardDeploy | null; sending: BoardQueueCommit[]; next: BoardQueueCommit[] } {
-  // One asked for before the live deploy never went out (targets openOf): it sends nothing, so everything waits for Next deploy.
-  const live = deploys.filter((d) => d.status === "live").sort((a, b) => (b.live_at ?? b.created_at) - (a.live_at ?? a.created_at))[0] ?? null;
-  const going = [...deploys].sort((a, b) => b.created_at - a.created_at).find((d) => isOpen(d) && d.sha && !supersededBy(d, live)) ?? null;
-  if (!going) return { going, sending: [], next: [...queue] };
-  // A deploy at main's head sends the whole queue, listed or not (a push target's build of main, a marker with no
-  // commits). One at another commit the queue does not list (it touched none of the target's paths) sends what its own
-  // records name, and everything older on main.
-  if (head && sameSha(going.sha!, head) && !queue.some((c) => sameSha(c.sha, going.sha!))) return { going, sending: [...queue], next: [] };
-  const at = queue.some((c) => sameSha(c.sha, going.sha!)) ? going.sha! : queue.find((c) => going.commit_rows?.some((r) => sameSha(r.sha, c.sha)))?.sha;
-  if (!at) return { going, sending: [], next: [...queue] };
-  return { going, sending: upTo(queue, at), next: after(queue, at) };
 }
 
 /** Each task's newest place on main: waiting ("next"), going out in an unfinished deploy, else the newest deploy that carried it. */

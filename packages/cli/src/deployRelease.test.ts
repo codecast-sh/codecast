@@ -76,6 +76,15 @@ describe("what a release does with each target", () => {
       expect(await commitsSince(repo, from, head, [], ["**/*.test.ts"])).toBe(1);
       const shipped = commit("app/d.ts");
       expect(await commitsSince(repo, from, shipped, ["app/**"], ["**/*.test.ts"])).toBe(1);
+      // The release's own bump for the version live now, committed after its cut, carries nothing; one for another
+      // version does.
+      fs.writeFileSync(path.join(repo, "app/package.json"), "{}");
+      git("add", ".");
+      git("commit", "-qm", "chore(app): bump version to 2.0.0");
+      const bumped = git("rev-parse", "HEAD");
+      expect(await commitsSince(repo, shipped, bumped, ["app/**"], [], "2.0.0")).toBe(0);
+      expect(await commitsSince(repo, shipped, bumped, ["app/**"], [], "1.9.0")).toBe(1);
+      expect(await commitsSince(repo, from, bumped, ["app/**"], ["**/*.test.ts"], "2.0.0")).toBe(1);
     } finally {
       fs.rmSync(repo, { recursive: true, force: true });
     }

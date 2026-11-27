@@ -29,10 +29,19 @@ export function deployReachFeed(ref: string) {
 
 /** The reach of `ref` (`owner/repo#N` or `owner/repo@sha`); `feed` false reads only what another surface fed. */
 export function useDeployReach(ref: string | null, feed = true): DeployReachRow | undefined {
+  return useDeployReachRead(ref, feed).reach;
+}
+
+/**
+ * The reach of `ref`, and whether the server has answered for it since this surface mounted (`ready`). Until then the
+ * row is what an earlier visit cached: a deploy since may have taken the change live, so a surface that would claim
+ * where it is not live yet (a run stopped at Deploy) says it is reading instead.
+ */
+export function useDeployReachRead(ref: string | null, feed = true): { reach: DeployReachRow | undefined; ready: boolean } {
   const opts = useMemo(() => (ref ? deployReachFeed(ref) : undefined), [ref]);
-  useSyncCollection("deployReach", api.deployReach.get, ref && feed ? { ref } : "skip", opts);
+  const { ready, error } = useSyncCollection("deployReach", api.deployReach.get, ref && feed ? { ref } : "skip", opts);
   useWatchEffect(() => (ref ? pinDetailRows("deployReach", [ref]) : undefined), [ref]);
   const row = useInboxStore((s) => (ref ? (s.deployReach?.[ref] as DeployReachRow | undefined) : undefined));
   // A change that touches no target has no reach (the server answers null; a row without targets is the same).
-  return row?.targets?.length ? row : undefined;
+  return { reach: row?.targets?.length ? row : undefined, ready: !ref || !feed || ready || !!error };
 }

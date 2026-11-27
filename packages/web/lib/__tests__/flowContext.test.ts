@@ -24,6 +24,32 @@ const run = {
 };
 
 describe("flowContext", () => {
+  test("a run that answered its gate and moved on stands where it is now, not at the gate (sd-5094)", () => {
+    const graph = { nodes: [
+      { id: "ci", label: "CI", type: "command" }, { id: "ci_card", label: "Why a person", type: "agent" }, { id: "decide__decide", label: "Decide", type: "human" },
+      { id: "merge", label: "Merge", type: "command" }, { id: "fix_conflict", label: "Resolve conflict", type: "agent" }, { id: "checks", label: "Checks", type: "command" },
+    ] };
+    const moved = {
+      _id: "r9", status: "running", current_node_id: "checks", gate_node_id: "decide__decide", gate_decision_status: "answered", gate_decision_short_id: "sd-5094",
+      node_statuses: [
+        { node_id: "ci", status: "completed", ...t(0, 120) },
+        { node_id: "ci_card", status: "completed", session_id: "s1", ...t(120, 200) },
+        { node_id: "decide__decide", status: "completed", ...t(200, 300) },
+        { node_id: "merge", status: "failed", ...t(300, 310) },
+        { node_id: "fix_conflict", status: "completed", session_id: "s2", ...t(310, 400) },
+        { node_id: "checks", status: "running", started_at: 400000 },
+      ],
+    };
+    const ctx = flowContext(moved, graph, { decisionId: "sd-5094" });
+    expect(ctx.lineChanged).toBe(false);
+    expect(ctx.stations[ctx.at]).toMatchObject({ id: "checks", state: "live", current: true });
+    expect(ctx.stations.find((s) => s.id === "decide__decide")).toMatchObject({ state: "done", current: false, href: "/decisions/sd-5094" });
+    expect(ctx.stations.map((s) => s.label)).toEqual(["CI", "Why a person", "Decide", "Merge", "Resolve conflict", "Checks"]);
+    // Paused on its open question, it stands at the gate.
+    const asking = flowContext({ ...moved, status: "paused", current_node_id: "decide__decide", gate_decision_status: "pending" }, graph);
+    expect(asking.stations[asking.at]).toMatchObject({ id: "decide__decide", state: "waiting" });
+  });
+
   test("a run whose line dropped its station reads its own history, with the gate where it stands", () => {
     const newGraph = { nodes: [{ id: "land", label: "Land", type: "agent" }, { id: "deploy", label: "Deploy", type: "command" }] };
     const ctx = flowContext(run, newGraph, { decisionId: "sd-4198" });
