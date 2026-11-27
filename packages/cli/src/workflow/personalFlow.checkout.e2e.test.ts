@@ -99,7 +99,7 @@ describe("the session's own uncommitted edits, the Ship button's default", () =>
     expect(await run(w)).toBe("completed");
     expect(s.briefs()).toEqual([]);
     expect(JSON.parse(s.result("land")!)).toMatchObject({ outcome: "landed", sha: w.originMain() });
-    expect(s.sent().at(-1).body).toContain("is over: Live.");
+    expect(s.sent().at(-1).body).toMatch(/is over: Live[.:] /);
     // The session's edit is on main and the checkout has nothing uncommitted left of it.
     expectLanded(w);
     expect(git(w.root, "status", "--porcelain", "--", "a.txt")).toBe("");
@@ -135,7 +135,7 @@ describe("the session's own uncommitted edits, the Ship button's default", () =>
     const [first, second] = s.spawned("deploy").map((d) => /The landed commit: ([0-9a-f]{40})/.exec(d.prompt)![1]);
     expect(second).toBe(first);
     expect(JSON.parse(s.result("after_fix")!)).toMatchObject({ next: "deploy" });
-    expect(s.sent().at(-1).body).toContain("is over: Live.");
+    expect(s.sent().at(-1).body).toMatch(/is over: Live[.:] /);
     expectLanded(w);
   }, 120_000);
 

@@ -187,7 +187,7 @@ describe("incident replays: the shipped change flow on real git and the real sta
     const before = dirty();
 
     expect(await run(w, paths, ["green"])).toBe("completed");
-    expect(s.sent().at(-1).body).toContain("The Ship run on ct-9 is over: Live.");
+    expect(s.sent().at(-1).body).toMatch(/The Ship run on ct-9 is over: Live[.:] /);
     expect(s.briefs()).toEqual([]);
     expect(w.calls()).toEqual(["flow pr", "flow ci", "flow verdicts", "flow merge", "flow await-deploy"]);
 
@@ -238,7 +238,7 @@ describe("incident replays: the shipped change flow on real git and the real sta
     const theirs = landOnMain(w.origin, { "m.txt": "main moved\n" }, "main moved");
 
     expect(await run(w, paths, ["green"])).toBe("completed");
-    expect(s.sent().at(-1).body).toContain("The Ship run on ct-9 is over: Live.");
+    expect(s.sent().at(-1).body).toMatch(/The Ship run on ct-9 is over: Live[.:] /);
     expect(s.briefs()).toEqual([]);
     expect(w.calls().filter((c) => c === "flow merge")).toHaveLength(1);
     const sha = w.merged();
@@ -259,7 +259,7 @@ describe("incident replays: the shipped change flow on real git and the real sta
     const reviewed = git(w.work, "rev-parse", BRANCH);
 
     expect(await run(w, paths, ["red-main", "green"])).toBe("completed");
-    expect(s.sent().at(-1).body).toContain("The Ship run on ct-9 is over: Live.");
+    expect(s.sent().at(-1).body).toMatch(/The Ship run on ct-9 is over: Live[.:] /);
     expect(s.briefs()).toEqual([]);
     // The real CI station judged the red main's, not the change's.
     const [first, second] = readState<any[]>("ci.seen", []);

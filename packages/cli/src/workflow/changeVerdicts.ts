@@ -170,7 +170,8 @@ export function changeVerdicts(dir: string, reviewPin: string | undefined, origi
     return done({ ...said, next: "new_round", why: `the branch moved to ${originHead.slice(0, 10)} after this round pushed ${String(pr.head_sha).slice(0, 10)}` });
   }
   if (review?.verdict === "rejected") return done({ ...said, next: "rejected", why: words(review.findings) || "the reviewer gave no reasons" });
-  if (conflict && ci?.head_sha === pr?.head_sha) return done({ ...said, next: "conflict", why: stationSaid(conflict) });
+  // The station's "Rebase it and push" is not the session's to do: the brief says how the run takes its fix.
+  if (conflict && ci?.head_sha === pr?.head_sha) return done({ ...said, next: "conflict", why: stationSaid(conflict).replace(/\s*Rebase it and push\.\s*$/, "") });
   if (machine) {
     if (rerun("ci_reruns")) return done({ ...said, next: "rerun_ci", why: machine });
     // Out of reruns: failures the change causes, judged on the pushed head beside the station's own, go to the session.

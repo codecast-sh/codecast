@@ -1401,6 +1401,15 @@ describe("gatePayload asker", () => {
     expect(gatePayload(node, g, { change_conversation: "jx7maker" })).toMatchObject({ subject_conversation_id: "jx7maker" });
     expect(gatePayload(node, g, {})).not.toHaveProperty("subject_conversation_id");
   });
+  // A card about one repository's change, asked from a session in another, never said which repository it merges into.
+  test("a run that merges a change names the repository first; a question that names it, or a run with no change, stands", () => {
+    const g = parseWorkflowSource(src);
+    const node = g.nodes.get("decide")!;
+    expect(gatePayload(node, g, { repo_name: "acme-app", branch: "codecast/change-ct-1" }).prompt).toBe("In acme-app: Ship?");
+    const named = parseWorkflowSource(src.replace('prompt="Ship?"', 'prompt="Ship this acme-app fix?"'));
+    expect(gatePayload(named.nodes.get("decide")!, named, { repo_name: "acme-app", branch: "b" }).prompt).toBe("Ship this acme-app fix?");
+    expect(gatePayload(node, g, { repo_name: "acme-app" }).prompt).toBe("Ship?");
+  });
 });
 
 describe("refreshedOnResume (line-versions.md LV4)", () => {

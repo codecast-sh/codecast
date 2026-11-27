@@ -253,7 +253,7 @@ export function changeAction(j: Journey, run: ChangeRun, g: ChangeGraph, ctx: { 
   const onMain = !!stop?.landed || !!stop?.mayHaveLanded || !!landedSha(run) || !!ctx.pr?.merged;
   // A stop that names its resume (the change is ready; one station goes again) offers that press (the bar's
   // ResumeAtPress), never Ship again beside it.
-  if (!onMain && subject && !mergeIsOff(run) && !stop?.resume && (n.kind === "unlanded" || stop?.fix === "again")) return { kind: "again", label: "Ship again", href: null };
+  if (!onMain && subject && !mergeIsOff(run) && !stop?.resume && !stop?.whole && (n.kind === "unlanded" || stop?.fix === "again")) return { kind: "again", label: "Ship again", href: null };
   if (session) return session;
   const card = run.gate_decision_short_id ?? run.gate_decision_id;
   return card ? { kind: "card", label: "Open the card", href: `/decisions/${card}` } : null;

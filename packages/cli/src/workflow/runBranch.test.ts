@@ -114,6 +114,40 @@ describe("another run's worktree holding the branch (ct-98893)", () => {
     expect(fs.readFileSync(path.join(treeOf(OTHER), "scratch-debug.log"), "utf8")).toBe("junk\n");
   });
 
+  // ct-102477: the refusal said only "a process still works in it". It names each process and stops none: a detached
+  // dev server or daemon there looks the same as one the run left behind.
+  test("a process in an ended run's worktree refuses, named by pid, command and when it started, and nothing is stopped", async () => {
+    await runTreeOn(OTHER);
+    const runs = path.join(lineRunDir(repo, OTHER), "runs");
+    fs.mkdirSync(runs, { recursive: true });
+    fs.writeFileSync(path.join(runs, "r1.json"), "{}");
+    const ended = fs.statSync(path.join(runs, "r1.json")).mtimeMs;
+    const child = spawn("/bin/sh", ["-c", "sleep 60"], { cwd: treeOf(OTHER), stdio: "ignore" });
+    const procs = [{ pid: child.pid!, command: "sleep 60", startedAt: ended - 1000 }, { pid: 4242, command: "/bin/zsh", startedAt: ended + 1000 }];
+    try {
+      await expect(claimRunBranch(repo, "change-ct-3", BRANCH, { task: "ct-3", rewrites: false, live: live(), now: later(), processes: async () => procs }))
+        .rejects.toThrow(`${BRANCH} is checked out by worktree ${OTHER}, and 2 processes still work in it: pid ${child.pid} (sleep 60, started before the run ended); pid 4242 (/bin/zsh, started after the run ended). Stop them if they are not needed (kill ${child.pid} 4242), or release the worktree with cast ws destroy ${OTHER}, then run this again`);
+      expect(child.exitCode).toBeNull();
+      expect(child.signalCode).toBeNull();
+      expect(fs.existsSync(treeOf(OTHER))).toBe(true);
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }, 60_000);
+
+  test("the processes in a tree are read by pid and command", async () => {
+    const { treeProcesses } = await import("./runBranch.js");
+    const child = spawn("/bin/sleep", ["30"], { cwd: repo, stdio: "ignore" });
+    try {
+      await new Promise((r) => setTimeout(r, 300));
+      const got = await treeProcesses(repo);
+      expect(got?.find((p) => p.pid === child.pid)).toMatchObject({ command: "/bin/sleep 30" });
+      expect(got?.find((p) => p.pid === child.pid)!.startedAt).toBeGreaterThan(Date.now() - 120_000);
+    } finally {
+      child.kill("SIGKILL");
+    }
+  }, 60_000);
+
   test("a freeze over foreign commits refuses before releasing the worktree that holds them", async () => {
     await runTreeOn(OTHER);
     await expect(claimRunBranch(repo, OURS, BRANCH, { task: "ct-1", rewrites: true, live: live(), now: later() }))

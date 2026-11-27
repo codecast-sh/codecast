@@ -5,6 +5,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawnSync } from "../proc.js";
+import type { UnpushedCommit } from "./unpushedCommits.js";
 
 export type FrozenChange = {
   source: "session" | "branch" | "task" | "pr" | "checkout";
@@ -36,6 +37,8 @@ export type FrozenChange = {
   behind?: { upstream: string; why: "conflict" | "unreplayable"; conflicts: string[]; reason: string };
   /** Set when that upstream commit already holds every file of the change at its frozen content: nothing is left to land. */
   landed?: string;
+  /** The checkout's own unpushed commits the change carries under its files, newest first (unpushedCommits.ts). */
+  unpushed?: UnpushedCommit[];
   branch: string;
   worktree: string;
   paths: string[];

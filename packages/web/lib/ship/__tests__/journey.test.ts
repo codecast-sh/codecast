@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { canAnswer, deployHold, insideWords, journeyOf, journeyStages, targetsFromLine, verdictsOf } from "../journey";
-import { gateWaitWords, whoWords, journeyWords, readableWhy, sentBackWords, waitWords } from "../journeyWords";
+import { gateWaitWords, whoWords, journeyWords, readableWhy, sentBackWords, waitWords, wholeWhy } from "../journeyWords";
 import { approvalOf, approvalWords, shipConfirms } from "../approval";
 import { landedSha } from "../runRecord";
 import { sessionAskOf } from "../sessionAsk";
@@ -365,6 +365,19 @@ describe("stops", () => {
     const why = "Stopped: CI never reported on the pushed head, also after running it again. The change is not at fault: resume this run at PR (`cast workflow resume ct-9 --at pr`) to run CI and a fresh review on the same change once GitHub runs CI on pull requests again. What CI said: x";
     const j = journeyOf(change, run({ status: "failed", current_node_id: "noci", spawner_conversation_id: "c1", fail_reason: why, node_statuses: [...ROUND, verdicts("no_ci", "timed_out", "ship"), st("noci", "failed", 20)] }));
     expect(j.now).toMatchObject({ kind: "stopped", resume: { at: "pr", label: "PR" } });
+  });
+  // ct-102477: a refreeze refused a worktree something rebased; its restart is the reason's last words, cut at 280.
+  test("a stop whose runner words name its restart keeps every word, so the page shows the restart the session heard", () => {
+    const why = "Could not freeze session jx7cgvq's change again: Something reset or rebased the run's worktree to d87da407ea, off the change as last frozen (61d7c6b4cb), so the run left it as it is. To ship that worktree's branch as it stands now, run it again on this task: `cast flow run change --task ct-102477 --branch codecast/change-ct-102477`.";
+    const j = journeyOf(change, run({ status: "failed", current_node_id: "brief", spawner_conversation_id: "c1", fail_reason: why, node_statuses: [...ROUND, verdicts("brief", "red", "changes"), st("brief", "failed", 90)] }));
+    expect(j.now).toMatchObject({ kind: "failed", fix: "session", why, whole: true });
+    // The phone's bar reads the same rule (FlowCard's NowLine).
+    expect(wholeWhy(j)).toBe(true);
+    // Any other long reason is still cut for the bar.
+    const other = journeyOf(change, run({ status: "failed", current_node_id: "brief", spawner_conversation_id: "c1", fail_reason: `Could not freeze session jx7cgvq's change again: ${"x ".repeat(200)}`, node_statuses: [...ROUND, st("brief", "failed", 90)] }));
+    expect((other.now as any).whole).toBeUndefined();
+    expect(wholeWhy(other)).toBe(false);
+    expect((other.now as any).why.endsWith("…")).toBe(true);
   });
   test("a deploy that missed its deadline opens the deploy; a runner crash runs again", () => {
     expect(journeyOf(change, run({ status: "failed", current_node_id: "deploy__failed", merge: { sha: "4a6e413b2c" }, fail_reason: "Stopped: Deploy stuck: cli is not live with 4a6e413 after 45m.", node_statuses: [...MERGED, st("deploy__wait", "failed", 16)] })).now).toMatchObject({ stage: "Deploy", fix: "deploy" });

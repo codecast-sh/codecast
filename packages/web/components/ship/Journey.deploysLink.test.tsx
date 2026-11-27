@@ -100,6 +100,18 @@ describe("the Ship panel's links into Deploys", () => {
     expect(renderToStaticMarkup(<JourneyView journey={{ stages: [], now: { ...stopped, fix: "again" } }} run={run({ status: "failed" })} now_ms={0} again={again} />)).toContain("data-ship-again");
   });
 
+  // ct-102477: a stop whose words name its one restart (a worktree something moved) still offered Ship again beside it.
+  test("a stop that names its one restart offers no Ship again, and shows its words whole", () => {
+    const again = () => <button data-ship-again>Ship again</button>;
+    const why = "Could not freeze session jx7cgvq's change again: Something reset or rebased the run's worktree to d87da407ea, off the change as last frozen (61d7c6b4cb), so the run left it as it is. To ship that worktree's branch as it stands now, run it again on this task: `cast flow run change --task ct-9 --branch codecast/change-ct-9`.";
+    for (const fix of ["session", "again"]) {
+      const stopped: any = { kind: "failed", stage: "Local CI", why, fix, session: "conv1", briefAt: null, end: null, whole: true };
+      const html = renderToStaticMarkup(<JourneyView journey={{ stages: [], now: stopped }} run={run({ status: "failed" })} now_ms={0} again={again} />);
+      expect(html).not.toContain("data-ship-again");
+      expect(html).toMatch(/<p class="sj-note" data-whole="true"[^>]*data-journey-why/);
+    }
+  });
+
   test("with no landed commit known, a target opens with the session highlighted and its deploy open", () => {
     const html = renderToStaticMarkup(<SessionTargets teamId="T1" conversationId="conv1" known={[{ name: "web", state: "live", deploy: "dp-12" }]} />);
     expect(links(html)).toEqual(["/deploys?team=T1&target=web&session=conv1&deploy=dp-12"]);

@@ -87,7 +87,30 @@ test("a failed run's restart is the one its stop names in the graph's words, els
   const rejected = await stopWords({ workflow_slug: "change", current_node_id: "rejected" });
   expect(rejected).not.toContain("cast workflow resume");
   expect(restartHint(change, rejected)).toBe("once the change is fixed, run it again: cast flow run change --task ct-9");
-  expect(restartHint({ task_short_id: "ct-9", workflow_slug: "line" }, null)).toBe("try it again: cast workflow resume ct-9 --at <station>");
+  // Never a literal placeholder: the station it stopped at, else its start; a run with no task says it cannot resume.
+  expect(restartHint({ task_short_id: "ct-9", workflow_slug: "line", current_node_id: "build" }, null)).toBe("try it again from where it stopped: cast workflow resume ct-9 --at build");
+  expect(restartHint({ task_short_id: "ct-9", workflow_slug: "line" }, null)).toBe("try it again from its start: cast workflow resume ct-9 --at start");
+  expect(restartHint({ workflow_slug: "line", current_node_id: "build" }, null)).toBe("it is bound to no task, so it cannot be resumed: start it again");
+});
+
+// ct-102477: a refreeze refused a worktree something rebased; the session heard one restart, show printed "<station>".
+test("a stop whose runner words name its restart prints that restart, the one the session heard", async () => {
+  const { worktreeMovedRestart, worktreeMovedRestartWords, worktreeMovedWords } = await import("@codecast/shared/contracts/runRestart");
+  const { runEndMessage } = await import("./subjectStation.js");
+  const command = worktreeMovedRestart("change", "ct-9", "codecast/change-ct-9");
+  const fail_reason = `Could not freeze session jx7cgvq's change again: ${worktreeMovedWords("d87da407ea0000", "61d7c6b4cb0000")}. ${worktreeMovedRestartWords(command)}`;
+  const run = { task_short_id: "ct-9", workflow_slug: "change", takes_change: true, current_node_id: "local_ci_fix", fail_reason };
+  expect(restartHint(run, null)).toBe("to ship the run's worktree as it stands now, run it again: cast flow run change --task ct-9 --branch codecast/change-ct-9");
+  const told = runEndMessage({ name: "change", label: "Ship" } as any, { taskId: "ct-9", endLabel: "Fix Local CI", failed: true, failReason: fail_reason });
+  expect(told).toBe(`The Ship run on ct-9 stopped at Fix Local CI: ${fail_reason}`);
+  expect(told).toContain("Something reset or rebased the run's worktree to d87da407ea");
+  expect(told).not.toContain("Run it again with `cast flow run change` once it is ready");
+  // Words a stage appends after the restart leave it standing; a task id and branch of any shape are read whole.
+  const appended = `Could not freeze the checkout's change again: ${worktreeMovedWords("d87da407ea0000", "61d7c6b4cb0000")}. ${worktreeMovedRestartWords(worktreeMovedRestart("our-ship", "TK-12", "fix/a+b_c@2"))} Local CI said: red`;
+  expect(restartHint({ ...run, fail_reason: appended }, null)).toBe("to ship the run's worktree as it stands now, run it again: cast flow run our-ship --task TK-12 --branch fix/a+b_c@2");
+  expect(runEndMessage({ name: "change", label: "Ship" } as any, { taskId: "ct-9", endLabel: "Fix Local CI", failed: true, failReason: appended })).not.toContain("once it is ready");
+  // The same words quoted after another stop's own (a finding that pastes them) name nothing.
+  expect(restartHint({ ...run, fail_reason: `Stopped: the reviewer said: ${fail_reason}` }, null)).toBe("once the change is fixed, run it again: cast flow run change --task ct-9");
 });
 
 // A flow named change names the library's restart for a stop node it keeps as the library's (same id and label),

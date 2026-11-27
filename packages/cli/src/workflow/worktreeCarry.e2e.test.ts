@@ -167,7 +167,7 @@ describe("edits left in the run's worktree", () => {
     await snapshotRunTree(tree, runDir);
     git(tree, "reset", "-q", "--hard", "main");
     write(tree, "b.txt", "fixed on the wrong base\n");
-    await expect(refreezeSessionChange(root, runDir, tree)).rejects.toThrow(/does not hold the change as last frozen/);
+    await expect(refreezeSessionChange(root, runDir, tree)).rejects.toThrow(/^Something reset or rebased the run's worktree to [0-9a-f]{10}, off the change as last frozen \([0-9a-f]{10}\), so the run left it as it is$/);
     expect(readFrozenChange(runDir)?.tip).toBe(before);
     expect(fs.readFileSync(path.join(tree, "b.txt"), "utf-8")).toBe("fixed on the wrong base\n");
   }, 180_000);

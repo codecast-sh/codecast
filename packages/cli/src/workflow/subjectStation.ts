@@ -11,6 +11,7 @@ import * as path from "node:path";
 import type { WorkflowGraph } from "./types";
 import { readFrozenChange, type FrozenChange } from "./flowChangeFile.js";
 import { PERSONAL_FLOW_SLUG } from "@codecast/shared/contracts/flowPool";
+import { ownRestartOf } from "@codecast/shared/contracts/runRestart";
 
 export type Subject = { conversationId: string; shortId: string };
 
@@ -89,6 +90,8 @@ export function writersNamed(
   change: { paths: string[]; writers?: Record<string, { conversation: string; session: string }> },
   text: string,
   roots: string[] = [],
+  /** Read only the lines that say something failed, and those beside them: a finding with none names nobody. */
+  opts: { failingOnly?: boolean } = {},
 ): { writers: Writer[]; unclaimed: string[] } {
   const base = (p: string) => p.slice(p.lastIndexOf("/") + 1);
   const sharing = new Map<string, number>();
@@ -106,7 +109,7 @@ export function writersNamed(
   const lines = findingLines(text, roots);
   const namedIn = (subset: string[]) => change.paths.filter((p) => subset.some((l) => tests.get(p)!.some((t) => t.test(l))));
   const strong = namedIn(lines.filter((l) => l.failing).map((l) => l.line));
-  const named = strong.length ? strong : namedIn(lines.map((l) => l.line));
+  const named = strong.length || opts.failingOnly ? strong : namedIn(lines.map((l) => l.line));
   const byWriter = new Map<string, Writer>();
   const unclaimed: string[] = [];
   for (const p of named) {
@@ -177,11 +180,13 @@ export function runEndMessage(graph: WorkflowGraph, opts: { taskId?: string; end
   const on = opts.taskId ? ` on ${opts.taskId}` : "";
   if (!opts.failed) {
     const said = (opts.lastOutput ?? "").replace(ANSI, "").split("\n").map((l) => l.trim()).filter(Boolean).pop();
-    return `The ${flow} run${on} is over: ${opts.endLabel}.${said && !said.startsWith("{") ? ` ${said}` : ""} Nothing more is waiting on this session for it.`;
+    // Words that open with the end's own name ("Live: e180ae0 on …") say it once.
+    const words = !said || said.startsWith("{") ? `${opts.endLabel}.` : said.startsWith(`${opts.endLabel}:`) ? (/[.!?]$/.test(said) ? said : `${said}.`) : `${opts.endLabel}. ${said}`;
+    return `The ${flow} run${on} is over: ${words} Nothing more is waiting on this session for it.`;
   }
   const why = (opts.failReason ?? "it failed").replace(/^Stopped:\s*/, "").replace(/\.$/, "");
-  // A stop that says all of it (whole_stop) stands as it is.
-  if (opts.whole) return `The ${flow} run${on} stopped at ${opts.endLabel}: ${why}.`;
+  // A stop that says all of it (whole_stop, or the runner's own words naming its restart) stands as it is.
+  if (opts.whole || ownRestartOf(opts.failReason)) return `The ${flow} run${on} stopped at ${opts.endLabel}: ${why}.`;
   // A stop after Land leaves the change on the default branch: only what comes after it did not happen.
   // The personal Ship lands with no merge, and runs as `change` in the workspace it ships (flowPool.ts workspacePool).
   const personal = graph.name === PERSONAL_FLOW_SLUG;
