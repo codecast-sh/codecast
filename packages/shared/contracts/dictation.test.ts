@@ -486,3 +486,62 @@ describe("abandoned starts and the recordings still finishing", () => {
     expect(a.value).toBe("keep me");
   });
 });
+
+describe("round 2", () => {
+  test("a send pressed while finishing still runs when the recognizer fails during the finish", async () => {
+    const h = harness("please review", [13, 13]);
+    const sent: string[] = [];
+    h.d.start();
+    await h.opened();
+    h.events.onPartial("the auth fix");
+    h.d.finishThen(() => sent.push(h.value));
+    h.events.onFailed("socket closed");
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(sent).toEqual(["please review the auth fix"]);
+  });
+
+  test("typing during the finish still sends what is in the box", async () => {
+    const h = harness();
+    const sent: string[] = [];
+    h.d.start();
+    await h.opened();
+    h.events.onPartial("ship it");
+    h.d.finishThen(() => sent.push(h.value));
+    h.type("ship it now");
+    h.events.onUtterance({ text: "ship it." });
+    await h.finished();
+    expect(sent).toEqual(["ship it now"]);
+  });
+
+  test("typing while nothing more is said ends the recording within a second", async () => {
+    const h = harness();
+    h.d.start();
+    await h.opened();
+    h.events.onPartial("hello");
+    h.type("hello, typed");
+    h.advance(1000);
+    expect(h.d.state).toEqual({ phase: "idle", error: null, stopped: "edited" });
+    expect(h.pipe.closed).toBeGreaterThan(0);
+    expect(h.value).toBe("hello, typed");
+  });
+});
+
+test("a send waiting on a recognizer that never answers still runs when the recording fails, and the next recording's send is not stuck", async () => {
+  const h = harness();
+  const sent: string[] = [];
+  h.d.start();
+  await h.opened();
+  h.events.onPartial("first");
+  h.d.finishThen(() => sent.push("one " + h.value));
+  h.events.onFailed("socket closed");
+  expect(sent).toEqual(["one first"]);
+  h.type("");
+  h.d.start();
+  await h.opened();
+  h.events.onPartial("second");
+  h.d.finishThen(() => sent.push("two " + h.value));
+  expect(h.d.state.phase).toBe("finishing");
+  await h.finished();
+  expect(sent).toEqual(["one first", "two second"]);
+});

@@ -65,7 +65,7 @@ import { isRecordingFile, useScreenRecordingAttach } from "../hooks/useScreenRec
 import { useFileAttach } from "../hooks/useFileAttach";
 import { ComposerAttachButton } from "./chat/ComposerAttachButton";
 import { DictateControls } from "./dictation/DictateControls";
-import { replayKey, useComposerDictation } from "../lib/dictation/useDictation";
+import { enterChord, isReplayedKey, replayKey, useComposerDictation } from "../lib/dictation/useDictation";
 import type { ComposeEditorHandle } from "./editor/ComposeEditor";
 import { useMentionQuery, useMentionServerSearch, sessionMentionTeamId, SERVER_MENTION_TYPES, matchScore, filterMentionItems, channelMentionItems } from "../hooks/useMentionQuery";
 import { mentionContextFor } from "../lib/mentionContext";
@@ -1255,7 +1255,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     }
   }, [conversationId, skills, onSideQuestion, queryMentions, cancelPendingDraft]);
   // Dictation writes through the same setter a keystroke does (useComposerDictation).
-  const { dictation, focusBox: focusComposerBox } = useComposerDictation(textareaRef, messageRef, handleMessageChange);
+  // Dictated words open no picker: an Enter held through the finish must send.
+  const { dictation, focusBox: focusComposerBox } = useComposerDictation(textareaRef, messageRef, (val) => { handleMessageChange(val); setAcTrigger(null); });
 
   const isSelectionActive = !!(selectedMessageContent && selectedMessageUuid);
   const savedDraftRef = useRef<string | null>(null);
@@ -2277,9 +2278,9 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    // While dictating, Esc cancels it and Enter waits for the last words, then
-    // goes through this handler again as the key it was.
-    if (dictation.running() && dictation.keyDown(e, replayKey(e, handleKeyDownRef), (k) => k.key === "Enter" && !k.shiftKey)) return;
+    // While dictating, Esc cancels it and every Enter chord but a new line waits
+    // for the last words, then goes through this handler again as the key it was.
+    if (dictation.running() && dictation.keyDown(e, replayKey(e, handleKeyDownRef), enterChord)) return;
     if (caught && e.key === "Escape") {
       e.preventDefault();
       e.stopPropagation();
@@ -2291,7 +2292,9 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       setHandoffOpen(true);
       return;
     }
-    if (acTrigger && acItems.length > 0) {
+    // A replayed Enter is the send pressed before any picker opened.
+    if (acTrigger && isReplayedKey(e)) setAcTrigger(null);
+    else if (acTrigger && acItems.length > 0) {
       if (e.key === "ArrowDown") {
         e.preventDefault();
         setAcIndex(i => Math.min(i + 1, acItems.length - 1));
