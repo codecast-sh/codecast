@@ -23,6 +23,7 @@ export function routeView(t: Doc<"transcripts">, r: Route) {
     mode: r.mode,
     added_by: String(r.added_by ?? t.started_by),
     ...(r.face === false ? { face: false } : {}),
+    ...(r.role ? { role: r.role } : {}),
   };
 }
 
