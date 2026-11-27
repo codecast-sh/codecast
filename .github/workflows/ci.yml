@@ -174,7 +174,11 @@ jobs:
     needs: [code_paths]
     if: needs.code_paths.outputs.run_build == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Measured 2026-11-26 over the last 100 CI runs: 73 green builds, p50 3.7
+    # min, p90 4.1, max 4.2. The builds that reached 20 minutes that day hung
+    # in the web build after the others finished (its prerender held a convex
+    # client open, fixed in c6c7a326b), so a hang now fails at 10, not 20.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
