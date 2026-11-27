@@ -69,8 +69,9 @@ export const mintDictationToken = action({
     const model = LIVE_TRANSCRIBE_MODEL;
     let languages = normalizeTranscribeLanguages(args.languages ?? []);
     let minted = await mintRealtimeSecret(ctx, grant.workspace, asrTranscriptionSession(model, languages), "dictation");
-    // One unsupported language code rejects the whole session: retry unconstrained.
-    if ("error" in minted && languages.length) {
+    // One unsupported language code rejects the whole session (a 400): retry
+    // unconstrained. An outage or a quota error is not retried.
+    if ("error" in minted && languages.length && minted.error.includes("(400)")) {
       languages = [];
       minted = await mintRealtimeSecret(ctx, grant.workspace, asrTranscriptionSession(model, languages), "dictation");
     }

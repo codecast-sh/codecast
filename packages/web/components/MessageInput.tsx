@@ -1369,9 +1369,9 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   switchComposeRef.current = switchCompose;
   // The rich editor takes the text as it stands, so a recording's last words
   // land in the box before it switches; switching first would drop them into
-  // a textarea that is no longer shown.
+  // a textarea that is no longer shown. Cancelled meanwhile, it stays put.
   const toggleCompose = useCallback(() => {
-    if (dictation.running()) void dictation.finish().then(() => switchComposeRef.current());
+    if (dictation.running()) dictation.finishThen(() => switchComposeRef.current());
     else switchCompose();
   }, [switchCompose, dictation]);
 
@@ -2617,10 +2617,10 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     // Send while dictating sends what was said, once it is all in. The
     // controller's own state decides (React's still reads "active" for a
     // render after the recording ends), and the send after it is the send
-    // itself, never this handler again.
+    // itself, never this handler again. Cancelled meanwhile, nothing is sent.
     if (dictation.running()) {
       e.preventDefault();
-      void dictation.finish().then(() => sendFormRef.current?.({ preventDefault: () => {} } as unknown as React.FormEvent));
+      dictation.finishThen(() => sendFormRef.current?.({ preventDefault: () => {} } as unknown as React.FormEvent));
       return;
     }
     sendForm(e);
