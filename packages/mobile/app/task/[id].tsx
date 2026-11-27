@@ -418,7 +418,8 @@ export default function TaskDetailScreen() {
               multiline
             />
             <RNView style={styles.commentDictate}>
-              <DictateControls dictation={dictation} />
+              {/* Send here is a bare glyph: ✕ and ✓ are bare too. */}
+              <DictateControls dictation={dictation} look="bare" />
             </RNView>
             <TouchableOpacity
               style={[styles.commentSend, !commentText.trim() && { opacity: 0.3 }]}
