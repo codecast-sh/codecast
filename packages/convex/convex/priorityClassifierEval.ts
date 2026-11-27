@@ -71,7 +71,13 @@ export const evalFacts = internalQuery({
     const sessions: EvalSession[] = [];
     for (const { conversation_id, first_at } of args.sessions) {
       const conv = await ctx.db.get(conversation_id);
-      if (!conv || !classifierReads(conv)) continue;
+      if (!conv) continue;
+      // One live never asks about (a spawned subagent, a workflow's session) still takes its parent's placement at creation
+      // (spawn.ts and forks call lib/priorityLinks inheritLink): read with no asks, so the replay only inherits.
+      if (!classifierReads(conv)) {
+        if (conv.parent_conversation_id) sessions.push({ id: String(conv._id), title: conv.title ?? "", last_active: first_at, parent: String(conv.parent_conversation_id), asks: [] });
+        continue;
+      }
       const firstTyped = await ctx.db.query("messages").withIndex("by_conversation_nav_prompt", (q) => q.eq("conversation_id", conv._id).eq("nav_prompt", true)).first();
       const firstPin = await ctx.db.query("thread_state_events").withIndex("by_conversation_at", (q) => q.eq("conversation_id", conv._id)).first();
       const titleAt = firstTyped?.timestamp ?? first_at;
