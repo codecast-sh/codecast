@@ -93,13 +93,21 @@ test("the entry points themselves are packaged", () => {
   assert.ok(allowed.has("preload.js"));
 });
 
-test("release verification preserves explicit module extensions", () => {
+test("release verification preserves explicit module extensions and resolves from the requiring file", () => {
   const { execFileSync } = require("node:child_process");
   const script = readFileSync(join(HERE, "scripts/release.sh"), "utf8");
-  const normalize = script.match(/case "\$mod" in .*? esac/)[0];
-  for (const mod of ["notificationRouter", "notificationRouter.js", "appWindows.mjs", "native/notifications.node"]) {
-    const actual = execFileSync("bash", ["-c", `${normalize}; printf '%s' "$f"`], { env: { ...process.env, mod }, encoding: "utf8" });
-    assert.equal(actual, `/${localRequires("main.js").find(f => f === mod || f === `${mod}.js`) ?? mod}`);
+  const normalize = script.match(/case "\$mod" in .*? esac\n\s*f=.*/)[0];
+  const cases = [
+    ["main.js", "./notificationRouter", "/notificationRouter.js"],
+    ["main.js", "./notificationRouter.js", "/notificationRouter.js"],
+    ["main.js", "./appWindows.mjs", "/appWindows.mjs"],
+    ["main.js", "./native/notifications.node", "/native/notifications.node"],
+    ["installedApps/index.js", "./engine", "/installedApps/engine.js"],
+    ["installedApps/index.js", "../winInstaller", "/winInstaller.js"],
+  ];
+  for (const [src, mod, expected] of cases) {
+    const actual = execFileSync("bash", ["-c", `${normalize}; printf '%s' "$f"`], { env: { ...process.env, src, mod }, encoding: "utf8" });
+    assert.equal(actual, expected, `${src} requires ${mod}`);
   }
 });
 
