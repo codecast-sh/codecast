@@ -356,16 +356,16 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
     dismiss();
   }, [dismiss]);
 
-  // Discard: clear the draft FIRST so the unmount abandon prunes the stub as usual; an action, since a
-  // local-only clear in a window that is not the sync host is put back by the host's replication.
+  // Discard empties the composer itself (text, pending write, stored draft) so its unmount snapshot writes nothing back.
+  const clearInputRef = useRef<(() => void) | null>(null);
   const discardDraftAndClose = useCallback(() => {
     const id = stubIdRef.current;
+    clearInputRef.current?.();
     if (id) useInboxStore.getState().clearDraftFinal(id);
     setConfirmClose(false);
     dismiss();
   }, [dismiss]);
 
-  const clearInputRef = useRef<(() => void) | null>(null);
   const clearDraft = useCallback(() => {
     clearInputRef.current?.();
     setRestored(false);

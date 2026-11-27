@@ -113,3 +113,33 @@ test("Discard after a Start leaves nothing behind: no draft here or on the serve
   await act(() => root.unmount());
   container.remove();
 }, 60_000);
+
+test("RULE: after Discard no draft exists for the compose key, after unmount, every debounced flush and the stub settling", async () => {
+  useInboxStore.setState({ currentUser: { _id: "user_start_test", name: "Tester" } as any, drafts: {}, sessions: {}, conversations: {}, composes: [] } as any);
+  (useInboxStore.getState() as any)._setDispatch(async () => undefined);
+  const { ComposeHost } = await import("../ComposeHost");
+  const container = w.document.createElement("div");
+  w.document.body.appendChild(container);
+  const root = createRoot(container);
+  await act(() => root.render(<ConvexProvider client={fakeConvex()}><ComposeHost /></ConvexProvider>));
+  await act(() => { useInboxStore.getState().openCompose(BRIEF, { start: START }); });
+  await flush(50);
+  const stubId = (useInboxStore.getState() as any).composes[0].stubId as string;
+  // The person edits the brief a little, then leaves.
+  const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+  await act(() => { typeInto(textarea, `${BRIEF}\nAnd the docs.`); });
+  await flush(10);
+  await act(() => { w.document.dispatchEvent(new w.KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
+  await flush(20);
+  const discard = [...container.ownerDocument.querySelectorAll("[role=alertdialog] button")].find((b) => b.textContent?.includes("Discard")) as HTMLButtonElement;
+  await act(() => { discard.click(); });
+  await flush(50);
+  await act(() => root.unmount());
+  container.remove();
+  // Every debounce and delayed recheck the composer can leave behind.
+  await flush(3_500);
+  const s = useInboxStore.getState() as any;
+  expect(s.drafts[stubId]?.draft_message ?? null).toBeNull();
+  expect(s.clientState?.drafts?.[stubId]?.draft_message ?? null).toBeNull();
+  expect(Object.values(s.sessions).filter((row: any) => row?._hasDraft || row?._id === stubId)).toEqual([]);
+}, 60_000);
