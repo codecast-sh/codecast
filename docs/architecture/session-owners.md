@@ -17,7 +17,9 @@ A session's owners are:
   `cast spawn --subagent` worker, a workflow station, a Ship session, a hand a
   role started, or a session a person dropped it onto in the sidebar
   (`adopt_parent`). A person's release, or a takeover, writes
-  `parent_released_at`. A killed or deleted parent counts as released.
+  `parent_released_at` and keeps the link; putting it back
+  (`restore_parent`) clears the stamp. A killed or deleted parent counts as
+  released.
 - **its implicit starter**: the human who started it (its author, else its
   runner, never an agent account), only while it has no people, no role and
   no parent, and never when a role started it (`role_started`).
@@ -36,7 +38,19 @@ spawner, the peer is that role's start (same team only). A spawner that is
 itself a worker passes on its parent's owners, up the chain.
 
 The agent owner is the role, else the parent session. Taking a session over
-removes every agent owner and makes the taker an owner.
+removes every agent owner and makes the taker an owner. An owners change that
+takes a role off records it (`conversations.released_role_id`); that role
+owning it again clears the record.
+
+Putting it back (`restore_parent`) makes the released parent own it again; the
+role and the people stay, and its standing wait is handed to the parent
+(`rehandWait`). It works for a subagent too, since the link never moved. It is
+refused (`takeBackRefusal`, `lib/ownersChange`) when the session has no
+released parent, or the parent is killed, deleted or closed, off the model,
+neither owned nor run by the caller, or its runner cannot open the session.
+The undo of a release or a takeover is a restore, offered only when the
+viewer may hand the parent work (`mayHandToIn`); the undo of a restore is a
+release.
 
 An adopt (a card dropped on the middle of another row in the inbox sidebar,
 `lib/adoptDrop`) makes the target the session's agent owner: it nests the
@@ -65,8 +79,10 @@ It is refused when:
   same.
 
 Undo puts the session back under its previous parent when that parent was
-live, unreleased and one the dropper may hand work to; under a released or dead
-parent, or none, it detaches it. It restores the old role and the dropper's
+live, unreleased and one the dropper may hand work to. Under a released parent
+that can still take it back (the open read's `released_parent`, else the card
+row's released link) it nests it back there, released, and puts its role back
+in a second step. Under a dead parent, or none, it detaches it. It restores the old role and the dropper's
 row, adding them back first when they do not run the session. When the old
 parent is someone else's, or it had both a role and a parent, no undo is
 offered.
@@ -265,12 +281,23 @@ On web, the one home of who owns a session is the `sessionOwners` collection
 | `people_ids` | the fact a change paints |
 | `role`, `parent_session` | the facts a change paints |
 | `people_info` | detail, keyed by id, never enumerated |
+| `released_parent`, `released_role` | where it came from, painted by a change and locked with the facts |
+| `spawned_by` | where it came from: the spawner, and whether the viewer may adopt it under it |
 | `implicit_starter`, `starter_id`, `role_started`, `can_edit`, `owners_changed_at` | detail |
 
 Two feeders fill it:
 
 - `useSyncSessionOwners`, the open conversation's read;
 - `useSyncVisibleSessionOwners`, the cards in the viewport.
+
+Only the open conversation's read carries where it came from
+(`lib/ownersOrigin`): the parent it was released from, when the viewer may
+put it back; the role a change took off it; and the session that spawned it,
+adoptable when the adopt rules would take it. The spawner's row changes with
+every message it streams, so the cards' read never asks, and a card read
+keeps the cached fields. The owners menu leads with them, under "Where it came
+from": Put back the parent, or adopt the spawner, then the role, then that
+session's own role unless the session offered is that role's seat.
 
 The card feeder settles the visible ids for 400 ms, splits them into chunks
 of 5 with fixed membership (`lib/ownerChunks`), and subscribes one
