@@ -105,10 +105,12 @@ await act(async () => { root.render(card()); });
 const press = (el: Element | null) => act(async () => { el!.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true })); });
 
 describe("the Modern card, mounted", () => {
-  test("draws one card with the state's word for its section", () => {
+  test("draws one card with the state's mark for its section, the word in its name", () => {
     expect(host.querySelectorAll("[data-session-id]")).toHaveLength(1);
     expect(host.querySelector("[data-session-id]")!.getAttribute("data-mc-status")).toBe("needs_you");
-    expect(host.querySelector("[data-status-word]")!.textContent).toBe("Needs you");
+    expect(host.querySelector("[data-mc-line2] [data-status-mark]")!.getAttribute("data-status-mark")).toBe("needs_you");
+    expect(host.querySelector("[data-status-word]")).toBeNull();
+    expect(host.querySelector("[data-session-id] [role=button]")!.getAttribute("aria-label")).toContain("Needs you");
     expect(host.querySelector("[data-sv-title]")!.textContent).toBe("Fix the auth race");
   });
 
@@ -177,7 +179,7 @@ describe("the Modern card, mounted", () => {
     await act(async () => { root.render(card({ variant: "stashed", onRestore: (id: string) => calls.push(`restore ${id}`), onKill: (id: string) => calls.push(`kill-aside ${id}`), onClose: undefined, onPin: undefined })); });
     const tools = host.querySelector("[data-mc-tools]")!;
     expect([...tools.querySelectorAll("button")].map((b) => b.getAttribute("aria-label"))).toEqual(["Restore", "Kill"]);
-    expect(host.querySelector("[data-status-word]")!.textContent).toBe("Stashed");
+    expect(host.querySelector("[data-session-id]")!.getAttribute("data-mc-status")).toBe("stashed");
     calls.length = 0;
     for (const b of tools.querySelectorAll("button")) await press(b);
     expect(calls).toEqual([`restore ${ID}`, `kill-aside ${ID}`]);

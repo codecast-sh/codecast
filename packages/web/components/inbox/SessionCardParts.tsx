@@ -587,8 +587,9 @@ export function CardSubagentsLine({ rows, onOpen }: {
 }) {
   if (rows.length === 0) return null;
   return (
-    <div data-card-bar data-sv-subagents-line={rows.length} className="flex w-full items-center gap-2.5 pl-2 pr-3 py-[3px] text-meta leading-tight tabular-nums text-sol-text-muted">
-      <SchedChildArrow label="Subagents" className="text-sol-violet/70" />
+    <div data-card-bar data-sv-subagents-line={rows.length} className="flex w-full items-center gap-1.5 pl-2 pr-3 py-[3px] text-meta leading-tight tabular-nums text-sol-text-muted">
+      <SchedChildArrow slot label="Subagents" className="text-sol-violet/70" />
+      <span className="flex items-center gap-2.5">
       {subagentStateGroups(rows).map((g) => {
         const words = `${g.count} ${g.count === 1 ? "subagent" : "subagents"} ${SESSION_STATUS[g.status].word.toLowerCase()}`;
         return (
@@ -600,12 +601,14 @@ export function CardSubagentsLine({ rows, onOpen }: {
           </button>
         );
       })}
+      </span>
     </div>
   );
 }
 
 /** Compact: under a card, one short row per subagent (its state's mark, its
- *  title, its state's word), marks under the card's own status mark. A row
+ *  title), marks under the card's own status mark and titles on its title's
+ *  edge. The mark says the state; the word is in the tooltip. A row
  *  opens that subagent; the open one is highlighted. */
 export function CardSubagentRows({ rows, activeSessionId, onOpen }: {
   rows: readonly SubagentRow[];
@@ -619,13 +622,13 @@ export function CardSubagentRows({ rows, activeSessionId, onOpen }: {
         const meta = SESSION_STATUS[status];
         const active = String(session._id) === activeSessionId;
         return (
-          <button key={session._id} type="button" data-sv-subagent-row={session._id} data-active={active || undefined} title={meta.meaning}
+          <button key={session._id} type="button" data-sv-subagent-row={session._id} data-active={active || undefined} title={`${meta.word}: ${meta.meaning}`}
             {...KEEP_DRAG_OFF_CARD}
             onClick={(e) => { e.stopPropagation(); onOpen(session, e); }}
-            className={`flex w-full min-h-[24px] items-center gap-2 pl-[13px] pr-3 text-left text-meta leading-tight hover:bg-sol-text/[0.04] [@media(pointer:coarse)]:min-h-11 ${active ? "bg-sol-text/[0.06]" : ""}`}>
-            <SessionStatusMark status={status} size={9} />
+            aria-label={`${cleanTitle(sessionCardTitle(session))}, ${meta.word}`}
+            className={`flex w-full min-h-[24px] items-center gap-2 pl-2 pr-3 text-left text-meta leading-tight hover:bg-sol-text/[0.04] [@media(pointer:coarse)]:min-h-11 ${active ? "bg-sol-text/[0.06]" : ""}`}>
+            <span className="flex w-5 shrink-0 justify-center"><SessionStatusMark status={status} size={9} /></span>
             <span className="min-w-0 truncate text-sol-text-secondary">{cleanTitle(sessionCardTitle(session))}</span>
-            <span className={`shrink-0 ${meta.text}`}>{meta.word}</span>
           </button>
         );
       })}

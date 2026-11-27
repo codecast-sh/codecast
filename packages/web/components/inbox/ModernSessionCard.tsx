@@ -175,6 +175,10 @@ export function ModernSessionCardView({
     stashHidden: isStashed && isStashHidden(session),
     closedBack: isStashed && isClosedHidden(session) ? closedBackWords(session) : undefined,
   });
+  // The mark already says the state (and the section header above agrees), so
+  // line 2 spells it out only when the word adds something: who holds the
+  // wait, or a line with nothing else on it.
+  const statusWordShown = !!withOwner || (!line.reason && !line.text);
 
   const [thumbZoom, setThumbZoom] = useState(false);
   const [thumbBroken, setThumbBroken] = useState(false);
@@ -363,13 +367,13 @@ export function ModernSessionCardView({
           </span>
         </div>
         <div data-mc-line2 className={`mt-0.5 flex min-w-0 items-start gap-2 ${hasThumb ? "pr-11" : ""}`}>
-          <span className="flex h-[18px] w-5 shrink-0 items-center justify-center"><SessionStatusMark status={status} /></span>
+          <span title={`${meta.word}: ${meta.meaning}`} className="flex h-[18px] w-5 shrink-0 items-center justify-center"><SessionStatusMark status={status} /></span>
           <p title={lineTitle} className={`min-w-0 flex-1 ${nested ? "text-meta" : "text-ui"} ${expanded ? "line-clamp-2" : "truncate"}`}>
-            <SessionStatusWord status={status} word={withOwner} title={withOwner ? "" : meta.meaning} className="font-medium" />
-            {line.reason && <span className={meta.text}><span aria-hidden className="text-sol-text-dim"> · </span>{line.reason}</span>}
+            {statusWordShown && <SessionStatusWord status={status} word={withOwner} title={withOwner ? "" : meta.meaning} className="font-medium" />}
+            {line.reason && <span className={meta.text}>{statusWordShown && <span aria-hidden className="text-sol-text-dim"> · </span>}{line.reason}</span>}
             {line.text && (
               <span className="text-sol-text-muted">
-                <span aria-hidden className="text-sol-text-dim"> · </span>
+                {(statusWordShown || line.reason) && <span aria-hidden className="text-sol-text-dim"> · </span>}
                 {line.prompt && <span aria-hidden className="font-mono text-sol-text-dim">&gt; </span>}
                 {line.text}
               </span>
