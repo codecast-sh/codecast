@@ -20784,8 +20784,8 @@ const resumeSessionCache = new Map<string, string>();
 const hibernatedSessions = new ParkLedger();
 const PARK_LEDGER_FILE = path.join(CONFIG_DIR, "parked-sessions.json");
 // Session ids whose park stamp this daemon has cleared since it booted. The set
-// above can miss a park (one the boot restore skipped, or a ledger lost or past
-// its age limit), so the daemon cannot always tell a session
+// above can miss a park (one the boot restore skipped, or a ledger lost), so
+// the daemon cannot always tell a session
 // it parked from one it never touched, and a wake that trusts only the set
 // leaves hibernated_at on a session that visibly has a pane. The first wake of
 // any session therefore clears the stamp whether or not the daemon remembers
@@ -24401,6 +24401,11 @@ export function trackSessionPaneForTests(
 /** Test seam: what the daemon believes about one session's pane. `beating` is
  *  the load-bearing one — a parked session that stops beating is deleted by the
  *  server's stale-row cron within the hour. */
+/** Test seam: stop the park ledger writing to the file a test's restore named. */
+export function detachParkLedgerForTests(): void {
+  hibernatedSessions.detach();
+}
+
 export function sessionParkStateForTests(sessionId: string): {
   parked: boolean;
   beating: boolean;
@@ -26472,8 +26477,8 @@ function retryHibernationStamps(): void {
  * process is running came back without this daemon (a resume by hand), so it
  * is not parked; its first wake clears the stamp.
  */
-export function restoreHibernationParks(file = PARK_LEDGER_FILE, now = Date.now()): string[] {
-  const restored = hibernatedSessions.restore(file, now, (id) => resumeSessionCache.has(id) || sessionRegistryProcessAlive(id));
+export function restoreHibernationParks(file = PARK_LEDGER_FILE): string[] {
+  const restored = hibernatedSessions.restore(file, (id) => resumeSessionCache.has(id) || sessionRegistryProcessAlive(id));
   for (const id of restored) {
     lastSentAgentStatus.set(id, "hibernated");
     managedHeartbeatSessions.add(id);
@@ -32120,10 +32125,13 @@ async function main(): Promise<void> {
     governorTick().catch((err) => log(`[GOVERNOR] tick failed: ${String(err)}`, "debug"));
   }, GOVERNOR_SAMPLE_INTERVAL_MS);
 
+  // Parked sessions hold no process for the reconcile below to find: beat them
+  // again from the ledger the last daemon left.
+  restoreHibernationParks();
+
   // Re-establish session→pid liveness mapping (esp. for idle sessions that don't
   // write JSONL) so the Sessions page can tell live-idle from dead. Run once
   // shortly after boot so the page recovers fast post-restart, then on a timer.
-  restoreHibernationParks();
   setTimeout(() => { reconcileSessionLiveness().catch(() => {}); }, 10_000);
   setInterval(() => {
     reconcileSessionLiveness().catch(() => {});
