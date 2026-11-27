@@ -331,13 +331,26 @@ test("a narrow window takes the desktop layout on a touch screen at least 900px 
   }
 }, 60_000);
 
-test("the route shows the feature-off landing while the workspace has Priorities off", async () => {
-  useInboxStore.getState().syncTable("teams", [{ _id: TEAM_ID, name: "Degrade Co", role: "admin", features: { priorities: false } }] as any);
+test("the route shows the feature-off landing while no workspace has Priorities on, and the list while any does", async () => {
+  const teams = (other: boolean) => useInboxStore.getState().syncTable("teams", [
+    { _id: TEAM_ID, name: "Degrade Co", role: "admin", features: { priorities: false } },
+    { _id: "team-other", name: "Other", role: "member", features: { priorities: other } },
+  ] as any);
+  teams(false);
   const page = await mount(<PrioritiesRoute />);
   try {
     expect(page.container.querySelector("[data-priorities]")).toBeNull();
     expect(page.text()).not.toContain("No priorities yet");
   } finally {
     await page.unmount();
+  }
+  // The active workspace has it off, another has it on: the page lists every workspace, so it shows.
+  teams(true);
+  answers["priorities:list"] = listOf([]);
+  const shown = await mount(<PrioritiesRoute />);
+  try {
+    expect(shown.text()).toContain("No priorities yet");
+  } finally {
+    await shown.unmount();
   }
 }, 60_000);

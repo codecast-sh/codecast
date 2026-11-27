@@ -18,7 +18,7 @@ import { Popover, PopoverAnchor, PopoverContent } from "../ui/popover";
 import { Button } from "../ui/button";
 import { SwitchReview, type SwitchLedger } from "../consequential/ConsequentialSwitch";
 import { usePriorities, usePriorityWrites } from "../../hooks/usePriorities";
-import { priorityHref, rankProvenance } from "../../lib/priorities";
+import { milestoneLinksOf, priorityHref, rankProvenance } from "../../lib/priorities";
 import { COARSE_TALL, type SessionLine } from "../../lib/priorityList";
 import { cn } from "../../lib/utils";
 import { useMountEffect } from "../../hooks/useMountEffect";
@@ -98,8 +98,8 @@ const copyLink = (shortId: string) => {
  * once, plus the ones each link counts but does not carry: what the rows
  * draw, so a merge and a drop count the same way.
  */
-function linkedSessionCount(row: Pick<PriorityRow, "links">, stepKey?: string): number {
-  const links = (row.links ?? []).filter((l) => stepKey == null || l.key === stepKey);
+function linkedSessionCount(row: Pick<PriorityRow, "links" | "mapped_links">, stepKey?: string): number {
+  const links = milestoneLinksOf(row).filter((l) => stepKey == null || l.key === stepKey);
   const ids = new Set(links.flatMap((l) => l.sessions.map((s) => s.conversation_id)));
   return ids.size + links.reduce((n, l) => n + l.sessions_more, 0);
 }
@@ -279,8 +279,12 @@ export function MilestoneMenu({ row, step, onRename, reveal, className }: {
   );
 }
 
-/** A session's ⋯ under a milestone, for the owner of both: off this milestone, off this priority, or to another milestone. */
-export function SessionMenu({ row, s, stepKey }: { row: PriorityRow; s: Pick<SessionLine, "short_id" | "title">; stepKey: string | null }) {
+/**
+ * A session's ⋯ under a milestone. For the owner of both: off this milestone,
+ * off this priority, or to another milestone; `unlinkOnly` (the session or
+ * the priority is someone else's): off this priority alone.
+ */
+export function SessionMenu({ row, s, stepKey, unlinkOnly }: { row: PriorityRow; s: Pick<SessionLine, "short_id" | "title">; stepKey: string | null; unlinkOnly?: boolean }) {
   const writes = usePriorityWrites();
   return (
     <span className="inline-flex" onClick={stop} onKeyDown={stop}>
@@ -291,14 +295,16 @@ export function SessionMenu({ row, s, stepKey }: { row: PriorityRow; s: Pick<Ses
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className={cn("min-w-[12rem]", TOUCH_ITEMS)} onClick={stop}>
-          {stepKey && <DropdownMenuItem data-act="not-milestone" onSelect={() => writes.moveSession(s.short_id, row.short_id, row.short_id, null)}>Not this milestone</DropdownMenuItem>}
+          {stepKey && !unlinkOnly && <DropdownMenuItem data-act="not-milestone" onSelect={() => writes.moveSession(s.short_id, row.short_id, row.short_id, null)}>Not this milestone</DropdownMenuItem>}
           <DropdownMenuItem data-act="not-priority" onSelect={() => writes.sessionNotThis(s.short_id, row.short_id)}>Not this priority</DropdownMenuItem>
-          <DropdownMenuSub>
-            <DropdownMenuSubTrigger data-act="move-session">Move to…</DropdownMenuSubTrigger>
-            <DropdownMenuSubContent {...SUB_PROPS} data-sub-list="move-session" className={cn(SUB_LIST, TOUCH_ITEMS)} onClick={stop}>
-              <MoveTargets row={row} session={s.short_id} stepKey={stepKey} />
-            </DropdownMenuSubContent>
-          </DropdownMenuSub>
+          {!unlinkOnly && (
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger data-act="move-session">Move to…</DropdownMenuSubTrigger>
+              <DropdownMenuSubContent {...SUB_PROPS} data-sub-list="move-session" className={cn(SUB_LIST, TOUCH_ITEMS)} onClick={stop}>
+                <MoveTargets row={row} session={s.short_id} stepKey={stepKey} />
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+          )}
         </DropdownMenuContent>
       </DropdownMenu>
     </span>

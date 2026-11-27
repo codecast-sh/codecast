@@ -7,6 +7,7 @@ import type { PriorityHistory, PriorityLinkedSession, PriorityPlanRef, PriorityR
 import { milestoneStateOf, orderSessions, type MilestoneState, type MilestoneStateKind } from "@codecast/shared/contracts/priorityDerive";
 import type { SessionStatus } from "./sessionStatus";
 import type { DrawnMark } from "../store/inboxMark";
+import { milestoneLinksOf } from "./priorities";
 
 export const LIST_DAYS = 10;
 const DAY = 86_400_000;
@@ -89,15 +90,19 @@ export const MILESTONE_STATE_WORD: Record<Exclude<MilestoneStateKind, "none">, s
  *
  * `live` answers what the inbox draws (hooks/usePriorityModels liveMarkOf
  * over store/inboxMark inboxMarkOf), or undefined when it draws nothing: then
- * the server's state stands, a needs_you there read as idle whoever owns it
- * (nothing asks through a session the inbox does not draw, and it is not
- * asleep either). A session riding its role's lead opens at the
+ * the server's state stands. The viewer's own needs_you there reads idle
+ * (nothing asks them through a session their inbox does not draw, and it is
+ * not asleep either); a teammate's stays needs_you, their own ask, so their
+ * milestone reads as the viewer's would. A session riding its role's lead opens at the
  * lead (`target`), where the answer is.
  */
 const lineOf = (s: PriorityLinkedSession, live: (conversationId: string) => DrawnMark | undefined): SessionLine => {
   const drawn = live(s.conversation_id);
-  if (drawn) return { ...s, state: drawn.asks ? "needs_you" : stateOfMark(drawn.mark), mark: drawn.mark, target: drawn.target, href: `/conversation/${drawn.target}` };
-  return { ...s, state: s.state === "needs_you" ? "idle" : s.state, target: s.conversation_id, href: `/conversation/${s.conversation_id}` };
+  // A teammate's session the inbox draws asking is their own ask (it does not ask the viewer): their milestone still reads Needs you.
+  const asks = drawn && (drawn.asks || (s.mine === false && drawn.mark === "needs_you"));
+  if (drawn) return { ...s, state: asks ? "needs_you" : stateOfMark(drawn.mark), mark: drawn.mark, target: drawn.target, href: `/conversation/${drawn.target}` };
+  // Undrawn: the viewer's own needs_you is idle; a teammate's is their own ask, and their milestone reads it as yours would.
+  return { ...s, state: s.state === "needs_you" && s.mine !== false ? "idle" : s.state, target: s.conversation_id, href: `/conversation/${s.conversation_id}` };
 };
 
 /**
@@ -153,9 +158,9 @@ export function buildModels(
 ): PriorityModel[] {
   const lanes = new Map((history?.lanes ?? []).map((l) => [l.short_id ?? l.key, l]));
   return rows.map((row) => {
-    const links = new Map((row.links ?? []).map((l) => [l.key, l]));
-    // Starting work is the owner's, and only on a priority still in play.
-    const canStart = row.mine && row.status === "active";
+    const links = new Map(milestoneLinksOf(row).map((l) => [l.key, l]));
+    // Anyone who reads a priority still in play may start on it (the server links the session to its milestone).
+    const canStart = row.status === "active";
     // Reads never return a dropped milestone; a row cached before that rule is held to it here.
     const milestones = row.steps.filter((step) => !step.dropped).map((step): MilestoneModel => {
       const l = links.get(step.key);
@@ -204,6 +209,18 @@ export const COARSE_TALL = "[@media(pointer:coarse)]:h-11 [@media(pointer:coarse
 const WIDE_MIN_LIST_WIDTH = 520;
 export const TABLET_QUERY = "(pointer: coarse) and (min-width: 900px)";
 export const layoutForWidth = (width: number, tablet = false): ListLayout => (tablet || width >= WIDE_MIN_LIST_WIDTH ? "wide" : "phone");
+
+/**
+ * The list's columns, shared by every row and heading so they line up: the
+ * rank column (ranks, faces and workspace icons, centred in it), then the
+ * text edge every heading and priority title starts at. A milestone's state
+ * mark sits in the box column just after the text edge.
+ */
+export const RANK_COLUMN = { wide: "grid grid-cols-[20px_minmax(0,1fr)] gap-x-2", phone: "grid grid-cols-[16px_minmax(0,1fr)] gap-x-2" } as const;
+/** The text edge as a left padding: the rank column and its gap. */
+export const TEXT_EDGE = { wide: "pl-[28px]", phone: "pl-[24px]" } as const;
+/** The title edge in Workspace grouping, past the face column (24px) and its gap: where its rows' titles start. */
+export const FACE_TEXT_EDGE = { wide: "pl-[60px]", phone: "pl-[56px]" } as const;
 
 /** A deploy a milestone reached, as its row draws it (Connected, with components/priorities/parts DeployMark). */
 export type DeployInfo = { id: string; short_id: string; target: string; status: string; at: number };

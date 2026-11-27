@@ -92,7 +92,7 @@ describe("milestoneStateOf", () => {
     expect(milestoneStateOf(m([], true), OWN)).toEqual({ kind: "done" });
   });
 
-  test("no live session: start on the owner's own active priority, else nothing", () => {
+  test("no live session: start on an active priority, else nothing", () => {
     expect(milestoneStateOf(m([s("killed", 9), s("done", 9)]), OWN).kind).toBe("start");
     expect(milestoneStateOf(m([]), OWN).kind).toBe("start");
     expect(milestoneStateOf(m([]), { canStart: false }).kind).toBe("none");
@@ -109,9 +109,14 @@ test("orderSessions: a person's session ranks above a workflow run, and every cl
   expect(orderSessions([s("done", 99, false, "closed-mine"), s("idle", 1, true, "run")]).map((x) => x.id)).toEqual(["run", "closed-mine"]);
 });
 
-test("orderSessions orders the server's own states: someone else's needs_you there ranks as idle", () => {
-  const theirs = { ...s("needs_you", 9, false, "theirs"), mine: false };
-  expect(orderSessions([theirs, s("dormant", 1, false, "mine")]).map((x) => x.id)).toEqual(["mine", "theirs"]);
+test("orderSessions: someone else's needs_you ranks as needs_you, above the viewer's own dormant session", () => {
+  const theirs = { ...s("needs_you", 1, false, "theirs"), mine: false };
+  expect(orderSessions([s("dormant", 9, false, "mine"), theirs]).map((x) => x.id)).toEqual(["theirs", "mine"]);
+});
+
+test("milestoneStateOf: a teammate's own ask makes their milestone needs_you, never idle", () => {
+  const theirs = { ...s("needs_you", 1, false, "theirs"), mine: false };
+  expect(milestoneStateOf(m(orderSessions([s("idle", 9, false, "other"), theirs])), OWN)).toEqual({ kind: "needs_you", session: theirs });
 });
 
 test("isWorkflowSession: a run's field, or a subagent titled as a step", () => {

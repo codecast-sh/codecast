@@ -42,6 +42,7 @@ import { sessionVisibility } from "./prioritySessionVisibility";
 import { moveSessionCount } from "./prioritySessionCount";
 import { isWorker, passActivity, pinsAskForPass, prioritiesOn, prioritiesPossibleFor } from "./priorityPassSchedule";
 import { classifierReads } from "./priorityClassifierHook";
+import { readerFor } from "./priorityAccess";
 
 type Ctx = { db: any };
 type Priority = Doc<"priorities">;
@@ -364,19 +365,21 @@ const strengthOf = (by: Conv["priority_set_by"]) => STRENGTH[by ?? "pass"];
  * session the pass placed). Precedence: the person > a known link > the
  * classifier and the pass, alike, so a link never overwrites a stronger one,
  * the classifier maps only a session mapped nowhere, and the pass moves a
- * classifier's filing but never a link's (priorityPassRun applyPlan). Refused (false) for
- * a session the person placed, someone else's priority, a merged one, one the
+ * classifier's filing but never a link's (priorityPassRun applyPlan).
+ * `teammate` lets a session map to a priority of someone else's that its
+ * owner can read (linkFromStart judges that). Refused (false) for a session
+ * the person placed, someone else's priority (without `teammate`), a merged one, one the
  * person said the session is not part of, a milestone they dropped, or
  * another workspace; a no-op when the session is already there, linked the
  * same way. It reads the
  * priority itself: callers find it in the per-mutation cache (ownPriorities),
  * whose rows may be stale on anything but ids, refs and keys.
  */
-export async function linkSession(ctx: Ctx, conv: Conv, priorityId: Id<"priorities">, step: string | undefined, by: LinkedBy = "link"): Promise<boolean> {
+export async function linkSession(ctx: Ctx, conv: Conv, priorityId: Id<"priorities">, step: string | undefined, by: LinkedBy = "link", teammate = false): Promise<boolean> {
   if (strengthOf(conv.priority_set_by) > STRENGTH[by] || (by === "classifier" && conv.priority_id)) return false;
   if ((conv.priority_not ?? []).some((id) => String(id) === String(priorityId))) return false;
   const priority: Priority | null = await ctx.db.get(priorityId);
-  if (!priority || priority.status === "merged" || String(priority.user_id) !== String(conv.user_id) || !(await prioritiesOn(ctx, priority.workspace))) return false;
+  if (!priority || priority.status === "merged" || (!teammate && String(priority.user_id) !== String(conv.user_id)) || !(await prioritiesOn(ctx, priority.workspace))) return false;
   const target = priority.steps.find((s) => s.key === step);
   if (target?.dropped) return false;
   const stepKey = target ? step : undefined;
@@ -389,12 +392,21 @@ export async function linkSession(ctx: Ctx, conv: Conv, priorityId: Id<"prioriti
   return true;
 }
 
-/** A session `starter` started from a milestone's Start (dispatch createSession `priority`, `priority_step`): only on a priority of their own. */
+/**
+ * A session `starter` started from a milestone's Start (dispatch createSession
+ * `priority`, `priority_step`): on a priority of their own, or a teammate's
+ * they can read (lib/priorityAccess Reader.canRead), on a milestone it shows
+ * them (Reader.stepsFor). Either way it is a known link, which the owner's
+ * pass leaves where it is (priorityPassRun applyPlan).
+ */
 export async function linkFromStart(ctx: Ctx, starter: Id<"users">, convId: Id<"conversations">, shortId: string, stepKey: string | undefined): Promise<boolean> {
   const p: Priority | null = await ctx.db.query("priorities").withIndex("by_short_id", (q: any) => q.eq("short_id", shortId.trim().toLowerCase())).first();
-  if (!p || String(p.user_id) !== String(starter)) return false;
   const conv: Conv | null = await ctx.db.get(convId);
-  return !!conv && linkSession(ctx, conv, p._id, stepKey);
+  if (!p || !conv || String(conv.user_id) !== String(starter)) return false;
+  if (String(p.user_id) === String(starter)) return linkSession(ctx, conv, p._id, stepKey);
+  const r = await readerFor(ctx, starter);
+  if (!(await r.canRead(p)) || (stepKey && !(await r.stepsFor(p)).some((s) => s.key === stepKey))) return false;
+  return linkSession(ctx, conv, p._id, stepKey, "link", true);
 }
 
 /** What the plan attribution rules read of a plan (priorityDerive PlanFacts). */

@@ -2,12 +2,14 @@
 // screen, app/priority/[id].tsx) say and offer, as pure functions over web's
 // models (lib/priorityList), so they are tested without React Native: each
 // milestone's mark, the DONE and POLISH sections, an open milestone's
-// connected groups, the ten-day bars, and the owner's ⋯ menus as sheet rows
-// whose presses are web's writes (lib/priorityWrites).
+// connected groups, the ten-day bars, the owner's ⋯ menus as sheet rows
+// whose presses are web's writes (lib/priorityWrites), and the list's
+// sections per workspace and person as the rows it draws in order.
 import type { PriorityPlanRef, PriorityRow, PriorityStep } from '@codecast/shared/contracts/priorities';
 import { isClosedSession, orderByState, type MilestoneStateKind } from '@codecast/shared/contracts/priorityDerive';
 import { MILESTONE_STATE_WORD, ago, type MilestoneModel, type PriorityModel, type SessionLine } from '@codecast/web/lib/priorityList';
 import { milestoneStart, rankProvenance, type PriorityWrites } from '@codecast/web/lib/priorities';
+import { GROUP_BY_LABEL, type GroupBy, type Sections } from '@codecast/web/lib/prioritySections';
 import type { SessionStatus } from '@codecast/web/lib/sessionStatus';
 import type { SessionStart } from '@codecast/web/store/composeSlice';
 import type { ComposeTask } from './compose';
@@ -207,11 +209,21 @@ export function milestoneMenu(row: PriorityRow, step: PriorityStep, writes: Prio
   ];
 }
 
-/** A session's ⋯ under a milestone (web's SessionMenu), for the owner of both: off this milestone, off this priority, or to another milestone. */
-export function sessionMenu(row: PriorityRow, s: Pick<SessionLine, 'short_id'>, stepKey: string | null, writes: PriorityWrites, ui: { moveTo: () => void }): SheetItem[] {
+/**
+ * A session's ⋯ under a milestone (web's SessionMenu), for the session's
+ * owner or the priority's, else null. For the owner of both: off this
+ * milestone, off this priority, or to another milestone; when one of them is
+ * someone else's, off this priority alone.
+ */
+export function sessionMenu(row: Pick<PriorityRow, 'short_id' | 'mine'>, s: Pick<SessionLine, 'short_id' | 'mine' | 'started_by_viewer'>, stepKey: string | null, writes: PriorityWrites, ui: { moveTo: () => void }): SheetItem[] | null {
+  // As the server takes it (doSessionNotThis, doSessionMove): the session's starter, never a co-owner.
+  const started = s.started_by_viewer ?? s.mine;
+  if (!row.mine && !started) return null;
+  const notThis: SheetItem = { label: 'Not this priority', icon: 'x-circle', onPress: () => writes.sessionNotThis(s.short_id, row.short_id) };
+  if (!(row.mine && started)) return [notThis];
   return [
     ...(stepKey ? [{ label: 'Not this milestone', icon: 'minus-circle' as const, onPress: () => writes.moveSession(s.short_id, row.short_id, row.short_id, null) }] : []),
-    { label: 'Not this priority', icon: 'x-circle', onPress: () => writes.sessionNotThis(s.short_id, row.short_id) },
+    notThis,
     { label: 'Move to…', icon: 'corner-down-right', onPress: ui.moveTo },
   ];
 }
@@ -224,4 +236,71 @@ export function sessionTargets(row: PriorityRow, own: readonly PriorityRow[], st
     ...here.map((step) => ({ priority: row, step })),
     ...own.filter((r) => r.short_id !== row.short_id).flatMap((r) => open(r).map((step) => ({ priority: r, step }))),
   ];
+}
+
+// ── The list's sections ─────────────────────────────────────────────────
+
+/** A heading's mark: a workspace's icon, or a person's face (their first row carries it). */
+export type HeadingMark = { workspace: string } | { face: Pick<PriorityRow, 'owner' | 'owner_image' | 'mine'> } | null;
+
+/**
+ * What the list draws, top to bottom. A `top` heading is a section's own (a
+ * workspace, or a person grouped first); otherwise it labels a group inside
+ * one. `face` puts the owner's face after the rank (Workspace grouping). A
+ * fold is a group's last row, its done and set-aside priorities folded.
+ */
+export type ListItem =
+  | { kind: 'heading'; key: string; top: boolean; mark: HeadingMark; name: string; count?: number }
+  | { kind: 'priority'; key: string; row: PriorityRow; face: boolean }
+  | { kind: 'fold'; key: string; rows: PriorityRow[]; face: boolean };
+
+/**
+ * Web's PrioritySections as rows: `headings` (more than one workspace shown)
+ * gives each workspace its heading, `people` (a teammate is on the page)
+ * labels each person inside one.
+ */
+export function sectionItems(sections: Sections, { headings, people }: { headings: boolean; people: boolean }): ListItem[] {
+  const out: ListItem[] = [];
+  const group = (key: string, active: readonly PriorityRow[], past: PriorityRow[], face = false) => {
+    for (const row of active) out.push({ kind: 'priority', key: row.short_id, row, face });
+    if (past.length) out.push({ kind: 'fold', key: `${key}/past`, rows: past, face });
+  };
+  const faceOf = (rows: readonly PriorityRow[]): HeadingMark => (rows[0] ? { face: rows[0] } : null);
+  if (sections.groupBy === 'workspace') {
+    for (const s of sections.sections) {
+      if (headings) out.push({ kind: 'heading', key: s.key, top: true, mark: { workspace: s.key }, name: s.name, count: s.active.length });
+      group(s.key, s.active.map((x) => x.row), s.past, true);
+    }
+  } else if (sections.groupBy === 'person_workspace') {
+    for (const p of sections.sections) {
+      const first = p.workspaces.flatMap((w) => [...w.active, ...w.past]);
+      out.push({ kind: 'heading', key: p.user_id, top: true, mark: faceOf(first), name: p.mine ? 'You' : p.owner, count: p.workspaces.reduce((n, w) => n + w.active.length, 0) });
+      for (const w of p.workspaces) {
+        out.push({ kind: 'heading', key: `${p.user_id}/${w.key}`, top: false, mark: { workspace: w.key }, name: w.name });
+        group(`${p.user_id}/${w.key}`, w.active, w.past);
+      }
+    }
+  } else {
+    for (const s of sections.sections) {
+      if (headings) out.push({ kind: 'heading', key: s.key, top: true, mark: { workspace: s.key }, name: s.name, count: s.people.reduce((n, p) => n + p.active.length, 0) });
+      for (const p of s.people) {
+        if (people) out.push({ kind: 'heading', key: `${s.key}/${p.user_id}`, top: false, mark: faceOf([...p.active, ...p.past]), name: p.mine ? 'You' : p.owner });
+        group(`${s.key}/${p.user_id}`, p.active, p.past);
+      }
+    }
+  }
+  return out;
+}
+
+/** Every priority the list draws, open or folded: their models share one scale. */
+export const itemRows = (items: readonly ListItem[]): PriorityRow[] =>
+  items.flatMap((i) => (i.kind === 'priority' ? [i.row] : i.kind === 'fold' ? i.rows : []));
+
+/** A workspace chip's press: turn it off, or back on. */
+export const toggleHidden = (hidden: readonly string[], key: string): string[] =>
+  hidden.includes(key) ? hidden.filter((k) => k !== key) : [...hidden, key];
+
+/** Group by as a picker sheet: the options pageControls offers, the current one checked. */
+export function groupBySheet(options: readonly GroupBy[], value: GroupBy, choose: (g: GroupBy) => void): SheetItem[] {
+  return options.map((g) => ({ label: GROUP_BY_LABEL[g], selected: g === value, onPress: () => { if (g !== value) choose(g); } }));
 }

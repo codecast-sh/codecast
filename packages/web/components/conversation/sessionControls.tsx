@@ -2,6 +2,7 @@ import { LogoIcon } from "../Logo";
 import { TeamSessionSwitch } from "./TeamSessionSwitch";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { SegmentedChoice } from "../TeamShareModePicker";
+import { StartLinkNotice } from "../priorities/StartLinkNotice";
 import { TEAM_SHARE_MODES } from "../../lib/teamShareModes";
 import type { TeamShareMode } from "../../lib/teamFeedRows";
 import { FolderSyncControl } from "./FolderSyncControl";
@@ -1293,10 +1294,11 @@ export function NewSessionVisibilityPicker({ conversation }: { conversation: Con
   const id = conversation._id;
   const sig = useInboxStore((st) => {
     const row: any = st.sessions[id];
-    return [row?._visibility ?? "", row?._team === "team" ? "1" : "", row?.git_root || row?.project_path || ""].join("\u0001");
+    return [row?._visibility ?? "", row?._team === "team" ? "1" : "", row?.git_root || row?.project_path || "", row?._start?.priority ?? ""].join("\u0001");
   });
-  const [picked, team, path] = sig.split("\u0001");
-  const destination = useQueryNoThrow(api.sessionVisibilityPreview.creationTeam, { path: path || undefined }).data;
+  const [picked, team, path, priority] = sig.split("\u0001");
+  // A Start names its priority: a folder no rule names goes to the priority's team, so the label names that team.
+  const destination = useQueryNoThrow(api.sessionVisibilityPreview.creationTeam, priority ? { path: path || undefined, priority } : { path: path || undefined }).data;
   if (isConvexId(id) || team || !destination) return null;
   const level = destination.visibility === "hidden" ? "private" : destination.visibility;
   const value = (picked || (level === "activity" ? undefined : level)) as TeamShareMode | undefined;
@@ -1461,6 +1463,7 @@ export function NewSessionView({ conversation, agentControls, slots, role }: {
             {!hosted && <span className="ml-2 inline-flex"><NewSessionProjectToggle conversation={conversation} /></span>}
             {!hosted && <TeamSessionSwitch conversationId={String(conversation._id)} />}
             {!hosted && <span className="ml-2 inline-flex"><NewSessionVisibilityPicker conversation={conversation} /></span>}
+            {!hosted && <span className="ml-2 inline-flex min-w-0"><StartLinkNotice conversationId={String(conversation._id)} /></span>}
           </>,
           slots.foot,
         )}
@@ -1501,7 +1504,7 @@ export function NewSessionView({ conversation, agentControls, slots, role }: {
             <ProjectSwitcher conversation={conversation} handleRef={projectsRef} machineSlot={machineSlot} />
           </ErrorBoundary>
           <div className="flex-1" />
-          <div className="w-full px-4 mb-2 flex items-center"><NewSessionProjectToggle conversation={conversation} /><TeamSessionSwitch conversationId={String(conversation._id)} /><span className="ml-2 inline-flex"><NewSessionVisibilityPicker conversation={conversation} /></span></div>
+          <div className="w-full px-4 mb-2 flex items-center"><NewSessionProjectToggle conversation={conversation} /><TeamSessionSwitch conversationId={String(conversation._id)} /><span className="ml-2 inline-flex"><NewSessionVisibilityPicker conversation={conversation} /></span><span className="ml-2 inline-flex min-w-0"><StartLinkNotice conversationId={String(conversation._id)} /></span></div>
           {contextLine("w-full px-4 mb-4")}
         </>
       )}

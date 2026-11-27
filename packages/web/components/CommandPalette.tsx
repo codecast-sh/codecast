@@ -11,7 +11,7 @@ import { withInboxView } from "../lib/inboxViewHistory";
 import { useCreateKinds, type CreateEnv, type CreateKind } from "../hooks/useCreateKinds";
 import { docTypeIcon } from "../lib/docTypeStyle";
 import { DocTypeMark } from "./docs/DocTypeMark";
-import { useTeamFeature, useCallsAvailable, useWorkspaceFeature, workspaceHasFeatureNow } from "../lib/teamFeatures";
+import { useAnyWorkspaceFeature, useTeamFeature, useCallsAvailable, useWorkspaceFeature, workspaceHasFeatureNow } from "../lib/teamFeatures";
 import { meetingLinkIn } from "@codecast/shared/contracts/meetingLinks";
 import { sendBotToMeeting } from "../lib/meetingBots";
 import type { TeamFeatureKey } from "@codecast/shared/contracts";
@@ -1728,7 +1728,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   // Flows among them where the workspace has it, as the Modern rail does.
   const modernStyle = useIsModernStyle();
   const flowsOn = useWorkspaceFeature("line");
-  const prioritiesOn = useWorkspaceFeature("priorities");
+  const prioritiesOn = useAnyWorkspaceFeature("priorities");
   const featuresOn: Partial<Record<TeamFeatureKey, boolean>> = { chat: chatOn, calls: callsOn, org: orgOn, changes: changesOn, line: modernStyle && flowsOn, priorities: prioritiesOn };
   const featureOn = (f: TeamFeatureKey | undefined) => !f || featuresOn[f];
 

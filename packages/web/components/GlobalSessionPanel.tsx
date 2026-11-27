@@ -106,7 +106,7 @@ import { ListHeadNewSession } from "./inbox/NewSessionButton";
 import { CompactPlanRow, PlanAskButton, PlanGroupFacts, PlanGroupMark, PlanTierHeader, RestingPlans } from "./inbox/PlanGroupParts";
 import { PLAN_TIERS, planTierFolded, planTierKey, planTierOf } from "../store/inboxStore";
 import { prioritiesAnywhere, priorityOrderSig, priorityPlaceReader, rankLabelOf, sortByPriority } from "../store/priorityOrder";
-import { useWorkspaceFeature } from "../lib/teamFeatures";
+import { useAnyWorkspaceFeature, useWorkspaceFeature } from "../lib/teamFeatures";
 import { INBOX_SECTION_DECLARED_STATUS } from "../lib/sessionStatus";
 import type { PlanItem } from "../store/inboxStore";
 import { windowOrgTree } from "../store/orgSlice";
@@ -2462,6 +2462,8 @@ function SessionListPanelImpl({
   useSyncPlansWithArgs(viewMode === "plan" ? planWsArgs : "skip");
   // The priorities the Priorities view sorts by are fed by the sync host's feeders (useSyncInboxPriorities).
   const prioritiesOn = useWorkspaceFeature("priorities");
+  // Top 3 / 5 / 10 rank across every workspace the viewer holds (store/priorityChips), so they show while any has Priorities on.
+  const topNOn = useAnyWorkspaceFeature("priorities");
   const workspacePlans = useWorkspaceCollection<PlanItem>("plans", planLensSig);
   const planView = useMemo(() => {
     if (viewMode !== "plan") return null;
@@ -3299,7 +3301,7 @@ function SessionListPanelImpl({
             projectPathByName={favoritesView ? favChipCounts!.projectPathByName : projectPathByName}
             projectActivity={favoritesView ? favChipCounts!.projectActivity : projectActivity}
             machineCounts={machineChips}
-            priorityCounts={!prioritiesOn ? NO_PRIORITY_CHIPS : favoritesView ? favChipCounts!.priorityCounts : priorityCounts}
+            priorityCounts={!topNOn ? NO_PRIORITY_CHIPS : favoritesView ? favChipCounts!.priorityCounts : priorityCounts}
             dropSessionOnLabel={dropSessionOnLabel}
           />
         ) : (
@@ -3309,7 +3311,7 @@ function SessionListPanelImpl({
             projectPathByName={favoritesView ? favChipCounts!.projectPathByName : projectPathByName}
             projectActivity={favoritesView ? favChipCounts!.projectActivity : projectActivity}
             machineCounts={machineChips}
-            priorityCounts={!prioritiesOn ? NO_PRIORITY_CHIPS : favoritesView ? favChipCounts!.priorityCounts : priorityCounts}
+            priorityCounts={!topNOn ? NO_PRIORITY_CHIPS : favoritesView ? favChipCounts!.priorityCounts : priorityCounts}
             dropSessionOnLabel={dropSessionOnLabel}
           />
         )}

@@ -21,17 +21,17 @@ import { internalQuery, mutation, query } from "./functions";
 import { internal } from "./_generated/api";
 import { accessStampFromDoc, authorizedFor, heldKeysFor, parseWorkspaceKey } from "./lib/accessKeys";
 import { teamFeatureOffMessage } from "./lib/teamFeatureGuard";
-import { positionOf } from "./lib/priorityGroup";
 import { FEATURE, featureCheck, readerFor, type Reader } from "./lib/priorityAccess";
 import { hasOkRun, runBlocker } from "./priorityPassRun";
-import { sessionVisibility } from "./lib/prioritySessionVisibility";
 import type { PriorityDetail, PriorityHistory, PriorityList, PriorityPinLine } from "@codecast/shared/contracts/priorities";
 import type { Doc, Id } from "./_generated/dataModel";
 import { type Priority, type Result, cliWorkspace, criticalCounts, isOwner, listFor, showFor, tokenUser } from "./priorityRead";
+import { positionOf } from "./lib/priorityGroup";
 import { historyFor } from "./priorityHistory";
 import { doCreate } from "./priorityCreate";
 import { createWorkContext } from "./data";
 import { fromCallWorkspace } from "./callReads";
+import { passTiming } from "./priorityPassSweep";
 import { type MilestoneChange, doCorrect, doCorrectionDelete, doMerge, doMilestone, doMove, doPriorityDone, doRetitle, doSessionMove, doSessionNotThis, doSetAside, doUndoPriorityDone } from "./priorityWrite";
 
 function orThrow<T>(res: Result<T>): T {
@@ -62,6 +62,22 @@ export const list = query({
   },
 });
 
+/**
+ * When the viewer's pass in one workspace runs (the header's behind chip and
+ * next pass, beside a list of every workspace): its own small subscription,
+ * so switching workspace never re-runs the list. Nothing for a workspace the
+ * viewer does not hold.
+ */
+export const timing = query({
+  args: { workspace: v.string() },
+  handler: async (ctx, { workspace }): Promise<{ behind_by_ms: number | null; next_pass_at: number | null } | null> => {
+    const viewer = await getAuthUserId(ctx);
+    if (!viewer) return null;
+    if (!(await readerFor(ctx, viewer)).held.has(workspace)) return { behind_by_ms: null, next_pass_at: null };
+    return passTiming(ctx, viewer, workspace, Date.now());
+  },
+});
+
 export const show = query({
   args: { short_id: v.string() },
   handler: async (ctx, { short_id }): Promise<PriorityDetail | null> => {
@@ -85,9 +101,11 @@ export const history = query({
  * The line under a mapped session's pinned state: for the priority's owner,
  * and for a teammate holding its workspace key when this open session is
  * listed to that team and the priority needs no rewrite (summary level is
- * enough: the line names the priority, not the transcript). No scan of the
- * priority's other sessions: one conversation read, one priority read, the
- * owner's membership, and the owner's active priorities for its position.
+ * enough: the line names the priority, not the transcript). Access judges
+ * the open session alone: one conversation read, one priority read, the
+ * owner's membership. Its position reads the owner's active priorities, and
+ * for a teammate which of them they can read (positionOf), so the line, the
+ * list and the page give one number.
  */
 export const pinLine = query({
   args: { conversation_id: v.id("conversations") },
@@ -98,20 +116,23 @@ export const pinLine = query({
     if (!conv?.priority_id) return null;
     const p = await ctx.db.get(conv.priority_id);
     if (!p || p.status === "merged") return null;
-    // Only the open session is judged: the owner's, or a teammate's listed to the team that holds the priority.
+    const r = await readerFor(ctx, viewer);
+    // A session not listed to the viewer (a teammate's Start made private) never names its priority.
+    if (String(conv.user_id) !== String(viewer) && !(await r.listed(conv))) return null;
+    // The open session is judged when it is the owner's, listed to the team that holds the priority; a teammate's session on it (a Start) never opens it: the priority must be readable (Reader.canRead).
     if (String(p.user_id) !== String(viewer)) {
       const ws = parseWorkspaceKey(p.workspace);
-      if (p.needs_rewrite || ws?.type !== "team" || !authorizedFor(accessStampFromDoc("priorities", p), String(viewer), await heldKeysFor(ctx, viewer))) return null;
-      if (!(await sessionVisibility(ctx).listedTo(conv, ws.teamId))) return null;
+      if (p.needs_rewrite || ws?.type !== "team" || !authorizedFor(accessStampFromDoc("priorities", p), String(viewer), r.held)) return null;
+      if (!(String(conv.user_id) === String(p.user_id) ? await r.vis.listedTo(conv, ws.teamId) : await r.canRead(p))) return null;
     }
     if (!(await featureCheck(ctx)(p.workspace))) return null;
     // A teammate reads a step only as the page shows it to them (Reader.stepsFor): never one written from a session they cannot see.
-    const steps = isOwner(viewer, p) ? p.steps : await (await readerFor(ctx, viewer)).stepsFor(p);
+    const steps = isOwner(viewer, p) ? p.steps : await r.stepsFor(p);
     const step = steps.find((s) => s.key === conv.priority_step_key && !s.dropped);
     return {
       short_id: p.short_id,
       title: p.title,
-      rank: await positionOf(ctx, p),
+      rank: await positionOf(ctx, r, p),
       ...criticalCounts(p),
       ...(step ? { step_title: step.title } : {}),
     };

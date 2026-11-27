@@ -4,6 +4,8 @@
 import type { Id } from "./_generated/dataModel";
 import { claimTaskOwnership } from "./lib/taskOwner";
 import { linkFromStart, startPlanId } from "./lib/priorityLinks";
+import { readerFor } from "./lib/priorityAccess";
+import { isTeamMember } from "./privacy";
 import { addConversationToWorkItem } from "./conversationLinks";
 import { canAccessPlan, canAccessTask, workspaceForConversation, workspaceForResource, workspacesMatch } from "./lib/access";
 
@@ -97,6 +99,25 @@ export async function linkConversationToObject(
     await addConversationToWorkItem(ctx, userId, "plan", plan, conversationId);
     return;
   }
+}
+
+/**
+ * The team a session started from a milestone's Start (`priority`) is routed
+ * to when nothing the person set names one (dispatch createSession): the
+ * priority's, so the link to that milestone can hold (lib/priorityLinks
+ * linkSession refuses a session in another workspace). A team priority the
+ * starter can read and whose team they are in gives that team; their own
+ * personal priority gives no team. Undefined for anything else.
+ */
+export async function startWorkspace(ctx: HandlerCtx, userId: Id<"users">, priority: string | undefined): Promise<{ team: Id<"teams"> | null } | undefined> {
+  if (!priority) return undefined;
+  const p = await ctx.db.query("priorities").withIndex("by_short_id", (q: any) => q.eq("short_id", priority.trim().toLowerCase())).first();
+  if (!p || p.status === "merged") return undefined;
+  if (String(p.user_id) !== String(userId) && !(await (await readerFor(ctx as any, userId)).canRead(p))) return undefined;
+  if (p.workspace === `user:${userId}`) return { team: null };
+  if (!p.workspace.startsWith("team:")) return undefined;
+  const team = p.workspace.slice("team:".length) as Id<"teams">;
+  return (await isTeamMember(ctx as any, userId, team)) ? { team } : undefined;
 }
 
 /**

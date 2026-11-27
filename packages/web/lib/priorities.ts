@@ -21,7 +21,8 @@ export function listRows(payload: PriorityList | null | undefined): PriorityRow[
   return payload?.priorities;
 }
 
-export function listMeta(payload: PriorityList | null | undefined): PriorityListMeta {
+/** The pass timing out of a list or timing answer (priorities.timing). */
+export function listMeta(payload: PriorityListMeta | null | undefined): PriorityListMeta {
   return { next_pass_at: payload?.next_pass_at ?? null, behind_by_ms: payload?.behind_by_ms ?? null };
 }
 
@@ -57,7 +58,8 @@ export type { PriorityDetail, PriorityHistory, PriorityHistoryLane };
 
 /** Who set the rank, in words: the person's own placement, or the pass's. */
 export function rankProvenance(row: Pick<PriorityRow, "rank" | "rank_source" | "mine" | "owner">): string | null {
-  if (row.rank == null) return null;
+  // A teammate's row says nothing of who placed it: the scale behind it counts priorities the viewer cannot see.
+  if (row.rank == null || row.rank_source == null) return null;
   if (row.rank_source !== "person") return "ranked by AI";
   return row.mine ? "you placed it" : `${row.owner || "owner"} placed it`;
 }
@@ -70,16 +72,17 @@ const sameOwner = (a: PriorityRow, b: PriorityRow) => String(a.user_id) === Stri
 // (store/prioritiesSlice), in place. The server's push settles each one.
 
 /**
- * The rows with `rank` and `rank_source` read live from their places
+ * The viewer's rows with `rank` and `rank_source` read live from their places
  * (shared/contracts/priorities priorityPositions), not the server's
- * snapshot, so a move paints at once. A teammate's rank is the server's: it
- * counts the owner's whole active group, which the viewer's rows cannot.
- * A row whose rank holds is the same row.
+ * snapshot, so a move paints at once. A teammate's row keeps the server's
+ * rank: their order over the priorities the viewer can read (1..n, no gaps),
+ * which the viewer never moves. A row whose rank holds is the same row.
  */
 export function withLiveRanks(rows: readonly PriorityRow[]): PriorityRow[] {
-  const positions = priorityPositions(rows, (r) => String(r._id));
+  const positions = priorityPositions(rows.filter((r) => r.mine), (r) => String(r._id));
   return rows.map((r) => {
-    const rank = r.mine ? positions.get(String(r._id)) ?? null : r.rank;
+    if (!r.mine) return r;
+    const rank = positions.get(String(r._id)) ?? null;
     const rank_source = rankSourceOf(r);
     return rank === r.rank && rank_source === r.rank_source ? r : { ...r, rank, rank_source };
   });
@@ -147,9 +150,9 @@ export function paintedRow(s: PaintState, shortId: string): PriorityRow | undefi
   return (lookup(s.priorities, shortId) as PriorityRow | undefined) ?? detailOf(s, shortId)?.base;
 }
 
-/** Its milestones' links where its surfaces read them: the row's, else the detail's (a teammate's or a past priority). */
+/** Its milestones' links where its surfaces read them: the row's (full, else a teammate's mapped ones), else the detail's (a past priority). */
 function linksOf(s: PaintState, row: PriorityRow): PriorityMilestoneLinks[] {
-  return row.links ?? detailOf(s, row.short_id)?.links ?? [];
+  return row.links ?? row.mapped_links ?? detailOf(s, row.short_id)?.links ?? [];
 }
 
 /** A move on a priority the list does not hold (the phone opens one page): its own rank steps, as the server's echo will say. */
@@ -198,6 +201,7 @@ export function paintRename(row: PriorityRow, stepKey: string, title: string): v
 export function paintDrop(s: PaintState, row: PriorityRow, stepKey: string): void {
   row.steps = row.steps.filter((st) => st.key !== stepKey);
   if (row.links) row.links = row.links.filter((l) => l.key !== stepKey);
+  if (row.mapped_links) row.mapped_links = row.mapped_links.filter((l) => l.key !== stepKey);
   const detail = detailOf(s, row.short_id);
   if (detail?.links) detail.links = detail.links.filter((l) => l.key !== stepKey);
   row.counts = criticalCounts(row.steps);
@@ -240,7 +244,9 @@ export function paintMerge(s: PaintState, from: PriorityRow, into: PriorityRow):
   const remap = new Map(from.steps.map((st) => [st.key, `s${++next}`]));
   into.steps = [...into.steps, ...from.steps.map((st) => ({ ...st, key: remap.get(st.key)! }))];
   into.counts = criticalCounts(into.steps);
-  if (into.links) into.links = [...into.links, ...linksOf(s, from).map((l) => ({ ...l, key: remap.get(l.key) ?? l.key }))];
+  const moved = () => linksOf(s, from).map((l) => ({ ...l, key: remap.get(l.key) ?? l.key }));
+  if (into.links) into.links = [...into.links, ...moved()];
+  else if (into.mapped_links) into.mapped_links = [...into.mapped_links, ...moved()];
   into.sessions = [...from.sessions.map((x) => ({ ...x, step_key: x.step_key ? remap.get(x.step_key) ?? null : null })), ...into.sessions];
   into.session_count += from.session_count;
   for (const conv of Object.values(s.sessions ?? {})) {
@@ -320,6 +326,9 @@ export type OwnerGroup = { user_id: string; owner: string; mine: boolean; active
 
 const PAST_ORDER: Partial<Record<PriorityStatus, number>> = { done: 0, quiet: 1, set_aside: 2 };
 
+/** A teammate's active priorities in the order the server numbered them (their rows carry no place on the scale). */
+const byServerRank = (rows: PriorityRow[]) => rows.filter((r) => r.status === "active").sort((a, b) => (a.rank ?? Infinity) - (b.rank ?? Infinity) || b.last_active_at - a.last_active_at);
+
 /** One group per owner, the viewer's first, then by name: active in rank order, then done, quiet and set aside. */
 export function ownerGroups(rows: readonly PriorityRow[]): OwnerGroup[] {
   const groups: OwnerGroup[] = [];
@@ -331,7 +340,7 @@ export function ownerGroups(rows: readonly PriorityRow[]): OwnerGroup[] {
   }
   groups.sort((a, b) => Number(b.mine) - Number(a.mine) || a.owner.localeCompare(b.owner) || a.user_id.localeCompare(b.user_id));
   for (const g of groups) {
-    g.active = effectivePriorityOrder(g.active);
+    g.active = g.mine ? effectivePriorityOrder(g.active) : byServerRank(g.active);
     g.past.sort((a, b) => (PAST_ORDER[a.status] ?? 9) - (PAST_ORDER[b.status] ?? 9) || (b.done_at ?? b.last_active_at) - (a.done_at ?? a.last_active_at));
   }
   return groups;
@@ -393,17 +402,22 @@ export function pastBadge(row: Pick<PriorityRow, "status" | "done_at" | "last_ac
   return "Set aside";
 }
 
+/** Its milestones' links as a list row carries them: full `links`, else `mapped_links` (a row past the list's link budget, the viewer's own too). */
+export function milestoneLinksOf(row: Pick<PriorityRow, "links" | "mapped_links">): PriorityMilestoneLinks[] {
+  return row.links ?? row.mapped_links ?? [];
+}
+
 /** What a priority row paints, for the store reader's wake signature. */
 export function prioritySig(r: PriorityRow): string {
   const steps = r.steps.map((s) => `${s.key}:${s.tier}:${s.done ? 1 : 0}:${s.refs.length}:${s.title}`).join(",");
   const sessions = r.sessions.map((s) => `${s.short_id}:${s.step_key ?? ""}:${s.title}`).join(",");
   const planSig = (p: PriorityPlanRef | null | undefined) => (p ? `${p.short_id}.${p.title}.${p.done}/${p.total}/${p.size}` : "");
-  const links = (r.links ?? []).map((l) => [
+  const links = milestoneLinksOf(r).map((l) => [
     l.key, l.correction_pending ? 1 : 0, l.looks_done ? 1 : 0, l.sessions_more, planSig(l.plan), l.part_of.map(planSig).join("+"),
-    l.sessions.map((x) => `${x.conversation_id}.${x.short_id}.${x.state}.${x.mine ? 1 : 0}.${x.workflow ? 1 : 0}.${x.title}.${x.last_active_at}`).join(";"),
+    l.sessions.map((x) => `${x.conversation_id}.${x.short_id}.${x.state}.${x.mine ? 1 : 0}.${x.started_by_viewer ? 1 : 0}.${x.workflow ? 1 : 0}.${x.title}.${x.last_active_at}`).join(";"),
   ].join(":")).join(",");
   const plan = planSig(r.plan);
-  return [r.rank, r.person_pos, r.ai_rank, r.status, r.title, r.summary, r.serves, r.done_at, r.last_active_at, r.owner, r.correction_pending, steps, sessions, links, plan].join("|");
+  return [r.rank, r.person_pos, r.ai_rank, r.status, r.title, r.summary, r.serves, r.done_at, r.last_active_at, r.owner, r.owner_image, r.correction_pending, steps, sessions, r.links ? "full" : "mapped", links, plan].join("|");
 }
 
 /** The person's controls, as the page hands them to its rows. */

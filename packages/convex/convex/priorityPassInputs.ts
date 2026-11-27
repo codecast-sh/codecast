@@ -62,7 +62,7 @@ export type PassInputs = {
   more: boolean;
   /** Where the cursor goes when every returned session is read. */
   read_to: number;
-  /** Sessions a priority here still holds that have left this workspace (made private, moved): applyPlan lets them go. */
+  /** Sessions a priority here still holds that have left this workspace (made private, moved): applyPlan lets them go. A teammate's session started on one (lib/priorityLinks linkFromStart) stays while it counts here. */
   strays: Id<"conversations">[];
   /** The pending corrections the input holds: applyPlan marks them applied. */
   corrections: Id<"priority_corrections">[];
@@ -127,6 +127,9 @@ export function sessionNames(reservedFor: (shortId: string) => Promise<string | 
   };
   return { ids, name };
 }
+/** A session a priority here holds that has left this workspace (made private, moved), the person's own or a teammate's: the pass lets it go. */
+export const leftWorkspace = async (vis: SessionVisibility, conv: Doc<"conversations">, workspace: string) => (await vis.workspaceOf(conv)) !== workspace;
+
 /** The person's own session, counting in this workspace (lib/prioritySessionVisibility: its team's only while listed there). */
 export const inWorkspace = async (vis: SessionVisibility, conv: Doc<"conversations">, userId: Id<"users">, workspace: string) =>
   String(conv.user_id) === String(userId) && (await vis.workspaceOf(conv)) === workspace;
@@ -509,18 +512,19 @@ export const passInputs = internalQuery({
     const strays: Id<"conversations">[] = [];
     const stepTaskIds = new Set<string>();
     for (const p of rows) {
+      // Twice the slots: teammates' sessions on it (never shown to the pass) leave the slots to the person's own.
       const held: Doc<"conversations">[] = await ctx.db
         .query("conversations")
         .withIndex("by_priority", (q: any) => q.eq("priority_id", p._id))
         .order("desc")
-        .take(PRIORITY_PASS_CAPS.sessions_per_priority);
+        .take(2 * PRIORITY_PASS_CAPS.sessions_per_priority);
       const readable: Doc<"conversations">[] = [];
       let left = false;
       for (const c of held) {
-        if (!(await inWorkspace(vis, c, args.user_id, args.workspace))) {
+        if (await leftWorkspace(vis, c, args.workspace)) {
           strays.push(c._id);
           left = true;
-        } else if (await mayRead(c)) readable.push(c);
+        } else if (String(c.user_id) === String(args.user_id) && readable.length < PRIORITY_PASS_CAPS.sessions_per_priority && (await mayRead(c))) readable.push(c);
       }
       // Named one at a time: whether a name must be longer depends on those named before it.
       const sessionsOf: PassPriority["sessions"] = [];

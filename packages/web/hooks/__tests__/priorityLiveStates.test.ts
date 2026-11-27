@@ -229,11 +229,11 @@ test("a role's session with an ask of its own in Decisions asks, answered in its
   for (const inbox of ["sidebar", "phone"] as const) expect([inbox, drawn(ridden, inbox)]).toEqual([inbox, { mark: "working", asks: false, target: lead }]);
 });
 
-test("not in the store: no mark; the server's needs_you reads idle, never sleeping, whoever owns it", () => {
+test("not in the store: no mark; the viewer's own needs_you reads idle, never sleeping, and a teammate's stays their ask", () => {
   const absent = fixtureId("absent1");
   expect(mark(absent)).toBeNull();
   expect(milestone(absent)).toBe("idle");
-  expect(milestone(absent, { mine: false })).toBe("idle");
+  expect(milestone(absent, { mine: false })).toBe("needs_you");
   // Its row says Idle, never the Sleeping moon.
   expect(model(absent).sessions[0].state).toBe("idle");
 });

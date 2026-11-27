@@ -19,6 +19,7 @@ import { newConversationAgentType } from "../lib/defaultAgent";
 import { bindComposeStart, bindComposeTask, composeDraftContent, findKeptComposeDraft, type ComposeContext, type ComposeInstance } from "../store/composeSlice";
 import { flushDraftWrite } from "../lib/pendingDraftWrites";
 import { settleHostedStart } from "../lib/startHostedConversation";
+import { sayIfStartUnlinked } from "../lib/priorityStartLink";
 import { useOnlyHostedAgent } from "../hooks/usePinnedAgents";
 import { ComposeRolePicker, useRoleRecipient } from "./ComposeRolePicker";
 import { Minus, Maximize2, ChevronUp, X } from "lucide-react";
@@ -32,6 +33,11 @@ import { Button } from "./ui/button";
 const draftContentFor = (id: string | null) => {
   flushDraftWrite(id);
   return composeDraftContent(useInboxStore.getState(), id);
+};
+// What the person put in: text that is still only what the composer opened with (a link's, a Start's brief) is not.
+const typedFor = (id: string | null, opened: string) => {
+  const content = draftContentFor(id);
+  return content && (content.images.length > 0 || content.text !== opened) ? content : null;
 };
 
 /**
@@ -83,26 +89,20 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
 
   // A ComposeView instance owns ONE deferred stub and ends one of three ways:
   //   • committed — the first send fires materialize() and sets sentRef.
-  //   • kept — the user chose "Keep draft" (or a dismissal we couldn't intercept
-  //     happened over typed content): the stub stays, flagged _hasDraft, and
-  //     renders as a draft new-session card in the inbox. The desktop palette
-  //     window keeps on every dismissal and reopens onto the kept draft
-  //     (findKeptComposeDraft).
-  //   • abandoned — abandonStub() prunes the un-sent, server-less stub (and plants
-  //     an IDB exclude so it can't resurrect as a ghost "New session").
+  //   • kept — "Keep draft", or a dismissal we couldn't intercept over typed content: the stub stays, flagged
+  //     _hasDraft, a draft card in the inbox (the palette window reopens onto it: findKeptComposeDraft).
+  //   • abandoned — abandonStub() prunes the un-sent stub (an IDB exclude keeps it from resurrecting as a ghost).
   // abandonStub is the SINGLE un-commit path, run from the only two moments the
-  // popup disappears: unmount, and the palette window hiding while staying
-  // mounted. Idempotent — pruneGhostSessions no-ops once the stub has been sent.
+  // popup disappears: unmount (StrictMode's dev remount too), and the palette
+  // window hiding while staying mounted. Idempotent once the stub has been sent.
+  const openedRef = useRef((initialQuery ?? "").trim());
   const abandonStub = useCallback(() => {
-    if (sentRef.current || handedOffRef.current || !stubIdRef.current) return;
-    // Typed content must survive dismissals that never passed through the
-    // confirm dialog (host unmounted us, the palette window hid on blur):
-    // auto-keep the draft instead of destroying it.
-    if (draftContentFor(stubIdRef.current)) {
-      useInboxStore.getState().setSessionHasDraft(stubIdRef.current, true);
-      return;
-    }
-    useInboxStore.getState().pruneGhostSessions([stubIdRef.current]);
+    const id = stubIdRef.current;
+    if (sentRef.current || handedOffRef.current || !id) return;
+    // What the person typed survives a dismissal that skipped the confirm; untouched opening text goes with the stub.
+    if (typedFor(id, openedRef.current)) return useInboxStore.getState().setSessionHasDraft(id, true);
+    if (draftContentFor(id)) useInboxStore.getState().clearDraftFinal(id);
+    useInboxStore.getState().pruneGhostSessions([id]);
   }, []);
 
   // The standalone desktop palette window (no onClose host). It closes
@@ -161,15 +161,15 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
       // closure's mount-time `path`/`agentType`: the user may have switched
       // either in the null-state pickers before sending, and that switch (written
       // to the stub row) must be what we create with.
-      // A hosted stub's first message rides the create (hostedFirstRef, set
-      // by the hosted gate below a tick before materialize fires).
-      create: (stubId) => store.createSessionFromStub(stubId, { agentType, projectPath: path, gitRoot: path || undefined, firstMessage: hostedFirstRef.current ?? undefined }),
+      // A hosted stub's first message rides the create (hostedFirstRef, set by the hosted gate below a tick before
+      // materialize fires). A Start's create says so when the server could not link it (lib/priorityStartLink).
+      create: (stubId) => sayIfStartUnlinked(store.createSessionFromStub(stubId, { agentType, projectPath: path, gitRoot: path || undefined, firstMessage: hostedFirstRef.current ?? undefined }), useInboxStore.getState().sessions[stubId]?._start, (message) => toast(message)),
     });
     materializeRef.current = materialize;
     stubIdRef.current = sid;
     if (instance) store.bindComposeStub(instance.id, sid);
 
-    if (initialQuery) store.setDraft(sid, { draft_message: initialQuery });
+    if (initialQuery) store.setDraft(sid, { draft_message: initialQuery }, { seed: true });
     if (context?.deviceId && sid !== resumeStubId) store.setSessionTargetDevice(sid, context.deviceId, { picked: true });
     if (context?.linkedTask && sid !== resumeStubId) bindComposeTask(store, sid, context.linkedTask);
     if (context?.start && sid !== resumeStubId) bindComposeStart(store, sid, context.start);
@@ -332,7 +332,7 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
   useWatchEffect(() => { if (!collapsed) refocusComposer(); }, [docked, collapsed, refocusComposer]);
 
   const requestClose = useCallback(() => {
-    if (!standalone && !sentRef.current && draftContentFor(stubIdRef.current)) {
+    if (!standalone && !sentRef.current && typedFor(stubIdRef.current, openedRef.current)) {
       // The confirm paints inside the body a collapsed dock hides.
       const inst = instanceRef.current;
       if (inst?.collapsed) useInboxStore.getState().setComposeCollapsed(inst.id, false);
@@ -355,16 +355,16 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
     dismiss();
   }, [dismiss]);
 
-  // Discard: clear the draft FIRST so the unmount abandon sees no content and
-  // prunes the stub as usual.
+  // Discard empties the composer itself (text, pending write, stored draft) so its unmount snapshot writes nothing back.
+  const clearInputRef = useRef<(() => void) | null>(null);
   const discardDraftAndClose = useCallback(() => {
     const id = stubIdRef.current;
-    if (id) useInboxStore.getState().clearDraft(id);
+    clearInputRef.current?.();
+    if (id) useInboxStore.getState().clearDraftFinal(id);
     setConfirmClose(false);
     dismiss();
   }, [dismiss]);
 
-  const clearInputRef = useRef<(() => void) | null>(null);
   const clearDraft = useCallback(() => {
     clearInputRef.current?.();
     setRestored(false);

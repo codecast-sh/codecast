@@ -17,7 +17,7 @@
 import { createContext, useContext } from "react";
 import { useInboxStore } from "../store/inboxStore";
 import { activeTeamIdOf } from "./activeTeam";
-import { workspaceFeatureEnabled, workspaceFeatureState, type FeatureState, type TeamFeatureKey } from "@codecast/shared/contracts";
+import { teamFeatureEnabled, workspaceFeatureEnabled, workspaceFeatureState, type FeatureState, type TeamFeatureKey } from "@codecast/shared/contracts";
 import { TEAM_FEATURE_CATALOG, teamHasFeature, workspaceHasFeatureIn } from "./teamFeatureRule";
 
 export { TEAM_FEATURE_CATALOG, teamHasFeature };
@@ -61,6 +61,17 @@ export function useWorkspaceCallsOn(): boolean {
  *  Shared rule: workspaceFeatureEnabled. */
 export function useWorkspaceFeature(key: TeamFeatureKey): boolean {
   return useInboxStore((s) => workspaceFeatureEnabled(s.teams || [], s.clientState.ui?.active_team_id, key));
+}
+
+/** Is `key` on in ANY workspace the viewer holds: for a surface that lists
+ *  every workspace at once (/priorities, its nav rows and its feeder), which
+ *  has something to show while any of them has the feature on. */
+export function anyWorkspaceFeature(teams: Parameters<typeof workspaceFeatureEnabled>[0] | null | undefined, key: TeamFeatureKey): boolean {
+  return (teams ?? []).some((t) => teamFeatureEnabled(t, key));
+}
+
+export function useAnyWorkspaceFeature(key: TeamFeatureKey): boolean {
+  return useInboxStore((s) => anyWorkspaceFeature(s.teams, key));
 }
 
 /** The same answer as useWorkspaceFeature, read once off the store, for code

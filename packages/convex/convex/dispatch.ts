@@ -38,7 +38,7 @@ import type { DeviceSnippetChange, ProviderKeyCommand } from "@codecast/shared/c
 import { upsertBinding } from "./capabilityBindings";
 import { Id } from "./_generated/dataModel";
 import { checkRateLimit } from "./rateLimit";
-import { resolveTeamForPath, buildShareUpdate, isTeamMember, PRIVATE_LOCK } from "./privacy";
+import { resolveTeamForPath, buildShareUpdate, isTeamMember, matchDirectoryMapping, PRIVATE_LOCK } from "./privacy";
 import { applyMembershipVisibilityChange } from "./teams";
 import { isTeamVisibilityLevel } from "./teamVisibility";
 import { resumeConversationSession } from "./daemonCommandUtils";
@@ -111,7 +111,7 @@ import { pinCapExceeded, PIN_CAP_ERROR } from "./inboxProjection";
 import { dismissGuestSuggestionFor, sendGuestSuggestionFor, writeGuestSuggestions } from "./guestSuggestions";
 import { proposeAnswerFor, proposePermissionFor, sendMineNowFor, withdrawTeamSuggestionFor } from "./teamSuggestions";
 import { acknowledgeIfReadable, markUnreadIfReadable } from "./sessionReads";
-import { answerPresence, charterWire, deepMergeField, isServerId, linkConversationToObject, linkStartedSession, liveSecretWrite, opsRowId, type HandlerCtx } from "./dispatchHelpers";
+import { answerPresence, charterWire, deepMergeField, isServerId, linkConversationToObject, linkStartedSession, liveSecretWrite, opsRowId, startWorkspace, type HandlerCtx } from "./dispatchHelpers";
 import { assertMayBind, handIsPrivate, handThreadToSession, handableThread } from "./chatHandoff";
 import { DISPATCHABLE_CONVERSATION_FIELDS, CLOUD_SESSION_SOURCES, type CloudSessionSource } from "@codecast/shared/contracts";
 import { claimProjectDefaultSession, readableProject } from "./sessionProjects";
@@ -1340,6 +1340,17 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     const project = newProjectId ? await ctx.db.get(newProjectId) : await readableProject(ctx, userId, opts.project_id);
     const projectId = project?._id ?? null;
     if (project?.team_id && !resolvedTeamId && (await isTeamMember(ctx as any, userId, project.team_id))) resolvedTeamId = project.team_id;
+    // Started from a milestone's Start: where nothing the person set names a
+    // team (no folder rule, no project or task team), the priority's
+    // workspace routes the session, in place of a team guessed from nowhere.
+    // A folder or project the person mapped to a team always wins, and
+    // sharing is only ever what the folder rule or their own pick gives: a
+    // Start never widens who reads a session. Where that leaves the session
+    // outside the priority's workspace, the link is refused (linkSession) and
+    // the composer says why (web lib/priorityStartLink).
+    const startIn = await startWorkspace(ctx, userId, opts.priority);
+    const mappedByPerson = !!matchDirectoryMapping(mappings, conversationPath) || !!project?.team_id || !!linkedTask?.team_id;
+    if (startIn && !mappedByPerson) resolvedTeamId = startIn.team ?? undefined;
     if (handChannel && String(resolvedTeamId ?? "") !== String(handChannel.team_id)) opts = { ...opts, private: true };
     // Team (the composer's Personal | Team switch): a team session, owned by
     // everyone on the team and read whole by them, on the team buildShareUpdate

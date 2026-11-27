@@ -35,7 +35,7 @@ import { SESSION_PAGE, clearDeadStepKeysNow, moveMergedSessionsNow, sessionMover
 import { parsePriorityPassOutput } from "./lib/priorityPassParse";
 import type { PriorityStep } from "@codecast/shared/contracts/priorities";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
-import { DAY, LATE_MARGIN_MS, MINUTE, RESERVATION_TTL_MS, cursorFor, firstAfter, inWorkspace, recentRuns, storedSessionId, type PassInputs } from "./priorityPassInputs";
+import { DAY, LATE_MARGIN_MS, MINUTE, RESERVATION_TTL_MS, cursorFor, firstAfter, inWorkspace, leftWorkspace, recentRuns, storedSessionId, type PassInputs } from "./priorityPassInputs";
 
 /** Runs one pass chains for work that did not fit, the first included: the rest waits for the next pass. */
 export const MAX_CHAINED_RUNS = 6;
@@ -270,9 +270,11 @@ export async function moveCorrections(ctx: { db: any }, from: Id<"priorities">, 
 
 /**
  * A session that left this workspace lets go of the priority here, so its new
- * workspace's pass can map it. The priority's title and summary may have been
- * written from it: it needs a rewrite (hidden from teammates until then)
- * unless this plan rewrote it already (`rewritten`, short ids).
+ * workspace's pass can map it. When the session is the owner's own, the
+ * priority's title and summary may have been written from it: it needs a
+ * rewrite (hidden from teammates until then) unless this plan rewrote it
+ * already (`rewritten`, short ids). A teammate's session (a Start on the
+ * owner's milestone) never wrote the priority, so its leaving hides nothing.
  */
 async function letGoStrays(
   ctx: { db: any },
@@ -285,9 +287,10 @@ async function letGoStrays(
   for (const id of strays) {
     const conv: Doc<"conversations"> | null = await ctx.db.get(id);
     const held: Doc<"priorities"> | null = conv?.priority_id ? await ctx.db.get(conv.priority_id) : null;
-    if (!conv || !held || (await inWorkspace(vis, conv, pair.user_id, pair.workspace)) || String(held.user_id) !== String(pair.user_id) || held.workspace !== pair.workspace) continue;
+    // Still counting in the workspace, the person's own or a teammate's they started there (lib/priorityLinks linkFromStart): it stays.
+    if (!conv || !held || !(await leftWorkspace(vis, conv, pair.workspace)) || String(held.user_id) !== String(pair.user_id) || held.workspace !== pair.workspace) continue;
     await move(conv, undefined, undefined);
-    if (!rewritten.has(held.short_id)) await ctx.db.patch(held._id, { needs_rewrite: true });
+    if (String(conv.user_id) === String(pair.user_id) && !rewritten.has(held.short_id)) await ctx.db.patch(held._id, { needs_rewrite: true });
   }
 }
 
@@ -297,7 +300,7 @@ export const releaseStrays = internalMutation({
   handler: async (ctx, args): Promise<void> => {
     const { move, recount } = sessionMover(ctx);
     await letGoStrays(ctx, sessionVisibility(ctx), move, args, args.strays);
-    await recount(args.user_id);
+    await recount();
   },
 });
 
@@ -579,7 +582,7 @@ export async function writePlan(
     // A session on a milestone this plan removed, or on a key no milestone holds (left from before), keeps the priority, step unknown, whoever put it there.
     for (const [id, removed] of gone) await clearDeadStepKeysNow(ctx, id, removed);
 
-    await recount(args.user_id);
+    await recount();
     // A new priority or milestone: the classifier asks again about the sessions it left unassigned.
     if (counts.created || newMilestone) await askRerun(ctx, args.user_id, args.workspace);
     return { counts, created };

@@ -72,7 +72,8 @@ export function formatPriorityLines(rows: PriorityRow[], now = Date.now()): stri
 export function formatPriorityDetail(p: PriorityDetail, now = Date.now()): string[] {
   const facts = [
     p.status === "done" && p.done_at ? `✓ done ${day(p.done_at)}` : STATUS_WORD[p.status] ?? p.status,
-    p.rank != null && p.status === "active" ? `#${p.rank} ${p.rank_source === "person" ? "(you placed it)" : "(ranked by AI)"}` : null,
+    // A teammate's rank carries no source (rank_source null): the number alone.
+    p.rank != null && p.status === "active" ? `#${p.rank}${p.rank_source === "person" ? " (you placed it)" : p.rank_source ? " (ranked by AI)" : ""}` : null,
     `critical ${p.counts.critical_done}/${p.counts.critical_total}`,
     p.serves ? `serves ${p.serves}` : null,
     p.session_count ? `${p.session_count}${p.session_count_more ? "+" : ""} session${p.session_count === 1 && !p.session_count_more ? "" : "s"}` : null,

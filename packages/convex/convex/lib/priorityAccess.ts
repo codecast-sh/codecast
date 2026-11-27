@@ -22,6 +22,31 @@ export const FEATURE = "priorities" as const;
  * ones its row counts ("4+" past that).
  */
 export const TEAMMATE_SESSIONS = 4;
+/**
+ * The newest sessions mapped to a priority its access reads to find the
+ * owner's newest TEAMMATE_SESSIONS among them: teammates' sessions started on
+ * it (lib/priorityLinks linkFromStart) never count, so this many leaves room
+ * for them; past it, hidden (failing closed). The same as a list's links read
+ * (priorityRead LINK_MAPPED_READ), so one scan serves both: a smaller window
+ * would make the links read the same sessions again.
+ */
+export const ACCESS_SESSIONS_READ = 10;
+/** The widest window access reads, ACCESS_SESSIONS_READ more at a time, while teammates' Starts leave fewer than TEAMMATE_SESSIONS of the owner's among the newest; past it, hidden. */
+export const ACCESS_SESSIONS_WIDE = 50;
+/**
+ * The most sessions one call's judgments read past each priority's newest
+ * ACCESS_SESSIONS_READ. Teammates' Starts stacked on every priority would otherwise make
+ * each judgment page to ACCESS_SESSIONS_WIDE and take a list past Convex's
+ * read cap; once it is spent, a priority that needs to look further back is
+ * hidden (failing closed), and every other verdict is as without it.
+ */
+export const ACCESS_WIDEN_BUDGET = 800;
+/** The windows a judgment reads in turn, `first` before them (each goes on from the last: Reader.sessionsOf). */
+const accessWindows = (first: number): number[] => {
+  const out = [first];
+  for (let n = ACCESS_SESSIONS_READ; n <= ACCESS_SESSIONS_WIDE; n += ACCESS_SESSIONS_READ) if (n > first) out.push(n);
+  return out;
+};
 
 type Ctx = { db: any };
 type Priority = Doc<"priorities">;
@@ -49,7 +74,7 @@ export type Reader = {
   viewer: Id<"users">;
   held: Set<string>;
   vis: SessionVisibility;
-  /** The newest `n` sessions mapped to a priority (by_priority), one read per priority per call. */
+  /** The newest `n` sessions mapped to a priority (by_priority), each read once per call: a wider read goes on from the last. */
   sessionsOf: (p: Priority, n: number) => Promise<Doc<"conversations">[]>;
   /**
    * Whether a session is listed to the viewer (its title, its chip, a count):
@@ -63,10 +88,14 @@ export type Reader = {
    * can read the call it was pulled from (`from_call`: the people in the
    * meeting saw it made) while it is still as created there (`pass_at` 0: no
    * pass has written it, so its title, summary and milestones hold nothing
-   * from the owner's sessions), or, in a team, sees at least one of its
-   * newest TEAMMATE_SESSIONS sessions listed to that team.
+   * from the owner's sessions), or, in a team, sees at least one of the
+   * owner's own newest TEAMMATE_SESSIONS sessions on it listed to that team
+   * (a teammate's session on it never counts). Judged once a call per priority, looking further back within the call's ACCESS_WIDEN_BUDGET.
+   * `narrow` reads TEAMMATE_SESSIONS + 1 sessions first instead of
+   * ACCESS_SESSIONS_READ, for a rank judging a whole group (lib/priorityGroup
+   * positionOf) whose sessions nothing else reads; the verdict is the same.
    */
-  canRead: (p: Priority) => Promise<boolean>;
+  canRead: (p: Priority, narrow?: boolean) => Promise<boolean>;
   /** The priority's steps as the viewer may see them (stepsFor). */
   stepsFor: (p: Priority) => Promise<PriorityStep[]>;
 };
@@ -79,16 +108,27 @@ export async function readerFor(ctx: Ctx, viewer: Id<"users">): Promise<Reader> 
     const key = String(p._id);
     const had = reads.get(key);
     if (had && had.n >= n) return (await had.rows).slice(0, n);
-    const rows: Promise<Doc<"conversations">[]> = ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", p._id)).order("desc").take(n);
+    // A wider read of a priority already read goes on from the oldest it holds, rather than reading those again.
+    const rows: Promise<Doc<"conversations">[]> = (async () => {
+      const before = had ? await had.rows : [];
+      if (had && before.length < had.n) return before;
+      const last = before.at(-1);
+      const more: Doc<"conversations">[] = await ctx.db.query("conversations")
+        .withIndex("by_priority", (q: any) => (last ? q.eq("priority_id", p._id).lt("_creationTime", last._creationTime) : q.eq("priority_id", p._id)))
+        .order("desc").take(n - before.length);
+      return [...before, ...more];
+    })();
     reads.set(key, { n, rows });
     return rows;
   };
   const listed = async (c: Doc<"conversations">) => {
     if (String(c.user_id) === String(viewer) || String(c.owner_user_id ?? "") === String(viewer)) return true;
     if (c.team_id && held.has(`team:${c.team_id}`) && (await vis.listedTo(c, c.team_id))) return true;
-    return isSessionOwner(ctx, c._id, viewer);
+    return isSessionOwner(ctx, c._id, viewer, c);
   };
-  const canRead = async (p: Priority) => {
+  const judged = new Map<string, Promise<boolean>>();
+  let widenLeft = ACCESS_WIDEN_BUDGET;
+  const judge = async (p: Priority, first: number) => {
     if (String(p.user_id) === String(viewer)) return true;
     if (p.needs_rewrite || !authorizedFor(accessStampFromDoc("priorities", p), String(viewer), held)) return false;
     if (p.from_call && p.pass_at === 0) {
@@ -97,8 +137,27 @@ export async function readerFor(ctx: Ctx, viewer: Id<"users">): Promise<Reader> 
     }
     const ws = parseWorkspaceKey(p.workspace);
     if (ws?.type !== "team") return false;
-    for (const c of (await sessionsOf(p, TEAMMATE_SESSIONS + 1)).slice(0, TEAMMATE_SESSIONS)) if (await vis.listedTo(c, ws.teamId)) return true;
+    // Teammates' Starts crowd the newest: while they leave fewer than TEAMMATE_SESSIONS of the owner's in a full window, look ten further back.
+    let owners: Doc<"conversations">[] = [];
+    let wide = ACCESS_SESSIONS_READ;
+    for (const n of accessWindows(first)) {
+      // Past the first ACCESS_SESSIONS_READ each step spends the call's widening budget; with too little left, hidden.
+      if (n > wide) {
+        if (widenLeft < n - wide) return false;
+        widenLeft -= n - wide;
+        wide = n;
+      }
+      const window = await sessionsOf(p, n);
+      owners = window.filter((c) => String(c.user_id) === String(p.user_id));
+      if (owners.length >= TEAMMATE_SESSIONS || window.length < n) break;
+    }
+    for (const c of owners.slice(0, TEAMMATE_SESSIONS)) if (await vis.listedTo(c, ws.teamId)) return true;
     return false;
+  };
+  const canRead = (p: Priority, narrow = false) => {
+    const key = String(p._id);
+    if (!judged.has(key)) judged.set(key, judge(p, narrow ? TEAMMATE_SESSIONS + 1 : ACCESS_SESSIONS_READ));
+    return judged.get(key)!;
   };
 
   // A step ref shown to a teammate: a session listed to them, a task they can read, a pull request or commit in a repository of the team's.

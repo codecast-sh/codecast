@@ -40,6 +40,7 @@ describe("output", () => {
     const detail = (over: Partial<PriorityRow>) => formatPriorityDetail({ ...row(over), steps: [], other_sessions: [], corrections: [] }, NOW)[1];
     expect(detail({ rank: 3, rank_source: "person", person_pos: 2.5 })).toBe("active · #3 (you placed it) · critical 3/6 · last active 2h ago");
     expect(detail({ rank: 2 })).toBe("active · #2 (ranked by AI) · critical 3/6 · last active 2h ago");
+    expect(detail({ rank: 2, rank_source: null, mine: false, owner: "Bea" })).toContain("active · #2 · critical 3/6");
   });
 
   test("show: steps under Critical path and Polish, done ones ticked, with their refs and sessions", () => {

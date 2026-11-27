@@ -2160,6 +2160,8 @@ export type ClientUI = HuddleClientUI & {
   // including off — so sticky can't decay into stuck. The legacy key still
   // lingers in server docs; nothing may ever read it (resolveShowOld).
   inbox_show_old?: boolean;
+  // /priorities' view (PrioritiesToolbar): workspaces off (a list: one joined later starts on), grouping, Compact. Stamped.
+  priorities_view?: { hidden?: string[]; group_by?: string; compact?: boolean };
   // When the user last said "Not now" to the "clear out your working set"
   // prompt. Stamped LWW: a snooze on one device silences the prompt on every
   // device for its window (STALE_PROMPT_SNOOZE_MS in GlobalSessionPanel).
@@ -7265,7 +7267,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   clearCurrentConversation: () => void;
 
   // -- Drafts --
-  setDraft: (id: string, fields: Record<string, any>) => void;
+  setDraft: (id: string, fields: Record<string, any>, opts?: { seed?: boolean }) => void;
   setSessionHasDraft: (id: string, has: boolean) => void;
   setSessionNewProject: (id: string, on: boolean) => void;
   getDraft: (id: string) => Record<string, any> | undefined;
@@ -14549,11 +14551,10 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // keeps the real text in its own state until the send's catch
   // (ComposerCatch) settles it. Every caller writes here on a debounce, so
   // the scan never runs per keystroke.
-  setDraft: sync(function (this: Draft, id: string, fields: Record<string, any>) {
+  setDraft: sync(function (this: Draft, id: string, fields: Record<string, any>, opts?: { seed?: boolean }) {
     if (typeof fields.draft_message === "string") fields = { ...fields, draft_message: withoutSecrets(fields.draft_message) };
     this.drafts[id] = fields;
-    if (!this.clientState.drafts) this.clientState.drafts = {};
-    this.clientState.drafts[id] = fields;
+    if (!opts?.seed) (this.clientState.drafts ??= {})[id] = fields; // a seed (text a composer opened with) is display state: synced once edited
   }),
 
   getDraft: (id: string) => {

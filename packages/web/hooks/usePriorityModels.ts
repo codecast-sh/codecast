@@ -6,6 +6,7 @@ import { isPriorityCard } from "@codecast/shared/contracts/priorityCard";
 import { useMemo } from "react";
 import type { PriorityHistory, PriorityRow } from "@codecast/shared/contracts/priorities";
 import { buildModels, type MilestoneModel, type PriorityModel } from "../lib/priorityList";
+import { milestoneLinksOf } from "../lib/priorities";
 import type { TeamDeployRow } from "../lib/deploys/targets";
 import { hostedStopsSig } from "../lib/hostedNotice";
 import {
@@ -146,8 +147,8 @@ export function usePriorityLiveStates(ids: readonly string[], now: number, inbox
 }
 
 /** Every linked session's conversation id across `rows`, sorted, once each. */
-export function linkedSessionIds(rows: ReadonlyArray<{ links?: Array<{ sessions: Array<{ conversation_id: string }> }> }>): string[] {
-  return [...new Set(rows.flatMap((r) => (r.links ?? []).flatMap((l) => l.sessions.map((s) => s.conversation_id))))].sort();
+export function linkedSessionIds(rows: ReadonlyArray<Pick<PriorityRow, "links" | "mapped_links">>): string[] {
+  return [...new Set(rows.flatMap((r) => milestoneLinksOf(r).flatMap((l) => l.sessions.map((s) => s.conversation_id))))].sort();
 }
 
 const prIndexes = new WeakMap<object, Map<string, string>>();

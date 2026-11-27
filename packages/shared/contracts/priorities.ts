@@ -122,13 +122,13 @@ export type PriorityRow = {
   title: string;
   summary: string;
   status: PriorityStatus;
-  /** Its position among the owner's active priorities in its workspace (null unless active): priorityPositions over the owner's whole active group. A teammate who can read it gets the owner's real position, as with the three below. */
+  /** Its position among the owner's active priorities in its workspace (null unless active). The owner reads their real position; a teammate reads the owner's order numbered 1..n over the priorities they can read (lib/priorityGroup positionOf; a list numbers over the rows it judged), so one hidden from them leaves no gap. */
   rank: number | null;
-  /** Where its owner placed it, on one scale with ai_rank (null until they move it). */
+  /** Where its owner placed it, on one scale with ai_rank (null until they move it; always null for a teammate: the scale counts priorities they cannot see). */
   person_pos: number | null;
-  /** Where the pass slotted it, on the same scale (read only while it is not placed). */
+  /** Where the pass slotted it, on the same scale (read only while it is not placed; null for a teammate). */
   ai_rank: number | null;
-  /** "person": its owner placed it; "ai": the pass did ("ranked by AI"). */
+  /** "person": its owner placed it; "ai": the pass did ("ranked by AI"); null for a teammate, who is not told who placed it. */
   rank_source: PriorityRankSource | null;
   /** "person" when the person marked it done or merged it: the pass leaves its status alone. */
   status_set_by: PrioritySetBy;
@@ -152,8 +152,10 @@ export type PriorityRow = {
   sessions: PrioritySession[];
   /** The owner wrote a correction no pass has read yet (always false for a teammate). */
   correction_pending: boolean;
-  /** Links per step (priorityDerive): a list carries them on the viewer's own active rows only, `show` on every priority; absent from a server that predates them. */
+  /** Links per step (priorityDerive): a list carries them on the active rows it links in full (the viewer's own top OWN_LINKED and its first teammates'), `show` on every priority; absent from a server that predates them. */
   links?: PriorityMilestoneLinks[];
+  /** A list's other active rows, the viewer's own or a teammate's (past its read budget): each step's links from the sessions mapped to it alone, no task or plan read, so no plan and nothing looks done. `show` carries full `links` for them. */
+  mapped_links?: PriorityMilestoneLinks[];
   /** The plan holding tasks from at least half the task-bearing steps (attributePlans); absent as above. */
   plan?: PriorityPlanRef | null;
   /** The call it was made in (a transcript id), present only when it was: a board marks frames of that call's objects "new". */
@@ -186,8 +188,10 @@ export type PriorityLinkedSession = {
   conversation_id: string;
   title: string;
   state: PrioritySessionState;
-  /** The viewer's own (or co-owned): only these ask the viewer anything; another's needs-you reads idle. */
+  /** The viewer's own (or co-owned). A teammate's session that needs input still reads needs_you on their milestone (priorityDerive orderSessions). */
   mine: boolean;
+  /** The viewer started it (its user_id, not a co-owner's share): they may say Not this priority of it (priorityWrite doSessionNotThis); absent from a server that predates it. */
+  started_by_viewer?: boolean;
   /** A step a workflow run spawned, not a session a person drives. */
   workflow: boolean;
   why: PriorityLinkWhy[];

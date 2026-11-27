@@ -4,7 +4,7 @@
 import { describe, expect, test } from "bun:test";
 import type { PriorityStep } from "@codecast/shared/contracts/priorities";
 import {
-  behindLabel, listMeta, listRows, passDue, milestoneStartHref, nextPassLabel, ownerGroups, paintMerge, paintMove, paintSessionMove, paintSessionNotThis, paintStatus, paintTier, pastBadge, prioritySig,
+  behindLabel, listMeta, listRows, passDue, milestoneStartHref, nextPassLabel, ownerGroups, paintDrop, paintMerge, paintMove, paintSessionMove, paintSessionNotThis, paintStatus, paintTier, pastBadge, prioritySig,
   withLiveRanks, writeOrRestore,
   type PriorityRow,
 } from "../priorities";
@@ -30,14 +30,18 @@ describe("buildModels: each milestone's state", () => {
     expect(model({}, [sess("dormant")], () => ({ mark: "done", asks: false, target: "c-dormant" })).kind).toBe("idle");
     // A stashed session is nobody on it: the owner's milestone offers a New session. A done one's results wait to be read: idle.
     expect(model({}, [sess("dormant")], () => ({ mark: "stashed", asks: false, target: "c-dormant" })).kind).toBe("start");
-    expect(model({ mine: false }, [sess("dormant")], () => ({ mark: "stashed", asks: false, target: "c-dormant" })).kind).toBe("none");
+    expect(model({ mine: false }, [sess("dormant")], () => ({ mark: "stashed", asks: false, target: "c-dormant" })).kind).toBe("start");
     expect(model({}, []).kind).toBe("start");
   });
-  test("a teammate's or a past priority offers nothing to start, and a teammate's ask never needs the viewer", () => {
-    expect(model({ mine: false }).kind).toBe("none");
+  test("a teammate's active priority offers Start as the viewer's own does; a past one nothing; a teammate's ask reads needs you", () => {
+    expect(model({ mine: false }).kind).toBe("start");
     expect(model({ status: "set_aside" }).kind).toBe("none");
-    expect(model({}, [sess("needs_you", false)]).kind).toBe("idle");
-    // Not drawn by the inbox, its own needs_you reads idle whoever owns it, never asleep.
+    expect(model({}, [sess("needs_you", false)]).kind).toBe("needs_you");
+    // Drawn by the viewer's inbox as asking, though not asking the viewer: a teammate's own ask still reads needs you, never asleep.
+    expect(model({}, [sess("needs_you", false)], () => ({ mark: "needs_you", asks: false, target: "c-needs_you" })).kind).toBe("needs_you");
+    // The viewer's own drawn the same way is the inbox's verdict: asleep.
+    expect(model({}, [sess("needs_you")], () => ({ mark: "needs_you", asks: false, target: "c-needs_you" })).kind).toBe("dormant");
+    // Not drawn by the inbox, the viewer's own needs_you reads idle, never asleep.
     expect(model({}, [sess("needs_you")]).kind).toBe("idle");
   });
 });
@@ -120,12 +124,35 @@ describe("a session's move, \"not this\" and a merge relink its inbox row at onc
     expect(rankOf(w, "c-two")).toBeNull();
   });
 
+  test("\"not this priority\" on a teammate's mapped-only row takes the session off its milestone at once", () => {
+    const theirs = row("pri-5", { mine: false, user_id: "ash" as any, steps: [step("s1", "critical")], mapped_links: [linked("s1", "c-five") as any], sessions: [{ short_id: "jx7c-five", title: "c-five", step_key: "s1", updated_at: 0 }], session_count: 1 });
+    const s = { priorities: { [theirs._id]: theirs }, sessions: { "c-five": { _id: "c-five", priority_id: theirs._id, priority_step_key: "s1" } } };
+    paintSessionNotThis(s as any, "jx7c-five", theirs);
+    expect(theirs.mapped_links![0].sessions).toEqual([]);
+    expect(s.sessions["c-five"]).toMatchObject({ priority_id: null, priority_step_key: null });
+  });
+
+  test("dropping a milestone takes its mapped links with it", () => {
+    const theirs = row("pri-6", { steps: [step("s1", "critical"), step("s2", "critical")], mapped_links: [linked("s1", "c-six") as any, linked("s2", "c-seven") as any] });
+    paintDrop({ priorities: { [theirs._id]: theirs } } as any, theirs, "s1");
+    expect(theirs.mapped_links!.map((l) => l.key)).toEqual(["s2"]);
+  });
+
   test("a merge carries every conversation on the merged priority to its new milestone keys", () => {
     const w = world();
     paintMerge(w.s as any, w.two, w.one);
     expect(w.s.sessions["c-two"]).toMatchObject({ priority_id: w.one._id, priority_step_key: "s3" });
     expect(w.s.sessions["c-one"]).toMatchObject({ priority_id: w.one._id, priority_step_key: "s1" });
     expect(rankOf(w, "c-two")?.rank).toBe(1);
+  });
+
+  test("a merge into one of the viewer's own rows past the list's link budget (mapped links only) carries the merged milestones' links too", () => {
+    const w = world();
+    w.one.mapped_links = w.one.links;
+    delete w.one.links;
+    paintMerge(w.s as any, w.two, w.one);
+    expect(w.one.links).toBeUndefined();
+    expect(w.one.mapped_links!.map((l) => l.key)).toEqual(["s1", "s2", "s3"]);
   });
 });
 
@@ -141,11 +168,10 @@ describe("the store actions' paints", () => {
     ]);
   });
 
-  test("a teammate's priorities keep the server's rank (it counts the owner's whole group), and their order among themselves", () => {
-    // Ash's pri-7 is active but not among the viewer's rows: the server's ranks count it, so pri-5 is 2, not 1.
-    const rows = [row("pri-1", { ai_rank: 1 }), row("pri-6", { ai_rank: 3, rank: 3, user_id: "ash" as any, mine: false }), row("pri-5", { ai_rank: 2, rank: 2, user_id: "ash" as any, mine: false })];
+  test("a teammate's priorities keep the server's rank (1..n over what the viewer reads), and are ordered by it", () => {
+    const rows = [row("pri-1", { ai_rank: 1 }), row("pri-6", { rank: 2, user_id: "ash" as any, mine: false }), row("pri-5", { rank: 1, user_id: "ash" as any, mine: false })];
     const live = withLiveRanks(rows);
-    expect(live.map((r) => [r.short_id, r.rank])).toEqual([["pri-1", 1], ["pri-6", 3], ["pri-5", 2]]);
+    expect(live.map((r) => [r.short_id, r.rank])).toEqual([["pri-1", 1], ["pri-6", 2], ["pri-5", 1]]);
     expect(ids(ownerGroups(live)[1].active)).toEqual(["pri-5", "pri-6"]);
   });
 
@@ -279,6 +305,7 @@ describe("prioritySig", () => {
     expect(changed([link({ sessions: [sess({ conversation_id: "conv-b" })] })])).toBe(true);
     expect(changed([link({ sessions: [sess({ mine: false })] })])).toBe(true);
     expect(changed([link({ sessions: [sess({ workflow: true })] })])).toBe(true);
+    expect(changed([link({ sessions: [sess({ started_by_viewer: true })] })])).toBe(true);
     expect(changed([link({ plan: plan("pl-1", "The plan, renamed") })])).toBe(true);
     expect(changed([link({ part_of: [plan("pl-2", "Another program")] })])).toBe(true);
     expect(changed([link()], { plan: plan("pl-3", "Priority plan, renamed") as any })).toBe(true);

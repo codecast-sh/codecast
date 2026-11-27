@@ -1,89 +1,17 @@
 // Priorities API reads (priorities.ts, priorityRead.ts, priorityHistory.ts):
-// who reads a priority, what history counts and the pin line. The owner's
-// controls are priorities.writes.test.ts.
+// who reads a priority, what history counts and the pin line. A teammate's
+// reads (order, caps, Start on their milestones, refs) are
+// priorities.teammates.test.ts; the owner's controls are priorities.writes.test.ts.
 import { patchConversationVisibility } from "./lib/conversationVisibility";
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
-import { convexTest } from "convex-test";
-import schema from "./schema";
-import { allModules } from "./testModules.testkit";
-import { api, internal } from "./_generated/api";
-import { hashToken } from "./apiTokens";
+import { internal } from "./_generated/api";
 import { teamFeatureOffMessage } from "./lib/teamFeatureGuard";
-import { HISTORY_SENDS_CAP, TEAMMATE_PRIORITIES_CAP } from "./priorityRead";
+import { HISTORY_SENDS_CAP } from "./priorityRead";
 import { sessionListedToTeam, sessionSharedWithTeam } from "./lib/prioritySessionVisibility";
-import { sessionPriorityReader } from "./lib/sessionPriority";
 import type { Id } from "./_generated/dataModel";
+import { CY_TOKEN, DAY, NOW, TOKEN, pri, rowsOf, world } from "./prioritiesWorld.testkit";
 
 setDefaultTimeout(60_000);
-
-const pri = (api as any).priorities;
-const TOKEN = "cc_test_priorities_ada";
-const CY_TOKEN = "cc_test_priorities_cy";
-const DAY = 86_400_000;
-const NOW = Date.now();
-
-/** A list answer's rows. */
-const rowsOf = async (asUser: any, args: Record<string, unknown>) => (await asUser.query(pri.list, args)).priorities;
-
-const step = (key: string, tier: "critical" | "polish", done = false) => ({ key, title: `Step ${key}`, tier, tier_set_by: "pass" as const, refs: [], done });
-
-/**
- * Ada and Bea share team Acme (priorities on); Cy is in team Other. Ada is
- * also in team Off, where the feature is off. Ada owns every priority.
- */
-async function world() {
-  const t = convexTest(schema, allModules);
-  const ids = await t.run(async (ctx) => {
-    const ada = await ctx.db.insert("users", { name: "Ada" } as any);
-    const bea = await ctx.db.insert("users", { name: "Bea" } as any);
-    const cy = await ctx.db.insert("users", { name: "Cy" } as any);
-    const acme = await ctx.db.insert("teams", { name: "Acme", created_at: NOW, features: { priorities: true } } as any);
-    const other = await ctx.db.insert("teams", { name: "Other", created_at: NOW, features: { priorities: true } } as any);
-    const off = await ctx.db.insert("teams", { name: "Off", created_at: NOW } as any);
-    for (const [u, team] of [[ada, acme], [bea, acme], [cy, other], [ada, off]] as const) {
-      await ctx.db.insert("team_memberships", { user_id: u, team_id: team, role: "member", joined_at: 1 } as any);
-    }
-    for (const [u, token] of [[ada, TOKEN], [cy, CY_TOKEN]] as const) {
-      await ctx.db.insert("api_tokens", { user_id: u, token_hash: await hashToken(token), name: "cli", created_at: NOW, last_used_at: NOW } as any);
-    }
-
-    const ws = `team:${acme}`;
-    const insertPriority = (short_id: string, fields: Record<string, unknown>) => ctx.db.insert("priorities", {
-      user_id: ada, workspace: ws, short_id, title: `Priority ${short_id}`, summary: "", status: "active",
-      steps: [], first_seen_at: NOW - 10 * DAY, last_active_at: NOW - DAY, pass_at: NOW, created_at: NOW, updated_at: NOW, ...fields,
-    } as any);
-    const p1 = await insertPriority("pri-1", { ai_rank: 1, steps: [step("s1", "critical", true), step("s2", "critical"), step("s3", "polish")] });
-    const p2 = await insertPriority("pri-2", { ai_rank: 2 });
-    const p3 = await insertPriority("pri-3", { last_active_at: NOW - 2 * DAY });
-    const p4 = await insertPriority("pri-4", { status: "done", done_at: NOW - DAY });
-    const personal = await insertPriority("pri-5", { workspace: `user:${ada}`, ai_rank: 1 });
-    const dark = await insertPriority("pri-6", { workspace: `team:${off}`, ai_rank: 1 });
-
-    const conv = (short_id: string, fields: Record<string, unknown>) => ctx.db.insert("conversations", {
-      user_id: ada, team_id: acme, agent_type: "claude_code", session_id: short_id, short_id, title: `Session ${short_id}`,
-      started_at: NOW, updated_at: NOW, message_count: 3, is_private: false, team_visibility: "full", status: "active", ...fields,
-    } as any);
-    const c1 = await conv("jx7one1", { priority_id: p1, priority_step_key: "s2" });
-    const c2 = await conv("jx7two2", {});
-    const c3 = await conv("jx7pvt3", { priority_id: p1, priority_step_key: "s1", is_private: true, team_visibility: "private" });
-    const c4 = await conv("jx7per4", { priority_id: personal });
-    // A teammate reads a priority only through a session of it listed to the team: one each for pri-2..4.
-    for (const [short_id, priority_id] of [["jx7two5", p2], ["jx7thr6", p3], ["jx7fou7", p4]] as const) await conv(short_id, { priority_id, updated_at: NOW - 2 * DAY });
-
-    const send = async (user: Id<"users">, c: Id<"conversations">, timestamp: number, extra: Record<string, unknown> = {}) => {
-      const message = await ctx.db.insert("messages", { conversation_id: c, role: "user", content: "x", timestamp } as any);
-      await ctx.db.insert("user_sends", { user_id: user, team_id: acme, conversation_id: c, message_id: message, timestamp, words: 1, text: "x", clipped: false, ...extra } as any);
-    };
-    await send(ada, c1, NOW - 60_000);
-    await send(ada, c1, NOW - DAY);
-    await send(ada, c2, NOW - 60_000);
-    await send(ada, c1, NOW - 60_000, { decision: { question: "q", picked: true } });
-    for (let i = 0; i < 3; i++) await send(bea, c1, NOW - 60_000);
-    return { ada, bea, cy, acme, off, ws, p1, p2, p3, p4, personal, dark, c1, c2, c3, c4 };
-  });
-  const as = (u: Id<"users">) => t.withIdentity({ subject: `${u}|session` });
-  return { t, as, ...ids };
-}
 
 describe("reads", () => {
   test("the owner and a teammate holding the workspace key see a priority; someone outside it does not", async () => {
@@ -187,7 +115,7 @@ describe("reads", () => {
     expect(p.other_sessions).toEqual([]);
   });
 
-  test("the viewer's own active row carries each step's sessions (state, mine, workflow, why), its plans, Looks done and pending corrections; nobody else's does", async () => {
+  test("every readable active row carries each step's sessions (state, mine, workflow, why), its plans, Looks done and pending corrections; a past one does not", async () => {
     const { t, as, ada, bea, acme, ws, p1, c1 } = await world();
     await t.run(async (ctx) => {
       const plan = (short_id: string, size: number, status = "active") => ctx.db.insert("plans", {
@@ -205,7 +133,7 @@ describe("reads", () => {
       const asks = await conv("jx7ask1", blocked);
       const run = await conv("jx7run1", { title: "Review · ct-901 tidy", is_subagent: true, parent_conversation_id: c1, inbox_killed_at: NOW });
       await conv("jx7prk1", { thread_state_status: "dormant", thread_state_at: NOW, last_turn_at: NOW - 1000 });
-      // Bea's session works Ada's task and asks Bea something: not Ada's to answer.
+      // Bea's session works Ada's task and asks Bea something: it reads needs-you to Ada too, though it is not hers.
       const beas = await conv("jx7bea1", { ...blocked, user_id: bea });
       const task = (short_id: string, plan_id: Id<"plans"> | undefined, conversation_ids: Id<"conversations">[], status = "open") => ctx.db.insert("tasks", {
         user_id: ada, team_id: acme, workspace: ws, short_id, title: `Task ${short_id}`, status, plan_id, conversation_ids, created_at: NOW, updated_at: NOW,
@@ -233,11 +161,11 @@ describe("reads", () => {
       ["jx7pvt3", "idle", true, false, ["mapped"]],
       ["jx7run1", "killed", true, true, ["via ct-901"]],
     ]);
-    // s2: Bea's blocked session reads idle and not Ada's.
+    // s2: Bea's blocked session reports needs-you, not Ada's, and ranks first: a teammate's ask reads as the viewer's own would.
     expect(links.s2.sessions.map((s: any) => [s.short_id, s.state, s.mine, s.why])).toEqual([
+      ["jx7bea1", "needs_you", false, ["via ct-902"]],
       ["jx7prk1", "dormant", true, ["linked"]],
       ["jx7one1", "idle", true, ["mapped"]],
-      ["jx7bea1", "idle", false, ["via ct-902"]],
     ]);
     // Last activity to the 10 minutes, so a heartbeat leaves the answer as it was.
     for (const l of row.links) for (const s of l.sessions) expect(s.last_active_at % 600_000).toBe(0);
@@ -250,9 +178,12 @@ describe("reads", () => {
     expect([links.s1.looks_done, links.s3.looks_done]).toEqual([false, true]);
     expect([links.s1.correction_pending, links.s2.correction_pending]).toEqual([false, true]);
     expect(row.correction_pending).toBe(true);
-    // A teammate's rows, and the viewer's past ones, carry no links.
+    // A teammate's active row carries links as the owner's does, each session only if listed to them; a past row carries none.
     const [theirs] = await rowsOf(as(bea), { workspace: ws });
-    expect(theirs.links).toBeUndefined();
+    const theirLinks = Object.fromEntries(theirs.links.map((l: any) => [l.key, l]));
+    expect(theirLinks.s1.sessions.map((s: any) => [s.short_id, s.state, s.mine])).toEqual([["jx7ask1", "needs_you", false], ["jx7run1", "killed", false]]);
+    expect(theirLinks.s2.sessions.map((s: any) => [s.short_id, s.state, s.mine])).toEqual([["jx7bea1", "needs_you", true], ["jx7prk1", "dormant", false], ["jx7one1", "idle", false]]);
+    expect(theirs.plan).toMatchObject({ short_id: "pl-1075" });
     const past = (await rowsOf(as(ada), { workspace: ws })).find((r: any) => r.short_id === "pri-4");
     expect(past.links).toBeUndefined();
     // `show` (the page and the reference card) carries the same links and plan, on any priority the viewer can read.
@@ -428,115 +359,6 @@ describe("reads", () => {
     expect(await as(bea).query(pri.pinLine, { conversation_id: c1 })).toBeNull();
     expect((await rowsOf(as(ada), {})).map((r: any) => r.short_id)).toContain("pri-1");
     expect(await as(ada).query(pri.pinLine, { conversation_id: c1 })).toMatchObject({ short_id: "pri-1" });
-  });
-
-  test("a teammate reads the owner's rank and place, in the list, on the page, on the pin line and on a session's priority alike, counting the owner's hidden #1", async () => {
-    const { t, as, ada, bea, acme, ws, p1 } = await world();
-    await t.run(async (ctx) => ctx.db.patch(p1, { needs_rewrite: true }));
-    const pin = await t.run(async (ctx) => (await ctx.db.query("conversations").withIndex("by_short_id", (q) => q.eq("short_id", "jx7two5")).first())!._id);
-    const listed = (await rowsOf(as(bea), { workspace: ws })).find((r: any) => r.short_id === "pri-2");
-    const shown = await as(bea).query(pri.show, { short_id: "pri-2" });
-    expect(listed.short_id).toBe("pri-2");
-    expect((await rowsOf(as(bea), { workspace: ws })).map((r: any) => r.short_id)).not.toContain("pri-1");
-    // pri-1 is hidden from Bea, yet pri-2 is still Ada's #2: the position is the owner's, in her whole active group.
-    for (const row of [listed, shown]) expect([row.rank, row.person_pos, row.ai_rank, row.rank_source]).toEqual([2, null, 2, "ai"]);
-    expect((await as(bea).query(pri.pinLine, { conversation_id: pin }))?.rank).toBe(2);
-    const ref = await t.run(async (ctx) => (await sessionPriorityReader(ctx, bea, acme))(await ctx.db.get(pin)));
-    expect(ref).toEqual({ id: "pri-2", title: "Priority pri-2", rank: 2, user_id: String(ada) });
-    // The owner reads the same rank from all of them.
-    const own = (await rowsOf(as(ada), { workspace: ws })).find((r: any) => r.short_id === "pri-2");
-    expect([own.rank, (await as(ada).query(pri.show, { short_id: "pri-2" })).rank, (await as(ada).query(pri.pinLine, { conversation_id: pin })).rank]).toEqual([2, 2, 2]);
-    expect([own.ai_rank, own.rank_source]).toEqual([2, "ai"]);
-    expect(await t.run(async (ctx) => (await sessionPriorityReader(ctx, ada, acme))(await ctx.db.get(pin)))).toEqual(ref);
-    // A write's echo carries the place, and a teammate's next read follows it.
-    expect(await as(ada).mutation(pri.moveTo, { short_id: "pri-2", to: 1 })).toMatchObject({ rank: 1, rank_source: "person" });
-    expect((await rowsOf(as(bea), { workspace: ws })).find((r: any) => r.short_id === "pri-2")).toMatchObject({ rank: 1, rank_source: "person" });
-  });
-
-  test("a row carries its owner's face: their own photo, else GitHub's, else none", async () => {
-    const { t, as, ada, bea, ws } = await world();
-    const face = async () => [(await rowsOf(as(bea), { workspace: ws }))[0].owner_image, (await as(bea).query(pri.show, { short_id: "pri-2" })).owner_image];
-    expect(await face()).toEqual([null, null]);
-    await t.run(async (ctx) => ctx.db.patch(ada, { github_avatar_url: "https://gh/ada.png" }));
-    expect(await face()).toEqual(["https://gh/ada.png", "https://gh/ada.png"]);
-    await t.run(async (ctx) => ctx.db.patch(ada, { image: "https://photo/ada.png" }));
-    expect(await face()).toEqual(["https://photo/ada.png", "https://photo/ada.png"]);
-    expect(await as(ada).mutation(pri.moveTo, { short_id: "pri-2", to: 1 })).toMatchObject({ owner: "Ada", owner_image: "https://photo/ada.png" });
-  });
-
-  test("a teammate's access reads only the newest four sessions (failing closed), while the pin line judges the open session alone", async () => {
-    const { t, as, ada, bea, acme, p1, c1 } = await world();
-    await t.run(async (ctx) => {
-      for (let i = 0; i < 4; i++) {
-        await ctx.db.insert("conversations", {
-          user_id: ada, team_id: acme, agent_type: "claude_code", session_id: `p${i}`, short_id: `jx7pvx${i}`, title: "private",
-          started_at: NOW, updated_at: NOW, message_count: 1, is_private: true, team_visibility: "private", status: "active", priority_id: p1,
-        } as any);
-      }
-    });
-    expect((await rowsOf(as(bea), {})).map((r: any) => r.short_id)).not.toContain("pri-1");
-    expect(await as(bea).query(pri.pinLine, { conversation_id: c1 })).toMatchObject({ short_id: "pri-1" });
-  });
-
-  test("a list judges at most TEAMMATE_PRIORITIES_CAP teammates' priorities, the most recently active, and says so", async () => {
-    const { t, ada, bea, acme, ws } = await world();
-    const BEA_TOKEN = "cc_test_priorities_bea";
-    await t.run(async (ctx) => {
-      await ctx.db.insert("api_tokens", { user_id: bea, token_hash: await hashToken(BEA_TOKEN), name: "cli", created_at: NOW, last_used_at: NOW } as any);
-      for (let i = 0; i < TEAMMATE_PRIORITIES_CAP; i++) {
-        const p = await ctx.db.insert("priorities", {
-          user_id: ada, workspace: ws, short_id: `pri-${100 + i}`, title: `More ${i}`, summary: "", status: "active",
-          steps: [], first_seen_at: NOW, last_active_at: NOW + i, pass_at: NOW, created_at: NOW, updated_at: NOW,
-        } as any);
-        await ctx.db.insert("conversations", {
-          user_id: ada, team_id: acme, agent_type: "claude_code", session_id: `m${i}`, short_id: `jx7m${i}`, title: "m",
-          started_at: NOW, updated_at: NOW, message_count: 1, is_private: false, team_visibility: "full", status: "active", priority_id: p,
-        } as any);
-      }
-    });
-    const res = await t.query(pri.cliList, { api_token: BEA_TOKEN, team_id: acme });
-    expect(res.teammates_truncated).toBe(true);
-    expect(res.priorities).toHaveLength(TEAMMATE_PRIORITIES_CAP);
-    expect(res.priorities.map((r: any) => r.short_id)).not.toContain("pri-1");
-  });
-
-  test("a teammate sees a step's refs they may read, and not a step written from a session since locked private", async () => {
-    const { t, as, ada, bea, acme, ws, p1, c1 } = await world();
-    await t.run(async (ctx) => {
-      // Another shared session keeps pri-1 readable once jx7one1 is locked.
-      await ctx.db.insert("conversations", {
-        user_id: ada, team_id: acme, agent_type: "claude_code", session_id: "keep", short_id: "jx7keep", title: "kept",
-        started_at: NOW, updated_at: NOW - 3 * DAY, message_count: 1, is_private: false, team_visibility: "full", status: "active", priority_id: p1,
-      } as any);
-      for (const [short_id, workspace] of [["ct-1", ws], ["ct-2", `user:${ada}`]] as const) {
-        await ctx.db.insert("tasks", { short_id, title: short_id, status: "open", task_type: "task", priority: "medium", source: "human", user_id: ada, workspace, created_at: 1, updated_at: 1 } as any);
-      }
-      await ctx.db.insert("pull_requests", {
-        team_id: acme, github_pr_id: 4, repository: "acme/web", number: 4, title: "PR 4", body: "", state: "open",
-        author_github_username: "ada", linked_session_ids: [], created_at: NOW, updated_at: NOW, head_ref: "ada/pr-4",
-      } as any);
-      await ctx.db.patch(p1, { steps: [
-        { key: "s1", title: "From the shared session", tier: "critical", tier_set_by: "pass", refs: [{ kind: "session", id: "jx7one1" }], done: false },
-        { key: "s2", title: "Mixed", tier: "critical", tier_set_by: "pass", refs: [{ kind: "task", id: "ct-1" }, { kind: "task", id: "ct-2" }, { kind: "pr", id: "acme/web#4" }, { kind: "pr", id: "elsewhere/x#1" }], done: false },
-      ] });
-    });
-    const stepsOf = async (who: Id<"users">) => (await as(who).query(pri.show, { short_id: "pri-1" })).steps.map((s: any) => [s.key, s.refs.map((r: any) => r.id)]);
-    expect(await stepsOf(bea)).toEqual([["s1", ["jx7one1"]], ["s2", ["ct-1", "acme/web#4"]]]);
-    await t.run(async (ctx) => ctx.db.patch(c1, { is_private: true, team_visibility: "private" }));
-    expect(await stepsOf(bea)).toEqual([["s2", ["ct-1", "acme/web#4"]]]);
-    expect((await rowsOf(as(bea), {})).find((r: any) => r.short_id === "pri-1").steps.map((s: any) => s.key)).toEqual(["s2"]);
-    // The pin line of the shared session on s1 names no step to her, and names it to the owner.
-    const keep = await t.run(async (ctx) => {
-      const id = (await ctx.db.query("conversations").withIndex("by_short_id", (q) => q.eq("short_id", "jx7keep")).first())!._id;
-      await ctx.db.patch(id, { priority_step_key: "s1" } as any);
-      return id;
-    });
-    const beaPin = await as(bea).query(pri.pinLine, { conversation_id: keep });
-    expect(beaPin?.short_id).toBe("pri-1");
-    expect(beaPin?.step_title).toBeUndefined();
-    expect((await as(ada).query(pri.pinLine, { conversation_id: keep }))?.step_title).toBe("From the shared session");
-    // The owner sees every step whole.
-    expect((await stepsOf(ada)).map(([key]: any) => key)).toEqual(["s1", "s2"]);
   });
 
   test("a member who left the team: their priorities there are read by nobody but them", async () => {

@@ -1,6 +1,6 @@
 import { CallsNavRow } from "./sidebar/CallsNav";
 import { workspaceNameOf, workspaceColorOf } from "../lib/projectColors";
-import { useCallsAvailable, useTeamFeature, useWorkspaceFeature, useWorkspaceFeatureState } from "../lib/teamFeatures";
+import { useAnyWorkspaceFeature, useCallsAvailable, useTeamFeature, useWorkspaceFeature, useWorkspaceFeatureState } from "../lib/teamFeatures";
 import { usePathname, useRouter } from "next/navigation";
 import { Suspense, useState, useMemo, useCallback, useRef, memo } from "react";
 import { useShallow } from "zustand/react/shallow";
@@ -176,7 +176,7 @@ export const Sidebar = memo(function Sidebar({ directoryFilter, isMobileOpen = f
   const flowsOn = useWorkspaceFeature("line");
   const flowsOffer = useWorkspaceFeatureState("line") === "offer";
   const changesOn = useTeamFeature("changes");
-  const prioritiesOn = useWorkspaceFeature("priorities");
+  const prioritiesOn = useAnyWorkspaceFeature("priorities");
   const chatOn = useTeamFeature("chat");
   const callsOn = useCallsAvailable();
   const isTasks = pathname === "/tasks" || pathname?.startsWith("/tasks/");

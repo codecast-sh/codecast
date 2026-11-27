@@ -1,30 +1,38 @@
 "use client";
-// /priorities: the page checked between sessions. The viewer's own active
-// priorities in rank order, each with its milestones' states in the session
-// language (components/priorities/PriorityBlock; lib/priorityList,
-// shared/contracts/priorityDerive), the ones done or set aside folded into one
-// line at the bottom, then where the viewer's messages went. The rows come
-// from the store (useSyncPriorities feeds convex priorities.list, whose rows
-// carry each milestone's sessions and plans); typing per day is an enrichment
-// read beside them, and each session's live state is the inbox's own verdict
-// when the store holds its row. The list's own width picks the layout: the
-// desktop rows down to a Daylight-sized list, the phone layout below it.
+// /priorities: the page checked between sessions. Every priority the viewer
+// can read, in every workspace they hold, each with its milestones' states in
+// the session language (components/priorities/PriorityBlock; lib/priorityList,
+// shared/contracts/priorityDerive), grouped as the viewer chooses
+// (lib/prioritySections, components/priorities/PrioritySections), then where
+// the viewer's messages went. The rows come from the store (useSyncPriorities
+// feeds convex priorities.list, whose rows carry each milestone's sessions
+// and plans); typing per day is an enrichment read beside them, and each
+// session's live state is the inbox's own verdict when the store holds its
+// row. The list's own width picks the layout: the desktop rows down to a
+// Daylight-sized list, the phone layout below it.
 import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
-import { AlertTriangle, ChevronRight, Loader2, Play, Target } from "lucide-react";
+import { AlertTriangle, Loader2, Play, Target } from "lucide-react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import type { PriorityHistory } from "@codecast/shared/contracts/priorities";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { useActiveWorkspaceKey } from "../../hooks/useWorkspaceCollection";
-import { usePriorities, usePriorityListMeta, usePriorityWrites, useRunPriorities, useSyncPriorities } from "../../hooks/usePriorities";
+import { usePriorities, usePriorityListMeta, usePrioritiesView, usePriorityWrites, useRunPriorities, useSyncPriorities } from "../../hooks/usePriorities";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { Button } from "../ui/button";
 import { SwitchReview, type SwitchLedger } from "../consequential/ConsequentialSwitch";
 import { EmptyState } from "../ui/empty-state";
 import { SkeletonRows } from "../ui/skeleton";
-import { PageFrame, PageHeader } from "../ui/page-header";
-import { LegendButton, Mark } from "../Mark";
-import { behindLabel, nextPassLabel, ownerGroups, passDue, type PriorityRow } from "../../lib/priorities";
+import { PageFrame } from "../ui/page-header";
+import { LegendButton } from "../Mark";
+import { PrioritiesHeader } from "./PrioritiesHeader";
+import { effectivePriorityOrder } from "@codecast/shared/contracts/priorities";
+import { useServerAuthSettled } from "../../hooks/useServerAuthSettled";
+import { useInboxStore } from "../../store/inboxStore";
+import { behindLabel, nextPassLabel, passDue, type PriorityRow } from "../../lib/priorities";
+import { buildSections, pageControls, rankDraggable, visibleCount, type Sections } from "../../lib/prioritySections";
+import { PrioritiesToolbar } from "./PrioritiesToolbar";
+import { OwnerFace, PrioritySections, type BlockOf } from "./PrioritySections";
 import { COARSE_TALL, LIST_DAYS, buildModels, lastDays, layoutForWidth, TABLET_QUERY, localDayKey, type ListLayout, type PriorityModel } from "../../lib/priorityList";
 import { cn } from "../../lib/utils";
 import { PriorityBlock, type RankDrag } from "./PriorityBlock";
@@ -35,16 +43,18 @@ import { useSidebarFocusId } from "../../hooks/useSidebarFocusId";
 const api = _api as any;
 
 export default function PrioritiesPage() {
-  const workspace = useActiveWorkspaceKey();
   const feed = useSyncPriorities();
   const rows = usePriorities();
-  // Typing per day is computed on read from typed messages (no table to
-  // mirror): an enrichment read beside the store, the rows paint without it.
+  // Typing per day, every workspace's in one answer, is computed on read from
+  // typed messages (no table to mirror): an enrichment read beside the store,
+  // the rows paint without it.
+  const settled = useServerAuthSettled();
   const history = useQueryNoThrow(
     api.priorities.history,
-    workspace ? { workspace, days: LIST_DAYS, tz_offset_minutes: new Date().getTimezoneOffset() } : "skip",
+    settled ? { days: LIST_DAYS, tz_offset_minutes: new Date().getTimezoneOffset() } : "skip",
     { remember: true },
   ).data as PriorityHistory | undefined;
+  const [view] = usePrioritiesView();
   const meta = usePriorityListMeta();
   const pass = useRunPriorities(rows.length);
   const now = useCoarseNow(30_000);
@@ -59,8 +69,8 @@ export default function PrioritiesPage() {
       <span className="ml-auto"><LegendButton lead="Priorities" /></span>
     </header>
   );
-  // The count beside the title is the viewer's own active priorities, the list's rows.
-  const listed = useMemo(() => rows.filter((r) => r.mine && r.status === "active").length, [rows]);
+  // The count beside the title is everyone's active priorities in the sections shown.
+  const listed = useMemo(() => visibleCount(rows, view.hidden), [rows, view.hidden]);
 
   let body: ReactNode;
   if (rows.length === 0 && feed.error) {
@@ -74,8 +84,7 @@ export default function PrioritiesPage() {
     );
   } else if (rows.length === 0 && !feed.ready) {
     body = <SkeletonRows rows={6} className="pt-2" rowClassName="h-8" />;
-  } else if (!rows.some((r) => r.mine && r.status !== "merged")) {
-    // Teammates' priorities alone draw nothing here: the list is the viewer's own.
+  } else if (!rows.some((r) => r.status !== "merged")) {
     body = <NoPrioritiesYet nextPass={nextPassLabel(meta.next_pass_at, now)} running={pass.running || passDue(meta, now)} onRun={pass.run} />;
   } else {
     body = <PrioritiesView rows={rows} history={history} now={now} layout={layout} />;
@@ -83,14 +92,21 @@ export default function PrioritiesPage() {
 
   return (
     <PageFrame
-      header={<PageHeader legacy={legacy} title="Priorities" glyph={<Mark id="entity.priority" labeled><Target className="size-4 shrink-0 text-sol-text-muted" aria-hidden /></Mark>} count={rows.length ? listed : null} status={behindChip} actions={<LegendButton lead="Priorities" />} />}
-      legacyColumn="mx-auto w-full max-w-[1280px]"
-      column="mx-auto w-full max-w-[1280px] px-3 pb-16 sm:px-6"
+      header={<PrioritiesHeader legacy={legacy} count={rows.length ? listed : null} status={behindChip} layout={layout} />}
+      legacyColumn={LIST_COLUMN}
+      column="w-full pb-16 [container-type:inline-size]"
     >
-      <div ref={measure}>{body}</div>
+      {/* The header row's own padding: 16px, 24px once the pane is 640px wide (components/ui/page-header.css). */}
+      <div className={cn(LIST_COLUMN, "px-4 [@container(min-width:640px)]:px-6")}>
+        <div ref={measure}>{body}</div>
+      </div>
     </PageFrame>
   );
 }
+
+
+/** The list's column: the same max width as the header's row (PrioritiesHeader), centred. */
+const LIST_COLUMN = "mx-auto w-full max-w-[1280px]";
 
 /** A touch screen at least 900px wide: Daylight gets the desktop grid whatever its sidebars leave the list. */
 const isTablet = () => typeof window !== "undefined" && !!window.matchMedia?.(TABLET_QUERY).matches;
@@ -170,9 +186,15 @@ export function PrioritiesView({ rows, history, now, layout }: {
   now: number;
   layout: ListLayout;
 }) {
-  // Only the viewer's own: active in rank order, then done, quiet and set aside.
-  const own = useMemo(() => ownerGroups(rows).find((g) => g.mine) ?? { active: [], past: [] }, [rows]);
-  const shown = useMemo(() => [...own.active, ...own.past], [own]);
+  const [view, setView] = usePrioritiesView();
+  const activeWorkspace = useActiveWorkspaceKey();
+  const teams = useInboxStore((s) => s.teams);
+  const workspaceNames = useMemo(() => Object.fromEntries((teams ?? []).map((t: any) => [`team:${t._id}`, String(t.name ?? "Team")])), [teams]);
+  const opts = useMemo(() => ({ activeWorkspace, hidden: view.hidden, workspaceNames }), [activeWorkspace, view.hidden, workspaceNames]);
+  const controls = useMemo(() => pageControls(rows, opts), [rows, opts]);
+  const sections = useMemo(() => buildSections(rows, { ...opts, groupBy: view.groupBy }), [rows, opts, view.groupBy]);
+  // Every row the sections draw, open or folded: their models share one scale.
+  const shown = useMemo(() => sectionRows(sections), [sections]);
   const days = useMemo(() => lastDays(LIST_DAYS, now), [now]);
   const todayIndex = days.indexOf(localDayKey(now));
   const ids = useMemo(() => linkedSessionIds(shown), [shown]);
@@ -182,52 +204,60 @@ export function PrioritiesView({ rows, history, now, layout }: {
   const prs = useMemo(() => linkedPrRefs(shown), [shown]);
   const lookups = usePriorityLookups(ids, prs, useMemo(() => shown.map((r) => r.workspace), [shown]));
   const writes = usePriorityWrites();
-  const [pastOpen, setPastOpen] = useState(false);
-  // A drag of the viewer's rank on a desktop list: which row, and where it would land.
-  const [drag, setDrag] = useState<{ id: string; over: string | null; after: boolean } | null>(null);
+  // A drag of the viewer's rank on a desktop list: which row (in which workspace), and where it would land.
+  const [drag, setDrag] = useState<{ id: string; workspace: string; over: string | null; after: boolean } | null>(null);
 
   const byId = new Map(models.map((m) => [m.row.short_id, m]));
-  const activeIds = own.active.map((x) => x.short_id);
   const dragOf = (r: PriorityRow): RankDrag | undefined => {
-    if (layout !== "wide" || r.status !== "active") return undefined;
+    if (layout !== "wide" || !rankDraggable(sections.groupBy, r)) return undefined;
+    // A drop lands only among the viewer's priorities in the dragged one's workspace.
+    const peer = !!drag && drag.id !== r.short_id && drag.workspace === r.workspace;
     return {
       dragging: drag?.id === r.short_id,
-      accepts: !!drag && drag.id !== r.short_id,
-      over: drag && drag.id !== r.short_id && drag.over === r.short_id ? (drag.after ? "after" : "before") : null,
-      start: () => setDrag({ id: r.short_id, over: null, after: false }),
+      accepts: peer,
+      over: peer && drag.over === r.short_id ? (drag.after ? "after" : "before") : null,
+      start: () => setDrag({ id: r.short_id, workspace: r.workspace, over: null, after: false }),
       end: () => setDrag(null),
       hover: (after) => setDrag((d) => (d && (d.over !== r.short_id || d.after !== after) ? { ...d, over: r.short_id, after } : d)),
       drop: (after) => {
         if (!drag) return;
-        const rest = activeIds.filter((x) => x !== drag.id);
+        const rest = effectivePriorityOrder(rows.filter((x) => x.mine && x.workspace === r.workspace)).map((x) => x.short_id).filter((x) => x !== drag.id);
         writes.move(drag.id, rest.indexOf(r.short_id) + (after ? 1 : 0) + 1);
         setDrag(null);
       },
     };
   };
-  const block = (r: PriorityRow) => {
+  const block: BlockOf = (r, o) => {
     const m: PriorityModel | undefined = byId.get(r.short_id);
-    return m && <PriorityBlock key={r.short_id} model={m} layout={layout} days={days} todayIndex={todayIndex} peak={peak} typingPending={!history} now={now} lookups={lookups} drag={dragOf(r)} />;
+    return m && (
+      <PriorityBlock
+        key={r.short_id}
+        model={m}
+        layout={layout}
+        days={days}
+        todayIndex={todayIndex}
+        peak={peak}
+        typingPending={!history}
+        now={now}
+        lookups={lookups}
+        drag={dragOf(r)}
+        compact={view.compact}
+        face={o?.face ? <OwnerFace row={r} /> : undefined}
+      />
+    );
   };
   return (
-    <div data-priorities data-layout={layout} className="[container-type:inline-size]">
-      <ol data-active>{own.active.map(block)}</ol>
-      {own.past.length > 0 && (
-        <div data-past-priorities className="mt-1 border-t border-sol-border/50 pt-2">
-          <button
-            type="button"
-            data-past-toggle
-            aria-expanded={pastOpen}
-            onClick={() => setPastOpen((o) => !o)}
-            className="-ml-1 inline-flex min-h-6 items-center gap-1 rounded px-1 text-mark font-semibold uppercase tracking-wide text-sol-text-dim hover:bg-sol-bg-alt hover:text-sol-text [@media(pointer:coarse)]:min-h-11"
-          >
-            Past <span className="font-normal tabular-nums">{own.past.length}</span>
-            <ChevronRight className={cn("size-3 transition-transform", pastOpen && "rotate-90")} aria-hidden />
-          </button>
-          {pastOpen && <ol>{own.past.map(block)}</ol>}
-        </div>
-      )}
+    <div data-priorities data-layout={layout} data-group-by={sections.groupBy} data-compact={view.compact || undefined} className="[container-type:inline-size]">
+      <PrioritiesToolbar controls={controls} view={view} groupBy={sections.groupBy} onChange={setView} layout={layout} />
+      <PrioritySections sections={sections} block={block} layout={layout} headings={controls.showSectionHeadings} people={controls.showGroupBy} />
       <MessagesByWorkspace days={days} todayIndex={todayIndex} />
     </div>
   );
+}
+
+/** Every priority the sections draw, active and folded. */
+function sectionRows(sections: Sections): PriorityRow[] {
+  if (sections.groupBy === "workspace") return sections.sections.flatMap((s) => [...s.active.map((x) => x.row), ...s.past]);
+  if (sections.groupBy === "person_workspace") return sections.sections.flatMap((p) => p.workspaces.flatMap((w) => [...w.active, ...w.past]));
+  return sections.sections.flatMap((s) => s.people.flatMap((p) => [...p.active, ...p.past]));
 }

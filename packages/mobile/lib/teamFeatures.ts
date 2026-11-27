@@ -11,7 +11,7 @@
 // undefined" rule are the same ones the web and the Convex guard use.
 import { useMemo } from "react";
 import { useInboxStore } from "@codecast/web/store/inboxStore";
-import { TEAM_FEATURES, workspaceFeatureEnabled, type TeamFeatureKey } from "@codecast/shared/contracts";
+import { TEAM_FEATURES, teamFeatureEnabled, workspaceFeatureEnabled, type TeamFeatureKey } from "@codecast/shared/contracts";
 import { createFeatureHooks, defineFeatures, type FeatureSource } from "@platform/flags";
 
 const TEAM_FEATURE_CATALOG = defineFeatures(TEAM_FEATURES);
@@ -38,6 +38,15 @@ const hooks = createFeatureHooks(TEAM_FEATURE_CATALOG, useTeamSource);
 /** true/false once the teams list has loaded; undefined while unknown. */
 export const useActiveTeamFeature: (key: TeamFeatureKey) => boolean | undefined =
   hooks.useFeatureState;
+
+/** Is `key` on in ANY workspace the viewer holds: for a screen that lists
+ *  every workspace at once (Priorities), as web's useAnyWorkspaceFeature.
+ *  undefined while unknown. */
+export function useAnyWorkspaceFeatureState(key: TeamFeatureKey): boolean | undefined {
+  const src = useTeamSource();
+  if (!src) return undefined;
+  return (src.all as any[]).some((t) => teamFeatureEnabled(t, key));
+}
 
 /** Is `key` on in the active WORKSPACE, personal included (the personal
  *  workspace borrows a `personal` feature from any of the viewer's teams,

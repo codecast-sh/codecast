@@ -167,6 +167,53 @@ test("a drag of the rank number drops the priority where it is let go, and rides
   }
 }, 60_000);
 
+const setView = (v: Record<string, unknown> | undefined) => useInboxStore.setState((st: any) => ({ clientState: { ...st.clientState, ui: { ...st.clientState.ui, priorities_view: v } } }));
+const PERSONAL = row(7, "Wardrobe", 1, [step("s1", "Shop", "critical")], { workspace: `user:${VIEWER_ID}` });
+
+test("Person, then workspace: a drag reorders within its workspace, rides movePriority, and never drops into another workspace", async () => {
+  useInboxStore.getState().syncTable("priorities", [...rows(), PERSONAL] as any);
+  setView({ group_by: "person_workspace" });
+  const page = await mount(<Live />);
+  try {
+    expect(document.querySelector("[data-priorities]")!.getAttribute("data-group-by")).toBe("person_workspace");
+    const dragEvent = (type: string) => Object.assign(new window.Event(type, { bubbles: true, cancelable: true }), { dataTransfer: { setData() {}, effectAllowed: "", dropEffect: "" }, clientY: 0 });
+    await act(async () => { block("pri-3").querySelector("[data-rank-handle]")!.dispatchEvent(dragEvent("dragstart")); });
+    // Over the viewer's priority in their personal workspace: no drop there.
+    await act(async () => { block("pri-7").dispatchEvent(dragEvent("dragover")); });
+    expect(block("pri-7").querySelector("[data-drop-at]")).toBeNull();
+    await act(async () => { block("pri-2").dispatchEvent(dragEvent("dragover")); });
+    expect(block("pri-2").querySelector("[data-drop-at]")?.getAttribute("data-drop-at")).toBe("before");
+    await act(async () => { block("pri-2").dispatchEvent(dragEvent("drop")); });
+    expect(await dispatched("movePriority")).toEqual([["pri-3", 2]]);
+    expect(ranks().slice(0, 3)).toEqual(["pri-1#1", "pri-3#2", "pri-2#3"]);
+  } finally {
+    await page.unmount();
+    setView(undefined);
+  }
+}, 60_000);
+
+test("a chip turned off stays off when the page is drawn again from the store", async () => {
+  useInboxStore.getState().syncTable("priorities", [...rows(), PERSONAL] as any);
+  setView(undefined);
+  const first = await mount(<Live />);
+  try {
+    await press(document.querySelector(`[data-workspace-chip="user:${VIEWER_ID}"]`)!);
+    expect(block("pri-7")).toBeNull();
+    expect(await dispatched("updateClientUI")).not.toEqual([]);
+  } finally {
+    await first.unmount();
+  }
+  const again = await mount(<Live />);
+  try {
+    expect(document.querySelector(`[data-workspace-chip="user:${VIEWER_ID}"]`)!.getAttribute("aria-pressed")).toBe("false");
+    expect(block("pri-7")).toBeNull();
+    expect(block("pri-1")).not.toBeNull();
+  } finally {
+    await again.unmount();
+    setView(undefined);
+  }
+}, 60_000);
+
 test("Mark done, Set aside and Restore paint the row's status and ride their overrides", async () => {
   const page = await mount(<Live />);
   try {
@@ -371,14 +418,14 @@ test("a session's ⋯: Not this milestone, Move to… and Not this priority pain
   }
 }, 60_000);
 
-test("a teammate's priority is not on the list, nor a set-aside one until Past opens", async () => {
+test("a teammate's priority is on the list under their name, with no drag handle; a set-aside one only once its fold opens", async () => {
   const page = await mount(<Live />);
   try {
-    expect(block("pri-4")).toBeNull();
+    expect(block("pri-4")).not.toBeNull();
+    expect(block("pri-4")!.querySelector("[data-rank-handle]")).toBeNull();
     expect(block("pri-5")).toBeNull();
     await openPast();
     expect(block("pri-5")).not.toBeNull();
-    expect(block("pri-4")).toBeNull();
   } finally {
     await page.unmount();
   }
@@ -585,6 +632,22 @@ test("Drop and Merge count linked sessions the same way, from the links; Drop sa
     expect(document.querySelector('[data-switch-review="Merge priority"]')!.textContent).toContain("3sessions move");
     // The confirm's buttons are 44px under a coarse pointer, as every confirm's are.
     for (const b of document.querySelectorAll("[data-switch-cancel], [data-switch-confirm]")) expect(b.className).toContain("[@media(pointer:coarse)]:h-11");
+  } finally {
+    await page.unmount();
+  }
+}, 60_000);
+
+test("Merge counts the sessions of one of the viewer's own rows past the list's link budget, from its mapped links", async () => {
+  // Past OWN_LINKED the list sends the viewer's own row mapped links only (convex priorityRead listFor).
+  const { links: _full, ...rest } = stored("pri-1") as any;
+  useInboxStore.setState((st: any) => ({ priorities: { ...st.priorities, [rest._id]: { ...rest, session_count: 9, mapped_links: [links("s1", [FEED], { sessions_more: 2 }), links("s2", [FEED])] } } }));
+  const page = await mount(<Live />);
+  try {
+    expect(stored("pri-1").links).toBeUndefined();
+    await openSub(priorityMenu("pri-1"), '[data-act="merge"]');
+    await press(item('[data-merge-into="pri-2"]'));
+    await page.waitFor(() => !!document.querySelector('[data-switch-review="Merge priority"]'));
+    expect(document.querySelector('[data-switch-review="Merge priority"]')!.textContent).toContain("3sessions move");
   } finally {
     await page.unmount();
   }
