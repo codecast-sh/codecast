@@ -6,6 +6,7 @@ import schema from "./schema";
 import { allModules } from "./testModules.testkit";
 import { api } from "./_generated/api";
 import { hashToken } from "./apiTokens";
+import { navPromptField } from "./userMessagesFilter";
 import type { Id } from "./_generated/dataModel";
 
 export const pri = (api as any).priorities;
@@ -63,7 +64,7 @@ export async function world() {
     for (const [short_id, priority_id] of [["jx7two5", p2], ["jx7thr6", p3], ["jx7fou7", p4]] as const) await conv(short_id, { priority_id, updated_at: NOW - 2 * DAY });
 
     const send = async (user: Id<"users">, c: Id<"conversations">, timestamp: number, extra: Record<string, unknown> = {}) => {
-      const message = await ctx.db.insert("messages", { conversation_id: c, role: "user", content: "x", timestamp } as any);
+      const message = await ctx.db.insert("messages", { conversation_id: c, role: "user", content: "x", timestamp, ...navPromptField({ role: "user", content: "x" }) } as any);
       await ctx.db.insert("user_sends", { user_id: user, team_id: acme, conversation_id: c, message_id: message, timestamp, words: 1, text: "x", clipped: false, ...extra } as any);
     };
     await send(ada, c1, NOW - 60_000);
