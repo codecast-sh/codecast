@@ -355,7 +355,7 @@ export function SidebarNavView({
           popped="work"
           isNarrow={isNarrow}
           onMobileClose={onMobileClose}
-          title="Priorities: what each person is driving at, and how far along"
+          title="Priorities: what you are driving at, and how far along"
           icon={<Target className="w-5 h-5 flex-shrink-0" strokeWidth={1.5} />}
         />}
         {shown("/projects") && <NavSection
