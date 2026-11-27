@@ -2965,9 +2965,12 @@ export const deliverRoutes = internalAction({
         continue;
       }
       const unsent = segments.filter((s: { seq: number }) => s.seq > route.sent_seq);
-      if (unsent.length === 0) continue;
-      const chunk = formatChunk(unsent);
-      const maxSeq = unsent[unsent.length - 1].seq;
+      // Scribe's final pass waits for word that the call is over, so the
+      // stop sends it one last message even when no words are left.
+      const scribeEnd = args.include_after_routes && route.kind === "session" && route.role === "scribe";
+      if (unsent.length === 0 && !scribeEnd) continue;
+      const chunk = unsent.length ? formatChunk(unsent) : "";
+      const maxSeq = unsent.length ? unsent[unsent.length - 1].seq : route.sent_seq;
       // Delivery acts as whoever pointed the route at the call — a
       // participant feeding an agent speaks as themselves. Routes from before
       // added_by existed fall back to the scribe.
@@ -3004,11 +3007,16 @@ export const deliverRoutes = internalAction({
             call: transcript.short_id ?? null,
             board: transcript.board_doc_id ? String(transcript.board_doc_id) : null,
           };
+          const header = route.role === "scribe"
+            ? scribeChunkHeader({ ...headerOpts, ended: scribeEnd })
+            : own ? ownRoomChunkHeader(headerOpts) : liveFeedChunkHeader(headerOpts);
           await ctx.runMutation(internal.transcripts.deliverToSession, {
             as_user: asUser,
             to: route.target,
-            body: `${route.role === "scribe" ? scribeChunkHeader(headerOpts) : own ? ownRoomChunkHeader(headerOpts) : liveFeedChunkHeader(headerOpts)}\n\n${chunk}`,
-            client_id: deliveryClientId(transcript._id, route.target, maxSeq),
+            body: chunk ? `${header}\n\n${chunk}` : header,
+            // The end message has an id of its own: with no new words its
+            // seq is the last chunk's, and a retry of the stop sends it once.
+            client_id: `${deliveryClientId(transcript._id, route.target, maxSeq)}${scribeEnd ? ":end" : ""}`,
           });
         } else if (route.kind === "doc") {
           await ctx.runMutation(internal.transcripts.deliverToDoc, {
