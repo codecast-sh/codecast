@@ -28,6 +28,8 @@ export type Sweep = {
   unretired: Array<{ short_id: string }>;
   /** The kinds the server could not read this time, each listed empty (absent from an older server). */
   failed_kinds?: SweepKind[];
+  /** Sessions the server could not judge for retirement this time, left out of `unretired` (absent from an older server). */
+  unretired_skipped?: number;
 };
 
 const SWEEP_KINDS = ["incidents", "late_targets", "failed_runs", "laggards", "unretired"] as const;
@@ -43,6 +45,7 @@ export function project(s: Sweep): Sweep {
     unretired: s.unretired.map((u) => ({ short_id: u.short_id })),
     // Only the kind names this CLI knows: anything else a server sent is dropped.
     ...(Array.isArray(s.failed_kinds) && s.failed_kinds.length ? { failed_kinds: SWEEP_KINDS.filter((k) => s.failed_kinds!.includes(k)) } : {}),
+    ...(Number.isInteger(s.unretired_skipped) && s.unretired_skipped! > 0 ? { unretired_skipped: s.unretired_skipped } : {}),
   };
 }
 
@@ -164,6 +167,7 @@ export async function runSweep(o: { read: () => Promise<Sweep>; json?: boolean; 
     return SWEEP_ERROR_EXIT;
   }
   if (failedKinds.length && !o.quiet) o.error(`release sweep could not read ${failedKinds.join(", ")} this time; listed as empty`);
+  if (s.unretired_skipped && !o.quiet) o.error(`release sweep could not judge ${s.unretired_skipped} session${s.unretired_skipped === 1 ? "" : "s"} for retirement this time; left out of unretired`);
   if (o.newSince !== undefined) {
     o.log(JSON.stringify(sweepVerdict(s, previous, (o.now ?? Date.now)())));
     return SWEEP_FOUND_EXIT;

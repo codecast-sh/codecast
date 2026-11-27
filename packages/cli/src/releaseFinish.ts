@@ -168,8 +168,10 @@ export async function finishCliRelease(deps: FinishDeps): Promise<string> {
       say(`Could not tell other teams' Release Captains: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
-  if (decision.force && !d.team_id) lines.push("No team fleet to watch: the deploy belongs to no team.");
-  if (decision.force && d.team_id) {
+  // The global floor holds the team's machines too: no team floor to set, and no refusal to set one to tell.
+  if (decision.force && !global && !d.team_id) lines.push("No team fleet to watch: the deploy belongs to no team.");
+  let lagging = false;
+  if (decision.force && !global && d.team_id) {
     let set: any = null;
     try {
       set = await deps.post("/cli/team-cli-floor/set", { team_id: d.team_id, version: deps.version, ...(deps.fromSession ? { from_session: deps.fromSession } : {}) });
@@ -185,7 +187,7 @@ export async function finishCliRelease(deps: FinishDeps): Promise<string> {
       const read = () => deps.post("/cli/team-cli-floor/fleet", { team_id: d.team_id, version: deps.version, ...(deps.fromSession ? { from_session: deps.fromSession } : {}) }, { read: true }) as Promise<Fleet>;
       const fleet = await waitForFleet(read, { waitMs: deps.waitMs, sleep: deps.sleep, now: deps.now });
       say(fleetNote(fleet));
-      if (fleet.lagging.length) await tellRelease({});
+      lagging = fleet.lagging.length > 0;
     }
   }
   // Read the note again: the wait can be twenty minutes, and a note written
@@ -193,5 +195,7 @@ export async function finishCliRelease(deps: FinishDeps): Promise<string> {
   const fresh = await deps.post("/cli/deploys/get", { ref: deps.deploy }, { read: true }).catch(() => null);
   const note = [fresh ? fresh.note : d.note, lines.join("\n")].filter(Boolean).join("\n\n");
   await deps.post("/cli/line/deploy/report", { deploy: deps.deploy, status: "live", note });
+  // After the report: the captain's message points at the deploy's note, which names the laggards only from now.
+  if (lagging) await tellRelease({});
   return note;
 }

@@ -25,7 +25,8 @@ const file = (filename: string) => ({ filename, status: "modified", additions: 1
 type Own = "row" | "trailer" | "guess";
 
 async function world(subject: Record<string, unknown> = {}, features: Record<string, boolean> = { retire_on_live: true }) {
-  const t = convexTest(schema, allModules);
+  // The server's per-transaction limits: commit rows carry their patches, so what the pass reads must stay inside them.
+  const t = convexTest({ schema, modules: allModules, transactionLimits: true });
   const ids = await t.run(async (ctx) => {
     const user = await ctx.db.insert("users", { name: "Ana" } as any);
     const team = await ctx.db.insert("teams", { name: "Acme", created_at: 1, features } as any);
@@ -73,6 +74,16 @@ async function world(subject: Record<string, unknown> = {}, features: Record<str
   const refusal = (workspace?: string) => t.run(async (ctx) => liveRetireRefusal(ctx, (await ctx.db.get(ids.conv))!, Date.now(), { workspace }));
   return { t, ids, commit, edit, changeRow, deploy, retireOn, asks, row, refusal };
 }
+
+/** `count` commits on main from `n`, each with ~900 KB of patch, by trailer of `conv` (or nobody's), in one transaction. */
+const PATCH = "+".repeat(900_000);
+const bigCommits = (w: Awaited<ReturnType<typeof world>>, n: number, count: number, conv: any) => w.t.run(async (ctx) => {
+  for (let i = n; i < n + count; i++) {
+    const message = conv ? `change ${i}\n\nCodecast-Session: https://codecast.sh/conversation/${conv}` : `change ${i}`;
+    const id = await ctx.db.insert("commits", { conversation_id: conv ?? undefined, sha: sha(i), message, author_name: "Ana", author_email: "a@x", timestamp: NOW - 60_000, files_changed: 1, insertions: 1, deletions: 0, repository: REPO, team_id: w.ids.team, branch: "main", files: [{ ...file(`web/big${i}.tsx`), patch: PATCH }] } as any);
+    await stampMainOrder(ctx, [id], NOW - 50_000 + i);
+  }
+});
 
 describe("a deploy going live asks the daemon of each session whose own change it takes live everywhere to retire it", () => {
   test("a pull request merged by hand: its session's commit is live on the one target it touches, so its daemon is asked, once", async () => {
@@ -229,6 +240,32 @@ describe("a deploy going live asks the daemon of each session whose own change i
     const other = await w.t.run(async (ctx) => ctx.db.insert("teams", { name: "Other", created_at: 1 } as any));
     expect(await w.refusal(`team:${other}`)).toBe("it is outside the deploy's workspace");
     expect(await w.t.mutation(internal.retireOnLive.retireSessionOnLive, { conversation: w.ids.conv, workspace: `team:${other}` })).toEqual({ asked: false, reason: "it is outside the deploy's workspace" });
+  });
+
+  test("the range's sessions are read from the deploy's own commits, not the commit rows: a range of large patches stays inside the read limit", async () => {
+    const w = await world();
+    await w.commit(0, ["web/old.tsx"], { own: "guess", conv: null });
+    await w.deploy("web", 0, NOW - DAY);
+    // Twenty commits of someone's, ~18 MB of patches between them: more than one transaction may read.
+    for (let batch = 0; batch < 4; batch++) await bigCommits(w, 10 + batch * 5, 5, null);
+    const other = await w.t.run(async (ctx) => ctx.db.insert("conversations", { user_id: w.ids.user, agent_type: "claude_code", started_at: NOW - 100_000, updated_at: NOW - 50_000, status: "active", title: "Other", message_count: 2 } as any));
+    await w.commit(40, ["web/b.tsx"], { conv: other });
+    await w.commit(41, ["web/a.tsx"]);
+    // The deploy names what it carried, as fillDeployRange or the deploy path's report writes it.
+    const short = await w.t.run(async (ctx) => recordDeployMarker(ctx, {
+      workspace: w.ids.workspace, team_id: w.ids.team, target: "web", sha: sha(41), repository: REPO, source: "m", status: "live", at: NOW,
+      commits: [{ sha: sha(41), subject: "change 41", conversation_id: w.ids.conv }, { sha: sha(40), subject: "change 40", conversation_id: other }, { sha: sha(10), subject: "change 10" }],
+    } as any));
+    const d = await w.t.run(async (ctx) => (await ctx.db.query("deploys").withIndex("by_workspace_created", (q: any) => q.eq("workspace", w.ids.workspace)).collect()).find((x: any) => x.short_id === short)!._id);
+    const { sessions } = await w.t.mutation(internal.retireOnLive.retireSessionsOnLive, { deploy: d });
+    expect(sessions.sort()).toEqual([String(w.ids.conv), String(other)].sort());
+  });
+
+  test("its own commits are read a few at a time: more bytes of them than it reads keeps it, rather than failing the read", async () => {
+    const w = await world();
+    // Twenty commits of its own, ~18 MB of patches: a whole read of them is past the transaction's limit.
+    for (let batch = 0; batch < 4; batch++) await bigCommits(w, 10 + batch * 5, 5, w.ids.conv);
+    expect(await w.refusal()).toBe("it has too many commits to read");
   });
 
   test("more subagents than it reads: kept rather than judged on part of them", async () => {

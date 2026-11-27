@@ -4,12 +4,12 @@
 // signature gate holds signed clients to signed releases. Every side effect
 // is injected; no process, network or file outside the fixture is touched.
 import { describe, expect, it } from "bun:test";
-import { closeSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync, writeSync } from "node:fs";
+import { chmodSync, closeSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { generateKeyPairSync } from "node:crypto";
 import { publicKeyToBase64, sha256Hex, signManifest, type UpdaterFs } from "@platform/cli-kit/update";
-import { DARWIN_SIGNING_TEAM, RELEASE_BASE_URL, RELEASE_MANIFEST_SIGNING, createCodecastUpdater, makeCurlDownload, makeDarwinSignatureCheck, UPDATE_IN_PROGRESS } from "./update";
+import { DARWIN_SIGNING_TEAM, RELEASE_BASE_URL, RELEASE_MANIFEST_SIGNING, createCodecastUpdater, makeCurlDownload, makeDarwinSignatureCheck, UPDATE_IN_PROGRESS, updateLockPath } from "./update";
 import { UPDATE_DEFER_RETRIES, UPDATE_DEFER_RETRY_MS, forcedUpdateWaits, selfUpdateOutcome, watchdogUpdateReport } from "./daemonSelfUpdate";
 import { exclusiveUpdate, isReleaseRace, updateWithRetry } from "./updateRetry";
 
@@ -323,9 +323,16 @@ describe("two updaters on one install (ct-102415)", () => {
     const dir = mkdtempSync(join(tmpdir(), "cast-update-race-"));
     try {
       const { exe, updater } = await install(dir);
-      const lock = join(dir, "update.lock");
-      const run = (u: ReturnType<typeof updater>) => exclusiveUpdate(lock, () => updateWithRetry(() => u.performUpdate(), noPause));
+      // Beside the binary whose `<binary>.new` it guards, whatever config dir each updater runs with.
+      const lock = updateLockPath(exe);
+      expect(lock).toBe(`${exe}.update.lock`);
+      // The lock adds no signal handler: the daemon's own SIGTERM handler must run once, not again re-raised by the lock.
+      const handlers = () => ["SIGINT", "SIGTERM", "SIGHUP"].map((s) => process.listenerCount(s as NodeJS.Signals));
+      const before = handlers();
+      const during: number[][] = [];
+      const run = (u: ReturnType<typeof updater>) => exclusiveUpdate(lock, () => { during.push(handlers()); return updateWithRetry(() => u.performUpdate(), noPause); });
       const results = await Promise.all([run(updater()), run(updater())]);
+      expect(during).toEqual([before]);
       expect(results.filter((r) => r.success)).toHaveLength(1);
       expect(results.filter((r) => !r.success).map((r) => r.error)).toEqual([UPDATE_IN_PROGRESS]);
       expect(readFileSync(exe)).toEqual(Buffer.from(BIG));
@@ -344,6 +351,20 @@ describe("two updaters on one install (ct-102415)", () => {
       const results = await Promise.all([run(updater()), run(updater())]);
       expect(results.filter((r) => r.success).length).toBeLessThan(2);
     } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("a lock that cannot be written beside the binary runs the update anyway, so its own failure is reported", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "cast-update-ro-"));
+    try {
+      chmodSync(dir, 0o555);
+      let ran = false;
+      const result = await exclusiveUpdate(join(dir, "codecast.update.lock"), async () => { ran = true; return { success: false, error: "permission denied" }; });
+      expect(ran).toBe(true);
+      expect(result).toEqual({ success: false, error: "permission denied" });
+    } finally {
+      chmodSync(dir, 0o755);
       rmSync(dir, { recursive: true, force: true });
     }
   });

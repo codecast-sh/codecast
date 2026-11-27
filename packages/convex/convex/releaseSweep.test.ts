@@ -203,26 +203,33 @@ describe("cast release sweep's read", () => {
     expect(s).toMatchObject(QUIET);
   });
 
-  test("one kind's failed read fails only that kind: it is named and listed empty, and the others still answer", async () => {
+  test("one session's failed judgment drops that session alone: it is counted as skipped, and the kind and the rest still answer", async () => {
     const w = await world();
     await w.target("web", ["web/**"]);
     // A failed run, which the sweep still lists.
     await w.run(await w.task("ct-701"), { fail_reason: "agent crashed" });
-    // One settled session with 40 commits of 500 KB each: judging it reads them all, past one query's 16 MiB.
-    const heavy = await w.insert("conversations", {
-      user_id: w.ids.me, team_id: w.ids.team, agent_type: "claude_code", started_at: NOW - HOUR, updated_at: NOW - 40 * MIN, status: "active", short_id: "jx7heavy", session_id: "s-heavy", title: "Heavy",
+    const settled = (short_id: string) => w.insert("conversations", {
+      user_id: w.ids.me, team_id: w.ids.team, agent_type: "claude_code", started_at: NOW - HOUR, updated_at: NOW - 40 * MIN, status: "active", short_id, session_id: `s-${short_id}`, title: short_id,
       message_count: 12, is_private: false, git_root: "/work/app", thread_state: "Shipped", thread_state_status: "done", thread_state_at: NOW - 30 * MIN, thread_state_msg_count: 12,
     });
-    const patch = "+".repeat(500_000);
-    for (let b = 0; b < 40; b += 8) {
+    const done = await settled("jx7done");
+    // A settled session with 20 subagents of 900 KB each: judging it reads them all, past one query's 16 MiB.
+    const heavy = await settled("jx7heavy");
+    const big = "x".repeat(900_000);
+    for (let b = 0; b < 20; b += 4) {
       await w.t.run(async (ctx: any) => {
-        for (let i = b; i < b + 8; i++) await ctx.db.insert("commits", w.commitRow(10 + i, ["web/huge.tsx"], NOW - 50 * MIN + i * 1000, heavy, patch));
+        for (let i = b; i < b + 4; i++) await ctx.db.insert("conversations", {
+          user_id: w.ids.me, team_id: w.ids.team, agent_type: "claude_code", started_at: NOW - HOUR, updated_at: NOW - 50 * MIN, status: "completed", session_id: `s-sub${i}`, title: big, message_count: 1, is_private: false, parent_conversation_id: heavy,
+        });
       });
     }
-    await w.live("web", 49);
+    await w.commit(1, ["web/a.tsx"], NOW - HOUR, done);
+    await w.commit(2, ["web/b.tsx"], NOW - HOUR + 1, heavy);
+    await w.live("web", 2);
     const s: any = await w.sweep();
-    expect(s.failed_kinds).toEqual(["unretired"]);
-    expect(s.unretired).toEqual([]);
+    expect(s.failed_kinds).toEqual([]);
+    expect(s.unretired.map((u: any) => u.short_id)).toEqual(["jx7done"]);
+    expect(s.unretired_skipped).toBe(1);
     expect(s.failed_runs.map((r: any) => r.task_short_id)).toEqual(["ct-701"]);
   });
 

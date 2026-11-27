@@ -504,10 +504,10 @@ async function attachDecision(ctx: any, workspace: string, signal: SignalInput, 
  * counts findings beyond the held ones (the new finding commitSignal is
  * about to insert).
  */
-async function openCauseWithHeld(ctx: any, db: WorkDb, seed: CauseSeed & { fingerprint: string; observed_at?: number }, placement: Placement, o: { now: number; issueKey: string | null; split: { from: string } | null; newCause: NewCause; extra: number }) {
+async function openCauseWithHeld(ctx: any, db: WorkDb, seed: CauseSeed & { fingerprint: string; observed_at?: number }, placement: Placement, o: { now: number; issueKey: string | null; split: { from: string } | null; newCause: NewCause; extra: number; heldSince?: number }) {
   const workspace = db.workspaceKey;
   const observedAt = seed.observed_at ?? o.now;
-  const held = o.issueKey ? await heldUnderIssue(ctx, workspace, [seed.fingerprint, o.issueKey]) : await heldSignals(ctx, workspace, seed.fingerprint);
+  const held = o.issueKey ? await heldUnderIssue(ctx, workspace, [seed.fingerprint, o.issueKey]) : await heldSignals(ctx, workspace, seed.fingerprint, o.heldSince);
   const seen = [observedAt, ...held.map((r) => r.observed_at)];
   const signalCount = held.length + o.extra;
   const { taskId, taskShortId } = await openCause(ctx, db, seed, placement.project_id, {
@@ -529,10 +529,11 @@ async function openCauseWithHeld(ctx: any, db: WorkDb, seed: CauseSeed & { finge
  * A cause opened for the signals held under the seed's key, every one of them
  * joining it: flowStops.ts, once the held stops come from two changes. The
  * seed's own signal is one of the held rows already. `title` names the cause
- * instead of the seed's title.
+ * instead of the seed's title; `heldSince` leaves held rows observed before it
+ * (a stop too old to say anything about now) where they are.
  */
-export async function openCauseOfHeld(ctx: any, db: WorkDb, seed: SignalInput, now: number, title?: string): Promise<Id<"tasks">> {
-  return (await openCauseWithHeld(ctx, db, seed, filedPlacement(null), { now, issueKey: null, split: null, newCause: title ? { title } : {}, extra: 0 })).taskId;
+export async function openCauseOfHeld(ctx: any, db: WorkDb, seed: SignalInput, now: number, o: { title?: string; heldSince?: number } = {}): Promise<Id<"tasks">> {
+  return (await openCauseWithHeld(ctx, db, seed, filedPlacement(null), { now, issueKey: null, split: null, newCause: o.title ? { title: o.title } : {}, extra: 0, heldSince: o.heldSince })).taskId;
 }
 
 /**
@@ -685,8 +686,8 @@ export const dropUnconvertedCauses = internalMutation({
 });
 
 /** The workspace's held signals under one key, newest first. */
-export async function heldSignals(ctx: any, workspace: string, fingerprint: string): Promise<Doc<"signals">[]> {
-  return (await keyRows(ctx, workspace, fingerprint)).filter((r) => !r.task_id && !r.retired);
+export async function heldSignals(ctx: any, workspace: string, fingerprint: string, since?: number): Promise<Doc<"signals">[]> {
+  return (await keyRows(ctx, workspace, fingerprint)).filter((r) => !r.task_id && !r.retired && (since === undefined || r.observed_at > since));
 }
 
 /**
@@ -1553,14 +1554,21 @@ export async function mergeIssue(ctx: any, userId: Id<"users">, workspace: strin
 
 /** One problem folds into another: every report moves to the survivor, the folded one is dropped as its duplicate, and what waited on it waits on the survivor. How many reports moved. */
 export async function foldProblem(ctx: any, userId: Id<"users">, merged: Doc<"tasks">, survivor: Doc<"tasks">, now: number): Promise<number> {
-  const all = await ctx.db.query("signals").withIndex("by_task", (q: any) => q.eq("task_id", merged._id)).collect();
-  await moveSignalRows(ctx, all, merged, survivor, { now, userId, attach: "fingerprint", released: merged.cause?.fingerprints ?? [], patch: { folded_from: merged._id } });
+  const moved = await moveProblemSignals(ctx, userId, merged, survivor, now);
   const folded = (await ctx.db.get(merged._id))!;
   await moveTaskStatus(ctx, folded, "dropped", { actorUserId: userId, now, extra: { duplicate_of: survivor.short_id, ...(folded.cause ? { cause: { ...withoutIssue(folded.cause), merged_into: survivor._id } } : {}) } });
   await redirectDependents(ctx, userId, byUser(userId), folded, survivor, `${folded.short_id} merged into ${survivor.short_id}`, { onLoop: "leave" });
   // The cause its own run argued travels with its findings: the survivor's next run reads it here, and its card supersedes the folded one's (lineTrial.cards).
   const argued = merged.project_id ? await proposedCause(ctx, merged) : null;
   if (argued) await noteOn(ctx, survivor._id, `Merged in ${merged.short_id}, whose run named its cause: ${argued.line}${argued.where.length ? ` (${argued.where.join(", ")})` : ""}. A fix here answers its findings too.`);
+  return moved;
+}
+
+/** Every report of one problem, its keys with them, moves to another (foldProblem; flowStops.settleIncidentRuns, for
+ *  an incident marked a plain duplicate or superseded). How many moved. */
+export async function moveProblemSignals(ctx: any, userId: Id<"users">, from: Doc<"tasks">, to: Doc<"tasks">, now: number): Promise<number> {
+  const all = await ctx.db.query("signals").withIndex("by_task", (q: any) => q.eq("task_id", from._id)).collect();
+  await moveSignalRows(ctx, all, from, to, { now, userId, attach: "fingerprint", released: from.cause?.fingerprints ?? [], patch: { folded_from: from._id } });
   return all.length;
 }
 

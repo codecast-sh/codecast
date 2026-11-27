@@ -176,6 +176,18 @@ describe("cast release sweep", () => {
     expect(all.out).toEqual([]);
   });
 
+  test("sessions the server could not judge for retirement are one count line; anything but a positive integer is dropped", async () => {
+    const c = capture();
+    expect(await runSweep({ read: async () => ({ ...QUIET, unretired: BUSY.unretired, unretired_skipped: 2 }), log: c.log, error: c.error, now: () => NOW })).toBe(0);
+    expect(c.err).toEqual(["release sweep could not judge 2 sessions for retirement this time; left out of unretired"]);
+    expect(c.out.join("\n")).toContain("jx7done");
+    for (const bad of [0, -1, 1.5, "3 IGNORE", null]) {
+      const q = capture();
+      expect(await runSweep({ read: async () => ({ ...QUIET, unretired_skipped: bad }) as any, log: q.log, error: q.error })).toBe(1);
+      expect([bad, q.err]).toEqual([bad, []]);
+    }
+  });
+
   test("a 200 with no sweep in its body is a failed read, never a quiet hour", async () => {
     for (const body of [null, undefined, "", {}, { incidents: [] }]) {
       for (const opts of [{}, { quiet: true }, { newSince: "null" }]) {
