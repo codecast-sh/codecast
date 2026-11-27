@@ -48,6 +48,8 @@ test("Turn on dictation / Turn off dictation follows the setting and flips it", 
   expect(writes).toEqual([true]);
   expect(closed).toBe(1);
   expect(row().textContent).toBe("Turn off dictation");
+  // The plain mic in both states: the struck one means a failed start.
+  expect(row().querySelector("svg")!.getAttribute("class")).toContain("lucide-mic ");
   await act(async () => { row().click(); });
   expect(writes).toEqual([true, false]);
   expect(row().textContent).toBe("Turn on dictation");

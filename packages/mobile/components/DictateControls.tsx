@@ -8,15 +8,21 @@
 //   struck-through mic (tinted where there is colour); a tap says it again,
 //   and can retry.
 //
+// While the microphone is listening a small dot fades in and out left of ✕,
+// so a box already full of words still says the mic is on (still under
+// Reduce Motion; not shown while starting or finishing).
+//
 // Every target is 44pt and none overlaps another, send's included: the row is
-// 80pt wide in every state (blocked included) and ends in the gap before send, whose left slop
-// beside it is 0 (DICTATE_SEND_SLOP). Idle: mic [-8,36], chevron [36,80].
-// Recording: ✕ [-8,36], ✓ [36,80]. Send's own target then starts at 80.
+// 90pt wide in every state (blocked included) and ends in the gap before send, whose left slop
+// beside it is 0 (DICTATE_SEND_SLOP). Idle: mic [2,46], chevron [46,90].
+// Recording: the dot's slot [0,10] (no target; ✕ reaches over it),
+// ✕ [2,46], ✓ [46,90]. Send's own target then starts at 90.
 //
 // ✕ and ✓ never outweigh send: beside a filled send (the session and chat
 // composers) they are quiet circles like attach; beside a bare send glyph
 // (the task comment box) they are bare glyphs too (`look="bare"`).
-import { StyleSheet, TouchableOpacity, View as RNView, ActivityIndicator } from 'react-native';
+import { useEffect, useRef } from 'react';
+import { AccessibilityInfo, Animated, StyleSheet, TouchableOpacity, View as RNView, ActivityIndicator } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
 import { DICTATION_LANGUAGES } from '@codecast/shared/contracts/dictation';
 import { MOBILE_SESSION_STYLE as S } from '@codecast/shared/render/mobileSessionStyle';
@@ -27,8 +33,8 @@ import { explainDictationFailure, type PhoneDictation } from '@/lib/dictation';
 import { setDictationLanguage, useDictationLanguage } from '@/lib/dictationLanguage';
 
 // 32pt buttons like attach and send, with hitSlop to a 44pt target. The first
-// button reaches 8pt left (a neighbour there keeps 8pt clear: the suggestion
-// chip's margin, the task box's gap) and 4pt right.
+// button sits 10pt into the row (the live dot's slot) and reaches 8pt left of
+// itself and 4pt right.
 const FIRST_SLOP = { top: 6, bottom: 6, left: 8, right: 4 };
 const FINISH_SLOP = { top: 6, bottom: 6, left: 4, right: 8 };
 /** The send button's hitSlop beside these controls: nothing to the left. */
@@ -46,6 +52,9 @@ export function DictateControls({ dictation, look = 'quiet' }: { dictation: Phon
     const finishing = state.phase === 'finishing' && !dictation.sendWaiting;
     return (
       <RNView style={[styles.row, styles.recording]}>
+        <RNView style={styles.liveSlot} pointerEvents="none">
+          {state.phase === 'listening' && <LiveDot color={Theme.red} />}
+        </RNView>
         <TouchableOpacity
           style={[look === 'bare' ? styles.bare : styles.quiet, styles.cancel]}
           onPress={dictation.cancel}
@@ -130,8 +139,47 @@ export function DictateControls({ dictation, look = 'quiet' }: { dictation: Phon
   );
 }
 
+/** The microphone is on: a dot that slowly fades in and out, still when the
+ *  person asked iOS to reduce motion. A shape, so it reads without colour. */
+function LiveDot({ color }: { color: string }) {
+  const opacity = useRef(new Animated.Value(1)).current;
+  useEffect(() => {
+    let live = true;
+    let pulse: Animated.CompositeAnimation | null = null;
+    const apply = (reduce: boolean) => {
+      if (!live) return;
+      pulse?.stop();
+      pulse = null;
+      opacity.setValue(1);
+      if (reduce) return;
+      pulse = Animated.loop(
+        Animated.sequence([
+          Animated.timing(opacity, { toValue: 0.25, duration: 900, useNativeDriver: true }),
+          Animated.timing(opacity, { toValue: 1, duration: 900, useNativeDriver: true }),
+        ]),
+      );
+      pulse.start();
+    };
+    AccessibilityInfo.isReduceMotionEnabled().then(apply, () => apply(false));
+    const sub = AccessibilityInfo.addEventListener('reduceMotionChanged', apply);
+    return () => {
+      live = false;
+      pulse?.stop();
+      sub.remove();
+    };
+  }, [opacity]);
+  return (
+    <Animated.View
+      style={[styles.liveDot, { backgroundColor: color, opacity }]}
+      accessible
+      accessibilityRole="image"
+      accessibilityLabel="Microphone on"
+    />
+  );
+}
+
 const styles = themedStyles((Theme) => StyleSheet.create({
-  // The same 80pt in every state, so nothing beside it moves.
+  // The same 90pt in every state, so nothing beside it moves.
   row: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -143,6 +191,18 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   mic: {
     ...S.imageButton,
     borderRadius: 16,
+    marginLeft: 10,
+  },
+  // Recording: the live dot's 10pt, matching the idle mic's margin.
+  liveSlot: {
+    width: 10,
+    height: 32,
+    justifyContent: 'center',
+  },
+  liveDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
   },
   // Blocked: both dimmed, both still say why on a tap.
   dim: {
