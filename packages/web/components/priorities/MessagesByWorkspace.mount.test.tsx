@@ -74,7 +74,7 @@ test("one row per workspace with messages, busiest first, each day stacked 1–3
     expect([...new Set(asked.filter((a) => a.startsWith("priorities:")))].sort()).toEqual([
       `priorities:history team:${BUSY}`, `priorities:history team:${QUIET}`, `priorities:history team:${SILENT}`, `priorities:history user:${VIEWER}`,
     ].sort());
-    expect(asked).toContain("priorityRanks:mine");
+    // Ranks come from the store; the sync host feeds them (DashboardLayout HostFeeders, useSyncPriorityRanks).
     expect(rows.map((r) => r.querySelector("[data-workspace-total]")!.textContent)).toEqual(["12", "1"]);
     const busyDays = [...rows[0].querySelectorAll("[data-day]")];
     expect(busyDays).toHaveLength(3);
