@@ -8,7 +8,7 @@ import { expect, setDefaultTimeout, test } from "bun:test";
 import { convexTest } from "convex-test";
 import schema from "./schema";
 import { allModules } from "./testModules.testkit";
-import { TEAMMATE_ALL_CAP, TEAMMATE_LINKED, TEAMMATE_PRIORITIES_CAP, TEAMMATE_TOTAL_CAP, listFor, showFor } from "./priorityRead";
+import { OWN_LINKED, TEAMMATE_ALL_CAP, TEAMMATE_LINKED, TEAMMATE_PRIORITIES_CAP, TEAMMATE_TOTAL_CAP, listFor, showFor } from "./priorityRead";
 import { sessionPriorityReader } from "./lib/sessionPriority";
 import type { Id } from "./_generated/dataModel";
 
@@ -232,7 +232,7 @@ async function dense(mates: number, per: number, sessions: number, teamNames = [
     let n = 0;
     let seed = 7;
     const rnd = () => (seed = (seed * 48271) % 2147483647) / 2147483647;
-    const convs: Id<"conversations">[] = [];
+    const convs: Array<{ id: Id<"conversations">; rank: number }> = [];
     for (let m = 0; m < mates; m++) {
       const mate = await ctx.db.insert("users", { name: `Mate ${m}` });
       for (const team of teams) {
@@ -248,7 +248,7 @@ async function dense(mates: number, per: number, sessions: number, teamNames = [
               user_id: mate, team_id: team, agent_type: "claude_code", session_id: sid, short_id: sid, title: sid,
               started_at: NOW, updated_at: NOW, message_count: 1, is_private: false, team_visibility: "full", status: "active", priority_id: p,
             });
-            if (s === 0) convs.push(c);
+            if (s === 0) convs.push({ id: c, rank });
           }
         }
       }
@@ -275,20 +275,107 @@ for (const [mates, per, sessions, teams] of [[8, 30, 10, 2], [4, 60, 10, 2], [16
   });
 }
 
-test("a dense Deploys board numbers each session's priority by walking its group only down to it", async () => {
+/** The documents a Deploys board reads naming the priorities of the sessions `on` picks, in one team. */
+async function board(on: (rank: number) => boolean) {
   const { t, bea, convs } = await dense(8, 30, 10);
-  const { docs, ranks } = await t.run(async (ctx: any) => {
+  return t.run(async (ctx: any) => {
+    const team = (await ctx.db.get(convs[0].id)).team_id;
+    const picked = [];
+    for (const c of convs) {
+      const conv = await ctx.db.get(c.id);
+      if (String(conv.team_id) === String(team) && on(c.rank)) picked.push({ conv, rank: c.rank });
+    }
     const counted = counting(ctx);
-    const team = (await ctx.db.get(convs[0])).team_id;
     const priorityOf = await sessionPriorityReader(counted.ctx, bea, team);
     const ranks: Array<number | null> = [];
-    for (const id of convs) {
-      const c = await ctx.db.get(id);
-      if (String(c.team_id) === String(team)) ranks.push((await priorityOf(c))?.rank ?? null);
-    }
-    return { docs: counted.docs(), ranks };
+    for (const { conv } of picked) ranks.push((await priorityOf(conv))?.rank ?? null);
+    return { docs: counted.docs(), ranks, wanted: picked.map((p) => p.rank) };
   });
-  console.log(`dense deploys board: ${docs} documents for ${ranks.length} sessions`);
-  expect(docs).toBeLessThan(DENSE_BUDGET);
-  expect(ranks.every((r) => r != null)).toBe(true);
+}
+
+test("a dense Deploys board numbers each session's priority by walking its group only down to it", async () => {
+  // Eight teammates' groups of thirty: the board holds each one's #3, or each one's #30.
+  const shallow = await board((rank) => rank === 3);
+  const deep = await board((rank) => rank === 30);
+  console.log(`dense deploys board: ${shallow.docs} documents for each teammate's #3, ${deep.docs} for each one's #30`);
+  expect(shallow.ranks).toEqual(shallow.wanted);
+  expect(deep.ranks).toEqual(deep.wanted);
+  // Three priorities judged per group, not thirty: the walk stops at the one it numbers (each group's own read of thirty is the same either way).
+  expect(shallow.docs * 3).toBeLessThan(deep.docs);
+  expect(deep.docs).toBeLessThan(DENSE_BUDGET);
+});
+
+/**
+ * Bea has `own` active priorities in each of `teams` team workspaces, and
+ * three teammates twenty each, all heavy (four milestones naming a task with
+ * two sessions, five mapped sessions): full links read each one's tasks and
+ * their sessions.
+ */
+async function ownHeavy(teams: number, own: number) {
+  const t = convexTest(schema, allModules);
+  const bea = await t.run(async (ctx: any) => {
+    const bea = await ctx.db.insert("users", { name: "Bea" });
+    let n = 0;
+    const conv = (owner: Id<"users">, team: Id<"teams">, fields: Record<string, unknown> = {}) => {
+      const sid = `jx7c${n++}`;
+      return ctx.db.insert("conversations", {
+        user_id: owner, team_id: team, agent_type: "claude_code", session_id: sid, short_id: sid, title: sid,
+        started_at: NOW, updated_at: NOW, message_count: 1, is_private: false, team_visibility: "full", status: "active", ...fields,
+      });
+    };
+    const heavy = async (owner: Id<"users">, team: Id<"teams">, rank: number) => {
+      const ws = `team:${team}`;
+      const steps = [];
+      for (let s = 1; s <= 4; s++) {
+        const short_id = `ct-${n++}`;
+        await ctx.db.insert("tasks", { user_id: owner, team_id: team, workspace: ws, short_id, title: short_id, status: "open", conversation_ids: [await conv(owner, team), await conv(owner, team)], created_at: NOW, updated_at: NOW });
+        steps.push({ key: `s${s}`, title: `M${s}`, tier: "critical", tier_set_by: "pass", refs: [{ kind: "task", id: short_id }], done: false });
+      }
+      const p = await ctx.db.insert("priorities", {
+        user_id: owner, workspace: ws, short_id: `pri-${n++}`, title: "p", summary: "", status: "active", ai_rank: rank, steps,
+        first_seen_at: NOW, last_active_at: NOW - rank, pass_at: NOW, created_at: NOW, updated_at: NOW,
+      });
+      for (let m = 0; m < 5; m++) await conv(owner, team, { priority_id: p, priority_step_key: `s${(m % 4) + 1}` });
+    };
+    const mates: Id<"users">[] = [];
+    for (let m = 0; m < 3; m++) mates.push(await ctx.db.insert("users", { name: `Mate ${m}` }));
+    for (let k = 0; k < teams; k++) {
+      const team = await ctx.db.insert("teams", { name: `T${k}`, created_at: NOW, features: { priorities: true } });
+      for (const u of [bea, ...mates]) await ctx.db.insert("team_memberships", { user_id: u, team_id: team, role: "member", joined_at: 1 });
+      for (let rank = 1; rank <= own; rank++) await heavy(bea, team, rank);
+      for (const mate of mates) for (let rank = 1; rank <= 20; rank++) await heavy(mate, team, rank);
+    }
+    return bea;
+  });
+  return t.run(async (ctx: any) => {
+    const counted = counting(ctx);
+    const list = await listFor(counted.ctx, bea, {});
+    return { list, calls: counted.calls(), docs: counted.docs() };
+  });
+}
+
+for (const [teams, own] of [[3, 40], [2, 50]] as const) {
+  test(`the viewer's own heavy priorities (${own} in each of ${teams} workspaces, beside teammates') share one link budget across workspaces`, async () => {
+    const { list, calls, docs } = await ownHeavy(teams, own);
+    console.log(`priority list with ${own} own heavy in ${teams} workspaces: ${calls} db calls, ${docs} documents for ${list.priorities.length} rows`);
+    expect(docs).toBeLessThan(DENSE_BUDGET);
+    const mine = list.priorities.filter((r: any) => r.mine);
+    expect(mine).toHaveLength(teams * own);
+    expect(mine.filter((r: any) => r.links)).toHaveLength(OWN_LINKED);
+    expect(mine.every((r: any) => !r.links !== !r.mapped_links)).toBe(true);
+  });
+}
+
+test("the viewer's own full links go round the workspaces by rank: every workspace's #1, then each #2, and so on", async () => {
+  const { list } = await ownHeavy(3, 40);
+  const mine = list.priorities.filter((r: any) => r.mine);
+  const full = mine.filter((r: any) => r.links);
+  // 40 over 3 workspaces: #1..#13 in each, and one #14.
+  const deepest = Math.ceil(OWN_LINKED / 3);
+  for (const ws of new Set(mine.map((r: any) => r.workspace))) {
+    const ranks = full.filter((r: any) => r.workspace === ws).map((r: any) => r.rank).sort((a: number, b: number) => a - b);
+    expect(ranks.slice(0, deepest - 1)).toEqual(Array.from({ length: deepest - 1 }, (_, i) => i + 1));
+  }
+  expect(Math.max(...full.map((r: any) => r.rank))).toBe(deepest);
+  expect(full.filter((r: any) => r.rank === deepest)).toHaveLength(OWN_LINKED - 3 * (deepest - 1));
 });

@@ -17,7 +17,7 @@ import { CODECAST_BASE_URL } from '@codecast/shared/entities';
 import type { PriorityRow, PriorityStep } from '@codecast/shared/contracts/priorities';
 import { sessionRowMark, type MilestoneModel, type PriorityModel, type SessionLine } from '@codecast/web/lib/priorityList';
 import { SESSION_STATUS } from '@codecast/web/lib/sessionStatus';
-import { priorityHref } from '@codecast/web/lib/priorities';
+import { milestoneLinksOf, priorityHref } from '@codecast/web/lib/priorities';
 import { priorityWrites } from '@codecast/web/lib/priorityWrites';
 import { branchesOf, type LinkLookups } from '@codecast/web/hooks/usePriorityModels';
 import { lookup } from '@codecast/web/lib/liveEntities';
@@ -102,8 +102,8 @@ const renamePrompt = (title: string, what: string, save: (next: string) => void)
 });
 
 /** The sessions a milestone (or the whole priority) links, each once, plus the ones the rows count but do not carry. */
-function linkedCount(row: Pick<PriorityRow, 'links'>, stepKey?: string): number {
-  const links = (row.links ?? []).filter((l) => stepKey == null || l.key === stepKey);
+function linkedCount(row: Pick<PriorityRow, 'links' | 'mapped_links'>, stepKey?: string): number {
+  const links = milestoneLinksOf(row).filter((l) => stepKey == null || l.key === stepKey);
   return new Set(links.flatMap((l) => l.sessions.map((s) => s.conversation_id))).size + links.reduce((n, l) => n + l.sessions_more, 0);
 }
 

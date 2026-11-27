@@ -244,7 +244,9 @@ export function paintMerge(s: PaintState, from: PriorityRow, into: PriorityRow):
   const remap = new Map(from.steps.map((st) => [st.key, `s${++next}`]));
   into.steps = [...into.steps, ...from.steps.map((st) => ({ ...st, key: remap.get(st.key)! }))];
   into.counts = criticalCounts(into.steps);
-  if (into.links) into.links = [...into.links, ...linksOf(s, from).map((l) => ({ ...l, key: remap.get(l.key) ?? l.key }))];
+  const moved = () => linksOf(s, from).map((l) => ({ ...l, key: remap.get(l.key) ?? l.key }));
+  if (into.links) into.links = [...into.links, ...moved()];
+  else if (into.mapped_links) into.mapped_links = [...into.mapped_links, ...moved()];
   into.sessions = [...from.sessions.map((x) => ({ ...x, step_key: x.step_key ? remap.get(x.step_key) ?? null : null })), ...into.sessions];
   into.session_count += from.session_count;
   for (const conv of Object.values(s.sessions ?? {})) {
@@ -400,7 +402,7 @@ export function pastBadge(row: Pick<PriorityRow, "status" | "done_at" | "last_ac
   return "Set aside";
 }
 
-/** Its milestones' links as a list row carries them: full `links`, else a teammate's `mapped_links`. */
+/** Its milestones' links as a list row carries them: full `links`, else `mapped_links` (a row past the list's link budget, the viewer's own too). */
 export function milestoneLinksOf(row: Pick<PriorityRow, "links" | "mapped_links">): PriorityMilestoneLinks[] {
   return row.links ?? row.mapped_links ?? [];
 }

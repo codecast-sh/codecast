@@ -31,6 +31,8 @@ const LIST_COUNT_CAP = 50;
  * fails a query past 4,096 reads: per-workspace caps let a list hold hundreds.
  */
 export const TEAMMATE_LINKED = 25;
+/** The most of the viewer's own active priorities one list gives full links, across every workspace by rank (each workspace's #1, then each #2, and so on); the rest are linked like teammates' past TEAMMATE_LINKED. */
+export const OWN_LINKED = 40;
 /** The most teammates' priorities one list judges in one workspace, the most recently active first (with `all` or a status, TEAMMATE_ALL_CAP across every workspace); past that it says `teammates_truncated`. */
 export const TEAMMATE_PRIORITIES_CAP = 60;
 /**
@@ -493,18 +495,16 @@ export async function listFor(ctx: Ctx, viewer: Id<"users">, args: { workspace?:
     || STATUS_ORDER[a.status] - STATUS_ORDER[b.status]
     || at(a) - at(b)
     || b.last_active_at - a.last_active_at);
-  const fullLinks = new Set(rows
-    .filter((p) => !isOwner(viewer, p) && p.status === "active")
-    .sort((a, b) => at(a) - at(b) || a.workspace.localeCompare(b.workspace) || String(a.user_id).localeCompare(String(b.user_id)))
-    .slice(0, TEAMMATE_LINKED)
-    .map((p) => String(p._id)));
+  const byRank = (a: Priority, b: Priority) => at(a) - at(b) || a.workspace.localeCompare(b.workspace) || String(a.user_id).localeCompare(String(b.user_id));
+  const linkedOf = (own: boolean, most: number) => rows.filter((p) => isOwner(viewer, p) === own && p.status === "active").sort(byRank).slice(0, most).map((p) => String(p._id));
+  const fullLinks = new Set([...linkedOf(true, OWN_LINKED), ...linkedOf(false, TEAMMATE_LINKED)]);
   const out: PriorityRow[] = [];
   const reads = linkReads(ctx, r);
   const now = Date.now();
   for (const p of rows) {
     const steps = await r.stepsFor(p);
-    // Links on every active priority, a teammate's too: the rows whose milestones show a state. Full `links` for the viewer's own and TEAMMATE_LINKED teammates' (the read cap); the rest `mapped_links`, so a client never takes them for full ones.
-    const full = isOwner(viewer, p) || fullLinks.has(String(p._id));
+    // Links on every active priority, a teammate's too: the rows whose milestones show a state. Full `links` for OWN_LINKED of the viewer's own and TEAMMATE_LINKED teammates' (the read cap); the rest `mapped_links`, so a client never takes them for full ones.
+    const full = fullLinks.has(String(p._id));
     const linked = p.status === "active" ? await linksFor(r, reads, p, steps, now, full) : null;
     const row = rowFor(viewer, p, ownerOf(people, p), positions.get(String(p._id)) ?? null, steps, await mappedSessions(r, p, listRead(viewer, p)), await correctionPending(ctx, viewer, p), LIST_SESSIONS);
     out.push(!linked ? row : full ? { ...row, ...linked } : { ...row, mapped_links: linked.links });

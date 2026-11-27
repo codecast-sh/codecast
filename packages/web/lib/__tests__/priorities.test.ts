@@ -145,6 +145,15 @@ describe("a session's move, \"not this\" and a merge relink its inbox row at onc
     expect(w.s.sessions["c-one"]).toMatchObject({ priority_id: w.one._id, priority_step_key: "s1" });
     expect(rankOf(w, "c-two")?.rank).toBe(1);
   });
+
+  test("a merge into one of the viewer's own rows past the list's link budget (mapped links only) carries the merged milestones' links too", () => {
+    const w = world();
+    w.one.mapped_links = w.one.links;
+    delete w.one.links;
+    paintMerge(w.s as any, w.two, w.one);
+    expect(w.one.links).toBeUndefined();
+    expect(w.one.mapped_links!.map((l) => l.key)).toEqual(["s1", "s2", "s3"]);
+  });
 });
 
 describe("the store actions' paints", () => {
