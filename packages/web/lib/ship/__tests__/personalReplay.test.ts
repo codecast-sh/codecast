@@ -207,9 +207,10 @@ describe("the personal journey, as its reports arrive", () => {
     }
     expect(new Set(offered.filter(([, bar]) => bar).map(([id]) => id))).toEqual(new Set(["unknown", "unknown_cut", "cutlanded"]));
     expect(resumeWords({ at: "land", label: "Land" })).toBe("Resume at Land");
-    // A team's flow never offers it, whatever its reason says.
+    // A team's flow offers it too when its stop names it (the change flow's CI never reported, ct-102369): the stop's own
+    // words are what the session heard and `cast workflow show` prints.
     const cut = end(replay("r8f: a Land its station cuts off during the catch-up says the change landed, and resuming it finishes and deploys (run 1)"));
-    expect((journeyOf({ ...personal, own_results: false, source: null }, cut as any).now as any).resume).toBeUndefined();
+    expect((journeyOf({ ...personal, own_results: false, source: null }, cut as any).now as any).resume).toEqual({ at: "land", label: "Land" });
   });
 
   test("a refused resume says the server's own words, never the error's envelope", () => {

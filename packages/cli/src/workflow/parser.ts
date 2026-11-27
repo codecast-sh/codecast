@@ -271,13 +271,14 @@ const ID_FIELDS = ["asker", "answerer", "retry_target"];
  * A segment's params (`params="except above=50"`): `$except` in its stations
  * and in its edges' conditions reads the composing node's attribute, else the
  * default written after `=`, else nothing. A value lands in a script as
- * written, so it is held to words and names.
+ * written, so it is held to words and names, or one run variable
+ * (`$review_question`), which the run expands as it expands any other.
  */
 function paramSubstitution(spec: Attr | undefined, given: Record<string, Attr>, who: string): (text: string) => string {
   const values = String(spec ?? "").split(/[\s,]+/).filter(Boolean).map((param) => {
     const [name, ...rest] = param.split("=");
     const value = given[name] === undefined ? rest.join("=") : String(given[name]);
-    if (!/^[\w .,:@/+-]*$/.test(value)) throw new Error(`${who} ${name}="${value}" may hold only words, names and paths`);
+    if (!/^[\w .,:@/+-]*$/.test(value) && !/^\$[A-Za-z_][\w.]*$/.test(value)) throw new Error(`${who} ${name}="${value}" may hold only words, names and paths, or one $variable`);
     return { ref: new RegExp(`\\$${name}(?![\\w.])`, "g"), value };
   });
   return (text) => values.reduce((t, { ref, value }) => t.replace(ref, value), text);

@@ -27,7 +27,7 @@ import {
   LANDING_STATIONS, behindBase, cardName, choiceWords, runOutcome, runPath, shortDay,
   type OutcomeTone, type ReportPhase, type ReportRun, type ReportStep, type ReportTask, type StepState,
 } from '@codecast/web/lib/line/runReport';
-import { landingOf, ownGraphOf } from '@codecast/web/lib/line/personalReport';
+import { landingOf } from '@codecast/web/lib/line/personalReport';
 import { resumeOf } from '@codecast/web/lib/ship/resumeAt';
 import { journeyOf, type TargetState } from '@codecast/web/lib/ship/journey';
 import { changeAction, changeHeadline, changeLinks, changePr, mergeIsOff, shipsChange, type ChangeAction, type ChangeLink } from '@codecast/web/lib/ship/changePage';
@@ -188,8 +188,9 @@ export default function RunScreen() {
   const outcome = runOutcome(run, task, now, false, { graph: workflow as any, ask });
   // A personal Ship lands, maybe twice: its latest landing, as its journey shows it.
   const landing = landingOf(run, workflow as any);
-  // A personal Ship's stop that says to resume the run (Landing unknown, Land cut off) offers that press, as its card does.
-  const resumeAt = ownGraphOf(workflow as any) ? resumeOf(run, (workflow as any)?.nodes) : null;
+  // A stop that says to resume the run (a personal Ship's Landing unknown, a change run's CI never reported) offers that
+  // press, as its card and the web's run page do.
+  const resumeAt = resumeOf(run, (workflow as any)?.nodes);
   // The session the run waits on asks a person: whom it waits on and what, as the run's card says it.
   const asking = live && run.waiting_on_session?.blocked && ask?.open !== false
     ? { head: ask?.mine ? 'Waiting on you' : 'Waiting for a person', body: [ask?.question, run.waiting_on_session.note].filter(Boolean).join('\n') }

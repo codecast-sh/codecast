@@ -139,6 +139,19 @@ function fail(message: string): never {
   process.exit(1);
 }
 
+/**
+ * How a failed run goes on, as its stop says it, the same restart the session heard and the run page offers: the
+ * resume its stop names (a change that is ready, one station to go again), else for a run that ships a change a fresh
+ * run once the change is fixed (Ship again), else a resume at the station that fits.
+ */
+export function restartHint(run: { fail_reason?: string | null; task_short_id?: string | null; workflow_slug?: string | null; takes_change?: boolean | null }): string {
+  const named = /`(cast workflow resume [^`]+)`/.exec(run.fail_reason ?? "")?.[1];
+  if (named) return `resume it: ${named}`;
+  const task = run.task_short_id ?? "<ct-N>";
+  if (run.takes_change && run.workflow_slug) return `once the change is fixed, run it again: cast flow run ${run.workflow_slug} --task ${task}`;
+  return `try it again: cast workflow resume ${task} --at <station>`;
+}
+
 /** `cast workflow show <run>`. */
 export async function showRun(deps: PublishDeps, ref: string, options: { sessions?: boolean; json?: boolean }): Promise<void> {
   const run = await runByRef(deps, ref, { sessions: options.sessions }).catch((e: Error) => fail(e.message));
@@ -151,7 +164,7 @@ export async function showRun(deps: PublishDeps, ref: string, options: { session
   const got = await apiPost(deps, "/cli/workflow-runs/get", { run_id: run._id }, { read: true, exitOnError: false }).catch(() => null);
   const labels = new Map<string, string>((got?.workflow?.nodes ?? []).map((n: { id: string; label?: string }) => [n.id, n.label ?? n.id]));
   console.log(formatRunDetail(run, labels));
-  if (run.status === "failed") console.log(fmt.muted(`\n  try it again: cast workflow resume ${run.task_short_id ?? "<ct-N>"} --at <station>`));
+  if (run.status === "failed") console.log(fmt.muted(`\n  ${restartHint(run)}`));
   else if (run.status === "running" || run.status === "paused" || run.status === "pending") console.log(fmt.muted(`\n  stop it: cast workflow cancel ${ref}`));
 }
 

@@ -192,11 +192,14 @@ export function runEndMessage(graph: WorkflowGraph, opts: { taskId?: string; end
 
 /** Why a run stops when a stage has sent the change back to its session as often as the flow allows. */
 export function sentBackWords(stage: string, times: number): string {
-  return `${stage} sent the change back ${times} times and it still does not pass.`;
+  return `${stage} sent the change back ${times} times, the most one run allows, and the last round still found something to fix.`;
 }
 
-/** A gate's answer, said to the session whose change it was about. */
+/** A gate's answer, said to the session whose change it was about. A note that only repeats the choice says nothing. */
 export function gateAnswerMessage(gateLabel: string, choice: string, note: string | undefined): string {
   const words = choice.replace(/^\[.\]\s*/, "").replace(/\s*::.*$/, "").trim();
-  return `${gateLabel}: ${words}.${note ? ` Their note: ${note}` : ""} The run goes on; this session will hear how it ends.`;
+  const said = (note ?? "").trim();
+  const plain = (s: string) => s.replace(/[.!\s]+$/, "").toLowerCase();
+  const own = said && plain(said) !== plain(words) ? ` Their note: ${/[.!?]$/.test(said) ? said : `${said}.`}` : "";
+  return `${gateLabel}: ${words}.${own} The run goes on; this session will hear how it ends.`;
 }

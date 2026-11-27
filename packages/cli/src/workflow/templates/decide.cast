@@ -1,10 +1,11 @@
 // A segment (flows.md FL2): one question to the person who answers for the
 // change, on the decision rail every gate uses (the-line.md L4).
 digraph decide {
-  graph [kind="segment", label="Decide", description="The person who answers for the change says ship, revise or drop", takes="task"]
+  // `question`: what the card asks, when the composing flow knows why it asks (the change flow: it edits CI); else the reviewer's.
+  graph [kind="segment", label="Decide", description="The person who answers for the change says ship, revise or drop", takes="task", params="question=$review_question"]
   start [shape=Mdiamond]
   decide [label="Decide", shape=hexagon, category=review,
-    prompt="$review_question",
+    prompt="$question",
     doc="$review_body"]
   ship    [shape=Msquare, label="Approved"]
   revise  [shape=Msquare, label="Revise", stop="Sent back for revision. $human_message"]

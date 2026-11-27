@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { fetchRuns, formatRunDetail, runByRef, slimRun, type RunListRow } from "./runsCli.js";
+import { fetchRuns, formatRunDetail, restartHint, runByRef, slimRun, type RunListRow } from "./runsCli.js";
 
 const SITE = "https://x.test";
 const deps = { getCliEndpoint: () => ({ siteUrl: SITE, apiToken: "t" }), detectCurrentSessionId: () => null } as any;
@@ -77,4 +77,12 @@ test("the detail names each station with its label, time, outcome and session, a
   expect(out).toMatch(/triage \(Triage\)\s+completed, 2m, outcome success, session jx7a/);
   expect(out).toMatch(/build \(Build\)\s+running, 5m so far, 2 visits <$/m);
   expect(formatRunDetail({ ...run, status: "failed", fail_reason: "verify exited 1" }, new Map(), now)).toContain("failed: verify exited 1");
+});
+
+// ct-102369: the session, `cast workflow show` and the run page each said a different restart for the same stop.
+test("a failed run's restart is the one its stop names, else a fresh run of a change, else a resume", () => {
+  const noci = "Stopped: CI never reported on the pushed head, also after running it again. The change is not at fault: resume this run at CI (`cast workflow resume ct-9 --at ci`) once GitHub runs CI on the pull request.";
+  expect(restartHint({ fail_reason: noci, task_short_id: "ct-9", workflow_slug: "change", takes_change: true })).toBe("resume it: cast workflow resume ct-9 --at ci");
+  expect(restartHint({ fail_reason: "Stopped: The reviewer rejected the change: x", task_short_id: "ct-9", workflow_slug: "change", takes_change: true })).toBe("once the change is fixed, run it again: cast flow run change --task ct-9");
+  expect(restartHint({ fail_reason: "verify exited 1", task_short_id: "ct-9", workflow_slug: "line" })).toBe("try it again: cast workflow resume ct-9 --at <station>");
 });

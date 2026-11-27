@@ -37,6 +37,7 @@ import { defaultExec, landedSha, mergePullRequest, sleepSync, undoneChanges, typ
 import { deploysFor, runShell, shipKeyRefusal, shipSpec, type Log } from "../land/shipCheckout.js";
 import type { ShipDeployStep } from "../workspace/types.js";
 import { keepEnds } from "./keepEnds";
+import { CI_APPROVAL_FILE } from "./changeVerdicts";
 import { holdRepoLease, leaseHolder, type RepoLease } from "../land/repoLease.js";
 import { acquiredTree, mainCheckout, noteLanded, noteRestoring, sweepScratchTrees, takeMergeLock, trackStep, type ScratchTree } from "./mergeScratch";
 import { chainBetween, recordRebase, verifyRebaseChain, type RebaseLink, type RegeneratedRebase } from "./rebaseRecord";
@@ -177,6 +178,10 @@ async function mergeStation(args: MergeStationArgs): Promise<MergeStationResult>
     if (!check?.allowed) return refuse(check?.reason ?? "the server did not allow the merge");
   } catch (err) {
     return refuse(message(err));
+  }
+  // The server cleared a CI edit only on a person's Ship: a later round with the same edit asks nobody again.
+  if (ci.ci_changed === true && typeof ci.ci_edit === "string") {
+    try { fs.writeFileSync(path.join(runDir, CI_APPROVAL_FILE), JSON.stringify({ ci_edit: ci.ci_edit }) + "\n"); } catch {}
   }
 
   // A merge an earlier attempt made whose station ended before it said so: what landed, and its deploys again.

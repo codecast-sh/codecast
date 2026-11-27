@@ -95,7 +95,7 @@ export type JourneyNow =
       landed?: boolean;
       /** The change may be on main (Landing unknown): shipping again could land it twice, so the run is the way on. */
       mayHaveLanded?: boolean;
-      /** The station the stop's reason says to resume the run at (Landing unknown, Land cut off: resumeAt.ts). */
+      /** The station the stop's reason says to resume the run at (Landing unknown, CI never reported: resumeAt.ts). */
       resume?: ResumeAt };
 
 /** `personal`: a personal Ship's run (ownRound.ts), whose bar reads by its own rules. */
@@ -659,7 +659,9 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
     // Once the change is on main, running it again would land nothing: the run is the way on, never Ship again.
     const landedAlready = own && !!view?.landed;
     const landUnknown = own && plan.some((b) => b.role === "land" && view!.station(b.id).state === "unknown");
-    const resume = own ? resumeOf(run, graph.nodes) : null;
+    // Any flow's stop that names its own resume (a personal Ship's Landing unknown; a change run's CI never reported):
+    // that is the way on, the same one the session heard and `cast workflow show` prints.
+    const resume = resumeOf(run, graph.nodes);
     const fix: StopFix = landedAlready && stage?.role !== "deploy" ? (subject ? "session" : "run")
       : stage?.role === "deploy" && deploysItself ? (deliberate || landedAlready ? "run" : "again")
       : stage?.role === "deploy" ? "deploy"

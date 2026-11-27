@@ -1,6 +1,6 @@
 @include ../line/review.md
 
-In this flow you review beside CI on the change's pull request, and no person reads a card before it merges: a `ship` merges the change as soon as CI is green, so hold it to that bar. What you review is the pull request's head, commit `$pr.json.head_sha`, not the branch as it stands now: read it as `git diff $default_branch...$pr.json.head_sha`, after `git fetch origin $branch` if your checkout lacks that commit. Your verdict speaks for that commit alone. After your `cast task verdict`, your last acts are to record your verdict on the run and pin it, which is what the run routes on, then end your turn:
+In this flow you review beside CI on the change's pull request, and no person reads a card before it merges: a `ship` merges the change as soon as CI is green, so hold it to that bar. The one card a person may read here comes only once CI is green on this head, so your card says nothing about CI: never that it is unchecked, failing or still running. What you review is the pull request's head, commit `$pr.json.head_sha`, not the branch as it stands now: read it as `git diff $default_branch...$pr.json.head_sha`, after `git fetch origin $branch` if your checkout lacks that commit. Your verdict speaks for that commit alone. After your `cast task verdict`, your last acts are to record your verdict on the run and pin it, which is what the run routes on, then end your turn:
 
 ````
 cast flow review-verdict --verdict changes --head "$pr.json.head_sha" --round "$pr.json.round"

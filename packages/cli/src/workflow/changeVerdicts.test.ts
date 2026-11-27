@@ -72,7 +72,9 @@ describe("changeVerdicts", () => {
 
   test("CI on another head, with no ci.json, timed out, or with the station's own failure runs again once in the round, then stops; never a brief", () => {
     for (const [ci, why] of [
-      [{ ...GREEN, head_sha: "old" }, "CI judged old, not the pushed head abc"],
+      [{ ...GREEN, head_sha: "old" }, "CI reported on old, not on the pushed head abc"],
+      [{ ...GREEN, green: false, head_sha: null, timed_out: true, failing: [STATION] }, "CI never reported on the pushed head abc: CI did not finish within 60m: test-web still running."],
+      [{ ...GREEN, green: false, timed_out: true, pending: ["test"], not_started: ["test"], failing: [STATION] }, "CI never started on abc: test never started"],
       [undefined, "CI left no ci.json"],
       [{ ...GREEN, green: false, timed_out: true, pending: ["test-web"], failing: [STATION] }, "CI did not finish: test-web still running"],
       [{ ...GREEN, green: false, failing: [STATION] }, "the CI station could not judge: CI did not finish within 60m: test-web still running."],
@@ -107,10 +109,39 @@ describe("changeVerdicts", () => {
   });
 
   test("red CI whose every failure also fails on main waits for main, unless the reviewer asked for changes", () => {
-    const blocked = { ...RED, blocked_by_main: true };
+    const blocked = { ...RED, failing: [], preexisting: [FAILURE], blocked_by_main: true };
     expect(verdicts({ "ci.json": blocked })).toMatchObject({ next: "wait_main", why: "every CI failure also fails on main (1)" });
     expect(verdicts({ "ci.json": blocked }, null).next).toBe("wait_main");
     expect(verdicts({ "ci.json": blocked }, pin({ verdict: "changes", findings: ["x"] })).next).toBe("brief");
+  });
+
+  // ct-102366: main's CI at the tested sha never reached a verdict, so a failure there may be main's.
+  test("failures main's CI never judged are never called the change's: alone they wait for main, beside the change's they are named apart", () => {
+    const unjudged = { ...GREEN, green: false, unjudged: [FAILURE], blocked_by_main: true };
+    expect(verdicts({ "ci.json": unjudged })).toMatchObject({ next: "wait_main", why: "main's CI had no verdict on any of CI's failures (1), so they may be main's" });
+    const both = verdicts({ "ci.json": { ...RED, unjudged: [FAILURE, FAILURE] } });
+    expect(both).toMatchObject({ next: "brief", fix: true, why: "CI is red: 1 failure this change causes, and 2 failures main's CI had no verdict on, so they may be main's" });
+    expect(both.ci_result).toMatchObject({ failing_count: 1, unjudged: [FAILURE, FAILURE] });
+  });
+
+  // ct-102367: a fresh reviewer's nits on a change CI passed must not stop the run.
+  test("only low and nit findings on green CI go back without costing a round; any higher one, or red CI, costs one", () => {
+    const small = verdicts({ "ci.json": GREEN }, pin({ verdict: "changes", findings: ["low a.css:3 a stray margin", "nit a.css:9 spacing"] }));
+    expect(small).toMatchObject({ next: "brief", fix: false, why: "the reviewer asked for small fixes (low or nit; this round costs none of the three): low a.css:3 a stray margin; nit a.css:9 spacing" });
+    expect(verdicts({ "ci.json": GREEN }, pin({ verdict: "changes", findings: ["low a.css:3 x", "medium a.ts:1 y"] }))).toMatchObject({ next: "brief", fix: true });
+    expect(verdicts({ "ci.json": RED }, pin({ verdict: "changes", findings: ["nit a.css:9 spacing"] }))).toMatchObject({ next: "brief", fix: true });
+    expect(verdicts({ "ci.json": GREEN }, pin({ verdict: "changes", findings: [] }))).toMatchObject({ next: "brief", fix: true });
+  });
+
+  // ct-102368: a conflict-only fix after a person approved the CI edit asked them again, four times for one change.
+  test("a CI edit a person let merge in this attempt is not asked again while its CI files are the same", () => {
+    const edited = { ...GREEN, ci_changed: true, ci_edit: "e1" };
+    const approved = (ci: object, proof: object | null) => changeVerdicts(dir({ "pr.json": PR, "ci.json": ci, "ci-approved.json": { ci_edit: "e1" } }), SHIP, null, proof as any);
+    expect(approved(edited, { review: null, ci_shipped: true })).toMatchObject({ next: "merge" });
+    expect(approved({ ...edited, ci_edit: "e2" }, { review: null, ci_shipped: true }).next).toBe("decide");
+    expect(approved(edited, { review: null, ci_shipped: false }).next).toBe("decide");
+    expect(approved(edited, null).next).toBe("decide");
+    expect(approved({ ...edited, ci_edit: null }, { review: null, ci_shipped: true }).next).toBe("decide");
   });
 
   test("a change that edits CI goes to a person when CI is green and the reviewer says ship; a red one goes back or waits like any red", () => {

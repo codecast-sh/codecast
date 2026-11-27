@@ -29,7 +29,12 @@ export type PrRecord = {
 export type StandingReview = { verdict: "ship"; head_sha: string };
 
 /** What the server holds for the run's current attempt (`/cli/workflow-runs/merge-proof`): the review Merge clears on. */
-export type MergeProof = { review: { verdict: string; head_sha: string } | null; rebases?: RebaseLink[] };
+export type MergeProof = {
+  review: { verdict: string; head_sha: string } | null;
+  rebases?: RebaseLink[];
+  /** A person answered Ship on one of the run's own cards in this attempt (what Merge needs for a change to CI). */
+  ci_shipped?: boolean;
+};
 
 /** `new_round`: origin's branch moved by someone other than the run's stations, so the round's review no longer stands. */
 export type PrStationResult = { ok: true; pr: PrRecord } | { ok: false; reason: string; new_round?: true };

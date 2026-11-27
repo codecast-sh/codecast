@@ -18,7 +18,7 @@ async function station(gh: Gh, opts: { deadlineMs?: number; dir?: string; head?:
   if (out.written) expect(JSON.parse(fs.readFileSync(path.join(dir, "ci.json"), "utf-8"))).toEqual(out.result);
   return { ...out, lines };
 }
-const verdict = (r: Partial<CiResult>): CiResult => ({ green: false, head_sha: HEAD, tested_main_sha: null, failing: [], preexisting: [], blocked_by_main: false, ci_changed: false, pending: [], reran: false, timed_out: false, no_ci: false, head_moved: false, observed_head: null, ...r });
+const verdict = (r: Partial<CiResult>): CiResult => ({ green: false, head_sha: HEAD, tested_main_sha: null, failing: [], preexisting: [], unjudged: [], blocked_by_main: false, ci_changed: false, ci_edit: null, pending: [], not_started: [], reran: false, timed_out: false, no_ci: false, head_moved: false, observed_head: null, ...r });
 /** CI red on its first run (each job id one lower), then the rollup given, after the station's rerun. */
 const redAfterRerun = (rollup2: Rollup[], extra: Partial<Parameters<typeof fakeGh>[0]>) =>
   fakeGh({ polls: [{ rollup: rollup2.map((c) => ({ ...c, detailsUrl: c.detailsUrl.replace(/job\/(\d+)/, (_: string, n: string) => `job/${Number(n) - 1}`) })) }, { rollup: rollup2 }], ...extra });
@@ -82,7 +82,7 @@ describe("cast flow ci: green is GitHub's", () => {
 
   test("no run where a workflow should run: waits, then timed out, never green", async () => {
     const { result, summary } = await station(fakeGh({ polls: [{ rollup: [] }] }), { deadlineMs: 10 * 60_000 });
-    expect(result).toEqual(verdict({ timed_out: true, tested_main_sha: BASE_OID, pending: ["CI"], failing: [expect.objectContaining({ job: "ci-station", excerpt: "CI did not finish within 10m: CI never started on aaaaaaa." })] }));
+    expect(result).toEqual(verdict({ timed_out: true, tested_main_sha: BASE_OID, pending: ["CI"], not_started: ["CI"], failing: [expect.objectContaining({ job: "ci-station", excerpt: "CI did not finish within 10m: CI never started on aaaaaaa." })] }));
     expect(summary).toBe("CI timed out on #7 after 10m: CI never started on aaaaaaa");
   });
 
@@ -255,7 +255,45 @@ describe("cast flow ci: splitting a red head (routing only, never green)", () =>
   test("main's run at a tested sha older than any window is fetched by its sha", async () => {
     const gh = redAfterRerun([check("test-cli", "FAILURE", 4)], { logs: { 4: BUN_LOG, 601: BUN_LOG }, ...mainWith([job("test-cli", 601, "failure")]) });
     expect((await station(gh)).result.blocked_by_main).toBe(true);
-    expect(gh.calls).toContain(`run list --repo ${REPO} --workflow CI --commit ${BASE_OID} --limit 20 --json databaseId,headSha,createdAt,status`);
+    expect(gh.calls).toContain(`run list --repo ${REPO} --workflow CI --commit ${BASE_OID} --limit 20 --json databaseId,headSha,createdAt,status,conclusion`);
+  });
+
+  // ct-102366: main's CI at the tested sha was cancelled (or still going), and an earlier run's pass said the change broke a test main had broken since.
+  const cancelledAtTested = { mainAt: { [BASE_OID]: [{ databaseId: 60, headSha: BASE_OID, createdAt: "2026-11-20T15:00:00Z", status: "completed", conclusion: "cancelled" }] }, mainEarlier: [{ databaseId: 59, headSha: OLDER_MAIN, createdAt: "2026-11-20T14:00:00Z", status: "completed" }] };
+  test("main's CI never judged the job at the tested sha and an earlier run passed it: unjudged, never the change's", async () => {
+    const gh = redAfterRerun([check("test-cli", "FAILURE", 4)], { logs: { 4: BUN_LOG }, ...cancelledAtTested, jobs: { 60: [job("test-cli", 600, "cancelled")], 59: [job("test-cli", 590, "success")] } });
+    const { result, summary } = await station(gh);
+    expect(result).toMatchObject({ green: false, blocked_by_main: true, failing: [], preexisting: [] });
+    expect(tests(result.unjudged)).toEqual([["test-cli", BUN_TEST]]);
+    expect(summary).toBe(`CI red on #7, blocked by main: 1 failure main's CI had no verdict on at ${BASE_OID.slice(0, 10)}`);
+  });
+
+  test("main's CI never judged the job at the tested sha: the nearest later run of main holding it judges it", async () => {
+    const later = (conclusion: string) => ({ ...cancelledAtTested, mainLater: [{ databaseId: 62, headSha: NEW_HEAD, createdAt: "2026-11-20T15:20:00Z", status: "completed" }, { databaseId: 61, headSha: MAIN, createdAt: "2026-11-20T15:10:00Z", status: "completed" }], compare: { [`${BASE_OID}...${MAIN}`]: "ahead" }, jobs: { 60: [job("test-cli", 600, "cancelled")], 61: [job("test-cli", 610, conclusion)], 59: [job("test-cli", 590, "success")] } });
+    const onMain = await station(redAfterRerun([check("test-cli", "FAILURE", 4)], { logs: { 4: BUN_LOG, 610: BUN_LOG }, ...later("failure") }));
+    expect(onMain.result).toMatchObject({ blocked_by_main: true, failing: [], unjudged: [] });
+    expect(tests(onMain.result.preexisting)).toEqual([["test-cli", BUN_TEST]]);
+    const ours = await station(redAfterRerun([check("test-cli", "FAILURE", 4)], { logs: { 4: BUN_LOG }, ...later("success") }));
+    expect(ours.result).toMatchObject({ blocked_by_main: false, preexisting: [], unjudged: [] });
+    expect(tests(ours.result.failing)).toEqual([["test-cli", BUN_TEST]]);
+  });
+
+  test("a summary job that fails because a job it needs failed is no failure of its own", async () => {
+    const workflow = "name: CI\non:\n  pull_request:\njobs:\n  test-cli:\n    runs-on: x\n  verify:\n    if: always()\n    needs: [test-cli]\n    runs-on: x\n";
+    const gh = redAfterRerun([check("test-cli", "FAILURE", 4), check("verify", "FAILURE", 6)], { logs: { 4: BUN_LOG, 6: VITE_LOG("check_job test-cli failure") }, workflows: { ".github/workflows/ci.yml": workflow }, ...mainWith([job("test-cli", 601, "success")]) });
+    const { result, summary } = await station(gh);
+    expect(result.failing.map((f) => f.job)).toEqual(["test-cli"]);
+    expect(summary).toBe("CI red on #7: 1 failure in test-cli");
+  });
+
+  test("a change to CI carries a digest of its CI files at the head: the same edit, the same digest", async () => {
+    const pass = { polls: [{ rollup: [check("lint", "SUCCESS", 1)] }], files: [".github/workflows/ci.yml", "src/app.ts"] };
+    const edit = (sha: string) => station(fakeGh({ ...pass, fileShas: [`${sha} modified .github/workflows/ci.yml`, "aaa modified src/app.ts"] }));
+    const [a, b, c] = [await edit("111"), await edit("111"), await edit("222")];
+    expect(a.result).toMatchObject({ green: true, ci_changed: true });
+    expect(a.result.ci_edit).toMatch(/^[0-9a-f]{16}$/);
+    expect(b.result.ci_edit).toBe(a.result.ci_edit);
+    expect(c.result.ci_edit).not.toBe(a.result.ci_edit);
   });
 
   test("one failure main has and one it does not: the change's goes back, nothing is blocked by main", async () => {

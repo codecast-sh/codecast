@@ -131,6 +131,14 @@ describe("B: the head is structure, never a station's free text", () => {
     expect(act(crashed, extending)).toMatchObject({ kind: "again" });
   });
 
+  // ct-102369: CI never reported offered Ship again here, a resume in `cast workflow show`, and a fresh run to the session.
+  test("a stop that names its resume never offers Ship again beside the bar's Resume", () => {
+    const noci = run({ status: "failed", current_node_id: "noci", fail_reason: "Stopped: CI never reported on the pushed head, also after running it again. The change is not at fault: resume this run at CI (`cast workflow resume ct-1 --at ci`) once GitHub runs CI on the pull request. What CI said: x", node_statuses: [...ROUND, verdicts("no_ci", "timed_out", "ship"), st("noci", "failed", 20)] });
+    expect(journeyOf(change, noci, [], null).now).toMatchObject({ kind: "stopped", resume: { at: "ci" } });
+    expect(act(noci)).toEqual({ kind: "session", label: "Open session", href: "/conversation/subj" });
+    expect(act({ ...noci, fail_reason: "runner crashed" })).toMatchObject({ kind: "again" });
+  });
+
   test("an earlier round's failure is not this stop", () => {
     const r = run({ status: "failed", current_node_id: "stopped", fail_reason: "Stopped: x", node_statuses: [...U_ROUND, st("land__changes", "failed", 7, { result_preview: '{"exit": "changes"}' }), st("fix", "completed", 8), st("land__pr", "failed", 10, { result_preview: "push refused" }), st("land__unpushed", "failed", 11, { result_preview: '{"exit": "unpushed"}' }), st("stopped", "failed", 12)] });
     // The run recorded its PR in an earlier round, so its way out is not said as No pull request.

@@ -352,7 +352,8 @@ export function JourneyNowBar({ now, run, now_ms, children, again, personal = fa
           {/* A deliberate stop (fix "run") stops the same way if run again: its words name the step first, done in the session (ct-102100). */}
           {/* A change already on main lands nothing if shipped again: the run is the way on. */}
           {/* A change that may be on main (Landing unknown) could land twice: resuming the run at Land is the way on. */}
-          {now.fix !== "deploy" && now.fix !== "run" && again && !now.landed && !now.mayHaveLanded ? again(now.fix === "again" || (inSession && !briefId)) : null}
+          {/* A stop that names its resume (the change is ready; one station goes again) offers only that. */}
+          {now.fix !== "deploy" && now.fix !== "run" && again && !now.landed && !now.mayHaveLanded && !resume ? again(now.fix === "again" || (inSession && !briefId)) : null}
           {children}
           {/* A stop's reason is whole: its last words are what the person does next. */}
           {now.why ? <p className="sj-note" data-whole={personal || undefined} data-journey-why>{now.why}</p> : null}
