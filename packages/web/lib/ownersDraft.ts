@@ -73,9 +73,10 @@ export type OwnersDiff = {
  * each back with its stamp. `meRuns`: the viewer runs the session, so they
  * may still edit after leaving. `releasedParent`: the parent a person
  * released it from, which a draft parent of that id puts back rather than
- * adopts.
+ * adopts. `mayRestore`: the viewer may hand the current parent work, so an
+ * undo of its release can put it back.
  */
-export function diffOwners(initial: OwnersDraft, draft: OwnersDraft, opts: { meId?: string; snapshots?: readonly OwnerRestoreRow[]; meRuns?: boolean; releasedParent?: string | null } = {}): OwnersDiff {
+export function diffOwners(initial: OwnersDraft, draft: OwnersDraft, opts: { meId?: string; snapshots?: readonly OwnerRestoreRow[]; meRuns?: boolean; releasedParent?: string | null; mayRestore?: boolean } = {}): OwnersDiff {
   const added = draft.people.filter((id) => !initial.people.includes(id));
   const removed = initial.people.filter((id) => !draft.people.includes(id));
   const roleChanged = (draft.role?.role_id ?? null) !== (initial.role?.role_id ?? null);
@@ -100,6 +101,9 @@ export function diffOwners(initial: OwnersDraft, draft: OwnersDraft, opts: { meI
   const onlyLeave = leaving && removed.length === 1 && !added.length && !roleChanged && !parentChanged;
   let inverse: SessionOwnersChange | null;
   if (!dirty) inverse = null;
+  // Putting the parent back is the server's to refuse to a viewer who may not
+  // hand it work: then nothing of the change is undone.
+  else if (parentReleased && opts.mayRestore === false) inverse = null;
   // Anyone who sees a session may add themselves: a leave alone is undone by rejoining.
   else if (onlyLeave) inverse = { add: [opts.meId!] };
   else if (leaving && !opts.meRuns) inverse = null;
@@ -133,8 +137,10 @@ export function diffOwners(initial: OwnersDraft, draft: OwnersDraft, opts: { meI
 
 /** Take it over (the composer strip): every agent owner comes off and the
  *  viewer becomes an owner. Undo puts the role and the parent back and takes
- *  the viewer off again. */
-export function takeOverChange(current: OwnersDraft, meId: string): { change: SessionOwnersChange; inverse: SessionOwnersChange | null } {
+ *  the viewer off again; none when the viewer may not hand the parent work
+ *  (`mayRestore` false), since the server would refuse putting it back. */
+export function takeOverChange(current: OwnersDraft, meId: string, opts: { mayRestore?: boolean } = {}): { change: SessionOwnersChange; inverse: SessionOwnersChange | null } {
+  if (current.parent && opts.mayRestore === false) return { change: { take_over: true }, inverse: null };
   return {
     change: { take_over: true },
     inverse: {

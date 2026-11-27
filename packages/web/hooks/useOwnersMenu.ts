@@ -24,7 +24,7 @@ import { useSessionRoleFacts } from "./useOwnersStoreEnv";
 import { isPerson } from "@codecast/shared/team/memberKind";
 import { teamMembersOf } from "../lib/activeTeam";
 import { addPeople, addPerson, diffOwners, releaseParent, removePerson, removeRole, setParent, setRole, type OwnersDraft } from "../lib/ownersDraft";
-import { ownersChangeRefusalIn, seatRoleOf, type OwnerRestoreRow, type SessionOwnersChange } from "../store/sessionOwnersSlice";
+import { mayHandToIn, ownersChangeRefusalIn, seatRoleOf, type OwnerRestoreRow, type SessionOwnersChange } from "../store/sessionOwnersSlice";
 import { memberName, roleOwnerOf, type OwnerPerson, type OwnerRoleFace, type SessionOwnersView } from "./useSessionOwners";
 import type { OrgRole } from "../components/org/orgTypes";
 
@@ -68,6 +68,7 @@ export function useOwnersMenu(conversationId: string, view: SessionOwnersView, o
   const spawnedBy = view.read?.spawned_by ?? null;
   const originSessionId = view.parent?.id ?? releasedParent?.conversation_id ?? spawnedBy?.conversation_id ?? null;
   const originSeatRole = useInboxStore((s: any) => seatRoleOf(s, originSessionId));
+  const mayRestore = useInboxStore((s: any) => !view.parent || mayHandToIn(s, view.parent.id));
 
   const live = view.draft;
   const [edit, setEdit] = useState<{ initial: OwnersDraft; draft: OwnersDraft } | null>(null);
@@ -154,11 +155,12 @@ export function useOwnersMenu(conversationId: string, view: SessionOwnersView, o
   const snapshots: OwnerRestoreRow[] = (view.read?.people_ids ?? []).map((id) => view.read!.people_info[id])
     .filter((p): p is NonNullable<typeof p> => !!p?.added_by && p.added_at != null)
     .map((p) => ({ user_id: String(p.user_id), added_by: String(p.added_by), added_at: p.added_at!, ...(p.seen_at != null ? { seen_at: p.seen_at } : {}), ...(p.note ? { note: p.note } : {}) }));
-  const diff = diffOwners(initial, draft, { meId: meId ?? undefined, snapshots, meRuns: !!meId && view.runnerId === meId, releasedParent: releasedParent?.conversation_id ?? null });
+  const diff = diffOwners(initial, draft, { meId: meId ?? undefined, snapshots, meRuns: !!meId && view.runnerId === meId, releasedParent: releasedParent?.conversation_id ?? null, mayRestore });
 
   // A parent that is the role's own standing session is the same agent: the
   // role's row stands for both, and removing it releases both.
-  const parentIsRole = !!draft.parent && !!draft.role && view.parent?.seatRoleId === draft.role.role_id;
+  const draftSeatRole = draft.parent === view.parent?.id ? view.parent?.seatRoleId : draft.parent === originSessionId ? originSeatRole : null;
+  const parentIsRole = !!draft.parent && !!draft.role && draftSeatRole === draft.role.role_id;
   // The only owner left cannot go: the session must keep one.
   const ownerCount = draft.people.length + (draft.role ? 1 : 0) + (draft.parent && !parentIsRole ? 1 : 0);
   const solo = ownerCount <= 1;

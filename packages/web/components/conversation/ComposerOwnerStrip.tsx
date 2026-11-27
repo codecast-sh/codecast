@@ -12,7 +12,7 @@
 
 import { memo } from "react";
 import { useInboxStore } from "../../store/inboxStore";
-import { ownersModelOnFor } from "../../store/sessionOwnersSlice";
+import { mayHandToIn, ownersModelOnFor } from "../../store/sessionOwnersSlice";
 import { useSessionOwners } from "../../hooks/useSessionOwners";
 import { takeOverChange } from "../../lib/ownersDraft";
 import { OwnerFace, ParentSessionFace } from "../OwnersMenu";
@@ -37,7 +37,8 @@ function OwnerStrip({ conversationId, className }: { conversationId: string; cla
   if (!agent || !view.meId) return null;
   const name = agent.kind === "role" ? agent.role.name : agent.title;
   const takeOver = () => {
-    const { change, inverse } = takeOverChange(view.draft, view.meId!);
+    const parent = view.draft.parent;
+    const { change, inverse } = takeOverChange(view.draft, view.meId!, { mayRestore: !parent || mayHandToIn(useInboxStore.getState() as never, parent) });
     applyOwnersWithToast(conversationId, change, inverse, `${name} removed`);
   };
   return (

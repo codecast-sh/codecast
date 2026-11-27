@@ -24,6 +24,7 @@ import { windowOrgTree } from "./orgSlice";
 import { underOwnersModel, workspaceFeatureEnabled } from "@codecast/shared/contracts";
 import { isConvexId } from "@codecast/shared/entities";
 import { action } from "./mutativeMiddleware";
+import { mayEdit } from "../lib/adoptDrop";
 import {
   applyOwnersChangeTo,
   ownersChangeRefusal,
@@ -195,6 +196,15 @@ function changeFactsOf(s: OwnersState, conversationId: string): SessionOwnerFact
   return { ...facts, parent_conversation_id: released, parent_released_at: 0 };
 }
 
+/** The viewer may hand work to this session (it owns or runs it), so it may
+ *  take a worker back: what the server's takeBackRefusal asks, as far as the
+ *  store can tell. An undo that would put a parent back is offered only then. */
+export function mayHandToIn(s: OwnersState & { currentUser?: any }, sessionId: string): boolean {
+  const meId = String(s.currentUser?._id ?? "");
+  const row = s.sessions?.[sessionId] ?? s.conversations?.[sessionId];
+  return !!meId && !!row && mayEdit(row, { facts: ownerFactsOf(s, sessionId), canEdit: !!ownersReadOf(s, sessionId)?.can_edit }, meId);
+}
+
 /** Who owns the session as the store shows it: its people, then its implicit starter. */
 export function ownerIdsOf(s: OwnersState, conversationId: string): string[] | null {
   const facts = ownerFactsOf(s, conversationId);
@@ -268,7 +278,8 @@ export function createSessionOwnersSlice(): SessionOwnersSliceActions {
       if ((read.role?.role_id ?? null) !== next.role) read.role = next.role ? roleRefOf(this, next.role) : null;
       if (!next.parentSession && read.parent_session) {
         // Released, it is where the session came from: the menu offers it back.
-        if (change.release_parent || change.take_over) read.released_parent = { ...read.parent_session };
+        // Offered back only when the viewer may put it back, as the server reads it.
+        if ((change.release_parent || change.take_over) && mayHandToIn(this, read.parent_session.conversation_id)) read.released_parent = { ...read.parent_session };
         read.parent_session = null;
       }
       if (change.restore_parent && next.parentSession && read.released_parent?.conversation_id === next.parentSession) {

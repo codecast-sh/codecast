@@ -133,6 +133,8 @@ describe("applySessionOwners", () => {
   test("a take-over remembers where it came from, and its undo puts the parent and the role back", async () => {
     const P = "p".repeat(32);
     const evals = { role_id: ROLE, short_id: "or-1", handle: "evals", name: "Eval Suite lead" };
+    // The parent is the viewer's own (they run it), so they may take it back.
+    useInboxStore.setState((st: any) => ({ sessions: { ...st.sessions, [P]: { _id: P, user_id: ME, owners_model: true } } }));
     applySessionOwnersRead(S, read({ people: [], role: evals, parent_session: { conversation_id: P, short_id: "p1", title: "Parent" } }));
     useInboxStore.getState().applySessionOwners(S, { take_over: true }, { role: ROLE, restore_parent: true, remove: [ME] });
     const taken = (useInboxStore.getState() as any).sessionOwners[S];

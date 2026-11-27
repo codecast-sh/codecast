@@ -68,5 +68,9 @@ describe("the owners menu's staged change", () => {
     expect(takeOverChange({ people: [], role: EVALS, parent: null }, "me")).toEqual({ change: { take_over: true }, inverse: { role: "r1", remove: ["me"] } });
     expect(takeOverChange({ people: ["me"], role: EVALS, parent: null }, "me").inverse).toEqual({ role: "r1" });
     expect(takeOverChange({ people: [], role: null, parent: "p1" }, "me").inverse).toEqual({ restore_parent: true, remove: ["me"] });
+    // A parent the viewer may not hand work to: the server would refuse putting it back, so no undo.
+    expect(takeOverChange({ people: [], role: EVALS, parent: "p1" }, "me", { mayRestore: false }).inverse).toBeNull();
+    const initial: OwnersDraft = { people: ["me"], role: null, parent: "p1" };
+    expect(diffOwners(initial, releaseParent(initial), { mayRestore: false }).inverse).toBeNull();
   });
 });
