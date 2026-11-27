@@ -12,8 +12,8 @@ import type { DeployReach } from "@codecast/shared/contracts/deployReach";
 import type { DeployPauseView } from "@codecast/shared/contracts/deployPause";
 import { entityRoute } from "@codecast/shared/entities";
 import {
-  VIEWS, ago, attemptGroups, carriedOfAttempts, carriedOfQueue, fold, mineSessionIds, queueCommits, recordedOf, rowsFor, shipperOf, shippingRuns, splitQueue, tasksOnMain, yourSessions,
-  type BoardDeploy, type BoardQueueCommit, type BoardRow, type BoardView, type Bucket, type CardId, type Carried, type DeployCard as Card, type DeployLine,
+  VIEWS, ago, attemptGroups, carriedOfAttempts, carriedOfQueue, fold, mineSessionIds, openPrs, queueCommits, recordedOf, rowsFor, shipperOf, shippingRuns, splitQueue, tasksOnMain, yourSessions,
+  type BoardDeploy, type BoardQueueCommit, type BoardRow, type BoardView, type Bucket, type CardId, type Carried, type DeployCard as Card, type DeployLine, type OpenPr,
 } from "../../lib/deploys/board";
 import { carriedMatches, commitMatches, deployMatches, focusWord, reachDeployOn, rowMatches, type DeployFocus } from "../../lib/deploys/focus";
 import { changeSpot, type Held, type HoldWord, type Spot } from "../../lib/deploys/spot";
