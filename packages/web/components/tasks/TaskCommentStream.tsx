@@ -23,6 +23,7 @@ import { useReaderFold } from "../../hooks/useReaderFold";
 import { objectHref } from "../../lib/entityLinks";
 import { modernButton, modernPill } from "../ui/modernLook";
 import { DictateControls } from "../dictation/DictateControls";
+import { FIELD_SIZING_STYLE } from "../composerLayout";
 import { textareaField, useDictation } from "../../lib/dictation/useDictation";
 const api = _api as any;
 
@@ -366,7 +367,9 @@ export function TaskCommentComposer({
             onPaste={handleCommentPaste}
             placeholder={dictation.active ? "Listening…" : "Leave a comment..."}
             rows={1}
-            className="flex-1 bg-transparent text-sm placeholder:text-sol-text-dim focus:outline-none resize-none overflow-hidden leading-relaxed py-1 text-sol-text"
+            // Grows with its text (dictated words included) up to ~8 lines, then scrolls.
+            style={FIELD_SIZING_STYLE}
+            className="flex-1 bg-transparent text-sm placeholder:text-sol-text-dim focus:outline-none resize-none overflow-y-auto max-h-48 leading-relaxed py-1 text-sol-text"
           />
           <div className="shrink-0 flex items-center gap-1">
             <DictateControls dictation={dictation} onMenuClosed={focusComment} />

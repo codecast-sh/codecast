@@ -1,9 +1,12 @@
 import { dom, w, restoreGlobals } from "./fixtures/composeDom";
 import { afterAll, afterEach, beforeEach, expect, mock, test } from "bun:test";
 
+// The lines a recording's end says once (useDictation), as the toast shows them.
+const toasts: string[] = [];
 mock.module("sonner", () => {
   const noop = () => 1;
-  return { toast: Object.assign(noop, { error: noop, info: noop, success: noop, warning: noop, dismiss: () => {}, loading: noop, custom: noop, promise: (p: any) => p }), Toaster: () => null };
+  const say = (kind: string) => (line: string) => { toasts.push(`${kind}: ${line}`); return 1; };
+  return { toast: Object.assign(say("info"), { error: say("error"), info: noop, success: noop, warning: noop, dismiss: () => {}, loading: noop, custom: noop, promise: (p: any) => p }), Toaster: () => null };
 });
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -252,15 +255,20 @@ test("keys behave as before while dictation is idle", async () => {
   await c.unmount();
 });
 
-test("a blocked microphone leaves the mic tinted, saying why", async () => {
+test("a blocked microphone says why once, and leaves the struck mic named by the reason", async () => {
   host.refuse = "Microphone permission denied";
+  toasts.length = 0;
   const c = await mountComposer();
   await c.press("Dictate");
-  const mic = c.button("Dictate")!;
+  expect(toasts).toEqual(["error: Microphone permission denied"]);
+  // Named by its reason, and marked without colour (the grayscale tablet).
+  const mic = c.button("Microphone permission denied")!;
   expect(mic).not.toBeNull();
   expect(mic.getAttribute("data-dictation-reason")).toBe("Microphone permission denied");
+  expect(mic.querySelector("svg")!.getAttribute("class")).toContain("lucide-mic-off");
   expect(mic.className).toContain("text-sol-red");
   await c.unmount();
+  expect(toasts.length).toBe(1);
 });
 
 test("the real microphone path names a refusal and a missing microphone", async () => {
@@ -290,14 +298,18 @@ test("any team of the person's without an OpenAI BAA disables the mic, as the se
     clientState: { ...useInboxStore.getState().clientState, ui: { ...(useInboxStore.getState().clientState.ui ?? {}), active_team_id: "team_open" } },
   } as any);
   const c = await mountComposer();
-  const mic = c.button("Dictate")!;
+  const line = "Dictation is off: Clinic has no BAA with OpenAI yet.";
+  const mic = c.button(line)!;
   expect(mic.disabled).toBe(true);
-  expect(mic.getAttribute("data-dictation-reason")).toBe("AI features are off for Clinic: no BAA with OpenAI yet.");
+  expect(mic.getAttribute("data-dictation-reason")).toBe(line);
   expect(c.button("Dictation settings")).toBeNull();
+  // The caret's space stays, so the row keeps its width.
+  expect(mic.closest("[data-dictation]")!.querySelectorAll("[data-dictate-target]").length).toBe(2);
   await c.unmount();
 });
 
 test("typing into the box mid-recording stops it and keeps the person's text", async () => {
+  toasts.length = 0;
   const c = await mountComposer();
   await c.press("Dictate");
   await say((e) => e.onPartial("hello"));
@@ -313,6 +325,8 @@ test("typing into the box mid-recording stops it and keeps the person's text", a
   expect(ta.value).toBe("hello there");
   const mic = c.button("Dictate")!;
   expect(mic.getAttribute("data-dictation-reason")).toBe("Dictation stopped: the text changed");
+  // Said once as it stopped: a hover-less screen never sees the tooltip.
+  expect(toasts).toEqual(["info: Dictation stopped: the text changed"]);
   await c.unmount();
 });
 
