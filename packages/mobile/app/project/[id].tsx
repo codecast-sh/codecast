@@ -26,6 +26,7 @@ import { CollapsibleBody } from '@/components/CollapsibleBody';
 import { showActionSheet, appPrompt } from '@/lib/popups';
 import { FactChip, LinkRow, ObjectHeader, ObjectMissing, ProgressBlock, SectionLabel, SessionsBlock, objectStyles as styles, targetChip } from '@/components/objects/ObjectParts';
 import { goalStatusVisual, projectStatusVisual, PROJECT_STATUS_ORDER, sessionRowsFor } from '@/components/objects/objectStatus';
+import { EntityKindIcon, ProjectStatusMark } from '@/components/marks';
 
 export default function ProjectScreen() {
   const Theme = useTheme();
@@ -94,7 +95,7 @@ function ProjectBody({ project, now, Theme, router }: { project: ProjectItem; no
       <ScrollView style={styles.container} contentContainerStyle={styles.content} testID={`project-screen-${project.short_id ?? project._id}`}>
         <RNText style={styles.title}>{project.title}</RNText>
         <RNView style={styles.chips}>
-          <FactChip icon={status.icon} label={status.label} color={status.color} onPress={pickStatus} testID="project-status" />
+          <FactChip mark={<ProjectStatusMark status={project.status} size={11} />} label={status.label} color={status.color} onPress={pickStatus} testID="project-status" />
           {lead && <FactChip icon="user-o" label={`@${lead.handle}`} color={Theme.textSecondary} link onPress={() => router.push(`/org/${lead.short_id}` as never)} />}
           {target && <FactChip icon="calendar-o" label={target.label} color={target.color} />}
         </RNView>
@@ -122,7 +123,7 @@ function ProjectBody({ project, now, Theme, router }: { project: ProjectItem; no
             <RNView style={styles.list}>
               {serves.map((g) => {
                 const v = goalStatusVisual(g.status, Theme);
-                return <LinkRow key={g._id} icon="flag-o" color={v.color} title={g.title} meta={v.label} onPress={() => router.push(`/goal/${g.short_id || g._id}` as never)} />;
+                return <LinkRow key={g._id} mark={<EntityKindIcon type="initiative" size={13} color={v.color} />} color={v.color} title={g.title} meta={v.label} onPress={() => router.push(`/goal/${g.short_id || g._id}` as never)} />;
               })}
             </RNView>
           </RNView>

@@ -16,7 +16,7 @@ import type { PendingCloseAdvice } from "../lib/closeAdviceBar";
 // un-hide transition). Both side effects are invisible unless the product SAYS
 // so — this hook is the one place that says it, shared by every kill/restore
 // surface: the sidebar card buttons, the command palette, the keyboard chords,
-// and the stashed-bucket "Kill all".
+// and a hidden bucket's "Kill N".
 
 let triggerNotices = 0;
 
@@ -70,7 +70,7 @@ export function useTriggerKillNotice({ feed = true }: { feed?: boolean } = {}) {
     );
   }, []);
 
-  // Bulk kill (a selection, the stashed bucket's "Kill all"): every card
+  // Bulk kill (a selection, a hidden bucket's "Kill N"): every card
   // collapses out, the kill is one undo, and the notice is one aggregate.
   const killManyWithNotice = useCallback((ids: string[]) => {
     if (!ids.length) return;
