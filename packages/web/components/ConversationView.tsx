@@ -232,6 +232,7 @@ import { adjustScrollForResizeRule } from "../lib/virtualList/resizeAdjust";
 import type { MountedRows } from "../lib/virtualList/coverage";
 import { createScrollSync, type ScrollSync } from "../lib/virtualList/scrollSync";
 import { lazyNamed } from "../lib/lazyNamed";
+import { rememberReadingSpot, readingSpotForOpen } from "../lib/transcriptReadingSpot";
 
 const MOMENT_FEATURES: readonly MomentFeature[] = ["decide", "visual", "publish"];
 /** Agent states in which the session is waiting on its human, not working. */
@@ -2223,6 +2224,20 @@ const ConversationViewInner = (
     at: number;
     jumped: boolean;
   } | null>(null);
+
+  // Browser back or forward onto this conversation lands where the reader
+  // left it (lib/transcriptReadingSpot). The remembered spot rides the branch
+  // anchor, which already places a message at an offset, holds off the
+  // snap to the tail, and pages the window to the message when it is not loaded.
+  const openedConvId = conversation?._id ? String(conversation._id) : null;
+  const openedConvIdRef = useRef<string | null>(null);
+  if (openedConvId && openedConvIdRef.current !== openedConvId) {
+    openedConvIdRef.current = openedConvId;
+    const spot = targetMessageId || propHighlightQuery ? null : readingSpotForOpen(openedConvId);
+    if (spot && onJumpToTimestamp) {
+      branchAnchorRef.current = { sourceId: openedConvId, targetId: openedConvId, ...spot, at: Date.now(), jumped: false };
+    }
+  }
 
   // BranchSelector / tree panel: switching branches is a local, store-driven switch —
   // the same instant path the sidebar uses. navigateToSession sets currentSessionId, the
