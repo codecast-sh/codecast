@@ -5,10 +5,14 @@
 // row, else the detail's own copy of a priority the list does not hold, and
 // the detail's corrections. Each rides `dispatch` to the side effect of the
 // same name (convex/dispatch.ts), which runs the API's own mutation. The
-// collection is not localFirst (store/clientSyncRegistry), so the server's
-// next push settles the paint; a refused write is put back by its caller
+// list is localFirst (store/clientSyncRegistry): every field a paint writes
+// whole holds over pushes from before the server had the write (an edit
+// inside a joined object is written whole by heldWhole, so a milestone holds
+// with its count), and the write's acknowledgement settles it on the server's
+// next answer (PRIORITY_ACTIONS); a refused write is put back by its caller
 // (lib/priorityWrites).
 import { asyncAction } from "./mutativeMiddleware";
+import { PRIORITY_OBJECT_FIELDS } from "./clientSyncRegistry";
 import type { PriorDone, PriorityRow, PrioritySetBy, PriorityStepTier } from "@codecast/shared/contracts/priorities";
 import {
   paintCorrection, paintCorrectionDelete, paintDetachedMove, paintDrop, paintedRow, paintMerge, paintMove, paintPriorityDone, paintRename, paintSessionMove,
@@ -42,6 +46,26 @@ export type PrioritiesSliceActions = {
 const listOf = (s: PaintState): PriorityRow[] => Object.values(s.priorities ?? {});
 const listed = (s: PaintState, shortId: string) => listOf(s).some((r) => r.short_id === shortId);
 
+/**
+ * Writes each object a painted row joins (steps, counts, sessions, links…)
+ * whole. The engine locks only a row's own field writes, so an edit inside
+ * steps or links would sit unprotected beside its locked count, and a push
+ * from before the server had the write would put the old milestone back under
+ * the new count. A field the paint left alone locks at the value the server
+ * already holds, and the next push retires it.
+ */
+function heldWhole(...rows: Array<PriorityRow | undefined>): void {
+  for (const row of rows) {
+    if (!row) continue;
+    const r = row as unknown as Record<string, unknown>;
+    for (const field of Object.keys(PRIORITY_OBJECT_FIELDS)) {
+      const v = r[field];
+      if (Array.isArray(v)) r[field] = [...v];
+      else if (v && typeof v === "object") r[field] = { ...v };
+    }
+  }
+}
+
 export function createPrioritiesSlice(): PrioritiesSliceActions {
   return {
     movePriority: asyncAction(function (this: PaintState, shortId: string, to: PriorityMove) {
@@ -54,6 +78,7 @@ export function createPrioritiesSlice(): PrioritiesSliceActions {
     setPriorityStepTier: asyncAction(function (this: PaintState, shortId: string, stepKey: string, tier: PriorityStepTier) {
       const row = paintedRow(this, shortId);
       if (row) paintTier(row, stepKey, tier);
+      heldWhole(row);
     }) as PrioritiesSliceActions["setPriorityStepTier"],
     setPriorityAside: asyncAction(function (this: PaintState, shortId: string) {
       paintStatus(listOf(this), shortId, "set_aside");
@@ -64,6 +89,7 @@ export function createPrioritiesSlice(): PrioritiesSliceActions {
     setPriorityStepDone: asyncAction(function (this: PaintState, shortId: string, stepKey: string, done: boolean) {
       const row = paintedRow(this, shortId);
       if (row) paintStepDone(row, stepKey, done, Date.now());
+      heldWhole(row);
     }) as PrioritiesSliceActions["setPriorityStepDone"],
     renamePriorityTitle: asyncAction(function (this: PaintState, shortId: string, title: string) {
       const row = paintedRow(this, shortId);
@@ -72,6 +98,7 @@ export function createPrioritiesSlice(): PrioritiesSliceActions {
     renamePriorityStep: asyncAction(function (this: PaintState, shortId: string, stepKey: string, title: string) {
       const row = paintedRow(this, shortId);
       if (row) paintRename(row, stepKey, title);
+      heldWhole(row);
     }) as PrioritiesSliceActions["renamePriorityStep"],
     dropPriorityStep: asyncAction(function (this: PaintState, shortId: string, stepKey: string) {
       const row = paintedRow(this, shortId);
@@ -84,6 +111,7 @@ export function createPrioritiesSlice(): PrioritiesSliceActions {
     undoPriorityStepDone: asyncAction(function (this: PaintState, shortId: string, stepKey: string, setBy: PrioritySetBy | null) {
       const row = paintedRow(this, shortId);
       if (row) paintUndoStepDone(row, stepKey, setBy);
+      heldWhole(row);
     }) as PrioritiesSliceActions["undoPriorityStepDone"],
     undoPriorityDone: asyncAction(function (this: PaintState, shortId: string, prior: PriorDone) {
       const row = paintedRow(this, shortId);
@@ -93,20 +121,24 @@ export function createPrioritiesSlice(): PrioritiesSliceActions {
       const from = paintedRow(this, shortId);
       const to = paintedRow(this, into);
       if (from && to && from !== to) paintMerge(this, from, to);
+      heldWhole(from, to);
     }) as PrioritiesSliceActions["mergePriority"],
     movePrioritySession: asyncAction(function (this: PaintState, session: string, from: string, to: string, stepKey: string | null) {
       const a = paintedRow(this, from);
       const b = paintedRow(this, to);
       if (a && b) paintSessionMove(this, session, a, b, stepKey, Date.now());
+      heldWhole(a, b);
     }) as PrioritiesSliceActions["movePrioritySession"],
     prioritySessionNotThis: asyncAction(function (this: PaintState, session: string, from: string) {
       const row = paintedRow(this, from);
       if (row) paintSessionNotThis(this, session, row);
+      heldWhole(row);
     }) as PrioritiesSliceActions["prioritySessionNotThis"],
     correctPriority: asyncAction(function (this: PaintState, shortId: string, text: string, stepKey: string | null, clientKey: string) {
       const row = paintedRow(this, shortId);
       // A local id until the server's own list of corrections arrives with the detail's next push.
       if (row && text.trim()) paintCorrection(this, row, { _id: `local-correction-${clientKey}`, step_key: stepKey, text: text.trim(), status: "pending", created_at: Date.now() });
+      heldWhole(row);
     }) as PrioritiesSliceActions["correctPriority"],
     deletePriorityCorrection: asyncAction(function (this: PaintState, correctionId: string) {
       paintCorrectionDelete(this, correctionId);
@@ -114,3 +146,6 @@ export function createPrioritiesSlice(): PrioritiesSliceActions {
     runPriorities: asyncAction(function (this: PaintState, _workspace: string) {}) as PrioritiesSliceActions["runPriorities"],
   };
 }
+
+/** Every priority control: its acknowledgement settles the locks its paint planted (lib/dispatchBinding). */
+export const PRIORITY_ACTIONS: ReadonlySet<string> = new Set(Object.keys(createPrioritiesSlice()));

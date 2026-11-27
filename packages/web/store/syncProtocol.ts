@@ -62,7 +62,7 @@ export function withClearedInboxStamps<T extends Record<string, unknown>>(doc: T
   return missing.length ? { ...doc, ...Object.fromEntries(missing.map((f) => [f, null])) } : doc;
 }
 
-// An owners lock its change's acknowledgement marked (store settleOwnersAck)
+// An owners or priority lock its write's acknowledgement marked (store settleAckedLocks)
 // retires on the first server value for its field after the ack: the value
 // lands. A row that does not carry the field leaves the lock to the next,
 // except an owners stamp a whole inbox row under the model (owners_model:

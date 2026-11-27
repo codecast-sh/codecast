@@ -11,6 +11,7 @@ import { humanizeConvexError } from "@codecast/shared/contracts";
 import { isChatRoomRefusal, releaseHeldAnswer, useInboxStore } from "../store/inboxStore";
 import { isPermanentDispatchError } from "../store/mutativeMiddleware";
 import { dropRejectedOrgIntent } from "../store/orgSlice";
+import { PRIORITY_ACTIONS } from "../store/prioritiesSlice";
 import { offerRollbackToHost } from "../store/syncReplication";
 import { recordSessionCommandDispatchError, SESSION_COMMAND_ACTIONS } from "./sessionCommands";
 import { deadRecordingPress } from "./calls/recordingPress";
@@ -63,9 +64,9 @@ export function makeDispatchBinding(
       (res) => {
         settle({ ok: true });
         if (action === "answerDecision") releaseHeldAnswer(args?.[0], true);
-        // The server has an owners change: the locks it planted settle on
-        // whatever the server answers since (store settleOwnersAck).
-        if (action === "applySessionOwners" && lockIds?.size) useInboxStore.getState().settleOwnersAck([...lockIds]);
+        // The server has an owners change or a priority control: the locks it
+        // planted settle on whatever the server answers since (store settleAckedLocks).
+        if ((action === "applySessionOwners" || PRIORITY_ACTIONS.has(action)) && lockIds?.size) useInboxStore.getState().settleAckedLocks([...lockIds]);
         return res;
       },
       (err) => { settle({ err }); throw err; },

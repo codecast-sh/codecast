@@ -109,7 +109,7 @@ export type GestureMessage =
   // instead of waiting for a value echo that a later remote write may never
   // deliver (a restore right after a kill).
   | { kind: "ack"; patches: Record<string, unknown>; ack: Array<{ scope_key: string; position: number }>; sentAt: number; ts: number; lockIds?: string[] }
-  // An owners change acknowledged (settleOwnersAck): the locks it planted, by
+  // An owners change or priority control acknowledged (settleAckedLocks): the locks it planted, by
   // key and painted value. A sibling retires its mirrored lock on the same
   // value, as it does for an ack.
   | { kind: "settle"; locks: Array<{ key: string; value: unknown }>; lockIds: string[]; sentAt: number; ts: number };
@@ -235,7 +235,7 @@ function isGestureMessage(data: unknown): data is Envelope {
       Array.isArray(e.ack) && e.ack.every((a) => a && typeof a.scope_key === "string" && typeof a.position === "number");
   }
   if (e.kind === "settle") {
-    // Only owners lock keys (inboxStore OWNERS_LOCK_FIELDS) are acted on.
+    // Only ack-settled lock keys (store/ackSettledLocks ACK_SETTLED_LOCK_FIELDS) are acted on.
     return typeof e.sentAt === "number" && Array.isArray(e.lockIds) && e.lockIds.every((id) => typeof id === "string") &&
       Array.isArray(e.locks) && e.locks.every((l) => l && typeof l.key === "string");
   }
