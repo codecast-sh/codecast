@@ -62,7 +62,8 @@ export type TaskRow = {
   /** A hosted routine said as a time of day: its wall clock (convex
    *  assistant/routines.ts hostedWallCadence). Words read it over interval_ms. */
   cadence?: WallCadence;
-  event_filter?: { event_type: string } | null;
+  /** pr_number narrows a pull request event to one PR (convex lib/eventFilterValidator). */
+  event_filter?: { event_type: string; pr_number?: number } | null;
   project_path?: string;
   run_count: number;
   created_at: number;

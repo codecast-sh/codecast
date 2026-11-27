@@ -9,8 +9,10 @@
 //   sleeping  only a wait stands: on someone or something, a trigger, or
 //             nothing visible at all (stalled)
 //
-// Precedence is working > shipping > sleeping: a session whose own workers are
-// producing reads Working even while its run waits. Pure and isomorphic: the
+// The person's own filing (a park, an active snooze) speaks first, as it does
+// in the classifier. Past that, precedence is working > shipping > sleeping: a
+// session whose own workers are producing reads Working even while its run
+// waits. Pure and isomorphic: the
 // web rail, the phone and the server's `cast sessions` all call it.
 import { ACTIVE_AGENT_STATUSES } from "./agentStatus";
 import type { WaitingOn } from "./inboxProjection";
@@ -68,7 +70,8 @@ export type ShippingActivity = { state: "shipping"; stage: ShipStage; failed: bo
 export type SleepingActivity<T extends DormantTriggerRow = DormantTriggerRow> =
   /** `on` is null for a task blocker or wait whose task the caller could not name; `wake` then carries it. */
   | { state: "sleeping"; flavor: "waiting"; on: Omit<WaitingOn, "at"> | null; since: number | null; wake: Extract<DormantWake<T>, { kind: "blocker" | "wait" }> | null; hibernated: boolean }
-  | { state: "sleeping"; flavor: "scheduled"; wake: Extract<DormantWake<T>, { kind: "trigger" | "trigger_unloaded" }>; hibernated: boolean }
+  /** An armed trigger, or (`background`) a command that only waits out a clock. */
+  | { state: "sleeping"; flavor: "scheduled"; wake: Extract<DormantWake<T>, { kind: "trigger" | "trigger_unloaded" | "background" }>; hibernated: boolean }
   /** Nothing visible will wake it; it returns to the person at `wake.back`. */
   | { state: "sleeping"; flavor: "stalled"; wake: Extract<DormantWake<T>, { kind: "claim" }>; hibernated: boolean }
   | { state: "sleeping"; flavor: "snoozed"; wake: Extract<DormantWake<T>, { kind: "snoozed" }>; hibernated: boolean }
@@ -92,8 +95,10 @@ const VERB_RULES: Record<WorkVerb, RegExp> = {
   reviewing: /\b(review|verif|critic|audit)/i,
   building: /\b(implement|build|fix|wir(e|es|ed|ing)\b)/i,
   researching: /\b(research|explor|min(e|es|ing)\b|map(s|ping)?\b)/i,
-  measuring: /\b(eval|draws?\b|replay|seal|sweep)/i,
-  testing: /\b(test|typecheck|tsc\b)|\bcast check\b/i,
+  // Only words that name the evals harness: "Evaluate the options" and
+  // "Sweep the repo" are ordinary work.
+  measuring: /\.\/evals\b|\bevals?\b|\bxrun\b|(?<!\.)\bfreezes?\b|\breplay(s|ed|ing)?\b|(?<!\.)\bseal(s|ed|ing)?\b/i,
+  testing: /\b(test|typecheck|tsc\b|ci\b|lint\b)|\bcast check\b/i,
 };
 // What a subagent or worker is asked to do reads by its task first; a command
 // by what it runs first (`bun test evals/x.test.ts` is testing, not measuring).
@@ -151,50 +156,110 @@ function shipping(ship: ShipInput): ShippingActivity {
   };
 }
 
-/** A background command (or Monitor) that watches CI or a deploy, and the stage it watches. */
-// The command is read by what it runs; a description (a Monitor's) by its
-// words, since only there does "deploy" or "CI" name what it watches
-// (`bun test deploy.test.ts` and `CI=1 bun test` are tests).
-export function shipStageOfCommand(t: { description?: string; command?: string }): ShipInput | null {
-  const cmd = t.command ?? "";
-  const desc = t.description ?? "";
-  if (/\bcast\s+deploy\b|deploy\.sh\b|\bfly\s+deploy\b|\brailway\s+up\b|\bdeploy\.ya?ml\b|--workflow[= ]\S*(deploy|release)|\bgh\s+workflow\s+run\b.*\b(deploy|release)|cut-cli-release/i.test(cmd) || /\bdeploy(s|ing|ed)?\b/i.test(desc)) {
-    const target = cmd.match(/\bcast\s+deploy\s+([a-z][\w-]*)/i)?.[1] ?? cmd.match(/packages\/([\w-]+)\/deploy\.sh\b/)?.[1] ?? cmd.match(/deploy\.sh\s+--([a-z][\w-]*)/)?.[1] ?? null;
-    return { stage: "deploy", target };
+// The commands a shell line runs, each as its words: split at every operator
+// and substitution, with the words that only lead a command (an env
+// assignment, `until`, `do`, `[`, `bash`…) taken off. A tool named as an
+// argument (`cat deploy.sh`, `bun test deploy.sh.test.ts`) is never one.
+const LEADERS = new Set(["until", "while", "do", "then", "else", "if", "!", "[", "[[", "time", "nohup", "exec", "command", "sudo", "bash", "sh", "zsh", "env"]);
+function invocations(cmd: string): string[][] {
+  return cmd.split(/&&|\|\||[;|\n`]|\$\(|\(/).map((seg) => {
+    const words = seg.trim().split(/\s+/).map((w) => w.replace(/^["']+|["')]+$/g, "")).filter(Boolean);
+    let i = 0;
+    while (i < words.length && (LEADERS.has(words[i]) || /^\w+=/.test(words[i]))) i++;
+    return words.slice(i);
+  }).filter((w) => w.length > 0);
+}
+
+// The deploy target a deploy names: `cast deploy web`, `packages/convex/deploy.sh`,
+// or a target flag (`deploy.sh --actor Jason --backend`: --actor takes a value,
+// --backend names the component).
+const DEPLOY_TARGET_FLAGS = new Set(["backend", "web", "cli", "mobile", "desktop", "convex", "electric", "intern", "aivery", "landing"]);
+function deployScriptTarget(words: string[]): string | null {
+  const dir = words[0].match(/(?:^|\/)packages\/([\w-]+)\/deploy\.sh$/)?.[1];
+  if (dir) return dir;
+  return words.slice(1).map((w) => w.match(/^--([\w-]+)$/)?.[1]).find((f) => !!f && DEPLOY_TARGET_FLAGS.has(f)) ?? null;
+}
+
+const SHIPPING_FLOWS = new Set(["change", "ship"]);
+
+function shipOfInvocation(words: string[], cmd: string): ShipInput | null {
+  const [a, b, c, d] = words;
+  const has = (flag: RegExp) => words.some((w) => flag.test(w));
+  if (a === "cast" && b === "flow" && c === "run") {
+    return d && (SHIPPING_FLOWS.has(d) || d.endsWith(".cast")) && !has(/^--dry-run$/) ? { stage: "ci" } : null;
   }
-  if (/\bcast\s+flow\s+run\b/.test(cmd)) return { stage: "ci" };
-  if (/\bgh\s+pr\s+merge\b/.test(cmd)) return { stage: "merge", pr: prOf(cmd) };
-  if (/\bgh\s+run\s+(watch|view)\b|\bgh\s+pr\s+checks\b/.test(cmd) || /\bCI\b/.test(desc)) return { stage: "ci", pr: prOf(cmd) };
+  if (a === "cast" && b === "deploy") {
+    if (has(/^(--help|-h)$/)) return null;
+    return { stage: "deploy", target: words.slice(2).find((w) => !w.startsWith("-")) ?? null };
+  }
+  if (/(^|\/)(deploy|release)\.sh$/.test(a ?? "")) return { stage: "deploy", target: deployScriptTarget(words) };
+  if ((a === "fly" && b === "deploy") || (a === "railway" && b === "up")) return { stage: "deploy" };
+  if (a === "gh" && b === "workflow" && c === "run") return /deploy|release/i.test(d ?? "") ? { stage: "deploy" } : null;
+  if (a === "gh" && b === "run" && (c === "watch" || (c === "view" && !has(/^--log/)))) {
+    // Watching a deploy workflow's run is watching the deploy.
+    return /--workflow[= ]\S*(deploy|release)|\bdeploy\.ya?ml\b/i.test(cmd) ? { stage: "deploy" } : { stage: "ci" };
+  }
+  if (a === "gh" && b === "pr" && c === "checks") return { stage: "ci", pr: prRef(d) };
+  if (a === "gh" && b === "pr" && c === "merge") return { stage: "merge", pr: prRef(d) };
   return null;
 }
 
-const prOf = (text: string): string | null => {
-  const n = text.match(/\bgh\s+pr\s+(?:checks|merge|view)\s+#?(\d+)/)?.[1];
+const prRef = (word: string | undefined): string | null => {
+  const n = word?.match(/^#?(\d+)$/)?.[1];
   return n ? `#${n}` : null;
 };
 
+/** A background command or Monitor that watches CI or a deploy, and the stage
+ *  it watches. The command is read by what it invokes. Only a Monitor's
+ *  description counts, since a Monitor says there what it watches; a shell's
+ *  description is the Bash tool's ("Run deploy tests" is a test). */
+export function shipStageOfCommand(t: { kind?: string; description?: string; command?: string }): ShipInput | null {
+  const cmd = t.command ?? "";
+  for (const words of invocations(cmd)) {
+    const ship = shipOfInvocation(words, cmd);
+    if (ship) return ship;
+  }
+  if (t.kind !== "monitor") return null;
+  const desc = t.description ?? "";
+  if (/\bdeploy(s|ing|ed)?\b/i.test(desc)) return { stage: "deploy" };
+  if (/\bCI\b/.test(desc)) return { stage: "ci" };
+  return null;
+}
+
+/** A command that only waits out a clock (`sleep 1800 && echo done`, an
+ *  `until …; do sleep 5; done` poll of nothing the pipeline or evals run): a
+ *  timed wake, not work. */
+export function isTimedWait(t: { command?: string }): boolean {
+  const cmd = t.command ?? "";
+  return /(^|[\s;&|(])sleep\s+\d/.test(cmd) && !shipStageOfCommand({ command: cmd }) && verbOfText(cmd, COMMAND_ORDER) === null;
+}
+
+// The events that say a step of one change's pipeline happened. Failure-only
+// events (pr_check_failed, deploy_failed) are a guard, not the wait.
 const EVENT_STAGE: Record<string, ShipStage> = {
   pr_checks_green: "ci",
-  pr_check_failed: "ci",
   pr_review_requested: "review",
   pr_review: "review",
   pr_approved: "review",
   pr_changes_requested: "review",
   pr_merged: "merge",
-  deploy: "deploy",
-  deploy_failed: "deploy",
-  deploy_live: "live",
 };
 const STAGE_ORDER: ShipStage[] = ["ci", "review", "merge", "deploy", "live"];
 
-/** The earliest ship stage an armed event trigger into the session waits on. */
+/** The earliest ship stage an armed event trigger into the session waits on.
+ *  It counts only when it is about this session's change: a pull request event
+ *  narrowed to one PR. Trigger rows do not say whether an event trigger fires
+ *  once, and the row's armed_trigger_kind is "standing" for every event
+ *  trigger (convex dormancy.ts isStandingInjectTrigger), so a deploy or
+ *  deploy_live trigger, which no filter narrows to one change, cannot be told
+ *  from a monitor that verifies every deploy: it reads Sleeping (scheduled). */
 function shipOfTriggers(triggers: DormantTriggerRow[]): ShipInput | null {
   let best: ShipInput | null = null;
   for (const r of triggers) {
     const filter = r.task.event_filter;
     const stage = filter ? EVENT_STAGE[filter.event_type] : undefined;
-    if (!stage || !isArmedTrigger(r)) continue;
-    if (!best || STAGE_ORDER.indexOf(stage) < STAGE_ORDER.indexOf(best.stage)) best = { stage, pr: filter?.pr_number ? `#${filter.pr_number}` : null };
+    if (!stage || !filter?.pr_number || !isArmedTrigger(r)) continue;
+    if (!best || STAGE_ORDER.indexOf(stage) < STAGE_ORDER.indexOf(best.stage)) best = { stage, pr: `#${filter.pr_number}` };
   }
   return best;
 }
@@ -226,16 +291,17 @@ function workingOf<T extends DormantTriggerRow>(input: SessionActivityInput<T>, 
   }
   if (row.producing_until != null && now < row.producing_until) return work("subagents", null, 0, "subagents working");
 
-  const own = commands.filter((c) => !shipStageOfCommand(c));
+  const own = commands.filter((c) => !shipStageOfCommand(c) && !isTimedWait(c));
   if (own.length > 0) {
     const texts = own.map(textOf);
     const verbs = texts.map((t) => verbOfText(t, COMMAND_ORDER));
     if (verbs.every((v) => v === "measuring")) return work("evals", "measuring", own.length, `measuring · ${plural(own.length, "eval draw")}`);
     const verb = verbOfAll(texts, COMMAND_ORDER);
+    // Never the raw command: a command line is data, not a label.
     const words = verb === "testing" ? "running tests"
       : verb ? verb
       : own.length > 1 ? `${own.length} background commands`
-      : (own[0].description || own[0].command?.split("\n").find((l) => l.trim()) || "background command").trim();
+      : own[0].description?.trim() || "running a command";
     return work("command", verb, own.length, words);
   }
 
@@ -254,11 +320,19 @@ function shippingOf<T extends DormantTriggerRow>(input: SessionActivityInput<T>,
   return ship ? shipping(ship) : null;
 }
 
-function sleepingOf<T extends DormantTriggerRow>(input: SessionActivityInput<T>): SleepingActivity<T> {
-  const { row, now } = input;
-  const hibernated = !!row.hibernated_at || row.agent_status === "hibernated";
+const hibernatedOf = (row: SessionActivityRow) => !!row.hibernated_at || row.agent_status === "hibernated";
+
+/** The person's own filing: a park or an active snooze outranks every signal. */
+function personFiledOf<T extends DormantTriggerRow>(row: SessionActivityRow, now: number): SleepingActivity<T> | null {
+  const hibernated = hibernatedOf(row);
   if (row.user_rest === "dormant") return { state: "sleeping", flavor: "parked", wake: { kind: "parked" }, hibernated };
   if (row.inbox_snoozed_until && row.inbox_snoozed_until > now) return { state: "sleeping", flavor: "snoozed", wake: { kind: "snoozed", at: row.inbox_snoozed_until }, hibernated };
+  return null;
+}
+
+function sleepingOf<T extends DormantTriggerRow>(input: SessionActivityInput<T>, commands: DormantWatch[]): SleepingActivity<T> {
+  const { row, now } = input;
+  const hibernated = hibernatedOf(row);
   if (row.waiting_on) {
     const { kind, ref, at } = row.waiting_on;
     return { state: "sleeping", flavor: "waiting", on: { kind, ref }, since: at ?? null, wake: null, hibernated };
@@ -274,8 +348,12 @@ function sleepingOf<T extends DormantTriggerRow>(input: SessionActivityInput<T>)
     case "unconfirmed":
     case "run_unreported":
       return { state: "sleeping", flavor: "unconfirmed", wake, hibernated };
-    case "claim":
+    case "claim": {
+      // A command that waits out a clock is a timed wake the row can see.
+      const waits = commands.filter(isTimedWait);
+      if (waits.length > 0) return { state: "sleeping", flavor: "scheduled", wake: { kind: "background", count: waits.length, what: waits[0].description?.trim() || "a timed wait" }, hibernated };
       return { state: "sleeping", flavor: "stalled", wake, hibernated };
+    }
     case "run":
       throw new Error("a live run reads working or shipping");
   }
@@ -284,7 +362,9 @@ function sleepingOf<T extends DormantTriggerRow>(input: SessionActivityInput<T>)
 /** Which section a dormant row draws in, and what its under-line says. */
 export function sessionActivity<T extends DormantTriggerRow>(input: SessionActivityInput<T>): SessionActivity<T> {
   const { row, now } = input;
+  const filed = personFiledOf<T>(row, now);
+  if (filed) return filed;
   const commands = input.watches?.length ? input.watches : (row.open_tasks ?? []).filter((t) => t.kind !== "agent" && t.kind !== "workflow");
   const liveRun = serverParkOf(row, now)?.kind === "run";
-  return workingOf(input, commands, liveRun) ?? shippingOf(input, commands, liveRun) ?? sleepingOf(input);
+  return workingOf(input, commands, liveRun) ?? shippingOf(input, commands, liveRun) ?? sleepingOf(input, commands);
 }

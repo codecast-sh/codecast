@@ -53,7 +53,7 @@ describe("working: the row's own work runs", () => {
     expect(act({ row: { workflow_run_id: "r", workflow_run_status: "running", workflow_run_name: "audit" } })).toEqual({
       state: "working", kind: "workflow", verb: "reviewing", count: 1, words: "workflow · audit",
     });
-    expect(act({ row: { open_tasks: [{ kind: "workflow", description: "sweep" }] } })).toMatchObject({ kind: "workflow", verb: "measuring", words: "workflow · sweep" });
+    expect(act({ row: { open_tasks: [{ kind: "workflow", description: "replay the freezes" }] } })).toMatchObject({ kind: "workflow", verb: "measuring", words: "workflow · replay the freezes" });
     expect(act({ row: { open_tasks: [{ kind: "workflow" }] } })).toMatchObject({ kind: "workflow", words: "workflow · workflow run" });
     // A workflow sub-session's run is its parent's, not its own work.
     expect(act({ row: { workflow_run_id: "r", workflow_run_status: "running", is_workflow_sub: true } }).state).toBe("sleeping");
@@ -76,6 +76,36 @@ describe("working: the row's own work runs", () => {
     // A test that mentions deploy or CI is still a test.
     expect(act({ row: { open_tasks: [shell("bun test convex/deploy.test.ts")] } })).toMatchObject({ state: "working", words: "running tests" });
     expect(act({ row: { open_tasks: [shell("CI=1 bun test")] } })).toMatchObject({ state: "working", words: "running tests" });
+  });
+
+  test("a described shell is read by what it runs: deploy and CI tests are tests", () => {
+    expect(act({ row: { open_tasks: [shell("bun test convex/deploy.test.ts", "Run deploy tests")] } })).toEqual({ state: "working", kind: "command", verb: "testing", count: 1, words: "running tests" });
+    expect(act({ row: { open_tasks: [shell("bun run ci", "Run the CI checks locally")] } })).toEqual({ state: "working", kind: "command", verb: "testing", count: 1, words: "running tests" });
+    expect(act({ row: { open_tasks: [shell("cast flow run change --dry-run", "Dry-run the change flow")] } })).toMatchObject({ state: "working", kind: "command" });
+    expect(act({ row: { open_tasks: [shell("./deploy.sh --actor Jason --backend", "Deploy backend")] } })).toEqual({ state: "shipping", stage: "deploy", failed: false, words: "Deploying backend", target: "backend" });
+  });
+
+  test("eval words only for the evals harness", () => {
+    expect(act({ row: { open_tasks: [agent("Evaluate the three options")] } })).toEqual({ state: "working", kind: "subagents", verb: null, count: 1, words: "1 subagent" });
+    expect(act({ row: { open_tasks: [agent("Sweep the repo for callers")] } })).toMatchObject({ kind: "subagents", verb: null });
+    expect(act({ row: { open_tasks: [agent("Seal the freeze"), agent("xrun guidance")] } })).toMatchObject({ kind: "evals", words: "measuring · 2 eval draws" });
+    expect(act({ row: { open_tasks: [shell("rm -rf /tmp/x; find . -name '*.seal'")] } })).toMatchObject({ kind: "command", verb: null });
+  });
+
+  test("a command with no verb and no description never shows its command line", () => {
+    expect(act({ row: { open_tasks: [shell("bun packages/cli/scripts/prompt-dry-run.ts --model opus")] } })).toEqual({ state: "working", kind: "command", verb: null, count: 1, words: "running a command" });
+  });
+
+  test("a command that only waits out a clock is a timed wake, not work", () => {
+    expect(act({ row: { open_tasks: [shell("sleep 1800 && echo done", "Wait 30 minutes")] } })).toEqual({
+      state: "sleeping", flavor: "scheduled", wake: { kind: "background", count: 1, what: "Wait 30 minutes" }, hibernated: false,
+    });
+    expect(act({ row: { open_tasks: [shell("until [ -f /tmp/out ]; do sleep 5; done")] } })).toMatchObject({ flavor: "scheduled", wake: { kind: "background", what: "a timed wait" } });
+    // A poll of the pipeline is shipping; a poll that runs work is working.
+    expect(act({ row: { open_tasks: [shell('until [ "$(gh run view 4488 --json status -q .status)" = completed ]; do sleep 20; done')] } }).state).toBe("shipping");
+    expect(act({ row: { open_tasks: [shell("while true; do bun test; sleep 60; done")] } })).toMatchObject({ state: "working", words: "running tests" });
+    // What the agent named still outranks it.
+    expect(act({ row: { waiting_on: { kind: "person", ref: "@ashot" }, open_tasks: [shell("sleep 600")] } })).toMatchObject({ flavor: "waiting" });
   });
 
   test("a surface's live watch rows stand in for the row's shells", () => {
@@ -111,22 +141,33 @@ describe("shipping: the change is between CI and live", () => {
     expect(act({ row: { open_tasks: [{ kind: "monitor", description: "Wait for the deploy to go live" }] } })).toMatchObject({ stage: "deploy" });
   });
 
-  test("an armed event trigger waits on a stage, the earliest when several", () => {
-    const stage = (type: string) => (act({ triggers: [event(type)] }) as { stage?: string }).stage;
+  test("an armed event trigger on one PR waits on its stage, the earliest when several", () => {
+    const stage = (type: string) => (act({ triggers: [event(type, 263)] }) as { stage?: string }).stage;
     expect(stage("pr_checks_green")).toBe("ci");
-    expect(stage("pr_check_failed")).toBe("ci");
     expect(stage("pr_review_requested")).toBe("review");
     expect(stage("pr_review")).toBe("review");
     expect(stage("pr_approved")).toBe("review");
+    expect(stage("pr_changes_requested")).toBe("review");
     expect(stage("pr_merged")).toBe("merge");
-    expect(stage("deploy")).toBe("deploy");
-    expect(stage("deploy_failed")).toBe("deploy");
-    expect(stage("deploy_live")).toBe("live");
+    expect(act({ triggers: [event("pr_merged", 263), event("pr_checks_green", 263)] })).toEqual({ state: "shipping", stage: "ci", failed: false, words: "CI running · #263", pr: "#263" });
     expect(act({ triggers: [event("deploy_live"), event("pr_merged", 263)] })).toEqual({ state: "shipping", stage: "merge", failed: false, words: "Merging", pr: "#263" });
-    expect(act({ triggers: [event("pr_checks_green", 263)] })).toMatchObject({ words: "CI running · #263" });
+  });
+
+  test("an event trigger not narrowed to this change, or waiting only for a failure, is a schedule", () => {
+    const flavor = (...triggers: ReturnType<typeof event>[]) => act({ triggers });
+    // Repo-wide PR watchers.
+    expect(flavor(event("pr_merged"))).toMatchObject({ state: "sleeping", flavor: "scheduled" });
+    expect(flavor(event("pr_review_requested"))).toMatchObject({ state: "sleeping", flavor: "scheduled" });
+    // Failure-only guards.
+    expect(flavor(event("pr_check_failed", 263))).toMatchObject({ state: "sleeping", flavor: "scheduled" });
+    expect(flavor(event("deploy_failed"))).toMatchObject({ state: "sleeping", flavor: "scheduled" });
+    // No filter narrows a deploy event to one change, and the trigger row does
+    // not say it fires once: a monitor verifying every deploy reads scheduled.
+    expect(flavor(event("deploy_live"))).toMatchObject({ state: "sleeping", flavor: "scheduled" });
+    expect(flavor(event("deploy"))).toMatchObject({ state: "sleeping", flavor: "scheduled" });
     // A paused trigger waits on nothing; an event that is not the pipeline's is a schedule.
     expect(act({ triggers: [event("pr_merged", 263, "paused")] }).state).toBe("sleeping");
-    expect(act({ triggers: [event("pr_comment")] })).toMatchObject({ state: "sleeping", flavor: "scheduled" });
+    expect(flavor(event("pr_comment"))).toMatchObject({ state: "sleeping", flavor: "scheduled" });
   });
 
   test("a run it started reads shipping when the caller says the run ships", () => {
@@ -146,7 +187,17 @@ describe("precedence: working > shipping > sleeping", () => {
 
   test("shipping outranks every wait", () => {
     expect(act({ row: { waiting_on: { kind: "session", ref: "jx7abc" } }, ship: { stage: "ci" } }).state).toBe("shipping");
-    expect(act({ triggers: [timed("t", NOW + 60_000), event("pr_merged")] })).toMatchObject({ state: "shipping", stage: "merge" });
+    expect(act({ triggers: [timed("t", NOW + 60_000), event("pr_merged", 263)] })).toMatchObject({ state: "shipping", stage: "merge" });
+  });
+
+  test("the person's own park or snooze outranks every activity", () => {
+    const busy = { open_tasks: [agent("Review the diff"), shell("gh pr checks 263 --watch")] };
+    expect(act({ row: { user_rest: "dormant", ...busy }, triggers: [event("pr_merged", 263)] })).toEqual({ state: "sleeping", flavor: "parked", wake: { kind: "parked" }, hibernated: false });
+    expect(act({ row: { user_rest: "dormant" }, ship: { stage: "ci" } })).toMatchObject({ flavor: "parked" });
+    expect(act({ row: { user_rest: "dormant" }, childrenRunning: 3 })).toMatchObject({ flavor: "parked" });
+    expect(act({ row: { inbox_snoozed_until: NOW + 5, ...busy } })).toEqual({ state: "sleeping", flavor: "snoozed", wake: { kind: "snoozed", at: NOW + 5 }, hibernated: false });
+    // A snooze that ran out no longer speaks.
+    expect(act({ row: { inbox_snoozed_until: NOW - 5, ...busy } })).toMatchObject({ state: "working" });
   });
 });
 
@@ -218,9 +269,38 @@ describe("childrenRunningOf", () => {
 });
 
 describe("shipStageOfCommand", () => {
-  test("ignores commands that are not the pipeline", () => {
-    expect(shipStageOfCommand({ command: "bun test" })).toBeNull();
-    expect(shipStageOfCommand({ command: "gh pr view 12" })).toBeNull();
-    expect(shipStageOfCommand({ command: "sleep 300" })).toBeNull();
+  test("only an invocation of a pipeline tool counts, never a mention of one", () => {
+    for (const command of [
+      "bun test", "gh pr view 12", "sleep 300", "gh pr view 263 --json state",
+      "cast flow run change --dry-run", "cast flow run build --task ct-1", "cast flow runs",
+      "cast deploy --help", "bun test deploy.test.ts", "bun test deploy.sh.test.ts", "CI=1 bun test",
+      "bun test packages/cli/src/__tests__/cast-deploy.test.ts", "vim deploy.sh", "cat packages/convex/deploy.sh",
+      "grep -r deploy.sh .", "gh run list --workflow deploy.yml", "gh run view 12 --log-failed", "gh workflow run ci.yml",
+    ]) expect([command, shipStageOfCommand({ command })]).toEqual([command, null]);
+  });
+
+  test("invocations, wherever they sit in the line", () => {
+    expect(shipStageOfCommand({ command: "git push && gh pr checks 263 --watch" })).toEqual({ stage: "ci", pr: "#263" });
+    expect(shipStageOfCommand({ command: "until gh run view 12 --json status; do sleep 5; done" })).toEqual({ stage: "ci" });
+    expect(shipStageOfCommand({ command: "cast flow run flows/ship.cast --task ct-9" })).toEqual({ stage: "ci" });
+    expect(shipStageOfCommand({ command: "cast deploy" })).toEqual({ stage: "deploy", target: null });
+    expect(shipStageOfCommand({ command: "bash packages/convex/deploy.sh" })).toEqual({ stage: "deploy", target: "convex" });
+    expect(shipStageOfCommand({ command: "./scripts/release.sh" })).toEqual({ stage: "deploy", target: null });
+    expect(shipStageOfCommand({ command: "fly deploy -a foo" })).toEqual({ stage: "deploy" });
+    expect(shipStageOfCommand({ command: "railway up" })).toEqual({ stage: "deploy" });
+  });
+
+  test("a deploy script's target is a target flag, never a flag's value", () => {
+    expect(shipStageOfCommand({ command: "./deploy.sh --actor Jason --backend" })).toEqual({ stage: "deploy", target: "backend" });
+    expect(shipStageOfCommand({ command: "./deploy.sh --actor Jason" })).toEqual({ stage: "deploy", target: null });
+    expect(shipStageOfCommand({ command: "./deploy.sh --yes --electric" })).toEqual({ stage: "deploy", target: "electric" });
+  });
+
+  test("only a Monitor's description says what it watches", () => {
+    expect(shipStageOfCommand({ kind: "monitor", description: "Tail the deploy logs" })).toEqual({ stage: "deploy" });
+    expect(shipStageOfCommand({ kind: "monitor", description: "Watch CI" })).toEqual({ stage: "ci" });
+    expect(shipStageOfCommand({ kind: "background", command: "bun test convex/deploy.test.ts", description: "Run deploy tests" })).toBeNull();
+    expect(shipStageOfCommand({ kind: "background", command: "bun run ci", description: "Run the CI checks locally" })).toBeNull();
+    expect(shipStageOfCommand({ description: "Watch CI", command: "bun test" })).toBeNull();
   });
 });

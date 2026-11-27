@@ -79,7 +79,7 @@ export interface DormantWakeSession {
 }
 
 /** A background shell or Monitor a surface watches live (web useLiveWatchRows). */
-export type DormantWatch = { description?: string; command?: string };
+export type DormantWatch = { kind?: string; description?: string; command?: string };
 
 const ARMED = new Set(["scheduled", "running"]);
 
