@@ -24,7 +24,7 @@ import type { PriorityDetail, PriorityHistory, PriorityList, PriorityPinLine } f
 import type { Doc, Id } from "./_generated/dataModel";
 import { type Priority, type Result, cliWorkspace, criticalCounts, isOwner, listFor, positionOf, showFor, tokenUser } from "./priorityRead";
 import { historyFor } from "./priorityHistory";
-import { type MilestoneChange, doCorrect, doCorrectionDelete, doMerge, doMilestone, doMove, doPriorityDone, doSessionMove, doSessionNotThis, doSetAside } from "./priorityWrite";
+import { type MilestoneChange, doCorrect, doCorrectionDelete, doMerge, doMilestone, doMove, doPriorityDone, doSessionMove, doSessionNotThis, doSetAside, doUndoPriorityDone } from "./priorityWrite";
 
 function orThrow<T>(res: Result<T>): T {
   if (res && typeof res === "object" && "error" in res) throw new Error(res.error);
@@ -33,6 +33,14 @@ function orThrow<T>(res: Result<T>): T {
 
 const statusArg = v.optional(v.union(v.literal("active"), v.literal("done"), v.literal("quiet"), v.literal("set_aside"), v.literal("merged")));
 const tierArg = v.union(v.literal("critical"), v.literal("polish"));
+const setByArg = v.union(v.literal("pass"), v.literal("person"));
+/** What a person's done replaced (shared/contracts/priorities PriorDone). */
+const priorDoneArg = v.object({
+  status: v.union(v.literal("active"), v.literal("quiet"), v.literal("set_aside")),
+  status_set_by: v.optional(setByArg),
+  person_pos: v.optional(v.number()),
+  ai_rank: v.optional(v.number()),
+});
 const cliScope = { team_id: v.optional(v.id("teams")), personal: v.optional(v.boolean()) };
 
 // ── Web (signed-in user) ─────────────────────────────────────────────────
@@ -133,6 +141,12 @@ export const setStepDone = mutation({
   handler: async (ctx, args) => orThrow(await doMilestone(ctx, await authed(ctx), args.short_id, args.step_key, { done: args.done })),
 });
 
+/** The undo of the person's own milestone done: open again, its done state back with whoever held it (`set_by`; none: the pass). */
+export const undoStepDone = mutation({
+  args: { short_id: v.string(), step_key: v.string(), set_by: v.optional(setByArg) },
+  handler: async (ctx, args) => orThrow(await doMilestone(ctx, await authed(ctx), args.short_id, args.step_key, { undoDone: args.set_by ?? null })),
+});
+
 export const renameStep = mutation({
   args: { short_id: v.string(), step_key: v.string(), title: v.string() },
   handler: async (ctx, args) => orThrow(await doMilestone(ctx, await authed(ctx), args.short_id, args.step_key, { title: args.title })),
@@ -146,6 +160,12 @@ export const dropStep = mutation({
 export const markDone = mutation({
   args: { short_id: v.string() },
   handler: async (ctx, args) => orThrow(await doPriorityDone(ctx, await authed(ctx), args.short_id)),
+});
+
+/** The undo of the person's own Mark done: back to the status and place it had. */
+export const undoDone = mutation({
+  args: { short_id: v.string(), prior: priorDoneArg },
+  handler: async (ctx, args) => orThrow(await doUndoPriorityDone(ctx, await authed(ctx), args.short_id, args.prior)),
 });
 
 export const merge = mutation({

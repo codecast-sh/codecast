@@ -27,6 +27,12 @@ export type PriorityStepTier = "critical" | "polish";
 /** Who last decided a field the person can also set. The pass never overwrites "person". */
 export type PrioritySetBy = "pass" | "person";
 
+/**
+ * What the person's own done replaced, which its undo puts back: a
+ * priority's status, who held it, and its place (convex priorities.undoDone).
+ */
+export type PriorDone = { status: "active" | "quiet" | "set_aside"; status_set_by?: PrioritySetBy; person_pos?: number; ai_rank?: number };
+
 export type PriorityRankSource = "person" | "ai";
 
 export type PriorityRefKind = "task" | "session" | "pr" | "commit";

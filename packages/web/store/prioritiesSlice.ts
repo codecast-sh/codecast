@@ -9,10 +9,10 @@
 // next push settles the paint; a refused write is put back by its caller
 // (lib/priorityWrites).
 import { asyncAction } from "./mutativeMiddleware";
-import type { PriorityRow, PriorityStepTier } from "@codecast/shared/contracts/priorities";
+import type { PriorDone, PriorityRow, PrioritySetBy, PriorityStepTier } from "@codecast/shared/contracts/priorities";
 import {
   paintCorrection, paintCorrectionDelete, paintDetachedMove, paintDrop, paintedRow, paintMerge, paintMove, paintPriorityDone, paintRename, paintSessionMove,
-  paintSessionNotThis, paintStatus, paintStepDone, paintTier, type PaintState, type PriorityMove,
+  paintSessionNotThis, paintStatus, paintStepDone, paintTier, paintUndoPriorityDone, paintUndoStepDone, type PaintState, type PriorityMove,
 } from "../lib/priorities";
 
 export type PrioritiesSliceActions = {
@@ -24,6 +24,9 @@ export type PrioritiesSliceActions = {
   renamePriorityStep: (shortId: string, stepKey: string, title: string) => Promise<unknown>;
   dropPriorityStep: (shortId: string, stepKey: string) => Promise<unknown>;
   markPriorityDone: (shortId: string) => Promise<unknown>;
+  /** The undo of the person's own done (lib/priorityWrites records it): what the press replaced comes back. */
+  undoPriorityStepDone: (shortId: string, stepKey: string, setBy: PrioritySetBy | null) => Promise<unknown>;
+  undoPriorityDone: (shortId: string, prior: PriorDone) => Promise<unknown>;
   mergePriority: (shortId: string, into: string) => Promise<unknown>;
   /** `from` is the priority the session shows on, for the paint; the server reads the session's own. */
   movePrioritySession: (session: string, from: string, to: string, stepKey: string | null) => Promise<unknown>;
@@ -73,6 +76,14 @@ export function createPrioritiesSlice(): PrioritiesSliceActions {
       const row = paintedRow(this, shortId);
       if (row) paintPriorityDone(row, Date.now());
     }) as PrioritiesSliceActions["markPriorityDone"],
+    undoPriorityStepDone: asyncAction(function (this: PaintState, shortId: string, stepKey: string, setBy: PrioritySetBy | null) {
+      const row = paintedRow(this, shortId);
+      if (row) paintUndoStepDone(row, stepKey, setBy);
+    }) as PrioritiesSliceActions["undoPriorityStepDone"],
+    undoPriorityDone: asyncAction(function (this: PaintState, shortId: string, prior: PriorDone) {
+      const row = paintedRow(this, shortId);
+      if (row) paintUndoPriorityDone(row, prior);
+    }) as PrioritiesSliceActions["undoPriorityDone"],
     mergePriority: asyncAction(function (this: PaintState, shortId: string, into: string) {
       const from = paintedRow(this, shortId);
       const to = paintedRow(this, into);

@@ -10,7 +10,7 @@ import { backfillGroup, legacy } from "./priorityRankBackfill";
 import { activeGroup, stepKeyMark } from "./lib/priorityGroup";
 import { inWorkspace } from "./priorityPassInputs";
 import { passActivity } from "./lib/priorityPassSchedule";
-import type { PriorityCorrection, PriorityRow, PriorityStep } from "@codecast/shared/contracts/priorities";
+import type { PriorDone, PriorityCorrection, PriorityRow, PriorityStep } from "@codecast/shared/contracts/priorities";
 import type { Doc, Id } from "./_generated/dataModel";
 import { type Ctx, OWN_SCAN_READ, type Priority, type Result, correctionOut, echo, owned, positionsOf } from "./priorityRead";
 
@@ -54,8 +54,12 @@ export async function doMove(ctx: Ctx, viewer: Id<"users">, shortId: string, to:
   return echo(ctx, viewer, p._id);
 }
 
-/** A milestone the person changes: its tier, its done state, its title, or a drop. */
-export type MilestoneChange = { tier: "critical" | "polish" } | { done: boolean } | { title: string } | { drop: true };
+/**
+ * A milestone the person changes: its tier, its done state, its title, a
+ * drop, or the undo of their own done (`undoDone`: who held its done state
+ * before, null for nobody).
+ */
+export type MilestoneChange = { tier: "critical" | "polish" } | { done: boolean } | { undoDone: PriorDone["status_set_by"] | null } | { title: string } | { drop: true };
 const MAX_TITLE = 200;
 
 /** A live (not dropped) milestone of `p` by key, or the plain reason there is none. */
@@ -78,6 +82,10 @@ export async function doMilestone(ctx: Ctx & { scheduler: any }, viewer: Id<"use
     const title = change.title.trim();
     if (!title || title.length > MAX_TITLE) return { error: `a milestone title is 1 to ${MAX_TITLE} characters` };
     next = { ...step, title, title_set_by: "person" };
+  } else if ("undoDone" in change) {
+    if (!step.done || step.done_set_by !== "person") return { error: `${step.title} is no longer marked done by you` };
+    const { done_at: _, done_set_by: __, ...rest } = step;
+    next = { ...rest, done: false, ...(change.undoDone ? { done_set_by: change.undoDone } : {}) };
   } else if (change.done) next = { ...step, done: true, done_at: step.done ? step.done_at ?? now : now, done_set_by: "person" };
   else {
     const { done_at: _, ...rest } = step;
@@ -120,6 +128,27 @@ export async function doPriorityDone(ctx: Ctx, viewer: Id<"users">, shortId: str
     const now = Date.now();
     await ctx.db.patch(p._id, { status: "done", status_set_by: "person", done_at: p.status === "done" ? p.done_at ?? now : now, ...UNRANKED, updated_at: now });
   }
+  return echo(ctx, viewer, p._id);
+}
+
+/**
+ * The undo of the person's own done, moments after it: the priority goes back
+ * to the status and place it had (`prior`, read when it was pressed), so it
+ * keeps its rank, and a status the pass held is the pass's again. Refused once
+ * it is no longer the person's done.
+ */
+export async function doUndoPriorityDone(ctx: Ctx, viewer: Id<"users">, shortId: string, prior: PriorDone): Promise<Result<PriorityRow>> {
+  const p = await owned(ctx, viewer, shortId);
+  if ("error" in p) return p;
+  if (p.status !== "done" || p.status_set_by !== "person") return { error: `${p.short_id} is no longer marked done by you` };
+  await ctx.db.patch(p._id, {
+    status: prior.status,
+    status_set_by: prior.status_set_by === "person" ? "person" : undefined,
+    done_at: undefined,
+    person_pos: prior.person_pos,
+    ai_rank: prior.ai_rank,
+    updated_at: Date.now(),
+  });
   return echo(ctx, viewer, p._id);
 }
 

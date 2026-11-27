@@ -10,6 +10,8 @@ import { listMeta, listRows, prioritySig, withLiveRanks, type PriorityListMeta, 
 import { priorityWrites } from "../lib/priorityWrites";
 import { resolveInboxViewMode, useInboxStore } from "../store/inboxStore";
 import { isRefusedDispatchError } from "../store/mutativeMiddleware";
+// Installs sonner as the undo notifier, which raises a check-off's Undo receipt (lib/priorityWrites).
+import "../store/undoStack";
 import { useSyncCollection } from "./useSyncCollection";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useServerAuthSettled } from "./useServerAuthSettled";
@@ -52,7 +54,7 @@ export function usePriorities(): PriorityRow[] {
 
 const WRITES = priorityWrites((message) => toast.error(message));
 
-/** The store's priority actions (lib/priorityWrites), each put back when the server refuses it, the reason shown as a toast. */
+/** The store's priority actions (lib/priorityWrites), each put back when the server refuses it, the reason shown as a toast; a check-off also records its undo. */
 export function usePriorityWrites(): PriorityWrites {
   return WRITES;
 }
