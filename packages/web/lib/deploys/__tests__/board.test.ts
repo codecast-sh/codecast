@@ -321,6 +321,8 @@ describe("branchHref", () => {
   test("a branch with a PR opens the PR page; without one, the branch on GitHub", () => {
     expect(branchHref("acme/app", "jb/fix", 42)).toBe("/pr/acme/app/42");
     expect(branchHref("acme/app", "jb/fix #2", null)).toBe("https://github.com/acme/app/tree/jb/fix%20%232");
+    // A repository the PR route cannot name (no owner) still opens the branch on GitHub.
+    expect(branchHref("app", "main", 3)).toBe("https://github.com/app/tree/main");
   });
 });
 
