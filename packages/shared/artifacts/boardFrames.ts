@@ -23,12 +23,14 @@
 //   hiddenKeys(view)                 keys held by any folded frame (nested folds included)
 //   carriedKeys(view, keys)          what moves with a selection: frame contents, nested frames, held keys, arrows whose ends both move
 //   moveFrameOps(view, key, dx, dy)  move a frame (or any selection) with everything it carries
-//   collapseFrameOps(view, key, o)   fold into a title pill; the enclosing frame reflows (unless o.reflowParent is false)
-//   expandFrameOps(view, key, o)     unfold; the enclosing frame reflows (unless o.reflowParent is false), or at the top level what it now covers moves down
+//   collapseFrameOps(view, key, o)   fold into a title pill; the enclosing frames reflow, up to o.levels of them
+//   expandFrameOps(view, key)        unfold; the enclosing frame reflows, or at the top level what it now covers moves down
 //   enclosingFrameKeys(view, key)    the open frames around a visible element, innermost first
+//   personTouched(view, ops, exempt) the people's elements a batch moves, resizes or newly encloses (agent courtesy)
+//   agentCollapseOps(view, key)      an agent's fold: reflows upward only as far as no person's element is touched
 //   reflowFrameOps(view, key)        lay out a frame's children and size it to fit, then settle its level the same way
 //   organizeOps(view, opts)          the whole board: agenda frames in the top row, other frames below, loose items gridded under them
-import type { ArtifactElement, ArtifactOp, Json } from "./core";
+import { foldOps, toElement, type ArtifactElement, type ArtifactOp, type ElementState, type Json } from "./core";
 import type { ArtifactView } from "./spec";
 import { contains, elementBounds, textWidth, type Box, type Pt } from "./boardGeometry";
 import { squareCols, tidyBoxes } from "./boardLayout";
@@ -218,8 +220,8 @@ class FrameLayout {
   private readonly fields = new Map<string, Record<string, Json>>();
   private readonly collapsedOverride = new Map<string, FrameCollapsed | null>();
   hidden: Set<string>;
-  /** False: a size change inside a frame leaves that frame (and those around it) as they are. */
-  reflowParent = true;
+  /** How many enclosing frames a size change may reflow, innermost first; the top-level push comes only past the last. */
+  levels = Infinity;
 
   constructor(view: View) {
     this.els = new Map(view.elements.map((e) => [e.key, e]));
@@ -323,14 +325,14 @@ class FrameLayout {
    * the push rule, judging what is newly covered against `judge` (the box the
    * frame had before the change; for an expand, the box it had before folding).
    */
-  settle(n: Node, before: Box, judge: Box = before) {
+  settle(n: Node, before: Box, judge: Box = before, level = 0) {
     if (sameBox(before, n.box)) return;
     const p = n.parent;
     if (p && p !== this.root) {
-      if (!this.reflowParent) return;
+      if (level >= this.levels) return;
       const pBefore = { ...p.box };
       this.reflow(p);
-      this.settle(p, pBefore);
+      this.settle(p, pBefore, pBefore, level + 1);
     } else this.push(n, judge);
   }
 
@@ -516,19 +518,16 @@ class FrameLayout {
   }
 }
 
-/** reflowParent: false folds or unfolds without reflowing the enclosing frame (an agent leaving a person's frame as it was). */
-export type FoldOpts = { reflowParent?: boolean };
-
-export function collapseFrameOps(view: View, key: string, opts: FoldOpts = {}): ArtifactOp[] {
+/** levels: how many enclosing frames the fold may reflow (0: the fold alone); every one by default. */
+export function collapseFrameOps(view: View, key: string, opts: { levels?: number } = {}): ArtifactOp[] {
   const l = new FrameLayout(view);
-  l.reflowParent = opts.reflowParent !== false;
+  l.levels = opts.levels ?? Infinity;
   l.collapse(l.frameNode(key, "open"));
   return l.ops();
 }
 
-export function expandFrameOps(view: View, key: string, opts: FoldOpts = {}): ArtifactOp[] {
+export function expandFrameOps(view: View, key: string): ArtifactOp[] {
   const l = new FrameLayout(view);
-  l.reflowParent = opts.reflowParent !== false;
   l.expand(l.frameNode(key, "folded"));
   return l.ops();
 }
@@ -553,4 +552,83 @@ export function organizeOps(view: View, opts: { people?: readonly string[] } = {
   const l = new FrameLayout(view);
   l.organize(opts.people ?? []);
   return l.ops();
+}
+
+// ── Agent courtesy ────────────────────────────────────────────────────────
+// An agent's layout never moves, resizes or swallows a person's element: the
+// CLI computes a batch, then checks it here before writing.
+
+/** Written by a person (the server stamps `by` "u:<id>"; a session writes as "s:<id>"). */
+export function isPersonElement(el: ArtifactElement | undefined): boolean {
+  return typeof el?.by === "string" && el.by.startsWith("u:");
+}
+
+const GEOMETRY = ["x", "y", "w", "h", "x1", "y1", "x2", "y2"] as const;
+
+/** The board after one batch, `by` kept, so a check can read both sides. */
+function applied(view: Pick<ArtifactView, "elements">, ops: readonly ArtifactOp[]): ArtifactElement[] {
+  const state = new Map<string, ElementState>();
+  const meta = new Map(view.elements.map((e) => [e.key, { rev: e.rev, by: e.by as string | undefined }]));
+  for (const e of view.elements) {
+    const { key: _k, kind, rev: _r, by: _b, at: _a, ...fields } = e as Record<string, any>;
+    state.set(e.key, { kind, fields });
+  }
+  foldOps(state, ops);
+  return [...state].filter(([, st]) => !st.deleted).map(([k, st]) => toElement(k, st, meta.get(k)));
+}
+
+/** Each visible element's open frames, by key: which frames geometrically hold it. */
+function holders(els: readonly ArtifactElement[]): Map<string, Set<string>> {
+  const hidden = hiddenKeys({ elements: [...els] });
+  const frames = els.filter((e) => e.kind === "frame" && !hidden.has(e.key) && !frameCollapsed(e)).map((f) => ({ key: f.key, box: elementBounds(f) }));
+  const out = new Map<string, Set<string>>();
+  for (const e of els) {
+    if (hidden.has(e.key) || e.kind === "connector") continue;
+    const b = elementBounds(e);
+    out.set(e.key, new Set(frames.filter((f) => f.key !== e.key && contains(f.box, b)).map((f) => f.key)));
+  }
+  return out;
+}
+
+/**
+ * The people's elements a batch would move or resize, or newly put inside a
+ * frame that did not hold them before. `exempt` are the keys the command was
+ * asked to act on (the frame it folds, the keys it moves): their own change
+ * is the point of the command.
+ */
+export function personTouched(view: Pick<ArtifactView, "elements">, ops: readonly ArtifactOp[], exempt: readonly string[] = []): string[] {
+  const skip = new Set(exempt);
+  const byKey = new Map(view.elements.map((e) => [e.key, e]));
+  const out = new Set<string>();
+  for (const op of ops) {
+    const el = byKey.get(op.k);
+    if (!isPersonElement(el) || skip.has(op.k) || !("set" in op)) continue;
+    if (GEOMETRY.some((f) => f in op.set && JSON.stringify(op.set[f]) !== JSON.stringify(el![f] ?? null))) out.add(op.k);
+  }
+  const before = holders(view.elements);
+  const after = applied(view, ops);
+  for (const [k, now] of holders(after)) {
+    const el = byKey.get(k);
+    // Held before (an unfolding frame's own contents coming back) is not new.
+    if (!isPersonElement(el) || skip.has(k) || !before.has(k)) continue;
+    const was = before.get(k)!;
+    if ([...now].some((f) => !was.has(f))) out.add(k);
+  }
+  return [...out];
+}
+
+/**
+ * An agent's fold: the fold always happens, then the enclosing frames reflow
+ * one level at a time, stopping at the first level whose reflow would touch
+ * a person's element. `leftAsItWas` is that level's frame.
+ */
+export function agentCollapseOps(view: View, key: string): { ops: ArtifactOp[]; leftAsItWas: string | null } {
+  const around = enclosingFrameKeys(view, key);
+  let ops = collapseFrameOps(view, key, { levels: 0 });
+  for (let level = 1; level <= around.length; level++) {
+    const next = collapseFrameOps(view, key, { levels: level });
+    if (personTouched(view, next, [key]).length) return { ops, leftAsItWas: around[level - 1] };
+    ops = next;
+  }
+  return { ops, leftAsItWas: null };
 }

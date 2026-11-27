@@ -7,6 +7,7 @@ import {
   collapseFrameOps,
   describeBoard,
   elementBox,
+  agentCollapseOps,
   enclosingFrameKeys,
   expandFrameOps,
   FRAME_GAP,
@@ -17,6 +18,7 @@ import {
   hiddenKeys,
   moveFrameOps,
   organizeOps,
+  personTouched,
   reflowFrameOps,
   type Box,
 } from "./board";
@@ -198,7 +200,7 @@ describe("collapse and expand", () => {
     expect(overlaps(box(v4, "el_i"), box(v4, "el_s2"))).toBe(false);
   });
 
-  test("reflowParent: false folds and unfolds the inner frame and leaves the outer one and its stickies as they were", () => {
+  test("levels: 0 folds the inner frame alone and leaves the outer one and its stickies as they were", () => {
     const v0 = board([
       frame("el_o", 0, 0, 1000, 800),
       frame("el_i", 40, 64, 500, 400),
@@ -208,17 +210,13 @@ describe("collapse and expand", () => {
     expect(enclosingFrameKeys(v0, "el_i")).toEqual(["el_o"]);
     expect(enclosingFrameKeys(v0, "el_s1")).toEqual(["el_i", "el_o"]);
     expect(enclosingFrameKeys(v0, "el_o")).toEqual([]);
-    const ops = collapseFrameOps(v0, "el_i", { reflowParent: false });
+    const ops = collapseFrameOps(v0, "el_i", { levels: 0 });
     expect(ops.map((o) => o.k)).toEqual(["el_i"]);
     const v1 = apply(v0, ops);
     expect([...hiddenKeys(v1)]).toEqual(["el_s1"]);
     expect(box(v1, "el_i")).toMatchObject({ x: 40, y: 64, h: FRAME_PILL_H });
     expect(box(v1, "el_o")).toEqual(box(v0, "el_o"));
     expect(pos(v1, "el_s2")).toEqual({ x: 700, y: 128 });
-
-    const v2 = apply(v1, expandFrameOps(v1, "el_i", { reflowParent: false }));
-    expect(hiddenKeys(v2).size).toBe(0);
-    for (const k of ["el_o", "el_i", "el_s1", "el_s2"]) expect(box(v2, k)).toEqual(box(v0, k));
   });
 
   test("refuses frames in the wrong state", () => {
@@ -472,5 +470,44 @@ describe("describe", () => {
     const lines = describeBoard(v2).split("\n");
     expect(lines.find((l) => l.includes("el_i  frame"))).toMatch(/^ {2}el_i/);
     expect(lines.find((l) => l.includes("el_s1  sticky"))).toMatch(/^ {4}el_s1/);
+  });
+});
+
+describe("agent courtesy", () => {
+  const mine = { by: "u:jason" };
+
+  test("personTouched names a person's element a batch moves, resizes or newly encloses, and spares the keys asked for", () => {
+    const v0 = board([frame("el_t", 0, 0, 1200, 900, mine), sticky("el_s", 80, 128), sticky("el_p", 700, 500, mine)]);
+    const reflow = reflowFrameOps(v0, "el_t");
+    expect(personTouched(v0, reflow)).toEqual(["el_p", "el_t"]);
+    // The frame asked for is the command's own change; its person-made contents still count.
+    expect(personTouched(v0, reflow, ["el_t"])).toEqual(["el_p"]);
+    expect(personTouched(v0, reflow, ["el_t", "el_p"])).toEqual([]);
+    // Swallowed: a frame grows over a person's sticky without moving it.
+    const v1 = board([frame("el_n", 0, 0, 260, 48, { collapsed: { w: 500, h: 400, holds: ["el_s"] } }), sticky("el_s", 40, 64), sticky("el_p", 280, 64, mine)]);
+    const grow: ArtifactOp[] = [{ k: "el_n", set: { collapsed: null, w: 500, h: 400 } }];
+    expect(personTouched(v1, grow, ["el_n"])).toEqual(["el_p"]);
+    // A frame's own contents coming back on expand are not new.
+    expect(personTouched(board([frame("el_n", 0, 0, 260, 48, { collapsed: { w: 500, h: 400, holds: ["el_q"] } }), sticky("el_q", 40, 64, mine)]), grow, ["el_n"])).toEqual([]);
+  });
+
+  test("an agent's fold reflows up to the level holding a person's work, keeps the levels below, and names that level", () => {
+    const v0 = board([
+      frame("el_o", 0, 0, 2000, 1200),
+      frame("el_t", 40, 64, 900, 900),
+      frame("el_n", 80, 128, 500, 400),
+      sticky("el_s", 120, 192),
+      frame("el_sib", 1000, 64, 900, 900),
+      sticky("el_p", 1040, 128, mine),
+    ]);
+    const { ops, leftAsItWas } = agentCollapseOps(v0, "el_n");
+    // el_t reflowed (shrank around the pill); el_o, whose reflow would move el_sib and el_p, did not.
+    expect(leftAsItWas).toBe("el_o");
+    expect(ops.map((o) => o.k).sort()).toEqual(["el_n", "el_t"]);
+    expect(ops).toEqual(collapseFrameOps(v0, "el_n", { levels: 1 }));
+    expect(personTouched(v0, ops, ["el_n"])).toEqual([]);
+    // No person anywhere: every level reflows.
+    const clean = board(v0.elements.map((e) => ({ ...e, by: "s:a" })));
+    expect(agentCollapseOps(clean, "el_n")).toEqual({ ops: collapseFrameOps(clean, "el_n"), leftAsItWas: null });
   });
 });

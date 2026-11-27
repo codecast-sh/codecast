@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { Command } from "commander";
 import { artifactView, specForCli } from "@codecast/shared/artifacts";
-import { lifecycleGuide, parseDocRef, parseOpsInput, readNotes, refTitles, registerBoardCommand, registerDataCommand, registerSheetCommand, resolveRmKeys } from "./liveArtifactCommand";
+import { lifecycleGuide, parseDocRef, parseOpsInput, readNotes, registerBoardCommand, registerDataCommand, registerSheetCommand, resolveRmKeys } from "./liveArtifactCommand";
 
 const ID = "k17abcdefghijklmnopqrstuvwxyz012";
 
@@ -101,76 +101,114 @@ describe("cast board frame verbs (pl-1145)", () => {
   const frameEl = (key: string, x: number, y: number, w: number, h: number, extra: Record<string, any> = {}) => ({ key, kind: "frame", rev: 1, by: "s:agent", x, y, w, h, title: key, ...extra }) as any;
   const put = (r: { ops: any[] }, k: string) => r.ops.find((o) => o.k === k)?.put;
   const set = (r: { ops: any[] }, k: string) => r.ops.find((o) => o.k === k)?.set;
+  /** One batch applied the way live.apply does, `by` kept. */
+  const apply = (v: any, ops: any[]) => artifactView("board", "B", v.elements.flatMap((e: any) => {
+    const o = ops.find((x) => x.k === e.key);
+    if (o && "del" in o) return [];
+    const r = { ...e, ...(o?.set ?? {}) };
+    for (const k in o?.set ?? {}) if (o.set[k] === null) delete r[k];
+    return [r];
+  }).concat(ops.filter((o) => "put" in o && !v.get(o.k)).map((o) => ({ ...o.put, key: o.k, rev: 0 }))));
+  const AGENT = { agent: true };
 
-  test("place --frame-ref sets the frame's ref and titles it by the entity, falling back to the id", () => {
+  test("place --frame-ref writes the ref and titles the frame with the caller's words or the bare id, never a looked-up title", () => {
     const view = artifactView("board", "B", []);
-    const titled = verbs.place.run(view, ["grid", "--frame-ref", "CT-12"], "One\nTwo", { titles: { "ct-12": "Budget caps" } });
-    const f = titled.ops.find((o: any) => o.put?.kind === "frame") as any;
-    expect(f.put).toMatchObject({ ref: "ct-12", title: "Budget caps" });
-    expect(verbs.place.refs!(["grid", "--frame-ref", "ct-12"])).toEqual(["ct-12"]);
-    const bare = verbs.place.run(view, ["grid", "--frame-ref", "pri-3"], "One");
-    expect((bare.ops.find((o: any) => o.put?.kind === "frame") as any).put).toMatchObject({ ref: "pri-3", title: "pri-3" });
+    const bare = verbs.place.run(view, ["grid", "--frame-ref", "CT-12"], "One\nTwo");
+    expect((bare.ops.find((o: any) => o.put?.kind === "frame") as any).put).toMatchObject({ ref: "ct-12", title: "ct-12" });
+    const named = verbs.place.run(view, ["grid", "--frame-ref", "pri-3", "--frame", "Budget caps"], "One");
+    expect((named.ops.find((o: any) => o.put?.kind === "frame") as any).put).toMatchObject({ ref: "pri-3", title: "Budget caps" });
     expect(() => verbs.place.run(view, ["grid", "--frame-ref", "jx7abcd"], "One")).toThrow(/pri-N, in-N, pl-N or ct-N/);
   });
 
-  test("frame --ref titles by the entity when the first word is a key, and --collapse folds it in the same batch", () => {
+  test("frame --ref with keys only is titled by the id, refuses a mistyped key, and --collapse folds it in the same batch", () => {
     const view = artifactView("board", "B", [sticky("el_a", 0, 0), sticky("el_b", 240, 0)]);
-    const r = verbs.frame.run(view, ["el_a", "el_b", "--ref", "pl-9", "--status", "leaning", "--collapse"], undefined, { titles: { "pl-9": "Huddle board" } });
-    // One put for the frame, already folded: no separate set op for it.
+    const r = verbs.frame.run(view, ["el_a", "el_b", "--ref", "pl-9", "--status", "leaning", "--collapse"], undefined, AGENT);
     const fk = r.ops.find((o: any) => o.put?.kind === "frame")!.k;
+    // One put for the frame, already folded: no separate set op for it.
     expect(r.ops.filter((o) => o.k === fk)).toHaveLength(1);
-    expect(put(r, fk)).toMatchObject({ ref: "pl-9", title: "Huddle board", status: "leaning", h: 48 });
+    expect(put(r, fk)).toMatchObject({ ref: "pl-9", title: "pl-9", status: "leaning", h: 48 });
     expect(put(r, fk).collapsed.holds.sort()).toEqual(["el_a", "el_b"]);
-    expect(r.status).toMatch(/collapsed/);
-    // A title given still wins over the entity.
-    const own = verbs.frame.run(view, ["Mine", "el_a", "--ref", "pl-9"], undefined, { titles: { "pl-9": "Huddle board" } });
-    expect((own.ops[0] as any).put).toMatchObject({ title: "Mine", ref: "pl-9" });
+    expect((verbs.frame.run(view, ["Mine", "el_a", "--ref", "pl-9"]).ops[0] as any).put).toMatchObject({ title: "Mine", ref: "pl-9" });
+    expect(() => verbs.frame.run(view, ["el_typo", "el_a", "--ref", "ct-1"])).toThrow("no element el_typo on this board");
     expect(() => verbs.frame.run(view, ["T", "el_a", "--status", "maybe"])).toThrow(/open, leaning, decided, parked/);
   });
 
-  test("edit --status tags a frame, --ref changes its entity and title, and both refuse a sticky", () => {
-    const view = artifactView("board", "B", [frameEl("el_f", 0, 0, 400, 300), sticky("el_a", 40, 64)]);
+  test("edit --status and --ref write only what changes and keep the title unless new words are given", () => {
+    const view = artifactView("board", "B", [frameEl("el_f", 0, 0, 400, 300, { title: "Budget caps", ref: "ct-1", status: "open" }), frameEl("el_g", 0, 400, 400, 300, { title: "" }), sticky("el_a", 40, 64)]);
     expect(set(verbs.edit.run(view, ["el_f", "--status", "decided"]), "el_f")).toEqual({ status: "decided" });
     expect(set(verbs.edit.run(view, ["el_f", "--status", "none"]), "el_f")).toEqual({ status: null });
-    expect(set(verbs.edit.run(view, ["el_f", "--ref", "in-4"], undefined, { titles: { "in-4": "Grow teams" } }), "el_f")).toEqual({ ref: "in-4", title: "Grow teams" });
+    expect(set(verbs.edit.run(view, ["el_f", "--ref", "in-4"]), "el_f")).toEqual({ ref: "in-4" });
+    expect(set(verbs.edit.run(view, ["el_f", "New", "words", "--ref", "in-4"]), "el_f")).toEqual({ title: "New words", ref: "in-4" });
+    expect(set(verbs.edit.run(view, ["el_g", "--ref", "in-4"]), "el_g")).toEqual({ ref: "in-4", title: "in-4" });
     expect(set(verbs.edit.run(view, ["el_f", "--ref", "none"]), "el_f")).toEqual({ ref: null });
+    expect(verbs.edit.run(view, ["el_f", "--ref", "ct-1"])).toEqual({ ops: [], status: "el_f already has that ref: nothing to write" });
+    expect(verbs.edit.run(view, ["el_f", "--status", "open"]).ops).toEqual([]);
     expect(() => verbs.edit.run(view, ["el_f", "--status", "done"])).toThrow(/--status is/);
     expect(() => verbs.edit.run(view, ["el_a", "--status", "open"])).toThrow(/frame's/);
   });
 
-  test("collapse and expand fold a frame in one batch; the enclosing frame reflows", () => {
+  test("collapse and expand fold a frame in one batch; with no person's work about, the enclosing frame reflows", () => {
     const v0 = artifactView("board", "B", [frameEl("el_o", 0, 0, 1000, 800), frameEl("el_i", 40, 64, 500, 400), sticky("el_s1", 80, 128), sticky("el_s2", 700, 128)]);
-    const r = verbs.collapse.run(v0, ["el_i"], undefined, { agent: true });
+    const r = verbs.collapse.run(v0, ["el_i"], undefined, AGENT);
     expect(set(r, "el_i").collapsed.holds).toEqual(["el_s1"]);
-    // The outer frame (only agent work in it) reflowed: s2 moved up beside the pill.
     expect(set(r, "el_s2")).toBeDefined();
-    expect(r.status).toMatch(/^collapsed el_i \(1 held\)/);
-    expect(r.status).not.toMatch(/left the enclosing frame/);
+    expect(r.status).toBe("collapsed el_i (1 held)\nkeys: el_i");
     const folded = artifactView("board", "B", [frameEl("el_f", 0, 0, 260, 48, { collapsed: { w: 400, h: 300, holds: ["el_a"] } }), sticky("el_a", 40, 64)]);
-    const e = verbs.expand.run(folded, ["el_f"]);
+    const e = verbs.expand.run(folded, ["el_f"], undefined, AGENT);
     expect(set(e, "el_f")).toMatchObject({ collapsed: null, w: 400, h: 300 });
     expect(e.status).toMatch(/^expanded el_f \(1 shown\)/);
     expect(() => verbs.collapse.run(v0, ["el_s1"])).toThrow(/not a frame/);
   });
 
-  test("an agent folding inside a frame that holds a person's sticky leaves that frame as it was, and says so", () => {
-    const v0 = artifactView("board", "B", [frameEl("el_o", 0, 0, 1000, 800), frameEl("el_i", 40, 64, 500, 400), sticky("el_s1", 80, 128), sticky("el_s2", 700, 128, "u:jason")]);
-    const r = verbs.collapse.run(v0, ["el_i"], undefined, { agent: true });
-    expect(r.ops.map((o) => o.k)).toEqual(["el_i"]);
-    expect(r.status!.split("\n")[1]).toBe("left the enclosing frame el_o as it was: it holds a person's work");
-    // A person (no agent flag) gets the reflow.
-    expect(verbs.collapse.run(v0, ["el_i"]).ops.map((o) => o.k)).toContain("el_s2");
+  test("courtesy: an agent's expand that would swallow a person's sticky is refused; a person's own run goes ahead", () => {
+    // A person folded the notes and the theme shrank around the pill, their sticky beside it.
+    const v0 = artifactView("board", "B", [frameEl("el_t", 0, 0, 1200, 900), frameEl("el_n", 40, 64, 500, 400), sticky("el_s", 80, 128), sticky("el_p", 640, 64, "u:jason")]);
+    const v1 = apply(v0, verbs.collapse.run(v0, ["el_n"]).ops);
+    expect(v1.get("el_p")).toMatchObject({ x: 324, y: 64 });
+    expect(() => verbs.expand.run(v1, ["el_n"], undefined, AGENT)).toThrow("left the board as it was: this would move or enclose a person's work (el_p). A person can press Reflow or Organize on the board.");
+    expect(verbs.expand.run(v1, ["el_n"]).ops.length).toBeGreaterThan(0);
+    // At the top level an expand that pushes a person's sticky down is refused the same way.
+    const top = artifactView("board", "B", [frameEl("el_n", 0, 0, 260, 48, { collapsed: { w: 500, h: 400, holds: ["el_s"] } }), sticky("el_s", 40, 64), sticky("el_p", 0, 200, "u:jason")]);
+    expect(() => verbs.expand.run(top, ["el_n"], undefined, AGENT)).toThrow(/\(el_p\)/);
+    expect(set(verbs.expand.run(top, ["el_n"]), "el_p")).toEqual({ y: 424 });
+  });
+
+  test("courtesy: an agent's collapse reflows the levels below the one holding a person's work and names that level", () => {
+    const v0 = artifactView("board", "B", [
+      frameEl("el_o", 0, 0, 2000, 1200, { title: "Budget" }),
+      frameEl("el_t", 40, 64, 900, 900),
+      frameEl("el_n", 80, 128, 500, 400),
+      sticky("el_s", 120, 192),
+      frameEl("el_sib", 1000, 64, 900, 900),
+      sticky("el_p", 1040, 128, "u:jason"),
+    ]);
+    const r = verbs.collapse.run(v0, ["el_n"], undefined, AGENT);
+    expect(r.ops.map((o) => o.k).sort()).toEqual(["el_n", "el_t"]);
+    expect(r.status!.split("\n")[1]).toBe(`left "Budget" as it was: it holds a person's work`);
+    // A person's collapse reflows every level, moving el_sib and el_p.
+    expect(verbs.collapse.run(v0, ["el_n"]).ops.map((o) => o.k)).toEqual(expect.arrayContaining(["el_o", "el_sib", "el_p"]));
+  });
+
+  test("courtesy: an agent's reflow, organize and frame move that would touch a person's sticky are refused; a person's are not", () => {
+    const v0 = artifactView("board", "B", [frameEl("el_t", 0, 0, 1200, 900), sticky("el_p", 700, 500, "u:jason"), sticky("el_s", 80, 128)]);
+    for (const args of [["el_t"], []]) {
+      expect(() => verbs.reflow.run(v0, args, undefined, AGENT)).toThrow(/a person's work \(el_p\)/);
+      expect(set(verbs.reflow.run(v0, args), "el_p")).toEqual({ x: 264, y: 64 });
+    }
+    expect(() => verbs.move.run(v0, ["el_t", "--by", "100,0"], undefined, AGENT)).toThrow(/\(el_p\)/);
+    expect(set(verbs.move.run(v0, ["el_t", "--by", "100,0"]), "el_p")).toEqual({ x: 800, y: 500 });
+    // Moving an agent's own frame of agent work is fine; so is reflowing one.
+    const own = artifactView("board", "B", [frameEl("el_t", 0, 0, 1200, 900), sticky("el_s", 80, 128), sticky("el_p", 2000, 0, "u:jason")]);
+    expect(verbs.move.run(own, ["el_t", "--by", "100,0"], undefined, AGENT).ops.map((o) => o.k).sort()).toEqual(["el_s", "el_t"]);
+    expect(verbs.reflow.run(own, ["el_t"], undefined, AGENT).ops.length).toBeGreaterThan(0);
   });
 
   test("reflow lays out one frame, or organizes the board with no frame; a laid-out frame writes nothing", () => {
     const v0 = artifactView("board", "B", [frameEl("el_f", 0, 0, 900, 700), sticky("el_a", 300, 300), sticky("el_b", 50, 100)]);
     const r = verbs.reflow.run(v0, ["el_f"]);
-    expect(set(r, "el_f")).toBeDefined();
     expect(r.status).toMatch(/^reflowed el_f/);
-    const after = artifactView("board", "B", v0.elements.map((e) => ({ ...e, ...set(r, e.key) })));
-    expect(verbs.reflow.run(after, ["el_f"])).toEqual({ ops: [], status: "el_f is already laid out" });
+    expect(verbs.reflow.run(apply(v0, r.ops), ["el_f"])).toEqual({ ops: [], status: "el_f is already laid out" });
     const org = verbs.reflow.run(artifactView("board", "B", [frameEl("el_f", 0, 0, 400, 300), frameEl("el_g", 2000, 900, 400, 300)]), []);
-    expect(org.ops.length).toBeGreaterThan(0);
     expect(org.status).toMatch(/^organized the board/);
     expect(() => verbs.reflow.run(v0, ["el_a"])).toThrow(/not a frame/);
   });
@@ -185,34 +223,8 @@ describe("cast board frame verbs (pl-1145)", () => {
   });
 });
 
-describe("refTitles", () => {
-  test("reads each id's title from its own route once, and leaves out one that can't be read", async () => {
-    const calls: string[] = [];
-    const answers: Record<string, any> = {
-      "/cli/work/get": { title: "Fix the auth race" },
-      "/cli/plans/get": { title: "Huddle board Scribe" },
-      "/cli/priorities/show": { title: " Budget caps " },
-      "/cli/initiatives/get": null,
-    };
-    const post = async (path: string, body: Record<string, any>) => {
-      calls.push(`${path} ${JSON.stringify(body)}`);
-      if (!(path in answers)) throw new Error(`unplanned ${path}`);
-      return answers[path];
-    };
-    expect(await refTitles(post, ["ct-1", "pl-2", "pri-3", "in-4", "ct-1"])).toEqual({ "ct-1": "Fix the auth race", "pl-2": "Huddle board Scribe", "pri-3": "Budget caps" });
-    expect(calls).toEqual([
-      '/cli/work/get {"short_id":"ct-1"}',
-      '/cli/plans/get {"short_id":"pl-2"}',
-      '/cli/priorities/show {"short_id":"pri-3"}',
-      '/cli/initiatives/get {"id":"in-4"}',
-    ]);
-    const refused = async () => { throw new Error("not found"); };
-    expect(await refTitles(refused, ["ct-9"])).toEqual({});
-  });
-});
-
 describe("cast board frame verbs through the CLI", () => {
-  test("frame --ref --collapse reads the title, writes one batch as the session, and courtesy reaches the verb", async () => {
+  test("frame --ref --collapse reads the board, writes one batch as the session, and courtesy reaches the verb", async () => {
     const seen: { path: string; body: any }[] = [];
     const elements = [
       { key: "el_o", kind: "frame", rev: 1, by: "u:jason", at: 1, fields: { x: 0, y: 0, w: 1000, h: 800, title: "Jason's", z: 0 } },
@@ -226,7 +238,6 @@ describe("cast board frame verbs through the CLI", () => {
         const body = await req.json();
         seen.push({ path, body: structuredClone(body) });
         if (path === "/cli/live/elements") return Response.json({ title: "B", doc_type: "board", head: 3, rows: elements.map((e) => ({ ...e, layer: "main" })), more: false });
-        if (path === "/cli/work/get") return Response.json(body.short_id === "ct-12" ? { title: "Budget caps" } : { error: `no task ${body.short_id} you can see` });
         if (path === "/cli/live/apply") return Response.json({ rev: 4, keys: body.ops.map((o: any) => o.k) });
         return new Response("unplanned", { status: 500 });
       },
@@ -238,21 +249,16 @@ describe("cast board frame verbs through the CLI", () => {
       const p = new Command();
       registerBoardCommand(p, { getCliEndpoint: () => ({ siteUrl: `http://127.0.0.1:${server.port}`, apiToken: "t" }), detectCurrentSessionId: () => "sess1" } as any);
       await p.parseAsync(["node", "cast", "board", "frame", ID, "el_a", "--ref", "ct-12", "--collapse"]);
-      // A task the caller can't read titles the frame by its id instead of stopping the write.
-      const q = new Command();
-      registerBoardCommand(q, { getCliEndpoint: () => ({ siteUrl: `http://127.0.0.1:${server.port}`, apiToken: "t" }), detectCurrentSessionId: () => "sess1" } as any);
-      await q.parseAsync(["node", "cast", "board", "frame", ID, "el_a", "--ref", "ct-13"]);
     } finally {
       console.log = log;
       server.stop(true);
     }
-    expect(seen.map((s) => s.path)).toEqual(["/cli/live/elements", "/cli/work/get", "/cli/live/apply", "/cli/live/elements", "/cli/work/get", "/cli/live/apply"]);
-    expect(seen[5].body.ops[0].put).toMatchObject({ kind: "frame", ref: "ct-13", title: "ct-13" });
-    const apply = seen[2].body;
+    expect(seen.map((s) => s.path)).toEqual(["/cli/live/elements", "/cli/live/apply"]);
+    const apply = seen[1].body;
     expect(apply.session_id).toBe("sess1");
     // One op: the new frame, folded; the person's enclosing frame and sticky are left alone.
     expect(apply.ops).toHaveLength(1);
-    expect(apply.ops[0].put).toMatchObject({ kind: "frame", ref: "ct-12", title: "Budget caps", collapsed: { holds: ["el_a"] } });
-    expect(logs.join("\n")).toContain("left the enclosing frame el_o as it was: it holds a person's work");
+    expect(apply.ops[0].put).toMatchObject({ kind: "frame", ref: "ct-12", title: "ct-12", collapsed: { holds: ["el_a"] } });
+    expect(logs.join("\n")).toContain(`left "Jason's" as it was: it holds a person's work`);
   });
 });
