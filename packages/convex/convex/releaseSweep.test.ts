@@ -68,7 +68,7 @@ describe("cast release sweep's read", () => {
 
   test("an open incident is listed with its runs, and its runs are not listed again as failed", async () => {
     const w = await world();
-    const fingerprint = "flowstop:acme/app:change:land__ci:abcd1234";
+    const fingerprint = "flowstop:acme/app:ci_unread";
     const cause = await w.task("ct-500");
     await w.t.run((ctx: any) => ctx.db.patch(cause, { cause: { signal_count: 2, first_seen: NOW, last_seen: NOW, fingerprints: [fingerprint] } }));
     await w.insert("signals", { user_id: w.ids.me, team_id: w.ids.team, workspace: w.ids.ws, short_id: "sg-1", source: "flow", kind: "flowstop", fingerprint, title: "Change stopped at CI", observed_at: NOW, created_at: NOW, task_id: cause, attach: "fingerprint" });
@@ -114,7 +114,7 @@ describe("cast release sweep's read", () => {
     const w = await world();
     await w.run(await w.task("ct-701"), { fail_reason: "Stopped: The reviewer rejected the change: no tests", stop_station: "land__review" });
     await w.run(await w.task("ct-702"), { fail_reason: "Stopped: Review found 3 findings", stop_station: "land__review" });
-    await w.run(await w.task("ct-703"), { fail_reason: "Stopped: main stayed red", stop_station: "land__wait_main", stop_fingerprint: "flowstop:acme/app:change:land__red_main" });
+    await w.run(await w.task("ct-703"), { fail_reason: "Stopped: main stayed red", stop_station: "land__wait_main", stop_fingerprint: "flowstop:acme/app:main_red" });
     await w.run(await w.task("ct-704"), { fail_reason: "Station land__ci failed: exit code 137" });
     const s: any = await w.sweep();
     expect(s.failed_runs.map((r: any) => [r.task_short_id, r.station]).sort()).toEqual([["ct-703", "land__wait_main"], ["ct-704", "land__ci"]]);

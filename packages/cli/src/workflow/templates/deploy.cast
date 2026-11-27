@@ -26,8 +26,8 @@ digraph deploy {
     script="cast flow await-deploy --merge \"$run_dir/merge.json\" --base $default_branch --branch \"$branch\" --run $run_id --node $station_id --task \"$task_id\" --files \"$change_files\" --except \"$except\" --send \"$send\""]
   live     [shape=Msquare, label="Live"]
   unmerged [shape=Msquare, label="Not merged", stop="$wait.output"]
-  stuck    [shape=Msquare, label="Deploy stuck", shared=true, stop="$wait.output"]
-  failed   [shape=Msquare, label="Deploy failed", shared=true, stop="$wait.output"]
+  stuck    [shape=Msquare, label="Deploy stuck", shared="deploy_stuck", stop="$wait.output"]
+  failed   [shape=Msquare, label="Deploy failed", shared="deploy_failed", stop="$wait.output"]
   start -> wait
   wait -> live     [condition="outcome = success"]
   wait -> unmerged [condition="outcome = failure and wait.exit_code = 4"]

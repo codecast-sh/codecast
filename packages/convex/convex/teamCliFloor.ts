@@ -6,7 +6,8 @@
 // that applies to its owner (systemConfig.effectiveMinCliVersion).
 
 import { v } from "convex/values";
-import { mutation, query } from "./functions";
+import { internalMutation, mutation, query } from "./functions";
+import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { requireUserOrToken } from "./lib/auth";
 import { deployGrantOf } from "./lib/deployAllowance";
@@ -113,31 +114,45 @@ const FORCED_RELEASE_READ = 200;
 
 /**
  * Tell the team's Release Captain (@release) what a release's finish left
- * undone: the force it could not make (`not_forced`, the refusal), or else the
- * team's machines still online and below `version` after the finish's wait.
- * Any member may: the finish runs as whoever shipped. Once per deploy and
- * kind. `told` is the role's handle, or null when no @release can be reached
- * or there is nothing to say.
+ * undone: the force it could not make (`not_forced` set), or else the team's
+ * machines still online and below the release after the finish's wait. Any
+ * member may: the finish runs as whoever shipped. The message lands in the
+ * captain's session labelled as codecast, so it carries only what the server
+ * read itself: the deploy must be a live `cli` deploy in this team's workspace
+ * that the caller can read, its version and id come from that row, and a
+ * refused force says only that the floor was not raised and by whose finish
+ * (`not_forced`'s text, the CLI's refusal, is not repeated). Sent as the
+ * caller, once per deploy and kind. `told` is the role's handle, or null when
+ * no @release can be reached or there is nothing to say.
  */
 export const tellRelease = mutation({
-  args: { api_token: v.optional(v.string()), team_id: v.id("teams"), deploy: v.string(), version: v.string(), not_forced: v.optional(v.string()) },
+  // `version` and the text of `not_forced` are read from the deploy and ignored; running CLIs still send them.
+  args: { api_token: v.optional(v.string()), team_id: v.id("teams"), deploy: v.string(), version: v.optional(v.string()), not_forced: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const userId = await requireUserOrToken(ctx, args.api_token);
-    const team: Doc<"teams"> | null = await ctx.db.get(args.team_id);
-    const m = await ctx.db.query("team_memberships").withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", args.team_id)).first();
-    if (!team || !m) throw new Error("Only a member of the team can tell its Release Captain");
+    const d = await deployByRef(ctx, args.deploy);
+    if (!d || !(await workspaceGrantsAccess(ctx, userId, d.workspace))) throw new Error(`No deploy ${args.deploy} you can read`);
+    const ws = parseWorkspaceKey(d.workspace);
+    if (ws?.type !== "team" || String(ws.teamId) !== String(args.team_id)) throw new Error(`${d.short_id} is not a deploy of this team`);
+    if (d.target !== "cli" || d.status !== "live" || !d.version || !RELEASE_VERSION.test(d.version)) throw new Error(`${d.short_id} is not a live CLI release`);
+    if (args.version !== undefined && args.version !== d.version) throw new Error(`${d.short_id} is release ${d.version}, not ${args.version}`);
+    const team: Doc<"teams"> | null = await ctx.db.get(ws.teamId);
+    if (!team) throw new Error(`${d.short_id}'s team is gone`);
     const role = await liveRoleByHandle(ctx, { team_id: team._id }, RELEASE_HANDLE);
     if (!role) return { told: null };
+    const version = d.version;
     let content: string;
-    if (args.not_forced) {
-      content = `${args.deploy}: release ${args.version} changed the daemon, but ${team.name}'s machines were not forced onto it: ${args.not_forced.slice(0, 300)}. Raise the floor with cast force-update ${args.version} --team ${team.name}.`;
+    if (args.not_forced !== undefined) {
+      const caller: Doc<"users"> | null = await ctx.db.get(userId);
+      const by = (caller?.name ?? caller?.github_username ?? "someone").replace(/[\r\n]+/g, " ").slice(0, 80);
+      content = `${d.short_id}: release ${version} changed the daemon, but ${team.name}'s machines were not forced onto it: ${by}'s finish could not raise the floor. Raise it with cast force-update ${version} --team ${team.name}.`;
     } else {
-      const lagging = (await teamFleet(ctx, team, args.version, Date.now())).lagging;
+      const lagging = (await teamFleet(ctx, team, version, Date.now())).lagging;
       if (!lagging.length) return { told: null };
       const named = lagging.slice(0, 20).map((d) => `${d.label} (${d.owner}, ${d.cli_version ?? "?"}${d.error ? `: ${d.error.slice(0, 120)}` : ""})`).join(", ");
-      content = `${args.deploy}: ${lagging.length} of ${team.name}'s machines are online and still below ${args.version} after the release's wait: ${named}.`;
+      content = `${d.short_id}: ${lagging.length} of ${team.name}'s machines are online and still below ${version} after the release's wait: ${named}.`;
     }
-    const sent = await tellRole(ctx, role._id, { content, client_id: `team-cli-floor:${args.deploy}:${args.not_forced ? "not-forced" : "lagging"}` });
+    const sent = await tellRole(ctx, role._id, { content, from_user_id: userId, client_id: `team-cli-floor:${d.short_id}:${args.not_forced !== undefined ? "not-forced" : "lagging"}` });
     return { told: sent ? role.handle : null };
   },
 });
@@ -155,7 +170,9 @@ const RELEASE_HANDLE = "release";
  * (an install GitHub confirmed, where a deploy target's repository is only
  * what its publisher claimed), or any deploy when platform staff ask. The
  * message carries only the checked version, the deploy's id and the told
- * team's own name and numbers; the caller learns only how many were told.
+ * team's own name and numbers. Each team's fleet is read in a mutation of its
+ * own (tellOtherTeam), so no one transaction reads every team's machines; the
+ * caller learns only how many teams are being checked (`asked`).
  */
 export const tellOtherTeams = mutation({
   args: { api_token: v.optional(v.string()), deploy: v.string(), version: v.string() },
@@ -164,14 +181,13 @@ export const tellOtherTeams = mutation({
     const userId = await requireUserOrToken(ctx, args.api_token);
     const d = await deployByRef(ctx, args.deploy);
     if (!d || !(await workspaceGrantsAccess(ctx, userId, d.workspace))) throw new Error(`No deploy ${args.deploy} you can read`);
-    if (d.target !== "cli" || d.version !== args.version) throw new Error(`${args.deploy} is not the CLI release ${args.version}`);
+    if (d.target !== "cli" || d.status !== "live" || d.version !== args.version) throw new Error(`${args.deploy} is not the live CLI release ${args.version}`);
     if (!isStaff(await ctx.db.get(userId)) && !(await isCodecastCliRelease(ctx, d))) {
       throw new Error(`${d.short_id} is not a release of codecast's CLI (${CLI_RELEASE_REPOSITORY}, from a team whose GitHub App installation covers it)`);
     }
     const global = await getSystemConfig(ctx, "min_cli_version");
-    if (global && !isBelowMinimum(global, args.version)) return { told: 0 };
-    const now = Date.now();
-    let told = 0;
+    if (global && !isBelowMinimum(global, args.version)) return { asked: 0 };
+    let asked = 0;
     // Only teams with a @release can be told: read those roles, never every team.
     const roles: Doc<"org_roles">[] = await ctx.db.query("org_roles").withIndex("by_handle", (q: any) => q.eq("handle", RELEASE_HANDLE)).take(OTHER_TEAMS_MAX + 1);
     if (roles.length > OTHER_TEAMS_MAX) console.warn(`[teamCliFloor.tellOtherTeams] ${d.short_id}: more than ${OTHER_TEAMS_MAX} @release roles; only the first ${OTHER_TEAMS_MAX} are read`);
@@ -184,14 +200,29 @@ export const tellOtherTeams = mutation({
       if (!team) continue;
       const floor = highestFloor([global, team.min_cli_version]);
       if (floor && !isBelowMinimum(floor, args.version)) continue;
-      const f = await teamFleet(ctx, team, args.version, now);
-      const older = f.lagging.length + f.offline.length;
-      if (!older) continue;
-      const name = /^[\w.-]+$/.test(team.name) ? team.name : JSON.stringify(team.name);
-      const content = `CLI release ${args.version} (${d.short_id}) changes the running daemon. ${team.name}'s floor is ${floor ?? "unset"}, and ${older} of its machines seen in the last day run older. Forcing them restarts each daemon and is your call: cast force-update ${args.version} --team ${name}`;
-      if (await tellRole(ctx, role._id, { content, client_id: `team-cli-floor:${d.short_id}:${team._id}` })) told++;
+      await ctx.scheduler.runAfter(0, internal.teamCliFloor.tellOtherTeam, { role_id: role._id, deploy: d.short_id, version: args.version });
+      asked++;
     }
-    return { told };
+    return { asked };
+  },
+});
+
+/** One other team's @release told of a release its machines run older than (tellOtherTeams checked the ask). */
+export const tellOtherTeam = internalMutation({
+  args: { role_id: v.id("org_roles"), deploy: v.string(), version: v.string() },
+  handler: async (ctx, args) => {
+    const role: Doc<"org_roles"> | null = await ctx.db.get(args.role_id);
+    const team: Doc<"teams"> | null = role?.team_id ? await ctx.db.get(role.team_id) : null;
+    if (!role || !team) return;
+    // Read again: the floors may have moved since the ask.
+    const floor = highestFloor([await getSystemConfig(ctx, "min_cli_version"), team.min_cli_version]);
+    if (floor && !isBelowMinimum(floor, args.version)) return;
+    const f = await teamFleet(ctx, team, args.version, Date.now());
+    const older = f.lagging.length + f.offline.length;
+    if (!older) return;
+    const name = /^[\w.-]+$/.test(team.name) ? team.name : JSON.stringify(team.name);
+    const content = `CLI release ${args.version} (${args.deploy}) changes the running daemon. ${team.name}'s floor is ${floor ?? "unset"}, and ${older} of its machines seen in the last day run older. Forcing them restarts each daemon and is your call: cast force-update ${args.version} --team ${name}`;
+    await tellRole(ctx, role._id, { content, client_id: `team-cli-floor:${args.deploy}:${team._id}` });
   },
 });
 const RELEASE_VERSION = /^\d+\.\d+\.\d+$/;
@@ -221,12 +252,15 @@ export const fleet = query({
 
 /** The fleet read itself, unguarded: `fleet` checks the caller, the release sweep (releaseSweep.ts) reads its own team's. */
 export async function teamFleet(ctx: any, team: Doc<"teams">, version: string, now: number) {
-  const members = await ctx.db.query("team_memberships").withIndex("by_team_id", (q: any) => q.eq("team_id", team._id)).collect();
+  // Bounded, so one team's read stays far inside a transaction's read limit (about 6.6k documents at most).
+  const members = await ctx.db.query("team_memberships").withIndex("by_team_id", (q: any) => q.eq("team_id", team._id)).take(FLEET_MEMBERS_MAX);
+  if (members.length === FLEET_MEMBERS_MAX) console.warn(`[teamCliFloor.teamFleet] ${team.name}: only the first ${FLEET_MEMBERS_MAX} members' machines are read`);
   const out = { team: team.name, version, floor: team.min_cli_version ?? null, took: [] as FleetDevice[], lagging: [] as FleetDevice[], offline: [] as FleetDevice[], cannot_update: [] as FleetDevice[] };
   for (const m of members) {
     const user = await ctx.db.get(m.user_id);
     const owner = user?.name ?? user?.github_username ?? user?.email ?? "someone";
-    const devices = await ctx.db.query("devices").withIndex("by_user_id", (q: any) => q.eq("user_id", m.user_id)).collect();
+    // Newest registrations first: a machine still in use is rarely a member's oldest.
+    const devices = await ctx.db.query("devices").withIndex("by_user_id", (q: any) => q.eq("user_id", m.user_id)).order("desc").take(FLEET_DEVICES_PER_MEMBER);
     for (const d of devices) {
       if (!d.cli_version || now - d.last_seen > FLEET_WINDOW_MS) continue;
       const row: FleetDevice = { device_id: d.device_id, label: d.display_name ?? d.label, owner, user_id: m.user_id, cli_version: d.cli_version, online: now - d.last_seen < DEVICE_ONLINE_MS, error: d.update_error ?? null };
@@ -239,3 +273,5 @@ export async function teamFleet(ctx: any, team: Doc<"teams">, version: string, n
   }
   return out;
 }
+const FLEET_MEMBERS_MAX = 300;
+const FLEET_DEVICES_PER_MEMBER = 20;

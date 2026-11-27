@@ -151,7 +151,7 @@ export async function finishCliRelease(deps: FinishDeps): Promise<string> {
   if (decision.force && !global) {
     try {
       const r = await deps.post("/cli/team-cli-floor/tell-other-teams", { deploy: deps.deploy, version: deps.version });
-      if (r?.told) say(r.told === 1 ? "Told 1 other team's Release Captain." : `Told ${r.told} other teams' Release Captains.`);
+      if (r?.asked) say(`Checking ${r.asked === 1 ? "1 other team" : `${r.asked} other teams`} with a Release Captain: each whose machines run older is told.`);
     } catch (err) {
       say(`Could not tell other teams' Release Captains: ${err instanceof Error ? err.message : String(err)}`);
     }
