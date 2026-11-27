@@ -466,6 +466,23 @@ describe("a finding goes to the writers of the files it names", () => {
     expect(parked(s)).toEqual([]);
   }, 1_200_000);
 
+  // A finding naming a writer's file and a file only the checkout's unpushed commit changed: the writer is briefed, and
+  // told which failing file is in that commit, and by whom, as a session's own brief is.
+  test("a writer's brief says which failing files are only in commits the change carries from the checkout", async () => {
+    const { root, edit } = checkoutWorld();
+    write(root, "src/e.ts", "export const e = 1;\n");
+    git(root, "add", "src/e.ts");
+    git(root, "commit", "-qm", "Editor", "-m", "Codecast-Session: https://codecast.sh/conversation/jx7d599abcdefghij");
+    const s = sessions({ [A]: () => edit(A, "src/a.ts", "export const a = 'good';\n") });
+    const check = `git -C $project_path show $branch:src/a.ts | grep -q good || { echo error: src/a.ts is not good; echo error: src/e.ts broke; exit 1; }`;
+    const { outcome } = await runOnCheckout(root, changeFlow(check));
+    expect(outcome).toBe("completed");
+    const [brief] = s.briefs();
+    expect(brief.to).toBe(A);
+    expect(brief.body).toContain("Some of the failing files are only in commits the change carries from the checkout, not in this session's edits: src/e.ts (commit ");
+    expect(brief.body).toContain("by session jx7d599). If this change caused the failure, fix it; otherwise say so in your reply.");
+  }, 1_200_000);
+
   test("a finding that names no file of the change goes to the session that ran the run", async () => {
     const { root } = checkoutWorld();
     const s = sessions({ [CALLER]: () => write(root, "notes.txt", "fixed\n") });

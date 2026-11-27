@@ -445,16 +445,27 @@ export async function processCwds(): Promise<string[]> {
  * in it" from a failed read.
  */
 export async function readProcessCwds(): Promise<string[] | null> {
-  const parse = (out: string) => out.split("\n").filter((l) => l.startsWith("n/")).map((l) => l.slice(1));
+  return (await readProcessCwdEntries())?.map((e) => e.cwd) ?? null;
+}
+
+/** Every process's working directory with its pid, from one lsof call; null as readProcessCwds reads it. */
+export async function readProcessCwdEntries(): Promise<Array<{ pid: number; cwd: string }> | null> {
+  const parse = (out: string) => {
+    const entries: Array<{ pid: number; cwd: string }> = [];
+    let pid = 0;
+    for (const l of out.split("\n")) {
+      if (l.startsWith("p")) pid = Number(l.slice(1));
+      else if (l.startsWith("n/")) entries.push({ pid, cwd: l.slice(1) });
+    }
+    return entries.length ? entries : null;
+  };
   try {
-    const { stdout } = await execFileAsync("lsof", ["-a", "-d", "cwd", "-Fn"], { encoding: "utf-8", timeout: 30_000, maxBuffer: 64 * 1024 * 1024 });
-    const cwds = parse(String(stdout));
-    return cwds.length ? cwds : null;
+    const { stdout } = await execFileAsync("lsof", ["-a", "-d", "cwd", "-Fpn"], { encoding: "utf-8", timeout: 30_000, maxBuffer: 64 * 1024 * 1024 });
+    return parse(String(stdout));
   } catch (err: any) {
     // lsof exits 1 when some processes cannot be read, with the rest on stdout.
     if (err?.killed || err?.signal) return null;
-    const cwds = parse(String(err?.stdout ?? ""));
-    return cwds.length ? cwds : null;
+    return parse(String(err?.stdout ?? ""));
   }
 }
 

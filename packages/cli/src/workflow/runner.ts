@@ -540,7 +540,10 @@ function lastSaid(state: WorkflowRunState): string | undefined {
 async function briefWriters(node: WorkflowNode, graph: WorkflowGraph, context: Record<string, string>, cwd: string, options: RunOptions, named: Writer[], unclaimed: string[]): Promise<NodeOutcome> {
   const call = (route: string, body: Record<string, unknown>) => cliCall(options, route, body);
   const found = context["stop_reason"] ? ` ${context["stop_stage"] || "The stage"} said: ${context["stop_reason"]}` : "";
-  const brief = withHeld(expandAgentPrompt(node.prompt ?? "", graph, context).trim(), context);
+  // As a session's brief says it (executeSubjectNode): failures that fall only in the checkout's unpushed commits.
+  const expanded = expandAgentPrompt(node.prompt ?? "", graph, context).trim();
+  const carried = carriedFailureNote(readFrozenChange(context["run_dir"]) ?? { paths: [] }, `${context["stop_reason"] ?? ""}\n${expanded}`, await findingRoots(cwd, context["worktree"]));
+  const brief = withHeld(carried ? `${expanded}\n\n${carried}` : expanded, context);
   const subject = subjectOf(context);
   // The files nobody's edit names are the subject's to fix or hand on; it may also be a writer.
   let writers: Writer[] = named;

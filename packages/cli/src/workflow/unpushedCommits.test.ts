@@ -62,9 +62,9 @@ describe("the checkout's unpushed commits", () => {
     expect(change.unpushed?.map((c) => [c.subject, c.session, c.files.length])).toEqual([["Code editor", "jx7d599", 2]]);
     expect(run(root, "log", "--format=%s", "origin/main..codecast/change-ct-1").split("\n")).toContain("Code editor");
     const lines = unpushedLines(change.unpushed);
-    expect(lines[0]).toBe("also carries 1 unpushed commit of the checkout's that upstream lacks, which ship with this change:");
+    expect(lines[0]).toBe("also carries 1 unpushed commit of the checkout's that upstream lacks, which ships with this change:");
     expect(lines[1]).toMatch(/^ {2}[0-9a-f]{9} Code editor \(session jx7d599, 2 files\)$/);
-    expect(unpushedBody(change.unpushed)).toMatch(/^This change also carries 1 commit the checkout it was made in had not pushed\. They ship with it:\n- `[0-9a-f]{9}` Code editor \(session jx7d599, 2 files\)$/);
+    expect(unpushedBody(change.unpushed)).toMatch(/^This change also carries 1 commit the checkout it was made in had not pushed\. It ships with this change:\n- `[0-9a-f]{9}` Code editor \(session jx7d599, 2 files\)$/);
   });
 
   // A commit squash-merged upstream while still unpushed here by sha: the cut's replay drops it, so the dry run does too.
@@ -84,6 +84,20 @@ describe("the checkout's unpushed commits", () => {
     expect(preview.unpushed).toEqual([]);
     const change = await freezeSessionChange(root, SESSION, { branch: "codecast/change-ct-3", worktree: "change-ct-3", fetched: true });
     expect(change.unpushed).toBeUndefined();
+  });
+
+  test("past the commits read whole, every one is still counted, and the words agree with the count", async () => {
+    const tree = run(root, "rev-parse", "HEAD^{tree}");
+    let tip = run(root, "rev-parse", "HEAD");
+    for (let i = 0; i < 205; i++) tip = run(root, "commit-tree", tree, "-p", tip, "-m", `empty ${i}`);
+    const got = await unpushedCommits(root, tip, "origin/main");
+    expect(got).toHaveLength(206);
+    expect(got[0].subject).toBe("empty 204");
+    expect(got.at(-1)!.sha).toBe(run(root, "rev-parse", "HEAD"));
+    const lines = unpushedLines(got);
+    expect(lines[0]).toBe("also carries 206 unpushed commits of the checkout's that upstream lacks, which ship with this change:");
+    expect(lines.at(-1)).toBe("  and 196 more");
+    expect(unpushedBody(got).split("\n")[0]).toBe("This change also carries 206 commits the checkout it was made in had not pushed. They ship with this change:");
   });
 
   test("a checkout with nothing unpushed names none", async () => {

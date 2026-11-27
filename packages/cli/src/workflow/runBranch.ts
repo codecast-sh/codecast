@@ -155,18 +155,13 @@ function runEndedAt(repo: string, name: string): number {
   try { return Math.max(0, ...fs.readdirSync(dir).map((f) => fs.statSync(path.join(dir, f)).mtimeMs)); } catch { return 0; }
 }
 
-/** Every process whose working directory is `tree` or under it, read with lsof and ps; null when they cannot be read. */
+/** Every process whose working directory is `tree` or under it, read with lsof (land/scan.ts) and ps; null when they cannot be read. */
 export async function treeProcesses(tree: string): Promise<TreeProcess[] | null> {
   const env = { ...process.env, LC_ALL: "C" };
-  const lsof = spawnSync("lsof", ["-a", "-d", "cwd", "-F", "pn"], { encoding: "utf-8", timeout: 30_000, maxBuffer: 64 * 1024 * 1024, env });
-  // lsof exits 1 when some processes cannot be read, with the rest on stdout.
-  if (lsof.error || lsof.signal || !lsof.stdout) return null;
-  const pids: number[] = [];
-  let pid = 0;
-  for (const l of lsof.stdout.split("\n")) {
-    if (l.startsWith("p")) pid = Number(l.slice(1));
-    else if (l.startsWith("n") && pid && pid !== process.pid && (l.slice(1) === tree || l.slice(1).startsWith(`${tree}/`))) pids.push(pid);
-  }
+  const { readProcessCwdEntries } = await import("../land/scan.js");
+  const entries = await readProcessCwdEntries();
+  if (!entries) return null;
+  const pids = entries.filter((e) => e.pid && e.pid !== process.pid && (e.cwd === tree || e.cwd.startsWith(`${tree}/`))).map((e) => e.pid);
   if (!pids.length) return [];
   const ps = (fields: string, ids: number[]) => spawnSync("ps", ["-o", fields, "-p", ids.join(",")], { encoding: "utf-8", timeout: 10_000, env }).stdout ?? "";
   // Elapsed time, [[dd-]hh:]mm:ss, since a start time is printed in a zone and form that differ by platform.

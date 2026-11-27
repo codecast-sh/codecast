@@ -10,7 +10,7 @@ import { writersNamed } from "./subjectStation.js";
 /** One commit the change carries: its sha, subject, the session its Codecast-Session trailer names, and its files. */
 export type UnpushedCommit = { sha: string; subject: string; session?: string; files: string[] };
 
-// A checkout with more unpushed commits than this is named by its newest ones and a count.
+// Past this many, a commit is read by its sha alone: every one is counted, and the newest are the ones a person reads.
 const READ_MAX = 200;
 
 /** The commits `head` holds that `upstream` lacks, newest first; none without an upstream to compare with. */
@@ -18,7 +18,14 @@ export async function unpushedCommits(root: string, head: string, upstream: stri
   const upstreamSha = upstream === "HEAD" ? null : await gitTry(root, ["rev-parse", "--verify", "--quiet", `${upstream}^{commit}`]);
   if (!upstreamSha) return [];
   const out = await gitTry(root, ["log", `--max-count=${READ_MAX}`, "--name-only", "--format=%x1e%H%x1f%s%x1f%(trailers:key=Codecast-Session,valueonly,separator=%x1f)", head, "--not", upstreamSha]);
-  return (out ?? "").split("\x1e").filter((r) => r.trim()).map((record) => {
+  const read = readCommits(out ?? "");
+  if (read.length < READ_MAX) return read;
+  const rest = ((await gitTry(root, ["rev-list", `--skip=${READ_MAX}`, head, "--not", upstreamSha])) ?? "").split("\n").filter(Boolean);
+  return [...read, ...rest.map((sha) => ({ sha, subject: "", files: [] }))];
+}
+
+function readCommits(out: string): UnpushedCommit[] {
+  return out.split("\x1e").filter((r) => r.trim()).map((record) => {
     const [header, ...files] = record.split("\n");
     const [sha, subject, ...trailers] = header.split("\x1f");
     // The trailer is the session's link (…/conversation/<id>) or its id; a session is named by its short id.
@@ -53,7 +60,7 @@ export function unpushedLines(commits: ReadonlyArray<UnpushedCommit> | undefined
   if (!commits?.length) return [];
   const more = commits.length - LISTED;
   return [
-    `also carries ${plural(commits.length, "unpushed commit")} of the checkout's that upstream lacks, which ship with this change:`,
+    `also carries ${plural(commits.length, "unpushed commit")} of the checkout's that upstream lacks, which ${commits.length === 1 ? "ships" : "ship"} with this change:`,
     ...commits.slice(0, LISTED).map((c) => `  ${commitWords(c)}`),
     ...(more > 0 ? [`  and ${more} more`] : []),
   ];
@@ -64,7 +71,7 @@ export function unpushedBody(commits: ReadonlyArray<UnpushedCommit> | undefined)
   if (!commits?.length) return "";
   const more = commits.length - LISTED;
   return [
-    `This change also carries ${plural(commits.length, "commit")} the checkout it was made in had not pushed. They ship with it:`,
+    `This change also carries ${plural(commits.length, "commit")} the checkout it was made in had not pushed. ${commits.length === 1 ? "It ships" : "They ship"} with this change:`,
     ...commits.slice(0, LISTED).map((c) => `- \`${c.sha.slice(0, 9)}\` ${c.subject} (${c.session ? `session ${c.session}, ` : ""}${plural(c.files.length, "file")})`),
     ...(more > 0 ? [`- and ${more} more`] : []),
   ].join("\n");
