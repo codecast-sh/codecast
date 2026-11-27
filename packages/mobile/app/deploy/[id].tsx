@@ -12,6 +12,7 @@ import { api as _api } from '@codecast/convex/convex/_generated/api';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { useQueryNoThrow } from '@codecast/web/hooks/useQueryNoThrow';
 import { useDeployTargets } from '@codecast/web/hooks/useSyncDeployTargets';
+import { teamWorkspaceKey } from '@codecast/web/lib/workspaceScope';
 import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
 import { deploysOf, productionOf, rebuiltOnly, sessionWords, sessionsOf, sourceWord, targetNow, teamRowOfView, type TeamDeployRow } from '@codecast/web/lib/deploys/targets';
 import { fmtClock, fmtDuration } from '@codecast/web/components/triggerCadence';
@@ -67,7 +68,7 @@ export default function DeployScreen() {
   const where = useQueryNoThrow(api.deployRefs.whereIs, id ? { ref: id } : 'skip');
   const served = where.data as { team_id: string | null } | null | undefined;
   const teamId = served?.team_id ?? (cached?.workspace?.startsWith('team:') ? cached.workspace.slice(5) : null);
-  const { targets, deploys, productions, ready } = useDeployTargets(teamId);
+  const { targets, deploys, productions, ready } = useDeployTargets(teamWorkspaceKey(teamId));
   const me = useInboxStore((s) => (s.currentUser as { name?: string } | null)?.name ?? 'You');
   const listed = deploys.find((x) => x.short_id === id) ?? cached;
   // The team's feed holds its newest deploys; an older one is read alone, as is one whose push names what it

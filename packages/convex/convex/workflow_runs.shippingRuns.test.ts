@@ -5,7 +5,7 @@ import { convexTest } from "convex-test";
 import { anyApi } from "convex/server";
 import schema from "./schema";
 import { allModules } from "./testModules.testkit";
-import { checkVerdictOf, shipTrackOf } from "./workflow_runs";
+import { checkVerdictOf, shipTrackOf } from "./lib/shipTrack";
 
 const api = anyApi as any;
 const NOW = Date.now();

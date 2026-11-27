@@ -9,12 +9,12 @@ import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { toldOf, type CheckoutRow } from "@codecast/shared/contracts/checkouts";
 import { useSyncCollection } from "./useSyncCollection";
 import { useWorkspaceCollection } from "./useWorkspaceCollection";
-import { deployScopeArgs, type WorkspaceKey } from "../lib/workspaceScope";
+import { deployScopeArgs, type StrictWorkspaceKey } from "../lib/workspaceScope";
 
 const api = _api as any;
 
 /** Feeder: a workspace's checkouts. `ready` once the server answered, failed or refused; `error` says why it failed. */
-export function useSyncCheckouts(workspace: WorkspaceKey | null | undefined): { ready: boolean; error: Error | null; refused: boolean } {
+export function useSyncCheckouts(workspace: StrictWorkspaceKey | null | undefined): { ready: boolean; error: Error | null; refused: boolean } {
   const r = useSyncCollection("checkouts", api.checkouts.forTeam, workspace ? deployScopeArgs(workspace) : "skip", {
     // Each answer is the workspace's whole set: a checkout its device stopped reporting leaves this window's store.
     dropAbsent: useCallback((row: CheckoutRow) => row?.workspace === workspace, [workspace]),
@@ -26,7 +26,7 @@ export function useSyncCheckouts(workspace: WorkspaceKey | null | undefined): { 
 const checkoutSig = (c: CheckoutRow) => `${c._id}|${c.reported_at}|${c.level.state === "stuck" ? toldOf(c.level).length : ""}`;
 
 /** Reader: a workspace's checkouts from the store, one repository's (`owner/name`, any case) or all, by device then path. */
-export function useCheckouts(workspace: WorkspaceKey | null | undefined, repository?: string | null): CheckoutRow[] {
+export function useCheckouts(workspace: StrictWorkspaceKey | null | undefined, repository?: string | null): CheckoutRow[] {
   const rows = useWorkspaceCollection<CheckoutRow>("checkouts", checkoutSig, workspace ?? null);
   const key = repository?.toLowerCase() ?? null;
   return useMemo(() => rows.filter((c) => !key || c.repository === key).sort((a, b) => a.device_id.localeCompare(b.device_id) || a.path.localeCompare(b.path)), [rows, key]);

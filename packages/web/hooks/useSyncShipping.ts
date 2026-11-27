@@ -10,7 +10,7 @@ import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useServerAuthSettled } from "./useServerAuthSettled";
 import { applyCollectionFeed, useFeederError } from "./useSyncCollection";
 import { useWorkspaceCollection } from "./useWorkspaceCollection";
-import { deployScopeArgs, type WorkspaceKey } from "../lib/workspaceScope";
+import { deployScopeArgs, type StrictWorkspaceKey } from "../lib/workspaceScope";
 
 const api = _api as any;
 
@@ -18,7 +18,7 @@ export type ShippingRunRow = ShippingRun & { workspace: string };
 export type ShippingShipperRow = ShippingShipper & { _id: string; workspace: string };
 
 /** One shippingRuns answer into its two homes; the workspace's rows the answer lacks leave. A null answer changes nothing. */
-export function applyShipping(workspace: WorkspaceKey, d: ShippingRuns | null | undefined): void {
+export function applyShipping(workspace: StrictWorkspaceKey, d: ShippingRuns | null | undefined): void {
   if (!d) return;
   const ours = (row: { workspace?: string } | undefined) => row?.workspace === workspace;
   applyCollectionFeed("shippingRuns", d.runs.map((r) => ({ ...r, workspace })), undefined, undefined, ours);
@@ -26,7 +26,7 @@ export function applyShipping(workspace: WorkspaceKey, d: ShippingRuns | null | 
 }
 
 /** Feeder: one workspace's Ship runs and shippers. `error` is a failed read (a backend without the query yet). */
-export function useSyncShipping(workspace: WorkspaceKey | null | undefined): { ready: boolean; error: Error | undefined } {
+export function useSyncShipping(workspace: StrictWorkspaceKey | null | undefined): { ready: boolean; error: Error | undefined } {
   const authSettled = useServerAuthSettled();
   const { data, error } = useQueryNoThrow(api.workflow_runs.shippingRuns, workspace && authSettled ? deployScopeArgs(workspace) : "skip");
   useFeederError("workflow_runs:shippingRuns", error);
@@ -44,7 +44,7 @@ const shipperSig = (s: ShippingShipperRow) => `${s.merged_sha ?? ""}|${s.spawner
  * Reader: a workspace's Ship runs and shippers from the store, with the feeder mounted. `shipping` is null only while
  * nothing is stored and the first answer has not come; `error` only when the read failed with nothing stored.
  */
-export function useShipping(workspace: WorkspaceKey | null | undefined): { shipping: { runs: ShippingRunRow[]; shippers: ShippingShipperRow[] } | null; error: boolean; live: boolean; failed: boolean } {
+export function useShipping(workspace: StrictWorkspaceKey | null | undefined): { shipping: { runs: ShippingRunRow[]; shippers: ShippingShipperRow[] } | null; error: boolean; live: boolean; failed: boolean } {
   const { ready, error } = useSyncShipping(workspace);
   const runs = useWorkspaceCollection<ShippingRunRow>("shippingRuns", runSig, workspace ?? null);
   const shippers = useWorkspaceCollection<ShippingShipperRow>("shippingShippers", shipperSig, workspace ?? null);

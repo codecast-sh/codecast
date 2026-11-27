@@ -9,7 +9,7 @@ import { Check, CircleDashed, Loader2, Pause, X } from "lucide-react";
 import { useInboxStore } from "../../store/inboxStore";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
-import { activeWorkspaceKeyOf } from "../../lib/workspaceScope";
+import { activeWorkspaceKeyOf, strictWorkspaceKey } from "../../lib/workspaceScope";
 import { teamHasFeature } from "../../lib/teamFeatureRule";
 import { useDeployTargets } from "../../hooks/useSyncDeployTargets";
 import { useCheckouts, useSyncCheckouts } from "../../hooks/useSyncCheckouts";
@@ -53,7 +53,7 @@ export function DeploysPage({ initialTarget, initialTeam, initialDeploy, initial
   // The page reads one workspace: a team's (`team:<id>`), or the viewer's own (`user:<id>`). Picking another here never
   // moves the app's active team; a deploy named in the address opens on its own workspace.
   const [spacePick, setSpacePick] = useState<string | null>(initialTeam ? `team:${initialTeam}` : null);
-  const workspace = spacePick ?? (where ? (where.team_id ? `team:${where.team_id}` : own) : null) ?? activeSpace;
+  const workspace = strictWorkspaceKey(spacePick ?? (where ? (where.team_id ? `team:${where.team_id}` : own) : null) ?? activeSpace);
   const personal = !!workspace?.startsWith("user:");
   const teamId = workspace?.startsWith("team:") ? workspace.slice(5) : null;
   const { targets, deploys, productions, ready } = useDeployTargets(workspace);

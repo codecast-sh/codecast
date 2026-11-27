@@ -11,7 +11,7 @@ import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useConvexSync } from "./useConvexSync";
 import { useInboxStore } from "../store/inboxStore";
 import { useWorkspaceCollection } from "./useWorkspaceCollection";
-import { deployScopeArgs, type WorkspaceKey } from "../lib/workspaceScope";
+import { deployScopeArgs, type StrictWorkspaceKey } from "../lib/workspaceScope";
 import { mergeDeployRow, type DeployProductionRow, type DeployTargetRow, type TeamDeployRow } from "../lib/deploys/targets";
 
 const api = _api as any;
@@ -19,7 +19,7 @@ const api = _api as any;
 /** Feeder: one workspace's targets and their deploys (`team:<id>`, or `user:<id>` for a person's own), or only those
  *  of one repository (a pull request's page). Mounted by the Deploys page, a session whose change has landed, and a
  *  pull request's page. */
-export function useSyncDeployTargets(workspace: WorkspaceKey | null | undefined, repository?: string | null) {
+export function useSyncDeployTargets(workspace: StrictWorkspaceKey | null | undefined, repository?: string | null) {
   const syncTable = useInboxStore((s) => s.syncTable);
   const { data } = useQueryNoThrow(api.deployTargets.view, workspace ? { ...deployScopeArgs(workspace), ...(repository ? { repository } : {}) } : "skip");
   useConvexSync(
@@ -51,7 +51,7 @@ export function useSyncDeployTargets(workspace: WorkspaceKey | null | undefined,
 
 /** Feeder: a workspace's deploys by their records, every target, declared or not, with what each carried. The Deploys
  *  page reads them so a workspace with deploys never reads as empty; inbox cards read them to say which sessions made it out. */
-export function useSyncTeamDeployRecords(workspace: WorkspaceKey | null | undefined) {
+export function useSyncTeamDeployRecords(workspace: StrictWorkspaceKey | null | undefined) {
   const syncTable = useInboxStore((s) => s.syncTable);
   const { data } = useQueryNoThrow(api.deployRefs.recentForTeam, workspace ? deployScopeArgs(workspace) : "skip");
   useConvexSync(data, useCallback((rows: TeamDeployRow[] | null) => { syncTable("teamDeploys", withRecorded(rows), { isDelta: true }); }, [syncTable]));
@@ -73,7 +73,7 @@ const targetSig = (t: DeployTargetRow) => `${t.name}|${t.policy}|${t.can_deploy 
 const deploySig = (d: TeamDeployRow) => `${d.status}|${d.sha ?? ""}|${d.live_at ?? 0}|${d.finished_at ?? 0}|${d.steps?.map((s) => `${s.id}:${s.status}`).join(",") ?? ""}|${d.note ?? ""}|${d.short_id}|${d.sessions?.map((x) => `${x.conversation_id}:${x.user_id ?? ""}:${x.task_short_ids?.length ?? ""}`).join(",") ?? ""}|${d.tasks?.length ?? 0}|${d.commit_rows?.map((c) => c.sha).join(",") ?? ""}|${d.pushed_via ?? ""}|${d.machine ?? ""}|${d.dirty ?? 0}|${d.adds_count ?? 0}|${d.drops_count ?? 0}`;
 
 /** Reader: a workspace's targets, deploys and productions from the store. With a repository, only that one's are fed. */
-export function useDeployTargets(workspace: WorkspaceKey | null | undefined, repository?: string | null): { targets: DeployTargetRow[]; deploys: TeamDeployRow[]; productions: DeployProductionRow[]; ready: boolean } {
+export function useDeployTargets(workspace: StrictWorkspaceKey | null | undefined, repository?: string | null): { targets: DeployTargetRow[]; deploys: TeamDeployRow[]; productions: DeployProductionRow[]; ready: boolean } {
   const { ready } = useSyncDeployTargets(workspace, repository);
   const targets = useWorkspaceCollection<DeployTargetRow>("deployTargets", targetSig, workspace ?? null);
   const deploys = useWorkspaceCollection<TeamDeployRow>("teamDeploys", deploySig, workspace ?? null);
