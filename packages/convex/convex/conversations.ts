@@ -3,7 +3,7 @@ import { hasDeliverableMessage } from "./lib/closeAside";
 import { sanitizeConvexObjectKeys } from "./lib/convexFieldNames";
 import { noteWriteCause } from "./lifecycleEvents";
 import { isClaudeSubagentSessionId } from "@codecast/shared/contracts/claudeSubagentSession";
-import { launchedHeadless, runsInParentProcess } from "@codecast/shared/contracts/runsInParent";
+import { launchedHeadless, legacyRunsInParent, runsInParentProcess } from "@codecast/shared/contracts/runsInParent";
 import { wakeFieldsOf } from "./wakeCost";
 import { cliSessionClassifier, recencyRankOf, type RecencyRank } from "./cliSessionClassifier";
 import { mutation, query, internalMutation, internalQuery, type QueryCtx, type MutationCtx } from "./functions";
@@ -1459,7 +1459,7 @@ export const createConversation = mutation({
     is_subagent: v.optional(v.boolean()),
     // Daemon-asserted: the transcript runs inside its parent's process (a
     // subagents/ transcript, a codex child running in its lead). An older
-    // daemon sends none, and the row is stamped from its session id.
+    // daemon sends none, and the row is stamped by the legacy rule.
     runs_in_parent: v.optional(v.boolean()),
     // The trigger this transcript is a spawned run of (the daemon's scheduler
     // started it), so the row is born nested (stampRunConversation) instead
@@ -1634,8 +1634,9 @@ export const createConversation = mutation({
       is_subagent: (args.is_subagent === true && !args.parent_message_uuid) ||
         (!!parentConversationId && !args.parent_message_uuid) ||
         (args.agent_type === "claude_code" && !args.parent_message_uuid && isClaudeSubagentSessionId(args.session_id)) || undefined,
-      runs_in_parent: args.runs_in_parent ??
-        (args.agent_type === "claude_code" && !args.parent_message_uuid && isClaudeSubagentSessionId(args.session_id)),
+      // An older daemon sends no answer: the legacy rule over what this row is.
+      runs_in_parent: args.runs_in_parent ?? (!args.parent_message_uuid &&
+        legacyRunsInParent({ agent_type: args.agent_type, session_id: args.session_id, parent_conversation_id: parentConversationId, cli_flags: args.cli_flags })),
       agent_team_name: args.agent_team_name,
       agent_name: args.agent_name,
       git_commit_hash: args.git_commit_hash,

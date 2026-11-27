@@ -35,6 +35,20 @@ describe("createConversation writes runs_in_parent on every row", () => {
     expect((await create({ agent_type: "claude_code", session_id: "agent-a1b2c3d4e5f6", parent_conversation_id: ids.parent })).runs_in_parent).toBe(true);
   });
 
+  // A named Agent call's transcript (agent-<name>-<hex>, meta taskKind
+  // in_process_teammate) runs inside its parent like a Task subagent.
+  test("an older daemon's named in-process agent is stamped from its agent id", async () => {
+    const { ids, create } = await world();
+    expect((await create({ agent_type: "claude_code", session_id: "agent-averifier-c79d1d65d5516bf9", parent_conversation_id: ids.parent })).runs_in_parent).toBe(true);
+  });
+
+  test("an older daemon's codex --print child of a lead is stamped as running in it", async () => {
+    const { ids, create } = await world();
+    expect((await create({ agent_type: "codex", session_id: "019a-codex-thread", parent_conversation_id: ids.parent, cli_flags: "--print", is_subagent: true })).runs_in_parent).toBe(true);
+    // The same launch with no lead to run in has its own process.
+    expect((await create({ agent_type: "codex", session_id: "019a-codex-top", cli_flags: "--print" })).runs_in_parent).toBe(false);
+  });
+
   test("a top-level session and a parent-linked uuid session have their own process", async () => {
     const { ids, create } = await world();
     expect((await create({ agent_type: "claude_code", session_id: "0b6e2c1a-top" })).runs_in_parent).toBe(false);
@@ -78,6 +92,7 @@ describe("runsInParentBackfill", () => {
       const base = { user_id: ids.me, project_path: "/tmp/p", started_at: 1, updated_at: 1, message_count: 0, status: "active" };
       return {
         agent: await ctx.db.insert("conversations", { ...base, agent_type: "claude_code", session_id: "agent-a1b2c3d4e5", is_subagent: true, parent_conversation_id: ids.parent } as any),
+        named: await ctx.db.insert("conversations", { ...base, agent_type: "claude_code", session_id: "agent-averifier-c79d1d65d5516bf9", is_subagent: true, parent_conversation_id: ids.parent } as any),
         codex: await ctx.db.insert("conversations", { ...base, agent_type: "codex", session_id: "019a-thread", parent_conversation_id: ids.parent, cli_flags: "--print" } as any),
         spawned: await ctx.db.insert("conversations", { ...base, agent_type: "claude_code", session_id: "0b6e2c1a-spawned", is_subagent: true, parent_conversation_id: ids.parent } as any),
         adopted: await ctx.db.insert("conversations", { ...base, agent_type: "claude_code", session_id: "0b6e2c1a-adopted", parent_conversation_id: ids.parent, adopted_at: 5 } as any),
@@ -90,7 +105,7 @@ describe("runsInParentBackfill", () => {
 
   test("a dry run counts and writes nothing", async () => {
     const { read, run } = await legacyWorld();
-    expect(await run({})).toMatchObject({ dryRun: true, stampedTrue: 2, stampedFalse: 2, done: true });
+    expect(await run({})).toMatchObject({ dryRun: true, stampedTrue: 3, stampedFalse: 2, done: true });
     const rows = await read();
     for (const r of Object.values(rows)) expect(r.runs_in_parent).toBeUndefined();
     expect(rows.adopted.adopted_at).toBe(5);
@@ -100,7 +115,7 @@ describe("runsInParentBackfill", () => {
     const { read, run } = await legacyWorld();
     await run({ dryRun: false });
     const rows = await read();
-    expect([rows.agent.runs_in_parent, rows.codex.runs_in_parent, rows.spawned.runs_in_parent, rows.adopted.runs_in_parent]).toEqual([true, true, false, false]);
+    expect([rows.agent.runs_in_parent, rows.named.runs_in_parent, rows.codex.runs_in_parent, rows.spawned.runs_in_parent, rows.adopted.runs_in_parent]).toEqual([true, true, true, false, false]);
     expect(rows.adopted.adopted_at).toBe(5);
     // The parent already held its fact.
     expect(await run({ dryRun: false })).toMatchObject({ stampedTrue: 0, stampedFalse: 0 });

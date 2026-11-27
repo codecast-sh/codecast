@@ -16,9 +16,12 @@ describe("runsInParentProcess", () => {
 });
 
 describe("legacyRunsInParent", () => {
-  test("a Claude Code subagent transcript", () => {
+  test("a Claude Code subagent transcript, a Task subagent's or a named in-process agent's", () => {
     expect(legacyRunsInParent({ session_id: "agent-a1b2c3d4e5" })).toBe(true);
-    expect(legacyRunsInParent({ session_id: "agent-averify-bugs-7-9" })).toBe(false);
+    expect(legacyRunsInParent({ session_id: "agent-averify-bugs-7-9" })).toBe(true);
+    expect(legacyRunsInParent({ agent_type: "claude_code", session_id: "agent-averifier-c79d1d65d5516bf9" })).toBe(true);
+    // Only Claude Code names its subagent transcripts this way.
+    expect(legacyRunsInParent({ agent_type: "codex", session_id: "agent-averifier-c79d1d65d5516bf9" })).toBe(false);
   });
 
   test("a codex child the lead launched as a program, but not one started through /cli/spawn", () => {
