@@ -245,7 +245,8 @@ describe("handing the scribe seat back", () => {
     const transcriptId = await startHuddle(w, room);
     await as(ids.ben).mutation(api.calls.joinRoom, { room_key: room, deliberate: true });
 
-    await expect(as(ids.ben).mutation(api.transcripts.releaseScribe, { room_key: room })).rejects.toThrow("Only the scribe can release");
+    expect(await as(ids.ben).mutation(api.transcripts.releaseScribe, { room_key: room })).toEqual({ released: false });
+    expect((await t.run(async (ctx) => ctx.db.get(transcriptId)))?.scribe_open).toBeUndefined();
     // While Ana scribes from her seat, Ben's start only observes.
     expect((await as(ids.ben).mutation(api.transcripts.start, { room_key: room, auto: true })).role).toBe("observer");
 
@@ -372,5 +373,44 @@ describe("review fixes", () => {
       await expect(as(ids.ben).mutation(api.calls.joinRoom, { room_key: room, deliberate: true })).rejects.toThrow("Cannot join room");
       expect((await as(ids.ben).query(api.calls.getLiveRooms, {})).map((r: any) => r.room_key)).not.toContain(room);
     }
+  });
+});
+
+describe("a scribe handover in an owner-only session huddle", () => {
+  /** Ana's phone holds the huddle on her private session; Cy is rung in at a
+   *  desktop; the phone hands the seat back and Cy's start takes the run. */
+  async function handover(w: World) {
+    const { t, as, ids } = w;
+    const room = sessionRoomKey(ids.routed);
+    const transcriptId = await startHuddle(w, room);
+    await as(ids.ana).mutation(api.calls.invite, { room_key: room, to_user: ids.cy });
+    const invite = await t.run(async (ctx) => (await ctx.db.query("call_invites").collect()).find((i) => String(i.to_user) === String(ids.cy)));
+    await as(ids.cy).mutation(api.calls.respondInvite, { invite_id: invite!._id, accept: true });
+    await as(ids.cy).mutation(api.calls.joinRoom, { room_key: room, deliberate: true });
+    expect(await as(ids.ana).mutation(api.transcripts.releaseScribe, { room_key: room })).toEqual({ released: true });
+    expect((await as(ids.cy).mutation(api.transcripts.start, { room_key: room, auto: true })).role).toBe("scribe");
+    await t.run(async (ctx) => ctx.db.patch(transcriptId, { status: "ended", ended_at: Date.now(), summary_status: "pending" }));
+    return { room, transcriptId };
+  }
+
+  test("the summary reaches the session as its owner, not as the guest who scribed last", async () => {
+    const w = await world();
+    const { transcriptId } = await handover(w);
+    await w.t.mutation(internal.transcripts.setSummary, { transcript_id: transcriptId, summary_status: "done", summary: "We decided things." });
+    const sends = await w.t.run(async (ctx) =>
+      (await ctx.db.system.query("_scheduled_functions").collect()).filter((f: any) => f.name.includes("deliverToSession") && String(f.args[0].body).includes("We decided things.")),
+    );
+    expect(sends.map((f: any) => [String(f.args[0].as_user), f.args[0].to])).toEqual([[String(w.ids.ana), String(w.ids.routed)]]);
+  });
+
+  test("a stranger to the room learns nothing from releaseScribe", async () => {
+    const w = await world();
+    const { t, as, ids } = w;
+    const room = dmRoomKey(ids.ana);
+    const transcriptId = await startHuddle(w, room);
+    const outsider = await t.run(async (ctx) => ctx.db.insert("users", { name: "Out" } as any));
+    expect(await as(outsider).mutation(api.transcripts.releaseScribe, { room_key: room })).toEqual({ released: false });
+    expect(await as(outsider).mutation(api.transcripts.releaseScribe, { room_key: dmRoomKey(outsider) })).toEqual({ released: false });
+    expect((await t.run(async (ctx) => ctx.db.get(transcriptId)))?.scribe_open).toBeUndefined();
   });
 });

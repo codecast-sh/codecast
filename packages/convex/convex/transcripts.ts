@@ -463,7 +463,8 @@ export const start = mutation({
 /** The scribe hands its seat back: the run stays live and the next client to
  *  ask (`start`) takes it, as after a Record press. The phone scribes only its
  *  own mic, so it releases when someone else sits down, and a web or desktop
- *  seat that hears every track picks the run up. Only the current scribe may. */
+ *  seat that hears every track picks the run up. Only the current scribe may;
+ *  for anyone else it is a no-op. */
 export const releaseScribe = mutation({
   args: { room_key: v.string() },
   handler: async (ctx, args): Promise<{ released: boolean }> => {
@@ -476,8 +477,9 @@ export const releaseScribe = mutation({
         .withIndex("by_room", (q) => q.eq("room_key", args.room_key))
         .collect()
     ).find((t) => t.status === "live");
-    if (!live || live.scribe_open) return { released: false };
-    if (String(live.started_by) !== String(userId)) throw new Error("Only the scribe can release");
+    // Anyone but the scribe gets the same answer as a room with no call, so
+    // a guessable key (dm:<id>) never tells a stranger a call is running.
+    if (!live || live.scribe_open || String(live.started_by) !== String(userId)) return { released: false };
     await ctx.db.patch(live._id, { scribe_open: true });
     return { released: true };
   },
@@ -1523,7 +1525,10 @@ export function huddleDigestTarget(
  *  stretches (and tells an agent it can snap a frame). A chat room gets a message the
  *  reader can unfold into the transcript (chat.postCallDigest); a session room
  *  gets its agent woken with the summary and the command that reads the whole
- *  transcript, never the transcript itself. Delivery acts as the scribe. */
+ *  transcript, never the transcript itself. A chat digest is posted as the
+ *  scribe; a session's is sent as the session's owner, who may always write
+ *  to it, since the scribe can be someone rung in from outside the session
+ *  (a phone hands its seat to a desktop guest, releaseScribe). */
 async function scheduleHuddleDigest(
   ctx: any,
   t: Doc<"transcripts">,
@@ -1562,8 +1567,9 @@ async function scheduleHuddleDigest(
     });
     return;
   }
+  const conversation = await ctx.db.get(target.conversationId as Id<"conversations">);
   await ctx.scheduler.runAfter(0, internal.transcripts.deliverToSession, {
-    as_user: t.started_by,
+    as_user: conversation?.user_id ?? t.started_by,
     to: target.conversationId,
     body: formatHuddleSummaryTag(String(t._id), digest, {
       callRef: t.short_id ?? null,
