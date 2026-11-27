@@ -87,6 +87,22 @@ describe('score', () => {
     expect(s.pass).toBe(false);
   });
 
+  test('one-off sessions: their own priority is a false positive; under a real priority or nowhere is right', async () => {
+    const g: Golden = { ...golden, one_off_sessions: ['t1', 't2', 't3'] };
+    const p: Produced[] = [
+      { ...produced[0]!, sessions: ['s1', 's2', 't3'] },
+      { key: 'a:5', workspace: 'acme', title: 'Bot identity', summary: '', status: 'active', steps: [], sessions: ['t1', 't2'] },
+    ];
+    const r = new Map(['s1', 's2', 't1', 't2', 't3', 't4'].map((s) => [s, `Session ${s}`]));
+    const { judge, offered } = scripted([{ produced: 'a:1', golden: 'g1', reason: '' }, { produced: 'a:5', golden: 'g2', reason: 'not offered' }], {});
+    const s = await score({ ...g, one_off_sessions: [...g.one_off_sessions!, 't4'] }, p, r, judge, tasksNow());
+    expect(s.standing_like).toEqual(['a:5']);
+    expect(offered).toEqual([['a:1']]);
+    expect(s.precision).toEqual({ matched: 1, of: 2, unmatched: ['a:5'] });
+    // t3 under a matched priority and t4 unplaced are right; t1 and t2 in a priority of their own are not.
+    expect(Object.fromEntries(s.sessions.results.filter((x) => x.label === 'one_off').map((x) => [x.session, x.correct]))).toEqual({ t1: false, t2: false, t3: true, t4: true });
+  });
+
   test('meets the bar when every metric clears it and nothing is falsely done', async () => {
     const clean = produced.slice(0, 2).map((p) => ({ ...p, steps: p.steps.map((x) => ({ ...x, done: x.title === 'Every case' })), sessions: p.key === 'a:2' ? ['s3'] : p.sessions }));
     const all = [...clean, { ...produced[4]!, sessions: ['s4'] }];
