@@ -61,8 +61,10 @@ export type Reader = {
    * Who may read a priority (the feature check is the caller's): its owner;
    * else someone holding its workspace key, while it needs no rewrite, who
    * can read the call it was pulled from (`from_call`: the people in the
-   * meeting saw it made) or, in a team, sees at least one of its newest
-   * TEAMMATE_SESSIONS sessions listed to that team.
+   * meeting saw it made) while it is still as created there (`pass_at` 0: no
+   * pass has written it, so its title, summary and milestones hold nothing
+   * from the owner's sessions), or, in a team, sees at least one of its
+   * newest TEAMMATE_SESSIONS sessions listed to that team.
    */
   canRead: (p: Priority) => Promise<boolean>;
   /** The priority's steps as the viewer may see them (stepsFor). */
@@ -89,7 +91,7 @@ export async function readerFor(ctx: Ctx, viewer: Id<"users">): Promise<Reader> 
   const canRead = async (p: Priority) => {
     if (String(p.user_id) === String(viewer)) return true;
     if (p.needs_rewrite || !authorizedFor(accessStampFromDoc("priorities", p), String(viewer), held)) return false;
-    if (p.from_call) {
+    if (p.from_call && p.pass_at === 0) {
       const call: Doc<"transcripts"> | null = await ctx.db.get(p.from_call);
       if (call && (await canReadCall(ctx, viewer, call))) return true;
     }

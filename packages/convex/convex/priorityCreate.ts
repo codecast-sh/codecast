@@ -8,7 +8,7 @@
 
 import { lastPriorityKey } from "@codecast/shared/contracts/priorities";
 import { matchHandle } from "@codecast/shared/chat";
-import { heldKeysFor, parseWorkspaceKey } from "./lib/accessKeys";
+import { parseWorkspaceKey } from "./lib/accessKeys";
 import { FEATURE, featureCheck, readerFor } from "./lib/priorityAccess";
 import { activeGroup, stepKeyMark } from "./lib/priorityGroup";
 import { askRerun } from "./lib/priorityClassifierHook";
@@ -34,7 +34,8 @@ async function ownerFor(ctx: Ctx, viewer: Id<"users">, workspace: string, owner:
 }
 
 /**
- * A new active priority in `workspace`, owned by the caller or a teammate
+ * A new active priority in `workspace` (one createWorkContext resolved, so
+ * the caller is a member), owned by the caller or a teammate
  * there, last in its owner's order (as a restore places one). Status and rank
  * stay the pass's to change, as for one it created.
  */
@@ -46,7 +47,6 @@ export async function doCreate(
   const title = args.title.trim();
   if (!title) return { error: "a priority needs a title" };
   if (title.length > MAX_TITLE) return { error: `a title is at most ${MAX_TITLE} characters` };
-  if (!(await heldKeysFor(ctx, viewer)).has(args.workspace)) return { error: "you are not a member of that workspace" };
   if (!(await featureCheck(ctx)(args.workspace))) return { error: teamFeatureOffMessage(FEATURE) };
   const owner = await ownerFor(ctx, viewer, args.workspace, args.owner);
   if (typeof owner === "object") return owner;

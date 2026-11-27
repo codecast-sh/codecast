@@ -3,8 +3,9 @@
 //
 // Access follows the workspace's sharing settings (lib/priorityAccess.ts): a
 // priority is readable by its owner, and by a teammate holding its `workspace`
-// key only while the owner lists their sessions to that team or the teammate
-// can read the call it was pulled from (`from_call`); nothing is
+// key only while the owner lists their sessions to that team, or while the
+// teammate can read the call it was pulled from (`from_call`) and no pass
+// has written it yet (`pass_at` 0); nothing is
 // readable, writable or run while the `priorities` feature is off there. Only the owner
 // changes a priority (a member of its workspace may create one for them or add
 // a task's milestone to it, priorityCreate.ts), and every change marks its
