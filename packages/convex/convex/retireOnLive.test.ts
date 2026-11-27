@@ -315,6 +315,16 @@ const GRAPH = {
   ],
 };
 
+/** The subjects' retire judgments a completion scheduled, each run once, as the scheduler would. */
+async function judgeScheduled(w: Awaited<ReturnType<typeof world>>, judged: Set<string>): Promise<number> {
+  const due = await w.t.run(async (ctx) => (await ctx.db.system.query("_scheduled_functions").collect()).filter((f: any) => f.name.endsWith("retireSessionOnLive") && !judged.has(String(f._id))));
+  for (const f of due) {
+    judged.add(String(f._id));
+    await w.t.mutation(internal.retireOnLive.retireSessionOnLive, f.args[0]);
+  }
+  return due.length;
+}
+
 describe("a run stopped at Deploy that a later deploy completes", () => {
   /** A run of the subject's change, stopped at Deploy; `heard` is the session its end message reached (the subject by default). */
   async function stoppedRun(subject: Record<string, unknown> = {}, heardBy?: "lead", features?: Record<string, boolean>) {
@@ -337,7 +347,12 @@ describe("a run stopped at Deploy that a later deploy completes", () => {
       await ctx.db.insert("pending_messages", { conversation_id: heard, from_user_id: w.ids.user, client_id: `run:${run}:end:1a2b`, content: "stopped at Deploy", status: "delivered", created_at: NOW - 29_000, retry_count: 0 } as any);
       return run;
     });
-    const complete = async (deployId: any) => w.t.run(async (ctx) => completeLiveRuns(ctx, deployId));
+    const judged = new Set<string>();
+    const complete = async (deployId: any) => {
+      const done = await w.t.run(async (ctx) => completeLiveRuns(ctx, deployId));
+      await judgeScheduled(w, judged);
+      return done;
+    };
     const told = (conv: any = w.ids.conv) => w.t.run(async (ctx) => (await ctx.db.query("pending_messages").withIndex("by_conversation_status", (q: any) => q.eq("conversation_id", conv).eq("status", "pending")).collect()).length);
     const tellLater = () => w.t.run(async (ctx) => (await ctx.db.system.query("_scheduled_functions").collect()).filter((f: any) => f.name.includes("tellIfKept")));
     return { ...w, run, lead, complete, told, tellLater };
@@ -387,5 +402,39 @@ describe("a run stopped at Deploy that a later deploy completes", () => {
     expect(await s.told(s.lead)).toBe(1);
     expect(await s.told()).toBe(0);
     expect(await s.tellLater()).toHaveLength(0);
+  });
+
+  test("a deploy completing many runs judges each subject in its own transaction: four subjects of 5 MB each, past one's 16 MiB", async () => {
+    const w = await world();
+    const big = "x".repeat(900_000);
+    const wf = await w.t.run(async (ctx) => ctx.db.insert("workflows", { user_id: w.ids.user, name: "change", slug: "change", ...GRAPH, created_at: 1, updated_at: 1 } as any));
+    const runs: any[] = [];
+    for (let i = 0; i < 4; i++) {
+      const subject = await w.t.run(async (ctx) => ctx.db.insert("conversations", {
+        user_id: w.ids.user, team_id: w.ids.team, agent_type: "claude_code", started_at: NOW - 100_000, updated_at: NOW - 50_000, status: "active", short_id: `jx7s${i}`, session_id: `s-s${i}`, owner_device_id: "dev-1", title: `Fix ${i}`, message_count: 12, git_root: ROOT,
+        thread_state: "Shipped", thread_state_status: "done", thread_state_at: NOW - 40_000, thread_state_msg_count: 12, last_person_turn_at: NOW - 90_000,
+      } as any));
+      // Six finished subagents of 900 KB each: judging the subject reads them all.
+      for (let b = 0; b < 6; b += 3) await w.t.run(async (ctx) => {
+        for (let j = b; j < b + 3; j++) await ctx.db.insert("conversations", { user_id: w.ids.user, team_id: w.ids.team, agent_type: "claude_code", started_at: NOW - 100_000, updated_at: NOW - 80_000, status: "completed", session_id: `s-s${i}-${j}`, title: big, message_count: 1, parent_conversation_id: subject } as any);
+      });
+      await w.commit(10 + i, [`web/s${i}.tsx`], { conv: subject });
+      runs.push(await w.t.run(async (ctx) => {
+        const run = await ctx.db.insert("workflow_runs", {
+          user_id: w.ids.user, workflow_id: wf, workspace: w.ids.workspace, status: "failed", current_node_id: "deploy__failed", fail_reason: "Stopped: Deploy stuck",
+          merge: { sha: sha(10 + i), branch: `fix${i}`, into: "main", at: NOW - 50_000 }, primary_conversation_id: subject,
+          node_statuses: [{ node_id: "deploy__wait", status: "failed", outcome: "failure" }, { node_id: "deploy__failed", status: "failed" }], created_at: NOW - 100_000, updated_at: NOW - 30_000,
+        } as any);
+        await ctx.db.insert("pending_messages", { conversation_id: subject, from_user_id: w.ids.user, client_id: `run:${run}:end:1a2b`, content: "stopped at Deploy", status: "delivered", created_at: NOW - 29_000, retry_count: 0 } as any);
+        return run;
+      }));
+    }
+    const d = await w.deploy("web", 13);
+    const done = await w.t.run(async (ctx) => completeLiveRuns(ctx, d));
+    expect(done.map(String).sort()).toEqual(runs.map(String).sort());
+    // No subject judged inside the completion: each is its own scheduled judgment.
+    expect(await w.asks()).toHaveLength(0);
+    expect(await judgeScheduled(w, new Set())).toBe(4);
+    expect((await w.asks()).map((a) => a.parsed.session_id).sort()).toEqual(["s-s0", "s-s1", "s-s2", "s-s3"]);
   });
 });

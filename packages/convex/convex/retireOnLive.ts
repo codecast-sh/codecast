@@ -275,26 +275,40 @@ export const retireSessionsOnLive = internalMutation({
   },
 });
 
+const keptTellArgs = { content: v.string(), client_id: v.string(), from_user_id: v.id("users") };
+
+/**
+ * One session judged in its own transaction, and its daemon asked to retire it. With `tell` (a completed run's subject
+ * that heard its stop, deployCarries.tellStoppedSession), a session kept now hears it at once, and one asked hears it
+ * once the ask's time is up, if it is still alive.
+ */
 export const retireSessionOnLive = internalMutation({
-  args: { conversation: v.id("conversations"), workspace: v.optional(v.string()) },
+  args: { conversation: v.id("conversations"), workspace: v.optional(v.string()), tell: v.optional(v.object(keptTellArgs)) },
   handler: async (ctx, args) => {
     const conv = await ctx.db.get(args.conversation);
     if (!conv) return { asked: false, reason: "it is gone" };
-    const reason = await askDaemonToRetire(ctx, conv, Date.now(), { workspace: args.workspace });
+    const reason = await askDaemonToRetire(ctx, conv, Date.now(), { workspace: args.workspace, tell: args.tell });
+    if (reason && args.tell) await tellKept(ctx, conv, args.tell);
     return reason ? { asked: false, reason } : { asked: true };
   },
 });
 
+/** A kept session hears the tell, once; a killed one hears nothing. */
+async function tellKept(ctx: any, conv: Doc<"conversations">, tell: KeptTell): Promise<boolean> {
+  if (conv.inbox_killed_at) return false;
+  const again = await ctx.db.query("pending_messages").withIndex("by_conversation_client_id", (q: any) => q.eq("conversation_id", conv._id).eq("client_id", tell.client_id)).first();
+  if (again) return false;
+  // A send refused (a hosted session the run's owner does not own) tells nobody.
+  await enqueuePendingMessage(ctx, conv, tell.from_user_id, { content: tell.content, client_id: tell.client_id }).catch(() => {});
+  return true;
+}
+
 /** The session is still alive once its daemon had its chance: it hears what it would have been spared, once. */
 export const tellIfKept = internalMutation({
-  args: { conversation: v.id("conversations"), content: v.string(), client_id: v.string(), from_user_id: v.id("users") },
+  args: { conversation: v.id("conversations"), ...keptTellArgs },
   handler: async (ctx, args) => {
     const conv = await ctx.db.get(args.conversation);
-    if (!conv || conv.inbox_killed_at) return { told: false };
-    const again = await ctx.db.query("pending_messages").withIndex("by_conversation_client_id", (q: any) => q.eq("conversation_id", conv._id).eq("client_id", args.client_id)).first();
-    if (again) return { told: false };
-    // A send refused (a hosted session the run's owner does not own) tells nobody.
-    await enqueuePendingMessage(ctx, conv, args.from_user_id, { content: args.content, client_id: args.client_id }).catch(() => {});
-    return { told: true };
+    if (!conv) return { told: false };
+    return { told: await tellKept(ctx, conv, { content: args.content, client_id: args.client_id, from_user_id: args.from_user_id }) };
   },
 });

@@ -20,7 +20,7 @@ const sha = (n: number) => `${n.toString(16).padStart(2, "0")}cd`.repeat(10);
 const file = (filename: string) => ({ filename, status: "modified", additions: 1, deletions: 0, changes: 1 });
 
 // Convex's own per-transaction limits (16 MiB read), which convex-test enforces when asked.
-async function world() {
+async function world(features: Record<string, boolean> = { retire_on_live: true }) {
   const t = convexTest({ schema, modules: allModules, transactionLimits: true });
   const ids = await t.run(async (ctx: any) => {
     const me = await ctx.db.insert("users", { name: "Ana" });
@@ -28,7 +28,7 @@ async function world() {
     const out = await ctx.db.insert("users", { name: "Outsider" });
     await ctx.db.insert("api_tokens", { user_id: me, token_hash: await hashToken(TOKEN), name: "cli", created_at: 1, last_used_at: 1 });
     await ctx.db.insert("api_tokens", { user_id: out, token_hash: await hashToken(OUTSIDER), name: "cli", created_at: 1, last_used_at: 1 });
-    const team = await ctx.db.insert("teams", { name: "Acme", created_at: 1 });
+    const team = await ctx.db.insert("teams", { name: "Acme", created_at: 1, features } as any);
     for (const u of [me, bo]) await ctx.db.insert("team_memberships", { user_id: u, team_id: team, role: "member", joined_at: 1 });
     const ws = `team:${team}`;
     const wf = await ctx.db.insert("workflows", { user_id: me, name: "change", slug: "change", label: "Change", nodes: [], edges: [], created_at: 1, updated_at: 1 });
@@ -79,6 +79,26 @@ describe("cast release sweep's read", () => {
     expect(s.incidents.map((i: any) => i.short_id)).toEqual(["ct-500"]);
     expect(s.incidents[0].runs.map((r: any) => r.task_short_id).sort()).toEqual(["ct-501", "ct-502"]);
     expect(s.failed_runs).toEqual([]);
+  });
+
+  test("a run still marked with an incident that closed, or that it no longer stops, is the sweep's again", async () => {
+    const w = await world();
+    const fingerprint = "flowstop:acme/app:ci_unread";
+    const incident = async (short: string, status: string) => {
+      const cause = await w.task(short, status);
+      await w.t.run((ctx: any) => ctx.db.patch(cause, { cause: { signal_count: 2, first_seen: NOW, last_seen: NOW, fingerprints: [fingerprint] } }));
+      return cause;
+    };
+    const open = await incident("ct-510", "in_progress");
+    const closed = await incident("ct-511", "done");
+    // Held: the open cause still stops it.
+    await w.run(await w.task("ct-512"), { incident_task_id: open, stop_station: "land__ci", stop_fingerprint: fingerprint });
+    // The incident closed, and the run failed again at the same exit.
+    await w.run(await w.task("ct-513"), { incident_task_id: closed, stop_station: "land__ci", stop_fingerprint: fingerprint });
+    // The cause is open, but the run failed again for another reason: a crash.
+    await w.run(await w.task("ct-514"), { incident_task_id: open, fail_reason: "Runner exited: the machine went to sleep" });
+    const s: any = await w.sweep();
+    expect(s.failed_runs.map((r: any) => r.task_short_id).sort()).toEqual(["ct-513", "ct-514"]);
   });
 
   test("a target holding a commit merged past its deadline is late; one inside it, or touching other paths, is not; a dormant target is skipped", async () => {
@@ -233,8 +253,8 @@ describe("cast release sweep's read", () => {
     expect(s.failed_runs.map((r: any) => r.task_short_id)).toEqual(["ct-701"]);
   });
 
-  test("a settled session whose change is live everywhere and that nothing keeps is listed; a retired one is not", async () => {
-    const w = await world();
+  async function liveSessions(features?: Record<string, boolean>) {
+    const w = await world(features);
     await w.target("web", ["web/**"]);
     const session = (short_id: string, extra: Record<string, unknown> = {}) => w.insert("conversations", {
       user_id: w.ids.me, team_id: w.ids.team, agent_type: "claude_code", started_at: NOW - HOUR, updated_at: NOW - 40 * MIN, status: "active", short_id, session_id: `s-${short_id}`, title: `Fix ${short_id}`,
@@ -245,7 +265,18 @@ describe("cast release sweep's read", () => {
     await w.commit(1, ["web/a.tsx"], NOW - HOUR, done);
     await w.commit(2, ["web/b.tsx"], NOW - HOUR + 1, gone);
     await w.live("web", 2);
-    const s: any = await w.sweep();
+    return w;
+  }
+
+  test("a settled session whose change is live everywhere and that nothing keeps is listed; a retired one is not", async () => {
+    const s: any = await (await liveSessions()).sweep();
     expect(s.unretired.map((u: any) => u.short_id)).toEqual(["jx7done"]);
+  });
+
+  test("with retire on live off, a live, finished session in the inbox is no exception", async () => {
+    const s: any = await (await liveSessions({})).sweep();
+    expect(s.unretired).toEqual([]);
+    expect(s.unretired_skipped).toBe(0);
+    expect(s.failed_kinds).toEqual([]);
   });
 });
