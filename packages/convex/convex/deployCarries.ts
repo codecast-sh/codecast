@@ -18,6 +18,7 @@ import { runWorkflowOf } from "./lib/runGraph";
 import { patchTask } from "./lib/taskWrite";
 import { enqueuePendingMessage } from "./pendingMessages";
 import { settleRunTask } from "./workflow_runs";
+import { retireIfLive } from "./retireOnLive";
 
 /** How far back merges are read for the waiting set and a marker's carries. */
 const MERGE_WINDOW_MS = 90 * DAY;
@@ -356,7 +357,8 @@ async function runsMergedInto(ctx: any, d: Doc<"deploys">): Promise<Doc<"workflo
 
 /**
  * Tell the session that heard the run stop (the one its runner's end message reached, found by that send's client
- * id) that the run is over at Live, once. A killed session is left alone, and a stop that reached nobody tells nobody.
+ * id) that the run is over at Live, once, or retire it when nothing is left for it. A killed session is left alone, and
+ * a stop that reached nobody tells nobody.
  */
 async function tellStoppedSession(ctx: any, run: Doc<"workflow_runs">, task: Doc<"tasks"> | null, flow: string, line: string): Promise<void> {
   const candidates = [run.spawner_conversation_id, run.primary_conversation_id, task?.created_from_conversation, ...(task?.conversation_ids ?? []).slice(-5)];
@@ -368,6 +370,8 @@ async function tellStoppedSession(ctx: any, run: Doc<"workflow_runs">, task: Doc
     const again = await ctx.db.query("pending_messages").withIndex("by_conversation_client_id", (q: any) => q.eq("conversation_id", id).eq("client_id", clientId)).first();
     const conversation = await ctx.db.get(id);
     if (again || !conversation || conversation.inbox_killed_at) return;
+    // Retired rather than told when nothing is left for it (retireOnLive.ts): a send would only wake it to read this.
+    if (!(await retireIfLive(ctx, conversation, Date.now()))) return;
     const named = runSenderName(flow, task?.short_id).replace(/^the /, "The ");
     // The deploy's line opens with "Live:" itself: the end is said once.
     const content = `${named} is over: ${/^Live:/.test(line) ? line : `Live. ${line}`} It had stopped at Deploy; a later deploy took the change live. Nothing more is waiting on this session for it.`;

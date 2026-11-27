@@ -376,6 +376,8 @@ export async function onDeployStatus(ctx: any, id: Id<"deploys">, quiet?: true):
     await closeSuperseded(ctx, d);
     // Runs that stopped at Deploy before a later deploy took their change live end at Live (deployCarries.completeLiveRuns).
     await ctx.scheduler.runAfter(0, internal.deployCarries.completeRunsOnLive, { deploy: id });
+    // Sessions whose change it takes live everywhere it goes, however they shipped it, are retired (retireOnLive.ts).
+    await ctx.scheduler.runAfter(0, internal.retireOnLive.retireSessionsOnLive, { deploy: id });
   }
   if (quiet) return;
   const sha = d.sha ? ` at ${d.sha.slice(0, 7)}` : d.version ? ` ${d.version}` : "";
