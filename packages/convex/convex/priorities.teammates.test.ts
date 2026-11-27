@@ -185,7 +185,27 @@ describe("a teammate's reads", () => {
     expect(await t.run(async (ctx) => (await readerFor(ctx, cy)).canRead((await ctx.db.get(p1))!))).toBe(false);
   });
 
-  test("a dozen teammates' Starts crowding the newest sessions never hide the owner's priority: access looks further back once", async () => {
+  test("a Start made private no longer names its priority on the pin line to a teammate who can still read the priority", async () => {
+    const { t, as, bea, cy, acme, ws, p1 } = await world();
+    const started = await t.run(async (ctx) => {
+      await ctx.db.insert("team_memberships", { user_id: cy, team_id: acme, role: "member", joined_at: 1 } as any);
+      const started = await ctx.db.insert("conversations", {
+        user_id: bea, team_id: acme, agent_type: "claude_code", session_id: "start-pvt", short_id: "jx7beap", title: "started",
+        started_at: NOW, updated_at: NOW + 1, message_count: 1, is_private: false, team_visibility: "full", status: "active",
+      } as any);
+      expect(await linkFromStart(ctx, bea, started, "pri-1", "s2")).toBe(true);
+      return started;
+    });
+    expect(await as(cy).query(pri.pinLine, { conversation_id: started })).toMatchObject({ short_id: "pri-1" });
+    await t.run(async (ctx) => ctx.db.patch(started, { is_private: true, team_visibility: "private" } as any));
+    // Cy still reads pri-1 through Ada's own sessions, but not through a session hidden from Cy.
+    expect((await rowsOf(as(cy), { workspace: ws })).map((r: any) => r.short_id)).toContain("pri-1");
+    expect(await as(cy).query(pri.pinLine, { conversation_id: started })).toBeNull();
+    // Its starter still sees where it sits.
+    expect(await as(bea).query(pri.pinLine, { conversation_id: started })).toMatchObject({ short_id: "pri-1" });
+  });
+
+  test("a dozen teammates' Starts crowding the newest sessions never hide the owner's priority: access looks further back", async () => {
     const { t, as, bea, cy, acme, ws, p1 } = await world();
     await t.run(async (ctx) => {
       await ctx.db.insert("team_memberships", { user_id: cy, team_id: acme, role: "member", joined_at: 1 } as any);

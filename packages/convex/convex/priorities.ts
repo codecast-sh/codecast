@@ -117,6 +117,8 @@ export const pinLine = query({
     const p = await ctx.db.get(conv.priority_id);
     if (!p || p.status === "merged") return null;
     const r = await readerFor(ctx, viewer);
+    // A session not listed to the viewer (a teammate's Start made private) never names its priority.
+    if (String(conv.user_id) !== String(viewer) && !(await r.listed(conv))) return null;
     // The open session is judged when it is the owner's, listed to the team that holds the priority; a teammate's session on it (a Start) never opens it: the priority must be readable (Reader.canRead).
     if (String(p.user_id) !== String(viewer)) {
       const ws = parseWorkspaceKey(p.workspace);
