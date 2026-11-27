@@ -9,7 +9,6 @@ import { PermissionStack } from "./PermissionCard";
 import { useInboxStore, getProjectName } from "../store/inboxStore";
 import { type DecisionStepper } from "../hooks/useDecisionQueue";
 import { useDecisionCardKeys } from "./decisionCardKeys";
-import { isMac } from "../shortcuts";
 import { queueTier, messagesSinceAsk, optionPageSlugs, findDecisionAnchorMessage, decisionDraftKey, type FreeTextMode, type QueueItem } from "../lib/decisionQueue";
 import { isOnThreadRoute } from "../lib/openSessionAtMessage";
 import { decisionHref, ladderRecommendation, ladderRecommenders } from "../lib/decisionLinks";
@@ -20,6 +19,7 @@ import { DecisionOptionList, RecommendedMark, TypeAnswerButton } from "./decisio
 import { OptionPages } from "./decisions/OptionPages";
 import { ChangeCardHeadline, ChangeCardVerdictBar, ChangeCardView } from "./decisions/ChangeCardView";
 import { DecisionDiscussion } from "./decisions/DecisionDiscussion";
+import { OwnWordsBox } from "./decisions/OwnWordsBox";
 import { discussDecision } from "../lib/decisionThread";
 import { toast } from "sonner";
 import { PassDecision } from "./decisions/PassDecision";
@@ -645,27 +645,13 @@ export function SessionDecisionCard({ item, stepper, asks, onPick, startSize, al
       {/* Off a run, the thread shows once something was asked in it: the words asked from the box and the session's reply stay on the card. */}
       {threaded && !gateOnly && <DecisionDiscussion decisionId={decideId!} compact bare className="mt-3" />}
       {otherOpen && (
-        <div className="mt-3">
-          <textarea
-            ref={otherRef}
-            value={otherText}
-            onChange={(e) => setOtherText(e.target.value)}
-            rows={3}
-            placeholder={hosted ? LANE_COPY.approval.typeAnswer : threaded ? "Ask the session that asked, or answer in your own words" : "Answer in your own words; this goes to the agent as a message."}
-            className="w-full bg-sol-card border border-sol-border rounded px-2 py-1.5 text-sm text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-blue/50"
-          />
-          <div className="flex items-center gap-2 mt-1 text-meta text-sol-text-dim">
-            {threaded ? (
-              <>
-                <KeyCap size="xs">return</KeyCap><span>ask</span>
-                {!gateOnly && <><KeyCap size="xs">{isMac ? "⌘" : "ctrl"}</KeyCap><KeyCap size="xs">return</KeyCap><span>answer with this</span></>}
-              </>
-            ) : (
-              <><KeyCap size="xs">return</KeyCap><span>send</span></>
-            )}
-            <KeyCap size="xs">esc</KeyCap><span>cancel</span>
-          </div>
-        </div>
+        <OwnWordsBox
+          boxRef={otherRef}
+          value={otherText}
+          onChange={setOtherText}
+          placeholder={hosted ? LANE_COPY.approval.typeAnswer : threaded ? "Ask the session that asked, or answer in your own words" : "Answer in your own words; this goes to the agent as a message."}
+          keys={!threaded ? "send" : gateOnly ? "ask" : "ask-or-answer"}
+        />
       )}
       {!cardBar && escapeHatch}
       {!cardBar && ladderBlock && <div className="mt-6">{ladderBlock}</div>}
