@@ -147,11 +147,18 @@ describe("shouldPlayWaitingSound", () => {
   });
 
   // A person took it over from its parent (parent_released_at): the wait is
-  // theirs now, as the push decides. A released Task subagent still stands
-  // down as agent-spawned.
+  // theirs now, as the push decides, with the owners model or without.
   it("chimes for a child once a person released it from its parent", () => {
     expect(episode({ parent_conversation_id: "p", parent_message_uuid: "plan-handoff", parent_released_at: 5 }).play).toBe(true);
-    expect(episode({ is_subagent: true, parent_conversation_id: "p", parent_released_at: 5 }).play).toBe(false);
+    expect(episode({ is_subagent: true, parent_conversation_id: "p", parent_released_at: 5 }).play).toBe(true);
+    expect(episode({ is_subagent: true, parent_conversation_id: "p", spawned_by_conversation_id: "p", parent_released_at: 5 }).play).toBe(true);
+  });
+
+  // Under the owners model the server stands a child down only while its
+  // parent session owns it (reason agent_owner): an unreleased parent link.
+  it("under the owners model, stays silent only while the parent owns the child", () => {
+    expect(episode({ owners_model: true, is_subagent: true, parent_conversation_id: "p" }).play).toBe(false);
+    expect(episode({ owners_model: true, is_subagent: true, parent_conversation_id: "p", parent_released_at: 5 }).play).toBe(true);
   });
 
   it("does not chime on the sync right after a killed-and-waiting session is revived", () => {

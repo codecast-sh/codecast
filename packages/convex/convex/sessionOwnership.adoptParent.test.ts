@@ -198,7 +198,7 @@ describe("adopt_parent", () => {
     expect(people(db)).toEqual([ME]);
   });
 
-  test("a dragged session still runs its own process: a revive takes it as itself, and a detach clears the mark", async () => {
+  test("a dragged session still runs its own process: a revive takes it as itself, its park is its parent's to hear, and a detach clears the mark", async () => {
     const db = fixtures(true, {}, {}, [{ _id: CHILD, short_id: "jxchild" }]);
     addRow(db, ME, 1);
     await performApplyOwnersChange(ctxOf(db), ME as any, { session_id: S, adopt_parent: LEAD });
@@ -206,7 +206,7 @@ describe("adopt_parent", () => {
     const parked = { ...conv(db), pending_api_error: true, pending_api_error_kind: "limit", updated_at: 1 };
     expect(runsInParentProcess(parked)).toBe(false);
     expect(actedBlockedConversations([parked], false).map((c: any) => c._id)).toEqual([S]);
-    expect(blockedIncidentNotice([parked])?.anchor._id).toBe(S);
+    expect(blockedIncidentNotice([parked])).toBeNull();
     // Moving it to another parent keeps the first mark.
     const was = conv(db).adopted_at;
     await performApplyOwnersChange(ctxOf(db), ME as any, { session_id: S, adopt_parent: CHILD });

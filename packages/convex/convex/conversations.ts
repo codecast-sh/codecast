@@ -9024,6 +9024,9 @@ async function enrichInboxSessionRow(
     // The owners model (lib/inboxOwners): its marker, implicit starter and
     // owning session only where the model applies, which every placement reads.
     ...(await inboxOwnerRowFields(ctx, conv)),
+    // A person took it over from its parent, on or off the model: who hears
+    // it reads this (shared answersToParent).
+    parent_released_at: conv.parent_released_at ?? null,
     user_id: conv.user_id,
     acting_user_id: (conv as any).acting_user_id ?? null,
     is_anchor: !!(conv as any).anchor_id,
@@ -9057,7 +9060,6 @@ async function inboxOwnerRowFields(ctx: any, conv: any): Promise<Record<string, 
     owner_session_id: owners.owner_session_id ?? null,
     role_started: conv.role_started ?? null,
     owners_changed_at: conv.owners_changed_at ?? null,
-    parent_released_at: conv.parent_released_at ?? null,
     adopted_at: conv.adopted_at ?? null,
     wait_up_at: conv.wait_up_at ?? null,
     wait_up_count: conv.wait_up_count ?? null,
@@ -9157,6 +9159,7 @@ async function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: nu
     inbox_adopted_at: child.inbox_adopted_at ?? null,
     headless_launch: launchedHeadless(child),
     runs_in_parent: runsInParentProcess(child),
+    parent_released_at: child.parent_released_at ?? null,
     // The child's own rest verdict, carried like every other stamp above (the
     // is_deferred/is_pinned twins over it are hardcoded because a child never
     // holds those). Without these three the verdict is write-only on a

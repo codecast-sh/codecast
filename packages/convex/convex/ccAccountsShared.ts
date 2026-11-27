@@ -1258,17 +1258,31 @@ export function blockedHeadlineCause<T extends { pending_api_error_kind?: string
   ] as const).reduce((best, cur) => (cur[0] > best[0] ? cur : best))[1];
 }
 
-/** The blocked-incident push: what parked, counted over sessions with a
- *  process of their own, and the newest park it covers, or null when none is
- *  parked. A worker inside its parent's process belongs to the session that
- *  started it, which reads its state and revives or drops it; pushing its park
- *  asked the person to act on work they never started (a Codex reviewer's
- *  safety stop read "1 needs safety review (1 subagent)" on the lock screen).
- *  The inbox still lists parked workers under their parent. */
+/** A child that answers to the session or run it works for (its subagent
+ *  flag or parent link), until a person takes it over (parent_released_at):
+ *  from then on it is theirs, heard like any session they own. Who HEARS a
+ *  child reads this; whether it has a process of its own is
+ *  runsInParentProcess, a separate question. */
+export function answersToParent(conv: {
+  is_subagent?: boolean | null;
+  parent_conversation_id?: unknown;
+  parent_released_at?: number | null;
+}): boolean {
+  return (conv.is_subagent === true || !!conv.parent_conversation_id) && conv.parent_released_at == null;
+}
+
+/** The blocked-incident push: what parked, counted over the sessions the
+ *  person answers for, and the newest park it covers, or null when none is
+ *  parked. A child that answers to a parent or a run (answersToParent: a Task
+ *  subagent, a `cast spawn --subagent` worker, a flow station) belongs to the
+ *  session that started it, which reads its state and revives or drops it;
+ *  pushing its park asked the person to act on work they never started (a
+ *  Codex reviewer's safety stop read "1 needs safety review (1 subagent)" on
+ *  the lock screen). The inbox still lists parked workers under their parent. */
 export function blockedIncidentNotice<
-  T extends { pending_api_error_kind?: string | null; updated_at?: number } & RunsInParentFacts,
+  T extends { pending_api_error_kind?: string | null; updated_at?: number; is_subagent?: boolean | null; parent_conversation_id?: unknown; parent_released_at?: number | null },
 >(blocked: T[]): { title: string; message: string; anchor: T; newestPark: number } | null {
-  const owned = blocked.filter((c) => !runsInParentProcess(c));
+  const owned = blocked.filter((c) => !answersToParent(c));
   if (owned.length === 0) return null;
   const of = (kind: string) => owned.filter((c) => c.pending_api_error_kind === kind).length;
   const auth = of("auth");

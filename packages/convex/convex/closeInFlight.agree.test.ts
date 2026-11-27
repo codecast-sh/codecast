@@ -44,6 +44,8 @@ const SCENARIOS: Record<string, Scenario> = {
   "fleet queued": { conv: { subagent_slot: "queued", subagent_slot_at: NOW - 60_000, parent_conversation_id: undefined } },
   "usage limit": { conv: { pending_api_error: true, pending_api_error_kind: "limit", pending_api_error_at: NOW - 60_000 } },
   "old usage limit": { conv: { pending_api_error: true, pending_api_error_kind: "limit", pending_api_error_at: NOW - 30 * 24 * 3_600_000 } },
+  // killSession stamps inbox_killed_at without inbox_dismissed_at; a killed row is never revived.
+  "killed with a usage limit": { conv: { pending_api_error: true, pending_api_error_kind: "limit", pending_api_error_at: NOW - 60_000, inbox_killed_at: NOW - 30_000 } },
   "armed trigger, no process": { conv: { armed_trigger_kind: "once" } },
 };
 

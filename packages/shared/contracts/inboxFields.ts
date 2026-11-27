@@ -97,12 +97,15 @@ export const INBOX_ROW_FIELDS = [
   // applies to (underOwnersModel): the marker, the implicit starter (the one
   // owner a row can name without reading owner rows), the session that owns
   // it, whether a role started it, the last owner write (an ENRICH trigger),
-  // when a person released it from its parent (the nested seat), when a
-  // person dragged it under one (its placement in the inbox), and its
-  // current wait's escalation: when, the message count it covers, and the
-  // person it reached that no owner row names (waitReachedPeople). Who else
-  // owns it is the owners read, never the row.
-  "owners_model", "implicit_owner", "owner_session_id", "role_started", "owners_changed_at", "parent_released_at", "adopted_at", "wait_up_at", "wait_up_count", "wait_up_person",
+  // when a person dragged it under a parent (its placement in the inbox),
+  // and its current wait's escalation: when, the message count it covers, and
+  // the person it reached that no owner row names (waitReachedPeople). Who
+  // else owns it is the owners read, never the row.
+  "owners_model", "implicit_owner", "owner_session_id", "role_started", "owners_changed_at", "adopted_at", "wait_up_at", "wait_up_count", "wait_up_person",
+  // When a person took it over from its parent, on or off the model: from
+  // then on it is theirs to hear (shared answersToParent), and under the
+  // model it takes the nested seat.
+  "parent_released_at",
   // The waiting episode the needs-input push last covered ("<count>:<kind>"):
   // an escalated wait's kind (shared escalatedAsks).
   "needs_input_notified_key",
@@ -119,7 +122,7 @@ export const INBOX_ROW_FIELDS = [
 // field reads as null everywhere (underOwnersModel is `=== true`).
 export const INBOX_MODEL_ONLY_ROW_FIELDS: ReadonlySet<string> = new Set([
   "owners_model", "implicit_owner", "owner_session_id", "role_started", "owners_changed_at",
-  "parent_released_at", "adopted_at", "wait_up_at", "wait_up_count", "wait_up_person", "needs_input_notified_key",
+  "adopted_at", "wait_up_at", "wait_up_count", "wait_up_person", "needs_input_notified_key",
 ]);
 
 const INBOX_ROW_FIELD_SET: ReadonlySet<string> = new Set(INBOX_ROW_FIELDS);

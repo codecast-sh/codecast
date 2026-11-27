@@ -194,7 +194,7 @@ import { cardVerdictIndexes } from "@codecast/shared/contracts/changeCard";
 import { escalationTargetIds } from "@codecast/shared/contracts/decisionEscalation";
 import { peopleAboveRole } from "@codecast/shared/contracts/orgLead";
 import type { OrgTree } from "../components/org/orgTypes";
-import { isAgentSpawnedConversation, isAgentTeamWorker, nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
+import { answersToParent, isAgentSpawnedConversation, isAgentTeamWorker, nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
 
 export type { PendingEntry } from "./syncProtocol";
 
@@ -3578,12 +3578,13 @@ export function getSessionRenderKey(
 }
 
 // Sole consumer: the waiting chime (hooks/useSyncInboxSessions.ts). A true
-// mirror of convex/notifications.ts checkNeedsInput's two stand-downs — reason
-// "subagent" (a child that answers to its parent: is_subagent or a parent
-// link, until a person released it from that parent with
-// parent_released_at) and reason "agent_spawned" (the shared
-// isAgentSpawnedConversation: spawned_by, non-lead agent identity, workflow
-// subs, parentless subagents). The server's third stand-down
+// mirror of convex/notifications.ts checkNeedsInput's stand-downs — reason
+// "subagent" (the shared answersToParent) and reason "agent_spawned" (the
+// shared isAgentSpawnedConversation: spawned_by, non-lead agent identity,
+// workflow subs, parentless subagents). Under the owners model the server
+// stands a child down only while its parent session owns it (reason
+// "agent_owner"): a parent link a person has not released. A child a person
+// took over (parent_released_at) is heard either way. The server's third stand-down
 // (agent_task_id → "schedule_run") has no chime counterpart: a schedule run
 // is never in the inbox as a waiting card. A worktree_name is a
 // LOCATION, not a parent: a human-started --isolated / cloud / path-stamped
@@ -3593,7 +3594,9 @@ export function getSessionRenderKey(
 // The one caveat, same as the server: `cast spawn` from a plain terminal
 // records no spawner and so is treated as human-started.
 export function isSub(s: InboxSession): boolean {
-  return ((!!s.is_subagent || !!s.parent_conversation_id) && !s.parent_released_at) || isAgentSpawnedConversation(s);
+  if (s.parent_released_at != null) return false;
+  if (underOwnersModel(s)) return !!s.parent_conversation_id;
+  return answersToParent(s) || isAgentSpawnedConversation(s);
 }
 
 export function isFork(s: InboxSession): boolean {

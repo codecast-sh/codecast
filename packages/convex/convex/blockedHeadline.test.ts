@@ -76,11 +76,14 @@ describe("blockedIncidentNotice", () => {
     expect(blockedIncidentNotice([conv("safety", { is_subagent: true, runs_in_parent: true }), conv("limit", { parent_conversation_id: "p", session_id: "agent-a1b2c3d4e5" })])).toBeNull();
   });
 
-  // A `cast spawn --subagent` worker is a child by its link but runs its own
-  // process: nothing else revives it, so its park is the person's.
-  test("a parked worker with its own process raises the push", () => {
+  // A `cast spawn --subagent` worker or a flow station runs its own process
+  // and is revived as itself, but it answers to its parent or run: its park
+  // is theirs, not the person's. A child a person took over is theirs.
+  test("a parked worker that answers to a parent raises no push until a person takes it over", () => {
     const spawned = conv("limit", { _id: "s", updated_at: 5, is_subagent: true, parent_conversation_id: "p", session_id: "0b6e2c1a-uuid", runs_in_parent: false });
-    expect(blockedIncidentNotice([spawned])).toMatchObject({ title: "1 session blocked on usage limits", anchor: spawned });
+    expect(blockedIncidentNotice([spawned])).toBeNull();
+    const released = { ...spawned, parent_released_at: 4 };
+    expect(blockedIncidentNotice([released])).toMatchObject({ title: "1 session blocked on usage limits", anchor: released });
   });
 
   test("a top-level safety stop says it waits for the person", () => {

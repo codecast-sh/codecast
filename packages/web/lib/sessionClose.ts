@@ -31,6 +31,7 @@ export type CloseRow = Parameters<typeof sessionLiveAt>[0] & {
   pending_api_error?: boolean | null;
   pending_api_error_kind?: string | null;
   pending_api_error_at?: number | null;
+  inbox_killed_at?: number | null;
   subagent_slot?: string | null;
   parked_wake_kind?: string | null;
 };
@@ -57,6 +58,7 @@ export function inFlightFactsOfRow(row: CloseRow, now: number, pendingSend = fal
       agent_type: row.agent_type ?? undefined,
       is_workflow_primary: row.is_workflow_primary,
       session_id: row.session_id,
+      inbox_killed_at: row.inbox_killed_at,
     }) && isCurrentBlock(row, now),
   };
 }

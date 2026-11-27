@@ -59,10 +59,11 @@ the dropper's own owner row off; other people's rows stay. It never sets
 `is_subagent`, but the session is now the target's worker, so it goes down
 with the target's kill or dismiss. It still runs its own process
 (`runs_in_parent` stays false, and every process gate reads
-`runsInParentProcess`): a usage-limit revive, auto-recovery and the blocked
-push treat it as a top-level session, and the waiting chime stays silent for
-it while it answers to its parent. The adopt also stamps `adopted_at` (a
-detach clears it), which the inbox reads to place the dragged card. The session is told whom it reports to, and
+`runsInParentProcess`): a usage-limit revive and auto-recovery restart it as
+itself. It answers to its parent (`answersToParent`), so the blocked push and
+the waiting chime stay silent for it until a person takes it over. The adopt
+also stamps `adopted_at` (a detach clears it), which the inbox reads to place
+the dragged card. The session is told whom it reports to, and
 a wait standing on it is handed to the target (`rehandWait`) without ringing
 its people again.
 
@@ -253,6 +254,13 @@ or open question files under Questions without any liveness.
 
 A killed or deleted parent counts as released. Its children fall back to their
 people and their implicit starter.
+
+A close of a parent takes down every child that runs inside its process
+(`goesDownWithLead`, reading `runsInParentProcess`): a Task subagent, a named
+in-process agent (`agent-<name>-<hex>`, which went down with nothing before
+`runs_in_parent`), and a codex child running in its lead. An agent-team
+teammate goes down with its lead too. Every other child has a process of its
+own and stays up.
 
 `notifications.releaseDeadParentChildren` is a scheduled job, paged 50 children
 a call over the sessions nested under the parent, that runs 60 s after
