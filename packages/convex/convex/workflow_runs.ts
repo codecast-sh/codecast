@@ -3,7 +3,7 @@ import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
-import { resolveCreationPrivacy } from "./privacy";
+import { isTeamAdmin, resolveCreationPrivacy } from "./privacy";
 import { findConversationByAnyRef, findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { killConversation } from "./conversations";
 import { askCore, finalizeAnswer, joinStack, normalizeVerdict, personMayResolve, refreshHolder, userMayRead, withdrawCore, GATE_PRESENT_AGAIN, type AnsweredBy } from "./sessionDecisions";
@@ -16,7 +16,7 @@ import { tookPastStart } from "@codecast/shared/contracts/runStart";
 import { sourceTakesSessionChange } from "@codecast/shared/contracts/flowPool";
 import type { ShippingRun, ShippingRuns, ShippingShipper } from "@codecast/shared/contracts/deployTargets";
 import { isTerminalTaskStatus } from "@codecast/shared/tasks";
-import { canAccessConversation, canAccessTask, canAccessPlan, computeWorkspaceKey, requireAccessiblePlan, requireAccessibleTask, resolveWorkspaceKey, workspaceGrantsAccess } from "./lib/access";
+import { canAccessConversation, canAccessTask, canAccessPlan, computeWorkspaceKey, parseWorkspaceKey, requireAccessiblePlan, requireAccessibleTask, resolveWorkspaceKey, workspaceGrantsAccess } from "./lib/access";
 import { patchTask } from "./lib/taskWrite";
 import { repairedClosedAt, repairedLineStatus, statusHistory } from "./lib/lineCauseRepair";
 import { moveTaskStatus } from "./tasks";
@@ -402,11 +402,17 @@ export async function answerGateCore(ctx: Ctx, run: any, response: string, by: A
 /**
  * Whether `userId` answers for a run: the account it runs as, or an owner of its session. A role's run placed on a
  * machine of the team's pool runs as that machine's account and is owned by the seat's person (orgLine.startRoleRun),
- * so both may cancel, resume or re-ask it.
+ * so both may cancel, resume or re-ask it. A team's bot account has no person of its own, so an admin of its team
+ * answers for its runs in the team's workspace, as for its machine (devices.setDeviceSshHost): the Aivery bot's onefix
+ * runs on its Mac mini could otherwise be cancelled or resumed only from that machine (Nov 27).
  */
 export async function ownsRun(ctx: Ctx, userId: Id<"users">, run: any): Promise<boolean> {
   if (String(run.user_id) === String(userId)) return true;
-  return !!run.primary_conversation_id && (await isSessionOwner(ctx, run.primary_conversation_id, userId));
+  if (run.primary_conversation_id && (await isSessionOwner(ctx, run.primary_conversation_id, userId))) return true;
+  const ws = parseWorkspaceKey(await resolveWorkspaceKey(ctx, run));
+  if (ws?.type !== "team") return false;
+  const account = await ctx.db.get(run.user_id);
+  return !!account?.is_bot && String(account.team_id) === String(ws.teamId) && (await isTeamAdmin(ctx, userId, ws.teamId));
 }
 
 async function canCancelRun(ctx: Ctx, userId: Id<"users">, run: any): Promise<boolean> {
