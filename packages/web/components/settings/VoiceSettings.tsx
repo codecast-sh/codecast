@@ -5,6 +5,8 @@
 // deletes every sample: with samples it arms first (the Delete button becomes
 // "Turn off · delete N"), with none it is one press. Writes are store actions
 // (setVoiceIdEnabled, deleteMyVoiceprints); counts come from useMyVoiceprint.
+// Above it, the Dictation switch (currentUser.dictation_enabled, store
+// setDictationEnabled) shows the composer mic.
 import { useRef, useState } from "react";
 import { AudioLines, Trash2 } from "lucide-react";
 import { useInboxStore } from "../../store/inboxStore";
@@ -20,6 +22,7 @@ import { voiceIdLedger } from "./voiceIdLedger";
 
 export function VoiceSettings({ pad }: { pad?: string }) {
   const enabled = useInboxStore((s) => (s.currentUser as { voice_id_enabled?: boolean } | null | undefined)?.voice_id_enabled === true);
+  const dictation = useInboxStore((s) => (s.currentUser as { dictation_enabled?: boolean } | null | undefined)?.dictation_enabled === true);
   const mine = useMyVoiceprint();
   const ago = useRelativeTime();
   const [arming, setArming] = useState<null | "delete" | "off">(null);
@@ -49,6 +52,10 @@ export function VoiceSettings({ pad }: { pad?: string }) {
   }, [arming]);
   return (
     <SettingsSection title="Voice" icon={AudioLines}>
+      {/* A plain switch: on only shows the composer mic; nothing records until it is pressed. */}
+      <SettingsRow label="Dictation" className={pad}>
+        <Switch checked={dictation} onCheckedChange={(on) => settleSpeakerWrite(useInboxStore.getState().setDictationEnabled(on))} aria-label="Dictation" />
+      </SettingsRow>
       <SettingsRow label="Recognize my voice in recordings" className={pad}>
         <ConsequentialSwitch
           on={enabled}

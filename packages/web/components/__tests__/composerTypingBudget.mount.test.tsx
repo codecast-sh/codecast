@@ -22,6 +22,18 @@ mock.module("sonner", () => {
 const realDraftWrites = await import("../../lib/pendingDraftWrites");
 let draftWritesScheduled = 0;
 mock.module("../../lib/pendingDraftWrites", () => ({ ...realDraftWrites, scheduleDraftWrite: () => { draftWritesScheduled++; } }));
+// The mic (DictateControls) draws through these tooltips; counting the ones it
+// labels counts its renders, so a keystroke that draws it again shows.
+const realShortcuts = await import("../KeyboardShortcutsHelp");
+let micRenders = 0;
+const MIC_LABELS = new Set(["Dictate", "Dictation settings"]);
+mock.module("../KeyboardShortcutsHelp", () => ({
+  ...realShortcuts,
+  ShortcutTooltip: (props: any) => {
+    if (MIC_LABELS.has(props.label)) micRenders++;
+    return <realShortcuts.ShortcutTooltip {...props} />;
+  },
+}));
 import { act, Profiler } from "react";
 import { createRoot } from "react-dom/client";
 import { ConvexProvider } from "convex/react";
@@ -31,6 +43,7 @@ import { offlineConvexClient } from "../../test-helpers/offlineConvex";
 
 afterAll(() => {
   mock.module("../../lib/pendingDraftWrites", () => realDraftWrites);
+  mock.module("../KeyboardShortcutsHelp", () => realShortcuts);
   closeDomWindow(dom);
   restoreGlobals();
 });
@@ -186,4 +199,29 @@ test("a keystroke into a box with text commits once, writes nothing to the store
   expect([...outside]).toEqual([]);
   expect({ layoutReadsWhileTyping: [...reads] }).toEqual({ layoutReadsWhileTyping: [] });
   expect(draftWritesScheduled).toBeGreaterThan(0);
+});
+
+test("with dictation on, a keystroke keeps the same budget and does not draw the mic again", async () => {
+  useInboxStore.setState({ currentUser: { _id: "user_type_budget", name: "Typist", dictation_enabled: true } } as any);
+  await settle();
+  const mic = textarea.ownerDocument.querySelector('button[aria-label="Dictate"]');
+  expect(mic).toBeTruthy();
+  const rendersBefore = micRenders;
+  expect(rendersBefore).toBeGreaterThan(0);
+  let worstCommits = 0;
+  let storeWrites = 0;
+  const outside = new Set<string>();
+  const reads = new Set<string>();
+  for (const ch of " and a few more words to dictate".slice(0, KEYS)) {
+    const t = await measure(() => typeChar(ch));
+    worstCommits = Math.max(worstCommits, t.commits);
+    storeWrites += t.storeWrites;
+    for (const m of t.outsideMutations) outside.add(m);
+    for (const r of t.layoutReads) reads.add(r);
+  }
+  expect({ worstCommitsPerKey: worstCommits }).toEqual({ worstCommitsPerKey: 1 });
+  expect({ storeWritesWhileTyping: storeWrites }).toEqual({ storeWritesWhileTyping: 0 });
+  expect([...outside]).toEqual([]);
+  expect({ layoutReadsWhileTyping: [...reads] }).toEqual({ layoutReadsWhileTyping: [] });
+  expect({ micRendersWhileTyping: micRenders - rendersBefore }).toEqual({ micRendersWhileTyping: 0 });
 });
