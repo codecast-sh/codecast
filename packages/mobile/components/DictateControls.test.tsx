@@ -21,8 +21,24 @@ function TouchableOpacity(props: any) {
   return React.createElement('TouchableOpacity', { ...props, onPress: touchableDisabled(props) ? undefined : props.onPress });
 }
 const openedSettings: number[] = [];
+// The live dot's pulse: each loop made, and whether it runs. Reduce Motion is
+// the phone's setting, read once and then followed.
+type Loop = { running: boolean; start(): void; stop(): void };
+const loops: Loop[] = [];
+const reduceMotion = { on: false, listeners: new Set<(on: boolean) => void>() };
 mock.module('react-native', () => ({
   View: host('View'), Text: host('Text'), TextInput: host('TextInput'), TouchableOpacity,
+  Animated: {
+    View: host('Animated.View'),
+    Value: class { constructor(public value: number) {} setValue(v: number) { this.value = v; } },
+    timing: () => ({}),
+    sequence: () => ({}),
+    loop: () => { const l: Loop = { running: false, start() { l.running = true; }, stop() { l.running = false; } }; loops.push(l); return l; },
+  },
+  AccessibilityInfo: {
+    isReduceMotionEnabled: async () => reduceMotion.on,
+    addEventListener: (event: string, fn: (on: boolean) => void) => { if (event === 'reduceMotionChanged') reduceMotion.listeners.add(fn); return { remove: () => reduceMotion.listeners.delete(fn) }; },
+  },
   Linking: { openSettings: async () => void openedSettings.push(1) },
   ActivityIndicator: host('ActivityIndicator'),
   StyleSheet: { create: <T,>(s: T) => s, flatten: (s: unknown) => s, hairlineWidth: 1, absoluteFillObject: {} },
@@ -109,6 +125,7 @@ function installHost() {
 
 beforeEach(() => {
   alerts.length = 0; sheets.length = 0; notices.length = 0; openedSettings.length = 0; secure.clear();
+  loops.length = 0; reduceMotion.on = false;
   storeState = { currentUser: { _id: 'u1', dictation_enabled: true }, teams: [], clientState: { ui: {} } };
   installHost();
 });
@@ -435,23 +452,29 @@ test('a huddle or room recording taking the mic finishes the dictation first', a
   expect([done, contracts.dictationRunning(), m.value()]).toEqual([true, false, 'about to call']);
 });
 
-// Lay a row out left to right from the props it renders: each button's box
-// (style width, margins) grown by its hitSlop. Every target is 44pt square at
+// Lay a row out left to right from what it renders: every child takes its
+// style width and margins (the live dot's slot included, which is no target),
+// and each button's box grows by its hitSlop. Every target is 44pt square at
 // least, and no two overlap, send's included (32pt, DICTATE_SEND_SLOP).
 function targets(m: Awaited<ReturnType<typeof mount>>, labels: string[]) {
   const flat = (st: any): any => (Array.isArray(st) ? Object.assign({}, ...st.filter(Boolean).map(flat)) : st ?? {});
-  const row = flat(m.byLabel(labels[0]!)[0]!.parent!.props.style);
+  let row = m.byLabel(labels[0]!)[0]!.parent;
+  while (row && row.type !== 'View') row = row.parent;
   let x = 0;
-  const rects = labels.map((label) => {
-    const n = m.byLabel(label)[0]!;
-    const st = flat(n.props.style);
-    const slop = n.props.hitSlop;
+  const rects: { label: string; left: number; right: number; height: number }[] = [];
+  for (const child of row!.children) {
+    if (typeof child === 'string') continue;
+    const st = flat(child.props.style);
     x += st.marginLeft ?? 0;
-    const rect = { label, left: x - slop.left, right: x + st.width + slop.right, height: st.height + slop.top + slop.bottom };
+    const label = child.props.accessibilityLabel;
+    if (labels.includes(label)) {
+      const slop = child.props.hitSlop;
+      rects.push({ label, left: x - slop.left, right: x + st.width + slop.right, height: st.height + slop.top + slop.bottom });
+    }
     x += st.width + (st.marginRight ?? 0);
-    return rect;
-  });
-  x += row.marginRight ?? 0;
+  }
+  expect(rects.map((r) => r.label)).toEqual(labels);
+  x += flat(row!.props.style).marginRight ?? 0;
   const { DICTATE_SEND_SLOP: send } = require('./DictateControls');
   rects.push({ label: 'Send', left: x - send.left, right: x + 32 + send.right, height: 32 + send.top + send.bottom });
   return rects;
@@ -474,6 +497,46 @@ test('every target is 44pt and none overlaps its neighbour, send included', asyn
   expectClear(recording);
   // Send sits in the same place in both states.
   expect(recording.at(-1)).toEqual(idle.at(-1));
+  // The live dot shows while listening and changes nothing beside it.
+  expect(m.byLabel('Microphone on').length).toBe(1);
+});
+
+test('a dot left of ✕ says the mic is on while it listens, and only then', async () => {
+  let opened: (pipe: unknown) => void = () => {};
+  (globalThis as any).__dictationTestHost = { open: (events: any) => new Promise((resolve) => { fake.events = events; opened = resolve; }) };
+  const m = await mount('');
+  const dot = () => m.byLabel('Microphone on');
+  await m.press('Dictate');
+  // Starting: the microphone is not open yet.
+  expect(dot()).toEqual([]);
+  let release: () => void = () => {};
+  await m.act(() => opened({ finish: () => new Promise<void>((r) => { release = r; }), close: () => {} }));
+  expect(dot().length).toBe(1);
+  // In the row before ✕: the slot holding it is the row's first child.
+  const row = m.byLabel('Cancel dictation')[0]!.parent!.parent!;
+  expect(row.children.findIndex((c: any) => typeof c !== 'string' && c.findAll((n: any) => n.props.accessibilityLabel === 'Microphone on').length > 0)).toBe(0);
+  await m.act(() => fake.events!.onPartial('words already in the box'));
+  expect([dot().length, loops.at(-1)!.running]).toEqual([1, true]);
+  // Finishing: the mic is closing, so the dot goes, and its pulse stops.
+  await m.press('Finish dictation');
+  expect([dot(), loops.at(-1)!.running]).toEqual([[], false]);
+  await m.act(() => release());
+  expect(dot()).toEqual([]);
+});
+
+test('under Reduce Motion the dot holds still, and follows the setting as it changes', async () => {
+  reduceMotion.on = true;
+  const m = await mount('');
+  await m.press('Dictate');
+  const dot = () => m.byLabel('Microphone on')[0]!;
+  const opacity = () => [dot().props.style].flat(9).find((st: any) => st && 'opacity' in st).opacity.value;
+  expect([loops.length, opacity()]).toEqual([0, 1]);
+  await m.act(() => reduceMotion.listeners.forEach((l) => l(false)));
+  expect([loops.length, loops[0]!.running]).toEqual([1, true]);
+  await m.act(() => reduceMotion.listeners.forEach((l) => l(true)));
+  expect([loops[0]!.running, opacity()]).toEqual([false, 1]);
+  await m.press('Cancel dictation');
+  expect(reduceMotion.listeners.size).toBe(0);
 });
 
 test('blocked keeps the same row: nothing beside it moves', async () => {

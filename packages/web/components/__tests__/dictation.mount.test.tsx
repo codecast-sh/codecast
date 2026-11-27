@@ -14,7 +14,7 @@ import { closeDomWindow } from "../../test-helpers/domGlobals";
 // opening ✕/✓ and "Listening…", words streaming into the box at the cursor,
 // ✓ keeping them, Esc putting the box back, Enter waiting for the last words
 // and then sending them, a blocked mic saying why, and a regulated team's mic
-// disabled.
+// dimmed and saying why on a click.
 // Run: bun test components/__tests__/dictation.mount.test.tsx
 
 afterAll(() => {
@@ -80,6 +80,19 @@ test("press the mic, words stream in at the end, ✓ keeps them", async () => {
   expect(c.button("Dictate")).not.toBeNull();
   // The draft saw the words, as it sees typing.
   await c.unmount();
+});
+
+test("beside the bare box's send arrow ✕ and ✓ are muted; beside the dock's filled Send they stay quiet", async () => {
+  const tone = async (opts: { bare?: boolean; foot?: boolean }) => {
+    const c = await mountComposer(opts);
+    await c.press("Dictate");
+    const out = ["Cancel dictation", "Finish dictation"].map((l) => c.button(l)!.className.includes("text-sol-text-dim/55"));
+    await c.press("Cancel dictation");
+    await c.unmount();
+    return out;
+  };
+  expect(await tone({ bare: true, foot: true })).toEqual([true, true]);
+  expect(await tone({})).toEqual([false, false]);
 });
 
 test("an empty box reads Listening… while recording", async () => {
@@ -171,7 +184,7 @@ test("the real microphone path names a refusal and a missing microphone", async 
   expect(reasons[0]).not.toBe("No microphone found");
 });
 
-test("any team of the person's without an OpenAI BAA disables the mic, as the server refuses the mint", async () => {
+test("any team of the person's without an OpenAI BAA dims the mic, and a click on it says why", async () => {
   // Clinic is one of the person's teams but not the one on screen: the
   // server's rule (dictation.authForDictation) checks every membership.
   useInboxStore.setState({
@@ -181,14 +194,68 @@ test("any team of the person's without an OpenAI BAA disables the mic, as the se
     ],
     clientState: { ...useInboxStore.getState().clientState, ui: { ...(useInboxStore.getState().clientState.ui ?? {}), active_team_id: "team_open" } },
   } as any);
+  toasts.length = 0;
   const c = await mountComposer();
-  const line = "Dictation is off: Clinic has no BAA with OpenAI yet.";
+  const line = "Dictation isn't available: Clinic has no BAA with OpenAI yet.";
+  // Named by the reason, and still a press (a touch screen has no hover for the tooltip).
   const mic = c.button(line)!;
-  expect(mic.disabled).toBe(true);
+  expect([mic.disabled, mic.getAttribute("aria-disabled")]).toEqual([false, "true"]);
   expect(mic.getAttribute("data-dictation-reason")).toBe(line);
-  expect(c.button("Dictation settings")).toBeNull();
-  // The caret's space stays, so the row keeps its width.
+  // The phone's blocked look: the plain mic and its caret, both dimmed.
+  expect(mic.querySelector("svg")!.getAttribute("class")).toContain("lucide-mic ");
+  const caret = c.button("Dictation settings")!;
+  for (const b of [mic, caret]) expect(b.className).toContain("text-sol-text-dim/40");
   expect(mic.closest("[data-dictation]")!.querySelectorAll("[data-dictate-target]").length).toBe(2);
+  await c.press(line);
+  expect(toasts).toEqual([`error: ${line}`]);
+  // The caret says the same, and neither starts a recording.
+  await act(async () => { caret.click(); });
+  expect(toasts).toEqual([`error: ${line}`, `error: ${line}`]);
+  expect(c.button("Cancel dictation")).toBeNull();
+  expect(dictationRunning()).toBe(false);
+  await c.unmount();
+});
+
+test("while the microphone listens, and only then, a dot left of ✕ says it is on", async () => {
+  // The microphone opens when the test says, so "starting" can be seen.
+  let open: () => void = () => {};
+  const real = w.__dictationTestHost.open;
+  w.__dictationTestHost.open = (events: any, signal: any) => new Promise((resolve) => { open = () => resolve(real(events, signal)); });
+  const c = await mountComposer();
+  const dot = () => c.container.querySelector("[data-dictate-live]");
+  await c.press("Dictate");
+  expect(c.container.querySelector("[data-dictation]")!.getAttribute("data-dictation")).toBe("starting");
+  expect(dot()).toBeNull();
+  await act(async () => { open(); });
+  await flush();
+  expect(dot()).not.toBeNull();
+  expect(dot()!.getAttribute("aria-label")).toBe("Microphone on");
+  // Before ✕, inside the recording's controls.
+  expect(dot()!.compareDocumentPosition(c.button("Cancel dictation")!) & w.Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  await say((e) => e.onPartial("words already in the box"));
+  expect(dot()).not.toBeNull();
+  await c.press("Finish dictation");
+  // Finishing: the mic is closing.
+  expect(dot()).toBeNull();
+  await act(async () => { host.endFinish!(); });
+  await flush();
+  expect(dot()).toBeNull();
+  await c.unmount();
+});
+
+test("a recording that stopped by itself says why in its toast, and the idle mic is plain Dictate again", async () => {
+  toasts.length = 0;
+  const c = await mountComposer();
+  await c.press("Dictate");
+  await say((e) => e.onPartial("kept words"));
+  await say((e) => e.onDropped());
+  await act(async () => { host.endFinish?.(); });
+  await flush();
+  expect(toasts.length).toBe(1);
+  const mic = c.button("Dictate")!;
+  expect(mic).not.toBeNull();
+  expect(mic.getAttribute("data-dictation-reason")).toBeNull();
+  expect(mic.querySelector("svg")!.getAttribute("class")).toContain("lucide-mic ");
   await c.unmount();
 });
 
@@ -382,10 +449,17 @@ test("a comment box closes on Esc while another box records, and cancels its own
   await act(async () => { other.button("Cancel dictation")!.click(); });
   await flush();
 
+  // Idle, the foot offers Cancel; while this box records it says what Esc does.
+  const foot = () => container.querySelector(".cc-cmt-composer-foot")!;
+  expect(foot().querySelector("button")?.textContent).toBe("Cancel Esc");
   await act(async () => { ta().focus(); });
   await act(async () => { (container.querySelector('button[aria-label="Dictate"]') as HTMLButtonElement).click(); });
   await flush();
+  expect(foot().querySelector("button")).toBeNull();
+  expect(foot().textContent).toBe("Esc cancels dictation");
+  expect(foot().querySelector("kbd")?.textContent).toBe("Esc");
   await esc();
+  expect(foot().querySelector("button")?.textContent).toBe("Cancel Esc");
   expect(closed).toBe(1); // Esc went to the recording
   expect(container.querySelector('button[aria-label="Dictate"]')).not.toBeNull();
   await esc();

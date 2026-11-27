@@ -1,19 +1,23 @@
 // The composer's mic, drawn the way Claude's composer draws it: a mic and a
 // small caret for its settings while idle; Cancel (✕) and Finish (✓) while it
-// records. Shown only once the person has turned dictation on (Settings ›
-// Voice); a person in any team without an OpenAI BAA sees the mic disabled
-// with the reason, the rule the server's mint applies (dictation.authForDictation).
-// A start that failed shows the struck-through mic (no colour needed: the
-// grayscale tablet) named by its reason; useDictation says the reason once.
-// The row keeps its width when blocked, and each target is 44px on a touch
-// screen ([data-dictate-target], app/globals.css).
+// records, with a small dot left of ✕ fading in and out while the microphone
+// listens, so a box already full of words still says the mic is on. Shown
+// only once the person has turned dictation on (Settings › Voice); a person in
+// any team without an OpenAI BAA sees the mic and caret dimmed, as the phone
+// draws them, and a click on either says why (the rule the server's mint
+// applies, dictation.authForDictation). A start that failed shows the
+// struck-through mic (no colour needed: the grayscale tablet) named by its
+// reason; useDictation says the reason once. The row keeps its width when
+// blocked, and each target is 44px on a touch screen ([data-dictate-target],
+// app/globals.css, where the dot sits inside ✕'s 44px).
 // The behaviour lives in useDictation; this is only the buttons. Memoized: the
 // controls and onMenuClosed a box passes are stable, so a keystroke in the box
 // does not draw the mic again.
 import { memo, useState, type MouseEvent, type ReactElement } from "react";
 import { Check, ChevronDown, Loader2, Mic, MicOff, X } from "lucide-react";
+import { toast } from "sonner";
 import { teamVendorBlock } from "@codecast/shared/contracts";
-import { DICTATION_LANGUAGES, dictationStopLine } from "@codecast/shared/contracts/dictation";
+import { DICTATION_LANGUAGES } from "@codecast/shared/contracts/dictation";
 import { useInboxStore } from "../../store/inboxStore";
 import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
 import {
@@ -31,13 +35,16 @@ import type { DictationControls } from "../../lib/dictation/useDictation";
  *  comment and chat box, beside its small square send. */
 export type DictateSize = "dock" | "bare";
 
-const SIZES: Record<DictateSize, { button: string; caret: string; icon: string }> = {
-  dock: { button: "w-7 h-7 rounded-full", caret: "w-4 h-7 rounded-full", icon: "w-3.5 h-3.5" },
-  bare: { button: "w-6 h-6 rounded-md", caret: "w-4 h-6 rounded-md", icon: "w-3.5 h-3.5" },
-};
-
 const BASE = "transition-colors flex items-center justify-center shrink-0";
 const QUIET = "text-sol-text-dim hover:text-sol-text hover:bg-sol-bg/50";
+
+/** `secondary`: ✕ and ✓. Beside the dock's filled Send they are QUIET like
+ *  the row's other icons; beside the bare box's bare send arrow they are
+ *  muted further, so the arrow stays the strongest mark in the row. */
+const SIZES: Record<DictateSize, { button: string; caret: string; icon: string; secondary: string }> = {
+  dock: { button: "w-7 h-7 rounded-full", caret: "w-4 h-7 rounded-full", icon: "w-3.5 h-3.5", secondary: QUIET },
+  bare: { button: "w-6 h-6 rounded-md", caret: "w-4 h-6 rounded-md", icon: "w-3.5 h-3.5", secondary: "text-sol-text-dim/55 hover:text-sol-text hover:bg-sol-bg/50" },
+};
 
 const dictationOn = (s: { currentUser?: unknown }) => (s.currentUser as { dictation_enabled?: boolean } | null | undefined)?.dictation_enabled === true;
 
@@ -53,7 +60,7 @@ export const DictateControls = memo(function DictateControls(props: { dictation:
 const openAiBlock = (s: { teams?: unknown[] }): string | null => {
   for (const team of s.teams ?? []) {
     const t = team as { name?: string; policy?: unknown } | null;
-    if (teamVendorBlock(t, "openai")) return `Dictation is off: ${t?.name || "your team"} has no BAA with OpenAI yet.`;
+    if (teamVendorBlock(t, "openai")) return `Dictation isn't available: ${t?.name || "your team"} has no BAA with OpenAI yet.`;
   }
   return null;
 };
@@ -72,9 +79,12 @@ function DictateButtons({ dictation, size = "dock", onMenuClosed }: { dictation:
   if (dictation.active) {
     const finishing = dictation.state.phase === "finishing";
     return (
-      <div className="flex items-center gap-0.5" data-dictation={dictation.state.phase}>
+      // data-dictate-recording keeps the dot's room in every recording phase,
+      // so the row does not move when the microphone opens.
+      <div className="flex items-center gap-0.5" data-dictation={dictation.state.phase} data-dictate-recording>
+        {dictation.state.phase === "listening" && <span data-dictate-live role="img" aria-label="Microphone on" />}
         {tip(
-          <button type="button" data-dictate-target onMouseDown={keepFocus} onClick={() => dictation.cancel()} className={`${BASE} ${sz.button} ${QUIET}`} aria-label="Cancel dictation">
+          <button type="button" data-dictate-target onMouseDown={keepFocus} onClick={() => dictation.cancel()} className={`${BASE} ${sz.button} ${sz.secondary}`} aria-label="Cancel dictation">
             <X className={sz.icon} />
           </button>,
           "Cancel dictation",
@@ -88,7 +98,7 @@ function DictateButtons({ dictation, size = "dock", onMenuClosed }: { dictation:
             disabled={finishing}
             aria-busy={finishing || undefined}
             // Quiet like ✕: Send stays the one primary in the row.
-            className={`${BASE} ${sz.button} ${QUIET} disabled:cursor-wait`}
+            className={`${BASE} ${sz.button} ${sz.secondary} disabled:cursor-wait`}
             aria-label="Finish dictation"
           >
             {finishing ? <Loader2 className={`${sz.icon} animate-spin`} /> : <Check className={sz.icon} />}
@@ -99,8 +109,30 @@ function DictateButtons({ dictation, size = "dock", onMenuClosed }: { dictation:
     );
   }
 
+  // A failed start keeps its reason on the struck mic until the next press. A
+  // recording that stopped by itself said why in its toast; the mic is plain again.
   const failed = blocked ? null : dictation.state.error;
-  const reason = blocked ?? failed ?? dictationStopLine(dictation.state.stopped);
+  const reason = blocked ?? failed;
+  if (blocked) {
+    // Blocked, as the phone draws it: mic and caret dimmed, both still pressable,
+    // and a press says why (a touch screen has no hover to show the tooltip).
+    // One toast however often it is pressed.
+    const explain = () => toast.error(blocked, { id: "dictation-blocked", position: "top-center" });
+    const dim = `${BASE} text-sol-text-dim/40 cursor-not-allowed`;
+    return (
+      <div className="flex items-center gap-0.5" data-dictation="idle" data-dictation-blocked>
+        {tip(
+          <button type="button" data-dictate-target onMouseDown={keepFocus} onClick={explain} aria-disabled data-dictation-reason={blocked} className={`${dim} ${sz.button}`} aria-label={blocked}>
+            <Mic className={sz.icon} />
+          </button>,
+          blocked,
+        )}
+        <button type="button" data-dictate-target onMouseDown={keepFocus} onClick={explain} aria-disabled className={`${dim} ${sz.caret}`} aria-label="Dictation settings">
+          <ChevronDown className="w-3 h-3" />
+        </button>
+      </div>
+    );
+  }
   const MicGlyph = failed ? MicOff : Mic;
   const mic = (
     <button
@@ -108,19 +140,17 @@ function DictateButtons({ dictation, size = "dock", onMenuClosed }: { dictation:
       data-dictate-target
       onMouseDown={keepFocus}
       onClick={() => dictation.start()}
-      disabled={!!blocked}
       data-dictation-reason={reason ?? undefined}
-      className={`${BASE} ${sz.button} ${blocked ? "text-sol-text-dim/30 cursor-not-allowed" : failed ? "text-sol-red hover:bg-sol-red/10" : QUIET}`}
-      aria-label={blocked ?? failed ?? "Dictate"}
+      className={`${BASE} ${sz.button} ${failed ? "text-sol-red hover:bg-sol-red/10" : QUIET}`}
+      aria-label={failed ?? "Dictate"}
     >
       <MicGlyph className={sz.icon} />
     </button>
   );
   return (
     <div className="flex items-center gap-0.5" data-dictation="idle">
-      {tip(blocked ? <span className="inline-flex">{mic}</span> : mic, reason ?? "Dictate")}
-      {/* Blocked keeps the caret's space, so the row does not shift. */}
-      {blocked ? <span data-dictate-target aria-hidden className={`${sz.caret} shrink-0`} /> : <LanguageMenu caretClass={`${BASE} ${sz.caret} ${QUIET}`} onClosed={onMenuClosed} />}
+      {tip(mic, reason ?? "Dictate")}
+      <LanguageMenu caretClass={`${BASE} ${sz.caret} ${QUIET}`} onClosed={onMenuClosed} />
     </div>
   );
 }
