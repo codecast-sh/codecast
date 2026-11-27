@@ -39,8 +39,8 @@ export type RankReader = { viewer: Id<"users"> | string; canRead: (p: Doc<"prior
  * number: each priority it judges costs a read, and those ranked below go
  * unread.
  */
-export async function positionsFor(ctx: { db: any }, r: RankReader, owner: Id<"users">, workspace: string, wanted: ReadonlySet<string>): Promise<Map<string, number>> {
-  const group = await activeGroup(ctx, owner, workspace);
+export async function positionsFor(ctx: { db: any }, r: RankReader, owner: Id<"users">, workspace: string, wanted: ReadonlySet<string>, readGroup: GroupRead = activeGroup): Promise<Map<string, number>> {
+  const group = await readGroup(ctx, owner, workspace);
   if (String(owner) === String(r.viewer)) return positionsOf(group);
   const out = new Map<string, number>();
   let left = group.filter((p) => wanted.has(String(p._id))).length;
@@ -54,9 +54,22 @@ export async function positionsFor(ctx: { db: any }, r: RankReader, owner: Id<"u
 }
 
 /** One priority's position as the reader sees it (positionsFor; null when not active): the same in a list, on the page, on the pin line and on a session's priority pill. */
-export async function positionOf(ctx: { db: any }, r: RankReader, p: Doc<"priorities">): Promise<number | null> {
+export async function positionOf(ctx: { db: any }, r: RankReader, p: Doc<"priorities">, readGroup: GroupRead = activeGroup): Promise<number | null> {
   if (p.status !== "active") return null;
-  return (await positionsFor(ctx, r, p.user_id, p.workspace, new Set([String(p._id)]))).get(String(p._id)) ?? null;
+  return (await positionsFor(ctx, r, p.user_id, p.workspace, new Set([String(p._id)]), readGroup)).get(String(p._id)) ?? null;
+}
+
+/** How a rank reads an owner's active group: activeGroup, or a memo of it for a caller ranking many priorities (lib/sessionPriority). */
+export type GroupRead = (ctx: { db: any }, userId: Id<"users">, workspace: string) => Promise<Doc<"priorities">[]>;
+
+/** activeGroup read once per owner and workspace for as long as the memo lives. */
+export function groupMemo(): GroupRead {
+  const seen = new Map<string, Promise<Doc<"priorities">[]>>();
+  return (ctx, userId, workspace) => {
+    const k = `${userId} ${workspace}`;
+    if (!seen.has(k)) seen.set(k, activeGroup(ctx, userId, workspace));
+    return seen.get(k)!;
+  };
 }
 
 /** The most sessions any one transaction reads off one priority; the rest is paged by scheduled runs (priorityPassRun SESSION_PAGE). */
