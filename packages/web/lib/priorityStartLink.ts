@@ -15,15 +15,19 @@ const WATCH_MS = 60_000;
  * What the server's row says of a Start's link: null while only the local
  * stub is known (its `priority_id` is unset; the server always sends one,
  * null when unlinked), "linked", or the sentence telling the person why not.
+ * A folder the person mapped to a team keeps its sessions there, and a Start
+ * never shares a private one, so those are the usual reasons.
  */
 export function startLinkVerdict(
-  row: { priority_id?: string | null; is_private?: boolean } | undefined,
+  row: { priority_id?: string | null; is_private?: boolean; team_id?: string | null } | undefined,
   start: SessionStart,
   priorityWorkspace: string | undefined,
+  teamName: (teamId: string) => string | undefined = () => undefined,
 ): null | "linked" | string {
   if (!row || row.priority_id === undefined) return null;
   if (row.priority_id) return "linked";
   const what = start.priority ?? "the priority";
+  if (row.team_id && priorityWorkspace !== `team:${row.team_id}`) return `This folder belongs to ${teamName(String(row.team_id)) ?? "another team"}, so the session isn't on ${what}`;
   if (row.is_private && priorityWorkspace?.startsWith("team:")) return `This session is private, so it isn't on ${what}: share it with the team to link it`;
   return `This session isn't on ${what}: that milestone can't take it`;
 }
@@ -36,7 +40,8 @@ export function sayIfStartUnlinked<T>(created: Promise<T>, start: SessionStart |
     const settle = (s: ReturnType<typeof useInboxStore.getState>): boolean => {
       const row = (s.sessions as Record<string, any>)[id];
       const workspace = (lookup(s.priorities, start.priority!) as { workspace?: string } | undefined)?.workspace;
-      const verdict = startLinkVerdict(row, start, workspace);
+      const teamName = (teamId: string) => (s.teams ?? []).find((t: any) => String(t._id) === teamId)?.name as string | undefined;
+      const verdict = startLinkVerdict(row, start, workspace, teamName);
       if (verdict && verdict !== "linked") say(verdict);
       return verdict != null;
     };

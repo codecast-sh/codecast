@@ -102,12 +102,12 @@ export async function linkConversationToObject(
 }
 
 /**
- * Where a session started from a milestone's Start (`priority`) lives: the
- * workspace of the priority it starts on, so the link to that milestone holds
- * (lib/priorityLinks linkSession refuses a session in another workspace). A
- * team priority the starter can read and whose team they are in gives that
- * team; their own personal priority gives no team. Undefined for anything
- * else, which leaves the session where its folder puts it.
+ * The team a session started from a milestone's Start (`priority`) is routed
+ * to when nothing the person set names one (dispatch createSession): the
+ * priority's, so the link to that milestone can hold (lib/priorityLinks
+ * linkSession refuses a session in another workspace). A team priority the
+ * starter can read and whose team they are in gives that team; their own
+ * personal priority gives no team. Undefined for anything else.
  */
 export async function startWorkspace(ctx: HandlerCtx, userId: Id<"users">, priority: string | undefined): Promise<{ team: Id<"teams"> | null } | undefined> {
   if (!priority) return undefined;
