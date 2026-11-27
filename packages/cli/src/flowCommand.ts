@@ -481,7 +481,8 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       // The change on its own branch and worktree, named as the run's isolated stations name theirs.
       const worktree = runSlug(graph, { task_id: task }, "run");
       const runDir = lineRunDir(top, worktree);
-      const { writeFrozenChange, branchHead, freezeSessionChange } = await import("./workflow/flowChange.js");
+      const { writeFrozenChange, freezeSessionChange } = await import("./workflow/flowChange.js");
+      const { branchHead } = await import("./workflow/originBranch.js");
       let change: import("./workflow/flowChange.js").FrozenChange | null = null;
       // A worktree an earlier run of this change made, read before its branch moves (workflow/runBranch.ts earlierRunTree).
       const { earlierRunTree } = await import("./workflow/runBranch.js");
