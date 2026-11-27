@@ -28,9 +28,11 @@ export type PalettePickExtra = {
   key: string;
   label: string;
   description?: string;
-  icon?: "sparkles" | "doc" | "slack";
+  icon?: "sparkles" | "doc" | "slack" | "scribe";
   // Highlight as the promoted default (first row, accent styling).
   primary?: boolean;
+  // Listed above the people and roles, as the list's first row.
+  lead?: boolean;
   // The row is only offered once the search box has text (e.g. "use what I
   // typed as a Slack channel id").
   needsQuery?: boolean;

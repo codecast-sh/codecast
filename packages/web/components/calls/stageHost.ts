@@ -1,7 +1,7 @@
 import { createContext, useContext, type ComponentType, type MouseEvent, type ReactNode } from "react";
 import type { Room } from "livekit-client";
 import type { ParticipantTile } from "../../lib/calls/callMedia";
-import { LayoutGrid, User, Wand2 } from "lucide-react";
+import { LayoutGrid, SquareKanban, User, Wand2 } from "lucide-react";
 
 // What the stage's views (StageViews) are told by whoever draws them, and the
 // few constants every stage shares. Its own module so the views file exports
@@ -97,11 +97,13 @@ export const STAGE_CTL_IDLE = "text-sol-text-muted hover:bg-white/10 hover:text-
 // between them is the frame.
 export const SPEAKING_RING = "ring-2 ring-sol-cyan/80 shadow-[0_0_0_5px_rgba(42,161,152,0.16)]";
 
-// The three ways to see a call, for whichever view switch draws them.
-export type StageView = "auto" | "speaker" | "grid";
+// The ways to see a call, for whichever view switch draws them. "board" is
+// the call's board on the stage (a member's only: a guest's page has no pins).
+export type StageView = "auto" | "speaker" | "grid" | "board";
 
 export const STAGE_VIEWS = [
   { key: "auto", icon: Wand2, label: "auto", hint: "Auto: shares take the stage" },
   { key: "speaker", icon: User, label: "speaker", hint: "Speaker: follow whoever is talking (click a tile to pin)" },
   { key: "grid", icon: LayoutGrid, label: "grid", hint: "Grid: everyone equal" },
+  { key: "board", icon: SquareKanban, label: "board", hint: "Board: the call's board on the stage, made if it has none" },
 ] as const;
