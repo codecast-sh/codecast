@@ -20,6 +20,7 @@ import {
   switchRecorderMic,
 } from "../calls/recorder";
 import { useInboxStore } from "../../store/inboxStore";
+import { DICTATION_RECORDING_BUSY, microphoneBusyHere } from "../dictation/crossWindow";
 
 // ── the fake browser ───────────────────────────────────────────────────────
 
@@ -297,6 +298,18 @@ describe("the recorder", () => {
     expect(FakeAudioContext.open()).toBe(0);
     expect(getRecorderStatus().phase).toBe("idle");
     expect(getRecorderStatus().transcriptId).toBeNull();
+  });
+
+  test("dictation stays refused while stopping, since the microphone is live until the recognizer lets go", async () => {
+    const noCall = { phase: "idle", muted: false };
+    await startRecording();
+    expect(microphoneBusyHere(noCall)).toBe(DICTATION_RECORDING_BUSY);
+    const stopping = stopRecording();
+    expect(getRecorderStatus().phase).toBe("stopping");
+    expect(micTracks[0].readyState).not.toBe("ended");
+    expect(microphoneBusyHere(noCall)).toBe(DICTATION_RECORDING_BUSY);
+    await stopping;
+    expect(microphoneBusyHere(noCall)).toBeNull();
   });
 
   test("a failed upload costs the audio and nothing else", async () => {

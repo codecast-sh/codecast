@@ -208,6 +208,11 @@ export type Dictation = {
   finishThen(then: () => void): void;
   /** Put the field back as it was before the press. */
   cancel(): void;
+  /** The box now writes for something else (the composer switched
+   *  conversations): stop at once and never write to the field again. What
+   *  is already written stays, nothing is restored, and a send waiting on the
+   *  recording is dropped. */
+  detach(): void;
   /** True while a press of Enter or Esc belongs to the recording. */
   readonly active: boolean;
   /** Stop listening for state changes and abandon any recording. */
@@ -493,12 +498,16 @@ export function createDictation(
       }
       settle(null);
     },
-    dispose() {
+    detach() {
       after = null;
-      if (state.phase !== "idle") {
-        pipe?.close();
-        settle(null);
-      }
+      if (state.phase === "idle") return;
+      // settle bumps `run`, so a finish, an open or a word still on its way
+      // from this recording finds itself stale and writes nothing.
+      pipe?.close();
+      settle(null);
+    },
+    dispose() {
+      self.detach();
       disposed = true;
     },
   };

@@ -53,22 +53,27 @@ export type DictationControls = {
    *  were kept; a second press replaces the first. Now, when idle. */
   finishThen(then: () => void): void;
   cancel(): void;
+  /** Stop at once and never write to the box again (it now writes for
+   *  another conversation); what is written stays, a waiting send is dropped. */
+  detach(): void;
   /**
-   * The box's keydown while recording: Esc cancels, the submit key (Enter by
-   * default) waits for the last words and then calls `submit` (finishThen).
-   * Returns true
-   * when it took the key; when nothing is recording it takes nothing.
+   * The box's keydown while recording: a bare Esc cancels, the submit key
+   * (Enter by default) waits for the last words and then calls `submit`
+   * (finishThen). Returns true when it took the key; when nothing is
+   * recording it takes nothing.
    */
   keyDown(e: KeyboardEvent, submit: () => void, isSubmitKey?: (e: KeyboardEvent) => boolean): boolean;
 };
 
 const plainEnter = (e: KeyboardEvent) => e.key === "Enter" && !e.shiftKey;
 
-/** A composer's submit keys while recording: every Enter chord (send, queue,
- *  fork, send-and-dismiss, send together) waits for the last words and is then
- *  replayed. Only a bare Shift+Enter, a new line, goes through as typed. */
-export const enterChord = (e: KeyboardEvent) =>
-  e.key === "Enter" && !(e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey);
+/** A composer's held keys while recording: every Enter chord (send, queue,
+ *  fork, send-and-dismiss, send together) and every Esc chord (⇧Esc, stop and
+ *  send) waits for the last words and is then replayed. A bare Shift+Enter, a
+ *  new line, goes through as typed; a bare Esc cancels (keyDown). */
+export const composerChord = (e: KeyboardEvent) =>
+  (e.key === "Enter" && !(e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey)) ||
+  (e.key === "Escape" && (e.shiftKey || e.metaKey || e.ctrlKey || e.altKey));
 
 /** `field` is read on every call through a ref, so a caller may pass a fresh
  *  one, but a stable one (useState) keeps the box's renders free of it. The
@@ -128,10 +133,13 @@ export function useDictation(field: DictationFieldAdapter): DictationControls {
         else then();
       },
       cancel: () => ctl.current?.cancel(),
+      detach: () => ctl.current?.detach(),
       keyDown: (e: KeyboardEvent, submit: () => void, isSubmitKey: (e: KeyboardEvent) => boolean = plainEnter) => {
         const c = ctl.current;
         if (!c?.active) return false;
-        if (e.key === "Escape") {
+        // Only a bare Esc cancels: an Esc chord (⇧Esc, stop and send) is a
+        // command of the box's own, held like the Enter chords below.
+        if (e.key === "Escape" && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
           e.preventDefault();
           e.stopPropagation();
           c.cancel();
@@ -209,9 +217,9 @@ export function textareaField(
  * stay put between keystrokes, so typing never draws the mic again.
  *
  * `owner` is what the box is writing for (a conversation). A composer reused
- * for another one without a remount finishes its recording there and drops
- * the send waiting on it, so an Enter pressed for the old conversation never
- * sends the new one's draft; the words already in the old draft stay.
+ * for another one without a remount detaches its recording: it takes no more
+ * words, so none meant for the old conversation reach the new one's draft, and
+ * the send waiting on it is dropped; the words already in the old draft stay.
  */
 export function useComposerDictation(
   boxRef: RefObject<HTMLTextAreaElement | null>,
@@ -232,15 +240,14 @@ export function useComposerDictation(
     ),
   );
   const dictation = useDictation(field);
-  const { running, finishThen } = dictation;
+  const { detach } = dictation;
   const ownerRef = useRef(owner);
-  // A layout effect, so the send is dropped before the new draft is loaded.
-  // finishThen's one slot takes the empty send in place of the waiting one.
+  // A layout effect, so the recording lets go before the new draft is loaded.
   useLayoutEffect(() => {
     if (ownerRef.current === owner) return;
     ownerRef.current = owner;
-    if (running()) finishThen(() => {});
-  }, [owner, running, finishThen]);
+    detach();
+  }, [owner, detach]);
   const focusBox = useCallback(() => boxRef.current?.focus(), [boxRef]);
   return { dictation, focusBox };
 }

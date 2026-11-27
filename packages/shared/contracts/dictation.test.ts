@@ -579,3 +579,61 @@ test("a send that throws does not reject finish()", async () => {
     console.error = err;
   }
 });
+
+describe("detach (the box now writes for something else)", () => {
+  test("before the first words: the next box's empty draft never takes the old one's words", async () => {
+    const h = harness();
+    const sent: string[] = [];
+    h.d.start();
+    await h.opened();
+    // The composer switches to another conversation whose draft is also empty.
+    h.d.detach();
+    expect(h.d.state.phase).toBe("idle");
+    expect(h.d.active).toBe(false);
+    expect(h.pipe.closed).toBe(1);
+    // Words meant for the old conversation arrive late, and Enter is pressed.
+    h.events.onUtterance({ text: "words meant for A" });
+    h.events.onPartial("more for A");
+    h.d.finishThen(() => sent.push(h.value));
+    expect(h.value).toBe("");
+    expect(sent).toEqual([""]);
+  });
+
+  test("words already written stay; nothing is restored and nothing more lands", async () => {
+    const h = harness("draft", [5, 5]);
+    h.d.start();
+    await h.opened();
+    h.events.onPartial("said in A");
+    expect(h.value).toBe("draft said in A");
+    h.d.detach();
+    expect(h.value).toBe("draft said in A");
+    h.type("draft said in A");
+    h.events.onPartial("said in A and more");
+    expect(h.value).toBe("draft said in A");
+  });
+
+  test("while finishing: the waiting send is dropped and the last words never land", async () => {
+    const h = harness();
+    const sent: string[] = [];
+    h.d.start();
+    await h.opened();
+    h.d.finishThen(() => sent.push("send"));
+    expect(h.d.state.phase).toBe("finishing");
+    h.d.detach();
+    h.events.onUtterance({ text: "late words" });
+    await h.finished();
+    expect(h.value).toBe("");
+    expect(sent).toEqual([]);
+    expect(h.d.state.phase).toBe("idle");
+  });
+
+  test("while the microphone is still opening: it is closed when it arrives", async () => {
+    const h = harness();
+    h.d.start();
+    h.d.detach();
+    expect(h.signal.aborted).toBe(true);
+    await h.opened();
+    expect(h.pipe.closed).toBe(1);
+    expect(h.d.state.phase).toBe("idle");
+  });
+});

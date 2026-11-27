@@ -41,7 +41,10 @@ const testHost = (): DictationHost | undefined => (typeof window !== "undefined"
 /** What a start nobody wants any more rejects with (the controller ignores it). */
 export const DICTATION_ABANDONED = "Dictation was cancelled";
 
-async function openMicrophone(convex: ConvexAction | null, elsewhere: Promise<string | null>, events: DictationPipeEvents, signal: { readonly aborted: boolean }): Promise<DictationPipe> {
+/** `busyYet` is another window's answer if it has come in: a refusal heard
+ *  while the browser asked for the microphone stops here, before a key is
+ *  minted. One still on its way is waited for after the pipe opens (open). */
+async function openMicrophone(convex: ConvexAction | null, busyYet: () => string | null, events: DictationPipeEvents, signal: { readonly aborted: boolean }): Promise<DictationPipe> {
   if (!convex) throw new Error("Dictation is not connected");
   // Loaded on the first press, not with every composer.
   const pipeModule = import("../calls/asrPipe");
@@ -62,13 +65,15 @@ async function openMicrophone(convex: ConvexAction | null, elsewhere: Promise<st
   }
   try {
     // A call or recording in another window said no while the browser asked.
-    const busy = await elsewhere;
+    const busy = busyYet();
     if (busy) throw new Error(busy);
     const { openAsrPipe } = await pipeModule;
     // Cancelled (or taken over) while the browser asked for the microphone:
     // let it go here, before the pipe mints a key nobody will use.
     if (signal.aborted) throw new Error(DICTATION_ABANDONED);
     const t0 = Date.now();
+    // Opened at once, without waiting for the other windows' answer: the
+    // pipe buffers the track from here, so the first words are never lost.
     const pipe = openAsrPipe({
       convex,
       roomKey: null,
@@ -108,16 +113,27 @@ export function dictationHost(convex: () => ConvexAction | null): DictationHost 
     open: (events, signal) => {
       // A call (the voice host's, where it holds the microphone) or a room
       // recording in this window refuses at once.
-      const busy = microphoneBusyHere(walkieCallState());
-      if (busy) return Promise.reject(new Error(busy));
-      // One in another window is asked while this one opens the microphone,
-      // and refuses before a key is minted.
-      const elsewhere = microphoneBusyElsewhere();
-      // One recording at a time across windows: theirs finish as this opens.
-      claimMicrophoneAcrossWindows();
+      const here = microphoneBusyHere(walkieCallState());
+      if (here) return Promise.reject(new Error(here));
+      // One in another window is asked while this one opens the microphone
+      // and its recognizer, so the ask never delays the first words. A no
+      // that comes in closes what opened (in that rare case a key was minted
+      // for nothing).
+      let answer: string | null = null;
+      const elsewhere = microphoneBusyElsewhere().then((why) => (answer = why));
       const t = testHost();
-      if (!t) return openMicrophone(convex(), elsewhere, events, signal);
-      return elsewhere.then((why) => (why ? Promise.reject(new Error(why)) : t.open(events, signal)));
+      const opening = t ? t.open(events, signal) : openMicrophone(convex(), () => answer, events, signal);
+      return opening.then(async (pipe) => {
+        const busy = await elsewhere;
+        if (busy) {
+          pipe.close();
+          throw new Error(busy);
+        }
+        // One recording at a time across windows: theirs finish once this one
+        // is sure to start, so a refused start never ends a third window's.
+        claimMicrophoneAcrossWindows();
+        return pipe;
+      });
     },
     now: () => (testHost()?.now ?? Date.now)(),
     setTimer: (fn, ms) => {

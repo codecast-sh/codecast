@@ -69,6 +69,45 @@ test("Shift+Enter while dictating is a new line, not a send", async () => {
   await c.unmount();
 });
 
+test("⇧Esc (stop and send) while dictating keeps the words, waits for the last ones, then stops and sends them", async () => {
+  const CONV = "jx70000000000000000000000dictesc"; // 32 chars: a real session, so ⇧Esc can stop and send
+  const before = useInboxStore.getState().stopAndSend;
+  const stopped: string[] = [];
+  useInboxStore.setState({ stopAndSend: async (_id: string, text: string) => { stopped.push(text); } } as any);
+  try {
+    const c = await mountComposer({ props: { conversationId: CONV, status: "active", agentType: "claude_code", isThinking: true, isConversationLive: true, onSendEscape: () => {} } });
+    await act(async () => { c.textarea().focus(); });
+    await c.press("Dictate");
+    await say((e) => e.onUtterance({ text: "stop and send this" }));
+    await c.key("Escape", { shiftKey: true });
+    // Not a cancel: the words stay and the last ones are waited for.
+    expect(c.textarea().value).toBe("stop and send this");
+    expect(host.finishing).toBe(true);
+    expect(stopped).toEqual([]);
+    await say((e) => e.onUtterance({ text: "right now." }));
+    await act(async () => { host.endFinish!(); });
+    await flush();
+    await flush();
+    expect(stopped).toEqual(["stop and send this right now."]);
+    await c.unmount();
+  } finally {
+    useInboxStore.setState({ stopAndSend: before } as any);
+  }
+});
+
+test("a bare Esc while dictating still cancels and puts the box back", async () => {
+  const c = await mountComposer({ initialDraft: "draft" });
+  await act(async () => { c.textarea().focus(); });
+  await c.press("Dictate");
+  await say((e) => e.onUtterance({ text: "throw this away" }));
+  expect(c.textarea().value).toBe("draft throw this away");
+  await c.key("Escape");
+  expect(c.textarea().value).toBe("draft");
+  expect(host.finishing).toBe(false);
+  expect(c.button("Dictate")).not.toBeNull();
+  await c.unmount();
+});
+
 test("dictated words open no picker, and an Enter held through the finish sends rather than picks", async () => {
   const skills = [{ name: "ship", description: "Ship the change" }];
   const c = await mountComposer({ props: { skills } });

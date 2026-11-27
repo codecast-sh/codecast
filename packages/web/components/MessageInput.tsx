@@ -65,7 +65,7 @@ import { isRecordingFile, useScreenRecordingAttach } from "../hooks/useScreenRec
 import { useFileAttach } from "../hooks/useFileAttach";
 import { ComposerAttachButton } from "./chat/ComposerAttachButton";
 import { DictateControls } from "./dictation/DictateControls";
-import { enterChord, isReplayedKey, replayKey, useComposerDictation } from "../lib/dictation/useDictation";
+import { composerChord, isReplayedKey, replayKey, useComposerDictation } from "../lib/dictation/useDictation";
 import type { ComposeEditorHandle } from "./editor/ComposeEditor";
 import { useMentionQuery, useMentionServerSearch, sessionMentionTeamId, SERVER_MENTION_TYPES, matchScore, filterMentionItems, channelMentionItems } from "../hooks/useMentionQuery";
 import { mentionContextFor } from "../lib/mentionContext";
@@ -2283,9 +2283,10 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    // While dictating, Esc cancels it and every Enter chord but a new line waits
-    // for the last words, then goes through this handler again as the key it was.
-    if (dictation.running() && dictation.keyDown(e, replayKey(e, handleKeyDownRef), enterChord)) return;
+    // While dictating, a bare Esc cancels it, and every Enter chord but a new
+    // line and every Esc chord wait for the last words, then go through this
+    // handler again as the key they were.
+    if (dictation.running() && dictation.keyDown(e, replayKey(e, handleKeyDownRef), composerChord)) return;
     if (caught && e.key === "Escape") {
       e.preventDefault();
       e.stopPropagation();

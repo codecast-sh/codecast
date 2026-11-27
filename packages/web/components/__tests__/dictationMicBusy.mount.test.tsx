@@ -76,27 +76,37 @@ test("a desktop voice host holding a live, unmuted call refuses dictation here; 
   }
 });
 
-test("a huddle in another window refuses dictation here, before the microphone opens", async () => {
+test("a huddle in another window refuses dictation here: what opened is closed, and no window's recording is finished", async () => {
   _resetCrossWindowForTests(200);
   const other = otherWindow((m, post) => { if (m?.ask) post({ answer: m.ask, busy: DICTATION_CALL_BUSY }); });
   const c = await mountComposer();
   await c.press("Dictate");
   await settleChannel();
   await flush();
-  expect(host.events).toBeNull();
+  expect(host.closed).toBe(1);
   expect(toasts).toEqual([`error: ${DICTATION_CALL_BUSY}`]);
   expect(c.button(DICTATION_CALL_BUSY)).not.toBeNull();
+  // A refused start claims nothing: a third window's recording keeps going.
+  expect(other.heard.filter((m) => m === "finish")).toEqual([]);
   await c.unmount();
 });
 
-test("with no other window answering, dictation starts once the ask runs out", async () => {
-  _resetCrossWindowForTests(30);
+test("with no other window answering, the recognizer opens at once and dictation starts once the ask runs out", async () => {
+  _resetCrossWindowForTests(120);
   const other = otherWindow();
   const c = await mountComposer();
   await c.press("Dictate");
-  await settleChannel();
+  // The ask is still out, yet the recognizer is already open (it buffers the
+  // microphone from here): no words are lost to the wait.
   expect(other.heard.some((m) => m?.ask)).toBe(true);
   expect(host.events).not.toBeNull();
+  expect(host.closed).toBe(0);
+  expect(c.button("Finish dictation")).not.toBeNull();
+  // Nothing is claimed from the other windows until the ask settles.
+  expect(other.heard.filter((m) => m === "finish")).toEqual([]);
+  await act(async () => { await new Promise((r) => setTimeout(r, 200)); });
+  expect(other.heard.filter((m) => m === "finish")).toEqual(["finish"]);
+  expect(host.closed).toBe(0);
   expect(c.button("Finish dictation")).not.toBeNull();
   await c.key("Escape");
   await c.unmount();

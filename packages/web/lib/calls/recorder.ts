@@ -79,8 +79,10 @@ const engine = createScribeEngine();
 let convex: ConvexHandle | null = null;
 let snapshot: RecorderStatus = IDLE;
 let phase: RecorderPhase = "idle";
-// Dictation, here or in another window, refuses to start while this holds the microphone.
-holdsMicrophoneWhile(() => (phase === "starting" || phase === "recording" ? DICTATION_RECORDING_BUSY : null));
+// Dictation, here or in another window, refuses to start while this holds the
+// microphone: stopping included, since the stream stays live through the
+// recognizer's graceful stop (the phone counts its `finishing` the same way).
+holdsMicrophoneWhile(() => (phase === "starting" || phase === "recording" || phase === "stopping" ? DICTATION_RECORDING_BUSY : null));
 let recTranscriptId: string | null = null;
 let startedAt = 0;
 let error: string | null = null;

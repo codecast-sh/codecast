@@ -150,17 +150,44 @@ test("a composer switched to another conversation while finishing sends nothing 
   await c.unmount();
 });
 
-test("a switch while recording, with no send waiting, keeps the words and stops", async () => {
+test("a switch while recording, with no send waiting, keeps the words and stops at once", async () => {
   const c = await mountComposer();
   await c.press("Dictate");
   await say((e) => e.onUtterance({ text: "half a thought" }));
   await c.switchTo("chat-draft:dictation-elsewhere");
-  expect(host.finishing).toBe(true);
-  await act(async () => { host.endFinish!(); });
-  await flush();
+  // Let go, not finished: no last words are waited for, since they would land here.
+  expect(host.finishing).toBe(false);
+  expect(host.closed).toBe(1);
   expect(dictationRunning()).toBe(false);
   expect(c.sent).toEqual([]);
   await c.switchTo(c.draftKey);
   expect(c.textarea().value).toBe("half a thought");
+  await c.unmount();
+});
+
+test("a switch before the first words: words arriving after it never reach the new conversation, and Enter there sends nothing", async () => {
+  // Both drafts empty, so the box looks the same to the recording before and after.
+  const OTHER = "chat-draft:dictation-other-empty";
+  const c = await mountComposer();
+  await act(async () => { c.textarea().focus(); });
+  await c.press("Dictate");
+  expect(c.button("Finish dictation")).not.toBeNull();
+  await c.switchTo(OTHER);
+  // The recognizer was still on its way with words meant for the old conversation.
+  await say((e) => e.onUtterance({ text: "words meant for A" }));
+  await say((e) => e.onPartial("and more for A"));
+  expect(c.textarea().value).toBe("");
+  expect(useInboxStore.getState().drafts[OTHER]?.draft_message ?? "").toBe("");
+  await c.key("Enter");
+  // Any last-words wait the recognizer still held ends here.
+  await act(async () => { host.endFinish?.(); });
+  await flush();
+  expect(c.sent).toEqual([]);
+  expect(c.textarea().value).toBe("");
+  // It let go at the switch: closed, not finished.
+  expect(host.finishing).toBe(false);
+  expect(host.closed).toBe(1);
+  expect(dictationRunning()).toBe(false);
+  expect(c.button("Dictate")).not.toBeNull();
   await c.unmount();
 });
