@@ -74,8 +74,10 @@ export type PriorityProposal = {
   /** One plain line on where it stands now. */
   summary: string;
   status: Exclude<PriorityStatus, "merged">;
-  /** Short ids of existing priorities this one absorbs (they become status "merged"). */
+  /** Short ids of existing priorities this one would absorb: each waits for the person as a merge proposal (PriorityMergeProposal). */
   merges?: string[];
+  /** One plain line on why the merged priorities are the same outcome: the proposal's reason. */
+  merge_reason?: string;
   /** An initiative short id ("in-5") it serves, or null for maintenance, workflow or personal work. */
   serves: string | null;
   /** Proposed position among the person's active priorities (1 = first); a priority the person placed keeps its place whatever this says. */
@@ -207,6 +209,22 @@ export type PriorityMilestoneLinks = {
   correction_pending: boolean;
 };
 
+/** One side of a merge proposal as the person reads it. */
+export type PriorityProposalSide = { short_id: string; title: string; rank: number | null };
+
+/**
+ * A merge the pass would make, waiting for the person: Accept merges
+ * `priority` into `into` as the pass would have; Reject tells every later
+ * pass they are two things.
+ */
+export type PriorityMergeProposal = {
+  _id: string;
+  priority: PriorityProposalSide;
+  into: PriorityProposalSide;
+  reason: string;
+  created_at: number;
+};
+
 /** A list answer: the rows, what it left out, and when the viewer's pass in the listed workspace runs. */
 export type PriorityList = {
   priorities: PriorityRow[];
@@ -218,6 +236,8 @@ export type PriorityList = {
   behind_by_ms: number | null;
   /** When the next pass here runs: now while one runs, else the one the viewer's activity scheduled; null when none is pending or no workspace is named. */
   next_pass_at: number | null;
+  /** The viewer's own merge proposals waiting on them, oldest first; absent from a server that predates them. */
+  proposals?: PriorityMergeProposal[];
 };
 
 /** One priority with every step's sessions (`show`). */

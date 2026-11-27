@@ -295,6 +295,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   mergePriority: never("priority control: a merge moves milestones, sessions and corrections and the server has no unmerge; the merge is confirmed first"),
   correctPriority: never("correction: the page lists it with its own delete"),
   deletePriorityCorrection: never("correction: a deleted correction is written again from Correct…"),
+  answerPriorityProposal: never("merge proposal: an accepted merge is the person's own merge, and a rejected one a refusal every later pass reads; neither has a verb that hands it back"),
   runPriorities: MACHINE,
   snoozeWalkie: SETTINGS,
   updateNotificationSettings: SETTINGS,

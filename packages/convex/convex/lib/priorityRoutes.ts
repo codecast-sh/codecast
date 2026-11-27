@@ -17,6 +17,7 @@ const MUTATIONS = {
   "session-not-this": "cliSessionNotThis",
   correct: "cliCorrect",
   "correction-delete": "cliDeleteCorrection",
+  "answer-proposal": "cliAnswerProposal",
   run: "cliRun",
 } as const;
 

@@ -4,10 +4,11 @@
 
 import { lastPriorityKey, placePriority } from "@codecast/shared/contracts/priorities";
 import { readerFor } from "./lib/priorityAccess";
-import { moveCorrections } from "./priorityPassRun";
+import { moveCorrections, writePlan } from "./priorityPassRun";
 import { clearDeadStepKeysNow, moveMergedSessionsNow, sessionMover } from "./priorityPassSessions";
 import { activeGroup, stepKeyMark } from "./lib/priorityGroup";
-import { inWorkspace } from "./priorityPassInputs";
+import { inWorkspace, passPriorityOf, stepTasksOf } from "./priorityPassInputs";
+import { acceptedMergePlan, proposalStale } from "./lib/priorityPass";
 import { passActivity } from "./lib/priorityPassSchedule";
 import type { PriorDone, PriorityCorrection, PriorityRow, PriorityStep } from "@codecast/shared/contracts/priorities";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -285,4 +286,60 @@ export async function doCorrectionDelete(ctx: Ctx, viewer: Id<"users">, ref: str
   // Marked, not erased: every reader, the eval export included, skips it.
   if (!c.deleted_at) await ctx.db.patch(c._id, { deleted_at: Date.now() });
   return { deleted: c._id };
+}
+
+/**
+ * One of the viewer's merge proposals, by its id or by a priority it names
+ * ("pri-4", either side) when exactly one pending proposal does, or the plain
+ * reason there is none.
+ */
+async function ownProposal(ctx: Ctx, viewer: Id<"users">, ref: string): Promise<Result<Doc<"priority_proposals">>> {
+  const r = ref.trim();
+  const id = ctx.db.normalizeId("priority_proposals", r);
+  if (id) {
+    const row: Doc<"priority_proposals"> | null = await ctx.db.get(id);
+    return row && String(row.user_id) === String(viewer) ? row : { error: `no merge proposal ${ref} of yours` };
+  }
+  const p = await owned(ctx, viewer, r);
+  if ("error" in p) return p;
+  const side = (index: string, field: string) => ctx.db.query("priority_proposals").withIndex(index, (q: any) => q.eq(field, p._id).eq("status", "pending")).take(5);
+  const waiting: Doc<"priority_proposals">[] = [...(await side("by_priority_status", "priority_id")), ...(await side("by_into_status", "into_id"))];
+  if (waiting.length === 1) return waiting[0];
+  return { error: waiting.length ? `${p.short_id} is in ${waiting.length} merge proposals; name one by its id (cast priorities proposals)` : `no merge proposal waits on ${p.short_id}` };
+}
+
+/**
+ * The person answers a merge the pass proposed (decision qd7fzq5). Accept
+ * writes the pass's own merge of the two as they stand now
+ * (lib/priorityPass acceptedMergePlan through priorityPassRun writePlan): the
+ * milestones and the place carried over, the sessions and corrections
+ * following, the absorbed one merged into the survivor. Reject records the
+ * refusal every later pass reads (priorityPassInputs refusedMergesFor). A
+ * proposal whose subject changed since (proposalStale) applies nothing: it
+ * turns stale and says why.
+ */
+export async function doAnswerProposal(ctx: Ctx & { scheduler: any }, viewer: Id<"users">, ref: string, accept: boolean): Promise<Result<PriorityRow>> {
+  const proposal = await ownProposal(ctx, viewer, ref);
+  if ("error" in proposal) return proposal;
+  if (proposal.status !== "pending") return { error: `that merge proposal was ${proposal.status} already` };
+  const gone: Priority | null = await ctx.db.get(proposal.priority_id);
+  const into: Priority | null = await ctx.db.get(proposal.into_id);
+  const pair = { user_id: viewer, workspace: proposal.workspace };
+  const now = Date.now();
+  const stale = proposalStale(gone, into, pair);
+  if (stale) {
+    await ctx.db.patch(proposal._id, { status: "stale", decided_at: now });
+    return { error: `that merge no longer applies (${stale}); nothing changed` };
+  }
+  // The person's own access to both, as every write of theirs checks it (the feature on, the priorities theirs).
+  for (const p of [gone!, into!]) {
+    const own = await owned(ctx, viewer, p.short_id);
+    if ("error" in own) return own;
+  }
+  if (accept) {
+    const plan = acceptedMergePlan(passPriorityOf(gone!, []), passPriorityOf(into!, []), await stepTasksOf(ctx, [gone!, into!], proposal.workspace), now);
+    await writePlan(ctx, pair, plan);
+  }
+  await ctx.db.patch(proposal._id, { status: accept ? "accepted" : "rejected", decided_at: now });
+  return echo(ctx, viewer, accept ? into!._id : gone!._id);
 }

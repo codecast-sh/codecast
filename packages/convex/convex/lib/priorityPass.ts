@@ -129,7 +129,11 @@ export type PriorityPassInput = {
   calls: PassCall[];
   /** What the person told the pass it got wrong, oldest first: read by every pass until they delete it. */
   corrections?: PassCorrection[];
+  /** Merges the person rejected (priority_proposals): each pair is two things to them, never merged again. */
+  refused_merges?: PassRefusedMerge[];
 };
+
+export type PassRefusedMerge = { priority: string; into: string };
 
 export type PassCorrection = { priority: string; step_key: string | null; text: string; at: number };
 
@@ -149,7 +153,7 @@ Not every session belongs to a priority. A standing role (a recurring duty, such
 A priority can also come from a call: what the person said they would do, or took on, in a call they were in. Calls are context, never sessions: name only sessions in sessions and refs.
 
 Keeping the list:
-- Return only the priorities that changed or gained sessions: an existing one with its short_id, a new one without. A priority you leave out stays as it is. Always return a priority marked "rewrite": it lost sessions you can no longer see, so write its title and summary again from only what is shown of it now. It is the same priority when it is the same outcome, even if the words changed; rename it freely. When two existing priorities are the same thing, return one of them and list the other's short_id in merges.
+- Return only the priorities that changed or gained sessions: an existing one with its short_id, a new one without. A priority you leave out stays as it is. Always return a priority marked "rewrite": it lost sessions you can no longer see, so write its title and summary again from only what is shown of it now. It is the same priority when it is the same outcome, even if the words changed; rename it freely. When two existing priorities are the same thing, return one of them, list the other's short_id in merges, and say in merge_reason, in one plain line, why they are the same outcome. A merge waits for the person to accept it; until they do, both stay as they are.
 - status: "done" only when every step on its critical path is done. "quiet" when nothing in it moved for about ${QUIET_DAYS} days and it is not done. Otherwise "active". Never set a priority aside; only the person does that, and one they set aside stays set aside whatever you return.
 - rank: your proposed position among all the active priorities, 1 first, by where the person is putting their time and attention. A priority marked "placed by the person" keeps its place among the others they placed, whatever you return; you slot the rest anywhere between them.
 - serves: the short id of a company goal the priority clearly advances, else null. Most work serves none.
@@ -167,6 +171,7 @@ The person's own settings are fixed facts; anything you return that changes one 
 - A step whose title, tier or done state is marked "set by the person" keeps it: return it as shown.
 - A step the person dropped is gone for good: never propose it again, under its own name or a similar one.
 - A priority marked done by the person stays done, and is never merged.
+- Two priorities the person refused to merge are separate things: never merge them, either way round.
 - A session placed by the person stays where they put it, and so does a session linked by what started it or by the classifier. A session "not part of" a priority never goes to that priority.
 - Corrections are the person telling you what the list gets wrong, in their words. Follow every one, even when the sessions seem to say otherwise.
 
@@ -196,6 +201,7 @@ export const PRIORITY_PASS_SCHEMA = {
           summary: STRING,
           status: { type: "string", enum: ["active", "done", "quiet"] },
           merges: { type: "array", items: STRING },
+          merge_reason: STRING,
           serves: { anyOf: [STRING, { type: "null" }] },
           rank: { type: "integer" },
           steps: {
@@ -335,13 +341,15 @@ export function buildPriorityPassPrompt(input: PriorityPassInput): { system: str
   const calls = input.calls.slice(-PRIORITY_PASS_CAPS.calls).map(callBlock).join("\n\n");
   const corrections = (input.corrections ?? []).slice(-PRIORITY_PASS_CAPS.corrections)
     .map((c) => `- ${when(c.at)} · on ${c.priority}${c.step_key ? `/${c.step_key}` : ""}: ${clip(c.text, PRIORITY_PASS_CAPS.correction_chars)}`).join("\n");
-  const budget = Math.max(PRIORITY_PASS_CAPS.prompt_chars - priorities.length - calls.length - corrections.length, PRIORITY_PASS_CAPS.prompt_chars * PRIORITY_PASS_CAPS.session_share_floor);
+  const refused = (input.refused_merges ?? []).map((r) => `- ${r.priority} and ${r.into}`).join("\n");
+  const budget = Math.max(PRIORITY_PASS_CAPS.prompt_chars - priorities.length - calls.length - corrections.length - refused.length, PRIORITY_PASS_CAPS.prompt_chars * PRIORITY_PASS_CAPS.session_share_floor);
   const { kept, omitted } = fitSessions(input.sessions, budget);
   const prompt = [
     `Person: ${input.person}. Workspace: ${input.workspace || "this workspace"}. Now: ${when(input.now)} UTC. The sessions below were active since ${when(input.window_start)} UTC.`,
     `# Company goals a priority may serve\n${goals}`,
     `# Their priorities so far\n${priorities}`,
     ...(corrections ? [`# Corrections the person wrote (follow every one)\n${corrections}`] : []),
+    ...(refused ? [`# Merges the person refused (each pair is two things: never merge them)\n${refused}`] : []),
     `# Sessions they worked in since the last pass\n${kept.length ? kept.map(sessionBlock).join("\n\n") : "(none)"}`,
     ...(calls ? [`# Calls they were in since the last pass\n${calls}`] : []),
   ].join("\n\n");
@@ -403,7 +411,24 @@ export type MergePlan = {
   notes: string[];
   /** Priorities that needed a rewrite and the reply wrote again: their flag clears. */
   rewritten: string[];
+  /** Merges the reply made, held for the person (holdMerges): applyPlan records each as a proposal. */
+  proposals?: MergeProposal[];
 };
+
+/** A merge the pass would make: `short_id` into `into` (an existing short id, or a create's `new-N`), with the reply's reason. */
+export type MergeProposal = { short_id: string; into: PriorityTarget; reason: string };
+
+/**
+ * Why a priority may not be merged away, by the pass or by accepting its
+ * proposal, or null: the person's set-aside or done stands, and a merged one
+ * is gone already.
+ */
+export function mergeBlocked(p: { status: PriorityStatus; status_set_by?: PrioritySetBy }): string | null {
+  if (p.status === "merged") return "it is merged already";
+  if (p.status === "set_aside") return "the person set it aside";
+  if (p.status_set_by === "person") return "the person marked it done";
+  return null;
+}
 
 /**
  * A proposal's steps, continuing the survivor's steps and those of every
@@ -494,8 +519,8 @@ export function mergePriorities(input: PriorityPassInput, output: PriorityPassOu
     for (const m of prop.merges ?? []) {
       const gone = byId.get(m);
       if (!gone) continue;
-      if (gone.status === "set_aside") { plan.notes.push(`${m}: not merged into ${target}, the person set it aside`); continue; }
-      if (gone.status_set_by === "person") { plan.notes.push(`${m}: not merged into ${target}, the person marked it done`); continue; }
+      const blocked = mergeBlocked(gone);
+      if (blocked) { plan.notes.push(`${m}: not merged into ${target}, ${blocked}`); continue; }
       absorbed.push(gone);
       mergedAway.add(m);
     }
@@ -632,6 +657,111 @@ export function mergePriorities(input: PriorityPassInput, output: PriorityPassOu
     plan.sessions.push({ session, ...m });
   }
   return plan;
+}
+
+// ---------------------------------------------------------------- merge proposals
+
+/**
+ * The reply with its merges held for the person (decision qd7fzq5): each
+ * merge becomes a proposal and the rest of the reply applies without it. The
+ * priority it would absorb keeps its milestones until the person accepts:
+ * a step the survivor's proposal continues from one of them (matched as the
+ * merge would match it) is left out, as the merge brings it. Its sessions
+ * stay too (applyPlan refuses the survivor any of them). A merge the pass may
+ * not make (mergeBlocked) is dropped, and a pair the person refused
+ * (`refused_merges`, either way round) is neither merged nor proposed.
+ */
+export function holdMerges(input: PriorityPassInput, output: PriorityPassOutput): { output: PriorityPassOutput; proposals: MergeProposal[]; notes: string[] } {
+  const byId = new Map(input.priorities.map((p) => [p.short_id, p]));
+  const refused = new Set((input.refused_merges ?? []).flatMap((r) => [`${r.priority} ${r.into}`, `${r.into} ${r.priority}`]));
+  const proposals: MergeProposal[] = [];
+  const notes: string[] = [];
+  let creates = 0;
+  const priorities = output.priorities.map((prop) => {
+    const prior = prop.short_id ? byId.get(prop.short_id) ?? null : null;
+    // As mergePriorities names its targets.
+    const target = prior ? prior.short_id : `new-${++creates}`;
+    const { merges, merge_reason, ...rest } = prop;
+    const held: PassPriority[] = [];
+    for (const m of merges ?? []) {
+      const gone = byId.get(m);
+      if (!gone) continue;
+      const blocked = mergeBlocked(gone);
+      if (blocked) notes.push(`${m}: not merged into ${target}, ${blocked}`);
+      else if (refused.has(`${m} ${target}`)) notes.push(`${m}: not merged into ${target}, the person said they are separate`);
+      else {
+        held.push(gone);
+        proposals.push({ short_id: m, into: target, reason: (merge_reason ?? "").trim() });
+      }
+    }
+    if (!held.length) return rest;
+    const own = prior?.steps ?? [];
+    const theirs = new Set(held.flatMap((p) => p.steps));
+    const pool = [...own, ...theirs];
+    const matched = matchSteps(pool, rest.steps, [...own.map(() => target), ...held.flatMap((p) => p.steps.map(() => p.short_id))], target);
+    const steps = rest.steps.filter((s, i) => {
+      if (!matched[i] || !theirs.has(matched[i]!)) return true;
+      notes.push(`${target}: left out "${s.title}" until the merge it continues is accepted`);
+      return false;
+    });
+    return { ...rest, steps };
+  });
+  return { output: { ...output, priorities }, proposals, notes };
+}
+
+/** A priority a merge proposal names, as its row stands. */
+type ProposalSide = { short_id: string; status: PriorityStatus; status_set_by?: PrioritySetBy; user_id: unknown; workspace: string };
+
+/**
+ * Why a merge proposal of the pair (`user_id`, `workspace`) no longer
+ * applies, or null: either priority is gone or not the person's there any
+ * more, the one it merges away is one no merge may take now (mergeBlocked:
+ * merged, set aside or done by the person, by hand since), or the survivor
+ * was merged since. A stale proposal never applies.
+ */
+export function proposalStale(gone: ProposalSide | null, into: ProposalSide | null, pair: { user_id: unknown; workspace: string }): string | null {
+  const theirs = (p: ProposalSide | null): p is ProposalSide => !!p && String(p.user_id) === String(pair.user_id) && p.workspace === pair.workspace;
+  if (!theirs(gone)) return "the priority it merges is gone";
+  if (!theirs(into)) return `the priority ${gone.short_id} would merge into is gone`;
+  const blocked = mergeBlocked(gone);
+  if (blocked) return `${gone.short_id}: ${blocked}`;
+  if (into.status === "merged") return `${into.short_id} is merged already`;
+  return null;
+}
+
+/** A pass's plan: the reply with its merges held for the person (holdMerges), the rest merged in (mergePriorities). */
+export function planPass(input: PriorityPassInput, output: PriorityPassOutput): MergePlan {
+  const held = holdMerges(input, output);
+  const plan = mergePriorities(input, held.output);
+  return { ...plan, notes: [...held.notes, ...plan.notes], proposals: held.proposals };
+}
+
+/** What a merge writes on its survivor: its milestones, the place it carries, when it was last active. */
+const MERGE_FIELDS = ["steps", "person_pos", "last_active_at"] as const;
+
+/**
+ * Accepting a merge proposal: the pass's own merge (mergePriorities) of
+ * `gone` into `into` as both stand now, as if the reply kept every live
+ * milestone of both and moved nothing else. Only what the merge writes on the
+ * survivor stays (MERGE_FIELDS); its rank and status are the next pass's.
+ * `step_tasks`: the tasks their milestones name, with their status now.
+ */
+export function acceptedMergePlan(gone: PassPriority, into: PassPriority, step_tasks: PassTask[], now: number): MergePlan {
+  const live = (p: PassPriority, qualified: boolean): PriorityProposal["steps"] =>
+    p.steps.filter((s) => !s.dropped).map((s) => ({ key: qualified ? `${p.short_id}/${s.key}` : s.key, title: s.title, tier: s.tier, refs: s.refs, done_judged: s.done }));
+  const input: PriorityPassInput = { person: "", workspace: "", now, window_start: now, priorities: [into, gone], initiatives: [], step_tasks, sessions: [], calls: [] };
+  const plan = mergePriorities(input, {
+    priorities: [{
+      short_id: into.short_id, title: into.title, summary: into.summary, status: into.status === "set_aside" ? "active" : into.status,
+      merges: [gone.short_id], serves: into.serves, rank: 1, steps: [...live(into, false), ...live(gone, true)], sessions: [],
+    }],
+    unassigned: [],
+  });
+  const updates = plan.updates.filter((u) => u.short_id === into.short_id).map((u) => ({
+    ...u,
+    patch: Object.fromEntries(MERGE_FIELDS.filter((k) => k in u.patch).map((k) => [k, u.patch[k]])) as Partial<PriorityWrite>,
+  }));
+  return { ...plan, updates };
 }
 
 // ---------------------------------------------------------------- order

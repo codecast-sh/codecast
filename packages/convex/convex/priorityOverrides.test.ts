@@ -25,6 +25,13 @@ const run = async (w: World) => {
 /** Lands after the last pass, just under its cursor: the overlap reads it (LATE_MARGIN_MS, OVERLAP_MS). */
 const late = () => Date.now() - 7 * 60_000;
 const byShort = async (w: World, short_id: string) => (await w.priorities()).find((p: any) => p.short_id === short_id)!;
+const proposalRows = (w: World) => w.t.run((ctx) => ctx.db.query("priority_proposals").collect());
+/** The one merge proposal waiting on Ana in Acme, as her list shows it. */
+const waitingProposal = async (w: World) => {
+  const listed = (await as(w, w.ana).query(pri.list, { workspace: w.team })).proposals;
+  expect(listed).toHaveLength(1);
+  return listed[0];
+};
 
 const steps = [
   { key: "s1", title: "Grader faults under 10%", tier: "critical", refs: [{ kind: "session", id: "jx7team" }] },
@@ -251,8 +258,8 @@ describe("milestone keys are never reused", () => {
   });
 });
 
-describe("a pass merge keeps a placed session's milestone", () => {
-  test("the person places a session on pri-2/s1 \"Ship the auth rewrite\"; the pass merges pri-2 into pri-1 without repeating it; the session lands on the survivor's carried milestone", async () => {
+describe("an accepted pass merge keeps a placed session's milestone", () => {
+  test("the person places a session on pri-2/s1 \"Ship the auth rewrite\"; the pass proposes merging pri-2 into pri-1 without repeating it; on accept the session lands on the survivor's carried milestone", async () => {
     const w = await seeded();
     await w.send(w.ana, w.oldConv, late(), "auth rewrite");
     model.reply = () => JSON.stringify({ priorities: [proposal({ title: "Auth", steps: [{ title: "Ship the auth rewrite", tier: "critical", refs: [] }], sessions: [] })], unassigned: [] });
@@ -262,7 +269,11 @@ describe("a pass merge keeps a placed session's milestone", () => {
     await w.send(w.ana, w.teamConv, late(), "grader and auth together");
     model.reply = () => JSON.stringify({ priorities: [proposal({ short_id: "pri-1", steps, merges: ["pri-2"] })], unassigned: [] });
     await run(w);
-    expect(await byShort(w, "pri-2")).toMatchObject({ status: "merged" });
+    // Proposed, not merged: pri-2 keeps its milestone and the session placed on it.
+    expect(await byShort(w, "pri-2")).toMatchObject({ status: "active" });
+    expect(await w.conversation(w.oldConv)).toMatchObject({ priority_id: (await byShort(w, "pri-2"))._id, priority_step_key: "s1" });
+    await as(w, w.ana).mutation(pri.answerProposal, { proposal: (await waitingProposal(w))._id, accept: true });
+    expect(await byShort(w, "pri-2")).toMatchObject({ status: "merged", merged_into: (await byShort(w, "pri-1"))._id });
     const survivor = await byShort(w, "pri-1");
     const carried = survivor.steps.find((s: any) => s.title === "Ship the auth rewrite" && !s.dropped);
     expect(carried).toBeDefined();
@@ -319,6 +330,109 @@ describe("a pass merge reads the absorbed priority's sessions itself", () => {
     const placed = await w.t.run(async (ctx) => (await ctx.db.query("conversations").withIndex("by_short_id", (q) => q.eq("short_id", "jx7a0")).first())!);
     expect(placed).toMatchObject({ priority_id: survivor._id, priority_step_key: "s4", priority_set_by: "person" });
     void pri2;
+  });
+});
+
+describe("a pass's merge waits for the person (decision qd7fzq5)", () => {
+  /** pri-1 as seeded, and pri-2 "Second" holding jx7old on its one milestone "Other". */
+  const twoPriorities = async () => {
+    const w = await seeded();
+    await w.send(w.ana, w.oldConv, late(), "other work");
+    model.reply = () => JSON.stringify({ priorities: [proposal({ title: "Second", steps: [{ title: "Other", tier: "critical", refs: [] }], sessions: [{ session: "jx7old", step: "Other" }] })], unassigned: [] });
+    await run(w);
+    return w;
+  };
+  /** A pass whose reply merges `gone` into `into`, renaming the survivor and repeating the absorbed milestone. */
+  const mergingPass = async (w: World, gone = "pri-2", into = "pri-1") => {
+    await w.send(w.ana, w.oldConv, late(), "it is all one push");
+    model.reply = () => JSON.stringify({
+      priorities: [proposal({
+        short_id: into, title: "Grader push", merges: [gone], merge_reason: "Both are the grader push",
+        steps: [...steps, { key: `${gone}/s1`, title: "Other", tier: "critical", refs: [] }], sessions: [{ session: "jx7team", step: "s1" }, { session: "jx7old" }],
+      })],
+      unassigned: [],
+    });
+    return run(w);
+  };
+
+  test("the merge becomes a proposal and nothing merges; the rest of the reply applies; repeated passes, either way round, keep one", async () => {
+    const w = await twoPriorities();
+    const before = await byShort(w, "pri-2");
+    await mergingPass(w);
+    const [p1, p2] = [await byShort(w, "pri-1"), await byShort(w, "pri-2")];
+    expect(p2).toMatchObject({ status: "active", steps: before.steps });
+    expect(p2.merged_into).toBeUndefined();
+    // pri-2 keeps its session, though the reply listed it under pri-1; pri-1 is renamed but does not take "Other" ahead of the merge.
+    expect(await w.conversation(w.oldConv)).toMatchObject({ priority_id: p2._id, priority_step_key: "s1" });
+    expect(p1.title).toBe("Grader push");
+    expect(p1.steps.map((s: any) => s.title)).toEqual(["Grader faults under 10%", "Ship the grader", "Docs"]);
+    const rows = await proposalRows(w);
+    expect(rows).toMatchObject([{ priority_id: p2._id, into_id: p1._id, reason: "Both are the grader push", status: "pending" }]);
+    expect(rows[0].run_id).toBeDefined();
+    expect(await waitingProposal(w)).toMatchObject({ priority: { short_id: "pri-2", title: "Second" }, into: { short_id: "pri-1", title: "Grader push" }, reason: "Both are the grader push" });
+
+    await mergingPass(w);
+    await mergingPass(w, "pri-1", "pri-2");
+    expect((await proposalRows(w)).map((r: any) => r.status)).toEqual(["pending"]);
+  });
+
+  test("accept merges as the pass would have: milestones, sessions, the absorbed priority's place and merged_into", async () => {
+    const w = await twoPriorities();
+    const me = as(w, w.ana);
+    // The person placed pri-2 first; pri-1 has no place of theirs, so the survivor takes pri-2's.
+    await me.mutation(pri.moveTo, { short_id: "pri-2", to: 1 });
+    const place = (await byShort(w, "pri-2")).person_pos;
+    expect((await byShort(w, "pri-1")).person_pos).toBeUndefined();
+    await mergingPass(w);
+    const into = await me.mutation(pri.answerProposal, { proposal: (await waitingProposal(w))._id, accept: true });
+    expect(into).toMatchObject({ short_id: "pri-1", rank: 1, person_pos: place });
+    expect(into.steps.map((s: any) => [s.key, s.title])).toEqual([["s1", "Grader faults under 10%"], ["s2", "Ship the grader"], ["s3", "Docs"], ["s4", "Other"]]);
+    expect(await byShort(w, "pri-2")).toMatchObject({ status: "merged", merged_into: into._id });
+    expect(await w.conversation(w.oldConv)).toMatchObject({ priority_id: into._id, priority_step_key: "s4" });
+    expect((await proposalRows(w)).map((r: any) => r.status)).toEqual(["accepted"]);
+    expect((await me.query(pri.list, { workspace: w.team })).proposals).toEqual([]);
+  });
+
+  test("reject: every later pass reads the refusal, and a reply that merges the pair again, either way round, proposes and merges nothing", async () => {
+    const w = await twoPriorities();
+    await mergingPass(w);
+    const row = await as(w, w.ana).mutation(pri.answerProposal, { proposal: (await waitingProposal(w))._id, accept: false });
+    expect(row).toMatchObject({ short_id: "pri-2", status: "active" });
+    expect((await proposalRows(w)).map((r: any) => r.status)).toEqual(["rejected"]);
+
+    model.prompts.length = 0;
+    await mergingPass(w, "pri-1", "pri-2");
+    expect(model.prompts.at(-1)).toContain("# Merges the person refused (each pair is two things: never merge them)\n- pri-2 and pri-1");
+    await mergingPass(w);
+    expect((await proposalRows(w)).map((r: any) => r.status)).toEqual(["rejected"]);
+    expect([(await byShort(w, "pri-1")).status, (await byShort(w, "pri-2")).status]).toEqual(["active", "active"]);
+    expect((await as(w, w.ana).query(pri.list, { workspace: w.team })).proposals).toEqual([]);
+  });
+
+  test("a proposal whose subject changed never applies: it leaves the list, accept refuses it, and the next pass marks it stale", async () => {
+    const w = await twoPriorities();
+    await mergingPass(w);
+    const { _id } = await waitingProposal(w);
+    const me = as(w, w.ana);
+    // The person merges pri-2 by hand, into pri-1 as it happens: the proposal is moot.
+    await me.mutation(pri.merge, { short_id: "pri-2", into: "pri-1" });
+    expect((await me.query(pri.list, { workspace: w.team })).proposals).toEqual([]);
+    await expect(me.mutation(pri.answerProposal, { proposal: _id, accept: true })).rejects.toThrow("that merge no longer applies (pri-2: it is merged already); nothing changed");
+    await w.send(w.ana, w.teamConv, late(), "more grader work");
+    model.reply = () => JSON.stringify({ priorities: [], unassigned: [] });
+    await run(w);
+    expect((await proposalRows(w)).map((r: any) => r.status)).toEqual(["stale"]);
+    // The hand merge carried "Other" once; the stale proposal added nothing.
+    expect((await byShort(w, "pri-1")).steps.filter((s: any) => s.title === "Other")).toHaveLength(1);
+  });
+
+  test("only the owner sees and answers their proposals", async () => {
+    const w = await twoPriorities();
+    await mergingPass(w);
+    const { _id } = await waitingProposal(w);
+    expect((await as(w, w.ben).query(pri.list, { workspace: w.team })).proposals).toEqual([]);
+    await expect(as(w, w.ben).mutation(pri.answerProposal, { proposal: _id, accept: true })).rejects.toThrow(`no merge proposal ${_id} of yours`);
+    expect((await byShort(w, "pri-2")).status).toBe("active");
   });
 });
 
@@ -515,7 +629,7 @@ describe("corrections", () => {
     expect(await w.t.query(pass.sweepCandidates, { team_id: w.acme })).toContainEqual({ user_id: w.ana, workspace: w.team });
   });
 
-  test("a merge by the pass takes the absorbed priority's corrections to the survivor, onto the step their step became", async () => {
+  test("an accepted pass merge takes the absorbed priority's corrections to the survivor, onto the step their step became", async () => {
     const w = await seeded();
     await w.send(w.ana, w.oldConv, late(), "other work");
     model.reply = () => JSON.stringify({ priorities: [proposal({ title: "Second", steps: [{ title: "Judge rollout", tier: "critical", refs: [] }], sessions: [{ session: "jx7old", step: "Judge rollout" }] })], unassigned: [] });
@@ -527,6 +641,10 @@ describe("corrections", () => {
     await w.send(w.ana, w.oldConv, late(), "one priority after all");
     model.reply = () => JSON.stringify({ priorities: [proposal({ short_id: "pri-1", merges: ["pri-2"], steps: [...steps, { key: "pri-2/s1", title: "Judge rollout", tier: "critical", refs: [] }] })], unassigned: [] });
     await run(w);
+    // Until it is accepted the corrections stay on pri-2, and the survivor does not take "Judge rollout" ahead of the merge.
+    expect((await me.query(pri.show, { short_id: "pri-2" })).corrections).toHaveLength(2);
+    expect((await byShort(w, "pri-1")).steps.map((s: any) => s.title)).not.toContain("Judge rollout");
+    await me.mutation(pri.answerProposal, { proposal: (await waitingProposal(w))._id, accept: true });
     expect(await byShort(w, "pri-2")).toMatchObject({ status: "merged" });
     const shown = await me.query(pri.show, { short_id: "pri-1" });
     expect(shown.steps.map((s: any) => [s.key, s.title])).toContainEqual(["s4", "Judge rollout"]);

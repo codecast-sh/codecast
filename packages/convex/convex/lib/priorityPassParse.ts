@@ -29,6 +29,8 @@ function knownRefs(input: PriorityPassInput): Set<string> {
 }
 
 const REF_KINDS: PriorityRefKind[] = ["task", "session", "pr", "commit"];
+/** A merge proposal's reason is one line. */
+const MERGE_REASON_CHARS = 300;
 const str = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v.trim() : null);
 
 /**
@@ -121,6 +123,7 @@ export function parsePriorityPassOutput(raw: unknown, input: PriorityPassInput):
       summary: str(r.summary) ?? "",
       status,
       ...(merges.length ? { merges } : {}),
+      ...(merges.length && str(r.merge_reason) ? { merge_reason: str(r.merge_reason)!.slice(0, MERGE_REASON_CHARS) } : {}),
       serves,
       rank,
       steps,

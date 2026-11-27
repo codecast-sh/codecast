@@ -2,8 +2,8 @@
 import { describe, expect, test } from "bun:test";
 import { useCliHarness } from "./externalDataCli.testHarness.js";
 import { clearWorkspaceCache } from "./resolveWorkspace.js";
-import { formatHistory, formatPriorityDetail, formatPriorityLines, priorityId } from "./prioritiesCommand.js";
-import type { PriorityRow } from "@codecast/shared/contracts/priorities";
+import { formatHistory, formatPriorityDetail, formatPriorityLines, formatProposals, priorityId } from "./prioritiesCommand.js";
+import type { PriorityMergeProposal, PriorityRow } from "@codecast/shared/contracts/priorities";
 
 const NOW = Date.UTC(2026, 10, 24, 18);
 const HOUR = 3_600_000;
@@ -15,6 +15,11 @@ const row = (over: Partial<PriorityRow>): PriorityRow => ({
   status_set_by: "pass", correction_pending: false,
   ...over,
 });
+
+const PROPOSAL: PriorityMergeProposal = {
+  _id: "k57prop1", priority: { short_id: "pri-4", title: "Deploy redesign", rank: 4 }, into: { short_id: "pri-2", title: "Deploys that are simple and reliable", rank: 2 },
+  reason: "Both are about making deploys boring", created_at: NOW,
+};
 
 const FIXTURE: PriorityRow[] = [
   row({}),
@@ -92,6 +97,15 @@ describe("output", () => {
       "pri-1  Trusted evals       █▃  4+ typed",
       "pri-9  Eval loop      Bea  ▁█  2 typed",
     ]);
+  });
+
+  test("proposals: what Accept does, the pass's reason, and the id to answer it by", () => {
+    expect(formatProposals([PROPOSAL, { ...PROPOSAL, _id: "k57prop2", priority: { ...PROPOSAL.priority, rank: null }, reason: "" }])).toEqual([
+      "Merge #4 pri-4 Deploy redesign into #2 pri-2 Deploys that are simple and reliable?  k57prop1",
+      "  Both are about making deploys boring",
+      "Merge pri-4 Deploy redesign into #2 pri-2 Deploys that are simple and reliable?  k57prop2",
+    ]);
+    expect(formatProposals([])).toEqual(["No merge proposals wait on you."]);
   });
 
   test("ids: pri-N in any case, or a bare number", () => {
@@ -185,6 +199,29 @@ describe("cast priorities on the wire", () => {
       "ok pri-3/s1 done", "ok pri-3/s1 not done", "ok pri-3/s2 renamed", "ok pri-3/s3 dropped", "ok pri-3 done", "ok pri-3 merged into pri-4",
       "ok jx7abc1 -> pri-3/s2", "ok jx7abc2 -> pri-3", "ok jx7abc1 is not part of pri-3",
       "ok correction c1 on pri-3/s2: the next pass reads it", "ok correction c1 deleted",
+    ]);
+  });
+
+  test("merge proposals: listed off the list answer, answered by id or by a priority they name; ls says how many wait", async () => {
+    clearWorkspaceCache();
+    h.answer = (p, body) => (p === "/cli/teams" ? roster : p === "/cli/priorities/list" ? { priorities: FIXTURE.slice(0, 1), proposals: [PROPOSAL] } : row({ short_id: body.accept ? "pri-2" : "pri-4" }));
+    await h.run("proposals");
+    await h.run("accept", "k57prop1");
+    await h.run("reject", "4");
+    await h.run();
+    expect(h.calls.filter((c) => c.path !== "/cli/teams")).toEqual([
+      { path: "/cli/priorities/list", body: { status: "active", team_id: "t1" } },
+      { path: "/cli/priorities/answer-proposal", body: { proposal: "k57prop1", accept: true } },
+      { path: "/cli/priorities/answer-proposal", body: { proposal: "pri-4", accept: false } },
+      { path: "/cli/priorities/list", body: { status: "active", team_id: "t1" } },
+    ]);
+    expect(h.logs).toEqual([
+      "Merge #4 pri-4 Deploy redesign into #2 pri-2 Deploys that are simple and reliable?  k57prop1",
+      "  Both are about making deploys boring",
+      "ok merged into pri-2",
+      "ok pri-4 stays apart; the pass will not propose that merge again",
+      expect.stringContaining("pri-1  Trusted evals"),
+      "1 merge proposal waits on you: cast priorities proposals",
     ]);
   });
 

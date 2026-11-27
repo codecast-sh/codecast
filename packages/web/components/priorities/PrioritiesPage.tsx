@@ -15,10 +15,10 @@ import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { AlertTriangle, Check, ChevronDown, Loader2, Play, Rows3, Target } from "lucide-react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
-import type { PriorityHistory } from "@codecast/shared/contracts/priorities";
+import type { PriorityHistory, PriorityMergeProposal } from "@codecast/shared/contracts/priorities";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { useActiveWorkspaceKey } from "../../hooks/useWorkspaceCollection";
-import { usePriorities, usePriorityListMeta, usePriorityWrites, useRunPriorities, useSyncPriorities } from "../../hooks/usePriorities";
+import { usePriorities, usePriorityListMeta, usePriorityProposals, usePriorityWrites, useRunPriorities, useSyncPriorities } from "../../hooks/usePriorities";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { Button } from "../ui/button";
@@ -39,6 +39,7 @@ import { PriorityBlock, type RankDrag } from "./PriorityBlock";
 import { linkedPrRefs, linkedSessionIds, usePriorityLiveStates, usePriorityLookups } from "../../hooks/usePriorityModels";
 import { StatsLine } from "./StatsLine";
 import { WaitingOnYou } from "./Waiting";
+import { MergeProposals, proposalMarks } from "./Proposals";
 
 const api = _api as any;
 
@@ -57,6 +58,7 @@ export default function PrioritiesPage() {
     { remember: true },
   ).data as PriorityHistory | undefined;
   const meta = usePriorityListMeta();
+  const proposals = usePriorityProposals();
   const pass = useRunPriorities(rows.length);
   const now = useCoarseNow(30_000);
   const behind = behindLabel(meta.behind_by_ms);
@@ -95,7 +97,7 @@ export default function PrioritiesPage() {
   } else if (rows.length === 0) {
     body = <NoPrioritiesYet nextPass={nextPassLabel(meta.next_pass_at, now)} running={pass.running || passDue(meta, now)} onRun={pass.run} />;
   } else {
-    body = <PrioritiesView rows={rows} history={history} now={now} layout={layout} filters={filters} onFilters={setFilters} compact={compact} onCompact={setCompact} />;
+    body = <PrioritiesView rows={rows} history={history} now={now} layout={layout} filters={filters} onFilters={setFilters} compact={compact} onCompact={setCompact} proposals={proposals} />;
   }
 
   return (
@@ -183,7 +185,7 @@ export function NoPrioritiesYet({ nextPass, running, onRun }: { nextPass: string
   );
 }
 
-export function PrioritiesView({ rows, history, now, layout, filters, onFilters, compact, onCompact }: {
+export function PrioritiesView({ rows, history, now, layout, filters, onFilters, compact, onCompact, proposals = [] }: {
   rows: PriorityRow[];
   history: PriorityHistory | undefined;
   now: number;
@@ -192,7 +194,10 @@ export function PrioritiesView({ rows, history, now, layout, filters, onFilters,
   onFilters: (f: ListFilters) => void;
   compact: boolean;
   onCompact: (on: boolean) => void;
+  /** The viewer's merge proposals waiting on them (usePriorityProposals). */
+  proposals?: PriorityMergeProposal[];
 }) {
+  const marks = useMemo(() => proposalMarks(proposals), [proposals]);
   const scoped = useMemo(() => rows.filter((r) => r.status !== "merged" && (!filters.mine || r.mine)), [rows, filters.mine]);
   const visible = useMemo(() => listedRows(rows, filters), [rows, filters]);
   const days = useMemo(() => lastDays(LIST_DAYS, now), [now]);
@@ -233,13 +238,14 @@ export function PrioritiesView({ rows, history, now, layout, filters, onFilters,
     };
   };
   const block = (m: PriorityModel | undefined, g: OwnerGroup) => m && (
-    <PriorityBlock key={m.row.short_id} model={m} layout={layout} compact={compact} filters={filters} todayIndex={todayIndex} peak={peak} now={now} lookups={lookups} drag={dragOf(g, m.row)} />
+    <PriorityBlock key={m.row.short_id} model={m} layout={layout} compact={compact} filters={filters} todayIndex={todayIndex} peak={peak} now={now} lookups={lookups} drag={dragOf(g, m.row)} merge={m.row.mine ? marks.get(m.row.short_id) : undefined} />
   );
   return (
     <div data-priorities data-layout={layout} data-compact={compact || undefined} className="[container-type:inline-size]">
       <StatsLine days={days} landed={landed} todayIndex={todayIndex} today={today} loose={history?.unassigned_today ?? []} now={now} layout={layout} />
       <FilterBar filters={filters} onChange={onFilters} compact={compact} onCompact={onCompact} layout={layout} />
       {filters.mine && <WaitingOnYou items={waiting} now={now} layout={layout} />}
+      <MergeProposals proposals={proposals} layout={layout} />
       {layout === "wide" && (
         <div aria-hidden className={cn(LIST_GRID.wide, "border-b border-sol-border/50 pb-1 text-mark font-medium uppercase tracking-wide text-sol-text-dim")}>
           <span className="col-start-3 flex w-full justify-end gap-2"><span className="px-1">Critical</span><span className={cn(POLISH_SLOT, compact && "[@container(max-width:44rem)]:hidden")} /></span>

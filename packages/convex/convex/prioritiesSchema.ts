@@ -186,6 +186,33 @@ export const priorityTables = {
     .index("by_user_workspace_status", ["user_id", "workspace", "status"])
     .index("by_applied", ["applied_at"]),
 
+  // A merge the pass would make and the person decides (decision qd7fzq5):
+  // `priority_id` would merge into `into_id`. Written "pending" by applyPlan
+  // in place of the merge, once per pair while one waits; the person accepts
+  // it (the pass's own merge, priorityProposals) or rejects it, and every
+  // later pass reads a rejected pair as two things and never proposes it
+  // again. A pending one whose subject changed (either priority merged or
+  // gone, or the merge one the pass would now refuse) never applies: it turns
+  // "stale". The pass's reply can never set a priority aside (its status is
+  // active, done or quiet), so a merge is the only kind.
+  priority_proposals: defineTable({
+    user_id: v.id("users"),
+    workspace: v.string(),
+    priority_id: v.id("priorities"),
+    into_id: v.id("priorities"),
+    /** The pass's one line on why they are the same outcome. */
+    reason: v.string(),
+    status: v.union(v.literal("pending"), v.literal("accepted"), v.literal("rejected"), v.literal("stale")),
+    /** The run that proposed it. */
+    run_id: v.optional(v.id("priority_pass_runs")),
+    created_at: v.number(),
+    decided_at: v.optional(v.number()),
+  })
+    .index("by_user_workspace_status", ["user_id", "workspace", "status"])
+    .index("by_priority_status", ["priority_id", "status"])
+    .index("by_into_status", ["into_id", "status"])
+    .index("by_workspace", ["workspace"]),
+
   // Every `cast state` write (conversations.performSetThreadState), kept
   // because the conversation's own pin holds only the latest. Pruned after 30
   // days (threadStateEvents.prune).

@@ -26,6 +26,7 @@ import { usePriorityWrites } from "../../hooks/usePriorities";
 import type { LinkKind } from "./parts";
 import { ActionButton, AnswerSecondary, BranchChip, DayStrip, DeployChip, InSession, KindCount, MilestoneMark, PlanChip, PrChip, SessionChip, SessionSlot, TaskChip } from "./parts";
 import { LooksDone, MilestoneMenu, MilestoneTitleInput, MilestoneToggle, PriorityMenu, SessionMenu } from "./controls";
+import { MergeMark } from "./Proposals";
 
 /** A desktop drag of the owner's rank (PrioritiesView): this row's part in it. */
 export type RankDrag = {
@@ -60,7 +61,7 @@ const C_MENU_PHONE = "col-start-5 row-start-1 justify-self-end";
 /** A wide row's title, one line on a mouse; under a coarse pointer it wraps onto a second, since nothing there hovers for the rest. */
 const COARSE_WRAP = "[@media(pointer:coarse)]:line-clamp-2 [@media(pointer:coarse)]:whitespace-normal";
 
-export function PriorityBlock({ model, layout, compact, filters, todayIndex, peak, now, lookups, drag }: {
+export function PriorityBlock({ model, layout, compact, filters, todayIndex, peak, now, lookups, drag, merge }: {
   model: PriorityModel;
   layout: ListLayout;
   compact: boolean;
@@ -72,6 +73,8 @@ export function PriorityBlock({ model, layout, compact, filters, todayIndex, pea
   lookups: LinkLookups;
   /** Set on the owner's own active rows of a desktop list. */
   drag?: RankDrag;
+  /** A merge proposal waiting on the person names it: the line its row shows (Proposals proposalMarks). */
+  merge?: string;
 }) {
   const { row } = model;
   const [doneOpen, setDoneOpen] = useState(!filters.hideDone);
@@ -117,6 +120,7 @@ export function PriorityBlock({ model, layout, compact, filters, todayIndex, pea
         todayIndex={todayIndex}
         peak={peak}
         drag={drag}
+        merge={merge}
         polish={polish.length ? { done: polish.filter((m) => m.done).length, total: polish.length, open: polishOpen, toggle: () => setPolishOpen((o) => !o) } : null}
         onProgress={critical.some((m) => m.done) ? () => setDoneOpen((o) => !o) : undefined}
       />
@@ -254,7 +258,7 @@ function Rank({ row, drag }: { row: PriorityRow; drag?: RankDrag }) {
   );
 }
 
-function PriorityHeader({ model, layout, compact, filters, todayIndex, peak, polish, onProgress, drag }: {
+function PriorityHeader({ model, layout, compact, filters, todayIndex, peak, polish, onProgress, drag, merge }: {
   model: PriorityModel;
   layout: ListLayout;
   compact: boolean;
@@ -264,6 +268,7 @@ function PriorityHeader({ model, layout, compact, filters, todayIndex, peak, pol
   polish: { done: number; total: number; open: boolean; toggle: () => void } | null;
   onProgress?: () => void;
   drag?: RankDrag;
+  merge?: string;
 }) {
   const { row } = model;
   const wide = layout === "wide";
@@ -286,6 +291,7 @@ function PriorityHeader({ model, layout, compact, filters, todayIndex, peak, pol
         {wide && !compact && model.stalledDays != null && <StalledMark days={model.stalledDays} className="inline-flex [@container(min-width:44rem)]:hidden" />}
         {/* On a phone and in the compact view the title keeps the row's width; the mark goes on the meta line below. */}
         {wide && !compact && pending && <PendingMark />}
+        {wide && !compact && merge && <MergeMark text={merge} />}
         {compact && model.action && <span data-compact-action className="ml-auto flex shrink-0"><ActionButton row={row} action={model.action} showSession={false} /></span>}
       </span>
       {/* The pips end at one x on every wide row, polish or not: the polish link has a slot of its own. */}
@@ -323,7 +329,7 @@ function PriorityHeader({ model, layout, compact, filters, todayIndex, peak, pol
         </>
       )}
       {/* A phone's meta line: polish, a pending correction and the momentum words. Compact is one line a priority (its strip in the row), so it keeps only a pending correction. */}
-      {!wide && (!compact || pending) && (
+      {!wide && (!compact || pending || merge) && (
         <div data-meta className={cn(C_META, "flex min-h-6 items-center gap-3")}>
           {polish && !compact && (
             <button type="button" data-polish aria-expanded={polish.open} onClick={polish.toggle} className="-ml-2 inline-flex h-11 items-center gap-0.5 whitespace-nowrap rounded px-2 text-meta text-sol-text-dim hover:bg-sol-bg-alt">
@@ -332,6 +338,7 @@ function PriorityHeader({ model, layout, compact, filters, todayIndex, peak, pol
             </button>
           )}
           {pending && <PendingMark />}
+          {merge && <MergeMark text={merge} />}
           {!compact && <MomentumWords model={model} stalled className="ml-auto" />}
         </div>
       )}
@@ -345,7 +352,7 @@ function PriorityHeader({ model, layout, compact, filters, todayIndex, peak, pol
           <PlanChip plan={plan} className="min-w-[7rem] max-w-[22rem]" />
         </div>
       )}
-      {wide && compact && pending && <span data-meta className="col-start-2 col-end-3 row-start-2 flex min-w-0 items-center"><PendingMark /></span>}
+      {wide && compact && (pending || merge) && <span data-meta className="col-start-2 col-end-3 row-start-2 flex min-w-0 items-center gap-2">{pending && <PendingMark />}{merge && <MergeMark text={merge} />}</span>}
       {/* A narrow wide list (Daylight beside the inbox) has no room for the words beside the strip: they go on the meta line under it, compact or not. */}
       {/* Compact stays one line: there the words show only beside the strip, where they fit. */}
       {wide && !compact && <MomentumWords model={model} className="col-start-3 col-end-6 row-start-2 justify-self-end [@container(min-width:44rem)]:hidden" />}

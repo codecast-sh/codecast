@@ -1,6 +1,7 @@
 // The person's controls over their priorities (convex priorities.ts): a move,
 // a milestone's tier, done state, title and drop, a priority's done, set
-// aside, restore and merge, a session's move and "not this", and corrections.
+// aside, restore and merge, a session's move and "not this", corrections, and
+// the answer to a merge the pass proposed.
 // Each paints the rows at once (lib/priorities paint*): the `priorities` list
 // row, else the detail's own copy of a priority the list does not hold, and
 // the detail's corrections. Each rides `dispatch` to the side effect of the
@@ -34,6 +35,8 @@ export type PrioritiesSliceActions = {
   /** Must-deliver (store/mutativeMiddleware): `clientKey` lets the server store a retried write once. */
   correctPriority: (shortId: string, text: string, stepKey: string | null, clientKey: string) => Promise<unknown>;
   deletePriorityCorrection: (correctionId: string) => Promise<unknown>;
+  /** Accept or reject a merge the pass proposed (priorities.answerProposal). Paints nothing: the list's next answer drops the card and, on accept, the merged row. */
+  answerPriorityProposal: (proposalId: string, accept: boolean) => Promise<unknown>;
   /** One pass now in a workspace (priorities.run). Paints nothing: the pass writes its rows in a minute. */
   runPriorities: (workspace: string) => Promise<unknown>;
 };
@@ -106,6 +109,7 @@ export function createPrioritiesSlice(): PrioritiesSliceActions {
     deletePriorityCorrection: asyncAction(function (this: PaintState, correctionId: string) {
       paintCorrectionDelete(this, correctionId);
     }) as PrioritiesSliceActions["deletePriorityCorrection"],
+    answerPriorityProposal: asyncAction(function (this: PaintState, _proposalId: string, _accept: boolean) {}) as PrioritiesSliceActions["answerPriorityProposal"],
     runPriorities: asyncAction(function (this: PaintState, _workspace: string) {}) as PrioritiesSliceActions["runPriorities"],
   };
 }

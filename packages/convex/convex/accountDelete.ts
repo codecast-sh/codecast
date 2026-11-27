@@ -31,6 +31,7 @@ const AFTER_CONVERSATIONS: ReadonlyArray<readonly [string, string, string]> = [
   ["priority_pass_schedules", "by_user_workspace", "user_id"],
   ["priority_classifications", "by_user_workspace_at", "user_id"],
   ["priority_corrections", "by_user_workspace_created", "user_id"],
+  ["priority_proposals", "by_user_workspace_status", "user_id"],
   // A person's voice samples (biometric): gone with the account.
   ["voiceprints", "by_user", "user_id"],
   ["suggestion_outcomes", "by_user_created", "user_id"],

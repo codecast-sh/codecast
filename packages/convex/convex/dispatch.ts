@@ -1837,6 +1837,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   correctPriority: async (ctx, _userId, [shortId, text, stepKey, clientKey]: [string, string, string | null, string | undefined]) =>
     ctx.runMutation!((api as any).priorities.correct, { short_id: shortId, text, ...(stepKey ? { step_key: stepKey } : {}), ...(clientKey ? { client_key: clientKey } : {}) }),
   deletePriorityCorrection: async (ctx, _userId, [correctionId]: [string]) => ctx.runMutation!((api as any).priorities.deleteCorrection, { correction_id: correctionId }),
+  answerPriorityProposal: async (ctx, _userId, [proposal, accept]: [string, boolean]) => ctx.runMutation!((api as any).priorities.answerProposal, { proposal, accept }),
   runPriorities: async (ctx, _userId, [workspace]: [string]) => ctx.runMutation!((api as any).priorities.run, { workspace }),
 
   // A member's level for a whole team (settings, the share-in-full nudge).

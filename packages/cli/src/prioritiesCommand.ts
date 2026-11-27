@@ -1,14 +1,15 @@
 // `cast priorities`: what each person is driving at (shared/contracts/priorities.ts),
 // inferred by a pass over their own sessions, and the person's own controls:
 // rank; a milestone's tier, done state, title and drop; set aside, done,
-// restore and merge; moving a session or saying it is not part of one; and
-// corrections the pass reads. Their call always wins over the pass.
+// restore and merge; moving a session or saying it is not part of one;
+// corrections the pass reads; and the answer to a merge the pass proposed.
+// Their call always wins over the pass.
 
 import type { Command } from "commander";
 import { apiPost, type PublishDeps } from "./castApi.js";
 import { commandGroup } from "./commandGroupLookup.js";
 import { ago, sparkline } from "./externalDataCli.js";
-import type { PriorityCorrection, PriorityDetail, PriorityHistory, PriorityList, PriorityRow } from "@codecast/shared/contracts/priorities";
+import type { PriorityCorrection, PriorityDetail, PriorityHistory, PriorityList, PriorityMergeProposal, PriorityProposalSide, PriorityRow } from "@codecast/shared/contracts/priorities";
 
 function fail(message: string): never {
   console.error(`Error: ${message}`);
@@ -102,6 +103,14 @@ export function formatPriorityDetail(p: PriorityDetail, now = Date.now()): strin
   return out;
 }
 
+const side = (s: PriorityProposalSide) => `${s.rank != null ? `#${s.rank} ` : ""}${s.short_id} ${s.title}`;
+
+/** Each merge proposal waiting on you: what Accept does, the pass's reason, and the id accept and reject take. */
+export function formatProposals(proposals: PriorityMergeProposal[]): string[] {
+  if (!proposals.length) return ["No merge proposals wait on you."];
+  return proposals.flatMap((p) => [`Merge ${side(p.priority)} into ${side(p.into)}?  ${p._id}`, ...(p.reason ? [`  ${p.reason}`] : [])]);
+}
+
 /**
  * One line per lane: id, title, its owner (a teammate's lane), a sparkline and
  * the total typed; a lane whose read was cut marks its total with "+".
@@ -155,6 +164,8 @@ export function registerPrioritiesCommand(program: Command, deps: PublishDeps): 
       if (behind) console.log(behind);
       if (!rows.length) return console.log(options.all ? "No priorities here." : "No active priorities. cast priorities ls --all shows the rest.");
       for (const line of formatPriorityLines(rows)) console.log(line);
+      const waiting = list.proposals?.length ?? 0;
+      if (waiting) console.log(`${waiting} merge proposal${waiting === 1 ? " waits" : "s wait"} on you: cast priorities proposals`);
       if (res.own_truncated) console.log("Your priorities past the most recently active ones are not listed.");
       if (res.teammates_truncated) console.log("Teammates' priorities past the most recently active ones are not listed.");
     });
@@ -260,6 +271,34 @@ export function registerPrioritiesCommand(program: Command, deps: PublishDeps): 
       if (options.json) return console.log(JSON.stringify(row, null, 2));
       console.log(`ok ${priorityId(id)} merged into ${row.short_id}`);
     });
+
+  pri
+    .command("proposals")
+    .description("Merges the pass proposed that wait on you; accept or reject each")
+    .option("--team <name|id|personal>", TEAM_HELP)
+    .option("--json", "As JSON")
+    .action(async (options: { team?: string; json?: boolean }) => {
+      const list: PriorityList = await apiPost(deps, "/cli/priorities/list", { status: "active", ...(await scope(deps, options.team)) }, { read: true });
+      const proposals = list.proposals ?? [];
+      if (options.json) return console.log(JSON.stringify(proposals, null, 2));
+      for (const line of formatProposals(proposals)) console.log(line);
+    });
+
+  for (const [verb, accept, description] of [
+    ["accept", true, "Accept a merge the pass proposed (its id, or a priority it names): merged as the pass would have"],
+    ["reject", false, "Reject a merge the pass proposed (its id, or a priority it names): the pass never proposes it again"],
+  ] as const) {
+    pri
+      .command(`${verb} <proposal>`)
+      .description(description)
+      .option("--json", "The priority as JSON (the survivor on accept)")
+      .action(async (proposal: string, options: { json?: boolean }) => {
+        const ref = /^(pri-)?\d+$/i.test(proposal.trim()) ? priorityId(proposal) : proposal.trim();
+        const row: PriorityRow = await apiPost(deps, "/cli/priorities/answer-proposal", { proposal: ref, accept });
+        if (options.json) return console.log(JSON.stringify(row, null, 2));
+        console.log(accept ? `ok merged into ${row.short_id}` : `ok ${row.short_id} stays apart; the pass will not propose that merge again`);
+      });
+  }
 
   const session = pri.command("session").description("Place one of your sessions; the pass keeps where you put it");
 

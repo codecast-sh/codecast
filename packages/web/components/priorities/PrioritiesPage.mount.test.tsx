@@ -230,6 +230,58 @@ test("Looks done?, correction pending and Stalled read on every width", async ()
   }
 }, 60_000);
 
+test("a merge the pass proposed is a card beside Waiting on you, with Accept and Reject, and both its priorities say so", async () => {
+  const proposal = {
+    _id: "prop1", priority: { short_id: "pri-4", title: "Priorities for Union", rank: 4 }, into: { short_id: "pri-2", title: "One simple ship flow", rank: 2 },
+    reason: "Both are the ship flow", created_at: NOW,
+  };
+  // The page reads the proposals off the list's own answer.
+  answers["priorities:history"] = HISTORY;
+  answers["priorities:list"] = { ...listOf(ROWS), proposals: [proposal] };
+  const page = await mount(<PrioritiesPage />);
+  try {
+    expect(describeFailures(page)).toBe("");
+    expect(page.container.querySelector("[data-proposal-question]")!.textContent).toBe("Merge #4 Priorities for Union into #2 One simple ship flow?");
+  } finally {
+    await page.unmount();
+    answers["priorities:list"] = listOf(ROWS);
+  }
+  const real = useInboxStore.getState().answerPriorityProposal;
+  for (const layout of ["wide", "phone"] as const) {
+    const pressed: Array<[string, boolean]> = [];
+    let refuse = false;
+    useInboxStore.setState({ answerPriorityProposal: (id: string, accept: boolean) => { pressed.push([id, accept]); return refuse ? Promise.reject(new Error("no")) : new Promise(() => {}); } } as any);
+    const view1 = await mount(view({ layout, proposals: [proposal] }));
+    try {
+      const card = view1.container.querySelector('[data-proposal="prop1"]')!;
+      expect(card.querySelector("[data-proposal-reason]")!.textContent).toBe("Both are the ship flow");
+      // Each priority it names shows a proposal is pending; the others do not.
+      expect(["pri-1", "pri-2", "pri-3", "pri-4", "pri-5"].filter((id) => block(view1.container, id).querySelector("[data-priority-head] [data-merge-pending]"))).toEqual(["pri-2", "pri-4"]);
+      expect(block(view1.container, "pri-4").querySelector("[data-merge-pending]")!.getAttribute("title")).toContain("merge into #2 One simple ship flow");
+      const accept = card.querySelector("[data-proposal-accept]") as HTMLButtonElement;
+      if (layout === "phone") for (const b of card.querySelectorAll("button")) expect(b.className).toContain("h-11");
+      // A refused answer brings the card back; an answer on its way takes it away at once.
+      refuse = true;
+      await (React as any).act(async () => accept.click());
+      expect(view1.container.querySelector('[data-proposal="prop1"]')).not.toBeNull();
+      refuse = false;
+      await (React as any).act(async () => (view1.container.querySelector("[data-proposal-reject]") as HTMLButtonElement).click());
+      expect(pressed).toEqual([["prop1", true], ["prop1", false]]);
+      expect(view1.container.querySelector("[data-proposals]")).toBeNull();
+    } finally {
+      await view1.unmount();
+    }
+  }
+  useInboxStore.setState({ answerPriorityProposal: real } as any);
+  // No proposal, no card.
+  const none = await mount(view());
+  try {
+    expect(none.container.querySelector("[data-proposals]")).toBeNull();
+  } finally {
+    await none.unmount();
+  }
+}, 60_000);
+
 test("compact at a phone's and Daylight's width: the title keeps 8rem and breaks between words; today and Stalled leave its cell", async () => {
   const stalled = row(8, "Trustworthy eval suite", 1, [step("s1", "Grader faults", "critical")], { first_seen_at: NOW - 30 * DAY });
   for (const layout of ["phone", "wide"] as const) {

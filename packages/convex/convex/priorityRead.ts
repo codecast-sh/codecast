@@ -12,7 +12,8 @@ import { passTiming } from "./priorityPassSweep";
 import { isSessionOwner } from "./sessionOwners";
 import { rowPinPredatesTurn } from "@codecast/shared/contracts/inboxPlacement";
 import { attributePlans, isWorkflowSession, orderSessions, type PlanFacts } from "@codecast/shared/contracts/priorityDerive";
-import type { PriorityCorrection, PriorityDetail, PriorityLinkedSession, PriorityLinkWhy, PriorityList, PriorityMilestoneLinks, PriorityPlanRef, PriorityRow, PrioritySession, PrioritySessionState, PriorityStatus, PriorityStep } from "@codecast/shared/contracts/priorities";
+import type { PriorityCorrection, PriorityDetail, PriorityLinkedSession, PriorityLinkWhy, PriorityList, PriorityMergeProposal, PriorityMilestoneLinks, PriorityPlanRef, PriorityRow, PrioritySession, PrioritySessionState, PriorityStatus, PriorityStep } from "@codecast/shared/contracts/priorities";
+import { proposalStale } from "./lib/priorityPass";
 import type { Doc, Id } from "./_generated/dataModel";
 import { planFactsOf } from "./lib/priorityLinks";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
@@ -443,7 +444,38 @@ export async function listFor(ctx: Ctx, viewer: Id<"users">, args: { workspace?:
     const row = rowFor(viewer, p, names.get(String(p.user_id)) ?? "", (isOwner(viewer, p) ? positions.get(String(p._id)) ?? null : null), steps, await mappedSessions(r, p, listRead(viewer, p)), await correctionPending(ctx, viewer, p), LIST_SESSIONS);
     out.push(linked ? { ...row, ...linked } : row);
   }
-  return { priorities: out, own_truncated, teammates_truncated, ...(args.workspace ? await passTiming(ctx, viewer, args.workspace, Date.now()) : { behind_by_ms: null, next_pass_at: null }) };
+  const proposals = await proposalsFor(ctx, r, viewer, args.workspace, (id) => positions.get(id) ?? null);
+  return { priorities: out, own_truncated, teammates_truncated, ...(args.workspace ? await passTiming(ctx, viewer, args.workspace, Date.now()) : { behind_by_ms: null, next_pass_at: null }), proposals };
+}
+
+/** The most of the viewer's pending merge proposals a list reads in one workspace, oldest first. */
+export const PROPOSALS_LISTED = 20;
+
+/**
+ * The viewer's own merge proposals waiting on them in one workspace (or every
+ * one of theirs with the feature on), oldest first: owner-only, as their
+ * corrections are. One whose subject changed since (proposalStale) is left
+ * out: it never applies, and the next pass marks it stale. `rankOf` is the
+ * list's own position of a priority by id.
+ */
+async function proposalsFor(ctx: Ctx, r: Reader, viewer: Id<"users">, workspace: string | undefined, rankOf: (id: string) => number | null): Promise<PriorityMergeProposal[]> {
+  const featureOn = featureCheck(ctx);
+  const out: PriorityMergeProposal[] = [];
+  for (const key of workspace ? (r.held.has(workspace) ? [workspace] : []) : [...r.held]) {
+    if (!(await featureOn(key))) continue;
+    const rows: Doc<"priority_proposals">[] = await ctx.db
+      .query("priority_proposals")
+      .withIndex("by_user_workspace_status", (q: any) => q.eq("user_id", viewer).eq("workspace", key).eq("status", "pending"))
+      .take(PROPOSALS_LISTED);
+    for (const p of rows) {
+      const gone: Priority | null = await ctx.db.get(p.priority_id);
+      const into: Priority | null = await ctx.db.get(p.into_id);
+      if (proposalStale(gone, into, { user_id: viewer, workspace: key })) continue;
+      const side = (x: Priority) => ({ short_id: x.short_id, title: x.title, rank: x.status === "active" ? rankOf(String(x._id)) : null });
+      out.push({ _id: p._id, priority: side(gone!), into: side(into!), reason: p.reason, created_at: p.created_at });
+    }
+  }
+  return out;
 }
 
 async function byShortId(ctx: Ctx, shortId: string): Promise<Priority | null> {

@@ -267,6 +267,7 @@ function plans() {
     byWorkspace("session_flows", "by_workspace_hash"),
     byWorkspace("priorities", "by_workspace_status"),
     byWorkspace("priority_corrections", "by_workspace"),
+    byWorkspace("priority_proposals", "by_workspace"),
     byWorkspace("landed_changes", "by_workspace_landed"),
     byWorkspace("project_memory", "by_workspace_project"),
     byWorkspace("project_expectations", "by_workspace_prefix"),

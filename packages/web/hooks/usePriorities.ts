@@ -17,7 +17,7 @@ import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useServerAuthSettled } from "./useServerAuthSettled";
 import { useCoarseNow } from "./useCoarseNow";
 import { useActiveWorkspaceKey, useWorkspaceCollection } from "./useWorkspaceCollection";
-import type { PriorityList } from "@codecast/shared/contracts/priorities";
+import type { PriorityList, PriorityMergeProposal } from "@codecast/shared/contracts/priorities";
 
 const api = _api as any;
 
@@ -44,6 +44,16 @@ export function usePriorityListMeta(): PriorityListMeta {
   const settled = useServerAuthSettled();
   const { data } = useQueryNoThrow(api.priorities.list, settled && workspace ? { workspace } : "skip", { remember: true });
   return listMeta(data as PriorityList | null | undefined);
+}
+
+const NO_PROPOSALS: PriorityMergeProposal[] = [];
+
+/** The viewer's merge proposals waiting on them in the active workspace, off the same list answer (one subscription). */
+export function usePriorityProposals(): PriorityMergeProposal[] {
+  const workspace = useActiveWorkspaceKey();
+  const settled = useServerAuthSettled();
+  const { data } = useQueryNoThrow(api.priorities.list, settled && workspace ? { workspace } : "skip", { remember: true });
+  return (data as PriorityList | null | undefined)?.proposals ?? NO_PROPOSALS;
 }
 
 /** Reader: the active workspace's priorities, waking on what a row paints, each rank read live from its place. */

@@ -9,7 +9,9 @@
 // the pass (lib/priorityPass.ts, priorityPassRun applyPlan) never overrides it:
 // a placed rank; a milestone's tier, done state, title and drop (steps are milestones);
 // set aside, done and merge; a session's move and "not this". Corrections are
-// the person's words to the pass, read by every later pass until deleted.
+// the person's words to the pass, read by every later pass until deleted. A
+// merge the pass would make waits for the owner as a proposal they accept or
+// reject (priorityWrite doAnswerProposal).
 
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
@@ -24,7 +26,7 @@ import type { PriorityDetail, PriorityHistory, PriorityList, PriorityPinLine } f
 import type { Doc, Id } from "./_generated/dataModel";
 import { type Priority, type Result, cliWorkspace, criticalCounts, isOwner, listFor, positionOf, showFor, tokenUser } from "./priorityRead";
 import { historyFor } from "./priorityHistory";
-import { type MilestoneChange, doCorrect, doCorrectionDelete, doMerge, doMilestone, doMove, doPriorityDone, doSessionMove, doSessionNotThis, doSetAside, doUndoPriorityDone } from "./priorityWrite";
+import { type MilestoneChange, doAnswerProposal, doCorrect, doCorrectionDelete, doMerge, doMilestone, doMove, doPriorityDone, doSessionMove, doSessionNotThis, doSetAside, doUndoPriorityDone } from "./priorityWrite";
 
 function orThrow<T>(res: Result<T>): T {
   if (res && typeof res === "object" && "error" in res) throw new Error(res.error);
@@ -193,6 +195,12 @@ export const deleteCorrection = mutation({
   handler: async (ctx, args) => orThrow(await doCorrectionDelete(ctx, await authed(ctx), args.correction_id)),
 });
 
+/** The person answers a merge the pass proposed (PriorityMergeProposal): accept merges as the pass would have, reject keeps them apart for good. */
+export const answerProposal = mutation({
+  args: { proposal: v.string(), accept: v.boolean() },
+  handler: async (ctx, args) => orThrow(await doAnswerProposal(ctx, await authed(ctx), args.proposal, args.accept)),
+});
+
 export const setAside = mutation({
   args: { short_id: v.string() },
   handler: async (ctx, args) => orThrow(await doSetAside(ctx, await authed(ctx), args.short_id, true)),
@@ -315,6 +323,16 @@ export const cliDeleteCorrection = mutation({
     const viewer = await tokenUser(ctx, args.api_token);
     if (!viewer) return { error: "Unauthorized" };
     return doCorrectionDelete(ctx, viewer, args.correction_id);
+  },
+});
+
+/** `cast priorities accept|reject <proposal>`: by its id, or by a priority one pending proposal names. */
+export const cliAnswerProposal = mutation({
+  args: { api_token: v.string(), proposal: v.string(), accept: v.boolean() },
+  handler: async (ctx, args) => {
+    const viewer = await tokenUser(ctx, args.api_token);
+    if (!viewer) return { error: "Unauthorized" };
+    return doAnswerProposal(ctx, viewer, args.proposal, args.accept);
   },
 });
 

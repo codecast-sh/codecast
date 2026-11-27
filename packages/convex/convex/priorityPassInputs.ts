@@ -17,7 +17,7 @@ import { isStandingSession } from "./lib/orgOwnership";
 import { isRunLog, parseRoomKey } from "@codecast/shared/contracts";
 import { vendorRefusalFromDb } from "./lib/vendorGuard";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
-import { PRIORITY_PASS_CAPS, type PassCall, type PassCorrection, type PassPriority, type PassSession, type PassTask, type PriorityPassInput } from "./lib/priorityPass";
+import { PRIORITY_PASS_CAPS, type PassCall, type PassCorrection, type PassPriority, type PassRefusedMerge, type PassSession, type PassTask, type PriorityPassInput } from "./lib/priorityPass";
 
 export const DAY = 86_400_000;
 export const MINUTE = 60_000;
@@ -300,6 +300,58 @@ async function correctionsFor(ctx: { db: any }, userId: Id<"users">, workspace: 
   return { input, pending, superseded };
 }
 
+/** A priority row as the pass reads it, with the sessions shown under it; `left`: it lost a session from view, so it needs a rewrite. */
+export function passPriorityOf(p: Doc<"priorities">, sessions: PassPriority["sessions"], left = false): PassPriority {
+  return {
+    short_id: p.short_id,
+    title: p.title,
+    summary: p.summary,
+    status: p.status as PassPriority["status"],
+    person_pos: p.person_pos ?? null,
+    ai_rank: p.ai_rank ?? null,
+    ...(p.status_set_by ? { status_set_by: p.status_set_by } : {}),
+    serves: p.serves ?? null,
+    steps: p.steps,
+    last_active_at: p.last_active_at,
+    sessions,
+    ...(p.needs_rewrite || left ? { needs_rewrite: true } : {}),
+    ...(p.step_key_max ? { step_key_max: p.step_key_max } : {}),
+  };
+}
+
+/** The tasks the priorities' milestones name, in the workspace, with their status now. */
+export async function stepTasksOf(ctx: { db: any }, rows: Doc<"priorities">[], workspace: string): Promise<PassTask[]> {
+  const ids = new Set(rows.flatMap((p) => p.steps.flatMap((s) => s.refs.filter((r) => r.kind === "task").map((r) => r.id))));
+  const out: PassTask[] = [];
+  for (const short_id of ids) {
+    const t: Doc<"tasks"> | null = await ctx.db.query("tasks").withIndex("by_short_id", (q: any) => q.eq("short_id", short_id)).first();
+    if (t && t.workspace === workspace) out.push({ short_id: t.short_id, title: t.title, status: t.status });
+  }
+  return out;
+}
+
+/** The most merges the person rejected one pass reads, newest first. */
+export const REFUSED_MERGES_READ = 100;
+
+/**
+ * The merges the person rejected in the workspace (priority_proposals), oldest
+ * first: every later pass reads each pair as two things. A pair one of whose
+ * priorities is gone or merged since says nothing any more.
+ */
+async function refusedMergesFor(ctx: { db: any }, userId: Id<"users">, workspace: string): Promise<PassRefusedMerge[]> {
+  const rows: Doc<"priority_proposals">[] = await ctx.db
+    .query("priority_proposals")
+    .withIndex("by_user_workspace_status", (q: any) => q.eq("user_id", userId).eq("workspace", workspace).eq("status", "rejected"))
+    .order("desc")
+    .take(REFUSED_MERGES_READ);
+  const out: PassRefusedMerge[] = [];
+  for (const r of rows.reverse()) {
+    const [a, b]: Array<Doc<"priorities"> | null> = [await ctx.db.get(r.priority_id), await ctx.db.get(r.into_id)];
+    if (a && b && a.status !== "merged" && b.status !== "merged") out.push({ priority: a.short_id, into: b.short_id });
+  }
+  return out;
+}
+
 /** A standing role's seat, a worker another session started (with its parent's id), or the person's own session. */
 async function sessionKind(ctx: { db: any }, conv: Doc<"conversations">, name: (conv: Doc<"conversations">) => Promise<string>): Promise<Pick<PassSession, "kind" | "parent">> {
   if (isStandingSession(conv)) return { kind: "role" };
@@ -507,7 +559,6 @@ export const passInputs = internalQuery({
     // The person's priorities in this workspace (read above), with their newest sessions.
     const priorities: PassPriority[] = [];
     const strays: Id<"conversations">[] = [];
-    const stepTaskIds = new Set<string>();
     for (const p of rows) {
       const held: Doc<"conversations">[] = await ctx.db
         .query("conversations")
@@ -530,29 +581,10 @@ export const passInputs = internalQuery({
           ...(c.priority_set_by === "person" ? { by_person: true } : c.priority_set_by === "link" || c.priority_set_by === "classifier" ? { linked_by: c.priority_set_by } : {}),
         });
       }
-      priorities.push({
-        short_id: p.short_id,
-        title: p.title,
-        summary: p.summary,
-        status: p.status as PassPriority["status"],
-        person_pos: p.person_pos ?? null,
-        ai_rank: p.ai_rank ?? null,
-        ...(p.status_set_by ? { status_set_by: p.status_set_by } : {}),
-        serves: p.serves ?? null,
-        steps: p.steps,
-        last_active_at: p.last_active_at,
-        sessions: sessionsOf,
-        // Its title and summary may come from a session it no longer holds: the pass writes them again.
-        ...(p.needs_rewrite || left ? { needs_rewrite: true } : {}),
-        ...(p.step_key_max ? { step_key_max: p.step_key_max } : {}),
-      });
-      for (const s of p.steps) for (const r of s.refs) if (r.kind === "task") stepTaskIds.add(r.id);
+      // Its title and summary may come from a session it no longer holds: the pass writes them again.
+      priorities.push(passPriorityOf(p, sessionsOf, left));
     }
-    const step_tasks: PassTask[] = [];
-    for (const short_id of stepTaskIds) {
-      const t: Doc<"tasks"> | null = await ctx.db.query("tasks").withIndex("by_short_id", (q: any) => q.eq("short_id", short_id)).first();
-      if (t && t.workspace === args.workspace) step_tasks.push({ short_id: t.short_id, title: t.title, status: t.status });
-    }
+    const step_tasks = await stepTasksOf(ctx, rows, args.workspace);
 
     const goals: Doc<"initiatives">[] = await ctx.db.query("initiatives").withIndex("by_workspace", (q: any) => q.eq("workspace", args.workspace)).take(INITIATIVES_READ);
     const initiatives = goals.filter((g) => g.status === "active" || g.status === "planned").map((g) => ({ short_id: g.short_id, title: g.title }));
@@ -561,6 +593,7 @@ export const passInputs = internalQuery({
     const ws = parseWorkspaceKey(args.workspace);
     const team: Doc<"teams"> | null = ws?.type === "team" ? await ctx.db.get(ws.teamId) : null;
     const corrections = await correctionsFor(ctx, args.user_id, args.workspace, shortId);
+    const refused_merges = await refusedMergesFor(ctx, args.user_id, args.workspace);
     const calls = team ? await callsIn(ctx, vis, args.user_id, team._id, overlap ? cursor_at - OVERLAP_MS : cursor_at, until, (landed) => fresh(landed, landed)) : [];
     return {
       input: {
@@ -574,6 +607,7 @@ export const passInputs = internalQuery({
         sessions,
         calls,
         corrections: corrections.input,
+        ...(refused_merges.length ? { refused_merges } : {}),
       },
       conversations: names.ids,
       cursor_at,
