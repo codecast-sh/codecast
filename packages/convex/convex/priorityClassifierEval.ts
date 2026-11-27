@@ -44,7 +44,7 @@ const EVAL_CHUNKS_START_WITHIN_MS = 3 * MINUTE;
 export type ClassifierEvalState = { cursor_at: number; priorities: PassPriority[] };
 
 /**
- * What live would ask about one session, in order: its first title's or first pin's ask, then its first pin's after a "new".
+ * What live asks about one session, in order: at each of the person's typed messages and each pin, until an answer files it.
  * With `every_message`, an ask at each typed message instead (a cadence to measure, not what live does), with `chars`
  * typed since the previous ask (this one's included). Every replayed ask sees the session's first generated title, the
  * oldest kept: live would see a later title once one is written (sessionFor `asOf`).
@@ -84,9 +84,8 @@ function inheritsFrom(conv: Doc<"conversations">): string | null {
  * with its asks as of their moments, and each one live never asks about (a
  * spawned subagent, a workflow's session) that inherits a placement, with
  * none; each with the session it would inherit from (inheritsFrom). Also the
- * tasks the priorities name. A session's first title is taken at its first
- * typed message (title generation runs at the second message), else at its
- * first activity in the window.
+ * tasks the priorities name. A session with nothing typed or pinned in the
+ * window is asked once, at its first activity there.
  */
 export const evalFacts = internalQuery({
   args: {

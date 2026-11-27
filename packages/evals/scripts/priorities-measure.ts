@@ -14,8 +14,8 @@
 //   bun packages/evals/scripts/priorities-measure.ts --golden <path> --user <email|user id> --classifier [--holdout 4] [--model <id>]
 //     runs the per-session classifier (priorityClassifierEval:evalClassify, deployed to prod: deploy first) instead of
 //     the pass, over the same window, against the golden priorities seeded as open goals (done ones too: they were open
-//     during the window), asking about each session as live would have, when live would have (its first title or pin,
-//     and its first pin after a "new"). Every --holdout'th golden priority (4th, 8th, ...; 0 holds none out) is left out
+//     during the window), asking about each session as live would have, when live would have (each typed message and
+//     pin, until an answer files it). Every --holdout'th golden priority (4th, 8th, ...; 0 holds none out) is left out
 //     of the seed, so its sessions test "new". No judge: a seeded pri-N is its golden priority. It reports
 //       placement      sessions of seeded goals placed under their own goal
 //       new detection  sessions of held-out goals left unplaced
@@ -659,7 +659,7 @@ async function runClassifierLocal(golden: Golden, goldenPath: string, arg: (name
   const labeled = new Set([...Object.keys(golden.session_labels), ...golden.standing_sessions]);
   const factsPath = process.argv.includes('--facts') ? resolve(arg('facts').replace(/^~/, homedir())) : null;
   type Saved = { args: { from: string; to: string; workspace: string }; window_start: number; every_message?: boolean; workspaces: Array<{ workspace: string; name: string; facts: ClassifierFacts }> };
-  // first: live's cadence (the title, then the first pin after a "new"). message, or words:N: re-read the session at each
+  // first: live's cadence (each typed message and pin until an answer files it). message, or words:N: re-read the session at each
   // typed message, or once N more words have been typed, the latest read standing (needs facts read with an ask a message).
   const cadence = process.argv.includes('--cadence') ? arg('cadence') : 'first';
   const wordsPer = /^words:(\d+)$/.exec(cadence)?.[1];

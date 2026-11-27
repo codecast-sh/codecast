@@ -84,7 +84,7 @@ export type PassSession = {
   pin_events: Array<{ at: number; text: string }>;
   /** What the person typed in it, oldest first. */
   typed: Array<{ at: number; text: string }>;
-  /** The person put it on this priority (and step), or a known link or the classifier did (`by`): it stays there. */
+  /** The person put it on this priority (and step), or a known link did (`by`): it stays there. A classifier's filing is not shown as placed: the pass may move it. */
   placed?: { priority: string; step_key: string | null; by?: "link" };
   /** Priorities the person said it is not part of. */
   not_for?: string[];
