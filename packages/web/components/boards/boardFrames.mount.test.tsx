@@ -6,7 +6,7 @@ import { act } from "react";
 import { JSDOM } from "jsdom";
 import { replaceGlobals } from "../../test-helpers/globals";
 import { closeDomWindow } from "../../test-helpers/domGlobals";
-import { collapseFrameOps } from "@codecast/shared/artifacts/board";
+import { collapseFrameOps, frameCollapsed } from "@codecast/shared/artifacts/board";
 import type { BoardEl } from "./boardTypes";
 
 const dom = new JSDOM("<!doctype html><html><body></body></html>", { pretendToBeVisual: true });
@@ -46,7 +46,7 @@ mock.module("../EntityIdPill", () => ({ ...realPill, EntityIdPill: ({ shortId }:
 const { createRoot } = await import("react-dom/client");
 const { BoardElementView } = await import("./BoardElements");
 const { BoardFrameContext } = await import("../../lib/boards/frameContext");
-const { boardFolds } = await import("./boardFolds");
+const { boardFolds, foldCount } = await import("./boardFolds");
 const { hitKey } = await import("./useBoardGestures");
 const { boardSvg } = await import("./boardExport");
 const { frameAt, useFrameHover } = await import("./useFrameHover");
@@ -85,11 +85,10 @@ async function draw(els: BoardEl[], opts: { readOnly?: boolean; docId?: string }
     readOnly: !!opts.readOnly,
     reflow: (k: string) => calls.reflow.push(k),
     toggleFold: (k: string) => calls.toggleFold.push(k),
-    get: (k: string) => all.get(k),
   };
   await act(() => root.render(
     <BoardFrameContext.Provider value={actions}>
-      {els.filter((e) => e.kind !== "connector").map((e) => <BoardElementView key={e.key} el={e} editing={false} onEditInput={NOOP} onEditDone={NOOP} />)}
+      {els.filter((e) => e.kind !== "connector").map((e) => <BoardElementView key={e.key} el={e} editing={false} onEditInput={NOOP} onEditDone={NOOP} held={frameCollapsed(e) ? foldCount(e, all) : undefined} />)}
     </BoardFrameContext.Provider>,
   ));
   return calls;
@@ -158,8 +157,7 @@ describe("hover follows the pointer through the frame's box", () => {
   function Harness({ els }: { els: BoardEl[] }) {
     const hover = useFrameHover(els);
     renders++;
-    const all = new Map(els.map((e) => [e.key, e]));
-    const actions = { docId: null, readOnly: false, reflow: NOOP, toggleFold: NOOP, get: (k: string) => all.get(k) };
+    const actions = { docId: null, readOnly: false, reflow: NOOP, toggleFold: NOOP };
     return (
       <div data-root onPointerMove={(e) => hover.move({ x: e.clientX, y: e.clientY }, 1)} onPointerLeave={hover.leave}>
         <BoardFrameContext.Provider value={actions}>

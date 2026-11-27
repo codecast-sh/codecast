@@ -23,12 +23,12 @@ import {
   stickyIconHeight,
   templateOps,
   type BoardTemplate,
-  clearOffset,
   cloneOps,
   connectorGeometry,
   elbowObstacles,
   elementBounds,
   elementBox,
+  frameCollapsed,
   intersects,
   nextZ,
   readingOrder,
@@ -72,6 +72,8 @@ import { runBoardBar } from "./boardCommands";
 import { useBoardOpeningFit } from "./useBoardOpeningFit";
 import { useBoardSelectionChrome } from "./useBoardSelectionChrome";
 import { useBoardFolds } from "./useBoardFolds";
+import { foldCount } from "./boardFolds";
+import { duplicateOffset } from "./boardPlacement";
 import { BoardFrameContext } from "../../lib/boards/frameContext";
 import { useBoardFrameActions } from "./useBoardFrameActions";
 import { useFrameHover } from "./useFrameHover";
@@ -353,17 +355,7 @@ export default function BoardView({ doc, live, selection: selectionIn, setSelect
   const duplicate = () => {
     if (!selectedEls.length) return;
     const els = carriedKeys(boardView(), selection).map((k) => byKeyRef.current.get(k)!).filter(Boolean);
-    // The copy lands beside the original (a gap to its right), or the nearest clear spot from there,
-    // so neither covers the other or a neighbour.
-    const box = unionBox(els.filter((e) => e.kind !== "connector").map(elementBounds));
-    let dx = 24, dy = 24;
-    if (box) {
-      const inFrame = new Set(els.map((e) => e.key));
-      const taken = allEls().filter((e) => !inFrame.has(e.key) && e.kind !== "frame" && e.kind !== "connector" && e.kind !== "pen").map(elementBounds).concat(box);
-      const off = clearOffset({ ...box, x: box.x + box.w + 24 }, taken, 40);
-      dx = Math.round(box.w + 24 + off.x);
-      dy = Math.round(off.y);
-    }
+    const { box, dx, dy } = duplicateOffset(els, allEls(), foldsRef.current.hidden);
     const { ops, map } = cloneOps(els, dx, dy, nextZ({ elements: allEls() }), (k) => byKeyRef.current.has(k));
     live.apply(ops);
     // A copy that landed past the edge of the view is brought into it, beside its original.
@@ -662,6 +654,8 @@ export default function BoardView({ doc, live, selection: selectionIn, setSelect
               el={el}
               interactive={el.kind === "card" && selection.length === 1 && selection[0] === el.key}
               hovered={el.kind === "frame" && frameHover.hovered === el.key}
+              selected={el.kind === "frame" && selection.includes(el.key)}
+              held={frameCollapsed(el) ? foldCount(el, byKey) : undefined}
               {...(el.kind === "page" ? { pageLive: livePage === el.key, onPageLive } : null)}
               {...(editing === el.key ? editHandlers : NOOP_EDIT)}
             />

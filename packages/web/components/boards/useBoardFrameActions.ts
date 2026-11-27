@@ -37,7 +37,6 @@ export function useBoardFrameActions(opts: {
     readOnly,
     reflow: (k) => current.current.reflow(k),
     toggleFold: (k) => current.current.toggleFold(k),
-    get: (k) => byKeyRef.current.get(k),
-  }), [docId, readOnly, byKeyRef]);
+  }), [docId, readOnly]);
   return { boardView, withHeld, organize, frameActions };
 }

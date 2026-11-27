@@ -8,7 +8,6 @@ import {
   connectorGeometry,
   labelSpot,
   elementBox,
-  foldedCount,
   frameCollapsed,
   shapeFontSize,
   shapeOutline,
@@ -203,7 +202,16 @@ const ShapeView = memo(function ShapeView({ el, editing, onEditInput, onEditDone
   );
 });
 
-const FrameView = memo(function FrameView({ el, editing, onEditInput, onEditDone, hovered }: ViewProps & { hovered?: boolean }) {
+type FrameProps = {
+  /** A frame the pointer is over: its controls show. */
+  hovered?: boolean;
+  /** A selected frame shows its controls too: a tap selects, and a touch screen has no hover. */
+  selected?: boolean;
+  /** A folded frame's "(n)", counted from the live board by its drawer (boardFolds' foldCount), so a held element added or deleted redraws the pill. */
+  held?: number;
+};
+
+const FrameView = memo(function FrameView({ el, editing, onEditInput, onEditDone, hovered, selected, held }: ViewProps & FrameProps) {
   const title = typeof el.title === "string" ? el.title : "";
   const folded = frameCollapsed(el);
   const actions = useContext(BoardFrameContext);
@@ -211,7 +219,6 @@ const FrameView = memo(function FrameView({ el, editing, onEditInput, onEditDone
   const label = editing ? <InlineEditor value={title} className="board-frame-title-edit" onInput={onEditInput} onDone={onEditDone} selectAll singleLine /> : <FrameTitle el={el} title={title} />;
   if (folded) {
     // A folded frame is a pill, pressed and dragged as a whole (no data-frame: its body is not canvas).
-    const n = foldedCount(el, actions.get);
     return (
       <div data-key={el.key} data-folded className="board-el board-frame board-frame-pill" style={boxStyle(el, { background: tint(el.color ?? "gray", 10), borderColor: tint(el.color ?? "gray", 34), color })}>
         {actions.readOnly ? (
@@ -222,12 +229,12 @@ const FrameView = memo(function FrameView({ el, editing, onEditInput, onEditDone
           </button>
         )}
         <span className="board-frame-pill-title">{label}</span>
-        <span className="board-frame-pill-count">({n})</span>
+        <span className="board-frame-pill-count">({held ?? 0})</span>
       </div>
     );
   }
   return (
-    <div data-key={el.key} data-frame className={`board-el board-frame${hovered ? " is-hovered" : ""}`} style={boxStyle(el, { background: tint(el.color ?? "gray", 7), borderColor: tint(el.color ?? "gray", 34) })}>
+    <div data-key={el.key} data-frame className={`board-el board-frame${hovered ? " is-hovered" : ""}${selected ? " is-selected" : ""}`} style={boxStyle(el, { background: tint(el.color ?? "gray", 7), borderColor: tint(el.color ?? "gray", 34) })}>
       <div className="board-frame-title" data-part="frame-title" style={{ color }}>{label}</div>
       {!editing && <FrameTools el={el} />}
     </div>
@@ -385,7 +392,7 @@ const PageView = memo(function PageView({ el, pageLive, onPageLive }: { el: Boar
 });
 
 /** One element, dispatched by kind. Connectors are drawn by ConnectorView with their ends. */
-export const BoardElementView = memo(function BoardElementView(props: ViewProps & PageLiveProps & { interactive?: boolean; /** A frame the pointer is over: its controls show. */ hovered?: boolean }) {
+export const BoardElementView = memo(function BoardElementView(props: ViewProps & PageLiveProps & FrameProps & { interactive?: boolean }) {
   switch (props.el.kind) {
     case "sticky": return <StickyView {...props} />;
     case "text": return <TextView {...props} />;

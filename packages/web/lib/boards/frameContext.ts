@@ -4,7 +4,6 @@
 // exports only components (a Fast Refresh boundary), as lib/calls/stagePins
 // holds the stage's pin context.
 import { createContext } from "react";
-import type { BoardEl } from "../../components/boards/boardTypes";
 
 export type BoardFrameActions = {
   /** The board's doc id: a chip's object made in the call whose board this is reads "new". */
@@ -13,8 +12,6 @@ export type BoardFrameActions = {
   reflow(key: string): void;
   /** Collapse an open frame, expand a folded one. */
   toggleFold(key: string): void;
-  /** The board's element by key, folded away or not: the pill counts what it holds. */
-  get(key: string): BoardEl | undefined;
 };
 
 export const BoardFrameContext = createContext<BoardFrameActions>({
@@ -22,5 +19,4 @@ export const BoardFrameContext = createContext<BoardFrameActions>({
   readOnly: true,
   reflow: () => {},
   toggleFold: () => {},
-  get: () => undefined,
 });

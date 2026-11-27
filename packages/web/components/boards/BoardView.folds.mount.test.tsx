@@ -1,8 +1,11 @@
 // The whole board view with a fold in it (pl-1145): select-all, a selection
 // made before the fold and a comment on a held element all leave what the
-// fold hides alone. Fails if BoardView stops reading the shown set.
+// fold hides alone. Fails if BoardView stops reading the shown set. Also: the
+// pill's count follows the live board, a duplicated pill lands by its own box,
+// and a tapped frame shows its tools with no hover.
 import { afterAll, describe, expect, mock, test } from "bun:test";
 import { act, useState } from "react";
+import { readFileSync } from "node:fs";
 import { JSDOM } from "jsdom";
 import { replaceGlobals } from "../../test-helpers/globals";
 import { closeDomWindow } from "../../test-helpers/domGlobals";
@@ -64,8 +67,11 @@ const live = {
   draft: { active: false },
   canUndo: false,
   canRedo: false,
-  apply: NOOP, preview: NOOP, commit: NOOP, undo: NOOP, redo: NOOP, setPresence: NOOP, comment: NOOP,
+  apply: (ops: any[]) => { applied.push(...ops); },
+  preview: NOOP, commit: NOOP, undo: NOOP, redo: NOOP, setPresence: NOOP, comment: NOOP,
 } as any;
+/** Every op the board applied. */
+let applied: any[] = [];
 let selected: string[] = [];
 /** Every selection the board asked for, in order: a held key in any of them is a stale pick that escaped. */
 let asked: string[][] = [];
@@ -130,5 +136,82 @@ describe("a board with a fold", () => {
     // The pill's top-right corner, not the held sticky's spot (100, 100) inside the fold.
     expect(parseFloat(pin.style.left)).toBe(Number(pill.x) + Number(pill.w) - 8);
     expect(parseFloat(pin.style.top)).toBe(Number(pill.y) - 8);
+  });
+});
+
+describe("a pill on the live board", () => {
+  test("its count follows what it holds as held elements are deleted and come back", async () => {
+    elements = folded;
+    await act(() => root.render(<Host initial={[]} />));
+    const count = () => q('[data-key="f"] .board-frame-pill-count')!.textContent;
+    expect(count()).toBe("(2)");
+    elements = folded.filter((e) => e.key !== "a");
+    await act(() => root.render(<Host initial={[]} />));
+    expect(count()).toBe("(1)");
+    elements = folded;
+    await act(() => root.render(<Host initial={[]} />));
+    expect(count()).toBe("(2)");
+  });
+
+  test("duplicated, it lands beside its own box, not beside the footprint of what it holds", async () => {
+    elements = folded;
+    // A fresh mount: the host keeps its selection across renders.
+    await act(() => root.render(<Host key="dup" initial={["f"]} />));
+    expect(selected).toEqual(["f"]);
+    applied = [];
+    const board = q("[data-board]")!;
+    await act(() => {
+      board.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "d", metaKey: true, ctrlKey: true, bubbles: true }));
+    });
+    const copy = applied.find((o) => o.put?.kind === "frame");
+    expect(copy).toBeDefined();
+    // A gap of 24 to the pill's right, at its height: the held stickies (down to y 224) and the sticky
+    // outside at x 900 are not in the way of a 48-tall pill.
+    expect(copy.put.x).toBe(Math.round(Number(pill.x) + Number(pill.w) + 24));
+    expect(copy.put.y).toBe(Number(pill.y));
+    // What it holds is copied with it, by the same offset, and folded into the copy.
+    const dx = copy.put.x - Number(pill.x);
+    const heldCopies = applied.filter((o) => o.put?.kind === "sticky");
+    expect(heldCopies.map((o) => o.put.x).sort((m: number, n: number) => m - n)).toEqual([40 + dx, 300 + dx]);
+    expect([...copy.put.collapsed.holds].sort()).toEqual(heldCopies.map((o) => o.k).sort());
+  });
+});
+
+describe("an open frame on a touch screen", () => {
+  const style = document.createElement("style");
+  style.textContent = readFileSync(new URL("./board.css", import.meta.url), "utf8");
+  document.head.appendChild(style);
+  const tap = (node: HTMLElement, type: string) => {
+    const e = new dom.window.MouseEvent(type, { bubbles: true, cancelable: true, button: 0, clientX: 100, clientY: 10 });
+    Object.defineProperty(e, "pointerType", { value: "touch" });
+    Object.defineProperty(e, "pointerId", { value: 7 });
+    node.dispatchEvent(e);
+  };
+  const tools = () => q('[data-key="f"] > .board-frame-tools')!;
+
+  test("a tap on its title selects it and shows Reflow and Collapse, with no hover", async () => {
+    elements = open;
+    await act(() => root.render(<Host key="tap" initial={[]} />));
+    expect(selected).toEqual([]);
+    expect(q('[data-key="f"]')!.classList.contains("is-hovered")).toBe(false);
+    expect(getComputedStyle(tools()).opacity).toBe("0");
+    const title = q('[data-key="f"] [data-part=frame-title]')!;
+    await act(() => { tap(title, "pointerdown"); tap(title, "pointerup"); });
+    expect(selected).toEqual(["f"]);
+    expect(q('[data-key="f"]')!.classList.contains("is-hovered")).toBe(false);
+    expect(q('[data-key="f"]')!.classList.contains("is-selected")).toBe(true);
+    expect(getComputedStyle(tools()).opacity).toBe("1");
+    expect(getComputedStyle(tools()).pointerEvents).toBe("auto");
+    expect(tools().querySelector('[aria-label="Reflow frame"]')).not.toBeNull();
+    expect(tools().querySelector('[aria-label="Collapse frame"]')).not.toBeNull();
+  });
+
+  test("its tool buttons are 44px on a coarse pointer", () => {
+    const sheet = style.sheet!;
+    const coarse = [...sheet.cssRules].filter((r): r is CSSMediaRule => (r as CSSMediaRule).media?.mediaText.includes("pointer: coarse"));
+    const rule = coarse.flatMap((m) => [...m.cssRules] as CSSStyleRule[]).find((r) => r.selectorText === ".board-frame-tools .board-bar-btn");
+    expect(rule).toBeDefined();
+    expect(rule!.style.minWidth).toBe("44px");
+    expect(rule!.style.height).toBe("44px");
   });
 });

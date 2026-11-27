@@ -3,7 +3,7 @@
 // wraps at the frame's edge instead of running into the next frame, and the
 // frame grows to hold the new sticky, as FigJam sections do. On an open
 // canvas a row wraps after four.
-import { contains, elementBounds, elementBox, type Box } from "@codecast/shared/artifacts/board";
+import { clearOffset, contains, elementBounds, elementBox, frameCollapsed, unionBox, type Box } from "@codecast/shared/artifacts/board";
 import type { BoardEl } from "./boardTypes";
 
 const GAP = 24;
@@ -37,4 +37,19 @@ export function nextStickySpot(cur: Box, h: number, dir: 1 | -1, els: Iterable<B
   }
   const bottom = spot.y + h + GAP;
   return frame && fb && bottom > fb.y + fb.h ? { ...spot, growFrame: { key: frame.key, h: Math.round(bottom - fb.y) } } : spot;
+}
+
+/**
+ * Where a duplicate of `els` lands: beside the original (a gap to its right), or the nearest clear
+ * spot from there, so neither covers the other or a neighbour. Both read what the canvas draws
+ * (`hidden`: what folds hold), so a pill is placed by its own box, never by the footprint of what it holds.
+ */
+export function duplicateOffset(els: readonly BoardEl[], all: readonly BoardEl[], hidden: ReadonlySet<string>): { box: Box | null; dx: number; dy: number } {
+  const box = unionBox(els.filter((e) => e.kind !== "connector" && !hidden.has(e.key)).map(elementBounds));
+  if (!box) return { box, dx: GAP, dy: GAP };
+  const moving = new Set(els.map((e) => e.key));
+  // An open frame is room to land in; a pill is a thing on the canvas.
+  const taken = all.filter((e) => !moving.has(e.key) && !hidden.has(e.key) && (e.kind !== "frame" || frameCollapsed(e)) && e.kind !== "connector" && e.kind !== "pen").map(elementBounds).concat(box);
+  const off = clearOffset({ ...box, x: box.x + box.w + GAP }, taken, 40);
+  return { box, dx: Math.round(box.w + GAP + off.x), dy: Math.round(off.y) };
 }
