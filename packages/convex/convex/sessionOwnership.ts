@@ -40,8 +40,7 @@ import { findOwnableConversation, personName, roleMayHoldSession, tellSession } 
 import { reportsToKey, reportsToLine, reportsToOf, type ReportsTo } from "./lib/reportsTo";
 import { notPriorityCard } from "./lib/priorityCardAccess";
 import { tellParentIfReleased } from "./lib/inProcessTakeover";
-export { reportsToLine, type ReportsTo };
-export { personName, roleMayHoldSession };
+export { reportsToLine, type ReportsTo, personName, roleMayHoldSession };
 import { labelsOf, noteOrgChange, rememberOrgRecord, roleSubject, sessionParent, sessionSubject, whereOfRole, whereOfSession, withOrgChange } from "./lib/orgChangeLog";
 
 // Session OWNERS — the humans whose inboxes a session appears in and who may
