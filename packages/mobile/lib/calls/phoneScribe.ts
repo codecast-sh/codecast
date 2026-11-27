@@ -4,7 +4,6 @@
 // scribe engine web runs, on the native mic tap (asrCapture.openMicTap), and
 // decides when with phoneScribeRule. A module singleton beside callManager,
 // so it keeps going with the call screen closed and the phone locked.
-import { makeFunctionReference } from "convex/server";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { openAsrPcmSession } from "@codecast/web/lib/calls/asrPipe";
@@ -14,10 +13,6 @@ import { convex } from "../convex";
 import { openMicTap, type MicTap } from "../asrCapture";
 import { getCallSnapshot, subscribeCall } from "./callManager";
 import { decidePhoneScribe } from "./phoneScribeRule";
-
-// Hands the scribe seat back when another person sits down. A reference by
-// name until transcripts.releaseScribe is in this tree's generated api.
-const releaseScribe = makeFunctionReference<"mutation", { room_key: string }>("transcripts:releaseScribe");
 
 const engine = createScribeEngine();
 let watchedRoom: string | null = null;
@@ -121,7 +116,7 @@ async function release(roomKey: string): Promise<void> {
     tap = null;
     await engine.stop({ keepLive: true, graceful: true });
     if (id) await convex.mutation(api.transcripts.flush, { transcript_id: id as Id<"transcripts"> }).catch(() => {});
-    await convex.mutation(releaseScribe, { room_key: roomKey }).catch(() => {});
+    await convex.mutation(api.transcripts.releaseScribe, { room_key: roomKey }).catch(() => {});
   } finally {
     busy = false;
   }
@@ -142,7 +137,7 @@ async function begin(roomKey: string, meId: string): Promise<void> {
       micTap?.close();
       if (!micTap) tapUnavailable = true;
       await engine.stop({ keepLive: true });
-      if (!micTap) await convex.mutation(releaseScribe, { room_key: roomKey }).catch(() => {});
+      if (!micTap) await convex.mutation(api.transcripts.releaseScribe, { room_key: roomKey }).catch(() => {});
       return;
     }
     tap = micTap;
