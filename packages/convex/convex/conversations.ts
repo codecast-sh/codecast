@@ -13693,7 +13693,8 @@ export const updateSessionId = mutation({
     const patch: Record<string, any> = { session_id: args.session_id };
     // A Claude Code subagent resumed under a UUID of its own (the daemon's
     // promotion, subagentPromotion.ts) runs in its own process from now on.
-    if (conv.agent_type === "claude_code" && conv.session_id && isClaudeSubagentSessionId(conv.session_id) && !isClaudeSubagentSessionId(args.session_id)) {
+    const subagentId = (session_id: string) => conv.agent_type === "claude_code" && legacyRunsInParent({ agent_type: conv.agent_type, session_id });
+    if (subagentId(conv.session_id ?? "") && !subagentId(args.session_id)) {
       patch.runs_in_parent = false;
     }
     if (args.project_path) patch.project_path = args.project_path;

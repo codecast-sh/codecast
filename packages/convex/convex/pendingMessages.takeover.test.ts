@@ -1,7 +1,7 @@
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { convexTest } from "convex-test";
 import schema from "./schema";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import { hashToken } from "./apiTokens";
 import { allModules } from "./testModules.testkit";
 
@@ -14,15 +14,15 @@ setDefaultTimeout(60_000);
 const TOKEN = "takeover-token";
 const AGENT = "a8665f73ab2350b5e";
 
-async function world(opts: { owners?: boolean } = {}) {
+async function world(opts: { owners?: boolean; team?: boolean } = {}) {
   const t = convexTest(schema, allModules);
   const ids = await t.run(async (ctx) => {
     const now = Date.now();
-    const me = await ctx.db.insert("users", { name: "Jason", emailVerificationTime: 1 } as any);
+    const me = await ctx.db.insert("users", { name: "Jason", emailVerificationTime: 1, notifications_enabled: true, push_token: "tok-me" } as any);
     await ctx.db.insert("api_tokens", { user_id: me, token_hash: await hashToken(TOKEN), name: "cli", created_at: now, last_used_at: now } as any);
     let team: any;
-    if (opts.owners) {
-      team = await ctx.db.insert("teams", { name: "Acme", features: { session_owners: true } } as any);
+    if (opts.owners || opts.team) {
+      team = await ctx.db.insert("teams", { name: "Acme", features: opts.owners ? { session_owners: true } : {} } as any);
       await ctx.db.insert("team_memberships", { user_id: me, team_id: team, role: "admin", joined_at: 1 } as any);
     }
     const base = { user_id: me, agent_type: "claude_code", project_path: "/tmp/p", started_at: now, updated_at: now, message_count: 2, status: "active", ...(team ? { team_id: team } : {}) };
@@ -124,10 +124,44 @@ describe("the daemon's rebind of a promoted child", () => {
     expect(child.session_id).toBe("5f0c3c1e-8d0a-4a51-9c6e-2b1f0e7d9a10");
     expect(child.runs_in_parent).toBe(false);
   });
+  test("a named agent's rebind clears it too", async () => {
+    const w = await world();
+    await w.t.run((ctx) => ctx.db.patch(w.ids.child, { session_id: "agent-areview-mobile-fe89e5471ddad254" } as any));
+    await w.t.mutation(api.conversations.updateSessionId, { conversation_id: w.ids.child, session_id: "5f0c3c1e-8d0a-4a51-9c6e-2b1f0e7d9a10", api_token: TOKEN });
+    expect((await w.row(w.ids.child)).runs_in_parent).toBe(false);
+  });
   test("any other rebind leaves it alone", async () => {
     const w = await world();
     await w.t.run((ctx) => ctx.db.patch(w.ids.child, { session_id: `agent-${AGENT}`, runs_in_parent: true }));
     await w.t.mutation(api.conversations.updateSessionId, { conversation_id: w.ids.child, session_id: "agent-b000000000000001", api_token: TOKEN });
     expect((await w.row(w.ids.child)).runs_in_parent).toBe(true);
+  });
+});
+
+describe("a child a person took over off the owners model", () => {
+  // The two halves of pl-1134 meet here: the takeover stamps parent_released_at,
+  // and the hearing gates stop silencing a released child.
+  test("is heard when it settles waiting, where before the takeover it stood down", async () => {
+    const w = await world({ team: true });
+    const settle = () => w.t.run(async (ctx) => {
+      const now = Date.now();
+      for (const r of await ctx.db.query("pending_messages").collect()) if (String(r.conversation_id) === String(w.ids.child)) await ctx.db.delete(r._id);
+      await ctx.db.patch(w.ids.child, { has_pending_messages: false, last_message_role: "assistant", message_count: 5, updated_at: now - 120_000, needs_input_notified_key: undefined, status: "active" } as any);
+      for (const m of await ctx.db.query("managed_sessions").collect()) await ctx.db.delete(m._id);
+      await ctx.db.insert("managed_sessions", { user_id: w.ids.me, conversation_id: w.ids.child, session_id: `agent-${AGENT}`, agent_status: "idle", agent_status_updated_at: now - 60_000, last_heartbeat: now - 5_000 } as any);
+      await ctx.db.insert("messages", { conversation_id: w.ids.child, role: "assistant", content: "Done. What next?", timestamp: now - 70_000 } as any);
+    });
+    const check = async () => {
+      const res: any = await w.t.mutation(internal.notifications.checkNeedsInput, { conversation_id: w.ids.child });
+      return { notified: res?.notified === true, reason: res?.reason };
+    };
+
+    await settle();
+    expect(await check()).toEqual({ notified: false, reason: "subagent" });
+
+    await w.personSend(w.ids.child, "take it from here");
+    expect((await w.row(w.ids.child)).parent_released_at).toBeNumber();
+    await settle();
+    expect((await check()).notified).toBe(true);
   });
 });
