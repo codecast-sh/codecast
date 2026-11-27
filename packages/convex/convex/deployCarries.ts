@@ -10,6 +10,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { extractTaskShortIds } from "./lib/gitRefs";
 import type { DeployRow } from "@codecast/shared/contracts/causeHistory";
 import { formatSessionMessage } from "@codecast/shared/contracts";
+import { runSenderName } from "@codecast/shared/contracts/runSender";
 import { commitBySha, mainAtOf } from "./deployTargetsState";
 import { DAY, carriedBy, normalizeDeployTarget, type DeployMerge } from "@codecast/shared/contracts/deploys";
 import { reachOf } from "./deployReach";
@@ -364,8 +365,13 @@ async function runsMergedInto(ctx: any, d: Doc<"deploys">): Promise<Doc<"workflo
  */
 async function tellStoppedSession(ctx: any, run: Doc<"workflow_runs">, task: Doc<"tasks"> | null, flow: string, line: string, workspace: string): Promise<void> {
   const subject: Doc<"conversations"> | null = run.primary_conversation_id ? await ctx.db.get(run.primary_conversation_id) : null;
-  const content = `The ${flow} run${task?.short_id ? ` on ${task.short_id}` : ""} is over: Live. ${line} It had stopped at Deploy; a later deploy took the change live. Nothing more is waiting on this session for it.`;
-  const tell = { content: formatSessionMessage("unknown", content, { name: "codecast" }), client_id: `run:${run._id}:live`, from_user_id: run.user_id };
+  const named = runSenderName(flow, task?.short_id).replace(/^the /, "The ");
+  // The deploy's line opens with "Live:" itself: the end is said once.
+  const content = `${named} is over: ${/^Live:/.test(line) ? line : `Live. ${line}`} It had stopped at Deploy; a later deploy took the change live. Nothing more is waiting on this session for it.`;
+  // From the run, as its runner's own messages are: its session when it has one, else the run by the name the runner
+  // signs with (runSender.ts).
+  const from = subject ? subject.short_id ?? String(subject._id).slice(0, 7) : "unknown";
+  const tell = { content: formatSessionMessage(from, content, subject ? {} : { name: runSenderName(flow, task?.short_id) }), client_id: `run:${run._id}:live`, from_user_id: run.user_id };
   const told = await stopHeardBy(ctx, run, task);
   const subjectHeard = !!subject && !!told && String(told._id) === String(subject._id);
   // Retiring is behind the team's retire_on_live flag; off, the session that heard the stop is told, as before it.
