@@ -282,7 +282,7 @@ show` draw them from the one home.
 
 Every step station's failure routes to Returned (`cast line deploy return
 dp-N`), which reads the failed station from the run, reports the deploy
-`failed` ("Stopped at Gate." and the step's words), and files one finding:
+`failed` ("Stopped at Send: <cause>" over the step's last words), and files one finding:
 source `deploy`, kind `regression`, and an issue key per project, target and
 step (`deploy:<project>:<target>:<step>`). `deploy` is a source whose finding
 opens a problem (signals.ts `CAUSE_OPENING_SOURCES`), so the first failure
@@ -291,6 +291,14 @@ the same step joins it, whichever deploy it was. The finding carries the
 deploy, its sha, the run's url, the fixes it carried, and what the step
 said. The carried fixes stay shipped and wait for the next deploy; the
 problem runs on the line like any other.
+
+The cause is one line of the step's whole output (`contracts/lineDeploy`
+`deployCauseLine`): the first that names what it needed (`An Expo user account
+is required`), else the first error line, else the last line that is no
+warning or stack frame. The step prints it last (`exited 1: <cause>`), Returned
+puts it in the note's first line, and every surface that heads a failed deploy
+shows that line (`deployNoteHeadline`, which reads an older note's log the same
+way) with the whole note behind it.
 
 
 ## DP10. A repository's deploy targets
@@ -343,10 +351,14 @@ deploy targets --publish`, with the machine and checkout that published
 them: where a deploy of a `here` target runs. A change that lands
 `.codecast/line.toml`, `deploy.toml`, `workspace.toml` or a file in the
 line's own folder is republished by its run's Deploy station (`workflow/republishLanded.ts`):
-once the run's checkout holds the merged commit with `.codecast` clean,
-within ten minutes, it runs `cast line profile --publish` there (`cast line
-deploy targets --publish` for a repository with no profile), and its last
-line says whether it did. A target the checkout stops
+it checks out a clean detached worktree of the merged commit, runs `cast line
+profile --publish` there (`cast line deploy targets --publish` for a
+repository with no profile) with `CODECAST_PUBLISH_ROOT` naming the run's
+checkout, so the published root stays where the targets' deploys run, removes
+the worktree, and its last line says whether it did. The run's checkout need
+never hold the commit. A cast that does not read a key the files name would
+publish without it, so it publishes nothing and says a cast released from
+that commit or later is needed. A target the checkout stops
 declaring is retired, not deleted. Every reader (the CLI, the server, the
 Deploys page) parses through `contracts/deployTargets`.
 
@@ -493,7 +505,16 @@ runs the line-deploy graph with the target's commands
 (`lineDeploy.deployProfileFor`): the send is its command or rollback, and a
 target read from elsewhere gets a live step (`cast line deploy await-live`)
 that waits for its reader to record the sha. Its other steps run the
-target's own commands (DP10), and a rollback runs none of them:
+target's own commands (DP10), and a rollback runs none of them. A checkout
+whose HEAD does not hold the deploy's sha (a shared checkout with others' edits
+is not kept level) runs what that commit declares, not its older files
+(`deployAtCommit.ts`): the target as the commit's deploy.toml has it, and a
+shell script the command starts as the commit has it, run with `bash -c` from
+the checkout's root so `$0` is still its path; `cast deploy` plans from the
+commit's targets the same way. A send that prints `Waiting for …` (a release in
+flight, CI on main) puts that line on the running deploy's note, and the line
+it moves on with after it, so whoever waits on the deploy reads why: `cli: dp-13
+goes out after the CLI release in flight (runs 4604…), then sends 1a2b3c4`. The steps:
 
 - `ci` before the send: the sha's verdict (`cast line deploy ci`).
 - `gate` after the send: the gate's verdict on what went out.
@@ -641,7 +662,12 @@ deploy sends main's head (DP13), so a later commit's deploy that carries the
 merged one satisfies the wait. When the send ends and a target it sent has no
 deploy carrying the commit, the stage fails at once rather than wait out the
 deadline, naming the sha the deploy did send: the checkout that publishes the
-target may be behind origin.
+target may be behind origin. A deploy that stopped at CI or Send sent
+nothing, so the stop says no deploy took the commit out (`No deploy took 1a2b3c4
+out: cli dp-3789 stopped at Send before sending anything (<cause>)`); one that
+failed later says the deploy that carried it failed. A target the stage only
+waits on names since when nobody has sent it (`nobody has sent desktop since
+46f3912 in dp-3793`).
 
 Every progress line names each target, what it waits for, how long and its
 deadline: `cli: dp-13 sending 1a2b3c4 (12m of 45m)`. A target's deadline starts

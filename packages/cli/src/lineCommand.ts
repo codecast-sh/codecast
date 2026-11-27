@@ -264,9 +264,11 @@ export function registerLineSubcommands(line: Command, deps: GroupDeps): void {
         step: step as any, deploy: ref, root: profileRoot, profile, runId: options.run || undefined,
         read,
         post: (path, body) => apiPost(deps, path, body),
+        report: (path, body) => apiPost(deps, path, body, { exitOnError: false }),
       });
-      // The command's own output is the station's output already; only the exit is said again.
-      if (r.code !== 0) { console.error(r.note?.startsWith("exited") ? `exited ${r.code}` : r.note ?? `exited ${r.code}`); process.exit(r.code); }
+      // The command's own output is the station's output already; only the exit and its cause are said again, last, where
+      // the Returned station's note reads them (`exited 1: <cause>`).
+      if (r.code !== 0) { console.error(r.note?.split("\n")[0] || `exited ${r.code}`); process.exit(r.code); }
     });
   deploy
     .command("watch")

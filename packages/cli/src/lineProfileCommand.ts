@@ -115,7 +115,7 @@ export async function publishLineProfile(deps: PublishDeps, read: ResolvedLinePr
   const { deviceId } = await import("./remote/device.js");
   const result = await apiPost(deps, "/cli/line/profile/publish", {
     ...(await scopeFor(deps, undefined, true)),
-    root: resolved.root ?? undefined,
+    root: resolved.root ? (await import("./pipeline.js")).publishedRoot(resolved.root) : undefined,
     groups,
     profile: publishFacts(resolved),
     device_id: deviceId(),
@@ -147,12 +147,12 @@ export async function publishDeployTargets(deps: PublishDeps, root: string, targ
   const { deviceId } = await import("./remote/device.js");
   const repository = readLocalGitContext(root).repository;
   if (!repository) throw new LineProfileError(`${root} has no GitHub origin, so its targets name no repository`);
-  const { headOf, publishRefusal } = await import("./pipeline.js");
+  const { headOf, publishRefusal, publishedRoot } = await import("./pipeline.js");
   const head = headOf(root);
   const skipped = head ? publishRefusal(root, []) : "not a git checkout";
   if (skipped) return { team_id: teamId ?? "", repository, targets: [], skipped };
   const { publishableTarget } = await import("@codecast/shared/contracts/deployTargets");
-  const r: DeployTargetsPublish = await apiPost(deps, "/cli/deploys/targets/publish", { repository, targets: targets.map(publishableTarget), device_id: deviceId(), root, head_sha: head!.sha, head_at: head!.at, ...(teamId ? { team_id: teamId } : {}) });
+  const r: DeployTargetsPublish = await apiPost(deps, "/cli/deploys/targets/publish", { repository, targets: targets.map(publishableTarget), device_id: deviceId(), root: publishedRoot(root), head_sha: head!.sha, head_at: head!.at, ...(teamId ? { team_id: teamId } : {}) });
   if (r.refused) return r;
   // The repository's pipeline rides with its targets, from the same checkout (pipeline.md PL6); one that fails to build or
   // publish never fails the targets' (`cast flow pipeline --publish` says why).

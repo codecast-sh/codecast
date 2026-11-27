@@ -11,7 +11,7 @@ import { DEPLOY_WAIT_CAP_MS, parseDeployTargets } from "@codecast/shared/contrac
 import type { MainRedPayload } from "@codecast/shared/contracts/mainRed";
 import { parseWorkflowSource } from "./parser";
 import { RESUME_ENV } from "./stationReexec";
-import { awaitDeploy, ciGateOf, deployDuties, holds, landedDuties, lineHeld, mainCiAt, mergedCommit, mergedSha, recordMergedSha, redSinceWords, runAwaitDeploy, targetState, targetTouches, type DeployClock, type DeployTargetRow, type DeployWaitIO, type DeployWaitPlace, type MainCi } from "./awaitDeploy";
+import { awaitDeploy, ciGateOf, deployDuties, failedWords, holds, landedDuties, lineHeld, mainCiAt, mergedCommit, mergedSha, recordMergedSha, redSinceWords, runAwaitDeploy, targetState, targetTouches, type DeployClock, type DeployTargetRow, type DeployWaitIO, type DeployWaitPlace, type MainCi } from "./awaitDeploy";
 
 const ENV = { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t", GIT_CONFIG_NOSYSTEM: "1" };
 let dir = "";
@@ -357,6 +357,16 @@ describe("awaitDeploy", () => {
     expect(await awaitDeploy({ sha: SHA, base: "main", plan: deployDuties(declared, ["api/b.ts"]), intervalMs: MIN }, f.io)).toEqual({ code: 1, line: "The deploy that carried 1a2b3c4 failed: backend dp-7 (convex push refused). A later deploy that takes it live ends this run at Live." });
   });
 
+  // dp-3789 stopped at Send before anything went out: it never carried the commit, and the stop does not say it did.
+  test("a deploy that stopped at Send sent nothing, and its stop names the cause line", async () => {
+    const note = "Stopped at Send.\nA cut-cli-release.yml run is already in flight: https://github.com/acme/app/actions/runs/9\nexited 1";
+    const f = fake(() => [{ name: "cli", history: [{ ...dp("dp-3", "failed"), note }] }]);
+    expect((await awaitDeploy({ sha: SHA, base: "main", plan: deployDuties(declared, ["cli/c.ts"]), intervalMs: MIN }, f.io)).line)
+      .toBe("No deploy took 1a2b3c4 out: cli dp-3 stopped at Send before sending anything (A cut-cli-release.yml run is already in flight: https://github.com/acme/app/actions/runs/9). A later deploy that takes it live ends this run at Live.");
+    expect(failedWords("1a2b3c4", [{ target: "cli", deploy: { short_id: "dp-3", status: "failed", note: "Stopped at Send." } }, { target: "web", deploy: { short_id: "dp-4", status: "failed", note: "Stopped at Live: not answering\nlog" } }]))
+      .toBe("The deploy that carried 1a2b3c4 failed: cli dp-3 stopped at Send before sending anything, web dp-4 (Stopped at Live: not answering). A later deploy that takes it live ends this run at Live.");
+  });
+
   test("a release that ended without sending a target fails it rather than wait for its deadline", async () => {
     // The live deploy from before the wait carries nothing of this change and is not what the release sent.
     const f = fake(() => [{ name: "backend", live: { ...dp("dp-1", "live", "old"), created_at: -5 } }], { send: async () => ({ code: 1, last: "not published: cast line deploy targets --publish" }) });
@@ -520,8 +530,20 @@ describe("awaitDeploy", () => {
     const f = fake((tick) => [{ name: "backend", history: tick >= 2 ? [dp("dp-1", "live")] : [] }]);
     const r = await awaitDeploy({ sha: SHA, base: "main", plan: deployDuties(declared, ["api/b.ts"], { send: false }), intervalMs: MIN }, f.io);
     expect(f.sends).toEqual([]);
-    expect(f.lines[0]).toBe("backend: waiting for a deploy that carries 1a2b3c4 (0m of 60m)");
+    expect(f.lines[0]).toBe("backend: waiting for the next `cast deploy backend` or a change run that sends it (0m of 60m)");
     expect(r.code).toBe(0);
+  });
+
+  test("a target nobody is sending says since when, from its live deploy", async () => {
+    const f = fake((tick) => [{ name: "backend", live: { short_id: "dp-0", status: "live", sha: "0f0f0f0f0f", created_at: 0, live_at: 0 }, history: tick >= 1 ? [dp("dp-1", "live")] : [] }], { carries: async (d) => d === HEAD });
+    await awaitDeploy({ sha: SHA, base: "main", plan: deployDuties(declared, ["api/b.ts"], { send: false }), intervalMs: MIN }, f.io);
+    expect(f.lines[0]).toBe("backend: waiting for the next `cast deploy backend` or a change run that sends it (nobody has sent backend since 0f0f0f0 in dp-0; 0m of 60m)");
+  });
+
+  test("a send waiting on a release in flight says what it goes out after", async () => {
+    const f = fake((tick) => [{ name: "cli", history: [{ ...dp("dp-3", tick >= 1 ? "live" : "running"), note: "Waiting for the CLI release in flight (runs 46042822000 )" }] }]);
+    await awaitDeploy({ sha: SHA, base: "main", plan: deployDuties(declared, ["cli/c.ts"]), intervalMs: MIN }, f.io);
+    expect(f.lines[0]).toBe("cli: dp-3 goes out after the CLI release in flight (runs 46042822000), then sends 1a2b3c4 (0m of 45m)");
   });
 });
 

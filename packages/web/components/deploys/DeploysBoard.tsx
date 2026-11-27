@@ -13,6 +13,7 @@ import type { CheckoutRow } from "@codecast/shared/contracts/checkouts";
 import type { DeployReach } from "@codecast/shared/contracts/deployReach";
 import type { DeployPauseView } from "@codecast/shared/contracts/deployPause";
 import { entityRoute } from "@codecast/shared/entities";
+import { deployNoteHeadline } from "@codecast/shared/contracts/lineDeploy";
 import {
   VIEWS, ago, attemptGroups, branchHref, carriedOfAttempts, carriedOfQueue, fold, mineSessionIds, openPrs, queueCommits, recordedOf, rowsFor, shipperOf, shippingRuns, splitQueue, tasksOnMain, yourSessions,
   type BoardDeploy, type BoardQueueCommit, type BoardRow, type BoardView, type Bucket, type CardId, type Carried, type DeployCard as Card, type DeployLine, type OpenPr,
@@ -387,7 +388,7 @@ function DeployCard({ card, view, mine, me, focus, now, target: t, production, d
           <span className="dpp-age" title={`${lead.live_at ? "Went live" : lead.status === "requested" && !going ? "Asked for" : "Started"} ${new Date(at).toLocaleString()}`}>{ago(now, at)}</span>
         </span>
       </div>
-      {lead.status === "failed" && lead.note ? <p className="dpp-card-note">{lead.note}</p> : null}
+      {lead.status === "failed" && lead.note ? <p className="dpp-card-note" title={lead.note}>{deployNoteHeadline(lead.note)}</p> : null}
       {openOne ? <DeployDetail d={openOne} now={now} /> : null}
       {quiet ? null
         : empty ? <p className="dpp-none">{lead.status === "live" ? (rebuiltOnly(lead) ? "Rebuilt, nothing new" : "Nothing recorded") : "Nothing recorded yet"}</p>

@@ -5,6 +5,7 @@ import React, { useContext, useMemo } from "react";
 import Link from "next/link";
 import { ArrowUpRight } from "lucide-react";
 import { actionsRunKey } from "@codecast/shared/contracts/deploys";
+import { deployNoteHeadline } from "@codecast/shared/contracts/lineDeploy";
 import { EntityIdPill } from "../EntityIdPill";
 import { ShortId } from "../ShortId";
 import { fmtClock } from "../triggerCadence";
@@ -104,7 +105,7 @@ export function DeployHoverContent({ deploy: d, href, onOpen, showOpen }: { depl
             )}
           </div>
         )}
-        {state === "failed" && d.note && <p title={d.note} className="pl-[22px] text-meta text-sol-red line-clamp-3 leading-relaxed">{d.note}</p>}
+        {state === "failed" && d.note && <p title={d.note} className="pl-[22px] text-meta text-sol-red line-clamp-3 leading-relaxed">{deployNoteHeadline(d.note)}</p>}
       </Link>}
       {fixes > 0 && (
         <RevealHostCtx.Provider value={null}>

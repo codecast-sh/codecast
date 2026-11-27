@@ -101,6 +101,20 @@ describe("a deploy step", () => {
     expect(live.note).toContain("not yet");
   });
 
+  test("a failed send names its cause line from its whole output, and says on the deploy what it waits for", async () => {
+    const s = fakeServer({ sha: "abc1234def", status: "running", run_id: "r" });
+    const warns = Array.from({ length: 80 }, (_, i) => `npm warn deprecated pkg${i}@1.0.0: no longer supported, update to a newer version please`).join("\n");
+    const script = `echo 'Waiting for the release in flight (runs 7)'; sleep 0.3; echo 'An account is required to proceed.'; cat <<'X'\n${warns}\nX\nexit 3`;
+    const send = await runDeployStep({ step: "send", deploy: "dp-3", root: tmp(), profile: { command: script }, read: s.read, post: s.post, report: s.post, log: () => {} });
+    expect(send.code).toBe(3);
+    expect(send.note!.split("\n")[0]).toBe("exited 3: An account is required to proceed.");
+    // The waiting line, then the line it moved on with, so the note never still says it waits.
+    const notes = s.posts.filter(([p, b]) => p === "/cli/line/deploy/report" && b.note).map(([, b]) => b.note);
+    expect(notes[0]).toBe("Waiting for the release in flight (runs 7)");
+    expect(notes.length).toBe(2);
+    expect(notes[1]).not.toMatch(/^Waiting/);
+  });
+
   test("a model key in this shell does not reach a step", async () => {
     process.env.OPENROUTER_API_KEY = "sk-test-not-real";
     try {
@@ -127,11 +141,22 @@ describe("watch and return", () => {
     expect(r.step).toBe("gate");
     const [, failed] = s.posts.find(([p]) => p === "/cli/line/deploy/report")!;
     expect(failed).toMatchObject({ status: "failed" });
-    expect(failed.note).toContain("Stopped at Gate");
+    expect(failed.note.split("\n")[0]).toBe("Stopped at Gate: gate refused: 3 cases moved");
     const [, signal] = s.posts.find(([p]) => p === "/cli/signal/add")!;
     expect(signal).toMatchObject({ source: "deploy", kind: "regression", issue: true, fingerprint: "deploy:proj_1:production:gate", title: "Deploy to production stopped at Gate", project: "proj_1", team_id: "team_1", evidence_url: "https://github.com/acme/app/actions/runs/42" });
     expect(signal.detail_md).toContain("ct-1 Totals");
     expect(signal.detail_md).toContain("3 cases moved");
+  });
+
+  test("a stop's headline is the step's own cause line, not the warnings around it", async () => {
+    const s = fakeServer({ sha: "abc1234def", status: "running" });
+    const run = { run: { node_statuses: [{ node_id: "send", status: "failed" }] } };
+    await returnDeploy({ deploy: "dp-3", runId: "r", note: "npm warn x\nError: channel:list failed\nAn account is required\nexited 1: An account is required", read: s.read, readRun: async () => run, post: s.post });
+    const [, failed] = s.posts.find(([p]) => p === "/cli/line/deploy/report")!;
+    expect(failed.note.split("\n")[0]).toBe("Stopped at Send: An account is required");
+    const bare = fakeServer({ sha: "abc1234def", status: "running" });
+    await returnDeploy({ deploy: "dp-3", runId: "r", read: bare.read, readRun: async () => run, post: bare.post });
+    expect(bare.posts.find(([p]) => p === "/cli/line/deploy/report")![1].note).toBe("Stopped at Send.");
   });
 
   test("the failed step is the last failed station before Returned", () => {

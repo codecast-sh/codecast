@@ -159,10 +159,11 @@ function stopDetail(run: ChangeRun, graph: ChangeGraph, title: string, landed: b
   return parts.length ? parts.map((p, i) => (i ? lower(p) : p)).join(" · ") : null;
 }
 
-/** The deploys a Deploy stop names as failed (awaitDeploy.ts: "The deploy that carried 929c5d8 failed: desktop dp-3559
- *  (Stopped at Send.), web dp-12."), by target, each once. */
+/** The deploys a Deploy stop names as failed (awaitDeploy.ts failedWords: "The deploy that carried 929c5d8 failed: desktop
+ *  dp-3559 (Stopped at Gate: …), web dp-12.", or "No deploy took 929c5d8 out: cli dp-3789 stopped at Send before sending
+ *  anything (…)."), by target, each once. */
 function failedDeploys(reason: string | null | undefined): Array<{ target: string; deploy: string }> {
-  const list = reason?.match(/deploy that carried \S+ failed:\s*([\s\S]*)$/)?.[1].replace(/\([^)]*\)/g, "") ?? "";
+  const list = reason?.match(/(?:deploy that carried \S+ failed|No deploy took \S+ out):\s*([\s\S]*)$/)?.[1].replace(/\([^)]*\)/g, "") ?? "";
   const out = new Map<string, string>();
   for (const m of list.matchAll(/\b([a-z][a-z0-9-]{0,31}) (dp-\d+)\b/g)) if (!out.has(m[1])) out.set(m[1], m[2]);
   return [...out].map(([target, deploy]) => ({ target, deploy }));

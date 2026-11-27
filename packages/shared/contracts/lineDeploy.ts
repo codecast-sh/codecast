@@ -69,3 +69,38 @@ export const normalizeRoleHandle = (s: string | null | undefined): string | null
   const t = (s ?? "").trim().replace(/^@/, "").toLowerCase();
   return t || null;
 };
+
+// A line that says nothing of why a step failed: a warning, a stack frame, a caret under a quoted line, a runtime's
+// version banner, a cut marker, npm's boilerplate under its own error, the bare exit code.
+const NOISE = /^(?:(?:npm )?warn\b|warning\b|at\s|\^+$|node\.js v\d|….*characters cut|exited \d+$|npm (?:err!?|error) (?:code|path|workspace|location|command|errno|syscall|a complete log)\b|<anonymous|\S+:\d+$|[-=_*#.\s]+$)/i;
+// A line that names what the step needed and did not have.
+const NEED = /\b(?:required|not found|denied|missing|unauthori[sz]ed|forbidden|permission|no such|not set|expired|already in flight|still waiting)\b/i;
+const ERROR = /\b(?:error|failed|fatal|cannot|could not|refused)\b/i;
+const CAUSE_MAX = 240;
+
+/**
+ * The one line of a failed step's output that says why (deploys.md DP9): the first that names what it needed (a
+ * login, a token, a file), else the first error line, else the last line that is no warning or stack frame; never
+ * the warnings and frames a tool prints around it. Cut to one line. Null for output with nothing to say.
+ */
+export function deployCauseLine(output: string | null | undefined): string | null {
+  // eslint-disable-next-line no-control-regex
+  const lines = (output ?? "").replace(/\x1b\[[0-9;]*m/g, "").split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !NOISE.test(l));
+  const line = lines.find((l) => NEED.test(l)) ?? lines.find((l) => ERROR.test(l)) ?? lines[lines.length - 1];
+  if (!line) return null;
+  return line.length > CAUSE_MAX ? `${line.slice(0, CAUSE_MAX - 1)}…` : line;
+}
+
+/**
+ * A deploy note's headline: its first line when that already names the cause ("Stopped at Send: <cause>"), else
+ * "Stopped at <step>: <cause>" from the log under it, for a note written before the stop named its cause.
+ */
+export function deployNoteHeadline(note: string | null | undefined): string | null {
+  const text = (note ?? "").trim();
+  if (!text) return null;
+  const [first, ...rest] = text.split("\n");
+  const stop = first.match(/^(Stopped at [^.:]+)\.?$/);
+  if (!stop) return deployCauseLine(first) ?? first.trim();
+  const cause = deployCauseLine(rest.join("\n"));
+  return cause ? `${stop[1]}: ${cause}` : `${stop[1]}.`;
+}
