@@ -72,7 +72,8 @@ export type StopFix = "run" | "session" | "deploy" | "again";
 export type JourneyNow =
   | { kind: "idle" }
   | { kind: "starting" }
-  | { kind: "working"; stage: string; verb: string | null; role: StageRole; who: StageWho; waits: JourneyWait[]; session: { id: string; title: string | null } | null }
+  /** `again`: why the run is back at a stage after reaching a later one ("Checking again after the session's fix (Resolve conflict)"). */
+  | { kind: "working"; stage: string; verb: string | null; role: StageRole; who: StageWho; waits: JourneyWait[]; session: { id: string; title: string | null } | null; again?: string }
   /** `by`: who sent it back when that is not the stage (a person's card answered with Revise). `blocked`: the session
    *  pinned blocked, so the run waits for a person, `note` then that pin, and `ask` the card it asked with when the
    *  store holds it (sessionAsk.ts). `conversation`: the session. */
@@ -471,7 +472,8 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
     // A fan-out's own state comes from its branches, except while the run stands at a step it holds after them.
     if (live && b.id === atStage && (!b.branches || holds(b, at))) return run.status === "paused" ? "waiting" : "active";
     const last = latestOf(b);
-    if (!last) return passed ? "skipped" : "idle";
+    // Never entered while the run went past it (a run that started on a later station of its flow): skipped, not ahead.
+    if (!last) return passed || (current >= 0 && index < current) ? "skipped" : "idle";
     if (last.status === "running" || last.status === "pending") return live ? "active" : "idle";
     // A landing stage with the merge recorded, or whose landing step passed (landedByStep), landed, whatever its
     // bookkeeping did after.
@@ -611,7 +613,21 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
       : own ? fanBase.branches!.filter((b) => branchState(b) === "active").map((b) => waitOf(b.label, ofRound(latestOf(b)) ? latestOf(b) : statusOf(fanBase.id)))
       : fanBase.branches!.filter((b) => latestOf(b)?.status === "running").map((b) => waitOf(b.label, latestOf(b)))
       : [waitOf(offMain ?? stage?.label ?? labelOf(at ?? ""), node)];
-    now = { kind: "working", stage: offMain ?? stage?.label ?? (at ? labelOf(at) : "Running"), verb: verbOf(stage, offMain), role: stage?.role ?? "step", who: stage?.who ?? "auto", waits, session: node?.session ? { id: String(node.session._id), title: node.session.title ?? null } : null };
+    // Back at a stage after the run reached a later one (Local CI again once a merge conflict was fixed): the step that
+    // sent it back, the nearest one before it off the stages up to this one, says why.
+    const again = (() => {
+      const since = node?.started_at;
+      const here = stage && !own && !offMain ? plan.findIndex((b) => b.id === stage.id) : -1;
+      if (here < 0 || since == null) return null;
+      const indexOf = (id: string) => { const b = stageFor(id); return b ? plan.indexOf(b) : -1; };
+      const before = statuses.filter((n) => n.node_id !== at && (n.started_at ?? 0) < since && byId.get(n.node_id)?.type !== "start").sort((a, b) => (b.started_at ?? 0) - (a.started_at ?? 0));
+      if (!before.some((n) => indexOf(n.node_id) > here)) return null;
+      const from = before.find((n) => !(stageOf(n.node_id) && indexOf(n.node_id) <= here));
+      if (!from || stageOf(from.node_id)) return null;
+      const fix = byId.get(segmentTopOf(from.node_id));
+      return isSubject(fix) ? `Checking again after the session's fix (${fix!.label})` : `Checking again after ${labelOf(from.node_id)}`;
+    })();
+    now = { kind: "working", stage: offMain ?? stage?.label ?? (at ? labelOf(at) : "Running"), verb: verbOf(stage, offMain), role: stage?.role ?? "step", who: stage?.who ?? "auto", waits, session: node?.session ? { id: String(node.session._id), title: node.session.title ?? null } : null, ...(again ? { again } : {}) };
   } else if (failed) {
     const stage = stages.find((s) => s.id === stopStage);
     const walked = chain(at);
