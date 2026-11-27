@@ -114,6 +114,10 @@ export interface WorkflowNode {
   // workspace's @release, and the runs it stopped resume when it closes (convex
   // flowStops.ts). A segment exit's mark rides onto the step a routed stop leaves by.
   shared?: boolean;
+  // A stop exit: the station a run stopped here resumes at (a station id), when the station that failed is not the
+  // one to start again from (a resume is a new attempt, and Merge clears only on that attempt's CI and review). The
+  // incident that holds the run resumes it there (convex flowStops.ts); without one it resumes at what failed.
+  resume?: string;
   // Bookkeeping (flows.md FL6): the station finishes the stage before it (reads
   // its verdicts, records the sha it merged), so a person sees it as part of
   // that stage, never as a stage of its own. It runs like any other station.
