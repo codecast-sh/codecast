@@ -22,6 +22,7 @@ import {
   authorizeRoom,
   authorizeRoomInviter,
   authorizeRoomMembership,
+  callTeamsOf,
   clearRoomState,
   expireRoomGrants,
   isSeat,
@@ -30,9 +31,9 @@ import {
   upsertRoomState,
   liveSeat,
   openRoomDoor,
+  ownerOnlyRoom,
   parseRoomKey,
 } from "./callRooms";
-import { featureVendorRefusal } from "./lib/vendorGuard";
 import { isTeamMember } from "./privacy";
 import { requireUser } from "./lib/requireUser";
 import { channelMemberIds, isRestricted } from "./chatAccess";
@@ -76,19 +77,12 @@ export const getCallConfig = query({
     const configured = livekit !== null;
     const userId = await getAuthUserId(ctx);
     let teams: string[] = [];
-    const off: Record<string, string> = {};
+    let off: Record<string, string> = {};
     if (configured && userId) {
-      const memberships = await ctx.db
-        .query("team_memberships")
-        .withIndex("by_user_id", (q) => q.eq("user_id", userId))
-        .collect();
-      for (const m of memberships) {
-        if (!(await teamHasFeature(ctx, m.team_id, "calls"))) continue;
-        // A regulated team's calls stay off while LiveKit has no BAA; its line says so where the controls would be.
-        const vendorOff = await featureVendorRefusal(ctx, m.team_id, "calls");
-        if (vendorOff) off[String(m.team_id)] = vendorOff;
-        else teams.push(String(m.team_id));
-      }
+      // A regulated team's refusal says so where the controls would be.
+      const mine = await callTeamsOf(ctx, userId);
+      teams = mine.teams.map(String);
+      off = mine.off;
     }
     const enabled = configured && (userId ? teams.length > 0 : true);
     return { enabled, url: enabled ? livekit?.url : undefined, teams, off };
@@ -1233,8 +1227,9 @@ export const getLiveRooms = query({
         room_key: roomKey,
         team_id: live[0].team_id,
         locked: !!state?.locked,
-        // Started private: listed only to the people it admits.
-        private: !!state?.private,
+        // Started private, or one person's alone (callRooms.ownerOnlyRoom):
+        // listed only to the people it admits.
+        private: !!state?.private || !!(await ownerOnlyRoom(ctx, roomKey)),
         // The huddle said "don't transcribe": what keeps every seated client's
         // auto-scribe from starting it again.
         transcribe_off: !!state?.transcribe_off,

@@ -4,7 +4,7 @@
 // pulled from it). Plain helpers; the queries that use them stay in
 // transcripts.ts.
 import type { Doc, Id } from "./_generated/dataModel";
-import { authorizeRoom, authorizeRoomNoGrant, canReadRoomlessCall } from "./callRooms";
+import { authorizeRoom, authorizeRoomNoGrant, canReadRoomlessCall, ownerOnlyRoom } from "./callRooms";
 import { isTeamMember } from "./privacy";
 import { teamHasFeature } from "./teamFeatures";
 import { isRoomlessKey, parseRoomKey } from "@codecast/shared/contracts";
@@ -73,8 +73,10 @@ export async function canReadCall(
   }
   // A private huddle's record is the people in it. The room's membership
   // reaches the team (a team-visible session, a public channel) everywhere
-  // but a people room, whose key names exactly the people it was for.
-  const membershipReads = !t.private || parseRoomKey(t.room_key)?.kind === "dm";
+  // but a people room, whose key names exactly the people it was for, and a
+  // room that is still one person's alone, whose membership is that person.
+  const membershipReads =
+    !t.private || parseRoomKey(t.room_key)?.kind === "dm" || !!(await ownerOnlyRoom(ctx, t.room_key));
   if (membershipReads && (await authorizeRoomNoGrant(ctx, userId, t.room_key)).ok) return true;
   // The huddle running now reads like the huddle: whoever its door admits
   // (the open door, a ring) may read the words being said in it, the way they
@@ -110,6 +112,10 @@ export function shapeCallRow(t: Doc<"transcripts">) {
     started_by: String(t.started_by),
     team_id: String(t.team_id),
     rec_shared: t.rec_shared ?? false,
+    // Readable only by the people in it: started private, or one person's
+    // alone (a room of one, a session the team cannot read). The calls page
+    // files these under Personal.
+    private: t.private ?? false,
     // Whether Record was ever pressed on this call (a run seats the people it
     // shows): the history marks the calls that have video, and a surface
     // that cannot play it yet (the phone) says where it plays rather than

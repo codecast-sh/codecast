@@ -1281,7 +1281,7 @@ describe("putting an agent out of the room", () => {
     team_members: [{ team_id: "team1", user_id: "ua" }, { team_id: "team1", user_id: "ub" }],
     team_memberships: [{ team_id: "team1", user_id: "ua" }, { team_id: "team1", user_id: "ub" }],
     teams: [{ _id: "team1", features: { calls: true } }],
-    conversations: [{ _id: "conv1", short_id: "conv1", title: "Fix the auth race", agent_type: "claude_code", user_id: "ua", team_id: "team1" }],
+    conversations: [{ _id: "conv1", short_id: "conv1", title: "Fix the auth race", agent_type: "claude_code", user_id: "ua", team_id: "team1", is_private: false }],
     messages: [],
     call_agent_feeds: [],
     call_session_links: [],

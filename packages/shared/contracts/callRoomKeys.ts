@@ -38,9 +38,10 @@ export function channelHuddleMemberIds(
 const MAX_ROOM_KEY_LENGTH = 400;
 
 export type ParsedRoomKey =
-  // A member set: sorted, unique user ids, two or more. `dm:` is the historic
+  // A member set: sorted, unique user ids, one or more. `dm:` is the historic
   // prefix — a 1:1 and a group of five are the same shape with different
-  // counts, so nothing else in the system needs a second "group" kind.
+  // counts, so nothing else in the system needs a second "group" kind. A set
+  // of one is a huddle with yourself: its room admits only you.
   | { kind: "dm"; users: string[] }
   | { kind: "channel"; channelId: string }
   | { kind: "session"; conversationId: string }
@@ -71,7 +72,7 @@ const REC_ID = /^[A-Za-z0-9-]{8,64}$/;
 export function parseRoomKey(roomKey: string): ParsedRoomKey | null {
   if (typeof roomKey !== "string" || roomKey.length > MAX_ROOM_KEY_LENGTH) return null;
   const parts = roomKey.split(":");
-  if (parts[0] === "dm" && parts.length >= 3 && parts.length <= MAX_ROOM_MEMBERS + 1) {
+  if (parts[0] === "dm" && parts.length >= 2 && parts.length <= MAX_ROOM_MEMBERS + 1) {
     const users = parts.slice(1);
     // Canonical order is part of the key's identity: a swapped or repeated
     // form is invalid, not an alias — otherwise one set of people could

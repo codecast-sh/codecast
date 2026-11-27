@@ -36,6 +36,7 @@ import {
   authorizeRoom,
   isRoomTranscribeOff,
   liveMembers,
+  ownerOnlyRoom,
   readRoomState,
   stampRoomWordsPublic,
 } from "./callRooms";
@@ -489,9 +490,15 @@ export async function beginCallRecord(
   const startedAt = Date.now();
   // A private huddle's words stay in its record: the room's own session
   // route would post them into a conversation the team may be able to read,
-  // so its agent joins only when someone inside adds it.
-  const isPrivate = !!(await readRoomState(ctx, args.roomKey))?.private;
-  const ownRoute = args.ownRoute !== false && !isPrivate;
+  // so its agent joins only when someone inside adds it. A room that is one
+  // person's alone (callRooms.ownerOnlyRoom) keeps its record private too,
+  // but an owner-only SESSION room keeps its own route: that conversation is
+  // the owner's alone, so the reason above does not reach it.
+  const chosenPrivate = !!(await readRoomState(ctx, args.roomKey))?.private;
+  const ownerOnly = await ownerOnlyRoom(ctx, args.roomKey);
+  const isPrivate = chosenPrivate || !!ownerOnly;
+  const withholdOwn = chosenPrivate && !(ownerOnly && ownRoomTarget(args.roomKey));
+  const ownRoute = args.ownRoute !== false && !withholdOwn;
   const id = await ctx.db.insert("transcripts", {
     room_key: args.roomKey,
     team_id: args.teamId,
@@ -505,7 +512,7 @@ export async function beginCallRecord(
     })),
     last_seq: 0,
     ...(isPrivate ? { private: true } : {}),
-    ...(args.ownRoute === false && !isPrivate && ownRoomTarget(args.roomKey) ? { own_route_owed: true } : {}),
+    ...(args.ownRoute === false && !withholdOwn && ownRoomTarget(args.roomKey) ? { own_route_owed: true } : {}),
     ...(args.scribeOpen ? { scribe_open: true } : {}),
   });
   // A new record has no public link, whatever the room's last one had.

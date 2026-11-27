@@ -14,7 +14,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { internalMutation, mutation, query, type MutationCtx } from "./functions";
 import type { Doc, Id } from "./_generated/dataModel";
 import { parseStagePinRef, stagePinRowId, STAGE_PIN_LIMIT, type StagePinTarget } from "@codecast/shared/contracts/stagePins";
-import { liveSeat, readRoomState } from "./callRooms";
+import { liveSeat, ownerOnlyRoom, readRoomState } from "./callRooms";
 import { liveTranscriptFor, postEvent } from "./callChat";
 import { canAccessDoc } from "./lib/access";
 import { verifyApiToken } from "./apiTokens";
@@ -120,7 +120,8 @@ async function removePin(ctx: MutationCtx, roomKey: string, raw: string): Promis
 
 /** The call's board, made on first need and pinned on the stage when made.
  *  It lives where the huddle's people can open it: the team's workspace, or
- *  for a private huddle the personal workspace of whoever asked for it.
+ *  for a private or owner-only huddle the personal workspace of whoever
+ *  asked for it.
  *  Returns the board's id, or null when the room has no live record to hang
  *  it on. */
 export async function ensureCallBoard(
@@ -135,7 +136,7 @@ export async function ensureCallBoard(
     const doc = await ctx.db.get(t.board_doc_id);
     if (doc && !doc.archived_at) return t.board_doc_id;
   }
-  const isPrivate = !!(await readRoomState(ctx, t.room_key))?.private;
+  const isPrivate = !!(await readRoomState(ctx, t.room_key))?.private || !!(await ownerOnlyRoom(ctx, t.room_key));
   const day = new Date(t.started_at).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
   const title = `${t.title?.trim() || "Huddle"} board · ${day}`;
   const { id } = await createDocAs(ctx, userId, {
