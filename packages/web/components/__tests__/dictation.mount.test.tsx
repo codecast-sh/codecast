@@ -1,29 +1,12 @@
 import { dom, w, restoreGlobals } from "./fixtures/composeDom";
-import { afterAll, afterEach, beforeEach, expect, mock, test } from "bun:test";
-
-// The lines a recording's end says once (useDictation), as the toast shows them.
-const toasts: string[] = [];
-mock.module("sonner", () => {
-  const noop = () => 1;
-  const say = (kind: string) => (line: string) => { toasts.push(`${kind}: ${line}`); return 1; };
-  return { toast: Object.assign(say("info"), { error: say("error"), info: noop, success: noop, warning: noop, dismiss: () => {}, loading: noop, custom: noop, promise: (p: any) => p }), Toaster: () => null };
-});
+import { fakeConvex, flush, freshDictationHarness, mountComposer, sayTo, toasts, type FakeHost } from "./fixtures/dictationComposer";
+import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
 import { act } from "react";
-import { createRoot, type Root } from "react-dom/client";
+import { createRoot } from "react-dom/client";
 import { ConvexProvider } from "convex/react";
-import { _resetDictationForTests, dictationRunning, type DictationHost, type DictationPipeEvents } from "@codecast/shared/contracts/dictation";
+import { dictationRunning } from "@codecast/shared/contracts/dictation";
 import { useInboxStore } from "../../store/inboxStore";
 import { closeDomWindow } from "../../test-helpers/domGlobals";
-// Entered from the composer, the graph reaches ChatMessage through
-// messageMarkdown -> EntityIdPill -> TaskCommentStream; entering from
-// ChatMessage closes that cycle on a lazy read (markdownMapCycles.guard).
-import "../chat/ChatMessage";
-import { offlineConvexClient } from "../../test-helpers/offlineConvex";
-import { holdTextareaTextNodes } from "../../lib/holdTextareaTextNode";
-
-// The app installs this at boot: a textarea's defaultValue write that repeats
-// its live value is skipped. Dictated words must still show with it on.
-holdTextareaTextNodes(w);
 
 // Dictation in the composers (MessageInput: the session composer and chat;
 // the task comment box), driven through window.__dictationTestHost so every
@@ -39,116 +22,17 @@ afterAll(() => {
   restoreGlobals();
 });
 
-function fakeConvex() {
-  const client = offlineConvexClient("https://example.convex.cloud");
-  (client as any).mutation = async () => null;
-  (client as any).query = async () => null;
-  (client as any).action = async () => null;
-  (client as any).watchQuery = () => ({ onUpdate: () => () => {}, localQueryResult: () => undefined, localQueryLogs: () => undefined, journal: () => undefined });
-  return client;
-}
-
-/** A recognizer the test speaks through. */
-function fakeHost() {
-  const h = {
-    events: null as DictationPipeEvents | null,
-    refuse: null as string | null,
-    closed: 0,
-    finishing: false,
-    endFinish: null as null | (() => void),
-    host: null as unknown as DictationHost,
-  };
-  h.host = {
-    open: (events) => {
-      h.events = events;
-      if (h.refuse) return Promise.reject(new Error(h.refuse));
-      return Promise.resolve({
-        finish: () =>
-          new Promise<void>((resolve) => {
-            h.finishing = true;
-            h.endFinish = resolve;
-          }),
-        close: () => {
-          h.closed++;
-          // As asrPipe does: closing releases a finish still waiting.
-          h.endFinish?.();
-        },
-      });
-    },
-  };
-  return h;
-}
-
-let host: ReturnType<typeof fakeHost>;
-let run = 0;
+let host: FakeHost;
 
 beforeEach(() => {
-  _resetDictationForTests();
-  host = fakeHost();
-  w.__dictationTestHost = host.host;
-  (useInboxStore.getState() as any)._setDispatch(async () => undefined);
-  useInboxStore.setState({
-    sessions: {},
-    conversations: {},
-    pendingMessages: {},
-    drafts: {},
-    reviewComments: {},
-    teams: [],
-    currentSessionId: null,
-    currentUser: { _id: "user_dictation_test", name: "Tester", dictation_enabled: true } as any,
-  } as any);
+  host = freshDictationHarness();
 });
 
 afterEach(() => {
   delete w.__dictationTestHost;
 });
 
-const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 0)); });
-
-async function mountComposer(opts: { bare?: boolean; foot?: boolean; initialDraft?: string } = {}) {
-  const sent: string[] = [];
-  const { MessageInput } = await import("../MessageInput");
-  const container = w.document.createElement("div");
-  w.document.body.appendChild(container);
-  const root: Root = createRoot(container);
-  const draftKey = `chat-draft:dictation-${++run}`;
-  await act(async () => {
-    root.render(
-      <ConvexProvider client={fakeConvex()}>
-        <MessageInput
-          conversationId={draftKey}
-          bareComposer={opts.bare}
-          initialDraft={opts.initialDraft}
-          composerFoot={opts.foot ? <span data-foot-start /> : undefined}
-          onGateSend={(content) => { sent.push(content); }}
-        />
-      </ConvexProvider>,
-    );
-  });
-  const q = (sel: string) => container.querySelector(sel) as HTMLElement | null;
-  const textarea = () => container.querySelector("textarea") as HTMLTextAreaElement;
-  const button = (label: string) => container.querySelector(`button[aria-label="${label}"]`) as HTMLButtonElement | null;
-  const press = async (label: string) => {
-    const b = button(label);
-    if (!b) throw new Error(`no ${label} button`);
-    await act(async () => { b.click(); });
-    await flush();
-  };
-  const key = async (k: string, init: Record<string, unknown> = {}) => {
-    await act(async () => { textarea().dispatchEvent(new w.KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true, ...init })); });
-    await flush();
-  };
-  const unmount = async () => {
-    await act(async () => { root.unmount(); });
-    container.remove();
-  };
-  return { container, q, textarea, button, press, key, sent, unmount };
-}
-
-const say = async (fn: (e: DictationPipeEvents) => void) => {
-  await act(async () => { fn(host.events!); });
-  await flush();
-};
+const say = sayTo(() => host);
 
 test("no mic while dictation is off", async () => {
   useInboxStore.setState({ currentUser: { _id: "u", dictation_enabled: false } as any } as any);
@@ -324,9 +208,9 @@ test("typing into the box mid-recording stops it and keeps the person's text", a
   await say((e) => e.onPartial("hello world"));
   expect(ta.value).toBe("hello there");
   const mic = c.button("Dictate")!;
-  expect(mic.getAttribute("data-dictation-reason")).toBe("Dictation stopped: the text changed");
-  // Said once as it stopped: a hover-less screen never sees the tooltip.
-  expect(toasts).toEqual(["info: Dictation stopped: the text changed"]);
+  // The person's own typing stopped it: nothing to say, on the mic or in a toast.
+  expect(mic.getAttribute("data-dictation-reason")).toBeNull();
+  expect(toasts).toEqual([]);
   await c.unmount();
 });
 
@@ -450,7 +334,8 @@ test("text typed before the first word is kept: Enter sends it, and the first wo
   await typeInto(b.textarea(), "fix the login bug");
   await say((e) => e.onPartial("today"));
   expect(b.textarea().value).toBe("fix the login bug");
-  expect(b.button("Dictate")!.getAttribute("data-dictation-reason")).toBe("Dictation stopped: the text changed");
+  expect(b.button("Finish dictation")).toBeNull();
+  expect(b.button("Dictate")!.getAttribute("data-dictation-reason")).toBeNull();
   await b.unmount();
 });
 
@@ -550,10 +435,11 @@ test("a huddle, an unmute, a voice message and a room recording each finish a ru
   const fs = await import("node:fs");
   // Each path that takes the microphone hands it over first.
   const src = (f: string) => fs.readFileSync(new URL(`../../lib/calls/${f}`, import.meta.url), "utf8");
-  expect(src("callManager.ts")).toMatch(/export async function joinCall\([^)]*\)[^{]*\{\s*(\/\/[^\n]*\n\s*)*void finishRunningDictation\(\);/);
-  expect(src("callManager.ts")).toMatch(/export async function setMuted\([^)]*\)[^{]*\{\s*if \(!muted\) void finishRunningDictation\(\);/);
-  expect(src("walkie.ts")).toMatch(/export function startBurst\([^)]*\)[^{]*\{\s*(\/\/[^\n]*\n\s*)*void finishRunningDictation\(\);/);
-  expect(src("recorder.ts")).toMatch(/void finishRunningDictation\(\);\s*setPhase\("starting"\);/);
+  // In this window and, over the dictation channel, in every other one.
+  expect(src("callManager.ts")).toMatch(/export async function joinCall\([^)]*\)[^{]*\{\s*(\/\/[^\n]*\n\s*)*void finishDictationEverywhere\(\);/);
+  expect(src("callManager.ts")).toMatch(/export async function setMuted\([^)]*\)[^{]*\{\s*if \(!muted\) void finishDictationEverywhere\(\);/);
+  expect(src("walkie.ts")).toMatch(/export function startBurst\([^)]*\)[^{]*\{\s*(\/\/[^\n]*\n\s*)*void finishDictationEverywhere\(\);/);
+  expect(src("recorder.ts")).toMatch(/void finishDictationEverywhere\(\);\s*setPhase\("starting"\);/);
   // And what that call does to a box: the words stay, the recording ends.
   const c = await mountComposer();
   await c.press("Dictate");
