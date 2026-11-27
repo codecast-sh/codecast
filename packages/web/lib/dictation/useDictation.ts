@@ -43,11 +43,16 @@ export type DictationControls = {
    *  words are in. React's `active` lags it by a render. */
   running(): boolean;
   start(): void;
-  finish(): Promise<void>;
+  /** Keep the words; true when they were kept (not cancelled meanwhile). */
+  finish(): Promise<boolean>;
+  /** Run `then` (a send, a create) once the last words are in, only if they
+   *  were kept; a second press replaces the first. Now, when idle. */
+  finishThen(then: () => void): void;
   cancel(): void;
   /**
    * The box's keydown while recording: Esc cancels, the submit key (Enter by
-   * default) waits for the last words and then calls `submit`. Returns true
+   * default) waits for the last words and then calls `submit` (finishThen).
+   * Returns true
    * when it took the key; when nothing is recording it takes nothing.
    */
   keyDown(e: KeyboardEvent, submit: () => void, isSubmitKey?: (e: KeyboardEvent) => boolean): boolean;
@@ -95,7 +100,12 @@ export function useDictation(field: DictationFieldAdapter): DictationControls {
         c.start();
         fieldRef.current.focus?.();
       },
-      finish: () => ctl.current?.finish() ?? Promise.resolve(),
+      finish: () => ctl.current?.finish() ?? Promise.resolve(true),
+      finishThen: (then: () => void) => {
+        const c = ctl.current;
+        if (c) c.finishThen(then);
+        else then();
+      },
       cancel: () => ctl.current?.cancel(),
       keyDown: (e: KeyboardEvent, submit: () => void, isSubmitKey: (e: KeyboardEvent) => boolean = plainEnter) => {
         const c = ctl.current;
@@ -109,7 +119,7 @@ export function useDictation(field: DictationFieldAdapter): DictationControls {
         if (isSubmitKey(e) && !e.nativeEvent.isComposing) {
           e.preventDefault();
           e.stopPropagation();
-          void c.finish().then(submit);
+          c.finishThen(submit);
           return true;
         }
         return false;

@@ -219,6 +219,29 @@ test('send while recording finishes first, then sends the dictated words', async
   expect(m.value()).toBe('');
 });
 
+test('send pressed twice while finishing sends once; send then Cancel sends nothing, ever', async () => {
+  const m = await mount('');
+  await m.press('Dictate');
+  await m.act(() => fake.events!.onPartial('ship it'));
+  await m.send();
+  await m.send();
+  await m.act(() => fake.finished());
+  expect(sent).toEqual(['ship it']);
+
+  await m.press('Dictate');
+  await m.act(() => fake.events!.onPartial('scratch that'));
+  await m.send();
+  await m.press('Cancel dictation');
+  expect(m.value()).toBe('');
+  // A later recording kept with Finish does not carry the cancelled send.
+  await m.press('Dictate');
+  await m.act(() => fake.events!.onPartial('just a draft'));
+  await m.press('Finish dictation');
+  await m.act(() => fake.finished());
+  expect(m.value()).toBe('just a draft');
+  expect(sent).toEqual(['ship it']);
+});
+
 test('typing into the box mid-recording stops it and keeps what was typed', async () => {
   const m = await mount('');
   await m.press('Dictate');
