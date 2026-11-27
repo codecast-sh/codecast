@@ -39,7 +39,7 @@ import { judgedFileWords } from '@codecast/web/lib/ship/judgedEdits';
 import { approvalOf, shipConfirms } from '@codecast/web/lib/ship/approval';
 import { landedSha } from '@codecast/web/lib/ship/runRecord';
 import { reachTargets } from '@codecast/web/lib/ship/sessionShip';
-import { useDeployReach } from '@codecast/web/hooks/useDeployReach';
+import { useDeployReachRead } from '@codecast/web/hooks/useDeployReach';
 import { useRunFlow } from '@codecast/web/hooks/useFlowObject';
 import type { JourneyTone } from '@codecast/web/lib/ship/journeyWords';
 import { ResumeAtAction } from '@/components/session/ResumeAtAction';
@@ -168,10 +168,10 @@ export default function RunScreen() {
   // Its verdicts judged on the head GitHub has the PR on, as the PR's header judges them.
   const changeRun = useMemo(() => (run ? onPrHead(run as any, prMerge?.head_sha) : run), [run, prMerge?.head_sha]);
   const mergedSha = changeRun && changeFlow ? landedSha(changeRun as any) ?? (prMerge?.merged ? prMerge.merge_sha : null) : null;
-  const reach = useDeployReach(mergedSha && changePrRef ? `${changePrRef.repository}@${mergedSha}` : null);
+  const { reach, ready: reachRead } = useDeployReachRead(mergedSha && changePrRef ? `${changePrRef.repository}@${mergedSha}` : null);
   const targets = useMemo<TargetState[]>(() => reachTargets(reach), [reach]);
   const journey = useMemo(() => (changeRun && changeFlow ? journeyOf(changeFlow, changeRun as any, targets, viewer) : null), [changeRun, changeFlow, targets, viewer]);
-  const head = journey && changeRun && changeFlow ? changeHeadline(journey, changeRun as any, changeFlow, { pr: prMerge, targets }) : null;
+  const head = journey && changeRun && changeFlow ? changeHeadline(journey, changeRun as any, changeFlow, { pr: prMerge, targets, reading: !reachRead }) : null;
   const links = journey && changeRun && changeFlow ? changeLinks(changeRun as any, changeFlow, targets, prMerge) : [];
   const newer = run ? [...others].filter((r) => r.created_at > run.created_at).sort((a, b) => b.created_at - a.created_at)[0]?._id ?? null : null;
   // The role whose line started the run holds its merge switch: its page, read only when merge was off.

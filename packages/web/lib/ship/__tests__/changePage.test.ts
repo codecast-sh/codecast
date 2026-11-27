@@ -323,6 +323,16 @@ describe("D: a stop always has one way on, and never one that cannot help", () =
     expect(words([{ name: "desktop", state: "live", deploy: "dp-3601" }, { name: "web", state: "failed" }])).toBe("Landed · live on desktop dp-3601 · web dp-12 failed · goes live with the next web deploy");
   });
 
+  // pl-1077 polish 4: mobile dp-3857 failed, dp-3858 took it live, and cli was still going out; the head named only mobile,
+  // and before reach answered it said mobile failed from what an earlier visit had cached.
+  test("a stop at Deploy names a target still sending the change, and says it is reading until reach answers", () => {
+    const r = run({ status: "failed", current_node_id: "deploy__failed", merge: { sha: "65d54feb1c", pr_url: "https://github.com/acme/app/pull/333" }, fail_reason: "Stopped: The deploy that carried 65d54fe failed: mobile dp-3857 (Stopped at Send.).", node_statuses: [...MERGED, st("deploy__wait", "failed", 16), st("deploy__failed", "failed", 17)] });
+    const said = (ctx: Record<string, unknown>) => changeHeadline(journeyOf(change, r, [], null), r, change, ctx as any);
+    const targets = [{ name: "mobile", state: "live", deploy: "dp-3858" }, { name: "cli", state: "deploying", deploy: "dp-3856" }];
+    expect(said({ targets })).toMatchObject({ words: "Stopped at Deploy", waits: "Landed · live on mobile dp-3858 · going out to cli in dp-3856" });
+    expect(said({ targets: [{ name: "mobile", state: "failed", deploy: "dp-3857" }], reading: true }).waits).toBe("Landed · reading where it is live");
+  });
+
   // ct-102396: dp-3789 stopped at Send on a refusal before anything went out; the head said "cli dp-3789 failed".
   test("a change whose deploy sent nothing reads Not sent, never failed", () => {
     const reason = "No deploy took f35e9c6 out: cli dp-3789 stopped at Send before sending anything (A cut-cli-release.yml run is already in flight: https://github.com/acme/app/actions/runs/9). A later deploy that takes it live ends this run at Live.";
