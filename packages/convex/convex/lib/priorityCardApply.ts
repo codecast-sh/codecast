@@ -4,11 +4,11 @@
 // their own merge on the priorities page (priorityWrite doMerge), of the
 // absorbed priority as it stands then, unless either priority was merged by
 // hand, deleted or set aside since. Each merge they decline (left unticked,
-// on a dismissed card, or answered in words only) becomes their correction on
-// the absorbed priority (declinedMergeText): every pass reads it, and no card
-// proposes that merge again until they delete it. Words with no ticks
-// ("Something else…") are saved as a correction the next pass reads. Every
-// answer records its outcome on the card.
+// or on a dismissed card) becomes their correction on the absorbed priority
+// (declinedMergeText): every pass reads it, and no card proposes that merge
+// again until they delete it. Words alone ("Something else…") decline
+// nothing: they are saved as a correction the next pass reads. Every answer
+// records its outcome on the card.
 
 import type { Doc, Id } from "../_generated/dataModel";
 import { changeLine, type PriorityCard } from "@codecast/shared/contracts/priorityCard";
