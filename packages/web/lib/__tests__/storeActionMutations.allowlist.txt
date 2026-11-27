@@ -27,7 +27,7 @@ components/PlanDetailPanel.tsx 1
 components/TriggerContextPanel.tsx 1
 components/WatchButton.tsx 1
 components/artifacts/ArtifactCard.tsx 1
-components/calls/useCallFeed.ts 3
+components/calls/useCallFeed.ts 2
 components/chat/SlackDmSwitch.tsx 1
 components/chat/SlackPeopleDialog.tsx 1
 components/decisions/DecisionAnswering.tsx 1

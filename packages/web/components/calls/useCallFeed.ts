@@ -11,10 +11,9 @@ import {
   humanizeConvexError,
   transcriptChunkHeader,
 } from "@codecast/shared/contracts";
-import { AVATAR_KEYS } from "@codecast/shared/contracts/orgAvatars";
-import { characterNameFor, defaultCharacterFor, type Character } from "@codecast/shared/contracts/sessionCharacter";
+import type { Character } from "@codecast/shared/contracts/sessionCharacter";
 import { SessionCreatePendingError, useInboxStore, useTrackedStore } from "../../store/inboxStore";
-import { spawnSessionWithMessage } from "../../lib/calls/spawnFeedSession";
+import { characterForRoom, charactersInRoom, spawnSessionWithMessage } from "../../lib/calls/spawnFeedSession";
 import { withoutUndo } from "../../store/undoStack";
 import { getRoom, ringInto, startTranscribing } from "../../lib/calls/callManager";
 import { useRecentProjectsFeed } from "../../hooks/useRecentProjectsFeed";
@@ -24,7 +23,7 @@ import { describeRoomLive } from "../../lib/calls/roomLabels";
 import { agentRoomName, findSessionRow } from "../../lib/calls/findSessionRow";
 import { identityPrefsNow } from "../../hooks/useIdentityPrefs";
 import { teamHasFeature } from "../../lib/teamFeatures";
-import { characterFor, identitySig } from "../../lib/sessionIdentity";
+import { identitySig } from "../../lib/sessionIdentity";
 import type { PalettePick, PalettePickTarget, PalettePickResult } from "../../lib/palettePick";
 
 // The two gestures that connect a huddle's words to the rest of the product:
@@ -124,37 +123,6 @@ export type TranscriptExcerpt = {
   partial: boolean;
 };
 
-/** The character a session spawned FOR a huddle wears (session-characters.md
- *  S1): the hash default for `seed`, unless an agent already in the room
- *  wears that face or that name, in which case the next free face and its
- *  name. Two agents called Ember in one room would answer each other's asks.
- *  Written as a CHOSEN character (the seed is the stub, not the row's final
- *  id), so the room's name for it holds on every surface. */
-export function characterForRoom(seed: string, taken: Character[]): Character {
-  const clash = (c: { avatar: string; name: string }) =>
-    taken.some((t) => t.avatar === c.avatar || t.name.toLowerCase() === c.name.toLowerCase());
-  const own = defaultCharacterFor(seed);
-  if (!clash(own)) return { ...own, chosen: true };
-  const start = AVATAR_KEYS.indexOf(own.avatar);
-  for (let i = 1; i < AVATAR_KEYS.length; i++) {
-    const avatar = AVATAR_KEYS[(start + i) % AVATAR_KEYS.length];
-    const c = { avatar, name: characterNameFor(seed, avatar) };
-    if (!clash(c)) return { ...c, chosen: true };
-  }
-  return { ...own, chosen: true };
-}
-
-/** The characters of the agents a live transcript already feeds, read from
- *  the store, so a newcomer can avoid their faces and names. */
-function charactersInRoom(routes: Array<{ kind: string; target: string }>): Character[] {
-  const st = useInboxStore.getState() as any;
-  return routes
-    .filter((r) => r.kind === "session")
-    .map((r) => findSessionRow(st, r.target))
-    .filter(Boolean)
-    .map((row) => characterFor(row));
-}
-
 export function excerptBody(excerpt: TranscriptExcerpt, note?: string): string {
   const header = transcriptChunkHeader({
     title: excerpt.title,
@@ -229,15 +197,11 @@ export function useAddLiveFeed(opts: {
   teamId?: string | null;
   getRoom: () => any;
 }) {
-  const convex = useConvex();
   const { roomKey, liveTranscriptId, routes, teamId, getRoom } = opts;
 
   return useCallback(
-    // `scribe`: the new session is the call's Scribe, briefed with its own
-    // instructions and seated in the slot `claim` holds (transcripts.inviteScribe).
-    async (target: FeedTarget, opts?: { face?: boolean; scribe?: { claim: number; instructions: string } }) => {
+    async (target: FeedTarget, opts?: { face?: boolean }) => {
       if (!roomKey) return;
-      const scribe = opts?.scribe;
       let route: { kind: "session" | "doc" | "slack"; target: string } | null = null;
       const face = opts?.face === false ? { face: false } : {};
       if (target.kind === "session") route = { kind: "session", target: target.id };
@@ -259,10 +223,6 @@ export function useAddLiveFeed(opts: {
             (stubId) => {
               stub = stubId;
               character = characterForRoom(stubId, charactersInRoom(routes ?? []));
-              if (scribe) {
-                character = { ...character, name: "Scribe" };
-                return scribe.instructions;
-              }
               return huddleFeedBriefing({ name: character.name, label });
             },
             (id) => {
@@ -270,7 +230,6 @@ export function useAddLiveFeed(opts: {
               if (character) withoutUndo(() => st.setSessionCharacter(id, { avatar: character!.avatar, name: character!.name }));
             },
             teamId ?? (st.clientState?.ui?.active_team_id as string | undefined),
-            !scribe,
           );
         } catch (err) {
           // Given up on the wait, but the session may have landed by now
@@ -290,21 +249,12 @@ export function useAddLiveFeed(opts: {
       const attach = async () => {
         if (liveTranscriptId) {
           try {
-            await convex.mutation(api.transcripts.addRoute, {
-              transcript_id: liveTranscriptId as any,
-              kind: route.kind,
-              target: route.target,
-              mode: "live",
-              ...face,
-              ...(scribe ? { role: "scribe" as const, claim: scribe.claim } : {}),
-            });
+            await useInboxStore.getState().addLiveRoute(liveTranscriptId, { kind: route.kind, target: route.target, mode: "live", ...face });
             return;
           } catch (err) {
-            // Scribe's claim lives on the transcript, so a fresh one cannot seat it.
-            if (scribe || !String(err).includes("ended")) throw err;
+            if (!String(err).includes("ended")) throw err;
           }
         }
-        if (scribe) throw new Error("The huddle stopped transcribing, so Scribe would hear nothing");
         const room = getRoom();
         if (!room) {
           // A recording has no room to fall back into: its transcript IS the
@@ -336,7 +286,7 @@ export function useAddLiveFeed(opts: {
         throw err;
       }
     },
-    [convex, roomKey, liveTranscriptId, teamId, getRoom],
+    [roomKey, liveTranscriptId, teamId, getRoom],
   );
 }
 

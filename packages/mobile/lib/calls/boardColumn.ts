@@ -10,8 +10,8 @@
 import type { ArtifactElement } from "@codecast/shared/artifacts";
 import { contains, elementBounds, foldedCount, frameCollapsed, frameRef, hiddenKeys, type Box } from "@codecast/shared/artifacts/board";
 
-/** What the column draws as a row: words and filed cards. Arrows, ink and the like stay on the canvas. */
-const ROW_KINDS = new Set(["sticky", "text", "shape", "card"]);
+/** What the column draws as a row: words, filed cards, published pages and images. Arrows, ink and the like stay on the canvas. */
+const ROW_KINDS = new Set(["sticky", "text", "shape", "card", "page", "image"]);
 
 export type ColumnNote = { kind: "note"; key: string; el: ArtifactElement };
 export type ColumnGroup = {
@@ -67,14 +67,18 @@ export function buildBoardColumn(elements: readonly ArtifactElement[]): ColumnCa
     const holder = innermostHolder(n.el.key);
     // Held keys look among the frames the same fold holds; the rest among the visible frames.
     const pool = holder ? (frameCollapsed(byKey.get(holder))?.holds ?? []) : [...nodes.keys()].filter((k) => !hidden.has(k));
-    let best: Node | null = null;
-    for (const k of pool) {
-      const f = nodes.get(k);
-      if (!f || f.el.kind !== "frame" || f.el.key === n.el.key || frameCollapsed(f.el)) continue;
-      if (holder && innermostHolder(k) !== holder) continue;
-      if (!contains(f.box, n.box) || (best && area(f.box) >= area(best.box))) continue;
-      best = f;
-    }
+    // FrameLayout.plant's rule: a frame holds another frame only if it is
+    // bigger, or the same size and earlier by key, so equal boxes never hold
+    // each other; the smallest holder wins, then key order.
+    const best = pool
+      .map((k) => nodes.get(k))
+      .filter((f): f is Node => {
+        if (!f || f.el.kind !== "frame" || f.el.key === n.el.key || frameCollapsed(f.el)) return false;
+        if (holder && innermostHolder(f.el.key) !== holder) return false;
+        if (!contains(f.box, n.box)) return false;
+        return n.el.kind !== "frame" || area(f.box) > area(n.box) || (area(f.box) === area(n.box) && f.el.key < n.el.key);
+      })
+      .sort((a, b) => area(a.box) - area(b.box) || (a.el.key < b.el.key ? -1 : 1))[0];
     return best ? best.el.key : holder;
   };
 
@@ -110,4 +114,19 @@ export function buildBoardColumn(elements: readonly ArtifactElement[]): ColumnCa
 export function foldLabel(g: Pick<ColumnGroup, "title" | "ref" | "count">, topLevel: boolean): string {
   const name = !topLevel && g.title ? g.title : "Working notes";
   return `${name} (${g.count})`;
+}
+
+/** A page element's row: its caption (or a plain name), and the phone's own
+ *  screen for the published page it shows; null when it names none. Never a
+ *  web page. */
+export function pageRow(el: ArtifactElement): { title: string; route: string | null } {
+  const slug = typeof el.slug === "string" ? el.slug.trim() : "";
+  const caption = typeof el.caption === "string" ? el.caption.trim() : "";
+  return { title: caption || "Published page", route: /^[A-Za-z0-9_-]+$/.test(slug) ? `/page/${slug}` : null };
+}
+
+/** An image element's thumbnail source, when it is one the phone can load (the canvas's rule). */
+export function imageThumb(el: ArtifactElement): { uri: string; alt: string } | null {
+  const src = typeof el.src === "string" && /^https?:\/\//.test(el.src) ? el.src : null;
+  return src ? { uri: src, alt: typeof el.alt === "string" ? el.alt : "" } : null;
 }

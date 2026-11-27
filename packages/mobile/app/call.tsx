@@ -216,7 +216,7 @@ export default function CallScreen() {
           {!filming && !transcribing.on && <Text style={styles.headerTitle}>huddle</Text>}
           <RecordingBadge roomKey={call.roomKey} canStart={call.phase === "connected"} />
           <TranscribingChip transcribing={transcribing} />
-          <CallBoardButton roomKey={call.phase === "connected" ? call.roomKey : null} />
+          <CallBoardButton phase={call.phase} roomKey={call.roomKey} />
         </View>
         <Pressable
           hitSlop={12}
