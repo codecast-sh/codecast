@@ -32,7 +32,7 @@ export function hiddenBucketTree(items: InboxSession[]): { topLevel: InboxSessio
   return { topLevel, subsByTop };
 }
 
-// The ids "Kill all" sends so nothing in the bucket survives. A kill stamps
+// The ids a hidden bucket's "Kill N" sends so none of its running rows survive. A kill stamps
 // only the killed row's direct children (nestParentIdOf, as hideSessionInDraft
 // cascades), so a row is covered only when its direct parent is killed
 // explicitly; every other row, a grandchild included, is killed itself.
