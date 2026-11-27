@@ -21,3 +21,17 @@ test("a refused link says why: a private session cannot sit on a team priority; 
   expect(startLinkVerdict({ priority_id: null, is_private: false }, start, "team:t1")).toMatch(/isn't on pri-7/);
   expect(startLinkVerdict({ priority_id: null, is_private: true }, start, "user:me")).toMatch(/isn't on pri-7/);
 });
+
+test("before Send: a Start links where its priority's team will read it, and says why not otherwise", async () => {
+  const { startLinkForecast } = await import("../priorityStartLink");
+  const codecast = { team_id: "cc", team_name: "Codecast", visibility: "private" };
+  expect(startLinkForecast("team:cc", codecast, {})).toEqual({ kind: "private", team: "Codecast" });
+  expect(startLinkForecast("team:cc", codecast, { visibility: "summary" })).toBeNull();
+  expect(startLinkForecast("team:cc", { ...codecast, visibility: "full" }, {})).toBeNull();
+  expect(startLinkForecast("team:cc", codecast, { team: true })).toBeNull();
+  expect(startLinkForecast("team:cc", { team_id: "un", team_name: "Union", visibility: "full" }, {})).toEqual({ kind: "folder", team: "Union" });
+  expect(startLinkForecast("team:cc", null, {})).toEqual({ kind: "locked" });
+  expect(startLinkForecast("team:cc", undefined, {})).toBeNull();
+  expect(startLinkForecast("user:me", null, {})).toBeNull();
+  expect(startLinkForecast("user:me", { team_id: "un", team_name: "Union", visibility: "full" }, {})).toEqual({ kind: "folder", team: "Union" });
+});

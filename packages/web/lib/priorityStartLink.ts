@@ -51,3 +51,32 @@ export function sayIfStartUnlinked<T>(created: Promise<T>, start: SessionStart |
   }, () => {});
   return created;
 }
+
+/** Where the composer would put a Start's session (sessionVisibilityPreview.creationTeam, given the priority): its team, or null for none. */
+export type StartDestination = { team_id: string; team_name: string; visibility: string } | null | undefined;
+
+/**
+ * Before Send: whether a Start's session will land where its priority is, as
+ * dispatch createSession and lib/priorityLinks linkSession decide. Null when
+ * it will (or nothing is known yet); else why not: the folder keeps it in
+ * another team (`folder`), it would stay private on its priority's team
+ * (`private`, which the person can fix by sharing), or the folder keeps it
+ * private outright (`locked`).
+ */
+export function startLinkForecast(
+  priorityWorkspace: string | undefined,
+  destination: StartDestination,
+  pick: { visibility?: string; team?: boolean },
+): null | { kind: "folder" | "private" | "locked"; team?: string } {
+  if (!priorityWorkspace || destination === undefined) return null;
+  const level = pick.visibility ?? destination?.visibility;
+  const shared = !!destination && (pick.team || level === "summary" || level === "full");
+  const lands = shared ? `team:${destination!.team_id}` : "user:";
+  if (priorityWorkspace.startsWith("team:")) {
+    if (lands === priorityWorkspace) return null;
+    if (!destination) return { kind: "locked" };
+    if (priorityWorkspace !== `team:${destination.team_id}`) return { kind: "folder", team: destination.team_name };
+    return { kind: "private", team: destination.team_name };
+  }
+  return shared ? { kind: "folder", team: destination!.team_name } : null;
+}

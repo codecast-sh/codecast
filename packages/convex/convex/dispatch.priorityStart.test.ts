@@ -114,3 +114,19 @@ describe("Start from a milestone outside the active workspace", () => {
     expect(conv.priority_id).toBeUndefined();
   });
 });
+
+describe("the composer's preview of where a Start goes (sessionVisibilityPreview.creationTeam)", () => {
+  const preview = (t: any, ada: Id<"users">, args: Record<string, unknown>) => t.withIdentity({ subject: `${ada}|session` }).query((api as any).sessionVisibilityPreview.creationTeam, args);
+
+  test("names the priority's team for an unmapped folder, private until the person shares it; a mapped folder keeps its own team", async () => {
+    const { t, ada, codecast, union } = await world();
+    expect(await preview(t, ada, { path: "/tmp/scratch", priority: "pri-1" })).toMatchObject({ team_id: String(codecast), team_name: "Codecast", visibility: "private" });
+    expect(await preview(t, ada, { path: "/work/union/app", priority: "pri-1" })).toMatchObject({ team_id: String(union), team_name: "Union" });
+    expect(await preview(t, ada, { path: "/work/codecast/app", priority: "pri-1" })).toMatchObject({ team_id: String(codecast) });
+  });
+
+  test("a Start on the person's own priority in an unmapped folder has no team to name", async () => {
+    const { t, ada } = await world();
+    expect(await preview(t, ada, { path: "/tmp/scratch", priority: "pri-3" })).toBeNull();
+  });
+});

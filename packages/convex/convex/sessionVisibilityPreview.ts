@@ -9,12 +9,14 @@
 import { v } from "convex/values";
 import { query } from "./functions";
 import { getAuthenticatedUserId } from "./pendingMessages";
-import { buildShareUpdate, resolveTeamForPath, type DirectoryMapping } from "./privacy";
+import { buildShareUpdate, matchDirectoryMapping, resolveTeamForPath, type DirectoryMapping } from "./privacy";
+import { startWorkspace } from "./dispatchHelpers";
 import { canUseTeamSessions } from "./lib/teamFeatureGuard";
 import { currentMembershipVisibility, type TeamVisibilityLevel } from "./teamVisibility";
 
 export const creationTeam = query({
-  args: { path: v.optional(v.string()), api_token: v.optional(v.string()) },
+  // `priority`: a milestone's Start, which routes a session in an unmapped folder to the priority's team (dispatch createSession).
+  args: { path: v.optional(v.string()), api_token: v.optional(v.string()), priority: v.optional(v.string()) },
   handler: async (ctx, args): Promise<{ team_id: string; team_name: string; team_sessions: boolean; visibility: "private" | TeamVisibilityLevel } | null> => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) return null;
@@ -23,7 +25,13 @@ export const creationTeam = query({
       .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
       .collect();
     const path = args.path || undefined;
-    const { teamId, isPrivate } = resolveTeamForPath(mappings as DirectoryMapping[], path, undefined);
+    let { teamId, isPrivate } = resolveTeamForPath(mappings as DirectoryMapping[], path, undefined);
+    // A Start in a folder no rule names goes where its priority is: that team, or no team for the person's own.
+    if (args.priority && !matchDirectoryMapping(mappings as DirectoryMapping[], path)) {
+      const startIn = await startWorkspace(ctx as any, userId, args.priority);
+      if (startIn && !startIn.team) return null;
+      if (startIn?.team) teamId = startIn.team;
+    }
     const share = await buildShareUpdate(ctx as any, { team_id: teamId, git_root: path }, userId);
     if (!share.team_id) return null;
     const team = await ctx.db.get(share.team_id);
