@@ -182,7 +182,8 @@ export function runEndMessage(graph: WorkflowGraph, opts: { taskId?: string; end
     const said = (opts.lastOutput ?? "").replace(ANSI, "").split("\n").map((l) => l.trim()).filter(Boolean).pop();
     // Words that open with the end's own name ("Live: e180ae0 on …") say it once.
     const words = !said || said.startsWith("{") ? `${opts.endLabel}.` : said.startsWith(`${opts.endLabel}:`) ? (/[.!?]$/.test(said) ? said : `${said}.`) : `${opts.endLabel}. ${said}`;
-    return `The ${flow} run${on} is over: ${words} Nothing more is waiting on this session for it.`;
+    // Words that leave a step to someone (a command to run) are not "nothing more is waiting".
+    return /`[^`]+`/.test(words) ? `The ${flow} run${on} is over: ${words}` : `The ${flow} run${on} is over: ${words} Nothing more is waiting on this session for it.`;
   }
   const why = (opts.failReason ?? "it failed").replace(/^Stopped:\s*/, "").replace(/\.$/, "");
   // A stop that says all of it (whole_stop, or the runner's own words naming its restart) stands as it is.

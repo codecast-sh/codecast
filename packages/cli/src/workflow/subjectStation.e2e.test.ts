@@ -741,6 +741,10 @@ describe("runEndMessage", () => {
     expect(runEndMessage(g, { taskId: "ct-1", endLabel: "Merged", failed: false, lastOutput: "4a6e413" }))
       .toBe("The Checked run on ct-1 is over: Merged. 4a6e413 Nothing more is waiting on this session for it.");
   });
+  test("an end whose words leave a command for someone does not say nothing more is waiting", () => {
+    const said = "Live: e180ae0 on cli dp-1. The line profile and deploy targets it changed were not republished: a worktree of e180ae0 could not be made (x). `cast line profile --publish` in a checkout at e180ae0 publishes them.";
+    expect(runEndMessage(g, { taskId: "ct-1", endLabel: "Live", failed: false, lastOutput: said })).toBe(`The Checked run on ct-1 is over: ${said}`);
+  });
 });
 
 describe("gateAnswerMessage", () => {

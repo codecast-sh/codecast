@@ -1,11 +1,11 @@
-// A change that lands .codecast/line.toml or deploy.toml republishes them from the run's checkout once it holds the
-// merged commit (republishLanded.ts): the server's copy moved on nothing else.
+// A change that lands .codecast/line.toml or deploy.toml republishes them from a clean worktree of the merged commit
+// (republishLanded.ts): the server's copy moved on nothing else, and the run's checkout may never hold the commit.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { landsConfig, notYetHeld, republishLanded } from "./republishLanded";
+import { castVersionNeeded, landsConfig, republishLanded, unknownKeys, withMergedTree } from "./republishLanded";
 
 const ENV = { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t", GIT_CONFIG_NOSYSTEM: "1", HOME: os.tmpdir() };
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-c", "commit.gpgsign=false", ...args], { cwd, env: ENV, encoding: "utf8" }).trim();
@@ -36,38 +36,63 @@ describe("republishLanded", () => {
     for (const f of [".codecast/line.toml", ".codecast/deploy.toml", ".codecast/workspace.toml", ".codecast/line/ship.md"]) expect(landsConfig([f])).toBe(true);
   });
 
-  test("a checkout publishes only once its HEAD holds the merged commit with .codecast clean", async () => {
-    expect(await notYetHeld(checkout, landed)).toContain("does not hold");
-    git(checkout, "merge", "-q", "--ff-only", landed);
-    write(checkout, ".codecast/line.toml", "[line]\nproject = \"mine\"\n");
-    expect(await notYetHeld(checkout, landed)).toContain("uncommitted edits");
-    git(checkout, "checkout", "-q", "--", ".codecast/line.toml");
-    expect(await notYetHeld(checkout, landed)).toBeNull();
-  });
-
-  test("waits for the checkout to hold it, then publishes once and says so", async () => {
-    let now = 0;
-    let looks = 0;
-    const published: number[] = [];
-    const words = await republishLanded("/repo", landed, {
-      held: async () => (++looks < 3 ? "the checkout's HEAD does not hold it yet" : null),
-      publish: async () => { published.push(now); return { republished: "all" as const }; },
-      sleep: async (ms) => { now += ms; },
-      now: () => now,
-    }, { intervalMs: 30_000, deadline: 10 * 60_000 });
-    expect(published).toEqual([60_000]);
+  test("publishes from a clean worktree of the merged commit the checkout has not caught up with, then removes it", async () => {
+    let seen = "";
+    const words = await republishLanded(landed, {
+      tree: (fn) => withMergedTree(checkout, landed, fn),
+      publish: async (d) => { seen = fs.readFileSync(path.join(d, ".codecast/line.toml"), "utf8"); expect(git(d, "rev-parse", "HEAD")).toBe(landed); return { republished: "all" as const }; },
+    });
     expect(words).toBe("Republished the line profile and deploy targets it changed.");
+    expect(seen).toContain("\"Q\"");
+    // The checkout itself never moved, and no worktree is left behind.
+    expect(fs.readFileSync(path.join(checkout, ".codecast/line.toml"), "utf8")).toContain("\"P\"");
+    expect(git(checkout, "worktree", "list").split("\n")).toHaveLength(1);
+    expect(await unknownKeys(checkout)).toEqual([]);
   });
 
-  test("a checkout that never holds it is named with the command that publishes by hand; a failed publish says why", async () => {
-    let now = 0;
-    const io = { held: async () => "the checkout's HEAD does not hold it yet", publish: async () => { throw new Error("never"); }, sleep: async (ms: number) => { now += ms; }, now: () => now };
-    const words = await republishLanded("/repo", landed, io, { intervalMs: 30_000, deadline: 10 * 60_000 });
-    expect(words).toBe(`The line profile and deploy targets it changed were not republished: the checkout's HEAD does not hold it yet. Run \`cast line profile --publish\` in /repo once it holds ${landed.slice(0, 7)}.`);
-    expect(now).toBe(10 * 60_000);
-    const failed = await republishLanded("/repo", landed, { ...io, held: async () => null, publish: async () => ({ republished: "none" as const, why: "both publishes failed" }) }, { intervalMs: 1, deadline: 0 });
-    expect(failed).toBe("The line profile and deploy targets it changed were not republished: both publishes failed.");
-    const half = await republishLanded("/repo", landed, { ...io, held: async () => null, publish: async () => ({ republished: "targets" as const, why: "cast line profile --publish failed in /repo" }) }, { intervalMs: 1, deadline: 0 });
-    expect(half).toBe("Republished the deploy targets it changed; the line profile was not: cast line profile --publish failed in /repo.");
+  test("a publishing cast that does not read a key the files name publishes nothing, and the words name the cast that does", async () => {
+    const tree = async <T,>(fn: (d: string) => Promise<T>) => fn("/tree");
+    const unknown = [".codecast/deploy.toml: target cli: 'warm' is not a key this cast reads"];
+    const words = await republishLanded(landed, { tree, publish: async () => ({ republished: "refused" as const, version: "v1.1.300", unknown, needed: "v1.1.320" }) });
+    expect(words).toBe(`The line profile and deploy targets it changed were not republished: the cast that publishes them (v1.1.300) does not read a key they name and would drop it (${unknown[0]}). cast v1.1.320 or later reads it: \`cast update\`, then \`cast line profile --publish\` in a checkout at ${landed.slice(0, 7)}.`);
+    expect(await republishLanded(landed, { tree, publish: async () => ({ republished: "refused" as const, version: "v2", unknown: ["a", "b"], needed: null }) })).toContain("does not read 2 keys they name and would drop them (a). A newer cast that reads them publishes them");
+  });
+
+  test("--strict refuses with what the publishing cast would drop, and exits 3", async () => {
+    const tree = path.join(dir, "strict");
+    write(tree, ".codecast/deploy.toml", "[[target]]\nname = \"cli\"\nrun = \"x.sh\"\nwarm = \"5m\"\n");
+    const unknown = await unknownKeys(tree);
+    expect(unknown).toHaveLength(1);
+    expect(unknown[0]).toContain("'warm' is not a key this cast reads");
+    const { refuseUnknownKeys } = await import("../lineProfileCommand");
+    const out: string[] = [];
+    const log = console.log, exit = process.exit;
+    console.log = (l: string) => { out.push(l); };
+    (process as any).exit = (code: number) => { throw new Error(`exit ${code}`); };
+    try {
+      await expect(refuseUnknownKeys(tree)).rejects.toThrow("exit 3");
+      await refuseUnknownKeys(checkout);
+    } finally {
+      console.log = log;
+      (process as any).exit = exit;
+    }
+    expect(JSON.parse(out[0])).toMatchObject({ refused: "unknown_keys", unknown });
+    expect(out).toHaveLength(1);
+  });
+
+  test("the cast needed is the release after the version codecast's own tree holds; other repositories name none", () => {
+    write(dir, "codecast/packages/cli/package.json", JSON.stringify({ name: "@codecast/cli", version: "1.1.319" }));
+    expect(castVersionNeeded(path.join(dir, "codecast"))).toBe("v1.1.320");
+    write(dir, "other/packages/cli/package.json", JSON.stringify({ name: "other-cli", version: "2.0.0" }));
+    expect(castVersionNeeded(path.join(dir, "other"))).toBeNull();
+    expect(castVersionNeeded(checkout)).toBeNull();
+  });
+
+  test("a failed publish says why; a tree that cannot be made names the command", async () => {
+    const tree = async <T,>(fn: (d: string) => Promise<T>) => fn("/tree");
+    expect(await republishLanded(landed, { tree, publish: async () => ({ republished: "none" as const, why: "both publishes failed" }) })).toBe("The line profile and deploy targets it changed were not republished: both publishes failed.");
+    expect(await republishLanded(landed, { tree, publish: async () => ({ republished: "targets" as const, why: "cast line profile --publish failed at abc1234" }) })).toBe("Republished the deploy targets it changed; the line profile was not: cast line profile --publish failed at abc1234.");
+    const none = await republishLanded(landed, { tree: async () => { throw new Error("fatal: invalid reference"); }, publish: async () => ({ republished: "all" as const }) });
+    expect(none).toBe(`The line profile and deploy targets it changed were not republished: a worktree of ${landed.slice(0, 7)} could not be made (fatal: invalid reference). \`cast line profile --publish\` in a checkout at ${landed.slice(0, 7)} publishes them.`);
   });
 });

@@ -173,6 +173,7 @@ export function registerLineSubcommands(line: Command, deps: GroupDeps): void {
     .option("--target <name>", "One target")
     .option("--publish", "Publish this checkout's declared targets (.codecast/deploy.toml) first")
     .option("--team <id>", "With --publish: the team, for a repository no GitHub installation or published checkout ties to one")
+    .option("--strict", "With --publish: publish nothing and exit 3 when this cast does not read a key the files name, since a publish by it would drop that key")
     .option("--json", "Machine-readable output")
     .action(async (_opts: any, cmd: any) => {
       // `deploy` itself takes --target and --json, so they land on it: read both levels.
@@ -190,7 +191,8 @@ export function registerLineSubcommands(line: Command, deps: GroupDeps): void {
       const repository = readLocalGitContext(root).repository;
       if (!repository) { console.error("No GitHub repository here: run inside a checkout with a GitHub origin"); process.exit(1); }
       if (options.publish) {
-        const { publishDeployTargets } = await import("./lineProfileCommand.js");
+        const { publishDeployTargets, refuseUnknownKeys } = await import("./lineProfileCommand.js");
+        if (options.strict) await refuseUnknownKeys(root);
         const r = await publishDeployTargets(deps, root, await checkoutTargets(root), options.team);
         const notPublished = r.skipped ?? r.refused;
         if (notPublished) console.error(`Not published: ${notPublished}`);
@@ -264,9 +266,11 @@ export function registerLineSubcommands(line: Command, deps: GroupDeps): void {
         step: step as any, deploy: ref, root: profileRoot, profile, runId: options.run || undefined,
         read,
         post: (path, body) => apiPost(deps, path, body),
+        report: (path, body) => apiPost(deps, path, body, { exitOnError: false }),
       });
-      // The command's own output is the station's output already; only the exit is said again.
-      if (r.code !== 0) { console.error(r.note?.startsWith("exited") ? `exited ${r.code}` : r.note ?? `exited ${r.code}`); process.exit(r.code); }
+      // The command's own output is the station's output already; only the exit and its cause are said again, last, where
+      // the Returned station's note reads them (`exited 1: <cause>`).
+      if (r.code !== 0) { console.error(r.note?.split("\n")[0] || `exited ${r.code}`); process.exit(r.code); }
     });
   deploy
     .command("watch")

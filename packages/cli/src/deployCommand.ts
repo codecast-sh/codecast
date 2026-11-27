@@ -54,15 +54,13 @@ export function registerDeployCommand(program: Command, deps: GroupDeps): void {
     .option("--dry-run", "Say what the release would send and wait for, and stop")
     .option("--json", "Machine-readable output")
     .action(async (names: string[], options: { files?: string; except?: string; sha?: string; carrying?: string; dryRun?: boolean; json?: boolean }) => {
-      const { checkoutTargets, originHead, runDeployGraphAsync, pinnedSha } = await import("./lineDeploy.js");
+      const { checkoutTargets, commitTargets, originHead, runDeployGraphAsync, pinnedSha } = await import("./lineDeploy.js");
       const { planRelease, runRelease, formatPlan, formatResults, commitsSince, holds } = await import("./deployRelease.js");
       const { readLocalGitContext } = await import("./prCommand.js");
       const { deviceId } = await import("./remote/device.js");
       const cwd = process.env.CODECAST_CWD || process.cwd();
       const repository = readLocalGitContext(cwd).repository;
       if (!repository) { console.error("No GitHub repository here: run inside the checkout whose targets these are"); process.exit(1); }
-      const declared = await checkoutTargets(cwd);
-      if (!declared.length) { console.error("This checkout declares no deploy targets. Add a [[target]] to .codecast/deploy.toml (docs: deploys.md DP10)."); process.exit(1); }
       const head = originHead(cwd);
       // --sha is the commit every deploy of the release makes live. --carrying plans the release by a commit main's
       // head holds (which targets lack it) and sends the head: a target whose command sends its tree can do only that.
@@ -71,6 +69,11 @@ export function registerDeployCommand(program: Command, deps: GroupDeps): void {
       if (pinned && "error" in pinned) { console.error(pinned.error); process.exit(1); }
       const sha = pinned?.sha ?? options.carrying ?? head.sha;
       if (!sha) { console.error(`Could not read origin/${head.branch} here`); process.exit(1); }
+      // A checkout behind the release's commit sends the targets that commit declares, not its older files (deployAtCommit.ts).
+      const { behindCommit } = await import("./deployAtCommit.js");
+      const behind = (await behindCommit(cwd, sha)) === "behind";
+      const declared = behind ? (await commitTargets(cwd, sha)).targets : await checkoutTargets(cwd);
+      if (!declared.length) { console.error("This checkout declares no deploy targets. Add a [[target]] to .codecast/deploy.toml (docs: deploys.md DP10)."); process.exit(1); }
       const readTargets = async () => (await apiPost(deps, "/cli/deploys/targets", { repository }, { read: true }))?.targets ?? [];
       const carries = (deployed: string) => holds(cwd, sha, deployed);
       const plan = await planRelease({

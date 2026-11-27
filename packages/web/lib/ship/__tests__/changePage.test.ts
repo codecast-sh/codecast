@@ -317,6 +317,17 @@ describe("D: a stop always has one way on, and never one that cannot help", () =
     expect(words([{ name: "desktop", state: "live", deploy: "dp-3601" }, { name: "web", state: "failed" }])).toBe("Landed · live on desktop dp-3601 · web dp-12 failed · goes live with the next web deploy");
   });
 
+  // ct-102396: dp-3789 stopped at Send on a refusal before anything went out; the head said "cli dp-3789 failed".
+  test("a change whose deploy sent nothing reads Not sent, never failed", () => {
+    const reason = "No deploy took f35e9c6 out: cli dp-3789 stopped at Send before sending anything (A cut-cli-release.yml run is already in flight: https://github.com/acme/app/actions/runs/9). A later deploy that takes it live ends this run at Live.";
+    const r = run({ status: "failed", current_node_id: "deploy__failed", merge: { sha: "f35e9c6628", pr_url: "https://github.com/acme/app/pull/324" }, fail_reason: `Stopped: ${reason}`, node_statuses: [...MERGED, st("deploy__wait", "failed", 16, { result_preview: reason }), st("deploy__failed", "failed", 17)] });
+    expect(head(r)).toEqual({ words: "Not sent", waits: "Landed · cli dp-3789 not sent · goes live with the next cli deploy", tone: expect.any(String) });
+    const mixed = run({ ...r, fail_reason: "Stopped: The deploy that carried f35e9c6 failed: cli dp-3789 stopped at Send before sending anything (x), web dp-12 (Stopped at Live: down)." });
+    expect(head(mixed)).toEqual({ words: "Stopped at Deploy", waits: "Landed · web dp-12 failed · cli dp-3789 not sent · goes live with the next cli and web deploys", tone: expect.any(String) });
+    // A later deploy taking it live is said as such; it is no longer Not sent.
+    expect(changeHeadline(journeyOf(change, r, [], null), r, change, { targets: [{ name: "cli", state: "live", deploy: "dp-3800" }] as any })).toMatchObject({ words: "Stopped at Deploy", waits: "Landed · live on cli dp-3800" });
+  });
+
   test("F2: a flow's own top-level unmerged that loops back to landing is not Deploy finding the change off main", () => {
     // change-pg17's path: ship__unshipped → unmerged → decide → decide__ship → ship → ship__shipped → deploy, which then failed.
     const flow = pushedFlow({ _id: "wf_pg17", ...BRANCHING_FLOW } as any) as any;

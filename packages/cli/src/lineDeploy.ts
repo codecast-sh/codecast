@@ -12,8 +12,9 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawn, spawnSync } from "./proc.js";
-import { deployStepCommand, LINE_DEPLOY_GRAPH, LINE_DEPLOY_STEP_LABELS, LINE_DEPLOY_STEPS, type LineDeployProfile, type LineDeployStep } from "@codecast/shared/contracts/lineDeploy";
+import { deployCauseLine, deployStepCommand, LINE_DEPLOY_GRAPH, LINE_DEPLOY_STEP_LABELS, LINE_DEPLOY_STEPS, type LineDeployProfile, type LineDeployStep } from "@codecast/shared/contracts/lineDeploy";
 import { resolveCastInvocation } from "./castInvocation.js";
+import { behindCommit, commandAtCommit } from "./deployAtCommit.js";
 import type { ResolvedLineProfile } from "./lineProfile.js";
 import { targetFromLineDeploy, type DeployTarget, type TargetDevPush } from "@codecast/shared/contracts/deployTargets";
 
@@ -192,6 +193,9 @@ export async function runDeployStep(opts: {
   log?: (line: string) => void;
   exec?: (cmd: string, env: NodeJS.ProcessEnv, cwd: string, onData: (chunk: string) => void) => Promise<number>;
   head?: (root: string) => { sha: string | null; branch: string };
+  atCommit?: typeof commandAtCommit;
+  /** A post whose failure must not end the step (the send's waiting line); else `post`. */
+  report?: Post;
 }): Promise<{ code: number; note: string | null }> {
   const log = opts.log ?? ((l) => process.stdout.write(l));
   const d = await opts.read(opts.deploy);
@@ -218,16 +222,38 @@ export async function runDeployStep(opts: {
   }
   const actor = d.started_by?.name ?? "cast";
   let tail = "";
-  const onData = (chunk: string) => { log(chunk); tail = (tail + chunk).slice(-4000); };
+  // The whole output, as far back as a cause line can sit under a tool's warnings (deployCauseLine).
+  let all = "";
+  // A send that waits (on a release in flight, on CI) says so on the deploy, so whoever waits on it reads why.
+  let waitingSaid = "";
+  const onData = (chunk: string) => {
+    log(chunk);
+    tail = (tail + chunk).slice(-4000);
+    all = (all + chunk).slice(-256_000);
+    if (opts.step !== "send") return;
+    // The newest waiting line, or once the send moves on, the line it moved on with, so the note never says it still waits.
+    const isWaiting = (l: string) => /^waiting for\b/i.test(l);
+    let said = waitingSaid;
+    for (const l of chunk.split("\n").map((x) => x.trim()).filter(Boolean)) if (isWaiting(l) || isWaiting(said)) said = l;
+    if (said !== waitingSaid) {
+      waitingSaid = said;
+      void (opts.report ?? opts.post)("/cli/line/deploy/report", { deploy: opts.deploy, status: "running", note: said.slice(0, 400) }).catch(() => {});
+    }
+  };
   // What went out is named by the time Finish runs (a release's latest.json version); read it fresh.
   const version = opts.step === "finish" ? ((await opts.read(opts.deploy))?.version ?? d.version ?? "") : (d.version ?? "");
   if (opts.step === "finish" && /\$version\b/.test(command) && !version) return { code: 1, note: `${opts.deploy} went live with no version recorded, so "${command}" has nothing to name` };
   const env = deployEnv(process.env, { sha, id: opts.deploy, actor, ...(d.url ? { url: d.url } : {}), ...(version ? { version } : {}) });
-  const code = await (opts.exec ?? shellExec)(expandDeployCommand(command, { sha, deploy: opts.deploy, actor, version }), env, opts.root, onData);
+  // A checkout behind the deploy's commit runs the script as that commit has it (deployAtCommit.ts).
+  const pinned = await (opts.atCommit ?? commandAtCommit)(opts.root, sha, expandDeployCommand(command, { sha, deploy: opts.deploy, actor, version }));
+  if (pinned.said) log(`${pinned.said}\n`);
+  const code = await (opts.exec ?? shellExec)(pinned.command, { ...env, ...pinned.env }, opts.root, onData);
   // The path's run page, named on the deploy so the steps after can follow it.
   const url = tail.match(/https:\/\/github\.com\/[^\s]+\/actions\/runs\/\d+/)?.[0];
   if (url && url !== d.url) await opts.post("/cli/line/deploy/report", { deploy: opts.deploy, status: "running", url });
-  return { code, note: code === 0 ? null : `exited ${code}\n${tail.slice(-1500)}` };
+  if (code === 0) return { code, note: null };
+  const cause = deployCauseLine(all);
+  return { code, note: `exited ${code}${cause ? `: ${cause}` : ""}\n${tail.slice(-1500)}` };
 }
 
 /** The watch station: the deploy is live, and its shipped fixes are watched from now (LE12). */
@@ -276,7 +302,11 @@ export async function returnDeploy(opts: { deploy: string; runId?: string; note?
   const step = failedStep(run?.run?.node_statuses ?? run?.node_statuses);
   const note = opts.note?.trim() || null;
   const label = step ? LINE_DEPLOY_STEP_LABELS[step] : "a step";
-  await opts.post("/cli/line/deploy/report", { deploy: opts.deploy, status: "failed", note: `Stopped at ${label}.${note ? `\n${note.slice(-1500)}` : ""}` });
+  // The headline names the cause: the step's own `exited N: <cause>` (runDeployStep, read from its whole output), else
+  // the cause line of what reached here. The log stays under it.
+  const own = note?.split("\n").map((l) => l.trim().match(/^exited \d+: (.+)$/)?.[1]).filter(Boolean).pop();
+  const cause = own ?? deployCauseLine(note);
+  await opts.post("/cli/line/deploy/report", { deploy: opts.deploy, status: "failed", note: `Stopped at ${label}${cause ? `: ${cause}` : "."}${note ? `\n${note.slice(-1500)}` : ""}` });
   const signal = await opts.post("/cli/signal/add", { ...deployFailureSignal(d, step, note), ...(opts.scope ?? {}) });
   return { step, signal };
 }
@@ -509,10 +539,14 @@ export function targetDeployProfile(t: DeployTarget, action: "deploy" | "redeplo
  * The step commands for a deploy: a target's when codecast asked for a deploy of one (the deploy names an action),
  * else the line profile's [line.deploy]. The checkout's files are the authority for every command.
  */
-export async function deployProfileFor(d: { target: string; action?: string | null }, root: string): Promise<{ profile: Partial<LineDeployProfile> | null; root: string; why?: string }> {
+export async function deployProfileFor(d: { target: string; action?: string | null; sha?: string | null }, root: string): Promise<{ profile: Partial<LineDeployProfile> | null; root: string; why?: string }> {
   if (d.action) {
-    const t = (await checkoutTargets(root)).find((x) => x.name === d.target);
-    if (!t) return { profile: null, root, why: `No target ${d.target} in this checkout's .codecast/deploy.toml` };
+    // A checkout behind the deploy's commit sends what that commit declares (deployAtCommit.ts). A deploy that names no
+    // commit yet sends origin's head, which its first step fixes as its sha: read that, fetched, as the steps will.
+    const sha = d.sha ?? originHead(root).sha;
+    const behind = sha && (await behindCommit(root, sha)) === "behind" ? sha : null;
+    const t = (behind ? (await commitTargets(root, behind)).targets : await checkoutTargets(root)).find((x) => x.name === d.target);
+    if (!t) return { profile: null, root, why: `No target ${d.target} in ${behind ? `${behind.slice(0, 7)}'s` : "this checkout's"} .codecast/deploy.toml` };
     return { profile: targetDeployProfile(t, d.action as "deploy" | "redeploy" | "rollback"), root };
   }
   const { profile, root: profileRoot } = await loadLineDeployProfile(root);

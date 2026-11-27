@@ -314,6 +314,15 @@ export function headOf(root: string): { sha: string; at: number } | null {
 }
 
 /**
+ * The checkout a publish names as where its targets' deploys run: this one, or the checkout CODECAST_PUBLISH_ROOT names
+ * when the files are read from a clean worktree of a commit that checkout has not caught up with (a change run's Deploy
+ * republishing what it merged, republishLanded.ts). The worktree goes away; the checkout keeps the env sends need.
+ */
+export function publishedRoot(root: string): string {
+  return process.env.CODECAST_PUBLISH_ROOT || root;
+}
+
+/**
  * Whether this checkout's pipeline is the repository's (pipeline.md PL5: never an uncommitted write on one machine):
  * HEAD is on the default branch as origin has it (equal to it or behind it), and `.codecast` and every flow file the
  * pipeline read are clean. Else why not.
@@ -371,5 +380,5 @@ export async function publishPipeline(post: Post, root: string, opts: { teamId?:
   const { pipeline, files, head } = await checkoutPipeline(root, { ...facts, ...(opts.repository ? { repository: opts.repository } : {}), deviceId: opts.deviceId ?? null });
   const refusal = head ? publishRefusal(root, files) : "not a git checkout";
   if (refusal) return { skipped: refusal };
-  return post("/cli/pipelines/publish", { ...pipeline, head_at: head!.at, ...(opts.teamId ? { team_id: opts.teamId } : {}) });
+  return post("/cli/pipelines/publish", { ...pipeline, root: pipeline.root && publishedRoot(pipeline.root), head_at: head!.at, ...(opts.teamId ? { team_id: opts.teamId } : {}) });
 }

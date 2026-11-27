@@ -283,6 +283,15 @@ test("a cancelled attempt that sent nothing is one line, and a link to an earlie
   unmount();
 });
 
+test("a failed card heads with the stop's cause line, the whole log behind it in the detail", () => {
+  const note = "Stopped at Send.\nnpm warn deprecated x@1: old\nAn Expo user account is required to proceed.\n    at JSON.parse (<anonymous>)\nexited 1";
+  const { host, unmount } = mountWith(props({ deploys: [dep("dp-13", 22 * H, { status: "failed", live_at: null, note }), ...many], openDeploy: "dp-13" }));
+  const failed = card(host, "dp-13");
+  expect(failed.querySelector(".dpp-card-note")!.textContent).toBe("Stopped at Send: An Expo user account is required to proceed.");
+  expect(failed.querySelector('[data-deploy-detail="dp-13"]')!.textContent).toContain("npm warn deprecated x@1");
+  unmount();
+});
+
 test("a deploy asked for with no commit reads Asked for across its card, never going out", () => {
   const { host, unmount } = mountWith(props({ deploys: [dep("dp-12", 21 * H, { status: "requested", sha: null, live_at: null, finished_at: null }), ...many] }));
   const asked = card(host, "dp-12");

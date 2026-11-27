@@ -113,6 +113,8 @@ export function runShip(run: Run, viewer: string | null = null, decision: GateDe
     // A finished run with no merge on it (a merge nobody recorded) says it finished, never that it did not land.
     return sha ? { words: "Merged", tone: "ok", run: run._id, sha, team: runTeam(run) } : { words: "Done", tone: "ok", run: run._id };
   }
+  // A deploy that stopped before sending anything (awaitDeploy.ts failedWords "No deploy took") did not fail out there.
+  if (/^Stopped: No deploy took/.test(run.fail_reason ?? "")) return { words: "Not sent", tone: "bad", run: run._id };
   if (/^Stopped: The deploy that carried/.test(run.fail_reason ?? "")) return { words: "Deploy failed", tone: "bad", run: run._id };
   // Not merged is said only of a run that ended at Deploy with no merge on it.
   if (run.status === "failed" && top === "deploy" && !sha) return { words: "Not merged", tone: "bad", run: run._id };

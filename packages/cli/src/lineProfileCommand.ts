@@ -115,7 +115,7 @@ export async function publishLineProfile(deps: PublishDeps, read: ResolvedLinePr
   const { deviceId } = await import("./remote/device.js");
   const result = await apiPost(deps, "/cli/line/profile/publish", {
     ...(await scopeFor(deps, undefined, true)),
-    root: resolved.root ?? undefined,
+    root: resolved.root ? (await import("./pipeline.js")).publishedRoot(resolved.root) : undefined,
     groups,
     profile: publishFacts(resolved),
     device_id: deviceId(),
@@ -134,6 +134,19 @@ export async function publishLineProfile(deps: PublishDeps, read: ResolvedLinePr
   return { projects: result.projects ?? [], unprojected };
 }
 
+/**
+ * `--strict` on a publish: when this cast does not read a key the checkout's .codecast files name, print what it would
+ * drop and exit 3, publishing nothing (republishLanded.ts reads the answer). The cast that publishes is the judge.
+ */
+export async function refuseUnknownKeys(root: string): Promise<void> {
+  const { unknownKeys } = await import("./workflow/republishLanded.js");
+  const unknown = await unknownKeys(root);
+  if (!unknown.length) return;
+  const { getVersion } = await import("./cliVersion.js");
+  console.log(JSON.stringify({ refused: "unknown_keys", version: `v${getVersion()}`, unknown }));
+  process.exit(3);
+}
+
 export type DeployTargetsPublish = { team_id: string; repository: string; targets: Array<{ name: string; changed: boolean }>; commits?: any; pipeline?: any; skipped?: string; refused?: string };
 
 /**
@@ -147,12 +160,12 @@ export async function publishDeployTargets(deps: PublishDeps, root: string, targ
   const { deviceId } = await import("./remote/device.js");
   const repository = readLocalGitContext(root).repository;
   if (!repository) throw new LineProfileError(`${root} has no GitHub origin, so its targets name no repository`);
-  const { headOf, publishRefusal } = await import("./pipeline.js");
+  const { headOf, publishRefusal, publishedRoot } = await import("./pipeline.js");
   const head = headOf(root);
   const skipped = head ? publishRefusal(root, []) : "not a git checkout";
   if (skipped) return { team_id: teamId ?? "", repository, targets: [], skipped };
   const { publishableTarget } = await import("@codecast/shared/contracts/deployTargets");
-  const r: DeployTargetsPublish = await apiPost(deps, "/cli/deploys/targets/publish", { repository, targets: targets.map(publishableTarget), device_id: deviceId(), root, head_sha: head!.sha, head_at: head!.at, ...(teamId ? { team_id: teamId } : {}) });
+  const r: DeployTargetsPublish = await apiPost(deps, "/cli/deploys/targets/publish", { repository, targets: targets.map(publishableTarget), device_id: deviceId(), root: publishedRoot(root), head_sha: head!.sha, head_at: head!.at, ...(teamId ? { team_id: teamId } : {}) });
   if (r.refused) return r;
   // The repository's pipeline rides with its targets, from the same checkout (pipeline.md PL6); one that fails to build or
   // publish never fails the targets' (`cast flow pipeline --publish` says why).
@@ -357,11 +370,12 @@ export function registerLineProfileCommands(line: Command, deps: PublishDeps): v
     .description("The flow profile for this directory (.codecast/line.toml merged with the defaults), each value with where it came from")
     .option("--json", "Machine-readable output")
     .option("--publish", "Publish this profile onto the projects its finders file into, so the app shows the whole line and /line says when a finder goes silent")
+    .option("--strict", "With --publish: publish nothing and exit 3 when this cast does not read a key the files name, since a publish by it would drop that key")
     .option("--starter", "Print a starter .codecast/line.toml for a repository that has none: the defaults written out, the project filled in")
     .option("--project <name>", "With --starter: the project its findings and line belong to")
     .option("--team <name>", "With --starter: the workspace for writes from this repo")
     .option("--write", "With --starter: write it at the repository root; refused when a profile already exists")
-    .action(async (options: { json?: boolean; publish?: boolean; starter?: boolean; project?: string; team?: string; write?: boolean }) => {
+    .action(async (options: { json?: boolean; publish?: boolean; strict?: boolean; starter?: boolean; project?: string; team?: string; write?: boolean }) => {
       if (options.starter) {
         if (!options.project?.trim()) fail("--starter needs --project <name>: the project this repository's line serves");
         const text = starterLineProfile({ project: options.project.trim(), team: options.team?.trim() || null });
@@ -387,6 +401,7 @@ export function registerLineProfileCommands(line: Command, deps: PublishDeps): v
         else process.stdout.write(formatLineProfile(resolved));
         return;
       }
+      if (options.strict) await refuseUnknownKeys(resolved.root ?? process.env.CODECAST_CWD ?? process.cwd());
       let result: Awaited<ReturnType<typeof publishLineProfile>>;
       try {
         result = await publishLineProfile(deps, resolved);
