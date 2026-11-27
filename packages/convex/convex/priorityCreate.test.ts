@@ -14,6 +14,7 @@ setDefaultTimeout(60_000);
 
 const pri = (api as any).priorities;
 const TOKEN = "cc_test_priority_create_ben";
+const CAROL_TOKEN = "cc_test_priority_create_carol";
 const NOW = Date.now();
 
 const backends: any[] = [];
@@ -21,7 +22,7 @@ afterEach(async () => {
   for (const t of backends.splice(0)) await t.finishAllScheduledFunctions?.(() => {}).catch?.(() => {});
 });
 
-/** Ana and Ben share team T (calls and priorities on); Cat is in team O; Ben is also in team Off, where priorities is off. Ben holds the token. */
+/** Ana, Ben and Carol share team T (calls and priorities on); Ana and Ben were on call cl-7, Carol was not. Cat is in team O; Ben is also in team Off, where priorities is off. Ben and Carol hold tokens. */
 async function world() {
   const t = convexTest(schema, allModules);
   backends.push(t);
@@ -32,21 +33,25 @@ async function world() {
     const ana = await ctx.db.insert("users", { name: "Ana", github_username: "ana" } as any);
     const ben = await ctx.db.insert("users", { name: "Ben", github_username: "ben" } as any);
     const cat = await ctx.db.insert("users", { name: "Cat", github_username: "cat" } as any);
-    for (const [u, tm] of [[ana, team], [ben, team], [cat, other], [ben, off]] as const) {
+    const carol = await ctx.db.insert("users", { name: "Carol", github_username: "carol" } as any);
+    for (const [u, tm] of [[ana, team], [ben, team], [carol, team], [cat, other], [ben, off]] as const) {
       await ctx.db.insert("team_memberships", { user_id: u, team_id: tm, role: "member", joined_at: NOW } as any);
     }
-    await ctx.db.insert("api_tokens", { user_id: ben, token_hash: await hashToken(TOKEN), name: "cli", created_at: NOW, last_used_at: NOW } as any);
+    for (const [u, token] of [[ben, TOKEN], [carol, CAROL_TOKEN]] as const) {
+      await ctx.db.insert("api_tokens", { user_id: u, token_hash: await hashToken(token), name: "cli", created_at: NOW, last_used_at: NOW } as any);
+    }
     const call = await ctx.db.insert("transcripts", {
       room_key: dmRoomKey(String(ana), String(ben)), team_id: team, started_by: ana, status: "ended", started_at: NOW - 60_000, ended_at: NOW,
       routes: [], last_seq: 0, short_id: "cl-7", participants: [{ id: String(ana), name: "Ana" }, { id: String(ben), name: "Ben" }],
     } as any);
-    return { team, other, off, ana, ben, cat, call, ws: `team:${team}` };
+    return { team, other, off, ana, ben, cat, carol, call, ws: `team:${team}` };
   });
   const priority = (short_id: string) => t.run(async (ctx: any) => await ctx.db.query("priorities").withIndex("by_short_id", (q: any) => q.eq("short_id", short_id)).first());
   const task = (short_id: string) => t.run(async (ctx: any) => await ctx.db.query("tasks").withIndex("by_short_id", (q: any) => q.eq("short_id", short_id)).first());
-  const create = (args: Record<string, unknown>) => t.mutation(pri.cliCreate, { api_token: TOKEN, team_id: ids.team, ...args } as any);
+  const create = (args: Record<string, unknown>) => t.mutation(pri.cliCreate, { api_token: TOKEN, workspace: "team", team_id: ids.team, ...args } as any);
   const createTask = (args: Record<string, unknown>) => t.mutation(api.tasks.create, { api_token: TOKEN, workspace: "team", team_id: ids.team, ...args } as any);
-  return { t, ...ids, priority, task, create, createTask };
+  const as = (u: string) => t.withIdentity({ subject: `${u}|session` });
+  return { t, ...ids, priority, task, create, createTask, as };
 }
 
 describe("cast priorities create", () => {
@@ -70,13 +75,26 @@ describe("cast priorities create", () => {
 
   test("refuses a workspace the caller is not in, an owner outside it, a personal priority for someone else, and a team with priorities off", async () => {
     const { create, other, off, t } = await world();
-    expect(await create({ title: "x", team_id: other })).toEqual({ error: "you are not a member of that workspace" });
+    await expect(create({ title: "x", team_id: other })).rejects.toThrow();
     expect(await create({ title: "x", owner: "@cat" })).toEqual({ error: "nobody in this team answers to @cat" });
-    expect((await create({ title: "x", team_id: undefined, personal: true, owner: "@ana" })).error).toContain("a personal priority is your own");
+    expect((await create({ title: "x", workspace: "personal", team_id: undefined, owner: "@ana" })).error).toContain("a personal priority is your own");
     expect(await create({ title: "x", team_id: off })).toEqual({ error: teamFeatureOffMessage("priorities") });
-    expect(await create({ title: "x", team_id: undefined })).toEqual({ error: "name a workspace: a team, or personal" });
     expect(await create({ title: "   " })).toEqual({ error: "a priority needs a title" });
     expect(await t.run(async (ctx: any) => (await ctx.db.query("priorities").collect()).length)).toBe(0);
+  });
+
+  test("with no workspace named, it lands where a task filed from the same session does, so --under needs no --team", async () => {
+    const { t, ben, team, ws, priority, task } = await world();
+    await t.run(async (ctx: any) => ctx.db.insert("conversations", {
+      user_id: ben, team_id: team, agent_type: "claude_code", session_id: "sess-ben", short_id: "jx7ben1", title: "Huddle notes",
+      started_at: NOW, updated_at: NOW, message_count: 1, is_private: false, team_visibility: "full", status: "active",
+    }));
+    const from = { conversation_id: "sess-ben", project_path: "/tmp/unmapped" };
+    const made = await t.mutation(pri.cliCreate, { api_token: TOKEN, title: "Ship the board", ...from } as any);
+    expect((await priority(made.short_id)).workspace).toBe(ws);
+    const filed = await t.mutation(api.tasks.create, { api_token: TOKEN, title: "Draw frames", under_priority: made.short_id, ...from } as any);
+    expect((await task(filed.short_id)).workspace).toBe(ws);
+    expect((await priority(made.short_id)).steps.map((st: any) => st.refs[0].id)).toEqual([filed.short_id]);
   });
 
   test("a call the caller cannot read is refused", async () => {
@@ -111,7 +129,7 @@ describe("cast task create --under", () => {
 
   test("pri-N appends a critical milestone naming the task, its key after every key spent", async () => {
     const { t, create, createTask, priority } = await world();
-    await create({ title: "Ship the board", owner: "@ana" });
+    await create({ title: "Ship the board", owner: "@ana", from_call: "cl-7" });
     await t.run(async (ctx: any) => {
       const p = await ctx.db.query("priorities").withIndex("by_short_id", (q: any) => q.eq("short_id", "pri-1")).first();
       await ctx.db.patch(p._id, { steps: [{ key: "s2", title: "Old", tier: "polish", tier_set_by: "pass", refs: [], done: false }], step_key_max: 4 });
@@ -123,7 +141,7 @@ describe("cast task create --under", () => {
     expect(p.step_key_max).toBe(5);
   });
 
-  test("a priority in another workspace, an unknown one, or a merged one files no task", async () => {
+  test("a priority in another workspace, an unknown one, or a merged one files no task, with one answer for unknown and unreadable", async () => {
     const { t, create, createTask, cat, other } = await world();
     await create({ title: "Team priority" });
     await t.run(async (ctx: any) => {
@@ -135,10 +153,41 @@ describe("cast task create --under", () => {
       const { _id, _creationTime, ...fields } = p;
       await ctx.db.insert("priorities", { ...fields, short_id: "pri-41", status: "merged", merged_into: _id });
     });
-    await expect(createTask({ title: "x", under_priority: "pri-40" })).rejects.toThrow("Priority not found: pri-40");
-    await expect(createTask({ title: "x", under_priority: "pri-404" })).rejects.toThrow("Priority not found: pri-404");
-    await expect(createTask({ title: "x", under_priority: "pri-41" })).rejects.toThrow("pri-41 was merged");
+    await expect(createTask({ title: "x", under_priority: "pri-40" })).rejects.toThrow("no priority pri-40 you can see");
+    await expect(createTask({ title: "x", under_priority: "pri-404" })).rejects.toThrow("no priority pri-404 you can see");
+    await expect(createTask({ title: "x", under_priority: "pri-41" })).rejects.toThrow("no priority pri-41 you can see");
     await expect(createTask({ title: "x", workspace: "personal", team_id: undefined, under_priority: "pri-1" })).rejects.toThrow("pri-1 is in another workspace than this task");
     expect(await t.run(async (ctx: any) => (await ctx.db.query("tasks").collect()).length)).toBe(0);
+  });
+});
+
+describe("a priority made for a teammate from a call", () => {
+  test("whoever was on the call reads it and files under it; a teammate who was not cannot, with the not-found answer", async () => {
+    const { t, create, createTask, as, ben, carol, team, priority } = await world();
+    await create({ title: "Ana's launch", owner: "@ana", from_call: "cl-7" });
+    expect((await as(String(ben)).query(pri.show, { short_id: "pri-1" }))?.title).toBe("Ana's launch");
+    expect(await as(String(carol)).query(pri.show, { short_id: "pri-1" })).toBeNull();
+
+    const made = await createTask({ title: "Book the venue", under_priority: "pri-1" });
+    expect((await priority("pri-1")).steps.map((st: any) => st.refs[0].id)).toEqual([made.short_id]);
+
+    const asCarol = (under: string) => t.mutation(api.tasks.create, { api_token: CAROL_TOKEN, workspace: "team", team_id: team, title: "x", under_priority: under } as any);
+    const unreadable = await asCarol("pri-1").catch((e: Error) => e.message);
+    const missing = await asCarol("pri-404").catch((e: Error) => e.message);
+    expect(unreadable).toContain("no priority pri-1 you can see");
+    expect(missing).toContain("no priority pri-404 you can see");
+    expect(unreadable.replace("pri-1", "pri-N")).toBe(missing.replace("pri-404", "pri-N"));
+  });
+
+  test("a milestone filed under a teammate's priority closes with its task", async () => {
+    const { t, create, createTask, priority, ana } = await world();
+    await create({ title: "Ana's launch", owner: "@ana", from_call: "cl-7" });
+    const made = await createTask({ title: "Book the venue", under_priority: "pri-1" });
+    expect((await priority("pri-1")).steps[0].done).toBe(false);
+    await t.mutation(api.tasks.update, { api_token: TOKEN, short_id: made.short_id, status: "done" } as any);
+    const p = await priority("pri-1");
+    expect(p.user_id).toBe(ana);
+    expect(p.steps[0]).toMatchObject({ done: true, refs: [{ kind: "task", id: made.short_id }] });
+    expect(p.steps[0].done_at).toBeGreaterThan(0);
   });
 });

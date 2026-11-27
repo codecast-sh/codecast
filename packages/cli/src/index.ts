@@ -10443,9 +10443,6 @@ function fmtCallDuration(row: { started_at: number; ended_at: number | null }): 
   return callLength(row.started_at, row.ended_at);
 }
 
-/** The call a reference names, or a thrown error whose `code` says why not
- *  ("not_found", "ambiguous"). A short id (cl-42) or full id resolves on the
- *  server; anything else is a unique prefix of a recent call's id. */
 /** A task's `--from-call` value: a call as `cast calls` names it, resolved
  *  to the id the server stores; '' passes through to unlink. */
 async function taskCallArg(ref: string): Promise<string> {
@@ -10457,25 +10454,8 @@ async function taskCallArg(ref: string): Promise<string> {
 }
 
 async function findCallId(ref: string, opts: { throwOnError?: boolean } = {}): Promise<string> {
-  const { isServerCallRef } = await import("./callSnap.js");
-  if (parseCallRef(ref) || isServerCallRef(ref)) return ref.toLowerCase();
-  const rows: any[] = await cliPost("/cli/calls/list", { limit: 200 }, opts);
-  const exact = rows.find((r) => r._id === ref);
-  if (exact) return exact._id;
-  const matches = rows.filter((r) => r._id.startsWith(ref));
-  if (matches.length === 1) return matches[0]._id;
-  // `try` holds the commands the sentence names, for a caller that answers
-  // in JSON (`cast call snap --json`).
-  const err = (code: "not_found" | "ambiguous", message: string, tries: string[]) => Object.assign(new Error(message), { code, try: tries });
-  if (matches.length > 1) throw err("ambiguous", `"${ref}" matches ${matches.length} recent calls; use more characters, or the short id from \`cast calls\``, ["cast calls"]);
-  // A short id typed without its prefix (`107` for cl-107) is the likeliest
-  // miss: say the spelling that works, and whether that call is there.
-  if (/^\d+$/.test(ref)) {
-    const short = `cl-${Number(ref)}`;
-    const there = rows.some((r) => r.short_id === short);
-    throw err("not_found", `No recent call matches "${ref}"${there ? `; did you mean ${short}?` : `; a call's short id is written ${short}.`} \`cast calls\` lists them`, there ? [`cast call ${short}`, "cast calls"] : ["cast calls"]);
-  }
-  throw err("not_found", `No recent call matches "${ref}"; \`cast calls\` lists them`, ["cast calls"]);
+  const { findCallIdIn } = await import("./callSnap.js");
+  return findCallIdIn((urlPath, body) => cliPost(urlPath, body, opts), ref);
 }
 
 program
