@@ -294,6 +294,30 @@ test("a folder the task pins wins over the link's, as on the server", async () =
   expect(opened[1]?.context?.projectPath).toBe("/Users/me/code/app/sub");
 });
 
+test("a folder a teammate's task pins, on none of the viewer's machines, is never proposed: the Start folder is, and the task still binds", async () => {
+  const { milestoneStartHref } = await import("../../lib/priorities");
+  const { settingsDataKey } = await import("../../lib/settingsData");
+  const key = settingsDataKey("directoryMappings", "me")!;
+  useInboxStore.setState({
+    currentUser: { _id: "me" },
+    priorities: { p59: { _id: "p59", short_id: "pri-59", workspace: "team:codecast" } },
+    machineRoster: [{ device_id: "d1", local_project_roots: ["/Users/me/code"] }],
+    recentProjects: [{ path: "/Users/me/code/codecast/web", count: 3, lastActive: 1 }],
+    settingsData: { [key]: { _id: key, value: [{ path_prefix: "/Users/me/code/codecast", team_id: "codecast", auto_share: true }] } },
+  } as any);
+  const href = milestoneStartHref({ short_id: "pri-59", plan: null }, { step: { key: "s1", title: "Ship it", refs: [{ kind: "task", id: "ct-31" }] } }, () => ({ title: "Their task", status: "open" }));
+  await open(href);
+  await act(async () => setTaskAnswer({ _id: "k31", short_id: "ct-31", title: "Their task", status: "open", project_path: "/Users/ashot/code/codecast" }));
+  await flush();
+  expect(opened.at(-1)!.context).toMatchObject({ projectPath: "/Users/me/code/codecast/web", linkedTask: { short_id: "ct-31" } });
+  // With no Start folder either, the composer's usual folder: still never the teammate's.
+  useInboxStore.setState({ settingsData: {} } as any);
+  await open(href);
+  await act(async () => setTaskAnswer({ _id: "k31", short_id: "ct-31", title: "Their task", status: "open", project_path: "/Users/ashot/code/codecast" }));
+  await flush();
+  expect(opened.at(-1)!.context.projectPath).toBeUndefined();
+});
+
 test("the same link clicked again after a timeout waits again", async () => {
   await open("/inbox?compose=a&task=ct-5");
   await act(async () => { await new Promise((r) => setTimeout(r, 400)); });

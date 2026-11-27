@@ -11,6 +11,7 @@ import { toast } from "sonner";
 import { useInboxStore, findProjectPathByName } from "../store/inboxStore";
 import { parseComposeLink, draftForTask, resolveLinkProject, stripComposeLink } from "../lib/composeLink";
 import { startFolderInStore } from "../lib/priorityStartFolder";
+import { pathOnMyMachines } from "../lib/machinePicker";
 import { useSyncTaskDetail } from "./useSyncTasks";
 import { useWatchEffect } from "./useWatchEffect";
 
@@ -97,9 +98,11 @@ export function useComposeLink(active: boolean): void {
     const linked = task && typeof task.short_id === "string" && task.short_id.toLowerCase() === link.task ? task : null;
     // A folder the task pins wins over the link's, as it does on the server
     // (resolveTaskGitContext), so the composer shows where the session runs.
-    const taskPath: string | undefined = linked
+    // Only a folder on one of the viewer's machines is ever proposed: a teammate's task pins their own checkout.
+    const pinned: string | undefined = linked
       ? linked.project_path || (linked.project_id ? st.projects[linked.project_id]?.project_path : undefined)
       : undefined;
+    const taskPath = pinned && pathOnMyMachines(st.machineRoster, pinned) ? pinned : undefined;
     // A Start on a team priority opens in a folder whose rule keeps the session in that team, so its link holds (lib/priorityStartFolder).
     const startFolder = !taskPath && !link.project && link.priority ? startFolderInStore(st, link.priority) : null;
     const projectPath = taskPath || resolveLinkProject(link.project, known) || startFolder?.path;
