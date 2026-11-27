@@ -1,10 +1,12 @@
 // A priority as an object, mounted in jsdom over a convex transport that
 // answers by name (test-helpers/missingBackend.tsx) with priorities.show's
-// contract. Proves: `pri-N` in a message is a pill (title, critical meter,
-// n/m) that opens /priorities/pri-N; hovering it shows the card (owner, rank
-// and who placed it, its open critical milestones with their states, Share
-// and Open); on a touch screen a tap opens the same card as a bottom sheet;
-// alone on a line it is the card; and the page at /priorities/pri-N is the
+// contract. Proves: `pri-N` in a message is a pill (owner's face, rank badge,
+// title, critical meter, n/m; a wide one wraps as prose) that opens
+// /priorities/pri-N; hovering it shows the card (face, rank badge, title,
+// plan, its open critical milestones with their states, pri-N, Share and
+// Open), a teammate's with their face and real rank; on a touch screen a tap
+// opens the same card as a bottom sheet; alone on a line it is the card; and
+// the page at /priorities/pri-N is the
 // list row made bigger: its title (the owner double-clicks it to rename),
 // Correct…, Share with Copy ID and ⋯, the ten days, the plan once, its
 // milestones as the list draws them with every open one expanded, and the
@@ -52,7 +54,7 @@ const DETAIL = {
     step("p1", "Priorities page redesign", "polish"),
   ],
   counts: { critical_done: 2, critical_total: 4 },
-  workspace: `team:${TEAM_ID}`, user_id: VIEWER_ID, owner: "Dana Viewer", mine: true,
+  workspace: `team:${TEAM_ID}`, user_id: VIEWER_ID, owner: "Dana Viewer", owner_image: null, mine: true,
   first_seen_at: NOW - 3 * DAY, last_active_at: NOW, done_at: null, session_count: 3, session_count_more: false, sessions: [], correction_pending: true,
   links: [
     links("s1", []),
@@ -88,7 +90,7 @@ afterEach(() => {
   useInboxStore.setState({ priorityDetails: {} } as any);
 });
 
-test("pri-N in a message is a pill: target, title, critical meter, and it opens the priority's page", async () => {
+test("pri-N in a message is a pill: face, rank badge, title, critical meter, and it opens the priority's page", async () => {
   const page = await inRouter(<p>Can you pick up <EntityIdPill shortId="pri-60" /> next?</p>);
   try {
     await page.waitFor(() => !!page.container.querySelector("[data-priority-pill]"));
@@ -97,7 +99,19 @@ test("pri-N in a message is a pill: target, title, critical meter, and it opens 
     expect(pill.getAttribute("href")).toBe("/priorities/pri-60");
     expect(pill.textContent).toContain("Priorities for Union");
     expect(pill.querySelector("[data-critical-meter]")?.textContent).toBe("2/4");
-    expect(pill.querySelector("svg")).not.toBeNull();
+    // The owner's face (your own initial, with no picture), then the rank badge, then the title; each an image with its name.
+    const face = pill.querySelector("[data-owner-face]")!;
+    expect(face.getAttribute("role")).toBe("img");
+    expect(face.getAttribute("aria-label")).toBe("You");
+    expect(face.getAttribute("title")).toBe("You");
+    expect(face.textContent).toBe("D");
+    const badge = pill.querySelector("[data-rank-mark]")!;
+    expect(badge.textContent).toBe("7");
+    expect(badge.getAttribute("role")).toBe("img");
+    expect(badge.getAttribute("aria-label")).toBe("Rank 7");
+    expect([...pill.children].map((c) => (c.hasAttribute("data-owner-face") ? "face" : c.hasAttribute("data-rank-mark") ? "rank" : c.hasAttribute("data-critical-meter") ? "meter" : "title"))).toEqual(["face", "rank", "title", "meter"]);
+    // Not in a wide row: the title truncates.
+    expect(pill.className).toContain("inline-flex");
     // The row went through the store, as every surface reads it.
     expect(Object.values((useInboxStore.getState() as any).priorityDetails).map((r: any) => r.short_id)).toEqual(["pri-60"]);
   } finally {
@@ -105,7 +119,7 @@ test("pri-N in a message is a pill: target, title, critical meter, and it opens 
   }
 });
 
-test("hovering the pill shows the card: owner, rank and who placed it, its open milestones with their states, Share and Open; no summary, no meter", async () => {
+test("hovering the pill shows the card: face, rank badge, title, plan, its open milestones with their states, pri-N, Share and Open; no summary, no meter", async () => {
   const page = await inRouter(<p>See <EntityIdPill shortId="pri-60" /></p>);
   try {
     await page.waitFor(() => !!page.container.querySelector("[data-priority-pill]"));
@@ -120,9 +134,9 @@ test("hovering the pill shows the card: owner, rank and who placed it, its open 
     const text = card.textContent!;
     expect(text).toContain("Priorities for Union");
     expect(text).toContain("pri-60");
-    expect(text).toContain("You");
-    expect(text).toContain("#7");
-    expect(text).toContain("ranked by AI");
+    expect(card.querySelector("[data-owner-face]")?.getAttribute("title")).toBe("You");
+    expect(card.querySelector("[data-rank-mark]")?.textContent).toBe("7");
+    expect(card.querySelector('[data-chip="plan"]')?.textContent).toContain(PLAN.title);
     // Each open critical milestone with its state, as the list draws it, and the polish one that needs you: Needs you opens the session to answer.
     const listed = [...card.querySelectorAll("[data-priority-milestones] li[data-milestone]")].map((li) => `${li.getAttribute("data-milestone")}:${li.getAttribute("data-state")}`);
     expect(listed).toEqual(["s2:needs_you", "s4:needs_you", "p1:needs_you"]);
@@ -135,6 +149,49 @@ test("hovering the pill shows the card: owner, rank and who placed it, its open 
     expect(card.querySelector("[data-priority-open]")?.getAttribute("href")).toBe("/priorities/pri-60");
   } finally {
     await page.unmount();
+  }
+});
+
+test("a teammate's card: their face and real rank, and no write control on its milestones", async () => {
+  answers["priorities:show"] = { ...DETAIL, mine: false, user_id: fixtureId("mate"), owner: "Sam Teammate", owner_image: null, rank: 3, person_pos: 3, rank_source: "person" };
+  const page = await inRouter(<EntityObjectCard refId="pri-60" count={1} />);
+  try {
+    await page.waitFor(() => !!page.container.querySelector("[data-priority-card]"));
+    const card = page.container.querySelector("[data-priority-card]")!;
+    expect(card.querySelector("[data-owner-face]")?.getAttribute("aria-label")).toBe("Sam Teammate");
+    expect(card.querySelector("[data-owner-face]")?.textContent).toBe("S");
+    expect(card.querySelector("[data-rank-mark]")?.textContent).toBe("3");
+    expect(card.querySelectorAll("[data-priority-milestones] li[data-milestone]").length).toBeGreaterThan(0);
+    expect(card.querySelector('[data-state-action="start"], [data-milestone-menu]')).toBeNull();
+  } finally {
+    await page.unmount();
+    answers["priorities:show"] = DETAIL;
+  }
+});
+
+test("a priority with no rank shows the target in the badge's place; a wide pill wraps as prose, never between its face, badge and first word", async () => {
+  answers["priorities:show"] = { ...DETAIL, status: "set_aside", rank: null, ai_rank: null };
+  const page = await inRouter(<p><EntityIdPill shortId="pri-60" wide /></p>);
+  try {
+    await page.waitFor(() => !!page.container.querySelector("[data-priority-pill]"));
+    const pill = page.container.querySelector("[data-priority-pill]") as HTMLElement;
+    expect(pill.querySelector('[data-rank-mark="none"]')?.tagName.toLowerCase()).toBe("svg");
+    expect(pill.className).not.toContain("inline-flex");
+    expect(pill.className).toContain("[box-decoration-break:clone]");
+    expect(pill.querySelector(".truncate")).toBeNull();
+    // "Priorities for Union": face, badge and "Priorities" hold together, as do "Union" and the meter; "for" may wrap.
+    const lead = pill.querySelector("[data-pill-lead]")!;
+    expect(lead.className).toContain("whitespace-nowrap");
+    expect(lead.querySelector("[data-owner-face]")).not.toBeNull();
+    expect(lead.querySelector("[data-rank-mark]")).not.toBeNull();
+    expect(lead.textContent).toBe("DPriorities");
+    const tail = pill.querySelector("[data-pill-tail]")!;
+    expect(tail.className).toContain("whitespace-nowrap");
+    expect(tail.textContent).toBe("Union2/4");
+    expect(pill.textContent).toBe("DPriorities for Union2/4");
+  } finally {
+    await page.unmount();
+    answers["priorities:show"] = DETAIL;
   }
 });
 
@@ -445,7 +502,10 @@ test("a teammate's priority: its owner by the title, its title is no rename, and
   try {
     await page.waitFor(() => !!page.container.querySelector("[data-priority-page]"));
     const el = page.container;
-    expect(el.querySelector("header [data-priority-owner]")?.textContent).toBe("Sam Teammate");
+    // Their face and name: the initial is theirs.
+    const owner = el.querySelector("header [data-priority-owner]")!;
+    expect(owner.textContent).toBe("SSam Teammate");
+    expect(owner.querySelector("[data-owner-face]")?.getAttribute("aria-label")).toBe("Sam Teammate");
     // No write control on a teammate's milestones or their sessions.
     expect(el.querySelector("[data-priority-page] [data-milestone-menu]")).toBeNull();
     expect(el.querySelector("[data-priority-page] [data-session-menu]")).toBeNull();
@@ -492,6 +552,9 @@ test("the render gallery's priority shows its Needs you, and the real server's r
     await page.waitFor(() => !!page.container.querySelector('[data-entity-card="priority"]'));
     const card = page.container.querySelector('[data-entity-card="priority"]')!;
     expect(card.querySelector('[data-state-action="needs_you"]')?.getAttribute("href")).toBe(`/conversation/${GALLERY_PRIORITY.asking}`);
+    // The owner's face (no picture, so their initial) and the rank badge.
+    expect(card.querySelector("[data-rank-mark]")?.textContent).toBe("7");
+    expect(card.querySelector("[data-owner-face]")?.textContent).toBe("D");
     await page.unmount();
   } finally {
     answers["priorities:show"] = DETAIL;
