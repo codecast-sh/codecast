@@ -8,7 +8,7 @@ mock.module("sonner", () => {
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { ConvexProvider } from "convex/react";
-import { _resetDictationForTests, dictationRunning, type DictationHost, type DictationPipeEvents } from "@codecast/shared/contracts";
+import { _resetDictationForTests, dictationRunning, type DictationHost, type DictationPipeEvents } from "@codecast/shared/contracts/dictation";
 import { useInboxStore } from "../../store/inboxStore";
 import { closeDomWindow } from "../../test-helpers/domGlobals";
 // Entered from the composer, the graph reaches ChatMessage through
@@ -530,7 +530,7 @@ test("switching to the rich editor mid-recording carries the last words into it"
 });
 
 test("a huddle, an unmute, a voice message and a room recording each finish a running dictation, keeping its words", async () => {
-  const { finishRunningDictation } = await import("@codecast/shared/contracts");
+  const { finishRunningDictation } = await import("@codecast/shared/contracts/dictation");
   const fs = await import("node:fs");
   // Each path that takes the microphone hands it over first.
   const src = (f: string) => fs.readFileSync(new URL(`../../lib/calls/${f}`, import.meta.url), "utf8");

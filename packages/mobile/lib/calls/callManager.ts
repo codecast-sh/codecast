@@ -33,7 +33,8 @@ const MOBILE_AUDIO_CAPTURE = {
 const audioSession = () => getLivekit()?.AudioSession ?? null;
 import { api } from "@codecast/convex/convex/_generated/api";
 import { convex } from "../convex";
-import { CALL_HEARTBEAT_MS, finishRunningDictation, humanizeConvexError, isRoomMachineryKind, localTranscribeLanguages } from "@codecast/shared/contracts";
+import { CALL_HEARTBEAT_MS, humanizeConvexError, isRoomMachineryKind, localTranscribeLanguages } from "@codecast/shared/contracts";
+import { finishRunningDictation } from "@codecast/shared/contracts/dictation";
 
 export type CallPhase = "idle" | "connecting" | "connected" | "error";
 

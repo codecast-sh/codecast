@@ -8,7 +8,7 @@
 
 import { useSyncExternalStore } from 'react';
 import * as SecureStore from 'expo-secure-store';
-import { DICTATION_LANGUAGES } from '@codecast/shared/contracts';
+import { DICTATION_LANGUAGES } from '@codecast/shared/contracts/dictation';
 
 const KEY = 'codecast.dictation_language';
 

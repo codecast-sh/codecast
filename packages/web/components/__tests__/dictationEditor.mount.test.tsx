@@ -3,7 +3,7 @@ import { afterAll, afterEach, expect, test } from "bun:test";
 import { Editor } from "@tiptap/core";
 import StarterKit from "@tiptap/starter-kit";
 import { TextSelection } from "@tiptap/pm/state";
-import { _resetDictationForTests, createDictation, type DictationPipeEvents } from "@codecast/shared/contracts";
+import { _resetDictationForTests, createDictation, type DictationPipeEvents } from "@codecast/shared/contracts/dictation";
 import { closeDomWindow } from "../../test-helpers/domGlobals";
 import { editorField } from "../../lib/dictation/editorField";
 
