@@ -348,7 +348,7 @@ export const RoomThread = memo(function RoomThread({
   const transcribeAlone = () => {
     if (!getRoom()) return void toast.error("Not connected to the huddle yet. Try again in a moment.");
     void startTranscribing(roomKey).then((ok) => {
-      if (!ok) toast.error("Could not start transcribing. Somebody else may be the scribe already.");
+      if (!ok) toast.error("Could not start transcribing. Somebody else may be transcribing already.");
     });
   };
 
@@ -579,7 +579,8 @@ export const RoomThread = memo(function RoomThread({
           Nothing to show, no band. */}
       {showHead && (
         <div className={`rt-head${quietHead ? " rt-head-quiet" : ""}`}>
-          {routes.map((r) => {
+          {/* Scribe is the stage header's chip, not one of these. */}
+          {routes.filter((r) => r.role !== "scribe").map((r) => {
             const agent = r.kind === "session" ? roster.find((a) => a.target === r.target) : null;
             return (
               <span
@@ -596,7 +597,7 @@ export const RoomThread = memo(function RoomThread({
                 {agent?.working && transcribing && (
                   <WorkingDots className="text-sol-violet" title={`${agent.name} is working`} />
                 )}
-                {agent && transcribing && facesOn && liveTranscriptId && r.role !== "scribe" && (
+                {agent && transcribing && facesOn && liveTranscriptId && (
                   <AgentFaceToggle
                     on={r.face !== false}
                     name={agent.name}

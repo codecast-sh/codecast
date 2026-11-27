@@ -60,6 +60,8 @@ export function openFeedTargetPicker(opts: {
   // as its standing agent's session, a teammate goes to `onPerson`.
   who?: { exclude: string[]; onPerson: (id: string) => void };
   toggle?: PalettePick["toggle"];
+  // Offer the call's Scribe as the first row (absent from the call only).
+  onScribe?: () => void;
   onPick: (t: FeedTarget, note?: string) => void;
 }) {
   const feed = opts.gesture === "feed";
@@ -72,6 +74,9 @@ export function openFeedTargetPicker(opts: {
       confirmLabel: feed ? "Add" : "Send",
       toggle: opts.toggle,
       extras: [
+        ...(opts.onScribe
+          ? [{ key: "scribe", label: "Scribe", description: "Lays out the huddle on the board", icon: "scribe" as const, lead: true }]
+          : []),
         {
           key: "new-session",
           label: feed ? "A new agent session" : "Send to a new agent session",
@@ -90,6 +95,7 @@ export function openFeedTargetPicker(opts: {
       ],
       onPick: (t: PalettePickTarget, r: PalettePickResult) => {
         if (t.kind === "person") return opts.who?.onPerson(t.id);
+        if (t.kind === "extra" && t.key === "scribe") return opts.onScribe?.();
         const target: FeedTarget | null =
           t.kind === "role"
             ? { kind: "session", id: t.id, label: t.label }
@@ -375,7 +381,7 @@ export function useAddLiveFeed(opts: {
           );
         }
         if (!(await startTranscribing(roomKey, [{ ...route, mode: "live", ...face }]))) {
-          throw new Error("Could not start transcribing. Somebody else may be the scribe already; pick the feed again once their words show here.");
+          throw new Error("Could not start transcribing. Somebody else may be transcribing already; pick the feed again once their words show here.");
         }
       };
       try {
@@ -484,8 +490,10 @@ export function useAddToCall(opts: {
   liveTranscriptId: string | null;
   routes: Array<{ kind: string; target: string }>;
   teamId?: string | null;
+  /** The call's Scribe (useScribe): offered first while it is absent. */
+  scribe?: { present: boolean; invite: () => void };
 }) {
-  const { roomKey, liveTranscriptId, routes, teamId } = opts;
+  const { roomKey, liveTranscriptId, routes, teamId, scribe } = opts;
   // A new agent starts in the room team's most used repo, read off this list.
   useRecentProjectsFeed();
   const addFeed = useAddLiveFeed({ roomKey, liveTranscriptId, routes, teamId, getRoom });
@@ -537,6 +545,7 @@ export function useAddToCall(opts: {
       toggle: facesOn
         ? { label: "Video avatar", value: face, onChange: (v) => { face = v; writeAgentFacePref(v); } }
         : undefined,
+      onScribe: scribe && !scribe.present ? scribe.invite : undefined,
       onPick: (t) => feed(t, facesOn ? face : undefined),
     });
   };
