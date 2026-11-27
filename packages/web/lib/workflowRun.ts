@@ -125,11 +125,12 @@ export function runNodeRows(run: any, workflow?: any | null): RunNodeRow[] {
   };
   for (const n of graph) push(n.id, n.label, n.type);
   // A status of a node the graph lists out of the steps (its start, its ends) reads by the graph's name and kind: the
-  // end the run reached is a step (the change flow's Deploy failed, the personal Ship's Landed), its start is not.
+  // end the run reached is a step (the change flow's Deploy failed, the personal Ship's Landed), its start is not, and
+  // neither is the plain `exit` a finished run reaches (the change flow's names it Live, as its last step already says).
   const known = new Map<string, any>((workflow?.nodes ?? []).map((n: any) => [n.id, n]));
   for (const ns of statuses) {
     const n = known.get(ns.node_id);
-    if (n?.type !== "start") push(ns.node_id, ns.label ?? n?.label ?? nodeWords(ns.node_id), n?.type);
+    if (n?.type !== "start" && !(n?.type === "exit" && ns.node_id === "exit")) push(ns.node_id, ns.label ?? n?.label ?? nodeWords(ns.node_id), n?.type);
   }
   return inRunOrder(rows, statuses);
 }

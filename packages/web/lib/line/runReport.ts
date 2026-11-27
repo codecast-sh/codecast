@@ -612,7 +612,8 @@ export { scriptLine };
  *  assembled something (the card), folded with `folded`, the stations not reached. */
 export type ReportPhase = { key: LinePhaseKey | "steps"; label: string; steps: ReportStep[]; routine: ReportStep[]; folded: Array<{ id: string; label: string }>; state: StepState | "skipped" };
 
-const isHidden = (r: RunNodeRow) => r.id === "start" || r.id === "exit" || r.type === "start" || r.type === "exit";
+// The end a run reached is a step (Landed, Rejected, Deploy failed): runNodeRows gives it the graph's type, exit.
+const isHidden = (r: RunNodeRow) => r.id === "start" || r.id === "exit" || r.type === "start";
 const reached = (r: RunNodeRow) => r.status !== "pending" || r.current;
 
 /**

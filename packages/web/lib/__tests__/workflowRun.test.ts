@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { runNodeCounts, runNodeGroups, runNodeRows } from "../workflowRun";
+import { runPath } from "../line/runReport";
 
 // Run: bun test lib/__tests__/workflowRun.test.ts
 
@@ -40,6 +41,15 @@ describe("runNodeRows", () => {
     const run = { status: "failed", node_statuses: [{ node_id: "start", status: "completed" }, { node_id: "deploy", status: "completed" }, { node_id: "deploy__failed", status: "failed" }] };
     expect(runNodeRows(run, g).map((r) => [r.id, r.label, r.type])).toEqual([["deploy", "Deploy", "conditional"], ["deploy__failed", "Deploy failed", "exit"]]);
     expect(runNodeRows({ status: "failed", node_statuses: [{ node_id: "land__not_landed", status: "failed" }] }, null)[0].label).toBe("Land not landed");
+    // The report (web RunPathView, the phone's run screen) keeps that end as a step too.
+    expect(runPath(run as any, g)[0].steps.map((s) => s.label)).toContain("Deploy failed");
+  });
+
+  // ct-102366 listed Live twice: the change flow's deploy__live step and its plain exit, also named Live.
+  test("the plain exit a finished run reaches is not a second step", () => {
+    const g = { nodes: [{ id: "deploy__live", label: "Live", type: "command" }, { id: "exit", label: "Live", type: "exit" }] };
+    const run = { status: "completed", node_statuses: [{ node_id: "deploy__live", status: "completed" }, { node_id: "exit", status: "completed" }] };
+    expect(runNodeRows(run, g).map((r) => r.id)).toEqual(["deploy__live"]);
   });
 
   test("a status the graph does not know is kept, never dropped, in the order it ran", () => {
