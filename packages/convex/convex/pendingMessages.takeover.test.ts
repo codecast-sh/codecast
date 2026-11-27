@@ -154,6 +154,12 @@ describe("another session's message to an in-process child", () => {
       .rejects.toThrow("jxkid01 runs inside jxpar01's process; message its parent instead.");
     expect((await w.row(w.ids.child)).parent_released_at).toBeUndefined();
   });
+  test("goes through once a person released it: the parent's notice names that `cast send`", async () => {
+    const w = await world();
+    await w.personSend(w.ids.child, "take it from here");
+    const sent = await w.t.mutation(api.pendingMessages.sendSessionMessage, { to: "jxkid01", from: "jxpar01", body: "here is what I had", api_token: TOKEN });
+    expect(sent.message_id).toBeTruthy();
+  });
   test("reaches a child with its own process as before", async () => {
     const w = await world();
     const sent = await w.t.mutation(api.pendingMessages.sendSessionMessage, { to: "jxown01", from: "jxpar01", body: "status?", api_token: TOKEN });

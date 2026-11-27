@@ -1051,7 +1051,9 @@ export async function performSessionSend(
   // Only the parent's own tools reach a session inside its process; a line
   // from another session would land in the parent's pane, or start a second
   // copy of it. A person's message takes it over instead (lib/inProcessTakeover).
-  if (fromRef && !args.direct && runsInParentProcess(target)) {
+  // Once released, the daemon holds any line until that copy stops, so the
+  // `cast send` the parent's notice names goes through.
+  if (fromRef && !args.direct && runsInParentProcess(target) && target.parent_released_at == null) {
     const parent = target.parent_conversation_id ? await ctx.db.get(target.parent_conversation_id) : null;
     const parentShort = parent ? (parent.short_id ?? String(parent._id).slice(0, 7)) : "its parent";
     throw new Error(`${target.short_id ?? target._id.toString().slice(0, 7)} runs inside ${parentShort}'s process; message its parent instead.`);
