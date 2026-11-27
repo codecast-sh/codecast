@@ -73,7 +73,7 @@ import { runBoardBar } from "./boardCommands";
 import { useBoardOpeningFit } from "./useBoardOpeningFit";
 import { useBoardSelectionChrome } from "./useBoardSelectionChrome";
 import { boardFolds } from "./boardFolds";
-import { BoardFrameContext, type BoardFrameActions } from "./BoardFrameParts";
+import { BoardFrameContext, type BoardFrameActions } from "../../lib/boards/frameContext";
 import { boardLayoutActions } from "./boardLayoutActions";
 import { useFrameHover } from "./useFrameHover";
 

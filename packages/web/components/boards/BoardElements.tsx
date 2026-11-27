@@ -30,7 +30,8 @@ import { pageShareUrl } from "../../lib/publishedPageUrls";
 import { PAGE_ESCAPE_MESSAGE } from "../../../shared/render/pageTheme";
 import { colorToken, shapeFill, stickyFill, tint } from "./boardColors";
 import type { BoardEl } from "./boardTypes";
-import { BoardFrameContext, FrameTitle, FrameTools } from "./BoardFrameParts";
+import { FrameTitle, FrameTools } from "./BoardFrameParts";
+import { BoardFrameContext } from "../../lib/boards/frameContext";
 
 export type EditProps = {
   /** This element's text is being edited in place. */

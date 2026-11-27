@@ -45,7 +45,7 @@ mock.module("../EntityIdPill", () => ({ ...realPill, EntityIdPill: ({ shortId }:
 
 const { createRoot } = await import("react-dom/client");
 const { BoardElementView } = await import("./BoardElements");
-const { BoardFrameContext } = await import("./BoardFrameParts");
+const { BoardFrameContext } = await import("../../lib/boards/frameContext");
 const { boardFolds } = await import("./boardFolds");
 const { hitKey } = await import("./useBoardGestures");
 const { boardSvg } = await import("./boardExport");

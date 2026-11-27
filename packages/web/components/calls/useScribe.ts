@@ -1,7 +1,5 @@
 import { useCallback, useSyncExternalStore } from "react";
 import { toast } from "sonner";
-import { useConvex } from "convex/react";
-import { api } from "@codecast/convex/convex/_generated/api";
 import { humanizeConvexError, SCRIBE_CLAIM_TTL_MS, scribeInstructions, scribeStatus, type ScribeStatus } from "@codecast/shared/contracts";
 import { SessionCreatePendingError, useInboxStore } from "../../store/inboxStore";
 import { getRoom } from "../../lib/calls/callManager";
@@ -52,7 +50,6 @@ export function scribeShownStatus(server: ScribeStatus, press: Press | null): Sc
 }
 
 export function useScribe(roomKey: string | null, live: ScribeLive) {
-  const convex = useConvex();
   // A claim whose agent never landed stops holding the slot by the clock
   // alone: the one moment worth a re-render is that claim's expiry.
   const expiresAt = live?.scribe_claim ? live.scribe_claim.at + SCRIBE_CLAIM_TTL_MS : null;
@@ -79,10 +76,11 @@ export function useScribe(roomKey: string | null, live: ScribeLive) {
     void (async () => {
       let claim: number | null = null;
       try {
-        const answer = await convex.mutation(api.transcripts.inviteScribe, { room_key: roomKey, ...(opts?.auto ? { auto: true } : {}) });
+        const store = useInboxStore.getState();
+        const answer = opts?.auto ? await store.inviteScribe(roomKey, true) : await store.inviteScribe(roomKey);
         // Somebody else's Scribe is joining or in (the transcript shows it),
         // or an automatic invite met a removal.
-        if (!answer.claimed) return;
+        if (!answer?.claimed) return;
         claim = answer.claim_id;
         const st = useInboxStore.getState() as any;
         const team = (st.teams ?? []).find((t: any) => String(t?._id) === live?.team_id);
@@ -96,7 +94,7 @@ export function useScribe(roomKey: string | null, live: ScribeLive) {
       } catch (err) {
         // Give the slot back at once rather than hold it until the claim
         // expires; a Scribe somebody else has invited since stays.
-        if (claim !== null) void convex.mutation(api.transcripts.removeScribe, { room_key: roomKey, claim }).catch(() => {});
+        if (claim !== null) void useInboxStore.getState().removeScribe(roomKey, claim).catch(() => {});
         toast.error(
           err instanceof SessionCreatePendingError
             // addFeed waited the spawn out and told the session to stand down.
@@ -107,18 +105,19 @@ export function useScribe(roomKey: string | null, live: ScribeLive) {
         if (presses.get(roomKey) === "invite") notePress(roomKey, null);
       }
     })();
-  }, [convex, roomKey, status, live?.team_id, live?.short_id, addFeed]);
+  }, [roomKey, status, live?.team_id, live?.short_id, addFeed]);
 
   const remove = useCallback(() => {
     if (!roomKey || status === "absent") return;
     notePress(roomKey, "remove");
-    void convex
-      .mutation(api.transcripts.removeScribe, { room_key: roomKey })
+    void useInboxStore
+      .getState()
+      .removeScribe(roomKey)
       .catch((err) => toast.error(humanizeConvexError(err, "Could not remove Scribe")))
       .finally(() => {
         if (presses.get(roomKey) === "remove") notePress(roomKey, null);
       });
-  }, [convex, roomKey, status]);
+  }, [roomKey, status]);
 
   return { present: status !== "absent", status, invite, remove };
 }
