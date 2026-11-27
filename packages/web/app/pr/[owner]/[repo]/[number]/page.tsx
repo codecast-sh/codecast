@@ -496,6 +496,7 @@ export function PRContent({
         authed={isAuthenticated}
         reviews={reviews}
         linkedSessionIds={pr.linked_session_ids ?? []}
+        checksRead={prFeed.ready || !!prFeed.error}
         checksHref={prViewHref(repository, number, "checks", family)}
         filesHref={prViewHref(repository, number, "files", family)}
         onOpenComments={openThreadStops.length ? () => jumpTo(openThreadStops[0].file, openThreadStops[0].key) : undefined}
