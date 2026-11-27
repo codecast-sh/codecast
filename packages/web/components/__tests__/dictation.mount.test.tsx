@@ -11,9 +11,9 @@ import { closeDomWindow } from "../../test-helpers/domGlobals";
 // Dictation in the composers (MessageInput: the session composer and chat;
 // the task comment box), driven through window.__dictationTestHost so every
 // state runs without a microphone: hidden until the switch is on, the mic
-// opening ✕/✓ and "Listening…", words streaming into the box at the cursor,
-// ✓ keeping them, Esc putting the box back, Enter waiting for the last words
-// and then sending them, a blocked mic saying why, and a regulated team's mic
+// opening ✕ and "Listening…", words streaming into the box at the cursor,
+// Esc putting the box back, Enter waiting for the last words and then sending
+// them, a blocked mic saying why, and a regulated team's mic
 // dimmed and saying why on a click.
 // Run: bun test components/__tests__/dictation.mount.test.tsx
 
@@ -56,11 +56,14 @@ test("the mic sits just before send, in the row or the foot that holds it", asyn
   }
 });
 
-test("press the mic, words stream in at the end, ✓ keeps them", async () => {
+test("press the mic, words stream in at the end, Enter sends them", async () => {
   const c = await mountComposer({ initialDraft: "fix the" });
+  await act(async () => { c.textarea().focus(); });
   await c.press("Dictate");
   expect(c.button("Cancel dictation")).not.toBeNull();
-  expect(c.button("Finish dictation")).not.toBeNull();
+  // ✕ is the recording's only control: Send, Enter or typing finish it.
+  expect(c.button("Finish dictation")).toBeNull();
+  expect(c.container.querySelector('[aria-label="Finishing dictation"]')).toBeNull();
   expect(c.button("Dictate")).toBeNull();
 
   await say((e) => e.onPartial("auth"));
@@ -71,35 +74,37 @@ test("press the mic, words stream in at the end, ✓ keeps them", async () => {
   await say((e) => e.onPartial("Then ship"));
   expect(c.textarea().value).toBe("fix the auth bug. Then ship");
 
-  await c.press("Finish dictation");
-  // Waiting for the last words: ✓ says so.
-  expect(c.button("Finish dictation")!.getAttribute("aria-busy")).toBe("true");
+  await c.key("Enter");
+  // Waiting for the last words: nothing sent yet.
+  expect(c.container.querySelector('[data-dictation="finishing"]')).not.toBeNull();
+  // The box is full already, so the spinner beside ✕ is what says words are still coming.
+  expect(c.container.querySelector('[aria-label="Finishing dictation"]')).not.toBeNull();
+  expect(c.container.querySelector('[data-dictate-slot]')!.parentElement!.hasAttribute("data-dictate-recording")).toBe(true);
+  expect(c.sent).toEqual([]);
   await act(async () => { host.endFinish!(); });
   await flush();
-  expect(c.textarea().value).toBe("fix the auth bug. Then ship");
+  await flush();
+  expect(c.sent).toEqual(["fix the auth bug. Then ship"]);
   expect(c.button("Dictate")).not.toBeNull();
-  // The draft saw the words, as it sees typing.
   await c.unmount();
 });
 
-test("✕ and ✓ are secondary but readable (the full dim token, never the row's 40% tint), in the bare box and the dock", async () => {
+test("✕ is secondary but readable (the full dim token, never the row's 40% tint), in the bare box and the dock", async () => {
   // Not an alpha step (text-sol-text-dim/55): .modern-style resolves those to
   // the solid token anyway. The 40% tint the row's other icons use measured
-  // 1.7:1, too faint for the only buttons that end a recording.
+  // 1.7:1, too faint for the recording's only control.
   const rowSecondary = "text-[var(--sol-text-dim)]";
   const tone = async (opts: { bare?: boolean; foot?: boolean }) => {
     const c = await mountComposer(opts);
     await c.press("Dictate");
-    const out = ["Cancel dictation", "Finish dictation"].map((l) => {
-      const cls = c.button(l)!.className.split(/\s+/);
-      return cls.includes(rowSecondary) && !cls.some((k) => /^text-sol-text-dim(\/\d+)?$/.test(k));
-    });
+    const cls = c.button("Cancel dictation")!.className.split(/\s+/);
+    const out = cls.includes(rowSecondary) && !cls.some((k) => /^text-sol-text-dim(\/\d+)?$/.test(k));
     await c.press("Cancel dictation");
     await c.unmount();
     return out;
   };
-  expect(await tone({ bare: true, foot: true })).toEqual([true, true]);
-  expect(await tone({})).toEqual([true, true]);
+  expect(await tone({ bare: true, foot: true })).toBe(true);
+  expect(await tone({})).toBe(true);
 });
 
 test("an empty box reads Listening… while recording", async () => {
@@ -231,6 +236,7 @@ test("while the microphone listens, and only then, a dot left of ✕ says it is 
   w.__dictationTestHost.open = (events: any, signal: any) => new Promise((resolve) => { open = () => resolve(real(events, signal)); });
   const c = await mountComposer();
   const dot = () => c.container.querySelector("[data-dictate-live]");
+  await act(async () => { c.textarea().focus(); });
   await c.press("Dictate");
   expect(c.container.querySelector("[data-dictation]")!.getAttribute("data-dictation")).toBe("starting");
   expect(dot()).toBeNull();
@@ -242,7 +248,7 @@ test("while the microphone listens, and only then, a dot left of ✕ says it is 
   expect(dot()!.compareDocumentPosition(c.button("Cancel dictation")!) & w.Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   await say((e) => e.onPartial("words already in the box"));
   expect(dot()).not.toBeNull();
-  await c.press("Finish dictation");
+  await c.key("Enter");
   // Finishing: the mic is closing.
   expect(dot()).toBeNull();
   await act(async () => { host.endFinish!(); });
@@ -357,7 +363,7 @@ test("task comment box: words stream in, Enter posts them once they are in, Esc 
   useInboxStore.setState({ addTaskComment: realAdd } as any);
 });
 
-test("task comment box: ✓ before any words closes the mic, and the box stops saying Listening…", async () => {
+test("task comment box: Enter before any words closes the mic, and the box stops saying Listening…", async () => {
   const { TaskCommentComposer } = await import("../tasks/TaskCommentStream");
   const container = w.document.createElement("div");
   w.document.body.appendChild(container);
@@ -375,7 +381,7 @@ test("task comment box: ✓ before any words closes the mic, and the box stops s
   await act(async () => { btn("Dictate")!.click(); });
   await flush();
   expect(ta.placeholder).toBe("Listening…");
-  await act(async () => { btn("Finish dictation")!.click(); });
+  await act(async () => { ta.dispatchEvent(new w.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })); });
   await flush();
   // Finishing: the last words are awaited, but nothing is listening.
   expect(container.querySelector('[data-dictation="finishing"]')).not.toBeNull();
@@ -439,7 +445,7 @@ test("text typed before the first word is kept: Enter sends it, and the first wo
   await typeInto(b.textarea(), "fix the login bug");
   await say((e) => e.onPartial("today"));
   expect(b.textarea().value).toBe("fix the login bug");
-  expect(b.button("Finish dictation")).toBeNull();
+  expect(b.button("Cancel dictation")).toBeNull();
   expect(b.button("Dictate")!.getAttribute("data-dictation-reason")).toBeNull();
   await b.unmount();
 });
@@ -751,7 +757,7 @@ test("Esc belongs to a box still finishing after the newer recording was cancell
   await b.press("Dictate");
   await b.press("Cancel dictation");
   expect(host.finishing).toBe(true);
-  expect(a.button("Finish dictation")).not.toBeNull();
+  expect(a.button("Cancel dictation")).not.toBeNull();
   expect(dictatingIn(a.textarea())).toBe(true);
   expect(dictatingIn(b.textarea())).toBe(false);
   await act(async () => { host.endFinish!(); });

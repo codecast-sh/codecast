@@ -261,7 +261,7 @@ test("Esc and Enter in a picker's search are the picker's: the recording keeps g
   expect(search("Search people and agents")).not.toBeNull();
   await press(search("Search people and agents")!, "Escape");
   expect(search("Search people and agents")).toBeNull();
-  expect(m.button("Finish dictation")).not.toBeNull();
+  expect(m.button("Cancel dictation")).not.toBeNull();
   expect(m.editor().getText()).toBe("the redirect");
 
   await act(async () => { chip("Labels").click(); });
@@ -274,7 +274,7 @@ test("Esc and Enter in a picker's search are the picker's: the recording keeps g
   expect(chip("urgent")).toBeTruthy();
   expect(finishing).toBe(false);
   expect(created).toEqual([]);
-  expect(m.button("Finish dictation")).not.toBeNull();
+  expect(m.button("Cancel dictation")).not.toBeNull();
 
   // Back in the description, Esc is the recording's again.
   await press(m.container.querySelector(".ProseMirror") as HTMLElement, "Escape");

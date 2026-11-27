@@ -1,7 +1,7 @@
 // The composer's mic, drawn the way Claude's composer draws it: a mic and a
-// small caret for its settings while idle; Cancel (✕) and Finish (✓) while it
-// records, with a small dot left of ✕ fading in and out while the microphone
-// listens, so a box already full of words still says the mic is on. Shown
+// small caret for its settings while idle; Cancel (✕) while it records (Send,
+// Enter or Create finish the words and send them), with a small dot left of ✕
+// fading in and out while the microphone listens, so a box already full of words still says the mic is on. Shown
 // only once the person has turned dictation on (Settings › Voice); a person in
 // any team without an OpenAI BAA sees the struck-through mic and the caret
 // dimmed, and a click on either says why (the rule the server's mint applies,
@@ -14,7 +14,7 @@
 // controls and onMenuClosed a box passes are stable, so a keystroke in the box
 // does not draw the mic again.
 import { memo, useState, type MouseEvent, type ReactElement } from "react";
-import { Check, ChevronDown, Loader2, Mic, MicOff, X } from "lucide-react";
+import { ChevronDown, Loader2, Mic, MicOff, X } from "lucide-react";
 import { toast } from "sonner";
 import { DICTATION_LANGUAGES } from "@codecast/shared/contracts/dictation";
 import { useInboxStore } from "../../store/inboxStore";
@@ -38,13 +38,10 @@ export type DictateSize = "dock" | "bare";
 const BASE = "transition-colors flex items-center justify-center shrink-0";
 const QUIET = "text-sol-text-dim hover:text-sol-text hover:bg-sol-bg/50";
 
-/** ✕ and ✓: at the weight of the row's other secondary icons (stash, hand
- *  off, fork), so Send, or the bare box's send arrow, stays the strongest
- *  mark in the row. A color-mix, not an alpha step like /55: Modern resolves
- *  those to the solid dim token (app/globals.css, "Translucent text"). */
-// The only controls that end a recording, so they keep readable contrast (≥3:1)
-// on the grayscale tablet rather than the row's 40% icon tint; Send stays the
-// one filled button.
+/** ✕: at the weight of the row's other secondary icons (stash, hand off,
+ *  fork), so Send, or the bare box's send arrow, stays the strongest mark in
+ *  the row, but with readable contrast (≥3:1) on the grayscale tablet rather
+ *  than the row's 40% icon tint. */
 const SECONDARY = "text-[var(--sol-text-dim)] hover:text-sol-text hover:bg-sol-bg/50";
 
 const SIZES: Record<DictateSize, { button: string; caret: string; icon: string }> = {
@@ -56,7 +53,7 @@ const dictationOn = (s: { currentUser?: unknown }) => (s.currentUser as { dictat
 
 export const DictateControls = memo(function DictateControls(props: { dictation: DictationControls; size?: DictateSize; onMenuClosed?: () => void }) {
   const enabled = useInboxStore(dictationOn);
-  // A recording outlives the switch going off mid-sentence: its ✕ and ✓ stay.
+  // A recording outlives the switch going off mid-sentence: its ✕ stays.
   if (!enabled && !props.dictation.active) return null;
   return <DictateButtons {...props} />;
 });
@@ -73,7 +70,6 @@ function DictateButtons({ dictation, size = "dock", onMenuClosed }: { dictation:
   );
 
   if (dictation.active) {
-    const finishing = dictation.state.phase === "finishing";
     return (
       // data-dictate-recording keeps the dot's room in every recording phase,
       // so the row does not move when the microphone opens.
@@ -85,22 +81,12 @@ function DictateButtons({ dictation, size = "dock", onMenuClosed }: { dictation:
           </button>,
           "Cancel dictation",
         )}
-        {tip(
-          <button
-            type="button"
-            data-dictate-target
-            onMouseDown={keepFocus}
-            onClick={() => void dictation.finish()}
-            disabled={finishing}
-            aria-busy={finishing || undefined}
-            // Quiet like ✕: Send stays the one primary in the row.
-            className={`${BASE} ${sz.button} ${SECONDARY} disabled:cursor-wait`}
-            aria-label="Finish dictation"
-          >
-            {finishing ? <Loader2 className={`${sz.icon} animate-spin`} /> : <Check className={sz.icon} />}
-          </button>,
-          finishing ? "Finishing…" : "Finish dictation",
-        )}
+        {/* Holds the row at its idle width; after Send or Enter the box may
+            already be full, so this spinner is what says the last words are
+            still coming. */}
+        <span data-dictate-slot className={`${BASE} ${sz.button}`}>
+          {dictation.state.phase === "finishing" && <Loader2 className={`${sz.icon} animate-spin text-[var(--sol-text-dim)]`} role="img" aria-label="Finishing dictation" />}
+        </span>
       </div>
     );
   }

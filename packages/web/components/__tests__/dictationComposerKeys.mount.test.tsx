@@ -64,7 +64,7 @@ test("Shift+Enter while dictating is a new line, not a send", async () => {
   await c.key("Enter", { shiftKey: true });
   expect(host.finishing).toBe(false);
   expect(c.sent).toEqual([]);
-  expect(c.button("Finish dictation")).not.toBeNull();
+  expect(c.button("Cancel dictation")).not.toBeNull();
   await c.key("Escape");
   await c.unmount();
 });
@@ -198,7 +198,7 @@ test("a live, unmuted call in this window refuses to start dictation and says wh
     useInboxStore.setState({ call: { ...before, phase: "connected", roomKey: "room_1", muted: true } } as any);
     await c.press("A huddle is using the mic");
     expect(host.events).not.toBeNull();
-    expect(c.button("Finish dictation")).not.toBeNull();
+    expect(c.button("Cancel dictation")).not.toBeNull();
     await c.key("Escape");
     await c.unmount();
   } finally {

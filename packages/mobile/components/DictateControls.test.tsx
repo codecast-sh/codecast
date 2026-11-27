@@ -1,7 +1,7 @@
 // Dictation in a phone text box, driven by presses: the mic shows only when the
-// person turned it on; a press turns it into Cancel and Finish while the words
-// stream into the box from a fake recognizer; Finish keeps them, Cancel puts
-// the box back, and a send pressed mid-recording sends the dictated words. The
+// person turned it on; a press turns it into Cancel while the words stream
+// into the box from a fake recognizer; Cancel puts the box back, and a send
+// pressed mid-recording finishes it and sends the dictated words. The
 // box here is wired exactly as the composers wire theirs (value, setter,
 // selection, send through dictation.send).
 import { afterEach, beforeAll, beforeEach, expect, mock, test } from 'bun:test';
@@ -214,12 +214,12 @@ test('hidden unless the person turned dictation on', async () => {
   expect(m.byLabel('Dictation settings').length).toBe(1);
 });
 
-test('the mic turns into Cancel and Finish, and the words stream in at the caret', async () => {
+test('the mic turns into Cancel (Send finishes), and the words stream in at the caret', async () => {
   const m = await mount('fix the please');
   await m.select(7);
   await m.press('Dictate');
   expect(m.byLabel('Dictate')).toEqual([]);
-  expect([m.byLabel('Cancel dictation').length, m.byLabel('Finish dictation').length]).toEqual([1, 1]);
+  expect([m.byLabel('Cancel dictation').length, m.byLabel('Finish dictation').length]).toEqual([1, 0]);
   await m.act(() => fake.events!.onPartial('auth'));
   expect(m.value()).toBe('fix the auth please');
   // The open sentence rewrites itself in place, then closes.
@@ -237,20 +237,6 @@ test('an empty box reads Listening… while recording', async () => {
   expect(m.placeholder()).toBe('Listening…');
   await m.act(() => fake.events!.onPartial('hello'));
   expect(m.value()).toBe('hello');
-});
-
-test('Finish keeps the words, waiting for the last ones', async () => {
-  const m = await mount('');
-  await m.press('Dictate');
-  await m.act(() => fake.events!.onPartial('hello there'));
-  await m.press('Finish dictation');
-  // Still waiting on the recognizer: the button says so and cannot be pressed twice.
-  const finishing = m.byLabel('Finish dictation')[0]!;
-  expect([finishing.props.disabled, finishing.findAllByType('ActivityIndicator' as any).length]).toEqual([true, 1]);
-  await m.act(() => fake.finished());
-  expect(m.value()).toBe('hello there');
-  expect(m.byLabel('Dictate').length).toBe(1);
-  expect(m.byLabel('Cancel dictation')).toEqual([]);
 });
 
 test('Cancel puts the box back exactly as it was', async () => {
@@ -291,13 +277,13 @@ test('send pressed twice while finishing sends once; send then Cancel sends noth
   await m.send();
   await m.press('Cancel dictation');
   expect(m.value()).toBe('');
-  // A later recording kept with Finish does not carry the cancelled send.
+  // A later recording sent does not carry the cancelled send: it sends once.
   await m.press('Dictate');
   await m.act(() => fake.events!.onPartial('just a draft'));
-  await m.press('Finish dictation');
+  await m.send();
   await m.act(() => fake.finished());
-  expect(m.value()).toBe('just a draft');
-  expect(sent).toEqual(['ship it']);
+  expect(m.value()).toBe('');
+  expect(sent).toEqual(['ship it', 'just a draft']);
 });
 
 test('typing into the box mid-recording stops it and keeps what was typed', async () => {
@@ -332,7 +318,7 @@ test('a start that failed says why at once, tints the mic, and a tap says it aga
   ]);
   installHost();
   await m.act(() => alerts[0]!.buttons![1]!.onPress!());
-  expect(m.byLabel('Finish dictation').length).toBe(1);
+  expect(m.byLabel('Cancel dictation').length).toBe(1);
   // The retry's success says nothing more.
   expect(notices.length).toBe(1);
 });
@@ -438,9 +424,10 @@ test('the app going to the background finishes the recording, keeping its words'
   await m.act(() => fake.events!.onPartial('half a thought'));
   // The microphone permission prompt makes the app inactive: that is no stop.
   await m.act(() => appStateListeners.forEach((l) => l('inactive')));
-  expect(m.byLabel('Finish dictation')[0]!.props.disabled).toBe(false);
+  expect(m.byLabel('Microphone on').length).toBe(1);
   await m.act(() => appStateListeners.forEach((l) => l('background')));
-  expect(m.byLabel('Finish dictation')[0]!.props.disabled).toBe(true);
+  // Finishing: the mic is closing, so its dot goes.
+  expect(m.byLabel('Microphone on')).toEqual([]);
   await m.act(() => fake.finished());
   expect(m.value()).toBe('half a thought');
   expect(m.byLabel('Dictate').length).toBe(1);
@@ -491,7 +478,10 @@ function targets(m: Awaited<ReturnType<typeof mount>>, labels: string[]) {
     x += st.width + (st.marginRight ?? 0);
   }
   expect(rects.map((r) => r.label)).toEqual(labels);
-  x += flat(row!.props.style).marginRight ?? 0;
+  // A row with its own width (recording) ends there, not after its last child.
+  const rowStyle = flat(row!.props.style);
+  if (rowStyle.width != null) x = rowStyle.width;
+  x += rowStyle.marginRight ?? 0;
   const { DICTATE_SEND_SLOP: send } = require('./DictateControls');
   rects.push({ label: 'Send', left: x - send.left, right: x + 32 + send.right, height: 32 + send.top + send.bottom });
   return rects;
@@ -510,10 +500,11 @@ test('every target is 44pt and none overlaps its neighbour, send included', asyn
   const idle = targets(m, ['Dictate', 'Dictation settings']);
   expectClear(idle);
   await m.press('Dictate');
-  const recording = targets(m, ['Cancel dictation', 'Finish dictation']);
+  const recording = targets(m, ['Cancel dictation']);
   expectClear(recording);
-  // Send sits in the same place in both states.
-  expect(recording.at(-1)).toEqual(idle.at(-1));
+  // ✕ lands where the mic was, and send does not move.
+  expect(recording.map((r) => [r.label, r.left, r.right])).toEqual([['Cancel dictation', 2, 46], ['Send', 90, 134]]);
+  expect(idle.at(-1)).toEqual(recording.at(-1));
   // The live dot shows while listening and changes nothing beside it.
   expect(m.byLabel('Microphone on').length).toBe(1);
 });
@@ -524,16 +515,16 @@ test('while the agent works, an empty box keeps Stop through a recording; the fi
   const slot = () => m.r.root.findByProps({ testID: 'send' }).props;
   expect(slot().accessibilityLabel).toBe('Stop the agent');
   await m.press('Dictate');
-  // Listening into an empty box: Stop stays, live, beside ✕ and ✓.
+  // Listening into an empty box: Stop stays, live, beside ✕.
   expect(m.placeholder()).toBe('Listening…');
   expect([slot().accessibilityLabel, touchableDisabled(slot())]).toEqual(['Stop the agent', false]);
   await m.press('Stop the agent');
   expect(stops).toBe(1);
-  // Stop is send's own button and slop: ✕ and ✓ keep their 44pt beside it.
+  // Stop is send's own button and slop: ✕ keeps its 44pt beside it.
   expect(slot().hitSlop).toBe(DICTATE_SEND_SLOP);
-  expectClear(targets(m, ['Cancel dictation', 'Finish dictation']));
+  expectClear(targets(m, ['Cancel dictation']));
   // The microphone is still on after the agent stopped.
-  expect(m.byLabel('Finish dictation').length).toBe(1);
+  expect(m.byLabel('Microphone on').length).toBe(1);
   await m.act(() => fake.events!.onPartial('and then'));
   expect(slot().accessibilityLabel).toBe('Send');
   // Cancel empties the box again: Stop is back.
@@ -579,8 +570,8 @@ test('a dot left of ✕ says the mic is on while it listens, and only then', asy
   expect(row.children.findIndex((c: any) => typeof c !== 'string' && c.findAll((n: any) => n.props.accessibilityLabel === 'Microphone on').length > 0)).toBe(0);
   await m.act(() => fake.events!.onPartial('words already in the box'));
   expect([dot().length, loops.at(-1)!.running]).toEqual([1, true]);
-  // Finishing: the mic is closing, so the dot goes, and its pulse stops.
-  await m.press('Finish dictation');
+  // Send finishes: the mic is closing, so the dot goes, and its pulse stops.
+  await m.send();
   expect([dot(), loops.at(-1)!.running]).toEqual([[], false]);
   await m.act(() => release());
   expect(dot()).toEqual([]);
@@ -594,7 +585,7 @@ test('the dot fades no lower than 0.45, so it stays visible on a dark ground; gl
   await m.press('Dictate');
   expect(m.byLabel('Microphone on').length).toBe(1);
   expect(timings).toEqual([0.45, 1]);
-  expect([glyph('Cancel dictation'), glyph('Finish dictation')]).toEqual([18, 18]);
+  expect(glyph('Cancel dictation')).toBe(18);
   await m.press('Cancel dictation');
 });
 
@@ -623,30 +614,18 @@ test('blocked keeps the same row: nothing beside it moves', async () => {
   expect(blocked).toEqual(idle);
 });
 
-test('✓ is quiet like ✕; a send waiting on the last words shows on Send, not on ✓', async () => {
+test('a send waiting on the last words shows on Send, not in the dictation row', async () => {
   const m = await mount('');
   await m.press('Dictate');
-  const flat = (st: any): any => (Array.isArray(st) ? Object.assign({}, ...st.filter(Boolean).map(flat)) : st ?? {});
-  const bg = (label: string) => flat(m.byLabel(label)[0]!.props.style).backgroundColor;
-  expect(bg('Finish dictation')).toBe(bg('Cancel dictation'));
   await m.act(() => fake.events!.onPartial('ship it'));
   expect(m.dictationOf().sendWaiting).toBe(false);
   await m.send();
   expect(m.dictationOf().sendWaiting).toBe(true);
-  const finish = m.byLabel('Finish dictation')[0]!;
-  expect(finish.findAllByType('ActivityIndicator' as any)).toEqual([]);
-  expect(finish.findByType('Feather' as any).props.name).toBe('check');
+  expect(m.r.root.findAllByType('ActivityIndicator' as any)).toEqual([]);
+  expect(m.byLabel('Cancel dictation')[0]!.findByType('Feather' as any).props.name).toBe('x');
   await m.act(() => fake.finished());
   expect(sent).toEqual(['ship it']);
   expect(m.dictationOf().sendWaiting).toBe(false);
-
-  // ✓ pressed alone: the spinner is on ✓, and no send waits.
-  await m.press('Dictate');
-  await m.act(() => fake.events!.onPartial('draft'));
-  await m.press('Finish dictation');
-  expect(m.dictationOf().sendWaiting).toBe(false);
-  expect(m.byLabel('Finish dictation')[0]!.findAllByType('ActivityIndicator' as any).length).toBe(1);
-  await m.act(() => fake.finished());
 
   // Send then Cancel: nothing waits any more.
   await m.press('Dictate');
@@ -657,12 +636,12 @@ test('✓ is quiet like ✕; a send waiting on the last words shows on Send, not
   expect(m.dictationOf().sendWaiting).toBe(false);
 });
 
-test('beside a bare send glyph (the task box) ✕ and ✓ are dim bare glyphs; beside a filled send they are quiet circles', async () => {
+test('beside a bare send glyph (the task box) ✕ is a dim bare glyph; beside a filled send it is a quiet circle', async () => {
   const flat = (st: any): any => (Array.isArray(st) ? Object.assign({}, ...st.filter(Boolean).map(flat)) : st ?? {});
   const look = async (variant?: 'quiet' | 'bare') => {
     const m = await mount('', variant);
     await m.press('Dictate');
-    const out = ['Cancel dictation', 'Finish dictation'].map((label) => {
+    const out = ['Cancel dictation'].map((label) => {
       const st = flat(m.byLabel(label)[0]!.props.style);
       const color = m.byLabel(label)[0]!.findByType('Feather' as any).props.color;
       return [label, st.backgroundColor ?? null, st.borderWidth ?? 0, st.width, st.height, color];
@@ -670,19 +649,17 @@ test('beside a bare send glyph (the task box) ✕ and ✓ are dim bare glyphs; b
     await m.press('Cancel dictation');
     return out;
   };
-  // Bare, they would match the accent arrow's weight in textMuted: the dim
-  // token keeps them secondary.
+  // Bare, it would match the accent arrow's weight in textMuted: the dim
+  // token keeps it secondary.
   expect(await look('bare')).toEqual([
     ['Cancel dictation', null, 0, 32, 32, THEME.textDim],
-    ['Finish dictation', null, 0, 32, 32, THEME.textDim],
   ]);
   expect(await look()).toEqual([
     ['Cancel dictation', THEME.bgAlt, 1, 32, 32, THEME.textMuted],
-    ['Finish dictation', THEME.bgAlt, 1, 32, 32, THEME.textMuted],
   ]);
 });
 
-test('the dim bare ✕ and ✓ keep 3:1 against the page in every palette', async () => {
+test('the dim bare ✕ keeps 3:1 against the page in every palette', async () => {
   // Theme is mocked in this file: Classic's values are read from its source,
   // Modern's from the module that derives them.
   const { readFileSync } = require('node:fs');
