@@ -154,10 +154,11 @@ describe("shouldPlayWaitingSound", () => {
     expect(episode({ is_subagent: true, parent_conversation_id: "p", spawned_by_conversation_id: "p", parent_released_at: 5 }).play).toBe(true);
   });
 
-  // Under the owners model the server stands a child down only while its
-  // parent session owns it (reason agent_owner): an unreleased parent link.
-  it("under the owners model, stays silent only while the parent owns the child", () => {
+  // One rule under the owners model too: a released child is heard, and an
+  // unreleased child or spawned peer stays silent, as before.
+  it("under the owners model, a released child chimes and an unreleased child or spawned peer stays silent", () => {
     expect(episode({ owners_model: true, is_subagent: true, parent_conversation_id: "p" }).play).toBe(false);
+    expect(episode({ owners_model: true, spawned_by_conversation_id: "lead" }).play).toBe(false);
     expect(episode({ owners_model: true, is_subagent: true, parent_conversation_id: "p", parent_released_at: 5 }).play).toBe(true);
   });
 

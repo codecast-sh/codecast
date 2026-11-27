@@ -828,13 +828,13 @@ export async function performNeedsInputCheck(
   const escalated = !!model && (unheard || waitReachedPeople(conv));
   // The sound skips pinned (isSessionWaitingForInput's !is_pinned arms).
   if (conv.inbox_pinned_at && !escalated) return { notified: false, reason: "pinned" };
-  // Mirror of the web's isSub guard (inboxStore), in the same order: a child
-  // that answers to its parent here (reason "subagent": the shared
-  // answersToParent; a workflow sub keeps this reason too, though
-  // isAgentSpawnedConversation would also catch it) and the
-  // isAgentSpawnedConversation gate just below (reason "agent_spawned"). A
-  // child a person took over (parent_released_at) skips both: it is theirs,
-  // heard like any session they own, with the owners model or without. The
+  // Mirror of the web's isSub guard (inboxStore), exactly and in the same
+  // order: a released child (parent_released_at: a person took it over) skips
+  // both stand-downs and is heard like any session they own; otherwise a
+  // child that answers to its parent stands down here (reason "subagent": the
+  // shared answersToParent; a workflow sub keeps this reason too, though
+  // isAgentSpawnedConversation would also catch it) and an agent-spawned row
+  // at the gate just below (reason "agent_spawned"). The
   // idle sound skips these, so the push does too. A worktree (local
   // --isolated, path-stamped, or a cloud host's) is a LOCATION, not a parent,
   // so a human-started worktree session pushes. Agent fan-out in worktrees
