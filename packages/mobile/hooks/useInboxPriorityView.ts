@@ -2,24 +2,23 @@
 // filed under one of the viewer's priorities says its rank and title, read off
 // the viewer's ranks (one subscription, fed while any workspace has priorities
 // on). The Priorities view also sorts each status section by that priority,
-// and feeds the active workspace's priorities so a move re-sorts at once;
-// resolveInboxViewMode allows it only in a workspace with them on.
+// and feeds every workspace's priorities with the same call as the Priorities
+// list, so a move re-sorts at once and neither snapshot drops the other's
+// workspaces; resolveInboxViewMode allows it only in a workspace with them on.
 import { useMemo } from 'react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import { useInboxStore, type InboxSession, type InboxViewMode } from '@codecast/web/store/inboxStore';
 import { prioritiesAnywhere } from '@codecast/web/store/priorityOrder';
 import { useSyncCollection } from '@codecast/web/hooks/useSyncCollection';
-import { useActiveWorkspaceKey } from '@codecast/web/hooks/useWorkspaceCollection';
-import { listRows } from '@codecast/web/lib/priorities';
+import { useSyncPriorities } from '@/hooks/usePriorityList';
 import { priorityInboxSig, priorityInboxView, type PriorityInboxView } from '@/lib/inboxPriorities';
 
 /** The rows' priority labels while any workspace has priorities on, sorting only in the Priorities view; else null. */
 export function useInboxPriorityView(viewMode: InboxViewMode): PriorityInboxView | null {
   const sorts = viewMode === 'priorities';
   const on = useInboxStore(prioritiesAnywhere);
-  const workspaceKey = useActiveWorkspaceKey();
-  // The generated api's type stops short of priorities here, as on the priority screen.
-  useSyncCollection('priorities', (api as any).priorities.list, sorts && workspaceKey ? { workspace: workspaceKey } : 'skip', { select: listRows });
+  // The same call as the Priorities list, so neither one's snapshot drops the other's workspaces.
+  useSyncPriorities(sorts);
   // The viewer's ranks and titles in every workspace.
   useSyncCollection('priorityRanks', (api as any).priorityRanks.mine, on ? {} : 'skip');
   const sig = useInboxStore((s) => (on ? priorityInboxSig(s) : ''));
