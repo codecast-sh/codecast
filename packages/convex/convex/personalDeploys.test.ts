@@ -101,6 +101,9 @@ describe("recording into a personal workspace", () => {
     await t.mutation(api.changesDeploy.markDeploy, { api_token: tokens.pia, repository: MINE, surface: "backend", sha: SHA });
     expect(await deploys()).toHaveLength(1);
     expect((await t.run((ctx) => ctx.db.query("external_events").collect())).filter((e) => e.kind === "deploy")).toHaveLength(0);
+    // Every path that records a personal deploy asks for the project's face (deploys.recordDeployMarker), not only a run's end.
+    const faces = await t.run((ctx) => ctx.db.query("repo_icons").collect());
+    expect(faces.map((f: any) => [f.workspace, f.repository])).toEqual([[ids.ws, MINE.toLowerCase()]]);
   });
 
   test("a team repository still records into its team", async () => {
@@ -128,6 +131,7 @@ describe("recording into a personal workspace", () => {
     expect(rows.targets).toEqual([]);
     expect(rows.passes.map((r) => r.workspace)).toEqual([ids.ws]);
     expect((await deploys()).map((d) => [d.workspace, d.target, d.status])).toEqual([[ids.ws, "production", "live"]]);
+    expect((await t.run((ctx) => ctx.db.query("repo_icons").collect())).map((f: any) => f.repository)).toEqual([MINE.toLowerCase()]);
   });
 });
 
@@ -250,7 +254,7 @@ describe("recordRunDeploy", () => {
     expect(card.sessions.map((s: any) => [s.conversation_id, s.task_short_ids])).toEqual([[String(ids.shipper), ["ct-7"]]]);
     expect(card.tasks.map((x: any) => x.short_id)).toEqual(["ct-7"]);
     expect(card.commit_rows).toHaveLength(1);
-    // The project's face is asked for by the server, once the repository has a deploy (no client ever asks).
+    // The project's face is asked for by the server once the repository has a deploy (no client ever asks).
     const faces = await t.run((ctx) => ctx.db.query("repo_icons").collect());
     expect(faces.map((f: any) => [f.workspace, f.repository, typeof f.requested_at])).toEqual([[ids.ws, MINE.toLowerCase(), "number"]]);
   });

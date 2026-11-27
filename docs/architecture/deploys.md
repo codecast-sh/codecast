@@ -215,7 +215,10 @@ through `packages/convex/run.sh`.
   deploy object.
 - The Deploys page in a personal workspace shows every project the person
   ships at once: a row of project chips (multi-select, all on) filters the
-  page, each project wears its repository's face, and the columns mix the
+  page, each project wears its repository's face (a drawing in the role icon
+  language, `repo_icons`, asked for by the first deploy `recordDeployMarker`
+  records into the workspace, whatever path reported it; until it is drawn,
+  the name's first letter in the same color), and the columns mix the
   chosen projects' runs and deploys. A run on its way shows the Check ·
   Review · Land track of a flow that lands straight to main (`track:
   "direct"`), or the pull request's steps (`track: "pr"`). It has no pause or

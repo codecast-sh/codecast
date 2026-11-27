@@ -34,6 +34,7 @@ import { tellRole } from "./pendingMessages";
 import { liveRoleByHandle } from "./lib/orgAccess";
 import { scheduleTriggerMatch } from "./lib/triggerMatch";
 import { fillDeployRange } from "./deployTargets";
+import { performRequestRepoIcon } from "./repoIcons";
 import { afterFor, shapeView } from "./deploysView";
 import { devPushedOver } from "./deployTargetsState";
 import { DEPLOY_FAILED_EVENT, DEPLOY_LIVE_EVENT } from "@codecast/shared/contracts";
@@ -331,6 +332,9 @@ export async function recordDeployMarker(ctx: any, m: DeployMarker): Promise<str
   await stampEvent(ctx, m.event_id, shortId);
   await onDeployStatus(ctx, id, m.quiet);
   if (status === "live") await scheduleDroppedWork(ctx, deployDropper(row), drops ?? [], m.started_by);
+  // A personal project's face is asked for by its deploys, whichever path records them (a run's end, a ship pass,
+  // cast ship mark, a GitHub reader): the Deploys page never asks (repoIcons.ts). A no-op once drawn or recently asked.
+  if (repository && m.workspace.startsWith("user:")) await performRequestRepoIcon(ctx, m.workspace.slice("user:".length) as Id<"users">, m.workspace, repository);
   return shortId;
 }
 

@@ -1,8 +1,8 @@
 // A repository's face on the Deploys page: a drawing in the role icon
 // language, made by the same generator from the repository's name and stored
 // per workspace in repo_icons. Modeled on sessionIcons.ts, but the server asks:
-// a personal run that records a deploy asks for its repository's face
-// (lib/runDeploy.ts), the server draws once, and an ask inside the retry window
+// every deploy recorded into a personal workspace asks for its repository's
+// face (deploys.recordDeployMarker), the server draws once, and an ask inside the retry window
 // after a failed drawing does nothing.
 
 import { v } from "convex/values";
