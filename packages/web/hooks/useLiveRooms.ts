@@ -8,6 +8,7 @@ import { useFaceRow } from "./useFaceRow";
 import { liveRoomOnlyMine, personalViewerOf } from "../lib/calls/personalCalls";
 import { roomIsOwnerOnly } from "../lib/faces/faceRowSigs";
 import { findSessionRow } from "../lib/calls/findSessionRow";
+import { sessionRoomConversationId } from "@codecast/shared/contracts";
 
 // The live-rooms read layer lives in ./liveRoomRows (platform-neutral); this
 // file binds it to the face row, web's answer to "which room am I in".
@@ -22,19 +23,25 @@ export function useLiveRooms(): LiveRoomRow[] {
 export function useLiveNowRooms(): LiveRoomRow[] {
   const rows = useLiveRooms();
   const personalViewer = useInboxStore(personalViewerOf);
+  // Whose session each owner-only room is, as "id:owner" pairs: a session row
+  // that lands after its room wakes this, the sessions collection does not.
+  const ownersSig = useInboxStore((st: any) =>
+    personalViewerOf(st) === null
+      ? ""
+      : rows
+          .flatMap((r) => {
+            const id = r.ownerOnly ? sessionRoomConversationId(r.roomKey) : null;
+            return id ? [`${id}:${findSessionRow(st, id)?.user_id ?? ""}`] : [];
+          })
+          .join("|"),
+  );
   return useMemo(
     () => {
       if (personalViewer === null) return rows;
-      // Whose session: read when the rooms change; an owner's own sessions
-      // are in their store.
-      const st = useInboxStore.getState();
-      const ownerOf = (id: string) => {
-        const row = findSessionRow(st, id);
-        return row?.user_id ? String(row.user_id) : null;
-      };
-      return rows.filter((r) => liveRoomOnlyMine(r, personalViewer, ownerOf));
+      const owners = new Map(ownersSig ? ownersSig.split("|").map((p) => p.split(":") as [string, string]) : []);
+      return rows.filter((r) => liveRoomOnlyMine(r, personalViewer, (id) => owners.get(id) || null));
     },
-    [rows, personalViewer],
+    [rows, personalViewer, ownersSig],
   );
 }
 

@@ -522,7 +522,28 @@ test("Personal's call list walks the owner's own calls, so newer team calls neve
   });
   const teamPage = (await as(ids.ana).query(api.transcripts.webListCalls, { limit: 2 })).map((c: any) => c._id);
   expect(teamPage).not.toContain(solo);
-  const personal = (await as(ids.ana).query(api.transcripts.webListCalls, { limit: 2, personal: true })).map((c: any) => c._id);
+  const page = await as(ids.ana).query(api.transcripts.webListCalls, { limit: 2, personal: true });
+  expect(page.complete).toBe(true);
+  const personal = page.calls.map((c: any) => c._id);
   expect(personal.sort()).toEqual([solo, ownSession].sort());
   expect(personal).not.toContain(teamHuddle);
+});
+
+test("a Personal walk that stops at the scan cap says it is not the whole truth", async () => {
+  const w = await world();
+  const { t, as, ids } = w;
+  const solo = await startHuddle(w, dmRoomKey(ids.ana));
+  await endCall(w, solo);
+  // More team huddles Ana scribed, all newer, than one walk may read.
+  await t.run(async (ctx) => {
+    for (let i = 0; i < 401; i++) {
+      await ctx.db.insert("transcripts", {
+        room_key: `channel:${ids.channel}`, team_id: ids.team, started_by: ids.ana, status: "ended",
+        started_at: Date.now() + 60_000 + i, ended_at: Date.now() + 120_000, routes: [], last_seq: 1,
+      } as any);
+    }
+  });
+  const page = await as(ids.ana).query(api.transcripts.webListCalls, { limit: 50, personal: true });
+  expect(page.calls.map((c: any) => c._id)).not.toContain(solo);
+  expect(page.complete).toBe(false);
 });

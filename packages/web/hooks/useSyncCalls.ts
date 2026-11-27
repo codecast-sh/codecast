@@ -29,7 +29,15 @@ const newestFirst = (a: any, b: any) => (b.started_at ?? 0) - (a.started_at ?? 0
  *  unshared recording would never leave. A full page vouches for everything
  *  back to its oldest call; a short one is everything the server would list.
  *  Older cached calls are outside the window and kept. */
-export function callListPruneScope(rows: any[] | null | undefined, limit: number, personalViewer: string | null = null) {
+export function callListPruneScope(
+  /** The answer as it came: the rows, or Personal's { calls, complete }. */
+  answer: any[] | { calls: any[]; complete: boolean } | null | undefined,
+  limit: number,
+  personalViewer: string | null = null,
+) {
+  // A Personal walk that stopped at its scan cap vouches for nothing it did
+  // not reach: prune nothing by it.
+  const rows = Array.isArray(answer) ? answer : answer?.complete ? answer.calls : null;
   if (!Array.isArray(rows)) return undefined;
   const floor = rows.length >= limit ? Math.min(...rows.map((r) => r.started_at ?? 0)) : -Infinity;
   return {
@@ -52,10 +60,12 @@ export function useCallList(
   const personal = personalViewer !== null;
   const syncOpts = useMemo(() => (data: any) => callListPruneScope(data, limit, personalViewer), [limit, personalViewer]);
   const args = useMemo(() => (personal ? { limit, personal: true } : { limit }), [limit, personal]);
-  const { ready, error, retry } = useSyncCollection("callList", api.transcripts.webListCalls, args, { syncOpts });
+  const { ready, error, retry } = useSyncCollection("callList", api.transcripts.webListCalls, args, { syncOpts, select: callRowsOf });
   const calls = useCollectionRows("callList", { sig: listSig, sort: newestFirst });
   return { calls, ready: ready || !!error, error, retry };
 }
+
+const callRowsOf = (d: any) => (Array.isArray(d) ? d : d?.calls ?? null);
 
 const SELECT_ONE = { select: (d: any) => (d ? [d] : null) };
 

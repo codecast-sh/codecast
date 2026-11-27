@@ -53,11 +53,19 @@ describe("callList pruning", () => {
   it("Personal's page prunes only the viewer's own calls; the team's cached calls stay", () => {
     const me = "u-me";
     sync([call("team", 200, { started_by: "u-ann", team_id: "t1" }), call("mine", 100, { room_key: `dm:${me}`, started_by: me })], 100);
-    const personal = [] as any[];
-    useInboxStore.getState().syncTable("callList", personal, callListPruneScope(personal, 100, me));
+    const personal = { calls: [] as any[], complete: true };
+    useInboxStore.getState().syncTable("callList", personal.calls, callListPruneScope(personal, 100, me));
     const s = useInboxStore.getState();
     expect(s.callList[id("team")]).toBeDefined();
     expect(s.callList[id("mine")]).toBeUndefined();
+  });
+
+  it("a Personal page whose walk stopped short prunes nothing: your older solo calls stay", () => {
+    const me = "u-me";
+    sync([call("old-solo", 50, { room_key: `dm:${me}`, started_by: me })], 100);
+    const short = { calls: [call("new-solo", 300, { room_key: `dm:${me}`, started_by: me })], complete: false };
+    useInboxStore.getState().syncTable("callList", short.calls, callListPruneScope(short, 100, me));
+    expect(useInboxStore.getState().callList[id("old-solo")]).toBeDefined();
   });
 
   it("never prunes a row without a server id", () => {

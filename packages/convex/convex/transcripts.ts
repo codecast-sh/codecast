@@ -96,7 +96,7 @@ import { SEGMENT_WRITE_BATCH, parseTranscriptionSegments, transcribeAudio } from
 export { parseTranscriptionSegments };
 import { HUDDLE_GRACE_MS, quietSince, withinHuddleGrace } from "./lib/huddleGrace";
 import { callSpeakerValidator, lineSpeakerNames } from "./lib/callSpeakers";
-import { callFilmed, callTasks, canReadCall, getCallCore, listCallsCore, routeView, shapeCallRow } from "./callReads";
+import { callFilmed, callTasks, canReadCall, getCallCore, listCallsCore, listPersonalCallsCore, routeView, shapeCallRow } from "./callReads";
 import { campplusEngine, runSpeechPipeline, scribeWordsSource } from "./lib/speechPipeline";
 import {
   assignedSpeaker,
@@ -2177,12 +2177,14 @@ export const backfillCallShortIds = internalMutation({
 
 export const webListCalls = query({
   // `personal`: the Personal workspace's page, walked from the viewer's own
-  // calls (callReads.listCallsCore).
+  // calls, answered as { calls, complete } (callReads.listPersonalCallsCore).
   args: { limit: v.optional(v.number()), personal: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
+    const limit = Math.min(args.limit ?? 50, 200);
+    if (args.personal) return userId ? await listPersonalCallsCore(ctx, userId, limit) : { calls: [], complete: true };
     if (!userId) return [];
-    return listCallsCore(ctx, userId, Math.min(args.limit ?? 50, 200), { personal: !!args.personal });
+    return listCallsCore(ctx, userId, limit);
   },
 });
 

@@ -179,10 +179,20 @@ function personalCandidate(t: Doc<"transcripts">, userId: Id<"users">): boolean 
   return !!t.private && parseRoomKey(t.room_key)?.kind === "session";
 }
 
-export async function listCallsCore(ctx: any, userId: Id<"users">, limit: number, opts: { personal?: boolean } = {}) {
-  // Personal: only the viewer's own shelf below, so 100 newer team calls
-  // never push their own calls off the page.
-  const memberships = opts.personal
+export async function listCallsCore(ctx: any, userId: Id<"users">, limit: number) {
+  return (await walkCalls(ctx, userId, limit, false)).calls;
+}
+
+/** Personal's page: only the viewer's own shelf, so newer team calls never
+ *  push their own calls off it. `complete` is false when a walk stopped at
+ *  the scan cap short of a page: the page then vouches for nothing older,
+ *  and a client must not prune by it. */
+export async function listPersonalCallsCore(ctx: any, userId: Id<"users">, limit: number) {
+  return walkCalls(ctx, userId, limit, true);
+}
+
+async function walkCalls(ctx: any, userId: Id<"users">, limit: number, personal: boolean) {
+  const memberships = personal
     ? []
     : await ctx.db
         .query("team_memberships")
@@ -198,11 +208,16 @@ export async function listCallsCore(ctx: any, userId: Id<"users">, limit: number
   // that session's thread and on its own page, never in the history.
   const keep = async (t: Doc<"transcripts">) =>
     !t.screen_recording && !(await isSilentHuddle(ctx, t)) && (await canReadCall(ctx, userId, t));
+  let complete = true;
   const walk = async (query: any, only?: (t: Doc<"transcripts">) => boolean) => {
     const kept: Doc<"transcripts">[] = [];
     let scanned = 0;
     for await (const t of query) {
-      if (kept.length >= limit || scanned++ >= CALL_LIST_SCAN_CAP) break;
+      if (kept.length >= limit) break;
+      if (scanned++ >= CALL_LIST_SCAN_CAP) {
+        complete = false;
+        break;
+      }
       if ((!only || only(t)) && (await keep(t))) kept.push(t);
     }
     return kept;
@@ -228,7 +243,7 @@ export async function listCallsCore(ctx: any, userId: Id<"users">, limit: number
         .query("transcripts")
         .withIndex("by_creator_started", (q: any) => q.eq("started_by", userId))
         .order("desc"),
-      opts.personal ? (t) => personalCandidate(t, userId) : (t) => isRoomlessKey(t.room_key),
+      personal ? (t) => personalCandidate(t, userId) : (t) => isRoomlessKey(t.room_key),
     )),
   );
   rows.sort((a, b) => b.started_at - a.started_at);
@@ -240,7 +255,7 @@ export async function listCallsCore(ctx: any, userId: Id<"users">, limit: number
     seen.add(String(t._id));
     out.push(shapeCallRow(t));
   }
-  return out;
+  return { calls: out, complete };
 }
 
 /** A huddle that ended with nothing in it: no word said, no line typed or
