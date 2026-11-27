@@ -9,8 +9,10 @@ import { HUDDLE_GUEST_NOTE, HUDDLE_PASS, type ChunkHeaderOpts, type ChunkLane } 
 /** How long a claim on a call's Scribe slot holds while its inviter spawns
  *  the agent. Judged at read time, by the server and by every client: a claim
  *  whose session never landed (a crashed tab, a create that failed) stops
- *  blocking the next invite once it is this old. */
-export const SCRIBE_CLAIM_TTL_MS = 3 * 60_000;
+ *  blocking the next invite once it is this old. Longer than the web's
+ *  5-minute spawn wait (useCallFeed SPAWN_WAIT_MS), so a slow spawn that does
+ *  land never finds its slot taken. */
+export const SCRIBE_CLAIM_TTL_MS = 6 * 60_000;
 
 /** A call's Scribe, as one word. `joining`: somebody claimed the slot and is
  *  starting the agent (or this window's invite is on its way). `listening`:
