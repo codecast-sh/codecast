@@ -1,80 +1,62 @@
 // The pull request a session is shepherding, as one chip.
 //
 // The inbox card and the thread state panel above the composer both show it,
-// so it lives here once. The number says which PR; the glyph after it says
-// what the PR is waiting for (its word is the tooltip, never a label on the
-// chip), and its color says whether that is the reader's problem.
-// Green means nothing is blocking, red means something broke, orange and
-// yellow mean it is waiting on a person or on CI. In the panel, a merged one
-// also shows how far it has gone toward production, as the reach's glyph.
+// so it lives here once. It wears the face every pull request wears
+// (lib/prStateGlyph): its glyph says where it is in its life, the glyph after
+// the number what it waits on, and the color whose problem that is (green
+// clear, red broke, orange and yellow waiting on a person or on checks). Its
+// words are the tooltip. A settled one (closed, or merged and live) dims. In
+// the panel a merged one reads its deploy and says how far it got until live.
 import React, { useState } from "react";
 import Link from "next/link";
 import { GitPullRequest } from "lucide-react";
-import { accentSoft, accentVar, prPath, shepherdStyle, type ExternalEventAccent } from "../lib/externalEvents";
-import { CI_WORDS, LINKED_PR_LOOK, showsCi, type LinkedPr, type LinkedPrCi } from "../lib/sessionPullRequests";
+import type { ReachState } from "@codecast/shared/contracts/deployReach";
+import { accentSoft, accentVar, prPath } from "../lib/externalEvents";
+import { CI_WORDS, LINKED_PR_LOOK, showsCi, type LinkedPr } from "../lib/sessionPullRequests";
 import type { PrStatus } from "../store/inboxStore";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { KEEP_DRAG_OFF_CARD, KEEP_OFF_CARD } from "../lib/keepOffCard";
 import { repoObjectId } from "../lib/entityLinks";
 import { useDeployReach } from "../hooks/useDeployReach";
-import { REACH_LOOK, type DeployTone } from "../lib/deploys/deployPill";
-import { REACH_ICON } from "../lib/deploys/deployLook";
-import { PR_STATE_GLYPH } from "../lib/prStateGlyph";
+import { prFace } from "../lib/prStateGlyph";
 
-const TONE_ACCENT: Record<DeployTone, ExternalEventAccent> = { green: "green", yellow: "yellow", red: "red", orange: "orange", muted: "muted", dim: "muted" };
-
-export function PrStatusChip({
-  status,
-  size = "card",
-  className = "",
-  look,
-  ci = null,
-  hover,
-  plain = false,
-}: {
+type ChipProps = {
   status: PrStatus | null | undefined;
   size?: "card" | "panel";
   className?: string;
-  /** The state (a PR_STATE_GLYPH key), its word for the tooltip, and its color, when the chip shows a pull request's own state rather than its shepherd's. */
-  look?: { state: string; label: string; accent: ExternalEventAccent };
-  /** A checks dot after the number. */
-  ci?: LinkedPrCi;
   hover?: string;
   /** Draw the face only, for a row that is itself the link. */
   plain?: boolean;
-}) {
+  /** A merged pull request's deploy reach; the panel reads it live, a card (drawn from props, maybe days old) never. */
+  reach?: ReachState | null;
+};
+
+export function PrStatusChip(props: ChipProps) {
+  const { status, size = "card", className = "", hover, plain = false, reach } = props;
   if (!status) return null;
-  const state = look?.state ?? status.state ?? "open";
-  const { label, accent } = look ?? shepherdStyle(status.state);
-  const glyph = PR_STATE_GLYPH[state] ?? {};
-  const Pr = glyph.pr ?? GitPullRequest;
-  const After = glyph.after;
+  if (size === "panel" && status.state === "merged" && reach === undefined) return <ReachedChip {...props} />;
+  const face = prFace(status.state, reach);
+  const { Pr, After, accent } = face;
   const icon = size === "panel" ? "w-3 h-3" : "w-2.5 h-2.5";
   const href = prPath({ repository: status.repository, number: status.number });
   const body = (
     <>
       <Pr aria-hidden className={`${icon} shrink-0`} />
       <span className="tabular-nums">#{status.number}</span>
-      {ci && !After && <span data-pr-ci={ci} aria-hidden className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: accentVar(CI_WORDS[ci].accent) }} />}
-      {After && <After aria-hidden data-pr-state={state} className={`${icon} shrink-0`} strokeWidth={state === "ci_red" || state === "failing" ? 3 : 2.25} />}
-      {label && <span className="sr-only">{label}</span>}
-      {/* The panel above the composer reads a merged pull request's reach live. A card,
-          drawn from props alone, shows none: the row it would read can be days old. */}
-      {size === "panel" && status.state === "merged" && (
-        <ChipReach refId={repoObjectId({ type: "pr", repository: status.repository, number: status.number })} className={icon} />
-      )}
+      {After && <After aria-hidden data-pr-state={face.state} className={`${icon} shrink-0`} strokeWidth={face.state === "ci_red" ? 3 : 2.25} />}
+      <span className="sr-only">{face.phrase}</span>
     </>
   );
-  const chip = `inline-flex items-center gap-[3px] px-1 py-0 rounded border font-semibold text-meta ${className}`;
+  const chip = `inline-flex items-center gap-[3px] px-1 py-0 rounded border font-semibold text-meta ${face.settled ? "opacity-60" : ""} ${className}`;
   const style = {
     color: accentVar(accent),
     background: accentSoft(accent, 12),
     borderColor: accentSoft(accent, 35),
   };
-  const title = hover ?? `${status.repository} #${status.number}${status.title ? ` — ${status.title}` : ""}${look ? "" : `\n${shepherdStyle(status.state).phrase}`}`;
+  const title = hover ?? `${status.repository} #${status.number}${status.title ? ` — ${status.title}` : ""}\n${face.phrase}`;
   if (!href || plain) {
     return (
-      <span className={chip} style={style} title={title}>
+      <span className={chip} style={style} title={title} data-pr-state={face.state}>
         {body}
       </span>
     );
@@ -85,6 +67,7 @@ export function PrStatusChip({
       className={`${chip} hover:brightness-110`}
       style={style}
       title={title}
+      data-pr-state={face.state}
       // The chip sits inside a clickable session card; opening the PR must not
       // also open the session behind it.
       onClick={(e) => e.stopPropagation()}
@@ -94,18 +77,19 @@ export function PrStatusChip({
   );
 }
 
-/** A merged pull request's reach on the panel's chip: its glyph in its tone, its word for screen readers, or nothing. */
-function ChipReach({ refId, className }: { refId: string; className: string }) {
-  const reach = useDeployReach(refId);
-  if (!reach) return null;
-  const look = REACH_LOOK[reach.state];
-  const Icon = REACH_ICON[reach.state];
-  return (
-    <span data-pr-reach={reach.state} className="inline-flex items-center" style={{ color: accentVar(TONE_ACCENT[look.tone]) }}>
-      <Icon aria-hidden className={`${className} shrink-0`} />
-      <span className="sr-only">{look.word}</span>
-    </span>
-  );
+/** The panel's merged chip, once its deploy reach is read live. */
+function ReachedChip(props: ChipProps) {
+  const status = props.status!;
+  const reach = useDeployReach(repoObjectId({ type: "pr", repository: status.repository, number: status.number }));
+  return <PrStatusChip {...props} reach={reach?.state ?? null} />;
+}
+
+/** A linked pull request's state, in the names its face draws: failing or running checks say more than "open". */
+function linkedPrState(pr: LinkedPr): string {
+  if (!showsCi(pr)) return pr.state;
+  if (pr.ci === "failure") return "ci_red";
+  if (pr.ci === "pending" && pr.state === "open") return "ci_pending";
+  return pr.state;
 }
 
 function linkedPrHover(pr: LinkedPr): string {
@@ -116,16 +100,12 @@ function linkedPrHover(pr: LinkedPr): string {
 }
 
 function LinkedChip({ pr, size, plain }: { pr: LinkedPr; size: "card" | "panel"; plain?: boolean }) {
-  const look = LINKED_PR_LOOK[pr.state];
-  const failing = pr.ci === "failure" && pr.state === "open";
   return (
     <PrStatusChip
       size={size}
       plain={plain}
       className={`shrink-0 ${pr.tier === "observed" ? "border-dashed opacity-75" : ""}`}
-      status={{ pr_id: pr.id, repository: pr.repository, number: pr.number, title: pr.title, state: pr.state, at: 0 }}
-      look={failing ? { state: "failing", label: "failing", accent: "red" } : { state: pr.state, ...look }}
-      ci={showsCi(pr) ? pr.ci : null}
+      status={{ pr_id: pr.id, repository: pr.repository, number: pr.number, title: pr.title, state: linkedPrState(pr), at: 0 }}
       hover={linkedPrHover(pr)}
     />
   );
@@ -133,8 +113,7 @@ function LinkedChip({ pr, size, plain }: { pr: LinkedPr; size: "card" | "panel";
 
 /**
  * Every pull request a session links (lib/sessionPullRequests), one chip each:
- * its state in the word and color, its checks as a dot while it is open, a
- * dashed edge when the session only sat on its branch. The one the session
+ * its state in its glyphs and color (lib/prStateGlyph), a dashed edge when the session only sat on its branch. The one the session
  * shepherds is left out, since its own chip says more. Past `max`, a count
  * opens the whole list.
  */
@@ -235,7 +214,7 @@ export function PrStack({ shepherd, prs }: { shepherd: PrStatus | null | undefin
         >
           <span className="relative inline-flex">
             {behind.map((pr, i) => {
-              const accent = LINKED_PR_LOOK[pr.state].accent;
+              const accent = prFace(linkedPrState(pr)).accent;
               const step = (behind.length - i) * 2;
               return (
                 <span

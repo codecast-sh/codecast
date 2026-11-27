@@ -64,6 +64,10 @@ export interface TerminalSessionInfo {
   command: string;
   created: number;
   attached: number;
+  /** The directory the session's active pane is in now (the shell's cwd
+   *  after a `cd`), where `path` is where the session started. The panel
+   *  resolves a relative path printed in the terminal against it. */
+  cwd?: string;
 }
 
 // NB: separators must be printable: tmux sanitizes control chars (tabs
@@ -71,7 +75,10 @@ export interface TerminalSessionInfo {
 // goes LAST and is re-joined, since it is the one field that may itself
 // contain the separator. pane_current_command expands through the session's
 // active pane, so one list call carries it and no per session query is needed.
-const SESSION_LIST_FORMAT = "#{session_name}|#{session_created}|#{session_attached}|#{pane_current_command}|#{session_path}";
+// The live cwd rides after the start path behind a marker no real path holds,
+// since both may contain "|".
+const CWD_MARK = "|=cwd=|";
+const SESSION_LIST_FORMAT = `#{session_name}|#{session_created}|#{session_attached}|#{pane_current_command}|#{session_path}${CWD_MARK}#{pane_current_path}`;
 
 /** Parse `tmux list-sessions -F SESSION_LIST_FORMAT` output: the panel's own
  *  sessions (cast-term-*), oldest first. */
@@ -81,9 +88,13 @@ export function parseTerminalSessionRows(stdout: string): TerminalSessionInfo[] 
     if (!line.trim()) continue;
     const [name, created, attached, command, ...pathParts] = line.split("|");
     if (!name || !name.startsWith(TERM_SESSION_PREFIX)) continue;
+    const tail = pathParts.join("|");
+    const mark = tail.lastIndexOf(CWD_MARK);
+    const cwd = mark >= 0 ? tail.slice(mark + CWD_MARK.length) : "";
     out.push({
       name,
-      path: pathParts.join("|"),
+      path: mark >= 0 ? tail.slice(0, mark) : tail,
+      ...(cwd ? { cwd } : {}),
       command: (command ?? "").trim(),
       created: (parseInt(created ?? "", 10) || 0) * 1000,
       attached: parseInt(attached ?? "", 10) || 0,
@@ -202,7 +213,7 @@ export function corsHeaders(origin: string | undefined, opts: TerminalServerOpti
     "Access-Control-Allow-Methods": "GET, POST, PUT, OPTIONS",
     // The browser can only read these off a cross-origin response if they're
     // exposed; the vault's write guard depends on the client seeing the ETag.
-    "Access-Control-Expose-Headers": "ETag, X-Vault-Mtime, X-Vault-Size",
+    "Access-Control-Expose-Headers": "ETag, X-Vault-Mtime, X-Vault-Size, X-Vault-Writable, X-Vault-Mode",
     // Chrome Private Network Access: a public https page fetching loopback
     // must see this on the preflight or the request is blocked.
     "Access-Control-Allow-Private-Network": "true",

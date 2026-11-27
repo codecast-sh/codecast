@@ -20,7 +20,7 @@ import { canOpenBeside, openBeside } from "./stage";
 import { tabNavigate } from "../src/compat/tabRouting";
 import { useInboxStore, type AppTab } from "../store/inboxStore";
 import { findLeaf, leavesOf } from "../store/stageSplit";
-import { sessionOfPanePath } from "./code/agent/sessions";
+import { sessionGitRefs, sessionOfPanePath, type SessionChangeRef } from "./code/agent/sessions";
 import { isFilesPath } from "./vault/vaultHref";
 import { filePathHref, resolveMentionPath, type FilePathContextValue } from "./filePathLinks";
 import { runCodeCommand, type CodeCommandId } from "./code/commands";
@@ -46,8 +46,11 @@ export interface EditorTarget {
   column?: number;
   /** The last line of a range the editor flashes on arrival. */
   endLine?: number;
-  /** With no `line`: text the file holds, tried in order. The editor lands on
-   *  the first found and flashes it (a MultiEdit's result names no lines). */
+  /** Text the file holds, tried in order (findTextRange). With no `line` the
+   *  editor lands on the first found and flashes it (a MultiEdit's result
+   *  names no lines); beside a `line` it is the check that the lines are
+   *  still there, and the editor moves to the match nearest `line` when the
+   *  file has changed under them since. */
   find?: string[];
   /** The conversation the path was written in, which resolves a relative one. */
   ctx?: FilePathContextValue | null;
@@ -61,6 +64,9 @@ export interface OpenInEditorOptions {
   split?: boolean;
   /** Once the file shows, open its diff against this git ref. */
   diffAgainst?: { ref: string; label?: string };
+  /** Once the file shows, peek the change at the landed line: its old lines
+   *  open inline (a tool card's edit, what it replaced on screen). */
+  peek?: boolean;
 }
 
 /** The absolute path a target names (as written when nothing resolves it). */
@@ -91,15 +97,23 @@ export function openInEditor(target: EditorTarget, opts: OpenInEditorOptions = {
     const args = { path: abs, line: target.line, column: target.column, split: "right" };
     void retryCommand("file.open", () => args).then((ok) => ok || tabNavigate(href, "push"));
   }
-  if (!target.line && target.find?.length && abs.startsWith("/")) {
-    const find = target.find;
+  if ((target.find?.length || opts.peek) && abs.startsWith("/")) {
+    const find = target.find ?? [];
     void whenEditorShows(abs).then(async (view) => {
-      const doc = (view as { state?: { doc: { toString(): string } } } | null)?.state?.doc;
-      const at = doc ? findTextRange(doc.toString(), find) : undefined;
-      if (!at) return;
-      const { revealTarget } = await import("./code/editorHost");
-      // Flashed even on one line: there is no range in the address to show it.
-      revealTarget(view as never, { line: at.line, endLine: at.endLine ?? at.line });
+      if (!view) return;
+      let line = target.line;
+      const doc = (view as { state?: { doc: { toString(): string } } }).state?.doc;
+      const at = doc && find.length ? findTextRange(doc.toString(), find, target.line) : undefined;
+      // Lines read off a tool result go stale as the file changes; the text
+      // the edit wrote finds where it is now. A match that holds the given
+      // line agrees with the address, which already landed there.
+      if (at && !(line && at.line <= line && line <= (at.endLine ?? at.line))) {
+        const { revealTarget } = await import("./code/editorHost");
+        // Flashed even on one line: there is no range in the address to show it.
+        revealTarget(view as never, { line: at.line, endLine: at.endLine ?? at.line });
+        line = at.line;
+      }
+      if (opts.peek && line) await retryCommand("git.peekHunk", () => ({ line }), view);
     });
   }
   if (opts.diffAgainst) {
@@ -223,10 +237,12 @@ export function firstChangedLine(patch: string | undefined): number | undefined 
 
 /** Where `candidates` (in order) sit in `text`, as whole lines: the first
  *  that occurs exactly once, else the first found (a short new text like
- *  `return null;` can also match lines the edit never wrote). Blank
- *  candidates are skipped; a candidate's surrounding blank lines don't count
- *  toward its range. */
-export function findTextRange(text: string, candidates: readonly string[]): { line: number; endLine?: number } | undefined {
+ *  `return null;` can also match lines the edit never wrote), at its
+ *  occurrence nearest `near` (1-based) when given. Blank candidates are
+ *  skipped; a candidate's surrounding blank lines don't count toward its
+ *  range. */
+export function findTextRange(text: string, candidates: readonly string[], near?: number): { line: number; endLine?: number } | undefined {
+  const lineOf = (at: number) => text.slice(0, at).split("\n").length;
   let fallback: { at: number; want: string } | undefined;
   let pick: { at: number; want: string } | undefined;
   for (const raw of candidates) {
@@ -234,15 +250,20 @@ export function findTextRange(text: string, candidates: readonly string[]): { li
     if (!want.trim()) continue;
     const at = text.indexOf(want);
     if (at < 0) continue;
-    fallback ??= { at, want };
     if (text.indexOf(want, at + 1) < 0) {
       pick = { at, want };
       break;
     }
+    if (fallback) continue;
+    fallback = { at, want };
+    if (near === undefined) continue;
+    for (let i = text.indexOf(want, at + 1); i >= 0; i = text.indexOf(want, i + 1)) {
+      if (Math.abs(lineOf(i) - near) < Math.abs(lineOf(fallback.at) - near)) fallback = { at: i, want };
+    }
   }
   const hit = pick ?? fallback;
   if (!hit) return undefined;
-  const line = text.slice(0, hit.at).split("\n").length;
+  const line = lineOf(hit.at);
   const endLine = line + hit.want.split("\n").length - 1;
   return endLine > line ? { line, endLine } : { line };
 }
@@ -288,33 +309,49 @@ export function editedLineRange(resultSnippet: string | undefined, newText: stri
 }
 
 /**
- * The git ref a conversation diff's base stands for in the editor's diff view.
- * The session base is HEAD while the session has committed nothing (all its
- * work is uncommitted), else the merge base its commits sit on. A turn, a
- * review mark or a picked range has no ref: null.
+ * The git ref a conversation diff's base stands for in the editor's diff view,
+ * read off the session's own commits (sessionGitRefs): Session is the parent
+ * of its first commit (HEAD while it has committed nothing), Commit its last
+ * commit, Branch the merge base. A commit with no recorded hash falls back to
+ * the merge base or HEAD. A turn, a review mark or a picked range has no ref:
+ * null.
  */
-export function gitRefForDiffBase(base: string, changes: readonly { changeType: string }[]): { ref: string; label: string } | null {
-  const committed = changes.some((c) => c.changeType === "commit");
-  if (base === "commit" || (base === "session" && !committed)) return { ref: "HEAD", label: "HEAD" };
-  if (base === "branch" || base === "session") return { ref: CODE_GIT_MERGE_BASE_REF, label: "Merge base" };
+export function gitRefForDiffBase(base: string, changes: readonly SessionChangeRef[]): { ref: string; label: string } | null {
+  const refs = sessionGitRefs(changes);
+  if (base === "session") {
+    if (!refs.committed) return { ref: "HEAD", label: "HEAD" };
+    return refs.base ? { ref: refs.base, label: "Session base" } : { ref: CODE_GIT_MERGE_BASE_REF, label: "Merge base" };
+  }
+  if (base === "commit") return refs.last ? { ref: refs.last, label: "Last commit" } : { ref: "HEAD", label: "HEAD" };
+  if (base === "branch") return { ref: CODE_GIT_MERGE_BASE_REF, label: "Merge base" };
   return null;
 }
 
+type LocalCheckouts = ReadonlyArray<{
+  root: string;
+  device_id?: string;
+  mine?: boolean;
+  worktrees: ReadonlyArray<{ path: string; branch?: string; main?: boolean; head_sha?: string }>;
+}>;
+
 /**
- * Where `path` (repo-relative) is on this machine, given the checkouts the
- * viewer's machines publish for its repository: the worktree on `refName`
- * when one is, else the main checkout. Null when this machine has none.
+ * This machine's checkout of a repository, given the checkouts the viewer's
+ * machines publish for it: the worktree on `refName` when one is (`onRef`),
+ * else the main checkout. `head` is that tree's commit when published. Null
+ * when this machine has none.
  */
-export function localCheckoutFile(
-  checkouts: ReadonlyArray<{ root: string; device_id?: string; mine?: boolean; worktrees: ReadonlyArray<{ path: string; branch?: string; main?: boolean }> }>,
-  deviceId: string | null,
-  refName: string,
-  path: string,
-): string | null {
+export function localCheckout(checkouts: LocalCheckouts, deviceId: string | null, refName: string): { root: string; onRef: boolean; head?: string } | null {
   if (!deviceId) return null;
   const here = checkouts.filter((c) => c.mine !== false && c.device_id === deviceId);
   if (!here.length) return null;
   const trees = here.flatMap((c) => c.worktrees);
-  const root = trees.find((w) => w.branch === refName)?.path ?? trees.find((w) => w.main)?.path ?? here[0].root;
-  return `${root.replace(/\/+$/, "")}/${path.replace(/^\/+/, "")}`;
+  const onRef = refName ? trees.find((w) => w.branch === refName) : undefined;
+  const tree = onRef ?? trees.find((w) => w.main);
+  return { root: (tree?.path ?? here[0].root).replace(/\/+$/, ""), onRef: !!onRef, head: tree?.head_sha };
+}
+
+/** Where `path` (repo-relative) is in this machine's checkout (localCheckout). */
+export function localCheckoutFile(checkouts: LocalCheckouts, deviceId: string | null, refName: string, path: string): string | null {
+  const at = localCheckout(checkouts, deviceId, refName);
+  return at ? `${at.root}/${path.replace(/^\/+/, "")}` : null;
 }

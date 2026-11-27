@@ -1,26 +1,46 @@
 import { describe, expect, test } from "bun:test";
-import { prPillLook } from "../prPill";
-import { changeLifecycle } from "../lifecycle";
-import { pullRequestFacts, type ChangePullRequest } from "../pullRequest";
+import { prRowState } from "../prPill";
+import { prFace } from "../../prStateGlyph";
+import type { ChangePullRequest } from "../pullRequest";
 
-const pr = (p: Partial<ChangePullRequest>): ChangePullRequest => ({ number: 1, state: "open", updated_at: 0, ...p });
-const look = (p: Partial<ChangePullRequest>, reach?: "live" | "going_out" | "failed") => {
-  const row = pr(p);
-  const facts = { vehicle: { kind: "pr" as const, number: 1 }, ...pullRequestFacts(row) };
-  const targets = reach ? [{ target: "web", state: reach }] : [];
-  return prPillLook(row, changeLifecycle(reach ? { ...facts, reach: { state: reach, targets } as any } : facts));
-};
+const state = (p: Partial<ChangePullRequest>) => prRowState({ state: "open", ...p });
 
-describe("a pull request pill says its state in its glyph", () => {
-  test("open, draft, merged and closed each wear their own glyph", () => {
-    expect(look({}).glyph).toBe("open");
-    expect(look({ draft: true }).glyph).toBe("draft");
-    expect(look({ state: "merged", merged_at: 1 }).glyph).toBe("merged");
-    expect(look({ state: "closed", closed_at: 1 }).glyph).toBe("closed");
+describe("a pull request row reads as one of its chips' states", () => {
+  test("its life: open, draft, merged, closed", () => {
+    expect(state({})).toBe("open");
+    expect(state({ draft: true })).toBe("draft");
+    expect(state({ state: "merged", merged_at: 1 })).toBe("merged");
+    expect(state({ state: "closed", closed_at: 1 })).toBe("closed");
   });
 
-  test("the lifecycle's word stays for the label", () => {
-    expect(look({ mergeable_state: "dirty" }).word).toBe("conflicts");
-    expect(look({ state: "merged", merged_at: 1 }, "live").word).toBe("live");
+  test("what it waits on, most pressing first, in the lifecycle's order", () => {
+    expect(state({ mergeable_state: "dirty", checks_state: "failure" })).toBe("conflicts");
+    expect(state({ checks_state: "failure", draft: true })).toBe("ci_red");
+    expect(state({ review_decision: "changes_requested", checks_state: "pending" })).toBe("changes_requested");
+    expect(state({ checks_state: "pending" })).toBe("ci_pending");
+    expect(state({ review_decision: "review_required", checks_state: "success" })).toBe("review_pending");
+    expect(state({ review_decision: "approved", checks_state: "pending" })).toBe("ci_pending");
+    expect(state({ review_decision: "approved", checks_state: "success" })).toBe("ready");
+    expect(state({ mergeable_state: "behind" })).toBe("behind");
+  });
+});
+
+describe("a pull request's face is the same everywhere it is drawn", () => {
+  test("its glyph says its life and the glyph after it what it waits on, in whose-problem color", () => {
+    expect(prFace("open")).toMatchObject({ mark: "pr.open", accent: "green", settled: false });
+    expect(prFace("open").After).toBeUndefined();
+    expect(prFace("ci_red")).toMatchObject({ mark: "pr.open", afterMark: "pr.failing", accent: "red" });
+    expect(prFace("conflicts")).toMatchObject({ afterMark: "pr.conflicts", accent: "red" });
+    expect(prFace("review_pending")).toMatchObject({ afterMark: "pr.review_pending", accent: "yellow" });
+    expect(prFace("draft")).toMatchObject({ mark: "pr.draft", accent: "muted" });
+  });
+
+  test("merged is a quiet green: settled once live or deploying nothing, bright with its reach until then", () => {
+    expect(prFace("merged")).toMatchObject({ mark: "pr.merged", accent: "green", settled: true });
+    expect(prFace("merged").After).toBeUndefined();
+    expect(prFace("merged", "live")).toMatchObject({ settled: true, phrase: "merged and live" });
+    expect(prFace("merged", "going_out")).toMatchObject({ settled: false, afterMark: "deploy.going_out", accent: "yellow" });
+    expect(prFace("merged", "failed")).toMatchObject({ settled: false, afterMark: "deploy.failed", accent: "red" });
+    expect(prFace("closed")).toMatchObject({ mark: "pr.closed", settled: true });
   });
 });

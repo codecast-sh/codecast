@@ -52,6 +52,7 @@ def("langmap lmap", "string", "engine", "");
 def("timeoutlen tm", "number", "engine", 1000);
 def("timeout to", "bool", "engine", true);
 def("clipboard cb", "string", "engine", "");
+def("gdefault gd", "bool", "engine", false);
 
 // Behaviors the engine has built in.
 def("ignorecase ic", "bool", "fixed", false, { fixed: true, note: "searches ignore case" });
@@ -60,7 +61,6 @@ def("hlsearch hls", "bool", "fixed", false, { fixed: true, note: "matches stay h
 def("incsearch is", "bool", "fixed", false, { fixed: true, note: "search moves as you type" });
 def("wrapscan ws", "bool", "fixed", true, { fixed: true, note: "search wraps around the file" });
 def("magic", "bool", "fixed", true, { fixed: true, note: "patterns use magic" });
-def("gdefault gd", "bool", "fixed", false, { fixed: false, note: "no gdefault in the engine; add /g to :s" });
 def("hidden hid", "bool", "fixed", false, { fixed: true, note: "buffers stay open in tabs" });
 def("autoread ar", "bool", "fixed", false, { fixed: true, note: "a clean buffer follows the disk" });
 def("compatible cp", "bool", "fixed", false, { fixed: false, note: "this is vim, not vi" });
@@ -215,6 +215,8 @@ function describe(spec: OptionSpec, value: Value): Pick<SetResult, "status" | "d
       return /unnamed/.test(String(value))
         ? { status: "translated", detail: "yanks and deletes go to the system clipboard" }
         : { status: "applied", detail: "registers stay inside the editor" };
+    case "gdefault":
+      return { status: "applied", detail: value ? ":s replaces every match on a line; /g the first" : ":s replaces the first match on a line; /g every one" };
     case "timeout":
     case "timeoutlen":
       return { status: "applied", detail: `ambiguous maps wait ${spec.name === "timeout" && !value ? "until the next key" : shown + (spec.name === "timeoutlen" ? " ms" : "")}` };

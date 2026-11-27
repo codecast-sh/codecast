@@ -69,12 +69,19 @@ the writer sessions, and links to the pull request, run and deploys.
   branch on its own (at most eight names a conversation), and draws as a
   pushed branch when it has commits main lacks. A pull request or commit
   reference (`owner/repo#N`, `owner/repo@sha`, `#N`) keeps its pill and its
-  hover card, and says its state without words. A pull request's glyph is
-  open, draft, merged or closed (`prPillLook`). After its name, a pull
-  request, and a commit once its deploy reach is read, draws the same track
-  the Branches page gives it, then the now's glyph in its tone
-  (`useRefLifecycle`, `ChangeSegment`). The lifecycle's word is the label,
-  the tooltip and the hover card's headline, never text on the line. The
+  hover card, and says its state without words. A pull request wears the
+  face its chips wear (`prFace` in `lib/prStateGlyph.ts`, read off its row by
+  `prRowState`): its glyph is open, draft, merged or closed, and after its
+  name a glyph in whose-problem color says what it waits on (checks running,
+  review, changes asked, failing checks, conflicts, behind, ready) or, once
+  merged, how far its deploy got until it is live. A closed one, and a merged
+  one that is live or deploys nothing, dims like an answered decision. The
+  pill's body stays the pull request's green; the chips on inbox cards and
+  above the composer take the state's color whole. A commit, once its deploy
+  reach is read, draws the same track the Branches page gives it, then the
+  now's glyph in its tone (`useRefLifecycle`, `ChangeSegment`). The state's
+  words are the label, the tooltip and the hover card's headline, never text
+  on the line. The
   same rule holds for every reference in prose: a branch's chip draws its
   track and glyph, a deploy pill its state icon and, while it moves, its
   elapsed time.

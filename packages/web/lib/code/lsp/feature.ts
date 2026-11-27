@@ -48,6 +48,8 @@ import { CodecastWorkspace } from "./workspace";
 import { vaultFileUri } from "./uri";
 import { lspTheme } from "./ui/theme";
 import { closePeek } from "./ui/peek";
+import { showNotice } from "./ui/notice";
+import { definitionClick } from "./definitionClick";
 import { diagnosticsItem, serverChip } from "./ui/status";
 
 /** Capabilities beyond @codemirror/lsp-client's own: everything the commands
@@ -108,15 +110,13 @@ const autoSync = ViewPlugin.fromClass(
 
 const run = (fn: (view: EditorView) => boolean) => (view: EditorView) => fn(view);
 
-/** Keys a person coming from VS Code or Zed expects. */
+/** Keys a person coming from VS Code or Zed expects, beyond the finders the
+ *  workspace binds in every editor (F12, Shift-F12, Cmd-Shift-O, Cmd-Alt-O:
+ *  editorWorkspace.ts), which work or say why in a file with no server. */
 const lspKeymap = keymap.of([
-  { key: "F12", run: run((v) => goToDefinition(v)), preventDefault: true },
-  { key: "Shift-F12", run: run(findReferences), preventDefault: true },
   { key: "F2", run: run(startRename), preventDefault: true },
   { key: "Mod-.", run: run(codeActions), preventDefault: true },
   { key: "Shift-Alt-f", run: (v) => formatDocument(v) !== null, preventDefault: true },
-  { key: "Mod-Shift-o", run: run(gotoSymbol), preventDefault: true },
-  { key: "Mod-Alt-o", run: (v) => gotoWorkspaceSymbol(v, workspaceClients(v)), preventDefault: true },
   { key: "F8", run: nextDiagnostic, preventDefault: true },
   { key: "Shift-F8", run: previousDiagnostic, preventDefault: true },
   { key: "Escape", run: (v) => closeCursorHover(v) || closePeek(v) },
@@ -139,6 +139,7 @@ function attached(client: LSPClient, uri: string, languageId: string): Extension
     signatureHelp(),
     lintGutter({ hoverTime: 250 }),
     autoSync,
+    definitionClick((v) => goToDefinition(v)),
     Prec.high(lspKeymap),
     lspTheme,
   ];
@@ -200,6 +201,8 @@ function keepSaveHooksFirst(): void {
 
 // ── activation ──────────────────────────────────────────────────────────────
 
+const queryArg = (args: Record<string, unknown> | undefined) => (typeof args?.query === "string" ? args.query : undefined);
+
 const onView =
   (fn: (view: EditorView) => boolean | null | Promise<unknown>): CodeCommandHandler =>
   (_args, ctx: CodeCommandContext) => {
@@ -219,9 +222,24 @@ export const lspCommandHandlers: Record<LspCommandId, CodeCommandHandler> = {
   "lsp.codeAction": onView(codeActions),
   "diagnostic.next": onView(nextDiagnostic),
   "diagnostic.prev": onView(previousDiagnostic),
-  "goto.symbol": onView(gotoSymbol),
-  "goto.workspaceSymbol": onView((v) => gotoWorkspaceSymbol(v, workspaceClients(v))),
+  // args?: { query } seeds the filter (quick open's `@name` / `#name`).
+  // args?: { container, current } lists one breadcrumb's level.
+  "goto.symbol": (args, ctx) =>
+    onView((v) =>
+      gotoSymbol(v, {
+        query: queryArg(args),
+        container: args && "container" in args ? ((args.container as string | null) ?? null) : undefined,
+        current: typeof args?.current === "string" ? args.current : undefined,
+      }),
+    )(args, ctx),
+  "goto.workspaceSymbol": (args, ctx) => onView((v) => gotoWorkspaceSymbol(v, workspaceClients(v), queryArg(args)))(args, ctx),
 };
+
+/** A finder a person asked for in a file whose server cannot answer it. */
+export function showNoServer(ctx: CodeCommandContext): void {
+  const view = ctx.view ?? activeView();
+  if (view) showNotice(view, { tone: "warn", title: pluginOf(view) ? "The language server can't answer this" : "No language server for this file" });
+}
 
 let active = false;
 

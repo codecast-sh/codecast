@@ -13,11 +13,11 @@ import type { EditorView } from "@codemirror/view";
 import type { CodeVimrcResponse } from "@codecast/shared/contracts";
 import { editorSetting, explicitEditorSettings, hasVimConfig, onEditorSettingsChange, setEditorSetting, vimModeOn, vimOptionsFromSettings } from "./editorSettings";
 import { useVaultStore } from "../../store/vaultStore";
-import { registerCodeCommands } from "./commands";
+import { registerCodeCommandLabel, registerCodeCommands } from "./commands";
 import { fetchVimrcText } from "./daemonClient";
 import type { VaultEndpoint } from "../vault/client";
 import { whenIdle } from "./idle";
-import { liveStatusItem, reconfigureEditorFeature, registerEditorFeature, registerStatusItem, type EditorFeatureContext, type StatusItemView } from "./features";
+import { liveStatusItem, nameStatusItem, reconfigureEditorFeature, registerEditorFeature, registerStatusItem, type EditorFeatureContext, type StatusItemView } from "./features";
 import { editorOptionOverrides, type CodeEditorOptions } from "./setup";
 import type { VimConfigReport, VimMode } from "./vim/types";
 
@@ -177,26 +177,47 @@ function whileVim(view: EditorView, follow: (vim: VimModule) => () => void, idle
   };
 }
 
-/** The mode while vim runs in this editor; a dim "Vim" to turn it back on
- *  when the person turned it off. Clicking toggles. */
+/** The mode while vim runs in this editor; a dim "Vim" to turn it on while
+ *  it is off. Clicking toggles. */
 function modeChip(view: EditorView): StatusItemView {
   const dom = document.createElement("button");
   dom.type = "button";
   dom.className = "cm-vim-mode";
   const text = document.createTextNode("");
-  dom.append(text);
+  // The register a macro is recording into, as Neovim's `recording @a`.
+  const rec = document.createElement("span");
+  rec.className = "cm-vim-rec";
+  rec.hidden = true;
+  dom.append(text, rec);
   dom.onclick = () => {
     setVim(!vimWanted());
     view.focus();
+  };
+  const showRecording = (register: string) => {
+    const label = register ? `@${register}` : "";
+    if (rec.textContent !== label) rec.textContent = label;
+    rec.hidden = !register;
   };
   const show = (mode: VimMode | null) => {
     const label = mode ? MODE_LABEL[mode] : "Vim";
     if (text.nodeValue !== label) text.nodeValue = label;
     dom.dataset.mode = mode ?? "off";
-    dom.title = mode ? "Vim mode on: click to turn off" : "Vim mode off: click to turn on";
-    dom.hidden = !mode && editorSetting("vimMode") !== "off";
+    nameStatusItem(dom, mode ? `Vim ${label}, turn off` : "Vim off, turn on", mode ? "Turn vim off" : "Turn vim on");
+    // Off, it stays on screen as the way in, for a person with no vimrc too;
+    // hidden only while vim is wanted and the engine is still loading.
+    dom.hidden = !mode && vimWanted();
   };
-  return liveStatusItem(dom, whileVim(view, (vim) => vim.onVimModeChange(view, show), () => show(null)));
+  const follow = (vim: VimModule) => {
+    const offs = [vim.onVimModeChange(view, show), vim.onVimRecordingChange(view, showRecording)];
+    return () => offs.forEach((off) => off());
+  };
+  return liveStatusItem(
+    dom,
+    whileVim(view, follow, () => {
+      show(null);
+      showRecording("");
+    }),
+  );
 }
 
 /** Neovim's showcmd: the keys vim holds toward a command (a count, `g`, a
@@ -252,6 +273,7 @@ export function registerVimFeature(): void {
   registerStatusItem({ id: "vim.mode", side: "left", order: 10, priority: 100, create: modeChip });
   registerStatusItem({ id: "vim.showcmd", side: "left", order: 11, priority: 60, create: showcmd });
 
+  registerCodeCommandLabel("vim.toggle", () => (vimWanted() ? "Vim: turn off" : "Vim: turn on"));
   registerCodeCommands({
     "vim.toggle": () => setVim(!vimWanted()),
     "vim.reloadConfig": () => {

@@ -95,6 +95,7 @@ const CODE_EDITOR_APP_CHORDS: ShortcutAction[] = [
   "people.wall",
   "code.reopenTab",
   "code.splitRight",
+  "ui.toggleShortcutsHelp",
   ...(isMac ? (["vault.quickSwitch", "tab.new", "code.closeTab", "tab.close", "code.quickOpen"] as const) : []),
 ];
 

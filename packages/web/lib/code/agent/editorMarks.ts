@@ -2,13 +2,15 @@
 // (never React, never a store write on a keystroke):
 //
 //   - agent edits: ranges a session wrote while the file was open, in that
-//     session's color. A soft background fades over ~2 s; a gutter bar stays
-//     until the cursor enters the range (a click on the bar or Escape
-//     dismisses too). ]a / [a step between them.
+//     session's color. A soft background fades over ~2 s from when the buffer
+//     is first on screen; a gutter bar and a scrollbar tick stay until the
+//     cursor enters the range (a click on the bar, `:AgentClear` and the
+//     status item's clear dismiss too). ]a / [a step between them.
 //   - quote flash: the range Cmd-L just quoted, pulsing once.
-//   - sent marker: the range a Cmd-K instruction went out about, with a quiet
-//     "sent to <session>" note, until the file changes under it or the
-//     session's turn ends.
+//   - sent marker: the range a Cmd-K instruction went out about, with a
+//     "sent to <session>" note and a dot for where the message is (queued,
+//     being worked on), until the file changes under that range or the turn
+//     that read it ends.
 //   - the inline instruction's host: a block widget under the selection that
 //     the React layer portals the input into.
 //
@@ -62,9 +64,15 @@ export interface Flash {
   to: number;
   color: string;
   kind: "edit" | "quote";
-  /** Epoch ms after which the flash is dropped. */
+  /** Epoch ms after which the flash is dropped; 0 until the buffer is on
+   *  screen, where its clock starts (a change to a background tab keeps its
+   *  fade for when the tab is shown). */
   until: number;
 }
+
+/** Where a sent instruction is: not yet read by the agent, or in the turn
+ *  working on it. */
+export type SentState = "queued" | "working";
 
 export interface SentMark {
   from: number;
@@ -74,6 +82,7 @@ export interface SentMark {
   sessionId: string;
   color: string;
   label: string;
+  state?: SentState;
 }
 
 export interface InlineSpot {
@@ -97,6 +106,10 @@ export const QUOTE_FLASH_MS = 900;
 export const addAgentEdits = StateEffect.define<{ edits: AgentEdit[]; flashUntil: number }>();
 export const dismissAgentEdits = StateEffect.define<"all" | number[]>();
 export const dropFlashes = StateEffect.define<number>(); // drop those due by this time
+/** Starts the clock of flashes waiting for the screen, at this time. */
+export const startFlashes = StateEffect.define<number>();
+/** A sent instruction moved on (its client id, and where it is now). */
+export const setSentState = StateEffect.define<{ key: string; state: SentState }>();
 export const addFlash = StateEffect.define<Flash>();
 export const addSentMark = StateEffect.define<SentMark>();
 /** Clears the marker of one sent message (its client id), or all. */
@@ -147,9 +160,9 @@ export const agentMarksField = StateField.define<AgentMarksState>({
     if (tr.docChanged) {
       edits = edits.map((e) => mapRange(e, tr.changes));
       flashes = flashes.map((f) => mapRange(f, tr.changes));
-      if (tr.annotation(externalChange)) sent = [];
-      else if (sent.length) {
-        // The person editing the quoted text ends the marker for that range.
+      if (sent.length) {
+        // A change to the marked text, the person's or a writer's on disk,
+        // ends that range's marker; one elsewhere in the file maps it.
         const touched = changedRanges(tr);
         sent = sent.map((s) => mapRange(s, tr.changes)).filter((s) => !touched.some((c) => c.from <= s.to && c.to >= s.from));
       }
@@ -166,7 +179,13 @@ export const agentMarksField = StateField.define<AgentMarksState>({
         const drop = e.value;
         edits = drop === "all" ? [] : edits.filter((_x, i) => !drop.includes(i));
       } else if (e.is(dropFlashes)) {
-        flashes = flashes.filter((f) => f.until > e.value);
+        flashes = flashes.filter((f) => f.until === 0 || f.until > e.value);
+      } else if (e.is(startFlashes)) {
+        const at = e.value;
+        if (flashes.some((f) => f.until === 0)) flashes = flashes.map((f) => (f.until ? f : { ...f, until: at + (f.kind === "quote" ? QUOTE_FLASH_MS : EDIT_FLASH_MS) }));
+      } else if (e.is(setSentState)) {
+        const { key, state } = e.value;
+        if (sent.some((s) => s.key === key && s.state !== state)) sent = sent.map((s) => (s.key === key ? { ...s, state } : s));
       } else if (e.is(addFlash)) {
         flashes = [...flashes, e.value];
       } else if (e.is(addSentMark)) {
@@ -191,8 +210,11 @@ export const agentMarksField = StateField.define<AgentMarksState>({
   },
 });
 
-/** Holds the agent gutter only while the buffer has agent edits, so a file no
- *  agent touched carries no empty strip beside the git gutter. */
+/** Holds the agent gutter only while the buffer has agent edits. The column
+ *  is zero wide and its bar sits exactly over the git bar beside it (the
+ *  theme below), so an agent's edit shows in its session's color where the
+ *  git change would, hands back to git once dismissed, and the text never
+ *  moves when the column comes or goes (contract 8). */
 const gutterSlot = new Compartment();
 
 /** An external change (fileSync's adopt) gets its ranges marked as one agent
@@ -207,7 +229,9 @@ const markExternalChanges = EditorState.transactionExtender.of((tr) => {
     const color = hooks.colorOf(sessionId);
     const edits = changedRanges(tr).map((r) => ({ ...r, sessionId, color }));
     if (edits.length) {
-      effects.push(addAgentEdits.of({ edits, flashUntil: Date.now() + EDIT_FLASH_MS }));
+      // The clock starts on screen (flashTimer), not here: the buffer may be
+      // in a background tab.
+      effects.push(addAgentEdits.of({ edits, flashUntil: 0 }));
       adding = true;
     }
   }
@@ -221,18 +245,22 @@ class SentNote extends WidgetType {
   constructor(
     readonly label: string,
     readonly color: string,
+    readonly state: SentState,
   ) {
     super();
   }
   eq(other: SentNote) {
-    return other.label === this.label && other.color === this.color;
+    return other.label === this.label && other.color === this.color && other.state === this.state;
   }
   toDOM() {
     const el = document.createElement("span");
     el.className = "cm-agentSentNote";
+    el.dataset.sentState = this.state;
     el.style.setProperty("--agent-c", this.color);
-    el.textContent = `sent to ${this.label}`;
-    el.title = `Instruction sent to ${this.label}`;
+    const dot = document.createElement("span");
+    dot.className = "cm-agentSentDot";
+    el.append(dot, `sent to ${this.label}`);
+    el.title = this.state === "working" ? `${this.label} is working on it` : `Waiting for ${this.label} to read it`;
     return el;
   }
 }
@@ -281,7 +309,7 @@ function buildDecorations(state: EditorState): DecorationSet {
   for (const s of sent) {
     if (s.to > s.from) items.push({ from: s.from, to: s.to, deco: Decoration.mark({ class: "cm-agentSent", attributes: { style: `--agent-c: ${s.color}` } }) });
     const end = doc.lineAt(Math.min(s.to, doc.length)).to;
-    items.push({ from: end, to: end, deco: Decoration.widget({ widget: new SentNote(s.label, s.color), side: 2 }) });
+    items.push({ from: end, to: end, deco: Decoration.widget({ widget: new SentNote(s.label, s.color, s.state ?? "queued"), side: 2 }) });
   }
   if (inline) {
     const pos = Math.min(inline.pos, doc.length);
@@ -342,11 +370,13 @@ const editGutter = gutter({
   },
 });
 
-/** Drops flashes once they have faded, so a line scrolled back into view does
- *  not replay its fade. */
+/** Starts the clock of flashes that arrived off screen, and drops flashes once
+ *  they have faded, so a line scrolled back into view does not replay its
+ *  fade. A view update cannot dispatch, so the start waits a microtask. */
 const flashTimer = ViewPlugin.fromClass(
   class {
     timer: ReturnType<typeof setTimeout> | null = null;
+    starting = false;
     constructor(readonly view: EditorView) {
       this.schedule();
     }
@@ -358,6 +388,15 @@ const flashTimer = ViewPlugin.fromClass(
       this.timer = null;
       const { flashes } = this.view.state.field(agentMarksField);
       if (!flashes.length) return;
+      if (flashes.some((f) => f.until === 0)) {
+        if (this.starting) return;
+        this.starting = true;
+        queueMicrotask(() => {
+          this.starting = false;
+          if (this.view.dom.isConnected && agentMarks(this.view.state).flashes.some((f) => f.until === 0)) this.view.dispatch({ effects: startFlashes.of(Date.now()) });
+        });
+        return;
+      }
       const due = Math.min(...flashes.map((f) => f.until));
       this.timer = setTimeout(
         () => {
@@ -393,15 +432,49 @@ const gutterHider = ViewPlugin.fromClass(
   },
 );
 
-const escapeDismisses = EditorView.domEventHandlers({
-  keydown(e, view) {
-    if (e.key !== "Escape" || e.defaultPrevented) return false;
-    const st = view.state.field(agentMarksField);
-    if (st.edits.length) view.dispatch({ effects: dismissAgentEdits.of("all") });
-    // Escape still does what it does (vim's normal mode, closing a panel).
-    return false;
+/** A tick on the scrollbar's edge for each agent edit, in its writer's
+ *  color, so an edit below the fold is seen. Placed by line fraction: no
+ *  layout read, redrawn only when the edits change. */
+const scrollTicks = ViewPlugin.fromClass(
+  class {
+    rail: HTMLElement | null = null;
+    constructor(readonly view: EditorView) {
+      this.draw();
+    }
+    update(u: ViewUpdate) {
+      if (u.startState.field(agentMarksField).edits !== u.state.field(agentMarksField).edits) this.draw();
+    }
+    draw() {
+      const { edits } = this.view.state.field(agentMarksField);
+      const doc = this.view.state.doc;
+      if (!edits.length) {
+        this.rail?.remove();
+        this.rail = null;
+        return;
+      }
+      if (!this.rail) {
+        this.rail = document.createElement("div");
+        this.rail.className = "cm-agentTicks";
+        this.rail.setAttribute("aria-hidden", "true");
+        this.view.dom.append(this.rail);
+      }
+      const ticks: HTMLElement[] = [];
+      for (const e of edits) {
+        const [a, b] = lineSpan(doc, e);
+        const tick = document.createElement("div");
+        tick.className = "cm-agentTick";
+        tick.style.top = `${((a - 1) / doc.lines) * 100}%`;
+        tick.style.height = `max(2px, ${((b - a + 1) / doc.lines) * 100}%)`;
+        tick.style.setProperty("--agent-c", e.color);
+        ticks.push(tick);
+      }
+      this.rail.replaceChildren(...ticks);
+    }
+    destroy() {
+      this.rail?.remove();
+    }
   },
-});
+);
 
 const theme = EditorView.baseTheme({
   "@keyframes cm-agent-fade": {
@@ -410,10 +483,25 @@ const theme = EditorView.baseTheme({
   },
   ".cm-agentFlash": { animation: `cm-agent-fade ${EDIT_FLASH_MS}ms ease-out forwards` },
   ".cm-agentQuoted": { animation: `cm-agent-fade ${QUOTE_FLASH_MS}ms ease-out forwards` },
-  ".cm-agentGutter": { width: "3px", minWidth: "3px" },
-  ".cm-agentGutter .cm-gutterElement": { padding: "0 !important", cursor: "pointer" },
-  ".cm-agentBar": { width: "3px", height: "100%", backgroundColor: "var(--agent-c)", borderRadius: "1px" },
+  // Zero wide, drawn over the git bar (gitTheme.ts: 3px at 2px in the next
+  // column), above it.
+  ".cm-gutters .cm-agentGutter": { width: "0", minWidth: "0", overflow: "visible", position: "relative", zIndex: 1 },
+  ".cm-agentGutter .cm-gutterElement": { padding: "0 !important", position: "relative" },
+  ".cm-agentBar": { position: "absolute", left: "2px", top: 0, bottom: 0, width: "3px", backgroundColor: "var(--agent-c)", borderRadius: "1px", cursor: "pointer" },
+  ".cm-agentBar:hover": { width: "5px", left: "1px" },
   ".cm-agentSent": { backgroundColor: "color-mix(in srgb, var(--agent-c) 9%, transparent)" },
+  ".cm-agentTicks": { position: "absolute", top: 0, bottom: 0, right: 0, width: "3px", pointerEvents: "none", zIndex: 3 },
+  ".cm-agentTick": { position: "absolute", right: 0, width: "3px", backgroundColor: "var(--agent-c)", opacity: 0.8 },
+  ".cm-agentSentDot": {
+    display: "inline-block",
+    width: "6px",
+    height: "6px",
+    marginRight: "0.5em",
+    borderRadius: "50%",
+    verticalAlign: "middle",
+    boxShadow: "inset 0 0 0 1px color-mix(in srgb, var(--agent-c) 60%, var(--sol-text-dim))",
+  },
+  "[data-sent-state=working] .cm-agentSentDot": { backgroundColor: "var(--agent-c)", boxShadow: "none" },
   ".cm-agentSentNote": {
     marginLeft: "1.5em",
     fontSize: "0.85em",
@@ -423,10 +511,19 @@ const theme = EditorView.baseTheme({
     pointerEvents: "auto",
   },
   ".cm-agentInline": { padding: "4px 0 6px" },
+  // The edits status item (feature.ts): bar and count in the writer's color.
+  ".cm-agent-edits": { display: "inline-flex", alignItems: "center", gap: "2px" },
+  ".cm-agent-edits[hidden]": { display: "none" },
+  ".cm-agent-edits button": { font: "inherit", background: "none", border: "none", padding: "0 3px", borderRadius: "3px", cursor: "pointer", color: "var(--agent-c)" },
+  ".cm-agent-edits button:hover": { background: "var(--sol-bg-alt)" },
+  ".cm-agent-editsNext": { display: "inline-flex", alignItems: "center", gap: "5px", fontVariantNumeric: "tabular-nums" },
+  ".cm-agent-editsBar": { width: "3px", height: "11px", borderRadius: "1px", backgroundColor: "var(--agent-c)" },
+  ".cm-agent-editsClear": { opacity: "0.6", color: "var(--sol-text-dim) !important" },
+  ".cm-agent-editsClear:hover": { opacity: "1" },
 });
 
 export function agentMarksExtension(): Extension {
-  return [agentMarksField, markExternalChanges, decorations, gutterSlot.of([]), gutterHider, flashTimer, escapeDismisses, theme];
+  return [agentMarksField, markExternalChanges, decorations, gutterSlot.of([]), gutterHider, flashTimer, scrollTicks, theme];
 }
 
 // ── verbs ──────────────────────────────────────────────────────────────────

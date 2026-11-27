@@ -9,7 +9,8 @@ import { useDeployReach, type DeployReachRow } from "./useDeployReach";
 import { repoObjectRefOf } from "../lib/repoObjects";
 import { changeLifecycle, type ChangeFacts, type Lifecycle } from "../lib/changes/lifecycle";
 import { isMerged, pullRequestFacts } from "../lib/changes/pullRequest";
-import { prPillLook, type PrPillLook } from "../lib/changes/prPill";
+import { prRowState } from "../lib/changes/prPill";
+import { prFace, type PrFace } from "../lib/prStateGlyph";
 
 /**
  * The lifecycle of a `pr` or `commit` entity row, or null when there is nothing to say yet: a commit says only where it
@@ -45,8 +46,8 @@ export function useRefLifecycle(type: string | null | undefined, entity: any, { 
   }, [isPr, isCommit, entity, reachRef, row]);
 }
 
-/** A pull request pill's look (lib/changes/prPill): its state glyph and the lifecycle's word. */
-export function usePrPillLook(entity: any, { reach = true } = {}): PrPillLook | null {
-  const lifecycle = useRefLifecycle("pr", entity, { reach });
-  return entity ? prPillLook(entity, lifecycle) : null;
+/** A pull request's face (lib/prStateGlyph) read off its row; a merged one reads its deploy reach unless `reach` is false (a bare pill). */
+export function usePrFace(entity: any, { reach = true } = {}): PrFace | null {
+  const reachRow = useDeployReach(entity && reach && isMerged(entity) ? repoObjectRefOf("pr", entity, 40) : null);
+  return entity ? prFace(prRowState(entity), reachRow?.state) : null;
 }

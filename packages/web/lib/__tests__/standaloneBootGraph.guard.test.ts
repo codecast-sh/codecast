@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { join } from "node:path";
+import { ALIASES, WEB, rel, walk } from "../../test-helpers/importGraph";
 
 // The standalone boots (src/shareBoot.tsx: the share pages and a guest's
 // /meet page) exist so that a stranger's page carries nothing of the app: no
@@ -17,60 +17,7 @@ import { dirname, join, relative, resolve } from "node:path";
 // runs, which is how a module the guest never exercises (the error reporter
 // behind notificationDelivery, say) stays out of what the page loads.
 
-const WEB = resolve(import.meta.dir, "../..");
-const ALIASES: Record<string, string> = {
-  "next/navigation": "src/compat/next-navigation.ts",
-  "next/link": "src/compat/next-link.tsx",
-};
 const FORBIDDEN = [/^store\//, /^lib\/calls\/callManager\.ts$/, /^src\/compat\/next-navigation\.ts$/];
-
-const IMPORT_RE = /(?:^|[\s;])(?:import|export)\s+(type\s+)?(?:[^'"]*?\sfrom\s+)?["']([^"']+)["']/g;
-
-function resolveFile(base: string): string | null {
-  for (const ext of ["", ".ts", ".tsx", "/index.ts", "/index.tsx"]) {
-    const p = base + ext;
-    if (existsSync(p) && !p.endsWith("/")) {
-      try {
-        readFileSync(p);
-        return p;
-      } catch {
-        // a directory
-      }
-    }
-  }
-  return null;
-}
-
-function resolveSpec(from: string, spec: string): string | null {
-  if (ALIASES[spec]) return join(WEB, ALIASES[spec]);
-  if (spec.startsWith("@/")) return resolveFile(join(WEB, spec.slice(2)));
-  if (spec.startsWith(".")) return resolveFile(resolve(dirname(from), spec));
-  return null; // a package: never the app
-}
-
-/** Every web file the entry reaches, with the chain that reached it. */
-function walk(entry: string): Map<string, string[]> {
-  const seen = new Map<string, string[]>([[entry, [rel(entry)]]]);
-  const queue = [entry];
-  while (queue.length) {
-    const file = queue.shift()!;
-    if (!/\.(ts|tsx)$/.test(file)) continue;
-    const src = readFileSync(file, "utf8");
-    for (const m of src.matchAll(IMPORT_RE)) {
-      if (m[1]) continue; // `import type` erases
-      const spec = m[2];
-      const target = resolveSpec(file, spec);
-      if (!target || seen.has(target)) continue;
-      seen.set(target, [...seen.get(file)!, rel(target)]);
-      queue.push(target);
-    }
-  }
-  return seen;
-}
-
-function rel(p: string): string {
-  return relative(WEB, p);
-}
 
 function leaks(entry: string): string[] {
   const out: string[] = [];

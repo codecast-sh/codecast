@@ -121,6 +121,9 @@ export interface OpenTerminalOptions {
   target?: string;
   interactive?: boolean;
   title?: string;
+  /** The conversation an attached pane belongs to: its project is where a
+   *  relative path in the output resolves (fileLinks.ts). */
+  conversationId?: string;
   /**
    * Detached instances live outside the bottom panel: no tab, no activeId —
    * the caller owns mounting (attachToContainer) and closing (closeTab).

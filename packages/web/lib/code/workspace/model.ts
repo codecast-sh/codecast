@@ -1,4 +1,5 @@
-// The code workspace as data: editor groups side by side, each with its own
+// The code workspace as data: editor groups in a two-level split (lanes along
+// the outer axis, groups stacked across it inside each lane), each with its own
 // tab list, plus the history a person moves through (most recently used tabs,
 // closed tabs to reopen). Pure functions over plain objects, so the store
 // (store/codeStore.ts) holds one value per vault, persistence writes it as
@@ -11,6 +12,9 @@
 // - A pinned tab sits at the left of its group and survives close-others and
 //   close-to-the-right.
 // - At most MAX_GROUPS groups; a group that loses its last tab collapses.
+// - A split along the outer axis adds a lane; a split across it divides the
+//   group inside its lane, as vim's :sp after :vs does. Groups the split did
+//   not touch keep their sizes; the new one takes half of the one it came from.
 
 import { isVirtualTab } from "./virtualTabs";
 
@@ -18,8 +22,9 @@ export interface WsTab {
   path: string;
   preview?: true;
   pinned?: true;
-  /** Where the cursor was, carried across reloads (1-based). */
-  cursor?: { line: number; col: number };
+  /** Where the cursor was, and the line at the top of the view, carried
+   *  across reloads (1-based). */
+  cursor?: { line: number; col: number; top?: number };
 }
 
 export interface WsGroup {
@@ -37,12 +42,27 @@ export interface ClosedTab {
   index: number;
 }
 
+/** One cell along the outer axis: the next `count` groups, in order, stacked
+ *  across it. */
+export interface WsLane {
+  count: number;
+  /** Percent per group inside the lane; null means equal. */
+  sizes: number[] | null;
+}
+
 export interface Workspace {
+  /** Every group in layout order, lane by lane. */
   groups: WsGroup[];
   activeGroup: string;
+  /** The outer axis: "horizontal" sets lanes side by side (each stacking its
+   *  groups top to bottom), "vertical" stacks lanes (each laying its groups
+   *  side by side). */
   orientation: "horizontal" | "vertical";
-  /** Percent per group, in order; null means equal. */
+  /** Percent per lane along the outer axis; null means equal. */
   sizes: number[] | null;
+  /** How the groups fall into lanes. Absent (an older workspace): one lane a
+   *  group. */
+  lanes?: WsLane[];
   /** Most recent first: `groupId\0path`. */
   mru: string[];
   closed: ClosedTab[];
@@ -59,7 +79,92 @@ export const splitMruKey = (key: string) => {
 };
 
 export function emptyWorkspace(): Workspace {
-  return { groups: [{ id: "g1", tabs: [], active: null }], activeGroup: "g1", orientation: "horizontal", sizes: null, mru: [], closed: [] };
+  return { groups: [{ id: "g1", tabs: [], active: null }], activeGroup: "g1", orientation: "horizontal", sizes: null, lanes: [{ count: 1, sizes: null }], mru: [], closed: [] };
+}
+
+// ── lanes ───────────────────────────────────────────────────────────────────
+
+/** The lanes, one per group when the workspace carries none (or a stale set). */
+export function lanesOf(ws: Workspace): WsLane[] {
+  const lanes = ws.lanes;
+  if (lanes && lanes.length && lanes.every((l) => l.count > 0) && lanes.reduce((n, l) => n + l.count, 0) === ws.groups.length) return lanes;
+  return ws.groups.map(() => ({ count: 1, sizes: null }));
+}
+
+/** The groups of each lane, in order. */
+export function laneGroups(ws: Workspace): WsGroup[][] {
+  let at = 0;
+  return lanesOf(ws).map((l) => ws.groups.slice(at, (at += l.count)));
+}
+
+/** Where the group at flat index `at` sits: its lane, its place in it, and
+ *  the flat index the lane starts at. */
+function locate(lanes: WsLane[], at: number): { lane: number; index: number; start: number } {
+  let start = 0;
+  for (let lane = 0; lane < lanes.length; lane++) {
+    if (at < start + lanes[lane].count) return { lane, index: at - start, start };
+    start += lanes[lane].count;
+  }
+  return { lane: lanes.length - 1, index: 0, start: start - lanes[lanes.length - 1].count };
+}
+
+const equalShares = (n: number) => Array.from({ length: n }, () => 100 / n);
+const sharesOf = (sizes: number[] | null | undefined, n: number) => (sizes && sizes.length === n ? sizes : equalShares(n));
+
+/** Shares with the one at `at` split in two halves. */
+function halve(sizes: number[] | null, n: number, at: number): number[] | null {
+  if (!sizes) return null;
+  const s = sharesOf(sizes, n);
+  return [...s.slice(0, at), s[at] / 2, s[at] / 2, ...s.slice(at + 1)];
+}
+
+/** Shares without the one at `at`, the rest scaled back up to the whole. */
+function dropShare(sizes: number[] | null, n: number, at: number): number[] | null {
+  if (!sizes || n < 2) return null;
+  const rest = sharesOf(sizes, n).filter((_, i) => i !== at);
+  const total = rest.reduce((a, b) => a + b, 0) || 1;
+  return rest.map((x) => (x * 100) / total);
+}
+
+const flip = (o: Workspace["orientation"]): Workspace["orientation"] => (o === "horizontal" ? "vertical" : "horizontal");
+
+/** One lane holding several groups is the same layout as one lane each
+ *  along the other axis; keep the second, so a lane only ever exists to
+ *  stack groups beside another lane. */
+function normalizeLanes(ws: Workspace): Workspace {
+  const lanes = lanesOf(ws);
+  if (lanes.length === 1 && lanes[0].count > 1) {
+    return { ...ws, orientation: flip(ws.orientation), sizes: lanes[0].sizes, lanes: ws.groups.map(() => ({ count: 1, sizes: null })) };
+  }
+  return lanes === ws.lanes ? ws : { ...ws, lanes };
+}
+
+export interface GroupRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** Each group's place in the workspace, as fractions of its width and height. */
+export function groupRects(ws: Workspace): Map<string, GroupRect> {
+  const out = new Map<string, GroupRect>();
+  const lanes = lanesOf(ws);
+  const outer = sharesOf(ws.sizes, lanes.length);
+  const horizontal = ws.orientation === "horizontal";
+  let a = 0;
+  laneGroups(ws).forEach((groups, li) => {
+    const span = outer[li] / 100;
+    const inner = sharesOf(lanes[li].sizes, groups.length);
+    let b = 0;
+    groups.forEach((g, gi) => {
+      const len = inner[gi] / 100;
+      out.set(g.id, horizontal ? { x: a, y: b, w: span, h: len } : { x: b, y: a, w: len, h: span });
+      b += len;
+    });
+    a += span;
+  });
+  return out;
 }
 
 function newGroupId(ws: Workspace): string {
@@ -235,7 +340,14 @@ function removeGroup(ws: Workspace, groupId: string): Workspace {
   if (at < 0 || ws.groups.length === 1) return ws;
   const groups = ws.groups.filter((g) => g.id !== groupId);
   const focus = ws.activeGroup === groupId ? groups[Math.max(0, at - 1)].id : ws.activeGroup;
-  const next: Workspace = { ...forgetMru(ws, groupId, null), groups, sizes: null };
+  // The groups left keep their sizes; the gone one's share goes to its lane
+  // (or, a lane emptied, to the other lanes).
+  const lanes = lanesOf(ws);
+  const { lane, index } = locate(lanes, at);
+  const l = lanes[lane];
+  const sizes = l.count === 1 ? dropShare(ws.sizes, lanes.length, lane) : ws.sizes;
+  const nextLanes = l.count === 1 ? lanes.filter((_, i) => i !== lane) : lanes.map((x, i) => (i === lane ? { count: x.count - 1, sizes: dropShare(x.sizes, x.count, index) } : x));
+  const next = normalizeLanes({ ...forgetMru(ws, groupId, null), groups, sizes, lanes: nextLanes });
   return focusGroupId({ ...next, activeGroup: focus === next.activeGroup ? focus : next.activeGroup }, focus);
 }
 
@@ -316,31 +428,206 @@ export function moveTab(ws: Workspace, fromGroupId: string, path: string, toGrou
 
 export type SplitDirection = "right" | "down";
 
-/** Open `path` in a new group beside `groupId` (or, at the group limit, in
- *  the next group over). The first split sets the workspace's orientation. */
+/** Whether a group can split: false at the group limit, where vim says
+ *  "E36: Not enough room" and nothing moves. */
+export const canSplitMore = (ws: Workspace) => ws.groups.length < MAX_GROUPS;
+
+/** Open `path` in a new group beside `groupId`, right of it or below it. Along
+ *  the outer axis that is a new lane; across it, the group divides inside its
+ *  lane. At the group limit nothing changes. */
 export function splitTo(ws: Workspace, groupId: string, path: string, direction: SplitDirection, opts: { at?: string; preview?: boolean } = {}): Workspace {
   const at = ws.groups.findIndex((g) => g.id === groupId);
-  if (at < 0) return ws;
-  if (ws.groups.length >= MAX_GROUPS) {
-    const target = ws.groups[at + 1] ?? ws.groups[at - 1];
-    return openTab(ws, path, { groupId: target.id, at: opts.at, preview: opts.preview });
-  }
+  if (at < 0 || !canSplitMore(ws)) return ws;
   const id = newGroupId(ws);
-  const orientation = ws.groups.length === 1 ? (direction === "down" ? "vertical" : "horizontal") : ws.orientation;
+  const axis = direction === "down" ? "vertical" : "horizontal";
   const group: WsGroup = { id, tabs: [], active: null };
-  const groups = [...ws.groups.slice(0, at + 1), group, ...ws.groups.slice(at + 1)];
-  return openTab({ ...ws, groups, orientation, sizes: null }, path, { groupId: id, at: opts.at, preview: opts.preview });
+  const lanes = lanesOf(ws);
+  const { lane, index, start } = locate(lanes, at);
+  let next: Workspace;
+  if (ws.groups.length === 1) {
+    next = { ...ws, groups: [ws.groups[0], group], orientation: axis, sizes: null, lanes: [{ count: 1, sizes: null }, { count: 1, sizes: null }] };
+  } else if (axis === ws.orientation) {
+    // A new lane after this one, taking half of this lane's share.
+    const end = start + lanes[lane].count;
+    next = {
+      ...ws,
+      groups: [...ws.groups.slice(0, end), group, ...ws.groups.slice(end)],
+      sizes: halve(ws.sizes, lanes.length, lane),
+      lanes: [...lanes.slice(0, lane + 1), { count: 1, sizes: null }, ...lanes.slice(lane + 1)],
+    };
+  } else {
+    const l = lanes[lane];
+    next = {
+      ...ws,
+      groups: [...ws.groups.slice(0, at + 1), group, ...ws.groups.slice(at + 1)],
+      lanes: lanes.map((x, i) => (i === lane ? { count: l.count + 1, sizes: halve(l.sizes, l.count, index) } : x)),
+    };
+  }
+  return openTab(next, path, { groupId: id, at: opts.at, preview: opts.preview });
 }
 
 export type FocusDirection = "left" | "right" | "up" | "down";
 
-/** The group in a direction from the focused one, given the orientation. */
+/** The group in a direction from the focused one: the one sharing that edge
+ *  with it, the longest shared stretch first. */
 export function neighborGroup(ws: Workspace, dir: FocusDirection): string | null {
-  const horizontal = ws.orientation === "horizontal";
-  const step = horizontal ? (dir === "left" ? -1 : dir === "right" ? 1 : 0) : dir === "up" ? -1 : dir === "down" ? 1 : 0;
-  if (!step) return null;
+  const rects = groupRects(ws);
+  const r = rects.get(ws.activeGroup);
+  if (!r) return null;
+  const near = (a: number, b: number) => Math.abs(a - b) < 1e-6;
+  let best: string | null = null;
+  let bestOverlap = 1e-6;
+  for (const [id, c] of rects) {
+    if (id === ws.activeGroup) continue;
+    const touches =
+      dir === "right" ? near(c.x, r.x + r.w) : dir === "left" ? near(c.x + c.w, r.x) : dir === "down" ? near(c.y, r.y + r.h) : near(c.y + c.h, r.y);
+    if (!touches) continue;
+    const across = dir === "left" || dir === "right" ? Math.min(r.y + r.h, c.y + c.h) - Math.max(r.y, c.y) : Math.min(r.x + r.w, c.x + c.w) - Math.max(r.x, c.x);
+    if (across > bestOverlap) {
+      best = id;
+      bestOverlap = across;
+    }
+  }
+  return best;
+}
+
+/** The group `delta` places from the focused one in layout order, wrapping
+ *  (vim's <C-w>w and <C-w>W). Null with one group. */
+export function cycleGroup(ws: Workspace, delta: number): string | null {
+  const n = ws.groups.length;
+  if (n < 2) return null;
+  const at = Math.max(0, ws.groups.findIndex((g) => g.id === ws.activeGroup));
+  return ws.groups[(((at + delta) % n) + n) % n].id;
+}
+
+/** The group focused before this one (vim's <C-w>p): the newest recent tab
+ *  that sits in another group still open. */
+export function previousGroup(ws: Workspace): string | null {
+  for (const key of ws.mru) {
+    const { groupId } = splitMruKey(key);
+    if (groupId !== ws.activeGroup && groupById(ws, groupId)) return groupId;
+  }
+  return null;
+}
+
+/** The smallest share a group keeps, matching the panel's own minimum. */
+export const MIN_GROUP_SIZE = 12;
+
+/** The run of sizes a change along `axis` acts on for the focused group: the
+ *  lanes when the axis is the outer one, else the focused group's lane. Null
+ *  when nothing sits beside it along that axis. */
+function sizeRun(ws: Workspace, axis: "width" | "height"): { lane: number | null; at: number; sizes: number[] } | null {
+  const lanes = lanesOf(ws);
+  const pos = locate(lanes, Math.max(0, ws.groups.findIndex((g) => g.id === ws.activeGroup)));
+  if ((axis === "width") === (ws.orientation === "horizontal")) {
+    return lanes.length > 1 ? { lane: null, at: pos.lane, sizes: sharesOf(ws.sizes, lanes.length) } : null;
+  }
+  const l = lanes[pos.lane];
+  return l.count > 1 ? { lane: pos.lane, at: pos.index, sizes: sharesOf(l.sizes, l.count) } : null;
+}
+
+/** Grow (or shrink, `by` < 0) the focused group by `by` percent, taken from
+ *  its neighbors along that axis in proportion to the room they have (vim's
+ *  <C-w>+ - < >). */
+export function resizeGroup(ws: Workspace, axis: "width" | "height", by: number): Workspace {
+  const run = by ? sizeRun(ws, axis) : null;
+  if (!run) return ws;
+  const { sizes, at } = run;
+  const max = 100 - MIN_GROUP_SIZE * (sizes.length - 1);
+  const target = Math.min(max, Math.max(MIN_GROUP_SIZE, sizes[at] + by));
+  const delta = target - sizes[at];
+  if (Math.abs(delta) < 0.1) return ws;
+  // Growing takes from the room above each one's minimum; shrinking gives
+  // back to every other group evenly.
+  const room = sizes.map((s, i) => (i === at ? 0 : delta > 0 ? s - MIN_GROUP_SIZE : 1));
+  const total = room.reduce((a, b) => a + b, 0);
+  return setSizes(ws, run.lane, sizes.map((s, i) => (i === at ? target : s - (delta * room[i]) / total)));
+}
+
+/** The focused group as large as the others allow (vim's <C-w>_ and <C-w>|). */
+export function maximizeGroup(ws: Workspace, axis: "width" | "height"): Workspace {
+  return resizeGroup(ws, axis, 100);
+}
+
+/** Every group the same size (vim's <C-w>=). */
+export function equalizeGroups(ws: Workspace): Workspace {
+  const lanes = lanesOf(ws);
+  if (ws.sizes === null && lanes.every((l) => l.sizes === null)) return ws;
+  return { ...ws, sizes: null, lanes: lanes.map((l) => (l.sizes ? { ...l, sizes: null } : l)) };
+}
+
+/** The focused group's siblings for exchange and rotate: the groups of its
+ *  lane when it shares one, else the lanes. */
+function swapScope(ws: Workspace): { lanes: WsLane[]; lane: number; index: number; start: number; inLane: boolean } | null {
   const at = ws.groups.findIndex((g) => g.id === ws.activeGroup);
-  return ws.groups[at + step]?.id ?? null;
+  if (ws.groups.length < 2 || at < 0) return null;
+  const lanes = lanesOf(ws);
+  const pos = locate(lanes, at);
+  return { lanes, ...pos, inLane: lanes[pos.lane].count > 1 };
+}
+
+/** Reorder the lanes; their groups and inner sizes go with them, each place
+ *  keeps its outer size. */
+function reorderLanes(ws: Workspace, lanes: WsLane[], order: number[]): Workspace {
+  const blocks = laneGroups({ ...ws, lanes });
+  return { ...ws, groups: order.flatMap((i) => blocks[i]), lanes: order.map((i) => lanes[i]) };
+}
+
+/** Reorder the groups of one lane; each place keeps its size. */
+function reorderInLane(ws: Workspace, start: number, count: number, order: number[]): Workspace {
+  const block = ws.groups.slice(start, start + count);
+  return { ...ws, groups: [...ws.groups.slice(0, start), ...order.map((i) => block[i]), ...ws.groups.slice(start + count)] };
+}
+
+/** Swap the focused group with the next one in its row or column, or the
+ *  previous one when it is last (vim's <C-w>x). Each place keeps its size,
+ *  and focus stays in the place, now showing the other group. */
+export function exchangeGroup(ws: Workspace): Workspace {
+  const s = swapScope(ws);
+  if (!s) return ws;
+  const n = s.inLane ? s.lanes[s.lane].count : s.lanes.length;
+  const at = s.inLane ? s.index : s.lane;
+  const other = at + 1 < n ? at + 1 : at - 1;
+  const order = Array.from({ length: n }, (_, i) => (i === at ? other : i === other ? at : i));
+  const next = s.inLane ? reorderInLane(ws, s.start, n, order) : reorderLanes(ws, s.lanes, order);
+  const place = s.inLane ? s.start + at : laneGroups(next).slice(0, at).reduce((k, block) => k + block.length, 0);
+  return focusGroupId(next, next.groups[place].id);
+}
+
+/** Rotate the focused group's row or column one place forward (`delta` 1,
+ *  vim's <C-w>r) or back (-1, <C-w>R). Focus moves with its group. */
+export function rotateGroups(ws: Workspace, delta: 1 | -1): Workspace {
+  const s = swapScope(ws);
+  if (!s) return ws;
+  const n = s.inLane ? s.lanes[s.lane].count : s.lanes.length;
+  const order = Array.from({ length: n }, (_, i) => (((i - delta) % n) + n) % n);
+  return s.inLane ? reorderInLane(ws, s.start, n, order) : reorderLanes(ws, s.lanes, order);
+}
+
+export type GroupEdge = "left" | "right" | "top" | "bottom";
+
+/** Move the focused group to an edge, full length (vim's <C-w>H L K J). The
+ *  rest keep their arrangement beside it. */
+export function moveGroupToEdge(ws: Workspace, edge: GroupEdge): Workspace {
+  const at = ws.groups.findIndex((g) => g.id === ws.activeGroup);
+  if (ws.groups.length < 2 || at < 0) return ws;
+  const group = ws.groups[at];
+  const orientation = edge === "left" || edge === "right" ? "horizontal" : "vertical";
+  const lanes = lanesOf(ws);
+  const { lane } = locate(lanes, at);
+  // The others, as lanes of the old layout.
+  let rest = lanes.map((l, i) => (i === lane ? l.count - 1 : l.count)).filter((c) => c > 0);
+  // Along the other axis the old lanes turn: one lane of several becomes one
+  // lane each, and single lanes side by side become one lane. (Two others at
+  // most, so these are the only shapes.)
+  if (orientation !== ws.orientation) rest = rest.length === 1 ? Array.from({ length: rest[0] }, () => 1) : [rest.reduce((a, b) => a + b, 0)];
+  const others = ws.groups.filter((g) => g !== group);
+  const first = edge === "left" || edge === "top";
+  const groups = first ? [group, ...others] : [...others, group];
+  const counts = first ? [1, ...rest] : [...rest, 1];
+  const same = orientation === ws.orientation && groups.every((g, i) => g === ws.groups[i]) && counts.length === lanes.length && counts.every((c, i) => c === lanes[i].count);
+  if (same) return ws;
+  return normalizeLanes({ ...ws, groups, orientation, sizes: null, lanes: counts.map((count) => ({ count, sizes: null })) });
 }
 
 /** The tab `delta` away in the focused group, wrapping. */
@@ -381,6 +668,14 @@ export function mruTabs(ws: Workspace): MruEntry[] {
   return out;
 }
 
+/** The alternate file (vim's `:b#`, <C-^>): the tab used before the focused
+ *  one, in the focused group when it has one, else in any group. */
+export function alternateTab(ws: Workspace): MruEntry | null {
+  const group = activeGroup(ws);
+  const others = mruTabs(ws).filter((e) => !(e.groupId === group.id && e.path === group.active));
+  return others.find((e) => e.groupId === group.id) ?? others.find((e) => e.path !== group.active) ?? null;
+}
+
 /** Follow a rename on disk: tabs on the path (or inside a renamed folder) follow it. */
 export function renamePath(ws: Workspace, from: string, to: string): Workspace {
   const hit = (p: string) => p === from || p.startsWith(from + "/");
@@ -408,10 +703,17 @@ export function forgetPath(ws: Workspace, path: string, opts: { keepTabs?: boole
   return { ...next, closed: next.closed.filter((c) => c.path !== path) };
 }
 
-export function setSizes(ws: Workspace, sizes: number[]): Workspace {
-  if (sizes.length !== ws.groups.length) return ws;
-  if (ws.sizes && ws.sizes.every((s, i) => Math.abs(s - sizes[i]) < 0.1)) return ws;
-  return { ...ws, sizes };
+/** Sizes from a drag or a command: the lanes' (`lane` null) or one lane's groups'. */
+export function setSizes(ws: Workspace, lane: number | null, sizes: number[]): Workspace {
+  const lanes = lanesOf(ws);
+  const same = (have: number[] | null) => !!have && have.length === sizes.length && have.every((s, i) => Math.abs(s - sizes[i]) < 0.1);
+  if (lane === null) {
+    if (sizes.length !== lanes.length || same(ws.sizes)) return ws;
+    return { ...ws, sizes };
+  }
+  const l = lanes[lane];
+  if (!l || sizes.length !== l.count || same(l.sizes)) return ws;
+  return { ...ws, lanes: lanes.map((x, i) => (i === lane ? { ...x, sizes } : x)) };
 }
 
 /** A persisted value back into a workspace, dropping anything malformed. */
@@ -420,25 +722,43 @@ export function reviveWorkspace(raw: unknown): Workspace | null {
   const r = raw as Partial<Workspace>;
   if (!Array.isArray(r.groups) || r.groups.length === 0) return null;
   const groups: WsGroup[] = [];
-  for (const g of r.groups.slice(0, MAX_GROUPS)) {
+  // Which stored lane each group came from, so the layout survives a group
+  // dropped as malformed or empty.
+  const stored = r.groups.slice(0, MAX_GROUPS);
+  const storedLanes = Array.isArray(r.lanes) && r.lanes.every((l) => l && Number.isInteger(l.count) && l.count > 0) && r.lanes.reduce((n, l) => n + l.count, 0) === r.groups.length ? r.lanes : null;
+  const laneAt = (i: number) => (storedLanes ? locate(storedLanes, i).lane : i);
+  const laneOfGroup = new Map<WsGroup, number>();
+  for (const [i, g] of stored.entries()) {
     if (!g || typeof g.id !== "string" || !Array.isArray(g.tabs)) continue;
     const seen = new Set<string>();
     // A virtual tab (search results) holds nothing a reload brings back.
     const tabs = g.tabs.filter((t): t is WsTab => !!t && typeof t.path === "string" && !isVirtualTab(t.path) && !seen.has(t.path) && !!seen.add(t.path));
     const active = typeof g.active === "string" && seen.has(g.active) ? g.active : (tabs[0]?.path ?? null);
-    groups.push({ id: g.id, tabs: pinnedFirst(tabs), active });
+    const group = { id: g.id, tabs: pinnedFirst(tabs), active };
+    laneOfGroup.set(group, laneAt(i));
+    groups.push(group);
   }
   const live = groups.filter((g) => g.tabs.length > 0);
   const kept = live.length ? live : [groups[0] ?? { id: "g1", tabs: [], active: null }];
   const activeId = kept.some((g) => g.id === r.activeGroup) ? r.activeGroup! : kept[0].id;
-  return {
+  // Rebuild the lanes from what was kept; a size stays only where its run
+  // kept every member.
+  const laneIds = [...new Set(kept.map((g) => laneOfGroup.get(g) ?? -1))];
+  const lanes: WsLane[] = laneIds.map((id) => {
+    const count = kept.filter((g) => (laneOfGroup.get(g) ?? -1) === id).length;
+    const prev = storedLanes?.[id];
+    return { count, sizes: prev && prev.count === count && Array.isArray(prev.sizes) && prev.sizes.length === count ? prev.sizes : null };
+  });
+  const lanesWhole = storedLanes ? lanes.length === storedLanes.length : lanes.length === r.groups.length;
+  return normalizeLanes({
     groups: kept,
     activeGroup: activeId,
     orientation: r.orientation === "vertical" ? "vertical" : "horizontal",
-    sizes: Array.isArray(r.sizes) && r.sizes.length === kept.length ? r.sizes : null,
+    sizes: lanesWhole && Array.isArray(r.sizes) && r.sizes.length === lanes.length ? r.sizes : null,
+    lanes,
     mru: Array.isArray(r.mru) ? r.mru.filter((k): k is string => typeof k === "string" && !isVirtualTab(k.slice(k.indexOf("\u0000") + 1))).slice(0, MAX_MRU) : [],
     closed: Array.isArray(r.closed) ? r.closed.filter((c) => c && typeof c.path === "string" && !isVirtualTab(c.path)).slice(0, MAX_CLOSED) : [],
-  };
+  });
 }
 
 /** What persists: everything but one-shot reveal requests. */

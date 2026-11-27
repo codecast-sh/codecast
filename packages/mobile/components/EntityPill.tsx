@@ -9,10 +9,9 @@ import { useSyncOrgProposal } from '@codecast/web/hooks/useSyncOrgProposals';
 import { usePriorityDetail, useSyncPriorityDetail } from '@codecast/web/hooks/usePriorityDetail';
 import { useRouter } from 'expo-router';
 import { Theme, useTheme, type Palette } from '@/constants/Theme';
-import { mixColor, webColor } from '@/lib/solColor';
+import { mixColor, solColor, webColor } from '@/lib/solColor';
 import { EntityKindIcon, TaskStatusMark, WebIcon } from '@/components/marks';
 import { ACCENT, DECISION_STATE, TYPE_ICON } from '@codecast/web/lib/entityCardAccent';
-import { PR_STATE_GLYPH } from '@codecast/web/lib/prStateGlyph';
 import { deployLook } from '@codecast/web/lib/deploys/deployLook';
 import { isConvexId, isEntityId, entityTypeFromId, entityReferenceLabel, parseCallRef, callRefLabelSuffix, parseProposalChangeRef, proposalChangeLabelSuffix, parseReplayRef, replayRefLabelSuffix, type EntityType } from '@codecast/shared/entities';
 import { mobileEntityRoute } from '@/lib/linkRoutes';
@@ -25,8 +24,8 @@ import { useMessageLongPress } from '@/components/MessageLongPress';
 import { deployTitle } from '@codecast/web/lib/line/deployWords';
 import { repoObjectTitle } from '@codecast/web/lib/repoObjects';
 import { deployPillElapsed, deployPillState, deployPillSuffix, deployTone, runRefKey, type DeployTone } from '@codecast/web/lib/deploys/deployPill';
-import { usePrPillLook, useRefLifecycle } from '@codecast/web/hooks/useRefLifecycle';
-import type { PrGlyph } from '@codecast/web/lib/changes/prPill';
+import { usePrFace, useRefLifecycle } from '@codecast/web/hooks/useRefLifecycle';
+import { accentVar } from '@codecast/web/lib/externalEvents';
 import { ChangeWords } from '@/components/ChangeText';
 import { PriorityPillMarks } from '@/components/priorities/PriorityPillMarks';
 import { useNowWhen } from '@codecast/web/hooks/useCoarseNow';
@@ -67,7 +66,6 @@ const TYPE_LABEL: Record<EntityType, string> = {
 // (lib/entityCardAccent), a task's status disc, a decision's state, a pull
 // request's state (lib/prStateGlyph) and a deploy's (lib/deploys/deployLook).
 const PILL_GLYPH = 11;
-const prGlyphIcon = (glyph: PrGlyph) => PR_STATE_GLYPH[glyph]?.pr ?? TYPE_ICON.pr;
 
 // A failure must be seen before it is read: about twice the tint every other pill wears.
 const FAILED_TINT = '33';
@@ -175,10 +173,11 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback, to, 
   const deployState = type === 'deploy' && entity ? deployPillState(entity) : null;
   const ticks = deployState === 'waiting' || deployState === 'going_out';
   const now = useNowWhen((t) => (ticks ? deployPillElapsed(entity, t) ?? '' : ''), 15_000);
-  // A pull request or commit says where it stands as its change: the web's track and glyph (changes.md CH4).
-  const change = useRefLifecycle(type === 'pr' || type === 'commit' ? type : null, entity);
+  // A commit says where it stands as its change: the web's track and glyph (changes.md CH4).
+  const change = useRefLifecycle(type === 'commit' ? type : null, entity);
   // A pull request's glyph is its state: open, draft, merged or closed.
-  const prLook = usePrPillLook(type === 'pr' ? entity : null);
+  // A pull request wears the face its web pill and chips wear (lib/prStateGlyph).
+  const prFace = usePrFace(type === 'pr' ? entity : null);
 
   // Unknown id shape, a Convex id resolving to no entity table, or the
   // transient state while resolveIdType is in flight.
@@ -222,8 +221,8 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback, to, 
 
   return (
     <RNText
-      style={[styles.pill, { backgroundColor: neutral ? Theme.textDim + '1f' : color + (deployState === 'failed' ? FAILED_TINT : '1a'), color }]}
-      accessibilityLabel={deployState ? `${label}, ${deployPillSuffix(entity, now)}` : prLook?.word ? `${label}, ${prLook.word}` : type === 'priority' && entity ? [label, entity.owner, entity.rank != null ? `rank ${entity.rank}` : null].filter(Boolean).join(', ') : undefined}
+      style={[styles.pill, { backgroundColor: neutral ? Theme.textDim + '1f' : color + (deployState === 'failed' ? FAILED_TINT : '1a'), color }, prFace?.settled && styles.settled]}
+      accessibilityLabel={deployState ? `${label}, ${deployPillSuffix(entity, now)}` : prFace ? `${label}, ${prFace.phrase}` : type === 'priority' && entity ? [label, entity.owner, entity.rank != null ? `rank ${entity.rank}` : null].filter(Boolean).join(', ') : undefined}
       onPress={to ? () => void openLink(to) : route ? () => router.push(route as any) : undefined}
       onLongPress={messageLongPress ? () => messageLongPress([{ label: 'Copy ID', text: entity?.short_id ?? rawId }]) : undefined}
       suppressHighlighting
@@ -232,8 +231,8 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback, to, 
         <TaskStatusMark status={entity?.status} size={PILL_GLYPH} color={neutral ? Theme.textDim : undefined} />
       ) : type === 'decision' ? (
         <WebIcon icon={(DECISION_STATE[entity?.status ?? 'pending'] ?? DECISION_STATE.pending).icon} color={color} size={PILL_GLYPH} />
-      ) : prLook ? (
-        <WebIcon icon={prGlyphIcon(prLook.glyph)} color={color} size={PILL_GLYPH} />
+      ) : prFace ? (
+        <WebIcon icon={prFace.Pr} color={color} size={PILL_GLYPH} />
       ) : deployState ? (
         (() => {
           const look = deployLook(entity, Date.now());
@@ -250,6 +249,7 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback, to, 
       {' '}{label}
       {/* The glyph and tone carry a deploy's state; only how long one still waits or goes out follows its name. */}
       {ticks && ` ${deployPillElapsed(entity, now) ?? ''}`}
+      {prFace?.After && <>{' '}<WebIcon icon={prFace.After} color={neutral ? Theme.textDim : solColor(accentVar(prFace.accent), Theme)} size={PILL_GLYPH} /></>}
       {change && <ChangeWords lifecycle={neutral ? { ...change, now: { ...change.now, tone: 'muted' } } : change} />}
     </RNText>
   );
@@ -265,4 +265,6 @@ const styles = StyleSheet.create({
     borderRadius: 4,
     overflow: 'hidden',
   },
+  // A settled pull request dims, as on the web.
+  settled: { opacity: 0.6 },
 });

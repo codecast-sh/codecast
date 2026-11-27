@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import postcss from "postcss";
-import { createTailwindBuilder, tailwindInWorker } from "./tailwindWorker";
+import { createTailwindBuilder, rebuildTailwindSheets, tailwindInWorker } from "./tailwindWorker";
 
 // A tiny project so a real Tailwind build takes milliseconds, not minutes.
 function tmpProject() {
@@ -56,5 +56,26 @@ describe("tailwind worker", () => {
     expect(result.css).toBe(plain);
     const built = await postcss([tailwindInWorker(configPath)]).process(SOURCE, { from });
     expect(built.css).toContain("0.4242em");
+  }, 60_000);
+
+  test("Vite gets no content globs, and a rebuild names a sheet only when its CSS changed", async () => {
+    const { dir, configPath, from } = tmpProject();
+    const built = await postcss([tailwindInWorker(configPath)]).process(SOURCE, { from });
+    expect(built.messages.some((m) => m.type === "dir-dependency")).toBe(false);
+
+    // A save that uses only classes already generated changes nothing.
+    fs.writeFileSync(path.join(dir, "Page.tsx"), 'export const P = () => <div className="flex" />;\n');
+    expect(await rebuildTailwindSheets()).not.toContain(from);
+    // A new class does.
+    fs.writeFileSync(path.join(dir, "Page.tsx"), 'export const P = () => <div className="tracking-[0.5151em]" />;\n');
+    expect(await rebuildTailwindSheets()).toContain(from);
+    expect(await rebuildTailwindSheets()).not.toContain(from);
+
+    // A window that loads the sheet between a save and the check gets the new
+    // class itself; the windows already open still need it.
+    fs.writeFileSync(path.join(dir, "Page.tsx"), 'export const P = () => <div className="tracking-[0.6161em]" />;\n');
+    const fresh = await postcss([tailwindInWorker(configPath)]).process(SOURCE, { from });
+    expect(fresh.css).toContain("0.6161em");
+    expect(await rebuildTailwindSheets()).toContain(from);
   }, 60_000);
 });

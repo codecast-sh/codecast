@@ -116,6 +116,12 @@ describe("parseTerminalSessionRows", () => {
     expect(rows[2].attached).toBe(2);
   });
 
+  it("reads the active pane's cwd after the start path", () => {
+    const [row] = parseTerminalSessionRows("cast-term-a1|1700000100|1|zsh|/Users/me/src|=cwd=|/Users/me/src/a|b/pkg");
+    expect(row.path).toBe("/Users/me/src");
+    expect(row.cwd).toBe("/Users/me/src/a|b/pkg");
+  });
+
   it("returns nothing for empty output", () => {
     expect(parseTerminalSessionRows("")).toEqual([]);
     expect(parseTerminalSessionRows("\n\n")).toEqual([]);

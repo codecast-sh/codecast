@@ -45,7 +45,7 @@ function setVault(state: Partial<ReturnType<typeof useVaultStore.getState>>) {
 test("a cached boot waits for the daemon instead of claiming the read failed", async () => {
   setVault({ endpoint: null, isRemote: false, connection: "cached" });
   const host = await render();
-  expect(host.textContent).not.toContain("Couldn't read this file.");
+  expect(host.textContent).not.toContain("Couldn't read");
   expect(host.querySelector(".cm-editor")).not.toBeNull();
   expect(host.textContent).toContain("Loading");
 });
@@ -53,7 +53,7 @@ test("a cached boot waits for the daemon instead of claiming the read failed", a
 test("no daemon at all says the file could not be read", async () => {
   setVault({ endpoint: null, isRemote: false, connection: "no-daemon" });
   const host = await render();
-  expect(host.textContent).toContain("Couldn't read this file.");
+  expect(host.textContent).toContain("Couldn't read");
 });
 
 test("a cached boot shows unsaved text held for hot exit, read-only, then loads the file", async () => {
@@ -219,7 +219,7 @@ test("a clean file removed and restored on disk comes back in its editor", async
       await settle();
     });
     // The editor stays, saying so, with a way to write the file back.
-    expect(host.textContent).not.toContain("This file does not exist.");
+    expect(host.textContent).not.toContain("Not on disk");
     expect(host.textContent).toContain("Deleted on disk");
     expect(host.textContent).toContain("Recreate");
     await act(async () => {
@@ -240,14 +240,14 @@ test("a clean file removed and restored on disk comes back in its editor", async
 test("while discovery runs it waits for the read instead", async () => {
   setVault({ endpoint: null, isRemote: false, connection: "discovering" });
   const host = await render();
-  expect(host.textContent).not.toContain("Couldn't read this file.");
+  expect(host.textContent).not.toContain("Couldn't read");
 });
 
 test("a remote vault without the file's text says it could not be read", async () => {
   // No Convex client: the remote read returns without a body.
   setVault({ endpoint: null, isRemote: true, connection: "connected" });
   const host = await render();
-  expect(host.textContent).toContain("Couldn't read this file.");
+  expect(host.textContent).toContain("Couldn't read");
 });
 
 test("unsaved edits outlive their file leaving disk and see it come back", async () => {
@@ -287,4 +287,66 @@ test("unsaved edits outlive their file leaving disk and see it come back", async
   expect(host.textContent).not.toContain("Deleted on disk");
   expect(host.textContent).toContain("Changed on disk");
   expect(view.state.doc.toString()).toBe(`// mine\n${text}`);
+});
+
+test("a failed read names why, keeps the file bar, and Retry reads again", async () => {
+  const { EditorView } = await import("@codemirror/view");
+  const file = "src/denied.ts";
+  const text = "export const d = 1;\n";
+  const realFetch = globalThis.fetch;
+  let reads = 0;
+  globalThis.fetch = (async (url: string) => {
+    if (!String(url).includes("/vault/file")) return new Response("{}", { status: 404 });
+    if (reads++ === 0) return new Response("no", { status: 403 });
+    return new Response(text, { status: 200, headers: { "X-Vault-Mtime": "1", "X-Vault-Size": String(text.length), ETag: "e1" } });
+  }) as any;
+  try {
+    setVault({ endpoint: { port: 1, token: "t" } as any, isRemote: false, connection: "connected", files: { [file]: { path: file, mtime: 1, size: text.length } } as any });
+    const host = await render(file);
+    for (let i = 0; i < 20 && !host.textContent?.includes("Couldn't read"); i++) await act(() => settle());
+    expect(host.textContent).toContain("Couldn't read");
+    expect(host.textContent).toContain("No permission");
+    // The breadcrumbs row stays: the file's name is still on screen.
+    expect(host.querySelector("nav")?.textContent).toContain("denied.ts");
+    const retry = [...host.querySelectorAll("button")].find((b) => b.textContent?.includes("Retry"))!;
+    await act(async () => {
+      retry.click();
+      await settle();
+    });
+    for (let i = 0; i < 20 && !host.querySelector(".cm-editor"); i++) await act(() => settle());
+    const view = EditorView.findFromDOM(host.querySelector(".cm-editor") as HTMLElement)!;
+    for (let i = 0; i < 20 && view.state.doc.toString() !== text; i++) await act(() => settle());
+    expect(view.state.doc.toString()).toBe(text);
+    expect(reads).toBe(2);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("a cached boot that waits past a beat offers Retry, which reconnects", async () => {
+  setVault({ endpoint: null, isRemote: false, connection: "cached", files: { "src/slow.ts": { path: "src/slow.ts", mtime: 1, size: 9 } } as any });
+  let reconnects = 0;
+  const realReconnect = useVaultStore.getState().reconnect;
+  useVaultStore.setState({ reconnect: async () => void reconnects++ });
+  try {
+    const host = await render("src/slow.ts");
+    expect(host.querySelector('[role="progressbar"]')).not.toBeNull();
+    expect(host.textContent).not.toContain("Couldn't read");
+    await act(() => new Promise((r) => setTimeout(r, 4100)));
+    expect(host.textContent).toContain("Daemon reconnecting");
+    const retry = [...host.querySelectorAll("button")].find((b) => b.textContent?.includes("Retry"))!;
+    await act(async () => retry.click());
+    expect(reconnects).toBe(1);
+    expect(host.textContent).not.toContain("Daemon reconnecting");
+  } finally {
+    useVaultStore.setState({ reconnect: realReconnect });
+  }
+}, 10000);
+
+test("a text file past the editor's limit says its size and the limit", async () => {
+  setVault({ endpoint: null, isRemote: false, connection: "connected", files: { "big.log": { path: "big.log", mtime: 1, size: 40 * 1024 * 1024 } } as any });
+  const host = await render("big.log");
+  expect(host.textContent).toContain("Too large");
+  expect(host.textContent).toContain("40 MB · limit");
+  expect(host.querySelector("nav")?.textContent).toContain("big.log");
 });

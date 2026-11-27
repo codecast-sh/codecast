@@ -10,11 +10,13 @@
 
 import { Prec, type Extension } from "@codemirror/state";
 import { ViewPlugin } from "@codemirror/view";
-import { getCM, vim } from "@replit/codemirror-vim";
+import { getCM, vim, Vim } from "@replit/codemirror-vim";
 import type { CodeVimrcResponse } from "@codecast/shared/contracts";
 import { applyVimConfig, ensureVimDefaults, parseVimConfig } from "./apply";
 import { clipboardSync } from "./clipboard";
 import { expandCommandLine, PROMPT_CARET } from "./exAdapters";
+import { gdefaultLine } from "./gdefault";
+import { attachExCompletion } from "./complete";
 import { whenIdle } from "../idle";
 import { dropPendingKeys } from "./keyLayer";
 import { vimTheme } from "./theme";
@@ -30,24 +32,43 @@ export {
   vimOptionsExtension,
   type VimEditorOptions,
 } from "./editorOptions";
-export { currentVimMode, onPendingVimKeysChange, onVimModeChange, pendingVimKeys } from "./mode";
+export { currentVimMode, onPendingVimKeysChange, onVimModeChange, onVimRecordingChange, pendingVimKeys, recordingRegister } from "./mode";
 export { flushPendingKeys } from "./keyLayer";
 export type * from "./types";
 
+const isExPrompt = (template: unknown) => template instanceof Node && template.textContent?.startsWith(":") === true;
+
+/** What a typed command line runs: gdefault applied, while history keeps
+ *  the line as typed, so recalling it flips nothing twice. */
+function exPromptClose(callback: (input: string) => void): (input: string) => void {
+  return (input) => {
+    const line = gdefaultLine(input);
+    callback(line);
+    if (line === input) return;
+    const history = (Vim.getVimGlobalState_() as { exCommandHistoryController?: { historyBuffer: string[] } }).exCommandHistoryController?.historyBuffer;
+    const at = history?.lastIndexOf(line) ?? -1;
+    if (history && at >= 0) history[at] = input;
+  };
+}
+
 /** A command line a map opens with text still in it (`:%s/<C-R><C-W>//g`)
  *  gets the word, register or line filled in as it opens, and the caret
- *  where the map's `<Left>`s left it. Held keys go with the view. */
+ *  where the map's `<Left>`s left it; the `:` line gets gdefault and Tab
+ *  completion. Held keys go with the view. */
 const promptExpansion = ViewPlugin.define((view) => {
   const cm = getCM(view);
   const open = cm?.openDialog;
   if (cm && open) {
     cm.openDialog = (template, callback, options?: { value?: string }) => {
-      if (!options?.value) return open.call(cm, template, callback, options);
-      const value = expandCommandLine(view, options.value);
+      const ex = isExPrompt(template);
+      if (typeof callback === "function" && ex) callback = exPromptClose(callback as (input: string) => void);
+      const value = options?.value ? expandCommandLine(view, options.value) : "";
       const caret = value.indexOf(PROMPT_CARET);
-      const close = open.call(cm, template, callback, { ...options, value: value.replace(PROMPT_CARET, "") });
-      const input = cm.state.dialog?.querySelector("input");
+      const close = options?.value ? open.call(cm, template, callback, { ...options, value: value.replace(PROMPT_CARET, "") }) : open.call(cm, template, callback, options);
+      const dialog = cm.state.dialog as HTMLElement | undefined;
+      const input = dialog?.querySelector("input");
       if (input && caret >= 0) input.setSelectionRange(caret, caret);
+      if (input && dialog && ex) attachExCompletion(view, input, dialog);
       return close;
     };
   }

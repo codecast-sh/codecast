@@ -1,6 +1,6 @@
 import type React from "react";
 import Link from "next/link";
-import { CornerUpLeft, ArrowRight, GitBranch, GitPullRequest, MessageSquare, Square, Tag, Users, Workflow } from "lucide-react";
+import { CornerUpLeft, ArrowRight, GitBranch, MessageSquare, Square, Tag, Users, Workflow } from "lucide-react";
 import { runHref } from "../../lib/decisionLinks";
 import { badgeVariants } from "../ui/badge";
 import { Button } from "../ui/button";
@@ -11,8 +11,8 @@ import { projectDotClass, workspaceColorOf } from "../../lib/projectColors";
 import { WORK_PROJECT_SEP } from "../../lib/workProjectSig";
 import { workProjectChipKey } from "../../store/workProjects";
 import { clickProjectChip } from "../../store/chipFilterClicks";
-import { accentVar, prPath, shepherdStyle } from "../../lib/externalEvents";
-import { PR_STATE_GLYPH } from "../../lib/prStateGlyph";
+import { accentVar, prPath } from "../../lib/externalEvents";
+import { prFace } from "../../lib/prStateGlyph";
 import { isDefaultBranch, sessionRepository } from "../../lib/repoNavigation";
 import { repoTreeHref } from "../../lib/repoView";
 import { cleanTitle } from "../../lib/conversationProcessor";
@@ -92,23 +92,22 @@ export function ModernBranchChip({ session, showBranch, className = "" }: { sess
   const pr = session.pr_status;
   if (pr) {
     const href = prPath({ repository: pr.repository, number: pr.number });
-    // What it waits on is a glyph after the number; the words are its tooltip.
-    const style = shepherdStyle(pr.state);
-    const glyph = PR_STATE_GLYPH[pr.state ?? ""] ?? {};
-    const Pr = glyph.pr ?? GitPullRequest;
-    const After = glyph.after;
-    const title = `${pr.repository} #${pr.number}${pr.title ? ` — ${pr.title}` : ""}\n${style.phrase}`;
+    // The face every pull request wears (lib/prStateGlyph): what it waits on is a glyph after the number, the words its tooltip.
+    const face = prFace(pr.state);
+    const { Pr, After } = face;
+    const title = `${pr.repository} #${pr.number}${pr.title ? ` — ${pr.title}` : ""}\n${face.phrase}`;
     const body = (
       <>
-        <Mark id={glyph.pr ? `pr.${pr.state}` : "pr.open"}><Pr aria-hidden className="w-3 h-3 shrink-0" /></Mark>
+        <Mark id={face.mark}><Pr aria-hidden className="w-3 h-3 shrink-0" /></Mark>
         <span className="tabular-nums shrink-0" title={title}>#{pr.number}</span>
-        {After ? <Mark id={pr.state === "ci_red" ? "pr.failing" : `pr.${pr.state}`}><After aria-hidden data-pr-state={pr.state} className="w-3 h-3 shrink-0" style={{ color: accentVar(style.accent) }} /></Mark> : null}
-        <span className="sr-only">{style.phrase}</span>
+        {After ? <Mark id={face.afterMark!}><After aria-hidden data-pr-state={face.state} className="w-3 h-3 shrink-0" style={{ color: accentVar(face.accent) }} /></Mark> : null}
+        <span className="sr-only">{face.phrase}</span>
       </>
     );
+    const dim = face.settled ? " opacity-60" : "";
     return href
-      ? <Link href={href} data-mc-chip="pr" onClick={stop} className={`${CHIP} ${PRESS} ${className}`}>{body}</Link>
-      : <span data-mc-chip="pr" className={`${CHIP} ${className}`}>{body}</span>;
+      ? <Link href={href} data-mc-chip="pr" onClick={stop} className={`${CHIP} ${PRESS}${dim} ${className}`}>{body}</Link>
+      : <span data-mc-chip="pr" className={`${CHIP}${dim} ${className}`}>{body}</span>;
   }
   const busy = session.cloud_placement === "pending" ? "preparing" : session.migration_batch_id ? "moving" : null;
   if (session.worktree_name || busy || session.cloud_workspace === "shared") {

@@ -22,6 +22,8 @@ describe("the editor address", () => {
     expect(parseCursorTarget(l)).toEqual({ line: 10, column: 3, endLine: 14 });
     expect(parseCursorTarget("12-20")).toEqual({ line: 12, column: undefined, endLine: 20 });
     expect(parseCursorTarget("12:4")).toEqual({ line: 12, column: 4 });
+    // A restored tab names the line at the top of its view too.
+    expect(parseCursorTarget("380:5@400")).toEqual({ line: 380, column: 5, top: 400 });
     // A raw `l` off a URL rides through the ?path= → ?f= rewrite as it came.
     expect(filesHref({ path: "x.ts", line: "10:3-14" })).toBe("/files?f=x.ts&l=10%3A3-14");
   });
@@ -92,12 +94,38 @@ describe("ranges", () => {
     expect(findTextRange(file, ["  return null;"])).toEqual({ line: 2 });
   });
 
+  test("findTextRange takes the occurrence nearest a hint line", () => {
+    const file = "a\n  return null;\nb\nc\nd\n  return null;\ne\n";
+    expect(findTextRange(file, ["  return null;"], 5)).toEqual({ line: 6 });
+    expect(findTextRange(file, ["  return null;"], 1)).toEqual({ line: 2 });
+    // A text that occurs once wins wherever the hint is.
+    expect(findTextRange(file, ["  return null;", "d"], 1)).toEqual({ line: 5 });
+  });
+
   test("a diff base maps to the git ref the editor diffs against", () => {
     expect(gitRefForDiffBase("session", [])).toEqual({ ref: "HEAD", label: "HEAD" });
+    // A commit whose hash went unrecorded falls back.
     expect(gitRefForDiffBase("session", [{ changeType: "commit" }])?.ref).toBe("@merge-base");
     expect(gitRefForDiffBase("commit", [{ changeType: "commit" }])?.ref).toBe("HEAD");
     expect(gitRefForDiffBase("branch", [])?.ref).toBe("@merge-base");
     expect(gitRefForDiffBase("turn", [])).toBeNull();
+  });
+
+  test("a trunk session's refs come from its own commits, not the branch", () => {
+    // Committed and pushed on main: the merge base with origin would be its
+    // own last commit, and the diff would read "No changes".
+    const pushed = [{ changeType: "edit" }, { changeType: "commit", commitHash: "aaaa111" }, { changeType: "edit" }, { changeType: "commit", commitHash: "bbbb222" }];
+    expect(gitRefForDiffBase("session", pushed)).toEqual({ ref: "aaaa111^", label: "Session base" });
+    expect(gitRefForDiffBase("commit", pushed)).toEqual({ ref: "bbbb222", label: "Last commit" });
+    expect(gitRefForDiffBase("branch", pushed)?.ref).toBe("@merge-base");
+  });
+
+  test("another session's later commits do not move this session's last commit", () => {
+    // Only this session's changes are listed: someone else committing on top
+    // leaves "Commit" at this session's own commit, never HEAD.
+    const mine = [{ changeType: "write" }, { changeType: "commit", commitHash: "cccc333" }, { changeType: "edit" }];
+    expect(gitRefForDiffBase("commit", mine)?.ref).toBe("cccc333");
+    expect(gitRefForDiffBase("session", mine)?.ref).toBe("cccc333^");
   });
 
   test("localCheckoutFile picks this machine's worktree on the ref", () => {

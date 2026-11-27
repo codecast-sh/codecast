@@ -2,14 +2,14 @@
 // agent, when, the commit, the lines, and the ways into it.
 
 import { useState } from "react";
-import { Check, Columns2, Copy, CornerDownRight, GitCommitHorizontal } from "lucide-react";
+import { Check, Columns2, Copy, GitCommitHorizontal } from "lucide-react";
 import { EntityIdPill } from "../../EntityIdPill";
 import { AgentTypeIcon, formatAgentType } from "../../AgentTypeIcon";
 import { Button } from "../../ui/button";
 import { useInboxStore } from "../../../store/inboxStore";
 import { blameViaLabel, isBlameVia } from "../../../lib/repoView";
 import { copyToClipboard, formatDateFull, formatRelative } from "../../../lib/utils";
-import { openBlameMessage, openBlameSession } from "../../../lib/code/blame/actions";
+import { openBlameSession } from "../../../lib/code/blame/actions";
 import { closeBlameHover, type BlameHover } from "../../../lib/code/blame/hover";
 import { runName } from "../../../lib/code/blame/model";
 
@@ -92,19 +92,6 @@ export function BlameHoverCard({ hover }: { hover: BlameHover }) {
           >
             <Columns2 /> Open beside
           </Button>
-          {session?.message_id && (
-            <Button
-              size="xs"
-              variant="ghost"
-              title="Open the conversation at the message that made this edit"
-              onClick={() => {
-                openBlameMessage(session);
-                closeBlameHover();
-              }}
-            >
-              <CornerDownRight /> At message
-            </Button>
-          )}
         </div>
       )}
     </div>

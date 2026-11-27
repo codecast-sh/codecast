@@ -654,11 +654,11 @@ describe("pull request references", () => {
   test("#N in a repository bound conversation reads as the title once the row is in hand", () => {
     const html = renderIn("codecast-sh/codecast", "landed PR #482 this morning");
     expect(pillText(html)).toBe("#482 Fix the auth race");
-    // An open pull request wears its state glyph, then where it stands as its change: the track, in its tone, and no word on the line.
+    // An open pull request waiting on nothing wears its life's glyph alone: no track, no word on the line, its state in the label.
     expect(html).toContain("lucide-git-pull-request ");
-    expect(html).toMatch(/<span class="chg-seg" data-tone="muted" data-change-segment="check">/);
-    expect(html).not.toContain('class="chg-word"');
-    expect(html).toContain('<span class="sr-only">not checked</span>');
+    expect(html).not.toContain("chg-seg");
+    expect(html).not.toContain("data-pr-state");
+    expect(html).toContain('aria-label="#482 Fix the auth race · open"');
     expect(html).toContain('href="/pr/codecast-sh/codecast/482"');
   });
 

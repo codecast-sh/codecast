@@ -26,9 +26,6 @@ import {
   Check,
   Zap,
   GitPullRequest,
-  GitPullRequestClosed,
-  GitPullRequestDraft,
-  GitMerge,
   GitCommitHorizontal,
   ChevronDown,
   Radio,
@@ -123,8 +120,8 @@ import { DeployPillSuffix } from "./deploys/deployRefLook";
 import { PriorityPill } from "./priorities/PriorityRef";
 import { DeployHoverContent, ProductionReach } from "./deploys/DeployHoverContent";
 import { RefChangeSegment } from "./changes/RefChangeSegment";
-import { usePrPillLook } from "../hooks/useRefLifecycle";
-import type { PrGlyph } from "../lib/changes/prPill";
+import { usePrFace } from "../hooks/useRefLifecycle";
+import { accentVar } from "../lib/externalEvents";
 import { CommitHoverContent, PullRequestHoverContent, RepoObjectUnknownHoverContent } from "./RepoObjectHoverContent";
 import { deployLook } from "../lib/deploys/deployLook";
 import { deployPillSuffix, isRollback, runRefKey } from "../lib/deploys/deployPill";
@@ -136,7 +133,6 @@ const KIND_IN_CARD = new Set<string>(["doc", "flow", "project", "proposal"]);
 /** Kinds whose pill draws the kind's own glyph. */
 const PILL_KINDS = new Set<string>(["session", "plan", "trigger", "doc", "project", "role", "person", "proposal", "call", "source", "replay", "flow", "priority", "commit"]);
 
-const PR_GLYPH_ICON: Record<PrGlyph, typeof GitPullRequest> = { open: GitPullRequest, draft: GitPullRequestDraft, merged: GitMerge, closed: GitPullRequestClosed };
 
 // `date:<iso>` optionally trailed by `|<label>` — the payload remarkEntityIds
 // writes for a serialized date pill (`@[<label> date:<iso>]`).
@@ -1148,11 +1144,13 @@ export function EntityIdPill({
   const deployV = type === "deploy" && entity ? deployLook(entity, Date.now()) : null;
   // A merged pull request or a commit carries how far it has gone toward production, on its hover card.
   const cardReach = entity && ((isPr && entity.state === "merged") || isCommit) ? repoObjectRefOf(type!, entity, 40) : null;
-  // A pull request's glyph is its state (open, draft, merged or closed); the lifecycle's word is its label and tooltip.
-  const prLook = usePrPillLook(isPr ? entity : null, { reach: !bare });
-  // A pull request or commit says where it stands after its name, as its change's track and glyph; a bare one keeps its whole title.
-  const saysState = !bare && (isPr || isCommit) && !!entity;
-  const settled = decisionSettled;
+  // A pull request wears its chips' face (lib/prStateGlyph): its life in the glyph, what it waits on after its name.
+  const prFace = usePrFace(isPr ? entity : null, { reach: !bare });
+  const PrAfter = bare ? undefined : prFace?.After;
+  // A pull request's wait or a commit's change follows its name, so its title is cut to keep it on the line; a bare one keeps its whole title.
+  const saysState = !bare && !!entity && (isCommit || !!PrAfter);
+  // An answered decision and a settled pull request dim alike; a list of nothing but merged ones (a Deploys board) keeps them bright.
+  const settled = decisionSettled || (!!prFace?.settled && !undimmed);
 
   // Who a session IS (session-characters.md S3): once a session wears a
   // character or a role, the reference reads as that person — the face in
@@ -1196,7 +1194,7 @@ export function EntityIdPill({
             : deployV
               ? deployV.Icon
             : isPr
-              ? PR_GLYPH_ICON[prLook?.glyph ?? "open"]
+              ? prFace?.Pr ?? GitPullRequest
               : isCommit
                 ? GitCommitHorizontal
                 : taskV.icon;
@@ -1210,7 +1208,7 @@ export function EntityIdPill({
     : type === "decision"
       ? `decision.${status === "answered" ? "answered" : status === "dismissed" || status === "withdrawn" ? "dismissed" : "pending"}`
       : isPr
-        ? `pr.${prLook?.glyph ?? "open"}`
+        ? prFace?.mark ?? "pr.open"
         : deployV
           ? deployMarkId(deployV.state, isRollback(entity))
           : type === "initiative"
@@ -1263,9 +1261,8 @@ export function EntityIdPill({
               ? "bg-sol-orange/[0.08] text-sol-orange hover:bg-sol-orange/[0.16]"
             : deployV
               ? deployV.chrome
-            // A merged pull request is settled, so it dims like an answered decision; its live dot stays bright.
             : isPr
-              ? entity?.state === "merged" && !undimmed ? "bg-sol-green/[0.05] text-sol-green/60 hover:bg-sol-green/[0.12]" : "bg-sol-green/[0.08] text-sol-green hover:bg-sol-green/[0.16]"
+              ? "bg-sol-green/[0.08] text-sol-green hover:bg-sol-green/[0.16]"
               : isCommit
                 ? "bg-sol-yellow/[0.08] text-sol-yellow hover:bg-sol-yellow/[0.16]"
                 : "bg-sol-violet/[0.08] text-sol-violet hover:bg-sol-violet/[0.16]";
@@ -1348,7 +1345,7 @@ export function EntityIdPill({
   // instead of a box that jumps to a line of its own or stacks two lines
   // tall inside the sentence (ct-87448). `.entity-ref--flow` in globals.css.
   const flows = !wide && !saysState && !deployV;
-  const linkLabel = deployV ? `${fullLabel} · ${deployPillSuffix(entity, Date.now())}` : prLook?.word ? `${fullLabel} · ${prLook.word}` : undefined;
+  const linkLabel = deployV ? `${fullLabel} · ${deployPillSuffix(entity, Date.now())}` : prFace ? `${fullLabel} · ${prFace.phrase}` : undefined;
   // A cut or shortened label keeps its whole title on the words, never around the glyph (its mark).
   const labelTitle = wide || saysState || fullLabel !== pillLabel ? fullLabel : undefined;
   return (
@@ -1389,8 +1386,13 @@ export function EntityIdPill({
           {/* A pill that carries its state cuts its title, so the state stays on the line with it. */}
           <span className={wide ? "self-baseline min-w-0 truncate leading-tight" : saysState ? "self-baseline min-w-0 max-w-[28ch] truncate leading-tight" : flows ? "entity-ref__label" : "self-baseline"} title={labelTitle}>{pillLabel}</span>
           {deployV && <DeployPillSuffix deploy={entity} />}
-          {/* A pull request or commit says where it stands as its change: the Branches page's track, and the now's glyph. */}
-          {saysState ? <RefChangeSegment type={isPr ? "pr" : "commit"} entity={entity} /> : null}
+          {/* A pull request's wait in its glyph and color, as its chips draw it; a commit's change as the Branches page's track. */}
+          {PrAfter && prFace ? (
+            <Mark id={prFace.afterMark!} quiet>
+              <PrAfter aria-hidden data-pr-state={prFace.state} className="self-center w-[0.9em] h-[0.9em] shrink-0" strokeWidth={2.5} style={{ color: accentVar(prFace.accent) }} />
+            </Mark>
+          ) : null}
+          {saysState && isCommit ? <RefChangeSegment type="commit" entity={entity} /> : null}
         </Link>
       </PopoverAnchor>
       {/* The other half of the pill: the caret opens the full page in a band

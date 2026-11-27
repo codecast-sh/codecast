@@ -36,6 +36,7 @@ const { runCodeCommand } = await import("../../commands");
 const { refreshGitStatus } = await import("../status");
 const git = await import("../gutter");
 const kit = await import("@codemirror/merge");
+const { EditorView } = await import("@codemirror/view");
 
 useVaultStore.setState({ activeVaultId: "v1", isRemote: false, endpoint: { url: "http://127.0.0.1:1", token: "t" } as any });
 
@@ -101,13 +102,24 @@ test("typing writes no store and fetches nothing", async () => {
   view.dispatch({ changes: { from: view.state.doc.length - 20, to: view.state.doc.length } });
 });
 
-test("an untracked file gets no gutter", async () => {
+test("an untracked file gets no gutter, and its diff reads as a new file", async () => {
+  const before = calls.base;
   const buffer = openCodeBuffer({ vaultId: "v1", path: "src/new.ts", content: "x\n", etag: "e2", readOnly: false });
   host.show(buffer);
-  await settle();
-  await settle();
-  expect(git.hasGitGutter(host.view.state)).toBe(false);
-  expect(runCodeCommand("git.nextHunk", undefined, { view: host.view, source: "vim" })).toBe(false);
+  await until(() => git.hasGitGutter(host.view.state), "the git feature");
+  const view = host.view;
+  // Nothing at HEAD to read, no column, no hunk to step outside the diff.
+  expect(calls.base).toBe(before);
+  expect(view.dom.querySelector(".cm-git-gutter")).toBeNull();
+  expect(git.gitLineMarks(view.state)).toEqual([]);
+  expect(runCodeCommand("git.nextHunk", undefined, { view, source: "vim" })).toBe(false);
+  expect(runCodeCommand("git.diffHead", undefined, { view, source: "vim" })).toBe(true);
+  await until(() => view.dom.querySelector(".cm-git-count")?.textContent === "New file", "the new file count");
+  // An older ref still diffs: a file added on the branch against where it began.
+  expect(runCodeCommand("git.diffAgainst", { ref: "main~3" }, { view, source: "vim" })).toBe(true);
+  await until(() => /change/.test(view.dom.querySelector(".cm-git-count")?.textContent ?? ""), "the ref's count");
+  runCodeCommand("git.diffHead", undefined, { view, source: "vim" });
+  expect(git.gitDiffState(view.state)).toBeNull();
 });
 
 test("a moved HEAD rereads the base", async () => {
@@ -151,5 +163,25 @@ test("an unknown ref shows as not found, a file missing at a real ref as all new
   git.openGitDiff(host.view, { ref: "gone" }, "unified");
   await until(() => kit.getChunks(host.view.state)?.chunks.length === 1, "the diff against nothing");
   expect(count()?.textContent).toBe("1 change");
+  git.closeGitDiff(host.view);
+});
+
+test("hunk commands from the side-by-side's right pane act on its diff", async () => {
+  const buffer = openCodeBuffer({ vaultId: "v1", path: "src/a.ts", content: "one\nTWO\nthree\nfour\n", etag: "e1", readOnly: false });
+  host.show(buffer);
+  await until(() => git.hasGitGutter(host.view.state), "the gutter");
+  git.openGitDiff(host.view, { ref: "HEAD" }, "split");
+  const right = () => {
+    const editors = host.view.dom.querySelectorAll(".cm-git-split .cm-mergeViewEditor .cm-editor");
+    return editors.length === 2 ? (EditorView.findFromDOM(editors[1] as HTMLElement) as InstanceType<typeof EditorView>) : null;
+  };
+  await until(() => !!right(), "the split");
+  const b = right()!;
+  b.dispatch({ selection: { anchor: b.state.doc.line(2).from } });
+  // vim's ]c and :GitGutterUndoHunk run with the right pane as their view.
+  expect(runCodeCommand("git.nextHunk", undefined, { view: b, source: "vim" })).toBe(true);
+  b.dispatch({ selection: { anchor: b.state.doc.line(2).from } });
+  expect(runCodeCommand("git.revertHunk", undefined, { view: b, source: "vim" })).toBe(true);
+  expect(host.view.state.doc.line(2).text).toBe("two");
   git.closeGitDiff(host.view);
 });

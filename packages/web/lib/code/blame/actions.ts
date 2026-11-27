@@ -26,22 +26,15 @@ export function openConversationHere(conversationId: string, messageId?: string 
 }
 
 /**
- * Open the session beside the editor. A stage pane opens a conversation at
- * its latest turn; where the stage has no room, the conversation opens in
- * the main view, at the message that made the edit when it is known.
+ * Open the conversation that wrote a line beside the editor, scrolled to the
+ * message that made the edit when it is known (a pane already showing that
+ * conversation moves to it). Where the stage has no room, the conversation
+ * opens in the main view at that message.
  */
 export function openBlameSession(session: CodeBlameSession | undefined): boolean {
   const id = blameConversationId(session);
   if (!id) return false;
-  if (openBeside(sessionPanePath(id))) return true;
+  if (openBeside(sessionPanePath(id, session?.message_id))) return true;
   openConversationHere(id, session?.message_id);
-  return true;
-}
-
-/** Go to the message that made the edit, in the main view. */
-export function openBlameMessage(session: CodeBlameSession | undefined): boolean {
-  const id = blameConversationId(session);
-  if (!id || !session?.message_id) return false;
-  openConversationHere(id, session.message_id);
   return true;
 }

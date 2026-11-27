@@ -26,6 +26,9 @@ export interface QuickPickOptions<T> {
   /** Shown when nothing matches. */
   empty: string;
   initialQuery?: string;
+  /** Selected when the list first shows unfiltered (the symbol a breadcrumb
+   *  names, among its siblings). */
+  initialItem?: T;
   /** Pixel offsets inside the editor to open at, instead of the top center. */
   at?: { left: number; top: number };
   maxRows?: number;
@@ -56,6 +59,7 @@ export function openQuickPick<T>(view: EditorView, opts: QuickPickOptions<T>): v
   const empty = el("div", "cm-lsp-empty", opts.empty);
   empty.hidden = true;
   let done = false;
+  let shownOnce = false;
   let controller: AbortController | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
 
@@ -80,14 +84,23 @@ export function openQuickPick<T>(view: EditorView, opts: QuickPickOptions<T>): v
     },
   });
 
-  const show = (rows: PickRow<T>[], pending = false) => {
-    list.setRows(rows);
+  const show = (rows: PickRow<T>[], pending = false, select?: number) => {
+    list.setRows(rows, select !== undefined && select >= 0 ? select : undefined);
     empty.hidden = rows.length > 0 || pending;
     if (!rows.length) opts.onPreview?.(null);
   };
 
   const filterLocal = (items: T[], query: string) => {
-    if (!query.trim()) return show(items.map((i) => rowFor(i)));
+    if (!query.trim()) {
+      const first = opts.initialItem !== undefined && !shownOnce;
+      shownOnce = true;
+      return show(
+        items.map((i) => rowFor(i)),
+        false,
+        first ? items.indexOf(opts.initialItem as T) : undefined,
+      );
+    }
+    shownOnce = true;
     const hits: { item: T; score: number; positions: number[]; order: number }[] = [];
     items.forEach((item, order) => {
       const m = fuzzyMatch(opts.entry(item).label, query);
@@ -115,7 +128,7 @@ export function openQuickPick<T>(view: EditorView, opts: QuickPickOptions<T>): v
     }, 90);
   };
 
-  const close = (cancel: boolean) => {
+  const close = (cancel: boolean, refocus = true) => {
     if (done) return;
     done = true;
     controller?.abort();
@@ -124,11 +137,14 @@ export function openQuickPick<T>(view: EditorView, opts: QuickPickOptions<T>): v
     root.remove();
     if (open?.close === close) open = null;
     if (cancel) opts.onCancel?.();
-    view.focus();
+    if (refocus) view.focus();
   };
+  // The pick acts before the editor takes focus back, so a jump it makes is
+  // recorded from where the pick started, not from the last preview.
   const finish = (item: T) => {
-    close(false);
+    close(false, false);
     opts.onPick(item);
+    if (!view.hasFocus) view.focus();
   };
 
   input.addEventListener("input", () => query(input.value));

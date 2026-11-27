@@ -166,6 +166,7 @@ function SplitBody({ convKey, split, tmuxSession }: { convKey: string; split: Sp
           target,
           title: target,
           detached: true,
+          conversationId: convKey,
           // Interactive, same as a manual `tmux attach` — the pill is just the
           // safe version of it (ignore-size, no nesting).
           interactive: true,
