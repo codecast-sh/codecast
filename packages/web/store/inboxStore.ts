@@ -7998,6 +7998,9 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
    *  (voiceprints.setVoiceIdEnabled). Off deletes every sample, so the
    *  myVoiceprint counts go to zero on the press too. */
   setVoiceIdEnabled: (enabled: boolean) => Promise<unknown>;
+  /** The viewer's dictation switch, `currentUser.dictation_enabled`
+   *  (dictation.setDictationEnabled): the composer mic shows only while it is on. */
+  setDictationEnabled: (enabled: boolean) => Promise<unknown>;
   /** Delete every sample of the viewer's voice (voiceprints.deleteMyVoiceprints). */
   deleteMyVoiceprints: () => Promise<unknown>;
   // Ephemeral media-plane state, written only by lib/calls/callManager. The
@@ -16949,6 +16952,10 @@ const inboxStoreConfig = (set: any, get: any) => ({
   }),
   deleteMyVoiceprints: asyncAction(function (this: Draft) {
     if (this.myVoiceprint) clearVoiceSamples(this.myVoiceprint);
+  }),
+  setDictationEnabled: asyncAction(function (this: Draft, enabled: boolean) {
+    if (this.currentUser) (this.currentUser as any).dictation_enabled = enabled;
+    return { enabled };
   }),
 
   // =====================
