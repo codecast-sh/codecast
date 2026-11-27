@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { generateKeyPairSync } from "node:crypto";
 import { publicKeyToBase64, sha256Hex, signManifest, type UpdaterFs } from "@platform/cli-kit/update";
-import { DARWIN_SIGNING_TEAM, RELEASE_BASE_URL, RELEASE_MANIFEST_SIGNING, createCodecastUpdater, makeCurlDownload, makeDarwinSignatureCheck, UPDATE_IN_PROGRESS, forcedUpdateWaits, updateRunAfter } from "./update";
+import { DARWIN_SIGNING_TEAM, RELEASE_BASE_URL, RELEASE_MANIFEST_SIGNING, createCodecastUpdater, makeCurlDownload, makeDarwinSignatureCheck, UPDATE_IN_PROGRESS, UPDATE_DEFER_RETRIES, UPDATE_DEFER_RETRY_MS, forcedUpdateWaits, selfUpdateOutcome } from "./update";
 import { exclusiveUpdate, isReleaseRace, updateWithRetry } from "./updateRetry";
 
 const enc = new TextEncoder();
@@ -233,10 +233,40 @@ describe("a floor no release reaches (ct-102483)", () => {
 });
 
 describe("a self update another process is already installing", () => {
-  it("leaves the device row's request open, not failed", () => {
-    expect(updateRunAfter(UPDATE_IN_PROGRESS, 5)).toBeNull();
-    expect(updateRunAfter("checksum_mismatch_darwin-arm64", 5)).toEqual({ state: "failed", error: "checksum_mismatch_darwin-arm64", at: 5 });
-    expect(updateRunAfter(undefined)).toEqual({ state: "failed", error: "unknown error", at: undefined });
+  // Each perform answers from the script in turn; waits are recorded, not slept.
+  function run(script: Array<{ success: boolean; error?: string }>) {
+    const waits: number[] = [];
+    const deferrals: number[] = [];
+    let performs = 0;
+    const outcome = selfUpdateOutcome(async () => script[Math.min(performs++, script.length - 1)]!, {
+      at: 5,
+      wait: async (ms) => { waits.push(ms); },
+      onDeferred: (n) => deferrals.push(n),
+    });
+    return { outcome, waits, deferrals, performs: () => performs };
+  }
+  const deferred = { success: false, error: UPDATE_IN_PROGRESS };
+
+  it("is tried again a minute later, and installs once the other updater lets go", async () => {
+    const r = run([deferred, deferred, { success: true }]);
+    expect(await r.outcome).toBeNull();
+    expect(r.performs()).toBe(3);
+    expect(r.waits).toEqual([UPDATE_DEFER_RETRY_MS, UPDATE_DEFER_RETRY_MS]);
+    expect(r.deferrals).toEqual([1, 2]);
+  });
+
+  it("fails the device row with a clear reason when the lock stays held, instead of installing forever", async () => {
+    const r = run([deferred]);
+    const failed = await r.outcome;
+    expect(failed).toMatchObject({ state: "failed", at: 5 });
+    expect(failed!.error).toContain("another updater (cast update, or a command's update check) held this install's update lock for 5 minutes");
+    expect(r.performs()).toBe(UPDATE_DEFER_RETRIES + 1);
+    expect(r.waits).toHaveLength(UPDATE_DEFER_RETRIES);
+  });
+
+  it("fails at once on any other error", async () => {
+    expect(await run([{ success: false, error: "checksum_mismatch_darwin-arm64" }]).outcome).toEqual({ state: "failed", error: "checksum_mismatch_darwin-arm64", at: 5 });
+    expect(await run([{ success: false }]).outcome).toEqual({ state: "failed", error: "unknown error", at: 5 });
   });
 });
 
@@ -294,6 +324,18 @@ describe("two updaters on one install (ct-102415)", () => {
       expect(readFileSync(exe)).toEqual(Buffer.from(BIG));
       // The lock is released: the next round runs.
       expect((await run(updater())).success).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("control: unlocked, the same two updaters break each other's download, so the fixture still races", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "cast-update-race-"));
+    try {
+      const { updater } = await install(dir);
+      const run = (u: ReturnType<typeof updater>) => updateWithRetry(() => u.performUpdate(), noPause);
+      const results = await Promise.all([run(updater()), run(updater())]);
+      expect(results.filter((r) => r.success).length).toBeLessThan(2);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -335,7 +335,7 @@ import {
   PERMISSION_HOOK_MAX_BODY,
   type PermissionHookInput,
 } from "./permissionHookWait.js";
-import { getVersion, performUpdate, ensureCastAlias, checkForUpdates, isDevMode, installChannel, updater, forcedUpdateWaits, updateRunAfter } from "./update.js";
+import { getVersion, performUpdate, ensureCastAlias, checkForUpdates, isDevMode, installChannel, updater, forcedUpdateWaits, selfUpdateOutcome } from "./update.js";
 import { isManagedInstall } from "./managedInstall.js";
 import { readInventoryAsync, toInvocableList } from "./capabilities/inventory.js";
 import {
@@ -5750,8 +5750,12 @@ async function runSelfUpdate(why: string, at?: number): Promise<void> {
   logLifecycle("update_start", `${why} from v${currentVersion}`);
   void sendHeartbeat().catch(() => {});
   await flushRemoteLogs();
-  const result = await performUpdate();
-  if (result.success) {
+  // A round another updater deferred is tried again here, with the row still installing.
+  const failed = await selfUpdateOutcome(performUpdate, {
+    at,
+    onDeferred: (n) => logLifecycle("update_deferred", `Update deferred from v${currentVersion}: another updater holds the lock (try ${n})`),
+  });
+  if (!failed) {
     // The refresh this daemon's successor runs on boot rewrites the
     // harness; someone asked for this update, so its changes are
     // recorded as requested, not automatic.
@@ -5761,10 +5765,8 @@ async function runSelfUpdate(why: string, at?: number): Promise<void> {
     restartDaemonProcess(why);
     return;
   }
-  // Another process installing this install is not a failure: the row keeps
-  // the request open and the next beat asks again.
-  updateRun = updateRunAfter(result.error, at);
-  logLifecycle(updateRun ? "update_failed" : "update_deferred", `Update ${updateRun ? "failed" : "deferred"} from v${currentVersion} error=${result.error}`);
+  updateRun = failed;
+  logLifecycle("update_failed", `Update failed from v${currentVersion} error=${failed.error}`);
   await flushRemoteLogs();
   void sendHeartbeat().catch(() => {});
 }

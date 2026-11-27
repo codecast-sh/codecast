@@ -68,7 +68,8 @@ policy = "release"
 # A send can wait up to 80 min for a release in flight before it cuts (scripts/cut-cli-release.sh),
 # and finalize up to 90 min for CI on the source commit.
 deadline = "4h"
-# The fallback serves a runner whose installed cast predates --deploy; drop it after the next CLI release.
+# A runner whose installed cast has --deploy runs the finish (releaseFinish.ts); one whose cast
+# predates it takes the else branch, the old global force. Drop the else after the next CLI release.
 finish = "if cast force-update --help 2>&1 | grep -q -- --deploy; then cast force-update $version --deploy $deploy; else cast force-update $version; fi"
 
 # An OTA update to every channel, after the backend it calls is live. The app bundles

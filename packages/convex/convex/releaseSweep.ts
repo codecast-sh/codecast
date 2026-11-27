@@ -7,7 +7,10 @@
 //   - deploy targets holding a commit merged longer ago than the target's
 //     deadline (deployDeadlineMs) that it does not run yet;
 //   - runs that failed in the last two hours outside any incident, not
-//     cancelled, not since re-run, on a task still open;
+//     cancelled, not since re-run, on a task still open, and the pipeline's to
+//     answer for: a failure that is no stop (a crash, a timeout, a station
+//     error no stop exit caught), or a stop at a shared exit still held. A stop
+//     about the change itself (rejected, findings) is its own run's to act on;
 //   - team machines online and still below a floor raised half an hour ago or
 //     more (teamCliFloor.teamFleet);
 //   - sessions whose change is live everywhere and that nothing keeps, yet are
@@ -22,7 +25,7 @@ import { verifyApiToken } from "./apiTokens";
 import { createWorkContext } from "./data";
 import { parseWorkspaceKey } from "./lib/accessKeys";
 import { canAccessConversation } from "./lib/access";
-import { openFlowStopIncidents, stopStationOf, type FlowStopIncident } from "./flowStops";
+import { isFlowStop, openFlowStopIncidents, stopStationOf, type FlowStopIncident } from "./flowStops";
 import { commitBySha, targetDeploys, targetRows } from "./deployTargetsState";
 import { teamFleet } from "./teamCliFloor";
 import { liveRetireRefusal } from "./retireOnLive";
@@ -89,6 +92,8 @@ async function failedRuns(ctx: any, workspace: string, now: number): Promise<Fai
   for (const run of rows) {
     // An incident's runs are listed under it; a queued resume is already acted on; a run with no task cannot be resumed.
     if (run.incident_task_id || run.resume_queued || !run.task_id || isCancelled(run.fail_reason)) continue;
+    // A stop is @release's only at a shared exit (its fingerprint), held while no second change shares it.
+    if (isFlowStop(run.fail_reason) && !run.stop_fingerprint) continue;
     const task: Doc<"tasks"> | null = await ctx.db.get(run.task_id);
     if (!task || isTerminalTaskStatus(task.status)) continue;
     // A later run of the same task is the re-run: this one is history.
