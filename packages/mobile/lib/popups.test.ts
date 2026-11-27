@@ -1,13 +1,25 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { appAlert, appPrompt, closePopup, orderedButtons, outsideTap, showActionSheet, usePopups } from "./popups";
+import { appAlert, appPrompt, closePopup, holdPopups, orderedButtons, outsideTap, showActionSheet, shownPopup, usePopups } from "./popups";
 
 const queue = () => usePopups.getState().queue;
 
-beforeEach(() => usePopups.setState({ queue: [] }));
+beforeEach(() => usePopups.setState({ queue: [], held: false }));
 
 describe("the popup queue", () => {
+  test("the app lock holds every popup, and the unlock shows it again", () => {
+    showActionSheet(undefined, [{ label: "Photo library", onPress: () => {} }]);
+    const sheet = queue()[0];
+    expect(shownPopup(usePopups.getState())).toBe(sheet);
+    holdPopups(true);
+    expect(shownPopup(usePopups.getState())).toBeUndefined();
+    appAlert("Arrived while locked");
+    expect(shownPopup(usePopups.getState())).toBeUndefined();
+    holdPopups(false);
+    expect(shownPopup(usePopups.getState())).toBe(sheet);
+  });
+
   test("one popup at a time; the next waits its turn", () => {
     appAlert("First");
     showActionSheet("Second", [{ label: "Go", onPress: () => {} }]);
