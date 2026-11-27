@@ -1,4 +1,46 @@
+import {
+  BellRing, Bug, CircleCheck, CircleMinus, CircleQuestionMark, FileText, Film, Flag, Folder, GitCommitHorizontal, GitPullRequest,
+  Hexagon, KeyRound, Map as MapIcon, MessageSquare, Network, Phone, Radio, Rocket, Signpost, Target, UserRound, Workflow, Zap,
+  type LucideIcon,
+} from "lucide-react";
 import type { EntityType } from "./entityLinks";
+
+/** Each kind's glyph, drawn in its accent (ACCENT[type].text): the card, every
+ *  list of a kind, and the phone's pills and rows draw these. */
+export const TYPE_ICON: Record<EntityType, LucideIcon> = {
+  session: MessageSquare,
+  task: Target, // replaced by the status disc at render time
+  plan: MapIcon,
+  doc: FileText,
+  trigger: Zap,
+  project: Folder,
+  initiative: Flag,
+  proposal: Network,
+  decision: Signpost,
+  pr: GitPullRequest,
+  commit: GitCommitHorizontal,
+  call: Phone,
+  replay: Film,
+  issue: Bug,
+  metric: BellRing,
+  deploy: Rocket,
+  source: Radio,
+  role: Hexagon,
+  person: UserRound,
+  secret: KeyRound,
+  flow: Workflow,
+  priority: Target,
+};
+
+// One state vocabulary for a decision reference. The pill keeps the
+// decision's yellow in every state (color names the object type); its glyph
+// says whether the question is still open, and a settled one fades.
+export const DECISION_STATE: Record<string, { label: string; color: string; icon: LucideIcon }> = {
+  pending: { label: "Open", color: "text-sol-yellow", icon: CircleQuestionMark },
+  answered: { label: "Answered", color: "text-sol-green", icon: CircleCheck },
+  dismissed: { label: "Dismissed", color: "text-sol-text-dim", icon: CircleMinus },
+  withdrawn: { label: "Withdrawn", color: "text-sol-text-dim", icon: CircleMinus },
+};
 
 // Every class literal in full — Tailwind's scanner never sees a composed
 // string like `hover:${accent.text}`, so composition would silently produce
