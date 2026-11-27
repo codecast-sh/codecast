@@ -258,6 +258,14 @@ export async function openIncidentIfShared(ctx: any, causeId: Id<"tasks">, now: 
 const stoppedBy = (run: Doc<"workflow_runs">, cause: Pick<Doc<"tasks">, "cause">) =>
   run.status === "failed" && isFlowStop(run.fail_reason) && !!run.stop_fingerprint && (cause.cause?.fingerprints ?? []).includes(run.stop_fingerprint);
 
+/** Whether the incident a run is marked with still holds it: that cause open and still the run's stop. A mark left from
+ *  a closed incident, or a run that failed again for another reason, holds nothing. */
+export async function heldByIncident(ctx: { db: any }, run: Doc<"workflow_runs">): Promise<boolean> {
+  if (!run.incident_task_id) return false;
+  const cause: Doc<"tasks"> | null = await ctx.db.get(run.incident_task_id);
+  return !!cause && !isTerminalTaskStatus(cause.status) && stoppedBy(run, cause);
+}
+
 /** Whether a line carries out the run's queued resume (orgLine.planQueuedResumes): a role's run, whether or not lines
  *  run now, so switching Flows off holds it until they are back on (linesRunIn's promise). */
 async function lineResumes(ctx: any, run: Doc<"workflow_runs">): Promise<boolean> {
