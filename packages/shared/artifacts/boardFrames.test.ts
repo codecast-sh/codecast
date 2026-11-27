@@ -105,16 +105,37 @@ describe("collapse and expand", () => {
     expect(box(v3, "el_a").x - box(v3, "el_b").x).toBe(40 - 300);
   });
 
-  test("expanding at the top level pushes down a frame the pill's size now covers", () => {
+  test("folding never moves a neighbour: one parked inside the folded area stays on expand", () => {
     const v0 = themeBoard();
     const v1 = apply(v0, collapseFrameOps(v0, "el_f"));
-    // Someone parks a frame right under the pill while it is folded.
     const v2 = apply(v1, moveFrameOps(v1, "el_g", 0, 100 - 500));
-    expect(box(v2, "el_g").y).toBe(100);
     const v3 = apply(v2, expandFrameOps(v2, "el_f"));
-    expect(box(v3, "el_g").y).toBe(400 + FRAME_SPACING);
-    expect(box(v3, "el_g1").y).toBe(400 + FRAME_SPACING + 64);
+    expect(box(v3, "el_g").y).toBe(100);
     expect(pos(v3, "el_out")).toEqual(pos(v0, "el_out"));
+  });
+
+  test("collapse then expand leaves a sibling that already overlapped the frame where it was", () => {
+    const v0 = board([frame("el_A", 0, 0, 600, 400), sticky("el_a", 40, 64), frame("el_B", 0, 300, 600, 300)]);
+    const v1 = apply(v0, collapseFrameOps(v0, "el_A"));
+    expect(box(v1, "el_B").y).toBe(300);
+    const v2 = apply(v1, expandFrameOps(v1, "el_A"));
+    expect(box(v2, "el_B").y).toBe(300);
+    expect(box(v2, "el_A")).toEqual(box(v0, "el_A"));
+  });
+
+  test("an arrow from inside a nested fold to a sibling hides when the outer frame folds", () => {
+    const v0 = board([
+      frame("el_o", 0, 0, 1000, 800),
+      frame("el_i", 40, 64, 500, 400),
+      sticky("el_x", 80, 128),
+      sticky("el_s", 700, 128),
+      el("el_xs", "connector", { from: "el_x", to: "el_s" }),
+    ]);
+    const v1 = apply(v0, collapseFrameOps(v0, "el_i"));
+    expect(hiddenKeys(v1).has("el_xs")).toBe(false);
+    const v2 = apply(v1, collapseFrameOps(v1, "el_o"));
+    expect([...hiddenKeys(v2)].sort()).toEqual(["el_i", "el_s", "el_x", "el_xs"]);
+    expect((v2.get("el_o")!.collapsed as any).holds).toContain("el_xs");
   });
 
   test("nested: folding the inner frame reflows the outer; folding the outer hides both", () => {
@@ -200,7 +221,7 @@ describe("reflow", () => {
     expect(v1.get("el_line")).toMatchObject({ x1: 650 + dx, y1: 450 + dy, x2: 1000 + dx, y2: 650 + dy });
   });
 
-  test("growing pushes overlapped top-level frames down, cascading; loose elements stay", () => {
+  test("growing pushes what it newly overlaps down, cascading, loose elements included", () => {
     const v0 = board([
       frame("el_a", 0, 0, 600, 300),
       ...[0, 1, 2, 3, 4, 5].map((i) => sticky(`el_a${i}`, 40 + (i % 2) * 260, 64 + Math.floor(i / 2) * 10)),
@@ -218,7 +239,32 @@ describe("reflow", () => {
     expect(c.y).toBe(b.y + b.h + FRAME_SPACING);
     expect(pos(v1, "el_b1")).toEqual({ x: 40, y: b.y + 64 });
     expect(pos(v1, "el_far")).toEqual(pos(v0, "el_far"));
-    expect(pos(v1, "el_loose")).toEqual(pos(v0, "el_loose"));
+    // C now reaches the loose sticky, so it moves down clear of C too.
+    expect(pos(v1, "el_loose")).toEqual({ x: 0, y: c.y + c.h + FRAME_GAP });
+  });
+
+  test("a growing frame never swallows a loose sticky, even over two reflows", () => {
+    const v0 = board([frame("el_F", 0, 0, 500, 260), sticky("el_1", 40, 64), sticky("el_2", 260, 64), sticky("el_P", 40, 280)]);
+    const v1 = apply(v0, reflowFrameOps(v0, "el_F"));
+    const v2 = apply(v1, reflowFrameOps(v1, "el_F"));
+    for (const v of [v1, v2]) {
+      const f = box(v, "el_F"), p = box(v, "el_P");
+      expect(overlaps(f, p)).toBe(false);
+      expect(p.y).toBeGreaterThanOrEqual(f.y + f.h);
+    }
+    expect(box(v1, "el_F").h).toBeGreaterThan(260);
+  });
+
+  test("reflowing a frame already laid out writes nothing", () => {
+    const v0 = board([
+      frame("el_f", 0, 0, 600, 1200),
+      sticky("el_a", 50, 300),
+      sticky("el_b", 350, 310, { h: 400 }),
+      sticky("el_c", 50, 700),
+      el("el_t", "text", { x: 100, y: 900, w: 300, h: 32, text: "To summarize", size: 20 }),
+    ]);
+    const v1 = apply(v0, reflowFrameOps(v0, "el_f"));
+    expect(reflowFrameOps(v1, "el_f")).toEqual([]);
   });
 
   test("shrinking leaves neighbours where they are", () => {
