@@ -186,21 +186,16 @@ html.light .board-root {
   align-items: center;
   gap: 6px;
 }
-/* Theme frames (pl-1145): the discussion status, the "new" mark, the object's chip. */
-.board-frame-status,
+/* Theme frames (pl-1145): the "new" mark, the object's chip. */
 .board-frame-new {
   font-size: 10px;
   font-weight: 600;
   line-height: 16px;
   padding: 0 5px;
   border-radius: 4px;
-  color: var(--sol-text-muted);
-  background: color-mix(in srgb, var(--sol-text-dim) 14%, transparent);
+  color: var(--sol-violet);
+  background: color-mix(in srgb, var(--sol-violet) 14%, transparent);
 }
-.board-frame-status.is-leaning { color: var(--sol-blue); background: color-mix(in srgb, var(--sol-blue) 14%, transparent); }
-.board-frame-status.is-decided { color: var(--sol-green); background: color-mix(in srgb, var(--sol-green) 16%, transparent); }
-.board-frame-status.is-parked { color: var(--sol-text-dim); background: color-mix(in srgb, var(--sol-text-dim) 10%, transparent); }
-.board-frame-new { color: var(--sol-violet); background: color-mix(in srgb, var(--sol-violet) 14%, transparent); }
 .board-frame-chip { display: inline-flex; align-items: center; min-width: 0; font-weight: 500; cursor: pointer; }
 /* Reflow and Collapse sit at the title's height, clear of the frame's right edge and of each other.
    They show while the pointer is anywhere in the frame's box or the band above it (useFrameHover). */
