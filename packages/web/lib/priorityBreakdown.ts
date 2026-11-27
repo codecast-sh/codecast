@@ -4,10 +4,16 @@
 // history, so past days use today's ranks.
 import type { PriorityHistory } from "@codecast/shared/contracts/priorities";
 
-/** Top to bottom of a day's stack: no priority, priorities 4+, priorities 1–3. */
+/**
+ * Top to bottom of a day's stack: no priority, priorities 4+, priorities 1–3,
+ * lightest to darkest on a light page (the reverse on a dark one). Composited
+ * on the page, the parts stay at least 45 grey levels apart and no priority
+ * 30 from the page, in every built-in theme light and dark, so a grayscale
+ * screen (Daylight) tells them apart (lib/__tests__/priorityBreakdown.test.ts).
+ */
 export const TIERS = [
-  { key: "none", word: "No priority", fill: "var(--sol-text-dim)", opacity: 0.3 },
-  { key: "rest", word: "Priorities 4+", fill: "var(--sol-green)", opacity: 0.45 },
+  { key: "none", word: "No priority", fill: "var(--sol-text-dim)", opacity: 0.34 },
+  { key: "rest", word: "Priorities 4+", fill: "var(--sol-green)", opacity: 0.66 },
   { key: "top", word: "Priorities 1–3", fill: "var(--sol-green)", opacity: 1 },
 ] as const;
 export type Tier = (typeof TIERS)[number]["key"];

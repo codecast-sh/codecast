@@ -41,13 +41,16 @@ export function ago(ts: number, now: number): string {
   return h < 24 ? `${h}h` : `${Math.round(h / 24)}d`;
 }
 
-/** The inbox's states (lib/sessionStatus) in the list's words. */
-export function stateOfStatus(s: SessionStatus): PrioritySessionState {
+/**
+ * A mark an inbox draws (lib/sessionStatus) in the milestone vocabulary. A
+ * mark outside it (the error mark of a hosted stop, a done check, a stashed
+ * tray) reads as idle; starting is working; a dismissed row is closed.
+ */
+export function stateOfMark(s: SessionStatus): PrioritySessionState {
   switch (s) {
-    case "needs_you": case "error": return "needs_you";
+    case "needs_you": return "needs_you";
     case "working": case "starting": return "working";
     case "dormant": return "dormant";
-    case "done": return "done";
     case "killed": return "killed";
     default: return "idle";
   }
@@ -63,10 +66,18 @@ export const MILESTONE_STATE_WORD: Record<Exclude<MilestoneStateKind, "none">, s
 };
 
 /**
- * A linked session's state: the inbox's live verdict when the store holds the
- * row (needs you exactly when the sidebar's Needs You holds it), else the
- * server's, except that the server alone never makes it need you: a row the
- * sidebar cannot file sleeps, and someone else's ask reads idle.
+ * A linked session's mark on a milestone is the mark its inbox draws for it.
+ * Web uses the sidebar (GlobalSessionPanel); the phone uses its inbox. A
+ * session the inbox doesn't draw (not in the store, or folded below the
+ * old-session fold) has no inbox mark, and falls back to its own state with
+ * needs_you demoted (dormant if yours, idle if someone else's). A drawn mark
+ * outside the milestone vocabulary (the error mark of a hosted stop, a
+ * done/delivered check) reads as idle. The milestone takes the most urgent of
+ * its live sessions' marks: needs_you › working › dormant › idle.
+ *
+ * `live` answers the drawn mark (hooks/usePriorityModels liveStateOf over
+ * store/inboxMark inboxMarkOf, already in this vocabulary: stateOfMark); the server's
+ * state is the session's own.
  */
 const sessionState = (s: Pick<PriorityLinkedSession, "mine" | "state" | "conversation_id">, live: (conversationId: string) => PrioritySessionState | undefined): PrioritySessionState => {
   const state = live(s.conversation_id);

@@ -8,6 +8,7 @@ import { useState, type ReactNode } from "react";
 import Link from "next/link";
 import { ChevronRight, GitBranch, GitMerge, GitPullRequest, GitPullRequestClosed, Map as MapIcon, Rocket, Workflow } from "lucide-react";
 import type { PriorityPlanRef } from "@codecast/shared/contracts/priorities";
+import { entityRoute } from "@codecast/shared/entities";
 import { isClosedSession, orderByState } from "@codecast/shared/contracts/priorityDerive";
 import { SessionStatusMark } from "../inbox/SessionStatusMark";
 import { taskVisual } from "../TaskStatusBadge";
@@ -40,20 +41,19 @@ function useSessionLabel(s: Pick<SessionLine, "title">): string {
   return `${m[1]}: ${named || m[3] || "work"}`;
 }
 
-export function Connected({ model, m, now, lookups, olderHref }: {
+export function Connected({ model, m, now, lookups }: {
   model: PriorityModel;
   m: MilestoneModel;
   now: number;
   lookups: LinkLookups;
-  /** Where the sessions the row does not carry are: the priority's page, open at this milestone. */
-  olderHref?: string;
 }) {
   const [closedOpen, setClosedOpen] = useState(false);
   const sessions = orderByState(m.sessions);
   const live = sessions.filter((s) => !isClosedSession(s));
   const closed = sessions.filter(isClosedSession);
   const plans: Array<{ plan: PriorityPlanRef; partOf?: boolean }> = [
-    ...(m.plan ? [{ plan: m.plan }] : model.plan ? [{ plan: model.plan }] : []),
+    // Only a plan of the milestone's own: the priority's plan would repeat under every milestone.
+    ...(m.plan && m.plan.short_id !== model.plan?.short_id ? [{ plan: m.plan }] : []),
     ...m.partOf.map((plan) => ({ plan, partOf: true })),
   ];
   const branches = branchesOf(m, lookups);
@@ -75,9 +75,8 @@ export function Connected({ model, m, now, lookups, olderHref }: {
         )}
         {m.more > 0 && (
           <li className={ROW}>
-            {olderHref
-              ? <Link href={olderHref} data-older-sessions className={cn(ROW_LINK, "text-meta text-sol-text-muted hover:text-sol-text hover:underline")}>+{m.more} older {m.more === 1 ? "session" : "sessions"}</Link>
-              : <span data-older-sessions className="text-meta text-sol-text-dim">+{m.more} older {m.more === 1 ? "session" : "sessions"}</span>}
+            {/* A count, not a way in: no page lists them yet. */}
+            <span data-older-sessions className="text-meta text-sol-text-dim">+{m.more} older {m.more === 1 ? "session" : "sessions"}</span>
           </li>
         )}
       </Group>
@@ -93,7 +92,7 @@ export function Connected({ model, m, now, lookups, olderHref }: {
       </Group>
       <Group kind="deploys" label="Deploys" n={deploys.length}>
         {deploys.map((d) => (
-          <Item key={d.id} href="/deploys" icon={<Rocket className={cn("size-3.5", d.status === "live" ? "text-sol-green" : d.status === "failed" ? "text-sol-red" : "text-sol-text-dim")} />} title={d.target} meta={`${d.status} · ${age(d.at, now)}`} />
+          <Item key={d.id} href={(d.short_id && entityRoute("deploy", d.short_id)) || "/deploys"} icon={<Rocket className={cn("size-3.5", d.status === "live" ? "text-sol-green" : d.status === "failed" ? "text-sol-red" : "text-sol-text-dim")} />} title={d.target} meta={`${d.status} · ${age(d.at, now)}`} />
         ))}
       </Group>
       {empty && <li className="py-1 text-meta text-sol-text-dim">Nothing connected yet</li>}
@@ -173,11 +172,11 @@ function PrItem({ pr, state }: { pr: string; state?: string }) {
   const { Icon, color } = PR[st];
   return (
     <li className={ROW}>
-      <a href={`https://github.com/${repo}/pull/${n}`} target="_blank" rel="noreferrer" data-pr={pr} className={cn(ROW_LINK, "hover:underline")}>
+      <Link href={entityRoute("pr", pr) ?? `/pr/${repo}/${n}`} data-pr={pr} className={cn(ROW_LINK, "hover:underline")}>
         <span className="flex size-4 shrink-0 items-center justify-center"><Icon className={cn("size-3.5", color)} aria-hidden /></span>
         <span className="text-ui tabular-nums text-sol-text">#{n}</span>
         <span className="min-w-0 truncate text-meta text-sol-text-dim">{repo.split("/")[1]} · {st}</span>
-      </a>
+      </Link>
     </li>
   );
 }

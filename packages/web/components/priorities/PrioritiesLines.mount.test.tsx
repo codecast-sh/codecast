@@ -16,7 +16,7 @@ const React = await import("react");
 const { useInboxStore } = await import("../../store/inboxStore");
 const { default: PrioritiesPage } = await import("./PrioritiesPage");
 const { default: PrioritiesRoute } = await import("../../app/priorities/page");
-const { HISTORY, KINDS, NOW, PL_1075, ROWS, block, links, listOf, mount, row, seedKinds, seedNeedsYou, sess, step, view } = await import("../../test-helpers/prioritiesList");
+const { HISTORY, HOUR, KINDS, NOW, PL_1075, ROWS, block, links, listOf, mount, row, seedKinds, seedNeedsYou, sess, step, view } = await import("../../test-helpers/prioritiesList");
 
 const openLine = async (b: HTMLElement, key: string) => {
   const { act } = React as any;
@@ -48,7 +48,29 @@ test("an open milestone lists what it is connected to, grouped by kind under lab
   }
 }, 60_000);
 
-test("sessions sort as the sidebar files them, then by recency; closed ones fold under \"n closed\"; older ones open the page", async () => {
+test("a connected PR opens the app's own pull request page and a deploy its own page; a plan shows only when it is the milestone's own", async () => {
+  seedKinds();
+  useInboxStore.getState().syncTable("teamDeploys", [{ _id: "dep8001", short_id: "dp-8001", workspace: `team:${TEAM_ID}`, target: "web", status: "live", live_at: NOW - HOUR, created_at: NOW - 2 * HOUR, sessions: [], tasks: [{ short_id: "ct-8001" }] }] as any, { isDelta: true });
+  // The priority's own plan is pl-1075: a milestone whose link names it lists no plan; one with a plan of its own lists that.
+  const OWN = { short_id: "pl-77", title: "Its own plan", done: 1, total: 3, size: 3 };
+  const r = { ...KINDS, plan: PL_1075, links: [{ ...KINDS.links[0], plan: PL_1075 }, { ...KINDS.links[1], plan: OWN }] };
+  const page = await mount(view({ rows: [r] }));
+  try {
+    const c = await openLine(block(page.container, "pri-9"), "s1");
+    expect(c.querySelector("[data-pr]")!.getAttribute("href")).toBe("/pr/codecast-sh/codecast/4580");
+    expect(c.querySelector("[data-pr]")!.hasAttribute("target")).toBe(false);
+    expect(c.querySelector('[data-group="deploys"] a')!.getAttribute("href")).toBe("/deploys?deploy=dp-8001");
+    expect(c.querySelector('[data-group="plans"]')).toBeNull();
+    const c2 = await openLine(block(page.container, "pri-9"), "s2");
+    expect(c2.querySelector('[data-group="plans"]')!.textContent).toContain(OWN.title);
+    expect(c2.textContent).not.toContain(PL_1075.title);
+  } finally {
+    await page.unmount();
+    useInboxStore.setState({ tasks: {} } as any);
+  }
+}, 60_000);
+
+test("sessions sort as the sidebar files them, then by recency; closed ones fold under \"n closed\"; older ones are a count", async () => {
   const r = row(12, "Sorted", 1, [step("s1", "Many sessions", "critical")], {
     links: [links("s1", [
       sess("idle1", "Idle one", "idle", 1),
@@ -77,9 +99,11 @@ test("sessions sort as the sidebar files them, then by recency; closed ones fold
     expect(listed()).toEqual(["needs_you", "working", "working", "dormant", "idle", "done", "killed"]);
     // Opening the fold leaves the milestone open.
     expect(block(page.container, "pri-12").querySelector('[data-milestone="s1"] [role=button]')!.getAttribute("aria-expanded")).toBe("true");
+    // No page lists the older ones yet, so the count promises no way in: plain text, no link.
     const older = c.querySelector("[data-older-sessions]")!;
     expect(older.textContent).toBe("+2 older sessions");
-    expect(older.getAttribute("href")).toBe("/priorities/pri-12?milestone=s1");
+    expect(older.tagName).toBe("SPAN");
+    expect(older.closest("a")).toBeNull();
   } finally {
     await page.unmount();
     unseed();

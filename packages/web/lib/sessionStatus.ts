@@ -27,7 +27,7 @@
 //   - Process liveness (/sessions' "active / idle 2h+ / dead / hibernated") is
 //     a different axis; it stays on that page as process facts, not a status.
 
-import { DEAD_AGENT_STATUSES, deriveLiveAt, isExitAfterDone, personStateOf, type InboxBucket, type WorkState } from "@codecast/shared/contracts";
+import { DEAD_AGENT_STATUSES, deriveLiveAt, isExitAfterDone, personStateOf, type InboxBucket, type ThreadStateStatus, type WorkState } from "@codecast/shared/contracts";
 import { rowPinPredatesTurn, rowWakeInputs } from "@codecast/shared/contracts/inboxPlacement";
 import { producingByOutput } from "@codecast/shared/contracts/subagentProducing";
 import type { PlanState } from "@codecast/shared/tasks";
@@ -197,6 +197,27 @@ export type StatusLive = {
   /** A pending `cast decide` (or a hosted approval) waits on the person. */
   asking?: boolean;
 };
+
+/** The status a grouped inbox section declares for the cards it draws, by its
+ *  key (GlobalSessionPanel renderSection keys): the card reads its section
+ *  from it (cardSectionOf). */
+export const INBOX_SECTION_DECLARED_STATUS: Record<string, ThreadStateStatus | undefined> = {
+  needs_input: "blocked", done: "done", new_results: "done", dormant: "dormant",
+};
+
+/** The section a card is drawn in, as the panel hands it over: the section's
+ *  variant and the status it declares. Null: a section that says where, not
+ *  what (Pinned, New, Questions, Couldn't finish), or no sections at all. */
+export function cardSectionOf(variant: "default" | "working" | "dismissed" | "stashed" | "snoozed" | undefined, sectionStatus: ThreadStateStatus | undefined): StatusSection | null {
+  if (variant === "working") return "working";
+  if (variant === "stashed") return "stashed";
+  if (variant === "dismissed") return "dismissed";
+  if (variant === "snoozed") return "snoozed";
+  if (sectionStatus === "blocked") return "needs_input";
+  if (sectionStatus === "done") return "done";
+  if (sectionStatus === "dormant") return "dormant";
+  return null;
+}
 
 /** A placement (store railRowPlacement / placedRailPlacement): its bucket and the work state it stamps. */
 export type StatusPlacement = { bucket: string; state: WorkState };

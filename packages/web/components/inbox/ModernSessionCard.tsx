@@ -12,7 +12,7 @@ import { threadStateView } from "../../lib/threadState";
 import { formatModel } from "../../lib/conversationProcessor";
 import { formatDateFull } from "../../lib/utils";
 import { sessionIdentity } from "../../lib/sessionIdentity";
-import { SESSION_STATUS, sessionStatusOf, type StatusSection } from "../../lib/sessionStatus";
+import { SESSION_STATUS, cardSectionOf, sessionStatusOf } from "../../lib/sessionStatus";
 import { sessionCardLine } from "../../lib/sessionCardLine";
 import { getProjectName, isFork, showsBlockedBadge, railRowPlacement } from "../../store/inboxStore";
 import { useSessionCardDrag } from "../../hooks/useSessionCardDrag";
@@ -51,18 +51,6 @@ import { PriorityRankChip } from "./PriorityRankChip";
 // and a hairline in the accent. Everything the Classic card drew that these
 // three lines leave out is in a tooltip (the time's and the line's) or the
 // card's context menu.
-
-/** The section the panel draws the card in, as its props say it. */
-function sectionOfProps(variant: SessionCardViewProps["variant"], sectionStatus: SessionCardViewProps["sectionStatus"]): StatusSection | null {
-  if (variant === "working") return "working";
-  if (variant === "stashed") return "stashed";
-  if (variant === "dismissed") return "dismissed";
-  if (variant === "snoozed") return "snoozed";
-  if (sectionStatus === "blocked") return "needs_input";
-  if (sectionStatus === "done") return "done";
-  if (sectionStatus === "dormant") return "dormant";
-  return null;
-}
 
 const SUB_ARROW = (
   <>
@@ -146,7 +134,7 @@ export function ModernSessionCardView({
   // with the header above it), a subagent standing as its own card included; a
   // row drawn under another card and a list with no sections read the row's
   // own placement, the verdict the rail would file it under.
-  const section = nested ? null : sectionOfProps(variant, sectionStatus);
+  const section = nested ? null : cardSectionOf(variant, sectionStatus);
   const status = sessionStatusOf({
     row: session,
     section,

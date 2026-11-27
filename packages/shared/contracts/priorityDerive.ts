@@ -75,13 +75,14 @@ export const isClosedSession = (s: Pick<ActionSession, "state">) => s.state === 
 const STATE_RANK: Record<PrioritySessionState, number> = { needs_you: 0, working: 1, dormant: 2, idle: 3, done: 4, killed: 5 };
 
 /**
- * Sessions a person drives before workflow runs, closed runs last; then needs
- * you > working > dormant > idle, then the most recent. This orders the
- * server's own states (convex priorityRead), where someone else's needs_you
- * is theirs to answer, so it ranks as idle.
+ * Live sessions a person drives, then live workflow runs, then every closed
+ * session (so a cut, convex priorityRead's per-milestone cap, never keeps a
+ * closed one over a live one); within each, needs you > working > dormant >
+ * idle, then the most recent. This orders the server's own states, where
+ * someone else's needs_you is theirs to answer, so it ranks as idle.
  */
 export function orderSessions<S extends ActionSession>(list: readonly S[]): S[] {
-  const tier = (s: S) => (s.workflow ? (isClosedSession(s) ? 2 : 1) : 0);
+  const tier = (s: S) => (isClosedSession(s) ? 2 : s.workflow ? 1 : 0);
   const rank = (s: S) => (s.state === "needs_you" && s.mine === false ? STATE_RANK.idle : STATE_RANK[s.state]);
   return [...list].sort((a, b) => tier(a) - tier(b) || rank(a) - rank(b) || b.last_active_at - a.last_active_at);
 }

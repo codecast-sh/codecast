@@ -386,11 +386,6 @@ export function milestoneStart(
 
 const shortDate = (at: number) => new Date(at).toLocaleDateString("en-US", { month: "short", day: "numeric" });
 
-/** A priority's page, open at one of its milestones (PriorityPage reads `milestone`). */
-export function milestoneHref(shortId: string, stepKey: string): string {
-  return `${priorityHref(shortId)}?milestone=${encodeURIComponent(stepKey)}`;
-}
-
 /** What a finished or past priority's row says where its count would be. */
 export function pastBadge(row: Pick<PriorityRow, "status" | "done_at" | "last_active_at">): string {
   if (row.status === "done") return `✓ Done ${row.done_at ? shortDate(row.done_at) : ""}`.trim();

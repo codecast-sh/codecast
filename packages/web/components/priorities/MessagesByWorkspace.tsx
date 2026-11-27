@@ -56,6 +56,7 @@ function DayBar({ space, day, label, today, allThatDay, peak }: { space: Workspa
               align="center"
               className="w-60"
               triggerClassName="flex w-full"
+              focusable
               card={
                 <div className="space-y-1.5 p-3">
                   <div className="flex items-center gap-2 text-ui font-semibold text-sol-text">
@@ -74,7 +75,8 @@ function DayBar({ space, day, label, today, allThatDay, peak }: { space: Workspa
                 </div>
               }
             >
-              <i data-tier={t.key} className="block w-full rounded-[2px] hover:brightness-110" style={{ height: heights[t.key], background: t.fill, opacity: t.opacity }} />
+              {/* Focusable by a tap (never a Tab stop), so a touch screen opens the card. */}
+              <i data-tier={t.key} tabIndex={-1} className="block w-full rounded-[2px] outline-none hover:brightness-110 focus:brightness-110" style={{ height: heights[t.key], background: t.fill, opacity: t.opacity }} />
             </HoverCard>
           ))}
         </span>
