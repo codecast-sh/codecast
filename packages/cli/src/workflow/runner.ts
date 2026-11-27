@@ -1530,13 +1530,18 @@ export function gatePayload(node: WorkflowNode, graph: WorkflowGraph, context: R
  * question that already names the repository stands. Every card the runner posts goes through here: a gate's
  * (gatePayload, so a segment's gate too, the change flow's CI-edit card among them) and a failure's (queueTaskDecision).
  */
-function inRepo(question: string, graph: Pick<WorkflowGraph, "takes">, context: Record<string, string>): string {
+function inRepo(question: string, graph: Pick<WorkflowGraph, "nodes">, context: Record<string, string>): string {
   const repo = context["repo_name"];
-  // A flow that takes a change (takes="…,branch": flowPool takesSessionChange) merges one; any other run in a worktree
-  // has a branch too, and merges nothing.
-  if (!repo || !graph.takes?.includes("branch") || !context["branch"] || new RegExp(`(^|[^\\w-])${repo.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^\\w-]|$)`, "i").test(question.split("\n")[0])) return question;
+  // A run lands a change when its graph has a station that lands one (the change flow's Merge, the line's and the
+  // personal Ship's Ship, a land segment's Land), not an exit named so; a review, intent or check run takes a branch
+  // too, and lands nothing.
+  if (!repo || !landsChange(graph) || !context["branch"] || new RegExp(`(^|[^\\w-])${repo.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^\\w-]|$)`, "i").test(question.split("\n")[0])) return question;
   return `In ${repo}: ${question}`;
 }
+
+const LANDING_STATIONS = new Set(["merge", "ship", "land"]);
+const landsChange = (graph: Pick<WorkflowGraph, "nodes">) =>
+  [...graph.nodes.values()].some((n) => n.type !== "exit" && LANDING_STATIONS.has(n.id.split("__").pop() ?? ""));
 
 /** The repository a checkout is of, as its origin names it (owner/name's name), else its directory's name. */
 function repoNameOf(cwd: string): string {
