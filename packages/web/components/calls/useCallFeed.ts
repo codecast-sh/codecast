@@ -285,8 +285,11 @@ export function useAddLiveFeed(opts: {
   const { roomKey, liveTranscriptId, routes, teamId, getRoom } = opts;
 
   return useCallback(
-    async (target: FeedTarget, opts?: { face?: boolean }) => {
+    // `scribe`: the new session is the call's Scribe, briefed with its own
+    // instructions and seated in the slot `claim` holds (transcripts.inviteScribe).
+    async (target: FeedTarget, opts?: { face?: boolean; scribe?: { claim: number; instructions: string } }) => {
       if (!roomKey) return;
+      const scribe = opts?.scribe;
       let route: { kind: "session" | "doc" | "slack"; target: string } | null = null;
       const face = opts?.face === false ? { face: false } : {};
       if (target.kind === "session") route = { kind: "session", target: target.id };
@@ -308,6 +311,10 @@ export function useAddLiveFeed(opts: {
             (stubId) => {
               stub = stubId;
               character = characterForRoom(stubId, charactersInRoom(routes ?? []));
+              if (scribe) {
+                character = { ...character, name: "Scribe" };
+                return scribe.instructions;
+              }
               return huddleFeedBriefing({ name: character.name, label });
             },
             (id) => {
@@ -340,12 +347,15 @@ export function useAddLiveFeed(opts: {
               target: route.target,
               mode: "live",
               ...face,
+              ...(scribe ? { role: "scribe" as const, claim: scribe.claim } : {}),
             });
             return;
           } catch (err) {
-            if (!String(err).includes("ended")) throw err;
+            // Scribe's claim lives on the transcript, so a fresh one cannot seat it.
+            if (scribe || !String(err).includes("ended")) throw err;
           }
         }
+        if (scribe) throw new Error("The huddle stopped transcribing, so Scribe would hear nothing");
         const room = getRoom();
         if (!room) {
           // A recording has no room to fall back into: its transcript IS the
