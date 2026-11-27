@@ -59,6 +59,11 @@ describe("the daemon build id at a commit", () => {
     expect(decideForce("a".repeat(40), { sha: "a".repeat(40), floor: "1.1.300" }, unread).force).toBe(false);
   });
 
+  test("forces, and says so, when the new release's own commit cannot be read", () => {
+    const unread = (sha: string) => { if (sha.startsWith("b")) throw new Error("git archive failed"); return "old-build"; };
+    expect(decideForce("b".repeat(40), { sha: "a".repeat(40), floor: "1.1.300" }, unread)).toEqual({ force: true, reason: "could not read bbbbbbbbbb: forced" });
+  });
+
   test("forces, and says so, when the commit of the release the floor names cannot be read", () => {
     const r = repo();
     try {

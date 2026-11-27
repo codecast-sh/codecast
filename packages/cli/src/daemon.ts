@@ -335,7 +335,7 @@ import {
   type PermissionHookInput,
 } from "./permissionHookWait.js";
 import { getVersion, performUpdate, ensureCastAlias, checkForUpdates, isDevMode, installChannel, updater } from "./update.js";
-import { forcedUpdateWaits, selfUpdateOutcome } from "./daemonSelfUpdate.js";
+import { forcedUpdateWaits, selfUpdateOutcome, watchdogUpdateReport } from "./daemonSelfUpdate.js";
 import { compareVersions } from "@platform/cli-kit/update";
 import { isManagedInstall } from "./managedInstall.js";
 import { readInventoryAsync, toInvocableList } from "./capabilities/inventory.js";
@@ -35482,8 +35482,9 @@ export async function runWatchdog(): Promise<void> {
         daemonAlive = false;
       }
     } else {
-      logLine(`Watchdog update failed: ${result.error}`);
-      await sendWatchdogLog("warn", `[LIFECYCLE] watchdog_update_failed: current=${version} target>=${minCliVersion} error=${result.error}`);
+      const { error, result: deferred } = watchdogUpdateReport(result);
+      logLine(error ?? deferred!);
+      if (error) await sendWatchdogLog("warn", `[LIFECYCLE] watchdog_update_failed: current=${version} target>=${minCliVersion} error=${result.error}`);
     }
   }
 
@@ -35541,8 +35542,7 @@ export async function runWatchdog(): Promise<void> {
         body: JSON.stringify({
           api_token: config.auth_token,
           command_id: updateCmd.id,
-          result: result.success ? "Updated by watchdog" : undefined,
-          error: result.success ? undefined : `Watchdog update failed: ${result.error}`,
+          ...watchdogUpdateReport(result),
         }),
       }).catch(() => {});
       if (result.success) {
