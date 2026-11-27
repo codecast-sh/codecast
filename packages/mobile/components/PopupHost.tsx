@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ComponentType, type ReactNode } from 'react';
 import {
-  Animated, BackHandler, Easing, Keyboard, KeyboardAvoidingView, PanResponder, Platform, Pressable, StyleSheet,
+  Animated, Easing, Keyboard, KeyboardAvoidingView, Modal, PanResponder, Platform, Pressable, StyleSheet,
   View, useWindowDimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -9,18 +9,22 @@ import * as Haptics from 'expo-haptics';
 import { Text, TextInput } from '@/components/Themed';
 import { Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { optionalNative } from '@/lib/optionalNative';
-import { closePopup, orderedButtons, outsideTap, usePopups, type AlertButton, type Popup } from '@/lib/popups';
+import { closePopup, orderedButtons, outsideTap, shownPopup, usePopups, type AlertButton, type Popup } from '@/lib/popups';
 
 // A popup is drawn in its own window above everything, a modal screen or an
-// open sheet included, the way a system alert is. A binary without the screens
-// module draws it over the app's root instead.
+// open sheet included, the way a system alert is. On iOS that window is the
+// screens module's overlay; a binary without it draws over the app's root. On
+// Android every Modal is a dialog window stacked over the root, so a popup drawn
+// on the root opened behind an open sheet (the new session sheet's photo menu
+// never showed, and each tap queued another): there the popup is a Modal of its
+// own, opened after the sheet and so above it.
 const FullWindowOverlay: ComponentType<{ children: ReactNode }> | null = Platform.OS === 'ios'
   ? optionalNative('RNSModule', () => require('react-native-screens').FullWindowOverlay)
   : null;
 
 /** Mounted once at the root: the popup at the head of lib/popups' queue. */
 export function PopupHost() {
-  const head = usePopups((s) => s.queue[0]);
+  const head = usePopups(shownPopup);
   if (!head) return null;
   const body = <PopupView key={head.id} popup={head} />;
   return FullWindowOverlay ? <FullWindowOverlay>{body}</FullWindowOverlay> : body;
@@ -61,11 +65,6 @@ function PopupView({ popup }: { popup: Popup & { id: number } }) {
     if (t.close) leave(t.run);
   };
 
-  useEffect(() => {
-    const sub = BackHandler.addEventListener('hardwareBackPress', () => { tapOutside(); return true; });
-    return () => sub.remove();
-  });
-
   const pan = useRef(PanResponder.create({
     onMoveShouldSetPanResponder: (_e, g) => g.dy > 8 && Math.abs(g.dy) > Math.abs(g.dx),
     onPanResponderMove: (_e, g) => drag.setValue(Math.max(0, g.dy)),
@@ -75,7 +74,7 @@ function PopupView({ popup }: { popup: Popup & { id: number } }) {
     },
   })).current;
 
-  return (
+  const view = (
     <View style={StyleSheet.absoluteFill}>
       <Animated.View style={[StyleSheet.absoluteFill, styles.backdrop, { opacity: shown }]}>
         <Pressable style={StyleSheet.absoluteFill} onPress={tapOutside} accessibilityLabel="Close" />
@@ -112,6 +111,13 @@ function PopupView({ popup }: { popup: Popup & { id: number } }) {
         </KeyboardAvoidingView>
       )}
     </View>
+  );
+  if (Platform.OS !== 'android') return view;
+  // The dialog window takes the back button, so it reaches the popup here.
+  return (
+    <Modal visible transparent animationType="none" statusBarTranslucent navigationBarTranslucent onRequestClose={tapOutside}>
+      {view}
+    </Modal>
   );
 }
 
