@@ -17,7 +17,6 @@ import { PRCommits } from "../../../../../components/pr/PRCommits";
 import { PRGuide } from "../../../../../components/pr/PRGuide";
 import { PRHeader } from "../../../../../components/pr/PRHeader";
 import { MergeMenu, MoreMenu, ReviewMenu } from "../../../../../components/pr/PRActions";
-import { ShipControl } from "../../../../../components/ShipControl";
 import { PRLineThread, type NoteMode } from "../../../../../components/pr/PRThread";
 import { PRReviewBar } from "../../../../../components/pr/PRReviewBar";
 import { PRTimeline } from "../../../../../components/pr/PRTimeline";
@@ -519,7 +518,6 @@ export function PRContent({
                 onWalk={() => jumpTo(openThreadStops[0].file, openThreadStops[0].key)}
               />
             )}
-            {isAuthenticated && pr.state === "open" && <ShipControl target={{ kind: "pull_request", id: String(pr._id) }} size="compact" />}
             {isAuthenticated && <MergeMenu pr={pr} />}
             <MoreMenu pr={pr} canWrite={isAuthenticated} onEditTitle={editTitle} />
           </>

@@ -15,7 +15,10 @@ import { useCheckouts, useSyncCheckouts } from "../../hooks/useSyncCheckouts";
 import { useDeployLines, useSyncDeployLines } from "../../hooks/useDeployLines";
 import { useShipping } from "../../hooks/useSyncShipping";
 import { isGoing, orderTargets, productionOf, recordTargets, targetNow, targetTone, type DeployTargetRow, type TargetTone } from "../../lib/deploys/targets";
-import type { BoardView } from "../../lib/deploys/board";
+import type { BoardView, OpenPr } from "../../lib/deploys/board";
+import { normalizeRepository } from "@codecast/shared/contracts";
+import { useSyncCollection } from "../../hooks/useSyncCollection";
+import { useCollectionRows } from "../../hooks/useCollectionRows";
 import { useDeployPress } from "../../hooks/useDeployPress";
 import { FOCUS_PARAMS, focusRef, focusRepository, focusSettled, focusTarget, pickTarget, reachAnyDeploy, targetKey, type DeployFocus } from "../../lib/deploys/focus";
 import { useDeployReach } from "../../hooks/useDeployReach";
@@ -66,6 +69,7 @@ export function DeploysPage({ initialTarget, initialTeam, initialDeploy, initial
   const pickShow = (v: BoardView) => pickFilters(v, mine);
   const pickMine = (on: boolean) => pickFilters(show, on);
   const me = useInboxStore((s) => (s.currentUser as { _id?: string } | null)?._id ?? null);
+  const meLogin = useInboxStore((s) => (s.currentUser as { github_username?: string } | null)?.github_username ?? null);
   // Shipping paints from the store; a run whose PR has not opened finds its repository by the checkout it runs in.
   // Web goes live before the backend that answers it: a failed read with nothing stored reads as unavailable.
   const shipping = useShipping(teamId);
@@ -100,6 +104,9 @@ export function DeploysPage({ initialTarget, initialTeam, initialDeploy, initial
   // A deploy link opens at that deploy's target; a change's link opens where its reach says (focusAt), not at the deploy that found the team.
   const want = pickedId ?? (initialDeploy && where ? targetKey(where.target, where.repository) : null) ?? focusAt?._id ?? null;
   const picked = pickTarget(ordered, want);
+  // Every open pull request of the picked target's repository, whether or not a Ship run carries it (Shipping draws
+  // the ones no run does). The timeline's feeder reads a repository's open PRs whole.
+  const prs = useOpenPullRequests(picked && !picked.record_only ? picked.repository : null);
   // The targets the linked change is on are outlined, the rest dimmed: a run's change reads across every target it goes to.
   const onFocus = useMemo(() => focusTargets(allTargets, deploys, focus, reach), [allTargets, deploys, focus, reach]);
   const press = useDeployPress(teamId, deploys, productions);
@@ -148,7 +155,7 @@ export function DeploysPage({ initialTarget, initialTeam, initialDeploy, initial
       {picked ? (
         <DeploysBoard
           key={picked._id} target={picked} production={productionOf(productions, picked)} deploys={deploys}
-          shipping={shipping.shipping} shippingError={shipping.error} linesByDeploy={linesByDeploy} onLinesWanted={setLineIds} checkouts={checkouts}
+          shipping={shipping.shipping} shippingError={shipping.error} prs={prs} meLogin={meLogin} linesByDeploy={linesByDeploy} onLinesWanted={setLineIds} checkouts={checkouts}
           me={me ? String(me) : null} now={now} priorities={priorities} focus={focus} reach={reach} openDeploy={initialDeploy ?? null}
           show={show} mine={mine} onShow={pickShow} onMine={pickMine} onClearFocus={clearFocus}
           onPress={press.open} onRollback={press.openRollback} onPause={() => press.openPause(picked, allTargets)} onLift={() => press.lift(picked)}
@@ -159,6 +166,23 @@ export function DeploysPage({ initialTarget, initialTeam, initialDeploy, initial
     </div>
     </div>
   );
+}
+
+/** What a pull request's card draws: a change to any of it redraws the column. */
+const openPrSig = (p: OpenPr) => `${p.state}|${p.title}|${p.updated_at}|${p.draft ? 1 : 0}|${p.checks_state ?? ""}|${p.review_decision ?? ""}|${p.mergeable_state ?? ""}|${p.behind_by ?? ""}|${p.head_ref ?? ""}`;
+
+/**
+ * One repository's open pull requests from the store, with the feeder mounted; null while nothing is held and unread.
+ * A repository's answer holds every one of its open PRs (pull_requests.getPRsForTimeline), so a row the store still
+ * holds as open that the answer lacks has closed out of sight: it leaves rather than stand as a card forever.
+ */
+function useOpenPullRequests(repository: string | null): OpenPr[] | null {
+  const repo = repository ? normalizeRepository(repository) : null;
+  const isOpenHere = useMemo(() => (p: OpenPr) => !!repo && p.state === "open" && typeof p.title === "string" && normalizeRepository(p.repository) === repo, [repo]);
+  const { ready } = useSyncCollection("pullRequests", api.pull_requests.getPRsForTimeline, repository ? { repository } : "skip", { dropAbsent: isOpenHere });
+  const where = isOpenHere;
+  const rows = useCollectionRows<OpenPr>("pullRequests", { where, sig: openPrSig });
+  return ready || rows.length ? rows : null;
 }
 
 /** Feeds one shown deploy card's lines into the store (hooks/useDeployLines), whether or not its rows are drawn. */
