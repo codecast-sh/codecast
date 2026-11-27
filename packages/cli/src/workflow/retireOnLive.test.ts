@@ -101,6 +101,36 @@ describe("a daemon asked to retire a session whose change is live", () => {
     expect(s.retires).toEqual([]);
   });
 
+  test("a later edit it committed locally and never pushed keeps it", async () => {
+    const { root, landed } = landedWorld();
+    write(root, "src/api.ts", "export const api = 3;\n");
+    transcript("sess-a", CONV, [
+      tool(root, "Edit", { file_path: path.join(root, "src/api.ts"), old_string: "1", new_string: "2" }, 90_000),
+      tool(root, "Edit", { file_path: path.join(root, "src/api.ts"), old_string: "2", new_string: "3" }, 20_000),
+    ]);
+    git(root, "commit", "-qam", "api 3, local only");
+    const s = server();
+    expect(await retireOnLive(s.call, { conversation_id: CONV, root, since: SINCE, commits: [{ sha: landed }] })).toEqual({ retired: false, reason: "it has commits origin/main lacks: src/api.ts" });
+    expect(s.retires).toEqual([]);
+  });
+
+  test("local commits whose content main already holds (they landed as a squash) do not keep it", async () => {
+    const { root } = landedWorld();
+    write(root, "src/api.ts", "export const api = 3;\n");
+    git(root, "commit", "-qam", "api 3");
+    write(root, "src/api.ts", "export const api = 4;\n");
+    git(root, "commit", "-qam", "api 4");
+    const other = path.join(sandbox, `squash-${worlds}`);
+    execFileSync("git", ["clone", "-q", git(root, "remote", "get-url", "origin"), other]);
+    write(other, "src/api.ts", "export const api = 4;\n");
+    git(other, "commit", "-qam", "api 4 (squash)");
+    git(other, "push", "-q", "origin", "main");
+    git(root, "fetch", "-q", "origin");
+    const squash = git(root, "rev-parse", "origin/main");
+    const s = server();
+    expect(await retireOnLive(s.call, { conversation_id: CONV, root, since: SINCE, commits: [{ sha: squash }] })).toEqual({ retired: true });
+  });
+
   test("a changed file no session's edits account for (a script's output) keeps it", async () => {
     const { root, landed } = landedWorld();
     write(root, "src/generated.ts", "export const g = 1;\n");

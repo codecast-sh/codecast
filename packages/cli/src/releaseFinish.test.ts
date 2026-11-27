@@ -93,7 +93,7 @@ describe("the finish", () => {
       if (path === "/cli/team-cli-floor/set") return o.set ? o.set() : { team: "Acme", version: body.version, changed: true };
       if (path === "/cli/team-cli-floor/fleet") return o.fleet ?? fleet([]);
       if (path === "/cli/team-cli-floor/tell-release") return { told: "release" };
-      if (path === "/cli/team-cli-floor/tell-other-teams") return { told: o.otherTeams ?? 0 };
+      if (path === "/cli/team-cli-floor/tell-other-teams") return { asked: o.otherTeams ?? 0 };
       return { short_id: "dp-9", status: "live" };
     };
     return { calls, post };
@@ -148,7 +148,7 @@ describe("the finish", () => {
     expect(forced).not.toContain("Forced everywhere");
     expect(forced).toContain("Forced: Acme's floor is now 1.1.306.");
     expect(s.calls.find((c) => c.path === "/cli/team-cli-floor/tell-other-teams")!.body).toEqual({ deploy: "dp-9", version: "1.1.306" });
-    expect(forced).toContain("Told 2 other teams' Release Captains.");
+    expect(forced).toContain("Checking 2 other teams with a Release Captain: each whose machines run older is told.");
     const unchanged = server({});
     await finishCliRelease({ root: "/x", deploy: "dp-9", version: "1.1.307", waitMs: 0, post: unchanged.post, buildIdAt: ids(false), log: () => {}, setGlobal });
     expect(asked).toEqual(["1.1.306"]);

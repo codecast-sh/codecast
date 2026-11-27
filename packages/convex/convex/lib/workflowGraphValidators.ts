@@ -37,8 +37,9 @@ export const workflowNodeValidator = v.object({
   asker: v.optional(v.string()),
   answerer: v.optional(v.string()),
   // A run's stop (flowStops.ts): an exit that says the shared pipeline broke, and the segment exit steps and
-  // bookkeeping stations a stop is never resumed at.
-  shared: v.optional(v.boolean()),
+  // bookkeeping stations a stop is never resumed at. A string names the breakage (the incident's key); true, pushed by
+  // a CLI before names and by a bare `shared=true`, names it by the exit's id.
+  shared: v.optional(v.union(v.boolean(), v.string())),
   // The station a run stopped at this exit resumes at, when it is not the one that failed.
   resume: v.optional(v.string()),
   segment: v.optional(v.string()),
