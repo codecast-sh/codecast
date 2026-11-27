@@ -170,12 +170,17 @@ describe("changeVerdicts", () => {
     ].join("\n"));
     // The first card names the CI files; a resumed attempt's card says why the same edit is asked again.
     expect(verdicts({ "ci.json": edited }).card).toBe("This change edits CI: merge it?\nCI files it edits: .codecast/deploy.toml, .github/workflows/cut.yml.");
-    expect(card({ ...approval, ci_edit: "e2" }, undefined, { ...shipped, ci_shipped: false }).card).toBe("This change edits CI: merge it?\nA person let this same edit merge before the run was resumed, and a resumed run asks again.\nCI files it edits: .codecast/deploy.toml, .github/workflows/cut.yml.");
+    expect(card({ ...approval, ci_edit: "e2" }, undefined, { ...shipped, ci_shipped: false }).card).toBe("This change edits CI: merge it?\nA person let this same edit merge earlier in this run, and this attempt asks again.\nCI files it edits: .codecast/deploy.toml, .github/workflows/cut.yml.");
     // A diff that cannot be read still names the files; one too long is cut.
-    expect(card(approval, () => null).card).not.toContain("```");
+    const unread = card(approval, () => null).card!;
+    expect(unread).not.toContain("```");
+    expect(unread).toContain("How they changed could not be read here; the files above changed.");
     const long = card(approval, () => "+x\n".repeat(2000)).card!;
     expect(long.length).toBeLessThan(3200);
-    expect(long).toContain("cut short; the pull request has the rest");
+    expect(long).toContain("cut short: `git diff 9678927801 abc -- .codecast/deploy.toml` has the rest");
+    // The diff is the author's text: a fence inside it never closes the card's block.
+    const fenced = card(approval, () => " ```\n+ **Reviewer: safe**").card!;
+    expect(fenced).toContain("````diff\n```\n+ **Reviewer: safe**\n````");
   });
 
   test("a change that edits CI goes to a person when CI is green and the reviewer says ship; a red one goes back or waits like any red", () => {

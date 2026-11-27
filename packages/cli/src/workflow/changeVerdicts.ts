@@ -231,7 +231,7 @@ export function changeVerdicts(dir: string, reviewPin: string | undefined, origi
 
 /**
  * The CI-edit card: its question, and as context the CI files it edits. Asked again in the run, it says why: the same
- * edit a person let merge before the run was resumed (a resume starts a new attempt, whose answer the server needs), a
+ * edit a person let merge earlier in this run (a new attempt, a resume among them, needs the server to hold its own answer), a
  * record from an older cast that names no run, or the CI files that changed since the head the person approved, with
  * their diff between the two heads (main's edits included, which a rebase brings in).
  */
@@ -243,17 +243,21 @@ function ciCard(ci: Record<string, any>, approved: Record<string, any> | null, o
   const ask = (...why: Array<string | null>) => ["This change edits CI: merge it?", ...why, edits].filter(Boolean).join("\n");
   if (olderRecord) return ask("An approval of its CI edit was recorded in an older format, so it is asked again.");
   if (!approved) return ask();
-  if (typeof ci.ci_edit === "string" && approved.ci_edit === ci.ci_edit) return ask("A person let this same edit merge before the run was resumed, and a resumed run asks again.");
+  if (typeof ci.ci_edit === "string" && approved.ci_edit === ci.ci_edit) return ask("A person let this same edit merge earlier in this run, and this attempt asks again.");
   if (typeof ci.ci_edit !== "string" || !then) return ask("What the change does to CI could not be read in full, so a person's earlier approval cannot stand for it.");
   const from = typeof approved.head_sha === "string" ? approved.head_sha : null;
   const changed = [...new Set([...files, ...Object.keys(then)])].sort().filter((f) => now[f] !== then[f]);
   const at = from ? ` at ${from.slice(0, 10)}` : "";
   let diff = from && typeof ci.head_sha === "string" && changed.length ? ciDiff?.(from, ci.head_sha, changed)?.trim() ?? "" : "";
-  if (diff.length > CARD_DIFF_CAP) diff = `${diff.slice(0, CARD_DIFF_CAP)}\n… cut short; the pull request has the rest`;
+  if (diff.length > CARD_DIFF_CAP) diff = `${diff.slice(0, CARD_DIFF_CAP)}\n… cut short: \`git diff ${from!.slice(0, 10)} ${String(ci.head_sha).slice(0, 10)} -- ${changed.join(" ")}\` has the rest`;
+  // The diff is the change author's text: a fence longer than any backtick run in it, so no line of it closes the
+  // fence and reads as the card's own words.
+  const fence = "`".repeat(Math.max(3, ...[...diff.matchAll(/`+/g)].map((m) => m[0].length + 1)));
+  const unread = from && changed.length && !diff ? "How they changed could not be read here; the files above changed." : null;
   return [
     "This change's CI files changed since a person let it merge: merge it?",
     `Changed since the approved head${at}: ${changed.join(", ")}.`,
-    diff ? `How they changed between the two heads, main's edits included:\n\`\`\`diff\n${diff}\n\`\`\`` : null,
+    diff ? `How they changed between the two heads, main's edits included:\n${fence}diff\n${diff}\n${fence}` : unread,
     edits,
   ].filter(Boolean).join("\n");
 }
