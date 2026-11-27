@@ -2,7 +2,7 @@
 // selection toolbar (mouse path) and the `r` conversation shortcut (keyboard
 // path) so both quote the SAME thing the same way — one resolver, one verb.
 
-import { quoteUnitAt } from "./quoteUnits";
+import { CANVAS_HOST_CLASS, quoteUnitAt } from "./quoteUnits";
 import { createReviewComment } from "./reviewActions";
 
 export type QuoteSelection = {
@@ -13,17 +13,45 @@ export type QuoteSelection = {
   quote: string;
 };
 
-export function resolveQuoteSelection(): QuoteSelection | null {
+// The selected range, wherever it lives. A canvas draws into a shadow root, and
+// the document's Selection reports a selection made inside one as collapsed at
+// the host, though its text is there: only getComposedRanges, handed the
+// canvases' roots, returns where the words really are. A caret (collapsed, no
+// text) returns before any DOM query, since the composer's every keystroke
+// lands here.
+export function liveSelectionRange(): Range | null {
   if (typeof window === "undefined") return null;
   const sel = window.getSelection();
-  if (!sel || sel.isCollapsed || sel.rangeCount === 0) return null;
-  const text = sel.toString().trim();
+  if (!sel || sel.rangeCount === 0) return null;
+  if (!sel.isCollapsed) return sel.getRangeAt(0);
+  if (!sel.toString() || typeof sel.getComposedRanges !== "function") return null;
+  const shadowRoots = Array.from(document.querySelectorAll(`.cc-msg-review .${CANVAS_HOST_CLASS}`), (h) => h.shadowRoot)
+    .filter((r): r is ShadowRoot => !!r);
+  if (!shadowRoots.length) return null;
+  const composed = sel.getComposedRanges({ shadowRoots })[0];
+  const root = composed?.startContainer.getRootNode();
+  if (!composed || composed.collapsed || !(root instanceof ShadowRoot) || composed.endContainer.getRootNode() !== root) return null;
+  const range = document.createRange();
+  range.setStart(composed.startContainer, composed.startOffset);
+  range.setEnd(composed.endContainer, composed.endOffset);
+  return range;
+}
+
+export function resolveQuoteSelection(): QuoteSelection | null {
+  const range = liveSelectionRange();
+  if (!range) return null;
+  // The selection's own text keeps the line breaks between blocks that a
+  // range's text drops.
+  const text = (window.getSelection()?.toString() || range.toString()).trim();
   if (!text) return null;
 
-  const range = sel.getRangeAt(0);
-  const anchorEl = (range.startContainer.nodeType === 1
-    ? (range.startContainer as Element)
-    : range.startContainer.parentElement) as HTMLElement | null;
+  // Inside a canvas, its host stands in for the selection in the transcript.
+  const root = range.startContainer.getRootNode();
+  const anchorEl = (root instanceof ShadowRoot
+    ? root.host
+    : range.startContainer.nodeType === 1
+      ? (range.startContainer as Element)
+      : range.startContainer.parentElement) as HTMLElement | null;
   const region = anchorEl?.closest(".cc-msg-review") as HTMLElement | null;
   if (!region) return null; // selection isn't in a reviewable assistant body
 
