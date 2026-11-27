@@ -125,7 +125,7 @@ export function ModernSessionsRow({ row, inbox, now, busy, expanded, parking, on
       >
         <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
           <span className="flex min-w-0 flex-1 basis-[16rem] items-center gap-2">
-            <span className="flex w-4 shrink-0 justify-center"><SessionStatusMark status={status} /></span>
+            <span className="flex w-4 shrink-0 justify-center"><SessionStatusMark status={status} labeled /></span>
             {row.conversation_id ? (
               <Link href={`/conversation/${row.conversation_id}`} className={`min-w-0 truncate text-body hover:underline underline-offset-2 ${quiet ? "text-sol-text-muted" : "font-medium text-sol-text"}`}>{title}</Link>
             ) : (

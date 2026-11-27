@@ -18,7 +18,7 @@ export function ModernWindowRow({ session, now, onOpen }: { session: InboxSessio
       onClick={() => onOpen(session._id)}
       className="group flex w-full min-w-0 items-center gap-2.5 rounded-control px-3 py-2 text-left transition-colors hover:bg-sol-text/[0.05]"
     >
-      <SessionStatusMark status={status} />
+      <SessionStatusMark status={status} labeled />
       <span className="min-w-0 flex-1 truncate text-ui text-sol-text">{cleanTitle(session.title || "New Session")}</span>
       <SessionStatusWord status={status} className="shrink-0 text-meta" />
       <span className="shrink-0 text-meta tabular-nums text-sol-text-dim">{formatRowTime(session.updated_at, isHostedAgentType(session.agent_type), now)}</span>

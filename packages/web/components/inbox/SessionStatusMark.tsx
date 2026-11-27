@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { Mark } from "../Mark";
 import { SESSION_STATUS, type SessionStatus, type StatusMarkShape } from "../../lib/sessionStatus";
 
 // The status vocabulary's visual half (lib/sessionStatus): the mark and the
@@ -28,13 +29,16 @@ const SHAPES: Record<StatusMarkShape, ReactNode> = {
   cross: <path d="m2.5 2.5 5 5m0-5-5 5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />,
 };
 
-/** A state's mark, in its colour. */
-export function SessionStatusMark({ status, size = 10, className = "" }: { status: SessionStatus; size?: number; className?: string }) {
+/** A state's mark, in its colour, named on hover. `labeled` when the state's
+ *  word sits beside it, so the icon legend leaves it out. */
+export function SessionStatusMark({ status, size = 10, className = "", labeled }: { status: SessionStatus; size?: number; className?: string; labeled?: boolean }) {
   const meta = SESSION_STATUS[status];
   return (
-    <svg data-status-mark={status} viewBox="0 0 10 10" width={size} height={size} aria-hidden className={`shrink-0 ${meta.text} ${className}`}>
-      {SHAPES[meta.mark]}
-    </svg>
+    <Mark id={`session.${status}`} labeled={labeled}>
+      <svg data-status-mark={status} viewBox="0 0 10 10" width={size} height={size} aria-hidden className={`shrink-0 ${meta.text} ${className}`}>
+        {SHAPES[meta.mark]}
+      </svg>
+    </Mark>
   );
 }
 
@@ -53,7 +57,7 @@ export function SessionStatusWord({ status, title, className = "", word }: { sta
 export function SessionStatusLabel({ status, title, className = "" }: { status: SessionStatus; title?: string; className?: string }) {
   return (
     <span className={`inline-flex items-center gap-1.5 whitespace-nowrap ${className}`}>
-      <SessionStatusMark status={status} />
+      <SessionStatusMark status={status} labeled />
       <SessionStatusWord status={status} title={title} className="font-medium" />
     </span>
   );

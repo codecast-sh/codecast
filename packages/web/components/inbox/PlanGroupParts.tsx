@@ -65,7 +65,7 @@ function PlanBand({ status, word, count, note, collapsed, onToggle, attrs }: {
       {...attrs}
       className={`flex w-full items-center gap-2 px-3 pt-3 pb-1 text-left ${SESSION_STATUS[status].text}`}
     >
-      <SessionStatusMark status={status} />
+      <SessionStatusMark status={status} labeled />
       <span className="text-mark font-semibold uppercase tracking-[0.08em]">{word}</span>
       <span className="text-mark tabular-nums opacity-70">{count}</span>
       {note && <span className="text-mark text-sol-text-dim">{note}</span>}

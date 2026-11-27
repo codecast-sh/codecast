@@ -2,6 +2,7 @@
 
 import { toggleAppAddressBar } from "../lib/appAddress";
 import { startTour } from '../tours/engine';
+import { openIconLegend } from "../lib/iconLegend";
 import { toast } from "sonner";
 import { isForeignSession } from "../lib/liveEntities";
 import { resolvePaletteTarget } from "../lib/paletteTarget";
@@ -301,6 +302,8 @@ export function useGlobalShortcutActions() {
   useShortcutAction('ui.toggleShortcutsHelp', useCallback(() => {
     useInboxStore.getState().toggleShortcutsPanel();
   }, []));
+
+  useShortcutAction('ui.iconLegend', useCallback(() => { openIconLegend(); }, []));
 
   useShortcutAction('ui.openTours', useCallback(() => {
     const s = useInboxStore.getState();

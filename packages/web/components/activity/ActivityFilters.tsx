@@ -59,7 +59,7 @@ export function ActivityFilterRow({ view, set, hasTeam, faces, projects, needsCo
         onClick={() => set({ needs: !view.needs })}
         className={`${ROW_BUTTON} ${view.needs ? "border-sol-yellow/50 bg-sol-yellow/10 text-sol-text modern:border-sol-yellow/50 modern:bg-sol-yellow/10 modern:text-sol-text" : "text-sol-text-muted modern:text-sol-text-muted"}`}
       >
-        <SessionStatusMark status="needs_you" />
+        <SessionStatusMark status="needs_you" labeled />
         Needs someone
         <span className={`tabular-nums ${needsCount > 0 ? "text-sol-yellow" : "text-sol-text-dim"}`}>{needsCount}</span>
       </Button>

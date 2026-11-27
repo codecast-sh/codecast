@@ -241,7 +241,7 @@ export const PaletteSessionRow = memo(function PaletteSessionRow({ conv, bucket,
       )}
       {status && (
         <span className="flex flex-shrink-0 items-center gap-1 text-meta">
-          <SessionStatusMark status={status} />
+          <SessionStatusMark status={status} labeled />
           <SessionStatusWord status={status} />
         </span>
       )}

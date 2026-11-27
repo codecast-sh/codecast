@@ -102,7 +102,7 @@ export const ActivityRow = memo(function ActivityRow({ item, relative, showActor
         </button>
         {showActor && <span title={item.actor.name}><Face actor={item.actor} size={18} /></span>}
         <span className="flex shrink-0 items-center gap-1.5 sm:w-24 modern:sm:w-[5.5rem]" title={meta.meaning}>
-          <SessionStatusMark status={item.status} />
+          <SessionStatusMark status={item.status} labeled />
           <SessionStatusWord status={item.status} title={item.reason ?? meta.meaning} className="hidden truncate text-ui font-medium sm:block" />
         </span>
         <Link

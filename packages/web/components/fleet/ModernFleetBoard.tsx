@@ -80,7 +80,7 @@ const ModernFleetTile = memo(function ModernFleetTile({ session, status, bandSay
         <span className="min-w-0 flex-1">
           <span className="block truncate text-body font-semibold text-sol-text">{title}</span>
           <span className="flex min-w-0 items-center gap-1.5 text-ui">
-            {!bandSays && <SessionStatusMark status={status} />}
+            {!bandSays && <SessionStatusMark status={status} labeled />}
             <span className="min-w-0 truncate">
               {!bandSays && <SessionStatusWord status={status} className="font-medium" />}
               {reason && <span className={meta.text}>{!bandSays && <span aria-hidden className="text-sol-text-dim"> · </span>}{reason}</span>}
@@ -107,7 +107,7 @@ function BandHeader({ band, count }: { band: StatusBand; count: number }) {
   const status = BAND_STATUS[band];
   return (
     <h3 className="mb-2 flex h-6 items-center gap-2">
-      <SessionStatusMark status={status} />
+      <SessionStatusMark status={status} labeled />
       <span className="text-mark font-semibold uppercase tracking-[0.08em] text-sol-text-muted">{SESSION_STATUS[status].word}</span>
       <span className="text-mark tabular-nums text-sol-text-dim">{count}</span>
       <span aria-hidden className="h-px flex-1 bg-sol-border" />
@@ -190,7 +190,7 @@ export function ModernFleetBody({ placed, opts, onOpen, onTileContextMenu }: {
       <div data-fleet-counts className="flex flex-wrap items-center gap-x-4 gap-y-1 text-ui text-sol-text-muted">
         {STATUS_BANDS.map((b) => bands[b].length > 0 && (
           <span key={b} className="inline-flex items-center gap-1.5">
-            <SessionStatusMark status={BAND_STATUS[b]} />
+            <SessionStatusMark status={BAND_STATUS[b]} labeled />
             <span className="tabular-nums text-sol-text">{bands[b].length}</span>
             {SESSION_STATUS[BAND_STATUS[b]].word}
           </span>

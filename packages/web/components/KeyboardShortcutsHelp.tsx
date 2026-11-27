@@ -1,5 +1,5 @@
 import { cloneElement, isValidElement, useContext, useMemo, useRef, useState, type ReactNode } from "react";
-import { X, Keyboard } from "lucide-react";
+import { X } from "lucide-react";
 import { formatShortcutParts, formatAcceleratorParts, getShortcutsForAction, getShortcutsByContext } from "../shortcuts";
 import type { ShortcutAction } from "../shortcuts";
 import { BOARD_SHORTCUT_SECTIONS } from "./boards/boardModel";
@@ -17,6 +17,8 @@ import { isTriageBarCompact, toggleTriageBarCompact } from "./triage/graduation"
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { KeyCap } from "./KeyCap";
+import { IconLegend } from "./IconLegend";
+import { setLegendTab, useLegendState } from "../lib/iconLegend";
 import { useWorkspaceFeature } from "../lib/teamFeatures";
 
 export { KeyCap };
@@ -29,6 +31,7 @@ export function KeyboardShortcutsPanel() {
     s => s.clientState.ui?.key_bindings,
   ]);
   const triageBarHidden = isTriageBarCompact(s.clientState.ui);
+  const { tab } = useLegendState();
   const everOpened = useRef(false);
   if (s.shortcutsPanelOpen) everOpened.current = true;
 
@@ -96,9 +99,19 @@ export function KeyboardShortcutsPanel() {
     >
       {everOpened.current && <div className="h-full w-[320px] bg-sol-bg border-l border-sol-border/60 flex flex-col">
         <div className="flex items-center justify-between px-4 py-3 border-b border-sol-border/40">
-          <div className="flex items-center gap-2">
-            <Keyboard className="w-4 h-4 text-sol-cyan" />
-            <span className="text-sm font-semibold text-sol-text tracking-tight">Shortcuts</span>
+          <div role="tablist" className="flex items-center gap-0.5 rounded-control bg-sol-text/[0.05] p-0.5">
+            {(["shortcuts", "icons"] as const).map((t) => (
+              <button
+                key={t}
+                type="button"
+                role="tab"
+                aria-selected={tab === t}
+                onClick={() => setLegendTab(t)}
+                className={`rounded-[5px] px-2.5 py-1 text-xs font-medium transition-colors ${tab === t ? "bg-sol-card text-sol-text shadow-sm" : "text-sol-text-dim hover:text-sol-text-muted"}`}
+              >
+                {t === "shortcuts" ? "Shortcuts" : "Icons"}
+              </button>
+            ))}
           </div>
           <button
             onClick={s.toggleShortcutsPanel}
@@ -109,7 +122,9 @@ export function KeyboardShortcutsPanel() {
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
+        {tab === "icons" ? (
+          <div className="flex-1 overflow-y-auto px-4 py-3">{s.shortcutsPanelOpen && <IconLegend />}</div>
+        ) : <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
           {systemRows.length > 0 && (
             <section>
               <div className="flex items-center gap-2 mb-2">
@@ -139,7 +154,7 @@ export function KeyboardShortcutsPanel() {
               </div>
             </section>
           ))}
-        </div>
+        </div>}
 
         <div className="px-4 py-2.5 border-t border-sol-border/30 text-meta text-sol-text-dim flex items-center gap-1.5 whitespace-nowrap">
           <MenuKeyCaps action="ui.toggleShortcutsHelp" className="contents" /> toggles this panel
