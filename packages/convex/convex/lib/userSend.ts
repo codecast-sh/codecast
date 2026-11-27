@@ -255,6 +255,16 @@ export function personTurnAnswersPinPatch(
   return answeredThreadStateFields();
 }
 
+// last_person_turn_at moves forward to a person's message (pinTurnKind), never
+// back: a transcript synced again replays older messages.
+export function personTurnStampPatch(
+  conversation: Pick<Doc<"conversations">, "last_person_turn_at">,
+  personTurnAt: number | null,
+): { last_person_turn_at?: number } {
+  if (personTurnAt == null || personTurnAt <= (conversation.last_person_turn_at ?? 0)) return {};
+  return { last_person_turn_at: personTurnAt };
+}
+
 // Who a session's own action speaks for when the session acts through the CLI
 // (its brief to a session it spawns): the person whose send started the turn
 // it is working on, else the account it runs under. A session on a teammate's

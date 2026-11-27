@@ -1,10 +1,11 @@
 // The run's subject between its turns (docs/architecture/flows.md FL4). While
 // the run works on the change without it (a check, a review, a person's card,
-// a deploy), a settled subject leaves the inbox (a hidden stash) and the run
-// asks its daemon to park it, so a session that has nothing to do holds no
-// process and no place in anyone's attention. And once its change is live, a
-// subject with no other work left is retired: killed, not told "done", since a
-// send would resume a parked session just to read that.
+// a deploy), the run asks a settled subject's daemon to park it, so a session
+// that has nothing to do holds no process. It stays in the inbox: the live run
+// is its wake, so it files under Dormant (classifyWorkState's doneRest). And
+// once its change is live, a subject with no other work left is retired:
+// killed, not told "done", since a send would resume a parked session just to
+// read that.
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { git, gitTry } from "../wipSnapshot.js";
@@ -37,32 +38,43 @@ const HIBERNATE_RETRY_MS = 5 * 60_000;
 
 export type SubjectParker = { tick(): Promise<void>; pause(): Promise<void>; resume(): void; stop(): Promise<void>; bind(context: Record<string, string>): void };
 
-// Where the run notes that a person brought its subject back: the run's context, so a resumed runner keeps it.
+// Where the run notes that a person took its subject over: the run's context, so a resumed runner keeps it.
 const KEPT = "subject_kept";
-// Buckets a stashed row still files in: it is out of the person's inbox.
-const OUT_OF_SIGHT = ["stashed", "dismissed", "hidden"];
+// When the run began watching its subject (epoch ms), in the run's context so a resume keeps the first one.
+const SINCE = "subject_watch_since";
+
+/** A person sent the subject something after the run began watching it, a bare "yes" included
+ *  (last_person_turn_at): they are using it, so it is theirs. Every send of the run's own is a machine's (a quiet
+ *  brief, a card's answer, the end message), and so is another session's. */
+export function personTurnSince(row: any, since: number): boolean {
+  return typeof row?.last_person_turn_at === "number" && row.last_person_turn_at > since;
+}
+
+/** Whether a person has taken the subject over, noted in the run's context (so a resumed runner keeps to it) or
+ *  read off `row` now: the parker checks once a minute, and its last check can miss a message a person sent just
+ *  before the run retires the subject. */
+export function subjectTakenOver(row: any, context: Record<string, string>): boolean {
+  if (context[KEPT] === "1") return true;
+  if (!context[SINCE] || !personTurnSince(row, Number(context[SINCE]))) return false;
+  context[KEPT] = "1";
+  return true;
+}
 
 /**
  * Parks the subject while the run does not need it: a check every `intervalMs`
  * (and whenever the runner calls `tick`, before each station), paused while a
- * station of the subject's own runs. Each settle is stashed hidden once, and
- * the daemon is asked to hibernate it at most every five minutes while it
- * stays live; a refusal (attached, mid turn, just resumed) is the daemon's
- * call, and the next ask may land. A person who brings it back from a stash
- * the run made keeps it: the run parks it no more, whatever they do with it
- * after (typing to it moves its transcript on). Nothing runs until `bind`
- * gives it the run's context, which remembers that across a resume: a resumed
- * runner that checked before reading it would stash a session a person kept.
+ * station of the subject's own runs. The daemon is asked to hibernate a
+ * settled, live subject at most every five minutes; a refusal (attached, mid
+ * turn, just resumed) is the daemon's call, and the next ask may land. A
+ * person who writes to it after the run began keeps it: the run parks it no
+ * more and never retires it. Nothing runs until `bind` gives it the run's
+ * context, which remembers that across a resume: a resumed runner that
+ * checked before reading it would park a session a person kept.
  */
 export function startSubjectParker(call: Call, subject: Subject, intervalMs: number, log: (line: string) => void): SubjectParker {
   let paused = false;
   let stopped = false;
   let inFlight: Promise<void> | null = null;
-  let stashedAt = -1;
-  // The run's stash stands: it put the subject out of sight, and nothing of the run's has brought it back since. Only
-  // a station of the subject's own sends it anything that could (pause), so a read that finds it back in the inbox
-  // while this holds is a person's doing.
-  let ours = false;
   let askedAt = 0;
   let context: Record<string, string> | null = null;
   let timer: ReturnType<typeof setInterval> | null = null;
@@ -70,23 +82,11 @@ export function startSubjectParker(call: Call, subject: Subject, intervalMs: num
   const check = async () => {
     const row = await subjectRow(call, subject);
     if (idle() || !row) return;
-    const settle = row.message_count ?? 0;
-    // The run stashed it and it is back in the inbox: a person put it there, though it may have moved on since.
-    if (ours && !OUT_OF_SIGHT.includes(row.bucket)) {
-      context![KEPT] = "1";
-      log(`${subject.shortId} was brought back to the inbox: the run leaves it there and parks it no more`);
+    if (subjectTakenOver(row, context!)) {
+      log(`${subject.shortId} has a person's message since the run began: the run leaves it to them and parks it no more`);
       return;
     }
     if (!parkable(row)) return;
-    if (stashedAt !== settle) {
-      if (idle()) return;
-      const stashed = await call("/cli/sessions/dismiss", { session: subject.conversationId, hidden: true });
-      if (stashed) {
-        stashedAt = settle;
-        ours = true;
-      }
-      log(stashed ? `${subject.shortId} is settled: stashed out of sight while the run goes on without it` : `could not stash ${subject.shortId}`);
-    }
     if (Date.now() - askedAt >= HIBERNATE_RETRY_MS) {
       if (idle()) return;
       askedAt = Date.now();
@@ -101,12 +101,13 @@ export function startSubjectParker(call: Call, subject: Subject, intervalMs: num
   };
   return {
     tick,
-    // A station of the subject's own sends it work: no stash or park may land on top of the brief.
-    pause: async () => { paused = true; await inFlight; ours = false; },
+    // A station of the subject's own sends it work: no park may land on top of the brief.
+    pause: async () => { paused = true; await inFlight; },
     resume: () => { paused = false; },
     stop: async () => { stopped = true; if (timer) clearInterval(timer); await inFlight; },
     bind: (ctx) => {
       context = ctx;
+      ctx[SINCE] ??= String(Date.now());
       if (timer || stopped) return;
       timer = setInterval(() => void tick(), intervalMs);
       timer.unref?.();

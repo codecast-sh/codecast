@@ -163,3 +163,33 @@ describe("a person's terminal turn and the pin", () => {
     expect((await row())?.last_turn_at).toBe(PINNED_AT + 8_000);
   });
 });
+
+// A Ship run watches its subject for a person taking it over (cli
+// workflow/subjectPark.ts). last_turn_origin misses a bare "yes", so the run
+// reads last_person_turn_at, which counts every message a person sends.
+describe("last_person_turn_at", () => {
+  test("a person's bare reply stamps it in either path; a machine's send does not", async () => {
+    const single = await setup();
+    await single.as.mutation(api.messages.addMessage, { conversation_id: single.conversation, role: "user", content: '<session-message from="jx7abcd">CI is green</session-message>', timestamp: PINNED_AT + 10_000 });
+    expect((await single.row())?.last_person_turn_at).toBeUndefined();
+    await single.as.mutation(api.messages.addMessage, { conversation_id: single.conversation, role: "user", content: "yes", timestamp: PINNED_AT + 20_000 });
+    expect((await single.row())?.last_person_turn_at).toBe(PINNED_AT + 20_000);
+
+    const batch = await setup();
+    await batch.as.mutation(api.messages.addMessages, {
+      conversation_id: batch.conversation,
+      messages: [
+        { role: "user", content: "ok", timestamp: PINNED_AT + 30_000 },
+        { role: "assistant", content: "Shipping.", timestamp: PINNED_AT + 31_000 },
+      ],
+    });
+    expect((await batch.row())?.last_person_turn_at).toBe(PINNED_AT + 30_000);
+  });
+
+  test("an older message synced again does not move it back", async () => {
+    const { as, conversation, row } = await setup();
+    await as.mutation(api.messages.addMessage, { conversation_id: conversation, role: "user", content: "go ahead", timestamp: PINNED_AT + 50_000 });
+    await as.mutation(api.messages.addMessages, { conversation_id: conversation, messages: [{ role: "user", content: "earlier ask", timestamp: PINNED_AT + 5_000 }] });
+    expect((await row())?.last_person_turn_at).toBe(PINNED_AT + 50_000);
+  });
+});

@@ -1,4 +1,4 @@
-import { Suspense, useRef } from "react";
+import { Suspense, useRef, useState } from "react";
 import { useInboxStore } from "../store/inboxStore";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useFlipAnimation } from "../hooks/useFlipAnimation";
@@ -19,6 +19,9 @@ export function ComposeHost() {
   // ComposeView's guarded close (draft keep/discard confirm) — the backdrop
   // routes clicks through it. Null until the modal mounts.
   const closeGuardRef = useRef<(() => void) | null>(null);
+  // The modal showing a picture full size sits at the bottom of the screen,
+  // so the picture gets the room above it.
+  const [pictureModal, setPictureModal] = useState<number | null>(null);
   const { containerRef, beforeReorder } = useFlipAnimation({ scale: true, durationMs: 240 });
   // Store subscribers run inside set(), before React commits: the frames still
   // sit where they were, which is the "first" measurement a FLIP needs. This
@@ -41,7 +44,7 @@ export function ComposeHost() {
           key={c.id}
           data-flip-key={c.id}
           className={c.mode === "modal"
-            ? "fixed inset-x-0 top-[12vh] z-20 mx-auto w-fit pointer-events-auto"
+            ? `fixed inset-x-0 ${pictureModal === c.id ? "bottom-4" : "top-[12vh]"} z-20 mx-auto w-fit pointer-events-auto`
             : "min-w-0 pointer-events-auto"}
         >
           <Suspense fallback={null}>
@@ -51,6 +54,7 @@ export function ComposeHost() {
               context={c.context}
               onClose={() => closeCompose(c.id)}
               closeGuardRef={c.mode === "modal" ? closeGuardRef : undefined}
+              onPictureOpen={(open) => setPictureModal((cur) => (open ? c.id : cur === c.id ? null : cur))}
             />
           </Suspense>
         </div>
