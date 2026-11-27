@@ -192,7 +192,7 @@ test("source, built and compiled invocations run with the repaired launchd PATH,
     fs.mkdirSync(root);
     const marker = path.join(root, "received.json");
     const main = path.join(root, `main.${extension}`);
-    fs.writeFileSync(main, `require('node:fs').writeFileSync(${JSON.stringify(marker)},JSON.stringify({args:process.argv.slice(2),path:process.env.PATH,noUpdate:process.env.CODECAST_NO_AUTO_UPDATE,pri:Number(require('node:child_process').execFileSync('/bin/ps',['-o','pri=','-p',String(process.pid)]).toString().trim())})); setInterval(()=>{},1000);`);
+    fs.writeFileSync(main, `const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(marker + ".tmp")},JSON.stringify({args:process.argv.slice(2),path:process.env.PATH,noUpdate:process.env.CODECAST_NO_AUTO_UPDATE,pri:Number(require('node:child_process').execFileSync('/bin/ps',['-o','pri=','-p',String(process.pid)]).toString().trim())}));fs.renameSync(${JSON.stringify(marker + ".tmp")},${JSON.stringify(marker)}); setInterval(()=>{},1000);`);
     const invocation = mirrorProcessInvocation(process.execPath, path.join(root, `daemon.${extension}`));
     const prior = process.env.PATH;
     process.env.PATH = "/bin";
@@ -212,7 +212,7 @@ test("source, built and compiled invocations run with the repaired launchd PATH,
   }
   const marker = path.join(f.root, "compiled.json");
   const main = path.join(f.root, "main.ts");
-  fs.writeFileSync(main, `require('node:fs').writeFileSync(${JSON.stringify(marker)},JSON.stringify(process.argv.slice(2))); setInterval(()=>{},1000);`);
+  fs.writeFileSync(main, `const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(marker + ".tmp")},JSON.stringify(process.argv.slice(2)));fs.renameSync(${JSON.stringify(marker + ".tmp")},${JSON.stringify(marker)}); setInterval(()=>{},1000);`);
   const executable = path.join(f.root, "cast-fixture");
   const built = Bun.spawn([process.execPath, "build", main, "--compile", "--outfile", executable], { stdout: "ignore", stderr: "pipe" });
   expect(await built.exited, await new Response(built.stderr).text()).toBe(0);
@@ -221,4 +221,4 @@ test("source, built and compiled invocations run with the repaired launchd PATH,
   expect(JSON.parse(fs.readFileSync(marker, "utf8"))).toEqual(["cloud", "mirror-run"]);
   await capture(f);
   await controller.stop();
-});
+}, 15_000);
