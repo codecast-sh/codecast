@@ -16,3 +16,16 @@ test("a denied inbox deep link shows the note, never the previous session", () =
     rmSync(directory, { recursive: true, force: true });
   }
 }, 180_000);
+
+test("a new session's first send keeps it open under its real id, never the unavailable note", () => {
+  const directory = mkdtempSync(join(tmpdir(), "inbox-rekeyed-stub-"));
+  const resultPath = join(directory, "result");
+  try {
+    execFileSync(process.execPath, [join(import.meta.dir, "fixtures/inboxRekeyedStubParam.tsx"), resultPath], {
+      timeout: 120_000,
+    });
+    expect(readFileSync(resultPath, "utf8")).toContain("rekeyed stub param verified");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}, 180_000);
