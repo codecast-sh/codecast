@@ -35,6 +35,17 @@ const target = args.find((arg) => arg.startsWith("--target="))?.split("=")[1];
 const SPLIT_COMPILED_BUILDS = args.includes("--compile") && !args.includes("--splitting");
 
 /**
+ * A compiled cast reads no .env from the directory it starts in. bun's default
+ * for a standalone binary loads it, and everything that cast starts inherits
+ * it: a runner started beside Union's backend .env handed its dead
+ * GITHUB_TOKEN to every station it ran, and gh's credential helper took that
+ * token over the host's own login, so every fetch was refused (Union
+ * ct-102909). A project's CONVEX_URL would point the CLI at another backend
+ * the same way. Development runs (`bun src/main.ts`) keep bun's own loading.
+ */
+export const COMPILED_ENV_ARGS = ["--no-compile-autoload-dotenv"];
+
+/**
  * Files the CLI starts as a `new Worker`. Bun bundles a worker only when the
  * build names it as an entrypoint; otherwise the compiled binary has no such
  * module and the worker dies with `ModuleNotFound resolving
@@ -240,7 +251,7 @@ if (import.meta.main) {
       fs.writeFileSync(COMPUTER_HELPER_PAYLOAD, "");
     }
     console.error(`browser extension: ${await packBrowserExtension()} bytes embedded`);
-    run(process.execPath, ["build", ...args, ...workerBuildArgs(path.join(import.meta.dir, "../src")), ...(SPLIT_COMPILED_BUILDS ? ["--splitting"] : []), ...EXTERNAL_WS, "--define", `CODECAST_MAC_ICON_HELPER=${JSON.stringify(helper)}`, ...daemonBuildIdDefine()]);
+    run(process.execPath, ["build", ...args, ...workerBuildArgs(path.join(import.meta.dir, "../src")), ...(SPLIT_COMPILED_BUILDS ? ["--splitting"] : []), ...(args.includes("--compile") ? COMPILED_ENV_ARGS : []), ...EXTERNAL_WS, "--define", `CODECAST_MAC_ICON_HELPER=${JSON.stringify(helper)}`, ...daemonBuildIdDefine()]);
     if (SPLIT_COMPILED_BUILDS) dropChunkSourcemaps();
   } finally {
     // Leave the tracked placeholder empty again: the payload belongs in the
