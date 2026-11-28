@@ -1,6 +1,10 @@
 // A command station: a script the run's shell expands and runs, and the
 // record every node's result lands in.
-import { constants as osConstants } from "node:os";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { randomUUID } from "node:crypto";
+import { constants as osConstants, tmpdir } from "node:os";
+import { CARRIED_OUTCOME, STATION_OUTCOME_ENV } from "@codecast/shared/contracts/stationOutcome";
 import { spawn } from "../proc.js";
 import { lineCommandEnv } from "../lineProfile.js";
 import { c } from "../colors.js";
@@ -184,6 +188,14 @@ const PIPE_CLOSE_GRACE_MS = 2000;
 
 const seconds = (ms: number) => (ms >= 120_000 ? `${Math.round(ms / 60_000)}m` : `${Math.round(ms / 1000)}s`);
 
+/**
+ * The outcome a station's record carries: "carried" for a script that succeeded after declaring it ended red and the
+ * run goes on past it (contracts/stationOutcome.ts), else the outcome the graph routes on. Routing never sees "carried".
+ */
+export function reportedOutcome(nodeId: string, context: Record<string, string>, outcome: NodeOutcome): NodeOutcome {
+  return outcome === "success" && context[`${nodeId}.carried`] === "true" ? CARRIED_OUTCOME : outcome;
+}
+
 /** `env` is what the runner adds to the script's environment beyond the line's run values: its run's own session (runner.ts stationEnv). */
 export async function executeCommand(
   node: WorkflowNode,
@@ -196,6 +208,9 @@ export async function executeCommand(
   console.log(`${c.dim}  $ ${script.split('\n')[0]}${script.includes('\n') ? '...' : ''}${c.reset}`);
   const graceMs = watch.graceMs ?? STATION_KILL_GRACE_MS;
   void reapDeadRunnerStations(undefined, graceMs).catch(() => {});
+  // Where the script may declare an outcome its exit code cannot say (`carried`, contracts/stationOutcome.ts).
+  const outcomeFile = path.join(tmpdir(), `cast-station-outcome-${randomUUID()}`);
+  delete context[`${node.id}.carried`];
 
   try {
     // A repo's check command (the line's verify station) outruns the old two
@@ -209,7 +224,7 @@ export async function executeCommand(
         cwd,
         // A project's line command (line-profile.md LP2) names run values
         // ($run_dir, $task_id, ...) that its own shell expands.
-        env: { ...process.env, ...lineCommandEnv(context), ...env },
+        env: { ...process.env, ...lineCommandEnv(context), ...env, [STATION_OUTCOME_ENV]: outcomeFile },
         stdio: ["ignore", "pipe", "pipe"],
         // Its own process group, so ending the station takes the script's
         // children with it. spawnSync's timeout sent one SIGTERM to bash
@@ -288,8 +303,11 @@ export async function executeCommand(
     if (ok && result.notes.length) context[`${node.id}.notes`] = result.notes.join("\n");
     else delete context[`${node.id}.notes`];
 
+    let declared = "";
+    try { declared = fs.readFileSync(outcomeFile, "utf-8").trim(); fs.rmSync(outcomeFile, { force: true }); } catch {}
     if (ok) {
-      console.log(`  ${c.green}✓ success${c.reset}`);
+      if (declared === CARRIED_OUTCOME) context[`${node.id}.carried`] = "true";
+      console.log(`  ${declared === CARRIED_OUTCOME ? `${c.yellow}✓ carried on (it ended red)` : `${c.green}✓ success`}${c.reset}`);
       return "success";
     } else {
       console.log(`  ${c.red}✗ failed (${result.timedOut ? "timed out" : result.stopped ? "the run ended" : `exit ${result.status}`})${c.reset}`);

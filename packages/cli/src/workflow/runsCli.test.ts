@@ -77,6 +77,9 @@ test("the detail names each station with its label, time, outcome and session, a
   expect(out).toMatch(/triage \(Triage\)\s+completed, 2m, outcome success, session jx7a/);
   expect(out).toMatch(/build \(Build\)\s+running, 5m so far, 2 visits <$/m);
   expect(formatRunDetail({ ...run, status: "failed", fail_reason: "verify exited 1" }, new Map(), now)).toContain("failed: verify exited 1");
+  // Local CI still red after the session's turn on it carried on to the PR: no check mark (polish round 6 M1).
+  const carried = { ...run, node_statuses: [{ node_id: "local_ci", status: "completed", outcome: "carried", started_at: 0, completed_at: 60_000 }] };
+  expect(formatRunDetail(carried, new Map([["local_ci", "Local CI"]]), now)).toMatch(/~ local_ci \(Local CI\)\s+completed, 1m, ended red, carried on$/m);
 });
 
 // Polish round 5: ct-102514 read "brief running, 11.7h so far" while its session had asked a person; the run page said so.

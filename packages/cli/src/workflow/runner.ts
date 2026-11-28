@@ -18,7 +18,7 @@ import { holdForVerdict, type VerdictAsk } from "./verdictAsk";
 import { sessionEndWords } from "@codecast/shared/contracts/sessionEnd";
 import { factsFor, holdsItsFacts, pinDirectCommands, runGraph, StartFactsError } from "./startFacts";
 import { keepEnds } from "./keepEnds";
-import { executeCommand, expandScriptVars, recordNodeOutput, type StationWatch } from "./commandStation";
+import { executeCommand, expandScriptVars, recordNodeOutput, reportedOutcome, type StationWatch } from "./commandStation";
 import { NO_SLOT, withStationSlot } from "./stationSlot";
 import { planReadiness } from "../planReadiness.js";
 import { readGateCard } from "../cardFile.js";
@@ -2759,7 +2759,7 @@ async function runNodeLoop(
         // A gate's outcome is the key it was answered with ("s" for Ship):
         // only "failure" is a failed node, and a no_slot with nowhere to go.
         node_status: outcome === "failure" || (outcome === NO_SLOT && !current.no_slot) ? "failed" : "completed",
-        outcome,
+        outcome: reportedOutcome(current.id, state.context, outcome),
         session_id: state.context[`${current.id}.session_id`],
         result_preview: stationPreview(current, state.context),
         // A call node's cost, as the server charged it (learning-loop.md LL10).
