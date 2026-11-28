@@ -29,6 +29,9 @@ export type PalettePickExtra = {
   label: string;
   description?: string;
   icon?: "sparkles" | "doc" | "slack" | "scribe";
+  // A short tag at the row's right edge, as a role row shows its @handle
+  // (the call's Scribe: "agent", so it reads as one agent, not an action).
+  tag?: string;
   // Highlight as the promoted default (first row, accent styling).
   primary?: boolean;
   // Listed above the people and roles, as the list's first row.

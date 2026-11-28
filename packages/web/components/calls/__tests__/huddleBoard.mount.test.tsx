@@ -35,7 +35,7 @@ const { useInboxStore } = await import("../../../store/inboxStore");
 const startTranscribing = mock(async (_roomKey: string) => {});
 const realCallManager = { ...(await import("../../../lib/calls/callManager")) };
 mock.module("../../../lib/calls/callManager", () => ({ ...realCallManager, startTranscribing }));
-const { BoardBanner, BoardStage, ScribeChip } = await import("../HuddleBoard");
+const { BoardBanner, BoardStage } = await import("../HuddleBoard");
 const { boardBannerState } = await import("../../../lib/calls/huddleSettings");
 const { HuddlesSection } = await import("../CallSettings");
 const { openFeedTargetPicker } = await import("../useCallFeed");
@@ -279,24 +279,6 @@ test("Open huddles on the board waits for the settings to load before deciding",
   await act(() => n.root.unmount());
 });
 
-test("the header chip: nothing while absent; joining, listening; its menu removes Scribe", async () => {
-  const remove = mock(() => {});
-  const chip = (status: Status) => <ScribeChip scribe={scribeOf(status, undefined, remove)} session="s1" onOpenBoard={() => {}} onOpenSession={() => {}} />;
-  const m = await mount(chip("absent"));
-  expect(m.container.textContent).toBe("");
-  await m.render(chip("joining"));
-  expect(m.container.textContent).toContain("Scribe · joining");
-  await m.render(chip("listening"));
-  const trigger = m.container.querySelector("button")!;
-  expect(trigger.textContent).toContain("Scribe · listening");
-  await act(async () => void trigger.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })));
-  const item = [...document.querySelectorAll("[role=menuitem]")].find((e) => e.textContent?.includes("Remove from the call")) as HTMLElement;
-  expect(item).toBeTruthy();
-  await act(() => item.click());
-  expect(remove).toHaveBeenCalledTimes(1);
-  await act(() => m.root.unmount());
-});
-
 test("Settings → Calls writes each workspace's huddle settings under its own key", async () => {
   const m = await mount(<HuddlesSection />);
   expect(m.container.textContent).toContain("Huddles in");
@@ -305,11 +287,19 @@ test("Settings → Calls writes each workspace's huddle settings under its own k
   expect(switchOf("Open huddles on the board").getAttribute("aria-checked")).toBe("false");
   await act(() => switchOf("Open huddles on the board").click());
   expect(ui().huddleBoardView).toEqual({ [WS]: true });
-  const select = m.container.querySelector("select")!;
-  await act(() => {
-    select.value = "t2";
-    select.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
-  });
+  // The workspace is a menu in the heading: its name in the title's words, each choice with its crest.
+  const trigger = m.container.querySelector("[aria-label='Workspace']") as HTMLButtonElement;
+  expect(trigger.textContent).toBe("Codecast");
+  const menuItems = async () => {
+    await act(async () => void trigger.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })));
+    return [...document.querySelectorAll("[role=menuitem]")] as HTMLElement[];
+  };
+  const pickWorkspace = async (name: string) => {
+    const item = (await menuItems()).find((e) => e.textContent === name)!;
+    await act(() => item.click());
+  };
+  await pickWorkspace("Union");
+  expect(trigger.textContent).toBe("Union");
   expect(switchOf("Open huddles on the board").getAttribute("aria-checked")).toBe("false");
   // On goes through the review; off is one press.
   await act(() => switchOf("Invite Scribe to every huddle").click());
@@ -322,11 +312,9 @@ test("Settings → Calls writes each workspace's huddle settings under its own k
   expect(ui().huddleAutoScribe).toEqual({ "team:t2": false });
   expect(ui().huddleBoardView).toEqual({ [WS]: true });
   // Personal is a choice beside the teams: the person's own huddles, keyed to them.
-  expect([...select.querySelectorAll("option")].map((o) => o.textContent)).toEqual(["Personal", "Codecast", "Union"]);
-  await act(() => {
-    select.value = "personal";
-    select.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
-  });
+  const items = await menuItems();
+  expect(items.map((o) => o.textContent)).toEqual(["Personal", "Codecast", "Union"]);
+  await act(() => items[0].click());
   await act(() => switchOf("Open huddles on the board").click());
   expect(ui().huddleBoardView).toEqual({ [WS]: true, "user:me": true });
   await act(() => switchOf("Invite Scribe to every huddle").click());
@@ -339,7 +327,7 @@ test("Settings → Calls writes each workspace's huddle settings under its own k
 test("with no active team, Settings → Calls starts on Personal", async () => {
   useInboxStore.setState((s: any) => ({ clientState: { ...s.clientState, ui: {} } }));
   const m = await mount(<HuddlesSection />);
-  expect((m.container.querySelector("select") as HTMLSelectElement).value).toBe("personal");
+  expect(m.container.querySelector("[aria-label='Workspace']")!.textContent).toBe("Personal");
   await act(() => m.root.unmount());
 });
 
@@ -351,7 +339,7 @@ test("the Add picker offers Scribe as its first row only when the caller can inv
   const onPick = mock(() => {});
   openFeedTargetPicker({ title: "Add to the call", gesture: "feed", onScribe, onPick });
   const pick = openPalette.mock.calls[0][0].pick;
-  expect(pick.extras[0]).toMatchObject({ key: "scribe", label: "Scribe", description: "Lays out the huddle on the board", lead: true });
+  expect(pick.extras[0]).toMatchObject({ key: "scribe", label: "Scribe", description: "Silent agent: lays out the huddle on the board", tag: "agent", lead: true });
   pick.onPick({ kind: "extra", key: "scribe" }, { query: "" });
   expect(onScribe).toHaveBeenCalledTimes(1);
   expect(onPick).not.toHaveBeenCalled();

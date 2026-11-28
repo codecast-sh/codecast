@@ -12,7 +12,7 @@
 // everywhere, because there is only one thing to change.
 import { useRef, useState } from "react";
 import { useMountEffect } from "../../hooks/useMountEffect";
-import { Mic, Radio, SquareKanban, Video, Volume2, X } from "lucide-react";
+import { Check, ChevronDown, Mic, Radio, SquareKanban, User, Video, Volume2, X } from "lucide-react";
 import { useInboxStore, useMyUserId } from "../../store/inboxStore";
 import { rememberCamera, rememberMic, rememberDeviceCheck, rememberMicAutoOpen } from "../../lib/calls/joinPrefs";
 import { setNoiseCancellation } from "../../lib/calls/callManager";
@@ -22,7 +22,8 @@ import { SettingsRow, SettingsSection } from "../settings/ui";
 import { MeetingDetectSection } from "../settings/MeetingDetectSection";
 import { WalkieCuesBlock } from "../settings/WalkieCuesBlock";
 import { DeviceRows } from "./DeviceRows";
-import { SelectBox } from "../ui/select-box";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
+import { TeamCrest } from "../team/TeamCrest";
 import { setHuddleSettings, useHuddleSetting } from "../../lib/calls/huddleSettings";
 import { ConsequentialSwitch } from "../consequential/ConsequentialSwitch";
 import { autoScribeLedger } from "../consequential/ledgers";
@@ -140,7 +141,7 @@ export function CallSettings({ compact = false }: { compact?: boolean }) {
 /** How huddles start in one workspace (lib/calls/huddleSettings): the
  *  person's own, chosen per workspace, the active one first. */
 export function HuddlesSection({ pad }: { pad?: string }) {
-  const teams = useInboxStore((s: any) => s.teams as Array<{ _id: string; name?: string }> | undefined) ?? [];
+  const teams = useInboxStore((s: any) => s.teams as Array<{ _id: string; name?: string; icon?: string; icon_color?: string }> | undefined) ?? [];
   const me = useMyUserId();
   const activeTeam = useInboxStore((s) => s.clientState?.ui?.active_team_id ?? null);
   // Personal (the person's own huddles: solo, a private session's room) or a
@@ -157,20 +158,27 @@ export function HuddlesSection({ pad }: { pad?: string }) {
       title={
         <span className="flex items-center gap-1.5">
           Huddles in
-          <SelectBox
-            variant="bare"
-            value={choice}
-            onChange={(e) => setPicked(e.target.value)}
-            aria-label="Workspace"
-            className="normal-case tracking-normal"
-          >
-            <option value="personal">Personal</option>
-            {teams.map((t) => (
-              <option key={t._id} value={t._id}>
-                {t.name ?? "Team"}
-              </option>
-            ))}
-          </SelectBox>
+          <DropdownMenu>
+            {/* The workspace as the title's own words: its crest and name in
+                the heading's type, the chevron right after the name. */}
+            <DropdownMenuTrigger
+              aria-label="Workspace"
+              className="flex min-w-0 items-center gap-1 rounded px-1 normal-case tracking-normal text-sol-text outline-none transition-colors hover:bg-sol-text/[0.06] focus-visible:bg-sol-text/[0.1] data-[state=open]:bg-sol-text/[0.06]"
+            >
+              <WorkspaceMark team={choice === "personal" ? null : teams.find((t) => t._id === choice) ?? {}} />
+              <span className="truncate">{workspaceName}</span>
+              <ChevronDown className="h-3 w-3 shrink-0 text-sol-text-dim" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" sideOffset={6} collisionPadding={8} className="min-w-[200px] p-1">
+              {[{ _id: "personal", name: "Personal" } as (typeof teams)[number], ...teams].map((t) => (
+                <DropdownMenuItem key={t._id} onSelect={() => setPicked(t._id)} className="gap-2">
+                  <WorkspaceMark team={t._id === "personal" ? null : t} />
+                  <span className="flex-1 truncate">{t.name ?? "Team"}</span>
+                  {t._id === choice && <Check className="h-3.5 w-3.5 text-sol-text-muted" />}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
         </span>
       }
       icon={SquareKanban}
@@ -191,6 +199,18 @@ export function HuddlesSection({ pad }: { pad?: string }) {
       </SettingsRow>
     </SettingsSection>
   );
+}
+
+/** A workspace's crest (the team switcher's), or the person glyph for Personal. */
+function WorkspaceMark({ team }: { team: { icon?: string; icon_color?: string } | null }) {
+  if (!team) {
+    return (
+      <span className="flex h-4 w-4 shrink-0 items-center justify-center">
+        <User className="h-3.5 w-3.5 text-sol-text-muted" />
+      </span>
+    );
+  }
+  return <TeamCrest icon={team.icon} color={team.icon_color} size="sm" className="h-4 w-4 rounded [&_svg]:h-3 [&_svg]:w-3" />;
 }
 
 /**

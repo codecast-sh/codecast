@@ -305,9 +305,14 @@ export const RoomThread = memo(function RoomThread({
   // After the call the routes are history: the chips still say who was in
   // the room (roster), but nobody hears a line typed now and nobody is
   // working on it (agents).
-  const roster = useAgentsInRoom(routes);
+  // The call's Scribe goes by its job's name everywhere in the thread.
+  const scribeTarget = routes.find((r) => r.role === "scribe")?.target;
+  const inRoom = useAgentsInRoom(routes);
+  const roster = useMemo(() => (scribeTarget ? inRoom.map((a) => (a.target === scribeTarget ? { ...a, name: "Scribe" } : a)) : inRoom), [inRoom, scribeTarget]);
   const agents = transcribing ? roster : [];
-  const working = agents.filter((a) => a.working);
+  // Scribe works the board out of sight and never answers here: its chip
+  // carries its dots, and the thread's tail waits only on agents that reply.
+  const working = agents.filter((a) => a.working && a.target !== scribeTarget);
   const ownRoomId = sessionRoomConversationId(roomKey);
   // A session's own room has an agent before anyone adds one: the server
   // routes the session in the moment transcription starts (transcripts.ts
@@ -539,7 +544,8 @@ export const RoomThread = memo(function RoomThread({
   const empty = passages.length === 0 && visibleRows.every((r) => r.event);
   // The pick on its way shows as a chip until its route lands among the real ones.
   const joining = adding && !("id" in adding && routes.some((r) => r.target === adding.id)) ? adding : null;
-  const showChips = routes.length > 0 || !!joining;
+  const scribeJoining = !scribeTarget && scribe.status === "joining";
+  const showChips = routes.length > 0 || !!joining || scribeJoining;
   // Nothing to fold, open or hide until someone has spoken.
   const showDensity = !recording && passages.length > 0;
   const showSwitch = seated && !recording;
@@ -588,9 +594,10 @@ export const RoomThread = memo(function RoomThread({
           Nothing to show, no band. */}
       {showHead && (
         <div className={`rt-head${quietHead ? " rt-head-quiet" : ""}`}>
-          {/* Scribe is the stage header's chip, not one of these. */}
-          {routes.filter((r) => r.role !== "scribe").map((r) => {
+          {routes.map((r) => {
             const agent = r.kind === "session" ? roster.find((a) => a.target === r.target) : null;
+            // The call's Scribe never has a face (transcriptsScribe seats it with none).
+            const isScribe = r.role === "scribe";
             return (
               <span
                 key={`${r.kind}:${r.target}`}
@@ -609,7 +616,7 @@ export const RoomThread = memo(function RoomThread({
                 {agent?.working && transcribing && (
                   <WorkingDots className="text-sol-violet" title={`${agent.name} is working`} />
                 )}
-                {agent && transcribing && facesOn && liveTranscriptId && (
+                {agent && !isScribe && transcribing && facesOn && liveTranscriptId && (
                   <AgentFaceToggle
                     on={r.face !== false}
                     name={agent.name}
@@ -634,6 +641,14 @@ export const RoomThread = memo(function RoomThread({
               </span>
             );
           })}
+          {/* Scribe on its way (claimed, not yet seated): joining like any agent. */}
+          {scribeJoining && (
+            <span className="rt-chip" title="Joining the room">
+              {/* Taking it out before it seats gives its claim back (useScribe.remove). */}
+              <FeedChip route={{ kind: "session", target: "", mode: "live" }} label="Scribe" removable={canRemove} onRemove={scribe.remove} />
+              <WorkingDots className="text-sol-violet" title="Scribe is joining" />
+            </span>
+          )}
           {joining && (
             <span className="rt-chip" title="Joining the room">
               <FeedChip

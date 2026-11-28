@@ -75,7 +75,7 @@ export function openFeedTargetPicker(opts: {
       toggle: opts.toggle,
       extras: [
         ...(opts.onScribe
-          ? [{ key: "scribe", label: "Scribe", description: "Lays out the huddle on the board", icon: "scribe" as const, lead: true }]
+          ? [{ key: "scribe", label: "Scribe", description: "Silent agent: lays out the huddle on the board", icon: "scribe" as const, tag: "agent", lead: true }]
           : []),
         {
           key: "new-session",

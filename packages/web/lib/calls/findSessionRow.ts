@@ -5,6 +5,8 @@ import { PERSONIFY_ALL_PREFS, sessionIdentity, type IdentityPrefs } from "../ses
 // call surface that names a fed session (the feed chips, the chat rail's
 // participants strip) so they cannot disagree about which session a route is.
 export function findSessionRow(state: any, ref: string): any | null {
+  // A joining chip names no session yet (""), and "" would match every row with no short id.
+  if (!ref) return null;
   const direct = state.sessions?.[ref];
   if (direct) return direct;
   const rows = Object.values(state.sessions ?? {}) as any[];
