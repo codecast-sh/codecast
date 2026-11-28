@@ -10,7 +10,7 @@ import { normalizeRepository } from "@codecast/shared/contracts";
 import { onPrHead } from "@codecast/shared/contracts/deployTargets";
 import type { PrDeployModel } from "../../hooks/usePrDeploy";
 import { useShipping } from "../../hooks/useSyncShipping";
-import { CHANGE_STEPS, isMerged, prState, prStepper, runState, runWordTarget, stepper, stepsFor } from "../../lib/deploys/board";
+import { CHANGE_STEPS, isMerged, prState, prStepper, runState, runWordTarget, stepper, trackFor } from "../../lib/deploys/board";
 import { teamWorkspaceKey } from "../../lib/workspaceScope";
 import { deploysFocusHref } from "../../lib/deploys/focus";
 import { ShipTrack } from "../deploys/ShipTrack";
@@ -54,7 +54,7 @@ export function PRShipStrip({ pr, model, shepherd, authed, runVerdict }: {
       <span className="pr-ship-label text-mark uppercase tracking-wider text-sol-text-dim">Shipping</span>
       <div className="pr-ship-body">
         <div className="pr-ship-line">
-          <ShipTrack track={run ? stepsFor(run) : CHANGE_STEPS} steps={steps} state={state} word={decide} />
+          <ShipTrack track={run ? trackFor(run) : CHANGE_STEPS} steps={steps} state={state} word={decide} />
           <span className="pr-ship-act">
             {/* Only once this window has read the runs itself: a press on a cached answer could start a second run. */}
             {authed && !run && (live || failed || !model.teamId) ? <ShipControl target={{ kind: "pull_request", id: String(pr._id) }} size="compact" /> : null}

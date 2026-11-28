@@ -47,6 +47,7 @@
 .sj-stage[data-state="back"] .sj-node { border-color: var(--sj-session); background: color-mix(in srgb, var(--sj-session) 16%, var(--sj-card)); color: var(--sj-session); box-shadow: 0 0 0 4px color-mix(in srgb, var(--sj-session) 14%, transparent); }
 /* Routed: a step chose another way on (a script that exits non-zero to route), neither a pass nor a stop. */
 .sj-stage[data-state="routed"] .sj-node { border-color: var(--sol-text-dim); color: var(--sol-text-muted); }
+.sj-stage[data-state="carried"] .sj-node { border-color: var(--sol-yellow); background: color-mix(in srgb, var(--sol-yellow) 16%, var(--sj-card)); color: var(--sol-yellow); }
 .sj-stage[data-state="skipped"] .sj-node { border-style: dashed; border-color: var(--sj-rule); }
 .sj-stage[data-state="skipped"] .sj-label { color: var(--sol-text-dim); }
 /* Ran and found nothing to do (its result said skipped): a solid ring with a dash, neither a pass nor never entered. */
@@ -194,6 +195,7 @@
 .sj-detail-mark { width: 8px; height: 8px; border-radius: 999px; background: var(--sol-text-dim); align-self: center; }
 .sj-detail-mark[data-status="completed"] { background: var(--sj-ok); }
 .sj-detail-mark[data-status="failed"] { background: var(--sj-bad); }
+.sj-detail-mark[data-status="carried"] { background: var(--sol-yellow); }
 .sj-detail-mark[data-status="skipped"] { background: transparent; border: 1.5px solid var(--sol-text-dim); }
 .sj-detail-mark[data-status="running"] { background: var(--sol-blue); animation: sj-pulse 1.6s ease-in-out infinite; }
 .sj-detail-session { color: var(--sol-blue); text-decoration: none; }

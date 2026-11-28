@@ -128,6 +128,19 @@ export function stepsFor(run: Pick<ShippingRun, "pr" | "node_statuses" | "curren
   return ids.some((id) => id !== "start" && id !== "land") ? PERSONAL_STEPS : CHANGE_STEPS;
 }
 
+/** The stations that check the change on its own machine before the pull request's CI (Local CI and its fix). */
+const LOCAL_CI = ["local_ci", "local_ci_fix"];
+
+/**
+ * The track as a run's card draws it (stepsFor): while the run is at Local CI, its CI step reads "Local CI", so the
+ * step that runs is the one named, never the pull request's CI looking pending beside its passed checks.
+ */
+export function trackFor(run: Pick<ShippingRun, "pr" | "node_statuses" | "current_node_id" | "track">): readonly Step[] {
+  const steps = stepsFor(run);
+  if (!LOCAL_CI.includes(leafOf(run.current_node_id))) return steps;
+  return steps.map((s) => (s.stations.includes("local_ci") ? { ...s, word: "Local CI" } : s));
+}
+
 /** The step a station belongs to among `steps`, -1 for one outside them. */
 export function stepOfStation(id: string | null | undefined, steps: readonly Step[] = CHANGE_STEPS): number {
   const leaf = leafOf(id);

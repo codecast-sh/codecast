@@ -29,8 +29,8 @@ import {
 } from '@codecast/web/lib/line/runReport';
 import { landingOf } from '@codecast/web/lib/line/personalReport';
 import { resumeOf } from '@codecast/web/lib/ship/resumeAt';
-import { journeyOf, type TargetState } from '@codecast/web/lib/ship/journey';
-import { changeAction, changeHeadline, changeLinks, changePr, mergeIsOff, shipsChange, type ChangeAction, type ChangeLink } from '@codecast/web/lib/ship/changePage';
+import type { TargetState } from '@codecast/web/lib/ship/journey';
+import { changeAction, changeHeadline, changeJourney, changeLinks, changePr, mergeHolder, mergeIsOff, newerMergedRun, shipsChange, type ChangeAction, type ChangeLink } from '@codecast/web/lib/ship/changePage';
 import { roleRowsOf } from '@codecast/web/lib/roleRows';
 import { usePullRequestMerge } from '@codecast/web/hooks/useSyncTimeline';
 import { onPrHead } from '@codecast/shared/contracts/deployTargets';
@@ -170,12 +170,15 @@ export default function RunScreen() {
   const mergedSha = changeRun && changeFlow ? landedSha(changeRun as any) ?? (prMerge?.merged ? prMerge.merge_sha : null) : null;
   const { reach, ready: reachRead } = useDeployReachRead(mergedSha && changePrRef ? `${changePrRef.repository}@${mergedSha}` : null);
   const targets = useMemo<TargetState[]>(() => reachTargets(reach), [reach]);
-  const journey = useMemo(() => (changeRun && changeFlow ? journeyOf(changeFlow, changeRun as any, targets, viewer) : null), [changeRun, changeFlow, targets, viewer]);
-  const head = journey && changeRun && changeFlow ? changeHeadline(journey, changeRun as any, changeFlow, { pr: prMerge, targets, reading: !reachRead }) : null;
+  // A later run on the task that merged this run's pull request: the change went on there.
+  const newerMerged = useMemo(() => (run ? newerMergedRun(run as any, others as any) : null), [run, others]);
+  const journey = useMemo(() => (changeRun && changeFlow ? changeJourney(changeFlow, changeRun as any, targets, viewer, { pr: prMerge, reading: !reachRead, newerMerged }) : null), [changeRun, changeFlow, targets, viewer, prMerge, reachRead, newerMerged]);
+  const head = journey && changeRun && changeFlow ? changeHeadline(journey, changeRun as any, changeFlow, { pr: prMerge, targets, reading: !reachRead, newerMerged }) : null;
   const links = journey && changeRun && changeFlow ? changeLinks(changeRun as any, changeFlow, targets, prMerge) : [];
   const newer = run ? [...others].filter((r) => r.created_at > run.created_at).sort((a, b) => b.created_at - a.created_at)[0]?._id ?? null : null;
   // The role whose line started the run holds its merge switch: its page, read only when merge was off.
-  const mergeRole = useInboxStore((s) => (run?.org_role_id && run && mergeIsOff(run as any) ? roleRowsOf(s as any).roles.find((r) => r._id === run.org_role_id)?.short_id ?? null : null));
+  const holder = run ? mergeHolder(run as any) : null;
+  const mergeRole = useInboxStore((s) => (run && (holder || (run.org_role_id && mergeIsOff(run as any))) ? roleRowsOf(s as any).roles.find((r) => (holder ? r.handle?.replace(/^@/, '') === holder : r._id === run.org_role_id))?.short_id ?? null : null));
   const act = journey && changeRun && changeFlow ? changeAction(journey, changeRun as any, changeFlow, { newer, pr: prMerge, mergeRole, targets }) : null;
   // Ship again through the web's own press path (hooks/useShipAgain): one press in flight, and the confirm's judged files
   // recorded as the person's approval.

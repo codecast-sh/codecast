@@ -119,8 +119,8 @@ function ShipBody({ flow, run, links }: { flow: AppFlow; run: RunRow; links: Run
   const viewer = useJourneyViewer(run as any);
   const journey = useMemo(() => journeyOf(flow, run as any, [], viewer), [flow, run, viewer]);
   const finished = journey.stages.every((s) => s.state === 'done' || s.state === 'skipped' || s.state === 'nothing') && journey.stages.some((s) => s.state === 'done');
-  const tone: Record<StageState, string> = { idle: Theme.textDim, active: Theme.blue, back: Theme.violet, waiting: Theme.yellow, done: Theme.green, routed: Theme.textMuted, stopped: Theme.red, skipped: Theme.textDim, nothing: Theme.textMuted, unknown: Theme.textMuted };
-  const icon: Record<StageState, FeatherName> = { idle: 'circle', active: 'loader', back: 'corner-down-left', waiting: 'clock', done: 'check-circle', routed: 'arrow-right-circle', stopped: 'x-circle', skipped: 'minus-circle', nothing: 'minus', unknown: 'help-circle' };
+  const tone: Record<StageState, string> = { idle: Theme.textDim, active: Theme.blue, back: Theme.violet, waiting: Theme.yellow, done: Theme.green, routed: Theme.textMuted, carried: Theme.yellow, stopped: Theme.red, skipped: Theme.textDim, nothing: Theme.textMuted, unknown: Theme.textMuted };
+  const icon: Record<StageState, FeatherName> = { idle: 'circle', active: 'loader', back: 'corner-down-left', waiting: 'clock', done: 'check-circle', routed: 'arrow-right-circle', carried: 'alert-triangle', stopped: 'x-circle', skipped: 'minus-circle', nothing: 'minus', unknown: 'help-circle' };
   const whoWords = (s: JourneyStage) => (s.state === 'nothing' ? 'Skipped' : finished ? (s.round ? `round ${s.round}` : '') : `${s.state === 'back' ? 'This session' : s.role === 'live' || s.state === 'skipped' ? '' : WHO_WORDS[s.who]}${s.round ? ` · round ${s.round}` : ''}`);
   // What a station's result said, under it (the phone has no hover): what it found or why it skipped, a step it left to the person.
   const result = (s: JourneyStage, indent: number) => (

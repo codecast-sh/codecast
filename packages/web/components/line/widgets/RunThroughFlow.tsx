@@ -16,6 +16,10 @@ import { useRunFlow } from "../../../hooks/useFlowObject";
 import { repositoryOfRemote, sessionRemoteOf, sessionRootOf, sessionWorkspaceOf, useRepoFlows } from "../../../hooks/useRepoFlows";
 import { appPool, previewsPersonal, shipPicks, type AppFlow } from "../../../lib/line/flowPool";
 import { journeyOf, runIsLive, type Journey, type TargetState } from "../../../lib/ship/journey";
+import { changeJourney, changePr, handedTo } from "../../../lib/ship/changePage";
+import { landedSha as mergedSha } from "../../../lib/ship/runRecord";
+import { usePullRequestMerge } from "../../../hooks/useSyncTimeline";
+import { repoObjectId } from "../../../lib/entityLinks";
 import { roundsOnOwnResults } from "../../../lib/ship/ownRound";
 import { stagePathWords } from "@codecast/shared/contracts/flowStagePlan";
 import { journeyWords } from "../../../lib/ship/journeyWords";
@@ -67,12 +71,19 @@ function ShipButton({ conversationId, sessionTitle }: { conversationId: string; 
   const runs = useSessionFlowRuns(conversationId);
   const run = runs?.find(runIsLive) ?? runs?.[0] ?? null;
   const { flow: runFlow } = useRunFlow(run);
-  // A change the run left on main: where the deploy records put it, on every target it touches.
+  // A change on main: the one the run left there, else, for a run that stopped short of merging, the one GitHub merged
+  // its PR as (someone else merged it: changePage landedOutside). Where the deploy records put that change, on every
+  // target it touches: its PR's reach when it went up as one, else its commit's; never the session's other commits.
+  const pr = run ? changePr(run) : null;
+  // Read only where it can change the reading: a stopped run, or a merge handed to its role, with nothing merged on record.
+  const prMerge = usePullRequestMerge(run && (run.status === "failed" || handedTo(run) !== null) && !mergedSha(run) ? pr : null) ?? null;
+  const merged = run ? mergedSha(run) ?? (prMerge?.merged ? prMerge.merge_sha : null) : null;
+  // Landed and left for a deploy to take out (its flow has no Deploy station): the chip then reads the reach.
   const landed = run ? landedSha(run) : null;
-  const reach = useDeployReach(landed);
+  const reach = useDeployReach(merged ? (pr ? repoObjectId({ type: "pr", repository: pr.repository, number: pr.number }) : merged) : null);
   const targets = useMemo(() => reachTargets(reach), [reach]);
   const viewer = useJourneyViewer(run);
-  const journey = useMemo(() => (run && runFlow ? journeyOf(runFlow, run, targets, viewer) : null), [run, runFlow, targets, viewer]);
+  const journey = useMemo(() => (run && runFlow ? changeJourney(runFlow, run, targets, viewer, { pr: prMerge }) : null), [run, runFlow, targets, viewer, prMerge]);
   const press = usePress(conversationId, run?.created_at ?? 0);
   const settled = useSettled(conversationId);
   const live = runIsLive(run);
@@ -102,7 +113,7 @@ function ShipButton({ conversationId, sessionTitle }: { conversationId: string; 
     </button>
   );
   const panel = showRun ? (
-    <RunPanel conversationId={conversationId} run={run} flow={runFlow!} journey={journey!} targets={reach ? targets : undefined} notice={notice} onAgain={() => setAgain(true)} />
+    <RunPanel conversationId={conversationId} run={run} flow={runFlow!} journey={journey!} targets={merged && pr ? targets : undefined} notice={notice} onAgain={() => setAgain(true)} />
   ) : starting && !again ? (
     <Starting press={press!} onOpen={() => { setOpen(false); openMessage(conversationId, press!.id); }} />
   ) : (

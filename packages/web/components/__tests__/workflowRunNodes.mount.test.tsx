@@ -140,4 +140,33 @@ describe("WorkflowRunNodes", () => {
       unmount();
     }
   });
+
+  test("pl-1077 polish 6: an ended run lists no step it never reached; a long command log reads as how it ended; carried is not a pass", async () => {
+    const log = ["7 paths changed since origin/main", "narrowed: packages/web runs 396 of 983", "… 3225 characters cut …", "red in 921s; logs in /tmp/ci-local-lBtKnP", "Still red after the session's turn on it: the pull request opens, and CI judges it against main."].join("\n");
+    const ended = {
+      _id: "kw3abcdefabcdefabcdefabcdefabcde",
+      status: "failed",
+      current_node_id: "exit",
+      node_statuses: [
+        { node_id: "independent-verify", status: "completed", outcome: "carried", started_at: now - 60_000, completed_at: now - 1_000, result_preview: log },
+      ],
+    };
+    const { container, unmount } = await mount({ run: ended, workflow });
+    try {
+      // Stations the run never reached are not listed at all, folded or not.
+      expect(container.querySelector('[data-step="web-client"]')).toBeNull();
+      expect(container.textContent).not.toContain("Not run");
+      const row = container.querySelector('[data-step="independent-verify"]')!;
+      const line = row.querySelector("p")!.textContent!;
+      expect(line).toContain("Still red after the session's turn");
+      expect(line).not.toContain("/tmp/ci-local");
+      expect(line).not.toContain("characters cut");
+      expect(row.querySelector("[data-step-full-output] pre")?.textContent).toBe(log);
+      // Ended red and the run carried on: never the green check.
+      expect(row.querySelector('[aria-label="red, carried on"]')).not.toBeNull();
+      expect(row.querySelector('[aria-label="completed"]')).toBeNull();
+    } finally {
+      unmount();
+    }
+  });
 });

@@ -25,7 +25,7 @@ import { PRDeployBand, PRReachChip } from "./PRDeploy";
 import { PRShipStrip } from "./PRShipStrip";
 import { usePrDeploy } from "../../hooks/usePrDeploy";
 import { usePullRequestRun } from "../../hooks/useSyncWorkflows";
-import { reviewOnHead, type ChangeLink } from "../../lib/ship/changePage";
+import { reviewEarlier, reviewOnHead, type ChangeLink } from "../../lib/ship/changePage";
 
 import { copyToClipboard, relTimeShort } from "../../lib/utils";
 import { withShortcut } from "../../shortcuts/registry";
@@ -377,6 +377,8 @@ export function PRHeader({
   const deploy = usePrDeploy(pr, repository, authed);
   const run = usePullRequestRun(authed ? repository : null, authed ? number : null);
   const runReview = reviewOnHead(run, pr.head_sha);
+  // Its reviewer judged a head the PR has moved past: say so, with the reviewer's session, rather than "nobody".
+  const earlierReview = runReview ? null : reviewEarlier(run, pr.head_sha);
 
   return (
     <header className="pr-band border-b border-sol-border/60 px-5 pt-4 pb-3 shrink-0">
@@ -442,7 +444,8 @@ export function PRHeader({
           {decision && <span style={{ color: accentVar(decision.accent) }}>{decision.label}</span>}
           {/* codecast's reviewer answers on the run, never on GitHub: its verdict on this head counts as a review. */}
           {runReview && run ? <Link href={`/workflows/runs/${run._id}`} style={{ color: accentVar(TONE_ACCENT[runReview.tone]) }} data-pr-run-review>{runReview.label}</Link> : null}
-          {PRReviewers({ pr, reviews }) ?? (!decision && !runReview && <span className="text-sol-text-dim">Nobody has reviewed yet</span>)}
+          {earlierReview && run ? <Link href={earlierReview.session ? `/conversation/${earlierReview.session}` : `/workflows/runs/${run._id}`} className="text-sol-text-muted hover:text-sol-cyan" data-pr-run-review-earlier>{earlierReview.label}</Link> : null}
+          {PRReviewers({ pr, reviews }) ?? (!decision && !runReview && !earlierReview && <span className="text-sol-text-dim">Nobody has reviewed yet</span>)}
         </Figure>
         <Figure label="Merge">
           {merge ? (

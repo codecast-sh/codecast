@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { onPrHead } from "@codecast/shared/contracts/deployTargets";
 import { journeyOf } from "../journey";
 import { stopTitle } from "../journeyWords";
-import { changeAction, changeHeadline, changeLinks, changePr, changeStations, currentHead, deployLine, endedStages, reviewOnHead, shipsChange } from "../changePage";
+import { changeAction, changeHeadline, changeJourney, changeLinks, changePr, changeStations, currentHead, deployLine, endedStages, handedTo, mergeHolder, mergeIsOff, newerMergedRun, reviewEarlier, reviewOnHead, shipsChange } from "../changePage";
 import { deploysHref } from "../../deploys/focus";
 import { BRANCHING_FLOW, UNION_CHANGE_FLOW } from "../journeyFixtures";
 import { appPool, flowBySlug, pushedFlow } from "../../line/flowPool";
@@ -284,7 +284,9 @@ describe("D: a stop always has one way on, and never one that cannot help", () =
     // Once GitHub merged the PR, the switch would change nothing.
     const pr = { merged: true, merge_sha: "e582239aa1" };
     expect(act(off, change, { pr, mergeRole: "or-12" })?.kind).toBe("session");
-    expect(changeHeadline(journeyOf(change, off, [], null), off, change, { pr })).toMatchObject({ words: "Stopped at Merge", waits: "PR merged on GitHub" });
+    // Read as the change: someone else merged it, so it is landed, not stopped (landedOutside).
+    const j = changeJourney(change, off, [], null, { pr });
+    expect(changeHeadline(j, off, change, { pr })).toMatchObject({ words: "Merged by someone else", waits: "Nothing to deploy" });
   });
 
   test("2: a run that recorded its PR never reads No pull request", () => {
@@ -522,5 +524,118 @@ describe("pl-1077 polish 3: a run back at an earlier stage says why; a stage it 
     expect(stages.find((s) => s.id === "pr")?.state).toBe("done");
     // One that has not reached it yet still reads it ahead.
     expect(journeyOf(withLocal as any, run({ current_node_id: "local_ci", node_statuses: [st("start", "completed", 0), st("local_ci", "running", 1)] })).stages.find((s) => s.id === "pr")?.state).toBe("idle");
+  });
+});
+
+describe("pl-1077 polish 6: a change someone else merged reads landed; a merge handed to its role; carried; earlier reviews", () => {
+  // ct-102786's shape: CI green and review ship, Merge refused (merge off), the run ended at Not merged, and a person
+  // merged PR #349 on GitHub.
+  const offReason = "Stopped: merge is off for this flow; a person turns it on with cast role line --merge on";
+  const stopped = run({ status: "failed", current_node_id: "unshipped", fail_reason: offReason, pr: { number: 349, repository: "acme/app", head_sha: "98faff16d9" }, ci_verdict: { green: true, head_sha: "98faff16d9" }, review_verdict: { verdict: "ship", head_sha: "98faff16d9" }, node_statuses: [...ROUND, verdicts("merge", "green", "ship"), st("merge", "failed", 14, { result_preview: "merge is off for this flow" }), st("unshipped", "failed", 15)] });
+  const pr = { merged: true, merge_sha: "fec4c95767" };
+  const live = [{ name: "cli", state: "live", deploy: "dp-3934" }, { name: "mobile", state: "live", deploy: "dp-3939" }, { name: "web", state: "live", deploy: "dp-3933" }] as any;
+  const states = (j: any) => Object.fromEntries(j.stages.map((x: any) => [x.id, x.state]));
+
+  test("H1: PR merged on GitHub: Merged by someone else, live where reach says, no red stop, and the strip from the facts", () => {
+    const j = changeJourney(change, stopped, live, null, { pr });
+    expect(j.outside).toEqual({ sha: "fec4c95767" });
+    expect(changeHeadline(j, stopped, change, { pr, targets: live })).toEqual({ words: "Merged by someone else", waits: "Live on cli, mobile and web", tone: "ok" });
+    const s = states(j);
+    expect(Object.values(s)).not.toContain("stopped");
+    expect([s.merge, s.deploy, s.live]).toEqual(["done", "done", "done"]);
+    expect(j.now.kind).toBe("live");
+    expect(endedStages(j, stopped, change)).toBe(j.stages);
+    expect(changeAction(j, stopped, change, { pr, targets: live })).toBeNull();
+  });
+
+  test("H1: going out and waiting targets read per target; the bar opens Deploys at the one not live", () => {
+    const some = [{ name: "web", state: "live", deploy: "dp-3933" }, { name: "cli", state: "deploying", deploy: "dp-3934" }, { name: "mobile", state: "waiting" }] as any;
+    const j = changeJourney(change, stopped, some, null, { pr });
+    expect(changeHeadline(j, stopped, change, { pr, targets: some }).waits).toBe("Live on web · going out to cli in dp-3934 · waiting to deploy to mobile");
+    expect(states(j).deploy).toBe("active");
+    expect(states(j).live).toBe("idle");
+    expect(changeAction(j, stopped, change, { pr, targets: some })?.kind).toBe("deploys");
+    // Reach not answered and nothing cached: it says it is reading, never a guess; a cached answer paints at once.
+    const reading = changeJourney(change, stopped, [], null, { pr, reading: true });
+    expect(changeHeadline(reading, stopped, change, { pr, targets: [], reading: true }).waits).toBe("Reading where it is live");
+    expect(changeHeadline(j, stopped, change, { pr, targets: some, reading: true }).waits).toMatch(/^Live on web/);
+  });
+
+  test("H1: the server's healed record reads the same, naming who merged it; Live once completed at Live", () => {
+    const healed = { ...stopped, merge: { sha: "fec4c95767", outside: true, by: "ashot" }, fail_reason: "Merged by someone else: #349 merged as fec4c95 by ashot; going live." };
+    const j = changeJourney(change, healed, live, null, {});
+    expect(changeHeadline(j, healed, change, { targets: live })).toMatchObject({ words: "Merged by ashot", waits: "Live on cli, mobile and web" });
+    expect(Object.values(states(j))).not.toContain("stopped");
+    const done = { ...healed, status: "completed", current_node_id: "exit", fail_reason: null, node_statuses: [...healed.node_statuses, st("deploy__wait", "completed", 20, { result_preview: "Live: fec4c95 on cli dp-3934." }), st("deploy__live", "completed", 21, { result_preview: '{"exit": "live"}' })] };
+    const jd = changeJourney(change, done, live, null, {});
+    expect(jd.outside).toBeUndefined();
+    expect(changeHeadline(jd, done, change, { targets: live }).words).toMatch(/^Live on/);
+  });
+
+  test("H1: a run that landed its own change and then stopped keeps its own reading", () => {
+    const own = run({ status: "failed", current_node_id: "deploy__failed", merge: { sha: "31ccbb83b1" }, fail_reason: "Stopped: Deploy stuck", node_statuses: [...MERGED, st("deploy__wait", "failed", 16)] });
+    expect(changeJourney(change, own, [], null, { pr: { merged: true, merge_sha: "31ccbb83b1" } }).outside).toBeUndefined();
+  });
+
+  test("H1: a newer run on the task that merged the same PR keeps Open the newer run and says so, never someone else", () => {
+    const older = { ...stopped, _id: "run1", created_at: 1 };
+    const newerRun = run({ _id: "run2", created_at: 2, status: "completed", current_node_id: "exit", pr: { number: 349, repository: "acme/app" }, merge: { sha: "fec4c95767" } });
+    const otherPr = run({ _id: "run3", created_at: 3, status: "completed", pr: { number: 400, repository: "acme/app" }, merge: { sha: "abc" } });
+    const unmerged = run({ _id: "run4", created_at: 4, status: "failed", pr: { number: 349, repository: "acme/app" } });
+    expect(newerMergedRun(older, [newerRun, otherPr, unmerged])).toBe("run2");
+    expect(newerMergedRun(older, [otherPr, unmerged])).toBeNull();
+    // An earlier run that merged it is not a newer one.
+    expect(newerMergedRun({ ...older, created_at: 9 }, [newerRun])).toBeNull();
+    const j = changeJourney(change, older, live, null, { pr, newerMerged: "run2" });
+    expect(j.outside).toBeUndefined();
+    expect(changeHeadline(j, older, change, { pr, targets: live, newerMerged: "run2" })).toEqual({ words: "A newer run merged it", waits: null, tone: "ok" });
+    expect(changeAction(j, older, change, { pr, newer: "run2", targets: live })).toEqual({ kind: "newer", label: "Open the newer run", href: "/workflows/runs/run2" });
+    // With no newer run that merged it, the same stop reads as someone else's merge.
+    expect(changeJourney(change, older, live, null, { pr, newerMerged: null }).outside).toEqual({ sha: "fec4c95767" });
+  });
+
+  test("H3: a merge handed to its role reads neutral, names the role and opens it; its merge-off words name it too", () => {
+    const handed = run({ status: "completed", current_node_id: "handed", pr: { number: 9, repository: "acme/app", head_sha: "abc1234" }, node_statuses: [...ROUND, verdicts("merge", "green", "ship"), st("merge", "completed", 14, { result_preview: "Merge is @release's: handed to it." }), st("handed", "completed", 15)] });
+    expect(handedTo(handed)).toBe("release");
+    expect(mergeHolder(handed)).toBe("release");
+    expect(changeHeadline(journeyOf(change, handed), handed, change)).toEqual({ words: "Handed to @release", waits: "Waiting for @release to merge it", tone: "idle" });
+    expect(changeAction(journeyOf(change, handed), handed, change, { mergeRole: "or-7" })).toEqual({ kind: "merge_switch", label: "Open @release", href: "/org/or-7" });
+    // Once the role merged it, the run is the merge's, not the hand-off's.
+    expect(handedTo({ ...handed, merge: { sha: "f00d", outside: true } })).toBeNull();
+    // GitHub merged the handed PR before the server's heal: it reads landed, not still waiting on the role.
+    const ghMerged = changeJourney(change, handed, live, null, { pr: { merged: true, merge_sha: "f00dbabe12" } });
+    expect(ghMerged.outside).toEqual({ sha: "f00dbabe12" });
+    expect(changeHeadline(ghMerged, handed, change, { targets: live })).toMatchObject({ words: "Merged by someone else", waits: "Live on cli, mobile and web" });
+    expect(changeAction(ghMerged, handed, change, { mergeRole: "or-7", targets: live })).toBeNull();
+    expect(endedStages(ghMerged, handed, change)).toBe(ghMerged.stages);
+    const refused = run({ ...stopped, fail_reason: "Stopped: @release's merge is off: `cast role line @release --merge on` lets its hands merge" });
+    expect(mergeIsOff(refused)).toBe(true);
+    expect(mergeHolder(refused)).toBe("release");
+    expect(changeHeadline(journeyOf(change, refused), refused, change).waits).toBe("@release's merge is off");
+  });
+
+  test("M1: Local CI red that the run carried past reads amber, never done", () => {
+    const withLocal = {
+      ...change,
+      nodes: [...change.nodes, { id: "local_ci", label: "Local CI", type: "command", shape: "parallelogram" }],
+      edges: [...change.edges.filter((e: any) => !(e.from === "start" && e.to === "pr")), { from: "start", to: "local_ci" }, { from: "local_ci", to: "pr" }],
+    };
+    const r = run({ current_node_id: "checks", node_statuses: [st("start", "completed", 0), st("local_ci", "completed", 1, { outcome: "carried", result_preview: "red in 921s\nStill red: the pull request opens" }), PR, st("checks", "running", 2)] });
+    const j = journeyOf(withLocal as any, r);
+    const local = j.stages.find((x) => x.id === "local_ci")!;
+    expect(local.state).toBe("carried");
+    expect(local.steps?.find((x) => x.id === "local_ci")?.carried).toBe(true);
+    // A green Local CI stays done.
+    const green = run({ current_node_id: "checks", node_statuses: [st("start", "completed", 0), st("local_ci", "completed", 1, { outcome: "success" }), PR, st("checks", "running", 2)] });
+    expect(journeyOf(withLocal as any, green).stages.find((x) => x.id === "local_ci")!.state).toBe("done");
+  });
+
+  test("M3: a review on a head the PR moved past says which head, with the reviewer's session", () => {
+    const r = { review_verdict: { verdict: "ship", head_sha: "a5a6b73ab9" }, node_statuses: [st("review", "completed", 3, { session: { _id: "jx71qnd" } })] };
+    expect(reviewEarlier(r, "6f6af8889a")).toEqual({ label: "Reviewed an earlier head (a5a6b73)", sha: "a5a6b73", session: "jx71qnd" });
+    expect(reviewEarlier(r, "a5a6b73ab9")).toBeNull();
+    // A rebase Merge made carries the verdict over: it is this head's review.
+    expect(reviewEarlier({ ...r, station_rebases: [{ from: "a5a6b73ab9", to: "6f6af8889a" }] }, "6f6af8889a")).toBeNull();
+    expect(reviewEarlier({ node_statuses: [] }, "6f6af8889a")).toBeNull();
   });
 });

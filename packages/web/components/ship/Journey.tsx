@@ -9,7 +9,7 @@ import { createContext, memo, useContext, useId, useMemo, useState } from "react
 import Link from "next/link";
 import { useInboxStore } from "../../store/inboxStore";
 import { roleRowsOf } from "../../lib/roleRows";
-import { ArrowRight, Check, ChevronDown, CornerDownLeft, Loader2, Minus, X } from "lucide-react";
+import { ArrowRight, Check, ChevronDown, CornerDownLeft, Loader2, Minus, AlertTriangle, X } from "lucide-react";
 import { insideWords, targetsFromLine, withRunDeploys, type InsideRoute, type Journey as JourneyModel, type JourneyStage, type JourneyNow, type JourneyWait, type TargetState } from "../../lib/ship/journey";
 import { WHO_WORDS, gateWaitWords, holdWords, outputSummary, plainNote, sentBackWords, stopTitle, waitWords } from "../../lib/ship/journeyWords";
 import { approvalWords } from "../../lib/ship/approval";
@@ -110,7 +110,7 @@ const BRANCH_FLAG: Partial<Record<JourneyStage["state"], { glyph: string; words:
 };
 
 /** A stage's state in words for a screen reader: its node, which shows it, is hidden from one. */
-const STATE_WORDS: Partial<Record<JourneyStage["state"], string>> = { done: "done", active: "current", waiting: "waiting", back: "sent back", stopped: "stopped", routed: "went another way", skipped: "skipped", nothing: "ran, skipped", unknown: "not known" };
+const STATE_WORDS: Partial<Record<JourneyStage["state"], string>> = { done: "done", active: "current", waiting: "waiting", back: "sent back", stopped: "stopped", routed: "went another way", carried: "red, carried on", skipped: "skipped", nothing: "ran, skipped", unknown: "not known" };
 function StateWords({ state }: { state: JourneyStage["state"] }) {
   return STATE_WORDS[state] ? <span className="sr-only">, {STATE_WORDS[state]}</span> : null;
 }
@@ -191,7 +191,7 @@ function StageDetail({ stage, now_ms, task }: { stage: JourneyStage; now_ms: num
     <ul className="sj-detail" data-journey-detail={stage.id}>
       {(stage.steps ?? []).map((st) => (
         <li key={st.id} data-status={st.status}>
-          <span className="sj-detail-mark" data-status={st.skipped || st.earlier ? "skipped" : st.status} aria-hidden />
+          <span className="sj-detail-mark" data-status={st.skipped || st.earlier ? "skipped" : st.carried ? "carried" : st.status} aria-hidden />
           <b>{st.label}</b>
           {st.skipped ? <span className="sj-skip">Skipped</span> : st.earlier ? <span className="sj-skip">earlier round</span> : null}
           {st.visits && st.visits > 1 ? <span className="sj-round">round {st.visits}</span> : null}
@@ -211,6 +211,7 @@ function Mark({ state }: { state: JourneyStage["state"] }) {
   if (state === "stopped") return <X className="w-3 h-3" strokeWidth={3} />;
   if (state === "back") return <CornerDownLeft className="w-3 h-3" strokeWidth={2.6} />;
   if (state === "routed") return <ArrowRight className="w-3 h-3" strokeWidth={2.6} />;
+  if (state === "carried") return <AlertTriangle className="w-3 h-3" strokeWidth={2.6} />;
   if (state === "nothing") return <Minus className="w-3 h-3" strokeWidth={3} />;
   if (state === "unknown") return <b className="sj-unknown" aria-hidden>?</b>;
   if (state === "active") return <i className="sj-pulse" />;

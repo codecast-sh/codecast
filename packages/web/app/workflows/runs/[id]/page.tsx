@@ -12,7 +12,7 @@ import { RunGate } from "../../../../components/WorkflowContextPanel";
 import { RunSessionAsk } from "../../../../components/ship/Journey";
 import { ChangeRunHead } from "../../../../components/ship/ChangeRunHead";
 import { useRunFlow } from "../../../../hooks/useFlowObject";
-import { shipsChange } from "../../../../lib/ship/changePage";
+import { shipsChange, newerMergedRun } from "../../../../lib/ship/changePage";
 import { useJourneyViewer } from "../../../../hooks/useJourneyViewer";
 import { WorkflowRunNodes } from "../../../../components/WorkflowRunNodes";
 import { formatRunDuration, runNodeCounts, runNodeRows, wfFmtTokens } from "../../../../lib/workflowRun";
@@ -286,7 +286,7 @@ function RunDetailContent({ runId }: { runId: string }) {
       <div className="flex-1 overflow-y-auto">
         <div className="max-w-[60rem] mx-auto px-5 py-5 space-y-7">
           {/* What the run did and what is true now, then where each fact lives. */}
-          {changeFlow ? <ChangeRunHead run={run} flow={changeFlow} now_ms={nowMs} chips={pageChips} newer={newer} /> : (
+          {changeFlow ? <ChangeRunHead run={run} flow={changeFlow} now_ms={nowMs} chips={pageChips} newer={newer} newerMerged={newerMergedRun(run as any, earlier as any)} /> : (
           <section data-run-report-head>
             <p className="text-[17px] leading-snug font-medium">
               <RunOutcomeText run={run as ReportRun} task={task} graph={workflow as any} ask={ask} />

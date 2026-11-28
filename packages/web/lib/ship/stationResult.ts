@@ -6,6 +6,12 @@
 
 export type StationResult = { outcome: string | null; note: string | null; leftForYou: string | null };
 
+/** The runner's outcome on a station that ended red and let the run carry on past it (Local CI red, the pull request
+ *  opens and CI judges it): completed, never passed. Mirrors CARRIED_OUTCOME in shared/contracts/stationOutcome.ts,
+ *  which the engine adds; read it from there once both have landed. */
+export const CARRIED_OUTCOME = "carried";
+export const isCarriedOutcome = (outcome: string | null | undefined) => outcome === CARRIED_OUTCOME;
+
 const text = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);
 
 /** A station's result JSON, when its output carries one with an outcome or a step left; null for any other output. */

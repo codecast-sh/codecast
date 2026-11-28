@@ -13,7 +13,7 @@ import { ChevronRight } from "lucide-react";
 import { onPrHead, type ShippingRun, type ShippingShipper } from "@codecast/shared/contracts/deployTargets";
 import { normalizeRepository } from "@codecast/shared/contracts";
 import type { CheckoutRow } from "@codecast/shared/contracts/checkouts";
-import { CHANGE_STEPS, ago, byUrgency, openPrs, prState, prStepper, repositoryOfRun, runOwner, runState, runWordTarget, shippingRuns, stepper, stepsFor, type CardId, type OpenPr } from "../../lib/deploys/board";
+import { CHANGE_STEPS, ago, byUrgency, openPrs, prState, prStepper, repositoryOfRun, runOwner, runState, runWordTarget, shippingRuns, stepper, trackFor, type CardId, type OpenPr } from "../../lib/deploys/board";
 import { prMatches, runMatches, type DeployFocus } from "../../lib/deploys/focus";
 import { EntityIdPill } from "../EntityIdPill";
 import { usePullRequestRun } from "../../hooks/useSyncWorkflows";
@@ -144,7 +144,7 @@ function RunCard({ r, repository, tagIn, now, focus, earlier, dropped = false }:
         {r.task_short_id ? <Link className="dpp-run-title" href={`/tasks/${r.task_short_id}`}>{title}</Link> : <span className="dpp-run-title">{title}</span>}
         <span className="dpp-age">{ago(now, r.updated_at)}</span>
       </div>
-      <ShipTrack track={stepsFor(r)} steps={stepper(r)} state={state} word={to ? <RunWord to={to} word={state.word} /> : undefined} />
+      <ShipTrack track={trackFor(r)} steps={stepper(r)} state={state} word={to ? <RunWord to={to} word={state.word} /> : undefined} />
       <div className="dpp-refs">
         {r.spawner_conversation_id && !r.stand_in ? <EntityIdPill type="session" id={r.spawner_conversation_id} wide /> : null}
         {r.pr ? <EntityIdPill type="pr" id={`${r.pr.repository || repository}#${r.pr.number}`} idLabel={`#${r.pr.number}`} certain compact bare /> : null}

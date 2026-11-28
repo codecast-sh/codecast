@@ -16,7 +16,7 @@ mock.module("../../comments/CommentAvatar", () => ({ CommentAvatar: () => null }
 mock.module("../../../hooks/usePrDeploy", () => ({ usePrDeploy: () => ({}) }));
 // The run review reads the store too: this header renders with no run.
 mock.module("../../../hooks/useSyncWorkflows", () => ({ usePullRequestRun: () => null }));
-mock.module("../../../lib/ship/changePage", () => ({ reviewOnHead: () => null }));
+mock.module("../../../lib/ship/changePage", () => ({ reviewOnHead: () => null, reviewEarlier: () => null }));
 mock.module("../../pr/PRDeploy", () => ({ PRDeployBand: () => null, PRReachChip: () => null, PRShipsTo: () => null }));
 // An open PR's shepherd sits in its Shipping strip, whose run read needs Convex: the strip here is the shepherd it is handed.
 mock.module("../../pr/PRShipStrip", () => ({ PRShipStrip: ({ shepherd }: any) => <>{shepherd}</> }));

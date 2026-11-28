@@ -2,7 +2,7 @@ import { after, onPrHead, splitQueue, upTo } from "@codecast/shared/contracts/de
 import { describe, expect, test } from "bun:test";
 import {
   attemptGroups, branchHref, carriedOfAttempts, carriedOfDeploy, carriedOfQueue, fold, mineSessionIds, queueCommits, repositoryOfRun, rowsFor,
-  recordedOf, runOwner, runState, runWordTarget, shipperOf, shippingRuns, stepper, stepsFor, tasksOnMain, withLines, yourSessions,
+  recordedOf, runOwner, runState, runWordTarget, shipperOf, shippingRuns, stepper, stepsFor, tasksOnMain, trackFor, withLines, yourSessions,
   isMerged, type BoardDeploy, type BoardQueueCommit,
 } from "../board";
 import { runWord } from "../spot";
@@ -543,5 +543,16 @@ describe("folding long lists", () => {
     expect(fold(13)).toEqual({ shown: 13, hidden: 0 });
     expect(fold(14)).toEqual({ shown: 14, hidden: 0 });
     expect(fold(15)).toEqual({ shown: 12, hidden: 3 });
+  });
+});
+
+describe("a run at Local CI names it on its track (pl-1077 polish 6)", () => {
+  test("its CI step reads Local CI while it is there, and CI again once it moves on", () => {
+    const st = (node_id: string, status: string) => ({ node_id, status, started_at: 1 });
+    const local = run("r1", { current_node_id: "local_ci", current_node_label: "Local CI", node_statuses: [st("pr", "completed"), st("local_ci", "running")] });
+    expect(trackFor(local).map((s) => s.word)).toEqual(["PR", "Local CI", "Review", "Merge"]);
+    expect(stepper(local)[1]).toBe("active");
+    expect(trackFor({ ...local, current_node_id: "local_ci_fix" }).map((s) => s.word)[1]).toBe("Local CI");
+    expect(trackFor({ ...local, current_node_id: "checks" })).toBe(stepsFor({ ...local, current_node_id: "checks" }));
   });
 });
