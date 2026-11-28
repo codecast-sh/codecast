@@ -182,26 +182,46 @@ describe("a repo flow runs as the default branch has it", () => {
     git(clone, "checkout", "-q", "-b", "behind", old);
     expect(fs.existsSync(wrapperIn(clone))).toBe(false);
 
-    const r = repoFlowAtDefault("change", clone, null, { fetch: false, cacheRoot: cache });
-    expect(r.use).toBe("default");
-    if (r.use !== "default") return;
-    const graph = parseWorkflowFile(r.file);
-    expect(graph.nodes.has("local_ci")).toBe(true);
-    // What `cast workflow run <copy>` pushes, and the server hands the daemon back as the run's pinned graph.
-    const pushed = graphOrigin(r.file, graph, "dev-1")!;
-    expect(pushed.root).toBe(path.dirname(path.dirname(path.dirname(r.file))));
-    expect(pushed.file).toBe(".codecast/flows/change.cast");
-    const { nodes, edges } = graphToPushPayload(graph);
-    const wf = { name: graph.name, slug: "change", source: r.source, nodes, edges, origin: { device_id: pushed.device_id, root: pushed.root, file: pushed.file } };
-    const run = { workflow_name: "change", project_path: clone, task_short_id: "ct-1" };
-    const ran = daemonRunGraph(run, wf, clone, "dev-1").graph!;
-    expect(ran.nodes.has("local_ci")).toBe(true);
-    expect(ran.edges.some((e) => e.from === "local_ci" && e.to === "pr")).toBe(true);
-    // Resumed, it reads the same copy.
-    expect(daemonRunGraph({ ...run, current_node_id: "local_ci" }, wf, clone, "dev-1", true).graph!.nodes.has("local_ci")).toBe(true);
-    // Another repo's run on this machine never takes this repo's copy for its own.
-    const other = mkdtemp();
-    git(other, "init", "-q", "-b", "main");
-    expect(daemonRunGraph({ ...run, project_path: other }, wf, other, "dev-1").graph!.nodes.has("local_ci")).toBe(false);
+    const was = process.env.CODECAST_FLOWS_CACHE;
+    process.env.CODECAST_FLOWS_CACHE = cache;
+    try {
+      ranFromCopy(clone);
+    } finally {
+      if (was === undefined) delete process.env.CODECAST_FLOWS_CACHE;
+      else process.env.CODECAST_FLOWS_CACHE = was;
+    }
   });
 });
+
+/** Start a run from `clone` the way `cast flow run` does, and read the graph the daemon executes for it. */
+function ranFromCopy(clone: string) {
+  const r = repoFlowAtDefault("change", clone, null, { fetch: false });
+  expect(r.use).toBe("default");
+  if (r.use !== "default") return;
+  const graph = parseWorkflowFile(r.file);
+  expect(graph.nodes.has("local_ci")).toBe(true);
+  // What `cast workflow run <copy>` pushes, and the server hands the daemon back as the run's pinned graph.
+  const pushed = graphOrigin(r.file, graph, "dev-1")!;
+  expect(pushed.root).toBe(path.dirname(path.dirname(path.dirname(r.file))));
+  expect(pushed.file).toBe(".codecast/flows/change.cast");
+  const { nodes, edges } = graphToPushPayload(graph);
+  const wf = { name: graph.name, slug: "change", source: r.source, nodes, edges, origin: { device_id: pushed.device_id, root: pushed.root, file: pushed.file } };
+  const run = { workflow_name: "change", project_path: clone, task_short_id: "ct-1" };
+  const ran = daemonRunGraph(run, wf, clone, "dev-1").graph!;
+  expect(ran.nodes.has("local_ci")).toBe(true);
+  expect(ran.edges.some((e) => e.from === "local_ci" && e.to === "pr")).toBe(true);
+  // Resumed, it reads the same copy.
+  expect(daemonRunGraph({ ...run, current_node_id: "local_ci" }, wf, clone, "dev-1", true).graph!.nodes.has("local_ci")).toBe(true);
+  // Another repo's run on this machine never takes this repo's copy for its own.
+  const other = mkdtemp();
+  git(other, "init", "-q", "-b", "main");
+  expect(daemonRunGraph({ ...run, project_path: other }, wf, other, "dev-1").graph!.nodes.has("local_ci")).toBe(false);
+  // A copy's marker counts only inside the flow cache: a stray one in another checkout, naming this repo, makes that
+  // checkout's flow no flow of this repo's, and a push from it records its own checkout.
+  put(other, ".codecast/flows/change.cast", `digraph change { start [shape=Mdiamond]; stray_only; exit [shape=Msquare]; start -> stray_only -> exit }\n`);
+  fs.copyFileSync(path.join(path.dirname(path.dirname(path.dirname(r.file))), ".codecast-flow-copy"), path.join(other, ".codecast-flow-copy"));
+  const strayFile = path.join(other, ".codecast/flows/change.cast");
+  expect(graphOrigin(strayFile, parseWorkflowFile(strayFile), "dev-1")!.root).toBe(other);
+  const stray = { ...wf, source: fs.readFileSync(strayFile, "utf-8"), origin: { device_id: "dev-1", root: other, file: ".codecast/flows/change.cast" } };
+  expect(daemonRunGraph(run, stray, clone, "dev-1").graph!.nodes.has("stray_only")).toBe(false);
+}

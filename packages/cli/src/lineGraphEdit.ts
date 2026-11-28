@@ -239,6 +239,8 @@ export async function runLineGraphEdit(
   const root = path.resolve(args.root);
   const castAbs = await deps.admit(path.join(root, args.file));
   if (!castAbs) throw new LineGraphError(`${path.join(root, args.file)} is not a graph in a project this machine tracks`);
+  // A default-branch copy (flowCopy.ts) is rewritten from the branch on the next run: an edit there would be lost.
+  if (flowCopyRoot(castAbs)) throw new LineGraphError(`${castAbs} is a copy of the repo's default-branch flow, which the next run writes again: edit ${args.file} in a checkout and push it`);
   const realRoot = fs.existsSync(root) ? fs.realpathSync(root) : root;
   const plan = planGraphEdit(castAbs, args, { root: realRoot });
   const writes: Array<{ file: string; content: string }> = [];

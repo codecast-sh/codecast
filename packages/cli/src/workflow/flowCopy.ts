@@ -6,6 +6,7 @@
 // ran the behind checkout's instead, the shipped template with no Local CI (ct-102787, ct-102790).
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { defaultFlowsCache } from "./teamFlowIndex.js";
 
 const MARKER = ".codecast-flow-copy";
 
@@ -18,16 +19,25 @@ export function markFlowCopy(dir: string, repo: string, sha: string): void {
   fs.writeFileSync(file, text);
 }
 
+const real = (p: string) => { try { return fs.realpathSync(p); } catch { return path.resolve(p); } };
+
+/** Whether `dir` sits inside this machine's flow cache: a marker anywhere else (a stray file in a checkout) is no copy. */
+function inCache(dir: string): boolean {
+  const rel = path.relative(real(defaultFlowsCache()), real(dir));
+  return !!rel && !rel.startsWith("..") && !path.isAbsolute(rel);
+}
+
 /** The default-branch copy directory holding `abs`, or null when `abs` is in none. */
 export function flowCopyRoot(abs: string): string | null {
   for (let dir = path.dirname(path.resolve(abs)); ; dir = path.dirname(dir)) {
-    if (fs.existsSync(path.join(dir, MARKER))) return dir;
+    if (fs.existsSync(path.join(dir, MARKER))) return inCache(dir) ? dir : null;
     if (path.dirname(dir) === dir) return null;
   }
 }
 
 /** The repo (its git common dir) the copy at `root` was read from, or null when `root` is no copy. */
 export function flowCopyRepo(root: string): string | null {
+  if (!inCache(root)) return null;
   try {
     const repo = JSON.parse(fs.readFileSync(path.join(root, MARKER), "utf-8"))?.repo;
     return typeof repo === "string" && repo ? repo : null;
