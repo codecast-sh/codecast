@@ -232,6 +232,18 @@ describe("TaskScheduler device affinity", () => {
     expect(calls.completed).toEqual(["t1"]);
   });
 
+  it("leaves a gated injection task to the device holding its checkout, where its precheck runs", async () => {
+    const elsewhere = { ...spawnTask("t1", path.join(dir, "nope")), originating_conversation_id: "conv123", precheck: "cast release sweep --new", precheck_mode: "state" };
+    const away = makeScheduler([elsewhere], { claimResult: (t) => t });
+    await away.scheduler.poll();
+    expect(away.calls.claimed).toEqual([]);
+    expect(away.calls.injected).toEqual([]);
+
+    const here = makeScheduler([{ ...elsewhere, project_path: dir }], { claimResult: (t) => t });
+    await here.scheduler.poll();
+    expect(here.calls.claimed).toEqual(["t1"]);
+  });
+
   it("claims a task created on this device", async () => {
     const task = { ...spawnTask("t1", dir), created_device_id: deviceId() };
     const { scheduler, calls } = makeScheduler([task]);
@@ -609,12 +621,12 @@ describe("precheck gate", () => {
     expect(calls.injected).toEqual(["conv123"]);
   });
 
-  it("runs ungated when the named directory is gone, rather than answering about $HOME", async () => {
+  it("leaves the firing due when the named directory is not here, rather than answering about $HOME or running ungated", async () => {
     const task = injectTask("exit 1", { project_path: path.join(dir, "vanished") });
     const { scheduler, calls } = makeScheduler([task], { claimResult: (t) => t });
     await scheduler.poll();
-    expect(calls.skipped).toEqual([]);
-    expect(calls.injected).toEqual(["conv123"]);
+    expect(calls.claimed).toEqual([]);
+    expect(calls.injected).toEqual([]);
   });
 
   it("a trigger with no precheck runs exactly as before", async () => {

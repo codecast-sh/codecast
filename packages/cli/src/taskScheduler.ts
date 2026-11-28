@@ -413,9 +413,11 @@ export class TaskScheduler {
       reason = `created on device ${task.created_device_id.slice(0, 8)}, this is ${deviceId().slice(0, 8)}`;
     } else if (task.originating_conversation_id) {
       // Injection tasks (--context current) only enqueue a message; the
-      // server's device routing delivers it, so any daemon can enqueue.
-      eligible = true;
-      reason = "";
+      // server's device routing delivers it, so any daemon can enqueue. A gated
+      // one runs its precheck in its checkout, so only a device that has it may
+      // claim: elsewhere it would run ungated and wake on every firing.
+      eligible = !(task.precheck && task.project_path) || fs.existsSync(task.project_path);
+      reason = `its precheck runs in ${task.project_path}, which does not exist on this device`;
     } else if (task.project_path) {
       // Spawn tasks bind to a checkout: only a device that has it may claim.
       eligible = fs.existsSync(task.project_path);
