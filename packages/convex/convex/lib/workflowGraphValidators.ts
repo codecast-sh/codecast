@@ -58,6 +58,11 @@ export const workflowNodeValidator = v.object({
   silent: v.optional(v.number()),
   refresh: v.optional(v.boolean()),
   max_free_visits: v.optional(v.number()),
+  // A call station's answer cap, system prompt and shape, and the stage name a station's stop and gate answer say.
+  max_tokens: v.optional(v.number()),
+  system: v.optional(v.string()),
+  output: v.optional(v.union(v.literal("json"), v.literal("text"))),
+  segment_label: v.optional(v.string()),
 });
 
 export const workflowEdgeValidator = v.object({
@@ -66,6 +71,7 @@ export const workflowEdgeValidator = v.object({
   label: v.optional(v.string()),
   condition: v.optional(v.string()),
   free_visit: v.optional(v.string()),
+  weight: v.optional(v.number()),
 });
 
 /** Each station's text file, repo-relative, for a graph that reads them (`@file`). */

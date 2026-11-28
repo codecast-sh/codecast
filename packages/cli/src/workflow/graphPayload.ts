@@ -50,6 +50,12 @@ export function graphNodesPayload(graph: WorkflowGraph) {
     ...(n.silent !== undefined ? { silent: n.silent } : {}),
     ...(n.refresh ? { refresh: true } : {}),
     ...(n.max_free_visits !== undefined ? { max_free_visits: n.max_free_visits } : {}),
+    // A call station's answer: its cap, its system prompt and its shape.
+    ...(n.max_tokens !== undefined ? { max_tokens: n.max_tokens } : {}),
+    ...(n.system ? { system: n.system } : {}),
+    ...(n.output ? { output: n.output } : {}),
+    // The stage a station's stop and gate answer name (runner.ts stop_stage).
+    ...(n.segment_label ? { segment_label: n.segment_label } : {}),
   }));
 }
 
@@ -59,5 +65,6 @@ export function graphEdgesPayload(graph: WorkflowGraph) {
     ...(e.label ? { label: e.label } : {}),
     ...(e.condition ? { condition: e.condition } : {}),
     ...(e.free_visit ? { free_visit: e.free_visit } : {}),
+    ...(e.weight !== undefined ? { weight: e.weight } : {}),
   }));
 }
