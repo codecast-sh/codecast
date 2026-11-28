@@ -319,9 +319,12 @@ async function runLiveAt(ctx: any, run: Doc<"workflow_runs">, repository: string
   if (!commit?.main_at) return null;
   if (d && !(sameSha(d.sha, commit.sha) || (d.cut_at != null && commit.main_at <= d.cut_at))) return null;
   const files = commit.files?.map((f) => f.filename) ?? null;
-  const reach = await reachOf(ctx, (w) => workspaceGrantsAccess(ctx, run.user_id, w), repository, { sha: commit.sha, main_at: commit.main_at, merged_at: commit.main_at }, files);
-  // No reach: the change touches no deploy target, so it is live once it is on main.
+  const at = { sha: commit.sha, main_at: commit.main_at, merged_at: commit.main_at };
+  const reach = await reachOf(ctx, (w) => workspaceGrantsAccess(ctx, run.user_id, w), repository, at, files);
   if (reach && reach.state !== "live") return null;
+  // No reach is live once on main only when no target at all takes the change out: targets its owner cannot read
+  // still decide, and say nothing, as the run's own wait keeps waiting when no target can answer (awaitDeploy).
+  if (!reach && (await reachOf(ctx, async () => true, repository, at, files))) return null;
   const graph = await runWorkflowOf(ctx, run);
   const prefix = stop ?? (graph ? deployPrefixOf(graph as unknown as GraphShape) : null);
   const to = graph && prefix ? liveExitOf(graph as unknown as GraphShape, prefix) : null;
@@ -441,7 +444,7 @@ async function runsMergedInto(ctx: any, d: Doc<"deploys">): Promise<Doc<"workflo
       .query("workflow_runs")
       .withIndex("by_merge_sha", (q: any) => q.gte("merge.sha", s).lt("merge.sha", `${s}~`))
       .take(20);
-    for (const r of rows) if (r.status === "failed" || mergedOutside(r)) runs.set(String(r._id), r);
+    for (const r of rows) if ((!r.pr || r.pr.repository === d.repository) && (r.status === "failed" || mergedOutside(r))) runs.set(String(r._id), r);
   }
   return [...runs.values()];
 }

@@ -334,6 +334,15 @@ describe("an outside merge goes Live whichever workspace its run sits in", () =>
     expect(run(t, "run_s").node_statuses.find((n: any) => n.node_id === "deploy__wait").result_preview).toBe(`Live: ${sha(5).slice(0, 7)} is on main, and no deploy target takes it out.`);
   });
 
+  test("a run whose owner cannot read the target that takes its merge out stays failed, not Live on main", async () => {
+    const { t, mergedOnGitHub } = await world();
+    // Its owner is in no team that owns the targets; cli takes sha(2) out, and nothing has taken it live.
+    t.users.push({ _id: "user_out", name: "Out" });
+    t.workflow_runs.push({ ...endedBeforeMerge("run_o", 26, "task_c", "stopped"), user_id: "user_out", workspace: "user:user_out" });
+    expect(await mergedOnGitHub(26, 2)).toBe("run_o");
+    expect(run(t, "run_o")).toMatchObject({ status: "failed", merge: { outside: true } });
+  });
+
   test("the backfill completes a run that recorded the merge but stayed failed, its dry run changes nothing, and a completed run is left alone", async () => {
     const { t, mark, drain, heal } = await world();
     inOther(t);
