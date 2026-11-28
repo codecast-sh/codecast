@@ -107,6 +107,7 @@
     "./contracts/deployReach": "./contracts/deployReach.ts",
     "./contracts/ciFailures": "./contracts/ciFailures.ts",
     "./contracts/stationOutcome": "./contracts/stationOutcome.ts",
+    "./contracts/mergeOff": "./contracts/mergeOff.ts",
     "./contracts/mainRed": "./contracts/mainRed.ts",
     "./contracts/lineDeploy": "./contracts/lineDeploy.ts",
     "./contracts/deployAuthority": "./contracts/deployAuthority.ts",

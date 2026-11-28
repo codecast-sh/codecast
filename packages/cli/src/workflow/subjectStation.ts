@@ -6,6 +6,7 @@
 // hears the gate's answer and how the run ended. Everything here is what the
 // runner says to the session and how it reads its change back; the waiting is
 // the runner's own station wait (waitOnStation).
+import { handedRole } from "@codecast/shared/contracts/mergeOff";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { WorkflowGraph } from "./types";
@@ -178,6 +179,9 @@ export async function findingRoots(cwd: string, worktree: string | undefined): P
 export function runEndMessage(graph: WorkflowGraph, opts: { taskId?: string; endLabel: string; failed: boolean; failReason?: string; lastOutput?: string; landed?: boolean; whole?: boolean }): string {
   const flow = graph.label || graph.name;
   const on = opts.taskId ? ` on ${opts.taskId}` : "";
+  const handed = opts.failed ? null : handedRole(opts.lastOutput);
+  // Handed to the role behind the run: nothing merged, and the server ends the run at Live once the role's merge is.
+  if (handed) return `The ${flow} run${on} handed its merge to @${handed}: @${handed}'s merge is off, so @${handed} merges the change itself. The run ends at Live once that merge goes live; nothing is waiting on this session for it meanwhile.`;
   if (!opts.failed) {
     const said = (opts.lastOutput ?? "").replace(ANSI, "").split("\n").map((l) => l.trim()).filter(Boolean).pop();
     // Words that open with the end's own name ("Live: e180ae0 on …") say it once.
@@ -195,6 +199,12 @@ export function runEndMessage(graph: WorkflowGraph, opts: { taskId?: string; end
     : `The change was not ${personal ? "landed" : "merged"}. Run it again with \`cast flow run ${personal ? "change" : graph.name}\` once it is ready.`;
   return `The ${flow} run${on} stopped at ${opts.endLabel}: ${why}. ${after}`;
 }
+
+/** The runner's banner for a run that completed: handed to the role behind it, or complete. */
+export const completeBanner = (lastOutput: string | undefined): string => {
+  const role = handedRole(lastOutput);
+  return role ? `Handed to @${role}` : "Workflow complete";
+};
 
 /** Why a run stops when a stage has sent the change back to its session as often as the flow allows. */
 export function sentBackWords(stage: string, times: number): string {

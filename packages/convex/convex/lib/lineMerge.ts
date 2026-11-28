@@ -4,6 +4,7 @@
 // role reader (orgRoles.lineOfRole) and the merge step share one reading.
 
 import { countersFor } from "./orgCaps";
+import { MERGE_OFF_REASON, roleMergeOffReason } from "@codecast/shared/contracts/mergeOff";
 
 export const MERGE_AUTHORITY_ID = "merge";
 export const MERGE_AUTHORITY_LABEL = "Merge the flow's approved branches into the project's default branch when their checks pass; the daily limit counts merges only";
@@ -45,7 +46,7 @@ export function mergeAllowance(role: { handle?: string | null; line_merge?: bool
   const bar = role.line_merge_rate ? { bar: role.line_merge_rate.bar, min: role.line_merge_rate.min } : null;
   const base = { on, used, limit, grant, mode: bar ? "rate" as const : "count" as const, bar, measured };
   // The switch is the role's: its hands' runs stop here, and the role merges their changes itself.
-  if (!on) return { ...base, allowed: false, reason: role.handle ? `@${role.handle}'s merge is off: \`cast role line @${role.handle} --merge on\` lets its hands merge` : "merge is off for this flow; a person turns it on with cast role line --merge on" };
+  if (!on) return { ...base, allowed: false, reason: role.handle ? roleMergeOffReason(role.handle) : MERGE_OFF_REASON };
   if (role.status && role.status !== "active") return { ...base, allowed: false, reason: `the role is ${role.status}` };
   if (!grant) {
     const expired = (role.authority ?? []).some((a) => a.id === MERGE_AUTHORITY_ID);

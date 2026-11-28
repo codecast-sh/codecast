@@ -178,3 +178,13 @@ test("a variant of change keeps the library's restart at the library's stop node
   expect(await stopWords(noci, shipped.filter((n) => n.id !== "noci"))).toBeNull();
   expect(await stopWords(noci, [{ id: "noci", stop: "Own words: `cast workflow resume x --at ci`" }])).toContain("--at ci");
 });
+
+// Polish round 6 (verifier): a run handed to its role is not "Workflow complete" and its session is not told it is over.
+test("a run handed to its role says so in its banner and to its session", async () => {
+  const { runEndMessage, completeBanner } = await import("./subjectStation.js");
+  const merge = "Merge is @release's: handed to it. @release's merge is off: `cast role line @release --merge on` lets its hands merge.";
+  expect(completeBanner(merge)).toBe("Handed to @release");
+  expect(completeBanner("Live: abc1234 on cli dp-1.")).toBe("Workflow complete");
+  expect(runEndMessage({ name: "change", label: "Ship" } as any, { taskId: "ct-9", endLabel: "Handed to its role", failed: false, lastOutput: merge }))
+    .toBe("The Ship run on ct-9 handed its merge to @release: @release's merge is off, so @release merges the change itself. The run ends at Live once that merge goes live; nothing is waiting on this session for it meanwhile.");
+});

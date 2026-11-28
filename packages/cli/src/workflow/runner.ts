@@ -41,7 +41,7 @@ import { RUN_CONVERSATION_ENV } from "../sessionIdentity.js";
 import { behindWords, frozenChangeContext, heldWords, readFrozenChange } from "./flowChangeFile.js";
 import { carriedFailureNote } from "./unpushedCommits.js";
 import { webBaseUrl } from "../config/readLocalConfig.js";
-import { checkoutChangeOf, failureExcerpt, findingRoots, gateAnswerMessage, runEndMessage, runWorktreePath, sentBackWords, subjectOf, writerBrief, writersNamed, type Subject, type Writer } from "./subjectStation.js";
+import { checkoutChangeOf, completeBanner, failureExcerpt, findingRoots, gateAnswerMessage, runEndMessage, runWorktreePath, sentBackWords, subjectOf, writerBrief, writersNamed, type Subject, type Writer } from "./subjectStation.js";
 import { notLiveYet, startSubjectParker, subjectOtherWork, subjectRow, subjectSettled, subjectTakenOver, SubjectTurn, type SubjectParker } from "./subjectPark.js";
 import { lineRunsRoot } from "./runDirs.js";
 import { releaseEndedRunTree, restoreRunTree, stopRunBrowser, usesRunTree } from "./runWorktree.js";
@@ -2529,7 +2529,7 @@ async function driveRun(
   }
 
   if (current.type === "exit" && !state.failed) {
-    console.log(`\n${c.bold}${c.green}━━━ Workflow complete ━━━${c.reset}`);
+    console.log(`\n${c.bold}${c.green}━━━ ${completeBanner(lastSaid(state))} ━━━${c.reset}`);
     console.log(`${c.dim}Nodes: ${state.completed.join(" → ")}${c.reset}`);
     // A reject verdict ends the run but not the task: it sits at open as
     // blocked until a person decides (the-line.md L4).

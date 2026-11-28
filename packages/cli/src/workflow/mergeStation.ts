@@ -44,6 +44,7 @@ import { defaultExec, landedSha, mergePullRequest, sleepSync, undoneChanges, typ
 import { deploysFor, runShell, shipKeyRefusal, shipSpec, type Log } from "../land/shipCheckout.js";
 import type { ShipDeployStep } from "../workspace/types.js";
 import { keepEnds } from "./keepEnds";
+import { handedWords, mergeOffRole } from "@codecast/shared/contracts/mergeOff";
 import { CI_APPROVAL_FILE } from "./changeVerdicts";
 import { LEASE_LINE_MS, LeaseLineWait, holdRepoLease, leaseAccessRefused, leaseHolder, leaseRouteMissing, type RepoLease } from "../land/repoLease.js";
 import { acquiredTree, holdExit, landedAs, mainCheckout, noteLanded, treeOwnsExit, noteRestoring, stopSteps, sweepScratchTrees, takeMergeLock, trackStep, type ScratchTree } from "./mergeScratch";
@@ -194,7 +195,7 @@ async function mergeStation(args: MergeStationArgs): Promise<MergeStationResult>
     });
     const check = await args.post("/cli/line/merge/check", { run_id: args.runId });
     const role = check?.role?.handle;
-    if (role && check.on === false && String(check.reason ?? "").startsWith(`@${role}'s merge is off`)) return { code: 5, line: `Merge is @${role}'s: handed to it. ${check.reason}.` };
+    if (role && check.on === false && mergeOffRole(check.reason) === role) return { code: 5, line: handedWords(role, check.reason) };
     if (!check?.allowed) return refuse(check?.reason ?? "the server did not allow the merge");
   } catch (err) {
     return refuse(message(err));
