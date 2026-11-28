@@ -339,7 +339,7 @@ describe("mergeBranch", () => {
 
     const view = { state: "OPEN", mergeable: "MERGEABLE", statusCheckRollup: [{ name: "ci", conclusion: "SUCCESS" }], mergeCommit: { oid: "squashed" } };
     const green = scripted({ "git rev-parse": { stdout: "abc\n" }, "gh pr view": { stdout: JSON.stringify(view) } });
-    expect(mergeBranch({ cwd: "/repo", branch: "b", into: "main", pr_url: pr, exec: green.exec })).toEqual({ kind: "merged", sha: "squashed", into: "main", via: "pr" });
+    expect(mergeBranch({ cwd: "/repo", branch: "b", into: "main", pr_url: pr, exec: green.exec })).toEqual({ kind: "merged", sha: "squashed", into: "main", via: "pr", pr_url: pr });
     expect(green.calls.find((c) => c.args[0] === "pr" && c.args[1] === "merge")?.args).toEqual(["pr", "merge", pr, "--squash", "--match-head-commit", "abc"]);
     // Only origin's branch goes, and only while it stands at the merged head: gh's --delete-branch would also take
     // the local branch and any worktree holding it.
@@ -368,6 +368,73 @@ describe("mergeBranch", () => {
     const refused = scripted({ "gh pr merge": { status: 1, stderr: "Head branch was modified" }, "gh pr view": { stdout: JSON.stringify({ state: "OPEN" }) } });
     expect(mergePullRequest(refused.exec, "/repo", { pr, branch: "b", head: "abc", into: "main" })).toEqual({ reason: "gh pr merge failed: Head branch was modified" });
     expect(refused.calls.some((c) => c.args[0] === "push")).toBe(false);
+  });
+
+  /** The real repository, seen as a GitHub one: `api` answers whether main is protected, `prs` the open pull requests for b. */
+  const onGitHub = (api: { status: number; stdout: string; stderr: string }, prs: { status: number; stdout: string; stderr: string }, calls: Call[] = []): Exec => (cmd, args, cwd, env) => {
+    calls.push({ cmd, args });
+    const key = `${cmd} ${args.join(" ")}`;
+    if (key === "git remote get-url origin") return { status: 0, stdout: "git@github.com:acme/app.git\n", stderr: "" };
+    if (key.startsWith("gh api repos/acme/app/branches/main")) return api;
+    if (key.startsWith("gh pr list")) return prs;
+    if (key.startsWith("gh pr create")) return { status: 0, stdout: "https://github.com/acme/app/pull/9\n", stderr: "" };
+    return defaultExec(cmd, args, cwd, env);
+  };
+  const ok = (stdout: string) => ({ status: 0, stdout, stderr: "" });
+
+  test("a default branch GitHub protects is never pushed to: with no pull request the step opens one, titled for the task, and leaves the merge for its checks (ct-95361)", async () => {
+    const r = gitRepo();
+    try {
+      r.git(r.work, "checkout", "-q", "-b", "b");
+      r.commit("b.txt", "fix\n", "fix: b");
+      r.git(r.work, "push", "-q", "origin", "b");
+      const main = r.git(r.origin, "rev-parse", "main");
+      const calls: Call[] = [];
+      const posts: Array<{ path: string; body: any }> = [];
+      const post = async (path: string, body: any) => { posts.push({ path, body }); return path.endsWith("/check") ? allowed : { ok: true }; };
+      const out = await runMergeStep({ cwd: r.work, run_id: "run_1", branch: "b", into: "main", post, exec: onGitHub(ok("true\n"), ok("[]\n"), calls) });
+      expect(out.outcome).toEqual({ kind: "left", reason: "GitHub protects main, so b lands through https://github.com/acme/app/pull/9, opened now; it merges once its checks have run green" });
+      expect(r.git(r.origin, "rev-parse", "main")).toBe(main);
+      expect(calls.some((c) => c.cmd === "git" && c.args[0] === "push")).toBe(false);
+      const create = calls.find((c) => c.args[0] === "pr" && c.args[1] === "create")?.args ?? [];
+      expect(create.slice(0, 8)).toEqual(["pr", "create", "--head", "b", "--base", "main", "--title", "Add"]);
+      expect(create[9]).toContain("GitHub protects main");
+      // Left, so the task says where it stands, naming the pull request; nothing is recorded as merged.
+      expect(posts.map((p) => p.path)).toEqual(["/cli/line/merge/check", "/cli/work/comment"]);
+      expect(posts[1].body.text).toContain("https://github.com/acme/app/pull/9");
+    } finally { r.done(); }
+  });
+
+  test("the branch's open pull request onto a protected default branch merges on the terms of a named one, and nothing is pushed past it", () => {
+    const pr = "https://github.com/acme/app/pull/9";
+    const on = (checks: unknown[]) => scripted({
+      "git remote get-url origin": { stdout: "https://github.com/acme/app.git\n" },
+      "gh api repos/acme/app/branches/main": { stdout: "true\n" },
+      "gh pr list": { stdout: JSON.stringify([{ url: pr }]) },
+      "git rev-parse": { stdout: "abc\n" },
+      "gh pr view": { stdout: JSON.stringify({ state: "OPEN", mergeable: "MERGEABLE", statusCheckRollup: checks, mergeCommit: { oid: "squashed" } }) },
+    });
+    const green = on([{ name: "ci", conclusion: "SUCCESS" }]);
+    expect(mergeBranch({ cwd: "/repo", branch: "b", into: "main", pr_url: null, exec: green.exec })).toEqual({ kind: "merged", sha: "squashed", into: "main", via: "pr", pr_url: pr });
+    expect(green.calls.some((c) => c.args.some((a) => a.endsWith(":refs/heads/main")))).toBe(false);
+    const pending = on([{ name: "ci", state: "PENDING" }]);
+    expect(mergeBranch({ cwd: "/repo", branch: "b", into: "main", pr_url: null, exec: pending.exec })).toEqual({ kind: "left", reason: `GitHub protects main, so b lands through ${pr}: checks are not green: ci=PENDING` });
+    expect(pending.calls.some((c) => c.args[0] === "pr" && (c.args[1] === "merge" || c.args[1] === "create"))).toBe(false);
+  });
+
+  test("protection GitHub cannot be asked about holds the push as protection does; a branch GitHub leaves open still lands by push", () => {
+    const r = gitRepo();
+    try {
+      r.git(r.work, "checkout", "-q", "-b", "b");
+      const head = r.commit("b.txt", "fix\n", "fix: b");
+      r.git(r.work, "push", "-q", "origin", "b");
+      const main = r.git(r.origin, "rev-parse", "main");
+      const unread = onGitHub({ status: 1, stdout: "", stderr: "HTTP 401: Bad credentials" }, { status: 1, stdout: "", stderr: "gh: not logged in" });
+      expect(mergeBranch({ cwd: r.work, branch: "b", into: "main", pr_url: null, exec: unread })).toEqual({ kind: "left", reason: "whether GitHub protects main could not be read (HTTP 401: Bad credentials), so it lands only through a pull request, and gh pr list failed: gh: not logged in" });
+      expect(r.git(r.origin, "rev-parse", "main")).toBe(main);
+      expect(mergeBranch({ cwd: r.work, branch: "b", into: "main", pr_url: null, exec: onGitHub(ok("false\n"), ok("[]\n")) })).toEqual({ kind: "merged", sha: head, into: "main", via: "push" });
+      expect(r.git(r.origin, "rev-parse", "main")).toBe(head);
+    } finally { r.done(); }
   });
 });
 

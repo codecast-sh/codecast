@@ -4,8 +4,10 @@
 // limit, the line's own switch), checks the branch is green and lands on the
 // default branch without a merge commit (replayed onto it when the default
 // branch has moved on), pushes, and records the merge so the role reports
-// it. Every refusal exits 0 with one line saying why: an approved task whose
-// merge is left to a person is not a failed run.
+// it. A default branch GitHub protects is never pushed to: the change lands
+// through a pull request, the branch's own or one this opens. Every refusal
+// exits 0 with one line saying why: an approved task whose merge is left to
+// a person is not a failed run.
 
 import { spawnSync } from "./proc.js";
 
@@ -28,7 +30,7 @@ export type MergeCheck = {
 };
 
 export type MergeOutcome =
-  | { kind: "merged"; sha: string; into: string; via: "pr" | "push" }
+  | { kind: "merged"; sha: string; into: string; via: "pr" | "push"; pr_url?: string }
   | { kind: "left"; reason: string };
 
 /** The checks a pull request must show before the line merges: every
@@ -48,8 +50,10 @@ export function checksGreen(rollup: unknown): { green: boolean; detail: string }
 /** Merge `branch` into `into`. With a pull request, `mergePullRequest` after
  *  its checks are green; without one, a fast forward push onto the default
  *  branch of what landingCommit says lands, read again when the default branch
- *  moves between the read and the push. */
-export function mergeBranch(args: { cwd: string; branch: string; into: string; pr_url: string | null; exec?: Exec; wait?: Wait }): MergeOutcome {
+ *  moves between the read and the push, unless GitHub protects the default
+ *  branch: then the branch's open pull request merges on the same terms, and
+ *  with none one is opened (titled `title`) and the merge waits for its checks. */
+export function mergeBranch(args: { cwd: string; branch: string; into: string; pr_url: string | null; title?: string; exec?: Exec; wait?: Wait }): MergeOutcome {
   const exec = args.exec ?? defaultExec;
   const { cwd, branch, into } = args;
   const fetch = exec("git", ["fetch", "origin", branch, into], cwd);
@@ -71,7 +75,22 @@ export function mergeBranch(args: { cwd: string; branch: string; into: string; p
     if (undone.length) return { kind: "left", reason: undoneReason(branch, into, undone) };
     const merged = mergePullRequest(exec, cwd, { pr: args.pr_url, branch, head: sha, into, wait: args.wait });
     if ("reason" in merged) return { kind: "left", reason: merged.reason };
-    return { kind: "merged", sha: merged.sha, into, via: "pr" };
+    return { kind: "merged", sha: merged.sha, into, via: "pr", pr_url: args.pr_url };
+  }
+  // No pull request, onto a branch GitHub protects: a push would land past its rules (ct-95361's old onefix graph
+  // pushed three commits onto Union's main past its required checks on Nov 28, and one turned it red). A pull request
+  // opened here is not merged in the same step: until its checks register, its rollup reads empty, which is green.
+  const guard = protectedOnGitHub(exec, cwd, into);
+  if (guard) {
+    const open = openPullRequestOf(exec, cwd, branch, into);
+    if ("reason" in open) return { kind: "left", reason: `${guard}, and ${open.reason}` };
+    if (open.url) {
+      const out = mergeBranch({ ...args, pr_url: open.url });
+      return out.kind === "left" ? { kind: "left", reason: `${guard}, so ${branch} lands through ${open.url}: ${out.reason}` } : out;
+    }
+    const opened = createPullRequest(exec, cwd, branch, into, args.title);
+    if ("reason" in opened) return { kind: "left", reason: `${guard}, and ${opened.reason}` };
+    return { kind: "left", reason: `${guard}, so ${branch} lands through ${opened.url}, opened now; it merges once its checks have run green` };
   }
   // No pull request: the push is a fast forward, so history stays flat.
   for (let attempt = 1; ; attempt++) {
@@ -93,6 +112,38 @@ export function mergeBranch(args: { cwd: string; branch: string; into: string; p
 }
 
 const firstLine = (r: { stdout: string; stderr: string }) => (r.stderr || r.stdout).trim().split("\n")[0];
+
+/** Why `into` lands only through a pull request: GitHub protects it, or whether it does cannot be read, which holds
+ *  the push the same way. Null for a remote not on GitHub, which has no pull request to use, and for a branch GitHub
+ *  leaves open to pushes. */
+export function protectedOnGitHub(exec: Exec, cwd: string, into: string): string | null {
+  const repo = /github\.com[:/]+([^/\s]+\/[^/\s]+?)(?:\.git)?\/?$/i.exec(exec("git", ["remote", "get-url", "origin"], cwd).stdout.trim())?.[1];
+  if (!repo) return null;
+  const read = exec("gh", ["api", `repos/${repo}/branches/${encodeURIComponent(into)}`, "--jq", ".protected"], cwd);
+  if (read.status !== 0) return `whether GitHub protects ${into} could not be read (${firstLine(read)}), so it lands only through a pull request`;
+  return read.stdout.trim() === "false" ? null : `GitHub protects ${into}`;
+}
+
+/** The branch's open pull request into `into`, or null when it has none. */
+function openPullRequestOf(exec: Exec, cwd: string, branch: string, into: string): { url: string | null } | { reason: string } {
+  const list = exec("gh", ["pr", "list", "--head", branch, "--base", into, "--state", "open", "--json", "url", "--limit", "1"], cwd);
+  if (list.status !== 0) return { reason: `gh pr list failed: ${firstLine(list)}` };
+  try {
+    return { url: (JSON.parse(list.stdout) as { url?: string }[])[0]?.url ?? null };
+  } catch {
+    return { reason: "gh pr list returned no JSON" };
+  }
+}
+
+/** Opens the pull request a protected default branch takes, titled after the task, else the branch's last commit. */
+function createPullRequest(exec: Exec, cwd: string, branch: string, into: string, title?: string): { url: string } | { reason: string } {
+  const subject = title || exec("git", ["log", "-1", "--format=%s", `origin/${branch}`], cwd).stdout.trim() || branch;
+  const body = `The line's merge step opened this pull request: GitHub protects ${into}, so ${branch} lands through a pull request and its checks rather than a push.`;
+  const made = exec("gh", ["pr", "create", "--head", branch, "--base", into, "--title", subject, "--body", body], cwd);
+  if (made.status !== 0) return { reason: `opening a pull request failed: ${firstLine(made)}` };
+  const url = made.stdout.trim().split("\n").pop() ?? "";
+  return /^https?:\/\//.test(url) ? { url } : { reason: `gh pr create named no pull request (${firstLine(made)})` };
+}
 
 export type Wait = (ms: number) => void;
 export const sleepSync: Wait = (ms) => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); };
@@ -289,12 +340,13 @@ async function mergeStep(
     log(`merge left to a person: ${held}`);
     return { outcome: { kind: "left", reason: held }, check, recorded: null };
   }
-  const outcome = mergeBranch({ cwd: args.cwd, branch: args.branch, into: args.into, pr_url: check.task?.pr_url ?? null, exec: args.exec });
+  const outcome = mergeBranch({ cwd: args.cwd, branch: args.branch, into: args.into, pr_url: check.task?.pr_url ?? null, title: check.task?.title, exec: args.exec });
   if (outcome.kind === "left") {
     log(`merge left to a person: ${outcome.reason}`);
     return { outcome, check, recorded: null };
   }
-  const recorded = await args.post("/cli/line/merge/record", { run_id: args.run_id, sha: outcome.sha, branch: args.branch, into: outcome.into, ...(check.task?.pr_url ? { pr_url: check.task.pr_url } : {}) });
+  const pr_url = outcome.pr_url ?? check.task?.pr_url;
+  const recorded = await args.post("/cli/line/merge/record", { run_id: args.run_id, sha: outcome.sha, branch: args.branch, into: outcome.into, ...(pr_url ? { pr_url } : {}) });
   log(`merged ${args.branch} into ${outcome.into} at ${outcome.sha.slice(0, 10)} (${recorded.used} of ${recorded.limit} today)`);
   return { outcome, check, recorded };
 }

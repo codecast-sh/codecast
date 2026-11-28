@@ -385,7 +385,11 @@ count against the limit), then lands the branch: with a pull request named in
 the handoff's evidence, `gh pr merge --squash --match-head-commit <head>` once
 every check is green and the PR is open and mergeable, recording the PR's
 merge commit only once origin's default branch holds it; without one, a fast forward push onto the
-default branch. A branch the default branch has moved past lands its own
+default branch. A default branch GitHub protects, or one whose protection
+cannot be read, is never pushed to: the branch's open pull request merges on
+the same terms, and with none the step opens one and leaves the merge until
+its checks have run (an old onefix graph pushed past Union's required checks
+and turned main red, ct-95361). A branch the default branch has moved past lands its own
 commits replayed on top (authors, messages and session trailers kept, merges
 of the default branch into it dropped), but only when the default branch
 changed none of the files the branch touches since they parted and the replay
