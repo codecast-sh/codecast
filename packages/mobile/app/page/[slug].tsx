@@ -41,6 +41,7 @@ import { ChatAvatar } from '@/components/chat/MessageRow';
 import { CONVEX_ORIGIN } from '@/lib/convex';
 import { openInBrowser, openLink } from '@/lib/links';
 import { optionalNative } from '@/lib/optionalNative';
+import { useAndroidImeInset } from '@/hooks/useAndroidImeInset';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const WebViewComp: any = optionalNative('RNCWebViewModule', () => require('react-native-webview').WebView);
@@ -74,6 +75,7 @@ function usePageDiscussionFeed(slug: string | undefined, ready: boolean) {
 export default function PageScreen() {
   const Theme = useTheme();
   const insets = useSafeAreaInsets();
+  const imeInset = useAndroidImeInset();
   const { slug: rawSlug, c: focusId } = useLocalSearchParams<{ slug: string; c?: string }>();
   const slug = rawSlug?.trim();
   const { isAuthenticated } = useConvexAuth();
@@ -160,7 +162,9 @@ export default function PageScreen() {
   return (
     <>
       {header}
-      <RNView style={styles.flex}>
+      {/* Android edge-to-edge never resizes the window for the keyboard, so the
+          screen shrinks by its height and the comment sheet rides above it. */}
+      <RNView style={[styles.flex, imeInset > 0 && { marginBottom: imeInset }]}>
         <RNView style={styles.flex}>
           {WebViewComp ? (
             <WebViewComp
