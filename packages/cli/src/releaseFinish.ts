@@ -1,5 +1,5 @@
-// What follows a CLI release once it is live (.codecast/deploy.toml's cli
-// target `finish`, ct-102483). Forcing every machine to update restarts every
+// What the Release Captain runs once a CLI release has been live 8h with no
+// rollback (sd-4745; `cast force-update <v> --deploy dp-N`, ct-102483). Forcing every machine to update restarts every
 // daemon, which is worth it only when the daemon's code changed, so the
 // decision is computed, never judged: the daemon build id (daemonBuildIdCompute)
 // at the release's commit against the one at the release the team's machines
