@@ -32,6 +32,8 @@
 //   exit 3  retest: CI tested another head, or the default branch's changes interact with the change
 //   exit 4  still in line for the repository's lease after LEASE_LINE_MS: nothing was done, and the place in line is
 //           kept in $run_dir for the graph to run the station again
+//   exit 5  handed to the role behind the run: its merge is off, so the role merges the change itself (by design: a
+//           Release Captain's hands leave the merge to the Captain); the last line names the role
 
 import * as fs from "node:fs";
 import os from "node:os";
@@ -48,7 +50,7 @@ import { acquiredTree, holdExit, landedAs, mainCheckout, noteLanded, treeOwnsExi
 import { chainBetween, recordRebase, verifyRebaseChain, type RebaseLink, type RegeneratedRebase } from "./rebaseRecord";
 import { GENERATED_FILE, generatorsFor, readGenerators, writtenBy, type Generator } from "./generatedFiles";
 
-export type MergeStationResult = { code: 0 | 1 | 2 | 3 | 4; line: string };
+export type MergeStationResult = { code: 0 | 1 | 2 | 3 | 4 | 5; line: string };
 
 export type MergeStationArgs = {
   /** The run's checkout: the repository the scratch tree is made from. */
@@ -191,6 +193,8 @@ async function mergeStation(args: MergeStationArgs): Promise<MergeStationResult>
       why: `CI green on ${short(head)}${ci.tested_main_sha ? ` against ${short(String(ci.tested_main_sha))}` : ""} and the review said ship`,
     });
     const check = await args.post("/cli/line/merge/check", { run_id: args.runId });
+    const role = check?.role?.handle;
+    if (role && check.on === false && String(check.reason ?? "").startsWith(`@${role}'s merge is off`)) return { code: 5, line: `Merge is @${role}'s: handed to it. ${check.reason}.` };
     if (!check?.allowed) return refuse(check?.reason ?? "the server did not allow the merge");
   } catch (err) {
     return refuse(message(err));

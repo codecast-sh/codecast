@@ -48,6 +48,8 @@ function world(role: Record<string, any> = {}, extra: Record<string, any[]> = {}
 describe("mergeAllowance", () => {
   test("off by default; on needs a live merge grant; the daily limit counts merges only", () => {
     expect(mergeAllowance({}, NOW)).toMatchObject({ on: false, allowed: false, reason: expect.stringContaining("merge is off") });
+    // Off names the role whose switch it is, and the command that lets its hands merge.
+    expect(mergeAllowance({ handle: "release" }, NOW).reason).toBe("@release's merge is off: `cast role line @release --merge on` lets its hands merge");
     expect(mergeAllowance({ line_merge: true }, NOW)).toMatchObject({ allowed: false, reason: "the role holds no merge authority" });
     expect(mergeAllowance({ line_merge: true, authority: [grant({ expires_at: NOW - 1 })] }, NOW)).toMatchObject({ allowed: false, reason: "the role's merge authority has expired" });
     expect(mergeAllowance({ line_merge: true, authority: [grant()] }, NOW)).toMatchObject({ allowed: true, reason: null, used: 0, limit: 2 });

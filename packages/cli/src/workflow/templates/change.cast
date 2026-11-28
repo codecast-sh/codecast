@@ -123,6 +123,9 @@ digraph change {
   nobody    [shape=Msquare, label="Needs a person", stop="This change edits CI, so CI can't vouch for it, and no session is behind the run to take it to a person."]
   dropped   [shape=Msquare, label="Dropped", stop="$stop_reason"]
   unshipped [shape=Msquare, label="Not merged", stop="$merge.output"]
+  // A role's hand whose role keeps its merge off (a Release Captain's, by design): the role merges the change itself.
+  // Not a stop: the server records that merge and completes the run at Live once deploys carry it (deployCarries.ts).
+  handed    [shape=Msquare, label="Handed to its role", keep_subject=true]
 
   // A repository whose default branch says [ship] mode = "direct" and runs no CI on GitHub lands with no pull request
   // (startFacts.ts, read from the default branch, never the change). Its check stands in for CI, an independent
@@ -178,6 +181,7 @@ digraph change {
   merge -> moving       [condition="outcome = failure and merge.exit_code = 3", label="main keeps moving"]
   merge -> merge        [condition="outcome = failure and merge.exit_code = 4 and merge.free.visits < 3", label="still in line", free_visit="merge"]
   merge -> in_line      [condition="outcome = failure and merge.exit_code = 4", label="line still long"]
+  merge -> handed       [condition="outcome = failure and merge.exit_code = 5", label="the role merges"]
   merge -> unshipped    [label="not merged"]
   retest -> ci   [condition="outcome = success"]
   retest -> pr   [condition="outcome = failure and retest.exit_code = 4", label="pushed after review"]
