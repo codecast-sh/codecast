@@ -143,6 +143,8 @@ function BoardBanner({ callKey, workspace, workspaceName, scribe }: { callKey: s
         <Text style={styles.bannerText}>{SCRIBE_INVITE_WORDS}</Text>
         <RNView style={styles.bannerActions}>
           <Pressable onPress={banner.invite} style={({ pressed }) => [styles.primary, pressed && styles.pressed]} accessibilityRole="button">
+            {/* Web's call-bar Add glyph: inviting Scribe is adding an agent to the call. */}
+            <Ionicons name="person-add-outline" size={15} color={Theme.bg} />
             <Text style={styles.primaryText}>Invite Scribe</Text>
           </Pressable>
           <Pressable onPress={banner.dismiss} style={({ pressed }) => [styles.close, pressed && styles.pressed]} accessibilityRole="button" accessibilityLabel="Dismiss for this call">
@@ -235,7 +237,7 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   bannerText: { fontSize: 14, color: Theme.text },
   workspace: { fontWeight: '600' },
   bannerActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  primary: { minHeight: 44, paddingHorizontal: 16, borderRadius: 10, justifyContent: 'center', backgroundColor: Theme.violet },
+  primary: { minHeight: 44, paddingHorizontal: 16, borderRadius: 10, flexDirection: 'row', alignItems: 'center', gap: 6, justifyContent: 'center', backgroundColor: Theme.violet },
   primaryText: { fontSize: 14, fontWeight: '600', color: Theme.bg },
   close: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
   check: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 44 },

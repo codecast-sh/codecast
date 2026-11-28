@@ -2779,7 +2779,10 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
       className={`${itemClass} ${x.primary ? "text-sol-text data-[selected=true]:bg-sol-violet/15" : ""}`}
     >
       {x.icon === "scribe" ? (
-        <PenLine className="w-4 h-4 flex-shrink-0 text-sol-violet" />
+        // An agent's face tile, the size a role's face takes in this list.
+        <span className="flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-full bg-sol-violet/15">
+          <PenLine className="h-2.5 w-2.5 text-sol-violet" />
+        </span>
       ) : x.icon === "doc" ? (
         <FileText className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
       ) : x.icon === "slack" ? (
@@ -2791,6 +2794,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
         <div className="truncate">{x.label}</div>
         {x.description && <div className="truncate text-meta text-sol-text-dim mt-0.5">{x.description}</div>}
       </div>
+      {x.tag && <span className="text-meta text-sol-text-dim font-mono flex-shrink-0">{x.tag}</span>}
     </CommandPrimitive.Item>
   );
   // A pasted Zoom, Meet, Teams, Webex or GoTo link: one row that sends a bot

@@ -1,9 +1,9 @@
 // The call's board as a stage view, and what brings Scribe to it: the invite
-// banner over the board, the "Next time" banner that turns the invite into
-// the person's default for the workspace, and the header chip that stands
-// for Scribe while it is in the call.
+// banner over the board, and the "Next time" banner that turns the invite into
+// the person's default for the workspace. Once in, Scribe is one of the room
+// thread's agent chips, removed there like any agent.
 import { useState } from "react";
-import { ChevronDown, PenLine, SquareKanban, SquareArrowOutUpRight, X } from "lucide-react";
+import { UserPlus, X } from "lucide-react";
 import { useInboxStore } from "../../store/inboxStore";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
@@ -12,7 +12,6 @@ import { startTranscribing } from "../../lib/calls/callManager";
 import type { ParticipantTile } from "../../lib/calls/callMedia";
 import { pinShare } from "../../lib/calls/stagePins";
 import type { StagePinRow } from "../../hooks/useStagePins";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { AppLoader } from "../AppLoader";
 import { Button } from "../ui/button";
 import { AutoStage } from "./StageViews";
@@ -138,7 +137,8 @@ export function BoardBanner({
   if (banner.state === "invite") {
     return (
       <div className={BANNER} role="status" data-banner="invite">
-        <PenLine className="h-3.5 w-3.5 shrink-0 text-sol-violet" />
+        {/* The call bar's Add glyph (AddPeople): inviting Scribe is adding an agent to the call. */}
+        <UserPlus className="h-3.5 w-3.5 shrink-0 text-sol-text-muted" />
         <span className="min-w-0 truncate">{SCRIBE_INVITE_WORDS}</span>
         <Button variant="violet" size="xs" onClick={banner.invite} className="shrink-0">
           Invite Scribe
@@ -193,63 +193,5 @@ function NextTimeBanner({ workspaceName, banner }: { workspaceName: string; bann
         />
       )}
     </div>
-  );
-}
-
-// ── The header chip ───────────────────────────────────────────────────────
-
-/** Scribe in the header while it is in the call, its menu the way to remove
- *  it. Nothing while it is absent: the board's banner and the Add menu invite. */
-export function ScribeChip({
-  scribe,
-  session,
-  onOpenBoard,
-  onOpenSession,
-}: {
-  scribe: Scribe;
-  /** Scribe's session, once seated. */
-  session: string | null;
-  onOpenBoard: () => void;
-  onOpenSession: (id: string) => void;
-}) {
-  if (!scribe.present) return null;
-  const word = scribe.status === "listening" ? "listening" : "joining";
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          className="flex shrink-0 items-center gap-1.5 rounded-md bg-sol-violet/10 px-2 py-1 font-mono text-meta text-sol-violet transition-colors hover:bg-sol-violet/15 data-[state=open]:bg-sol-violet/20"
-          title="Scribe keeps the call's board as you talk"
-          aria-label={`Scribe, ${word}`}
-        >
-          <span className={`h-1.5 w-1.5 rounded-full bg-sol-violet${word === "joining" ? " animate-pulse" : ""}`} aria-hidden="true" />
-          Scribe · {word}
-          <ChevronDown className="h-3 w-3 opacity-60" />
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent
-        align="end"
-        sideOffset={6}
-        collisionPadding={8}
-        className="w-[220px] rounded-lg border-0 bg-sol-bg-alt p-1 font-mono text-meta shadow-2xl ring-1 ring-sol-text/[0.08]"
-      >
-        <DropdownMenuItem onSelect={onOpenBoard} className="gap-2 rounded-md px-2 py-1.5 focus:bg-sol-text/[0.06]">
-          <SquareKanban className="h-3.5 w-3.5 text-sol-text-muted" />
-          Open the board
-        </DropdownMenuItem>
-        {session && (
-          <DropdownMenuItem onSelect={() => onOpenSession(session)} className="gap-2 rounded-md px-2 py-1.5 focus:bg-sol-text/[0.06]">
-            <SquareArrowOutUpRight className="h-3.5 w-3.5 text-sol-text-muted" />
-            Open Scribe's session
-          </DropdownMenuItem>
-        )}
-        <DropdownMenuSeparator className="bg-sol-text/[0.06]" />
-        <DropdownMenuItem onSelect={scribe.remove} className="gap-2 rounded-md px-2 py-1.5 text-sol-red focus:bg-sol-red/10 focus:text-sol-red">
-          <X className="h-3.5 w-3.5" />
-          Remove from the call
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
   );
 }

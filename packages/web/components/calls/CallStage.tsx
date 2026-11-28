@@ -88,7 +88,7 @@ import { StagePinLabel, StagePinTile } from "./StagePinTile";
 import { StagePinButton } from "./StagePinPicker";
 import { StageShareButton } from "./StageShareButton";
 import { useScribe, type ScribeLive } from "./useScribe";
-import { BoardBanner, BoardStage, ScribeChip } from "./HuddleBoard";
+import { BoardBanner, BoardStage } from "./HuddleBoard";
 import { huddleWorkspace, huddleWorkspaceName } from "../../lib/calls/huddleSettings";
 import { useBoardViewDefault } from "../../hooks/useBoardViewDefault";
 
@@ -541,24 +541,6 @@ export function CallStage({
         <SegmentedRadio label="View" options={STAGE_VIEWS} value={view} onChange={setView} labels iconClass="h-3.5 w-3.5" className="shrink-0" />
 
         <HeaderRule />
-
-        {/* Scribe, while it is in the call: the chip stands for it, and its
-            menu is the way out. Nothing while it is absent. */}
-        {scribe.present && (
-          <>
-            <ScribeChip
-              scribe={scribe}
-              session={live?.routes.find((r) => r.role === "scribe")?.target ?? null}
-              onOpenBoard={() => setView("board")}
-              onOpenSession={(id) => {
-                if (panel) return void navigateMainWindow(`/conversation/${id}`);
-                useInboxStore.getState().navigateToSession(id);
-                collapse();
-              }}
-            />
-            <HeaderRule />
-          </>
-        )}
 
         {/* The thread: the one rail beside the stage. Not the transcription
             switch: the dot says the room is being transcribed whether or not

@@ -305,9 +305,14 @@ export const RoomThread = memo(function RoomThread({
   // After the call the routes are history: the chips still say who was in
   // the room (roster), but nobody hears a line typed now and nobody is
   // working on it (agents).
-  const roster = useAgentsInRoom(routes);
+  // The call's Scribe goes by its job's name everywhere in the thread.
+  const scribeTarget = routes.find((r) => r.role === "scribe")?.target;
+  const inRoom = useAgentsInRoom(routes);
+  const roster = useMemo(() => (scribeTarget ? inRoom.map((a) => (a.target === scribeTarget ? { ...a, name: "Scribe" } : a)) : inRoom), [inRoom, scribeTarget]);
   const agents = transcribing ? roster : [];
-  const working = agents.filter((a) => a.working);
+  // Scribe works the board out of sight and never answers here: its chip
+  // carries its dots, and the thread's tail waits only on agents that reply.
+  const working = agents.filter((a) => a.working && a.target !== scribeTarget);
   const ownRoomId = sessionRoomConversationId(roomKey);
   // A session's own room has an agent before anyone adds one: the server
   // routes the session in the moment transcription starts (transcripts.ts
@@ -327,6 +332,9 @@ export const RoomThread = memo(function RoomThread({
   // controls' Add does (AddPeople): from a seat in the live huddle only.
   const scribeLive = useQueryNoThrow(api.transcripts.getLive, seated && liveTranscriptId ? { room_key: roomKey, tail: 1 } : "skip").data as ScribeLive;
   const scribe = useScribe(seated ? roomKey : null, scribeLive);
+  // A removal pressed here takes Scribe's chip off at once (huddleSlice's
+  // press), as useScribe shows it gone everywhere else in this window.
+  const scribeLeaving = useInboxStore((st) => st.scribePresses[roomKey] === "remove");
   const { open: openAddAgent, adding } = useAddToCall({ roomKey, liveTranscriptId, routes, teamId: call?.team_id, scribe: seated && scribeLive ? scribe : undefined });
   const removeFeed = useRemoveLiveFeed(liveTranscriptId);
   const facesOn = useInboxStore((st) => teamHasFeature(st.teams, call?.team_id, "agent_faces"));
@@ -539,7 +547,8 @@ export const RoomThread = memo(function RoomThread({
   const empty = passages.length === 0 && visibleRows.every((r) => r.event);
   // The pick on its way shows as a chip until its route lands among the real ones.
   const joining = adding && !("id" in adding && routes.some((r) => r.target === adding.id)) ? adding : null;
-  const showChips = routes.length > 0 || !!joining;
+  const scribeJoining = !scribeTarget && scribe.status === "joining";
+  const showChips = routes.length > 0 || !!joining || scribeJoining;
   // Nothing to fold, open or hide until someone has spoken.
   const showDensity = !recording && passages.length > 0;
   const showSwitch = seated && !recording;
@@ -588,9 +597,11 @@ export const RoomThread = memo(function RoomThread({
           Nothing to show, no band. */}
       {showHead && (
         <div className={`rt-head${quietHead ? " rt-head-quiet" : ""}`}>
-          {/* Scribe is the stage header's chip, not one of these. */}
-          {routes.filter((r) => r.role !== "scribe").map((r) => {
+          {routes.map((r) => {
             const agent = r.kind === "session" ? roster.find((a) => a.target === r.target) : null;
+            // The call's Scribe never has a face (transcriptsScribe seats it with none).
+            const isScribe = r.role === "scribe";
+            if (isScribe && scribeLeaving) return null;
             return (
               <span
                 key={`${r.kind}:${r.target}`}
@@ -603,13 +614,17 @@ export const RoomThread = memo(function RoomThread({
                   removable={canRemove}
                   removeBlocked={r.kind === "session" && r.target === heldRoute ? OWN_ROUTE_HELD : null}
                   onRemove={() =>
-                    void removeFeed(r.kind, r.target).catch((e) => toast.error(humanizeConvexError(e, "Could not take it out of the call")))
+                    // Scribe leaves through its own store action from a seat (one way out,
+                    // shown at once); any other agent, or a reader outside the call, through the route.
+                    isScribe && scribe.present
+                      ? scribe.remove()
+                      : void removeFeed(r.kind, r.target).catch((e) => toast.error(humanizeConvexError(e, "Could not take it out of the call")))
                   }
                 />
                 {agent?.working && transcribing && (
                   <WorkingDots className="text-sol-violet" title={`${agent.name} is working`} />
                 )}
-                {agent && transcribing && facesOn && liveTranscriptId && (
+                {agent && !isScribe && transcribing && facesOn && liveTranscriptId && (
                   <AgentFaceToggle
                     on={r.face !== false}
                     name={agent.name}
@@ -634,6 +649,14 @@ export const RoomThread = memo(function RoomThread({
               </span>
             );
           })}
+          {/* Scribe on its way (claimed, not yet seated): joining like any agent. */}
+          {scribeJoining && (
+            <span className="rt-chip" title="Joining the room">
+              {/* Taking it out before it seats gives its claim back (useScribe.remove). */}
+              <FeedChip route={{ kind: "session", target: "", mode: "live" }} label="Scribe" removable={canRemove} onRemove={scribe.remove} />
+              <WorkingDots className="text-sol-violet" title="Scribe is joining" />
+            </span>
+          )}
           {joining && (
             <span className="rt-chip" title="Joining the room">
               <FeedChip
