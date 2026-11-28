@@ -19,6 +19,7 @@ import Feather from '@expo/vector-icons/Feather';
 import { mixColor } from '@/lib/solColor';
 import { showNotice } from '@/lib/undoBar';
 import { useUndoBarAnchor } from '@/hooks/useUndoBarAnchor';
+import { useAndroidImeInset } from '@/hooks/useAndroidImeInset';
 import { copyToClipboard } from '@/lib/clipboard';
 import { useActiveTeamFeature } from '@/lib/teamFeatures';
 import { usePolicyRefusal } from '@codecast/web/lib/managedPolicy';
@@ -2695,27 +2696,6 @@ function SessionHeaderBar({ children, inFlow = false }: { children?: ReactNode; 
       {children}
     </RNView>
   );
-}
-
-// Android IME inset, driven straight from the keyboard events. KAV's Android
-// path can't be trusted for this: it never resets to 0 from a hide event —
-// it RE-DERIVES padding as (own frame height − getWindowVisibleDisplayFrame
-// height), and under edge-to-edge the KAV spans the full window while the
-// visible frame excludes the status bar and any still-animating IME slice.
-// Every dismissal therefore left ~a-status-bar-plus of phantom padding, and
-// IME churn right after a send strobed the composer between padded and
-// unpadded (glitchy bottom on the tablet). Event-driven padding has no frame
-// math: didShow carries the IME height above the system bars, didHide is an
-// authoritative 0.
-function useAndroidImeInset(): number {
-  const [inset, setInset] = useState(0);
-  useEffect(() => {
-    if (Platform.OS !== 'android') return;
-    const show = Keyboard.addListener('keyboardDidShow', (e) => setInset(e.endCoordinates.height));
-    const hide = Keyboard.addListener('keyboardDidHide', () => setInset(0));
-    return () => { show.remove(); hide.remove(); };
-  }, []);
-  return inset;
 }
 
 function ForkFamilyRow({ node, router, currentId, onClose }: { node: FlatForkNode; router: any; currentId: string; onClose: () => void }) {
