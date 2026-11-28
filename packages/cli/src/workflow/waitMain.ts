@@ -6,9 +6,11 @@
 //
 // Main's CI is the push runs of the workflows the repository runs on pull
 // requests, the ones the CI station judges: a release or deploy workflow
-// dispatched on main is not CI. A commit no CI ran on (a release's version
+// dispatched on main is not CI. A commit CI never runs on (a release's version
 // bump, pushed by a workflow's token, which starts no workflow) is judged by
-// the newest commit under it that CI ran on.
+// the newest commit under it that CI ran on. A person's commit with no run is
+// one CI has not started on yet, unless it was pushed long enough ago that CI
+// would have: until then main's head is still to be judged.
 import { defaultExec, type Exec } from "../lineMerge.js";
 import { stationCli, type StationCli } from "./stationReexec.js";
 
@@ -17,6 +19,8 @@ type Run = { databaseId: number; workflowName?: string; headSha: string; status:
 const PASSING = new Set(["success", "neutral", "skipped"]);
 /** How far under main's head the wait looks for a commit CI ran on. */
 const DEPTH = 100;
+/** How long after its commit CI has always started on a person's push: a commit older with no run never gets one. */
+const CI_STARTS_MS = 10 * 60_000;
 const short = (sha: string) => sha.slice(0, 10);
 
 /** "1h 5m", "23m", "40s". */
@@ -65,8 +69,16 @@ function commitsUnder(exec: Exec, cwd: string, base: string, head: string): stri
   return r.status === 0 ? r.stdout.split("\n").map((l) => l.trim()).filter(Boolean) : [head];
 }
 
+/** Whether CI never runs on a commit that has no run: a bot's push (a workflow's token starts no workflow), or one old enough that CI would have started. */
+function noCiComing(exec: Exec, cwd: string, sha: string, now: number): boolean {
+  const r = exec("git", ["log", "-1", "--format=%an%x1f%cn%x1f%ct", sha], cwd);
+  const [author = "", committer = "", at = ""] = r.stdout.trim().split("\x1f");
+  if (r.status !== 0) return false;
+  return /\[bot\]$/.test(author) || /\[bot\]$/.test(committer) || now - Number(at) * 1000 >= CI_STARTS_MS;
+}
+
 /** The default branch's head and its CI: green, red (with the failed runs), or still going, on the commit it judged. */
-export function mainCi(exec: Exec, cwd: string, base: string): MainCi | { reason: string } {
+export function mainCi(exec: Exec, cwd: string, base: string, now = Date.now()): MainCi | { reason: string } {
   const ls = exec("git", ["ls-remote", "origin", `refs/heads/${base}`], cwd);
   const head = ls.stdout.trim().split(/\s/)[0] ?? "";
   if (!head) return { reason: `cannot read origin's ${base}: ${(ls.stderr || ls.stdout).trim().split("\n")[0] ?? ""}` };
@@ -82,8 +94,8 @@ export function mainCi(exec: Exec, cwd: string, base: string): MainCi | { reason
   if (!on(head).length) {
     const under = commitsUnder(exec, cwd, base, head);
     const at = under.findIndex((sha) => on(sha).length > 0);
-    // No CI run on any of them yet: main's head is still to be judged.
-    if (at > 0) { judged = under[at]!; skipped = at; }
+    // No CI run on any of them yet, or one above it that CI may still start on: main's head is still to be judged.
+    if (at > 0 && under.slice(0, at).every((sha) => noCiComing(exec, cwd, sha, now))) { judged = under[at]!; skipped = at; }
   }
   // Each workflow by its newest run on the commit.
   const newest = new Map<string, Run>();
@@ -139,7 +151,7 @@ export async function waitForMain(args: {
   let redSince = back?.redSince ?? "";
   let last: ReturnType<typeof mainCi> | null = null;
   for (;;) {
-    last = mainCi(exec, args.cwd, args.base);
+    last = mainCi(exec, args.cwd, args.base, now());
     if ("state" in last && last.state === "green") return { ok: true, line: `Main CI is green at ${short(last.judged)}${last.skipped ? `: ${judgedWhy(last)}, so the newest commit under it that CI ran on is judged` : ""}.` };
     if ("state" in last && last.state === "red" && !redSince) redSince = last.judged;
     const waited = now() - start;
