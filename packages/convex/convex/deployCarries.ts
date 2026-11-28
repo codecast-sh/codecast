@@ -22,6 +22,7 @@ import { settleRunTask } from "./workflow_runs";
 import { internal } from "./_generated/api";
 import { workspaceKeyHasFeature } from "./lib/teamFeatureGuard";
 import { HANDED_EXIT } from "@codecast/shared/contracts/mergeOff";
+import { deployStopOf } from "@codecast/shared/contracts/deployStop";
 
 /** How far back merges are read for the waiting set and a marker's carries. */
 const MERGE_WINDOW_MS = 90 * DAY;
@@ -243,17 +244,6 @@ const STOPPED_RUN_COMMITS_MAX = 500;
 
 type StoppedRun = Pick<Doc<"workflow_runs">, "status" | "current_node_id" | "merge" | "node_statuses">;
 
-/**
- * The Deploy segment a run stopped in (`deploy`, `direct_deploy`): its change merged, its wait failed, and the run
- * ended at the segment's Deploy failed or Deploy stuck. Null for a run that stopped anywhere else.
- */
-export function deployStopOf(run: StoppedRun): string | null {
-  if (run.status !== "failed" || !run.merge?.sha) return null;
-  const m = /^(.+)__(failed|stuck)$/.exec(run.current_node_id ?? "");
-  if (!m) return null;
-  return run.node_statuses.some((n) => n.node_id === `${m[1]}__wait` && n.status === "failed") ? m[1] : null;
-}
-
 type GraphShape = { nodes: Array<{ id: string; type: string; script?: string }>; edges: Array<{ from: string; to: string; condition?: string }> };
 
 /**
@@ -444,7 +434,7 @@ async function runsMergedInto(ctx: any, d: Doc<"deploys">): Promise<Doc<"workflo
       .query("workflow_runs")
       .withIndex("by_merge_sha", (q: any) => q.gte("merge.sha", s).lt("merge.sha", `${s}~`))
       .take(20);
-    for (const r of rows) if ((!r.pr || r.pr.repository === d.repository) && (r.status === "failed" || mergedOutside(r))) runs.set(String(r._id), r);
+    for (const r of rows) if ((!r.pr || r.pr.repository === d.repository) && (deployStopOf(r) || mergedOutside(r))) runs.set(String(r._id), r);
   }
   return [...runs.values()];
 }
@@ -508,26 +498,29 @@ export const recordOutsideMergeOnPr = internalMutation({
 
 /**
  * The runs whose pull request was merged outside them before recordOutsideMerge existed (ct-102786's #349), healed as
- * the webhook would have, and the runs that recorded such a merge but did not complete at Live though deploys carry it.
- * Idempotent: a run that completed is never read again. A dry run by default; one page
- * of failed runs, newest first, and with `auto` each page schedules the next until runs older than the window.
+ * the webhook would have, and the runs that recorded such a merge, or stopped at Deploy (deployStopOf), but did not
+ * complete at Live though deploys carry it. Idempotent: a run that completed at Live is never read again. A dry run by
+ * default; one page of runs of `status` (failed, or completed: a Deploy stop whose runner lost the exit's stop),
+ * newest first, and with `auto` each page schedules the next until runs older than the window.
  *   packages/convex/run.sh deployCarries:healOutsideMerges '{"dry": false, "auto": true}'
+ *   packages/convex/run.sh deployCarries:healOutsideMerges '{"dry": false, "auto": true, "status": "completed"}'
  */
 export const healOutsideMerges = internalMutation({
-  args: { dry: v.optional(v.boolean()), auto: v.optional(v.boolean()), cursor: v.optional(v.union(v.string(), v.null())) },
+  args: { dry: v.optional(v.boolean()), auto: v.optional(v.boolean()), cursor: v.optional(v.union(v.string(), v.null())), status: v.optional(v.union(v.literal("failed"), v.literal("completed"))) },
   handler: async (ctx, args) => {
     const now = Date.now();
     const dry = args.dry !== false;
-    const res = await ctx.db.query("workflow_runs").withIndex("by_status", (q: any) => q.eq("status", "failed")).order("desc").paginate({ cursor: args.cursor ?? null, numItems: 200 });
+    const status = args.status ?? "failed";
+    const res = await ctx.db.query("workflow_runs").withIndex("by_status", (q: any) => q.eq("status", status)).order("desc").paginate({ cursor: args.cursor ?? null, numItems: 200 });
     const healed: string[] = [];
     for (const run of res.page as Doc<"workflow_runs">[]) {
       if (!run.pr || run.updated_at < now - STOPPED_RUN_WINDOW_MS) continue;
-      // A merge recorded while its deploys could not be read as live: completed now if they carry it.
-      if (mergedOutside(run)) {
+      // A merge recorded, or a Deploy stop, while its deploys could not be read as live: completed now if they carry it.
+      if (mergedOutside(run) || deployStopOf(run)) {
         if (dry ? await runLiveAt(ctx, run, run.pr.repository, null, now) : await completeRunIfLive(ctx, run, run.pr.repository, null, now)) healed.push(String(run._id));
         continue;
       }
-      if (!endedBeforeMerge(run)) continue;
+      if (status !== "failed" || !endedBeforeMerge(run)) continue;
       const pr: Doc<"pull_requests"> | null = await ctx.db.query("pull_requests").withIndex("by_repository_number", (q: any) => q.eq("repository", run.pr!.repository).eq("number", run.pr!.number)).first();
       if (!pr) continue;
       // The run a real pass records the merge on, which is the pull request's newest, not always the run this page read.
@@ -536,7 +529,7 @@ export const healOutsideMerges = internalMutation({
     }
     const oldest = (res.page as Doc<"workflow_runs">[]).at(-1)?.created_at ?? 0;
     const next = res.isDone || oldest < now - 2 * STOPPED_RUN_WINDOW_MS ? null : res.continueCursor;
-    if (next && args.auto) await ctx.scheduler.runAfter(0, internal.deployCarries.healOutsideMerges, { dry: args.dry, auto: true, cursor: next });
+    if (next && args.auto) await ctx.scheduler.runAfter(0, internal.deployCarries.healOutsideMerges, { dry: args.dry, auto: true, cursor: next, status });
     return { dry, read: res.page.length, healed, next };
   },
 });

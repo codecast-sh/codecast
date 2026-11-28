@@ -83,7 +83,7 @@ export function registerDeployCommand(program: Command, deps: GroupDeps): void {
         named: names,
         except: (options.except ?? "").split(/[\s,]+/).filter(Boolean),
         ...(options.files !== undefined ? { files: options.files.split(/\s+/).filter(Boolean) } : {}),
-        commitsSince: (from, paths, unless, liveVersion) => commitsSince(cwd, from, sha, paths, unless, liveVersion),
+        commitsSince: (from, t, liveVersion) => commitsSince(cwd, from, sha, t, liveVersion),
         carries,
       }).catch((err) => { console.error(err instanceof Error ? err.message : String(err)); process.exit(1); });
       if (options.dryRun) {

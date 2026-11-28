@@ -45,6 +45,24 @@ export const workflowNodeValidator = v.object({
   segment: v.optional(v.string()),
   segment_exit: v.optional(v.union(v.literal("done"), v.literal("stop"))),
   fold: v.optional(v.boolean()),
+  // How a run ends at an exit (cli types.ts): a stop's words, a stop about the machine, words that say it all, and an
+  // end that keeps the change's session. A runner reading this copy fails a stop exit as a run of the source does.
+  stop: v.optional(v.string()),
+  machine: v.optional(v.boolean()),
+  whole_stop: v.optional(v.boolean()),
+  keep_subject: v.optional(v.boolean()),
+  // A station's machine slot and where no place goes, seconds of quiet before it reads silent, a station re-made on
+  // resume, and how many free_visit entries it takes without spending a visit.
+  machine_slot: v.optional(v.string()),
+  no_slot: v.optional(v.string()),
+  silent: v.optional(v.number()),
+  refresh: v.optional(v.boolean()),
+  max_free_visits: v.optional(v.number()),
+  // A call station's answer cap, system prompt and shape, and the stage name a station's stop and gate answer say.
+  max_tokens: v.optional(v.number()),
+  system: v.optional(v.string()),
+  output: v.optional(v.union(v.literal("json"), v.literal("text"))),
+  segment_label: v.optional(v.string()),
 });
 
 export const workflowEdgeValidator = v.object({
@@ -52,6 +70,8 @@ export const workflowEdgeValidator = v.object({
   to: v.string(),
   label: v.optional(v.string()),
   condition: v.optional(v.string()),
+  free_visit: v.optional(v.string()),
+  weight: v.optional(v.number()),
 });
 
 /** Each station's text file, repo-relative, for a graph that reads them (`@file`). */

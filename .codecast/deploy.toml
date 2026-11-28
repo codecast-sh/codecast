@@ -8,6 +8,8 @@
 #             a before_push step goes out at the change flow's Merge, before the merge;
 #             the target takes that step's run and when
 #   run       the command that sends it, from the checkout root ($sha, $deploy, $actor)
+#   when      the paths it ships; the first, when a whole package (packages/electron/**), is its own:
+#             a release's bump of that package.json carries nothing past the version live there
 #   unless    paths under its `when` that ship nothing there (tests, fixtures): a change
 #             whose files under `when` are all among them sends no deploy of it, and goes
 #             out with its next deploy. Never a path a shipped file reads: `cast bench`

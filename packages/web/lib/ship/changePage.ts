@@ -7,7 +7,7 @@
 import { SEGMENT_SEP, takesSessionChange, type FlowEdgeIn, type FlowNodeIn } from "@codecast/shared/contracts/flowPool";
 import { entityRoute, repoObjectId } from "@codecast/shared/entities";
 import { verdictOnHead } from "@codecast/shared/contracts/deployTargets";
-import { failedDeploysOf } from "@codecast/shared/contracts/deployStop";
+import { awaySendsOf, deployStopOf, deployStopWords, failedDeploysOf } from "@codecast/shared/contracts/deployStop";
 import { journeyOf, journeyStages, targetsFromLine, withRunDeploys, type Journey, type JourneyStage, type JourneyViewer, type TargetState } from "./journey";
 import { gateWaitWords, holdWords, journeyWords, sentBackWords, stopTitle, type JourneyTone } from "./journeyWords";
 import { landedSha } from "./runRecord";
@@ -266,13 +266,17 @@ function stopDetail(run: ChangeRun, graph: ChangeGraph, title: string, landed: b
  * A change on main whose deploy failed: it is landed, and for each target that deploy failed on, where the change
  * stands there now from the deploy records (`targets`, deploy reach): live in a later deploy, going out in one, else
  * that deploy failed (or sent nothing) and the target's next deploy takes it live (it is on main, so any later deploy of
- * the target carries it). Without reach, the failed deploys the reason names.
+ * the target carries it). Without reach, the failed deploys the reason names. A stop that only says another person's
+ * machine sends the target (awaySendsOf) failed nothing: `away` heads it as waiting for that machine to send, and as
+ * live or deploying once a deploy took it there.
  */
-function deployFailedWords(run: ChangeRun, targets: ReadonlyArray<TargetState>, reading = false): { words: string; notSent: boolean } | null {
-  const failed = failedDeploysOf(run.fail_reason);
+function deployFailedWords(run: ChangeRun, targets: ReadonlyArray<TargetState>, reading = false): { words: string; notSent: boolean; away: { words: string; tone: JourneyTone } | null } | null {
+  const reason = deployStopWords(run) ?? run.fail_reason;
+  const sends = awaySendsOf(reason);
+  const failed = sends.length ? sends.map((a) => ({ target: a.target, deploy: "", unsent: true })) : failedDeploysOf(reason);
   if (!failed.length) return null;
   // Reach not answered yet: what an earlier visit cached may say failed where a deploy since took it live.
-  if (reading) return { words: "Landed · reading where it is live", notSent: false };
+  if (reading) return { words: "Landed · reading where it is live", notSent: false, away: null };
   const now = failed.map((f) => ({ ...f, at: targets.find((t) => t.name === f.target) }));
   // A target the stop does not name that is still sending the change holds it as much as a failed one.
   const sending = targets.filter((t) => t.state === "deploying" && !failed.some((f) => f.target === t.name));
@@ -283,13 +287,18 @@ function deployFailedWords(run: ChangeRun, targets: ReadonlyArray<TargetState>, 
     ...live.map((f) => `live on ${f.target}${f.at!.deploy ? ` ${f.at!.deploy}` : ""}`),
     ...[...going.map((f) => ({ name: f.target, deploy: f.at!.deploy })), ...sending].map((t) => `going out to ${t.name}${t.deploy ? ` in ${t.deploy}` : ""}`),
     ...(["failed", "not sent"] as const).flatMap((word) => {
-      const these = waiting.filter((f) => (word === "not sent") === f.unsent);
+      const these = waiting.filter((f) => f.deploy && (word === "not sent") === f.unsent);
       return these.length ? [`${these.map((f) => `${f.target} ${f.deploy}`).join(", ")} ${word}`] : [];
     }),
     ...(waiting.length ? [`goes live with the next ${listWords(waiting.map((f) => f.target))} deploy${waiting.length > 1 ? "s" : ""}`] : []),
   ];
+  const senders = [...new Set(sends.filter((a) => waiting.some((f) => f.target === a.target)).map((a) => a.sender))];
+  const away = !sends.length ? null
+    : waiting.length ? { words: `Waiting for ${listWords(senders)} to send ${listWords(waiting.map((f) => f.target))}`, tone: "wait" as const }
+    : going.length || sending.length ? { words: `Deploying to ${listWords([...going.map((f) => f.target), ...sending.map((t) => t.name)])}`, tone: "wait" as const }
+    : { words: `Live on ${listWords(live.map((f) => f.target))}`, tone: "ok" as const };
   // Not sent: every deploy it names stopped before sending anything, and none has taken it out since.
-  return { words: ["Landed", ...parts].join(" · "), notSent: !live.length && !going.length && !sending.length && waiting.every((f) => f.unsent) };
+  return { words: ["Landed", ...parts].join(" · "), notSent: !live.length && !going.length && !sending.length && waiting.every((f) => f.unsent), away };
 }
 
 /** The page's headline for a change run: where the change stands now, and what it waits on. */
@@ -313,6 +322,11 @@ export function changeHeadline(j: Journey, run: ChangeRun, graph: ChangeGraph, c
     if (/^live$/i.test(ended)) {
       const on = n.kind === "live" && n.targets.length ? n.targets : targetsFromLine(deployLine(run, changeStations(graph))).map((t) => t.name);
       return head(on.length ? `Live on ${listWords(on)}` : "Live", null, "ok");
+    }
+    // A Deploy stop whose runner lost the exit's stop ended completed there: it reads as the stop it is.
+    if (deployStopOf(run)) {
+      const said = deployFailedWords(run, ctx.targets ?? [], ctx.reading);
+      return said?.away ? head(said.away.words, said.words, said.away.tone) : head(said?.notSent ? "Not sent" : ended, said?.words ?? null, "bad");
     }
     return head(ended, null, "ok");
   }
@@ -351,7 +365,7 @@ export function changeHeadline(j: Journey, run: ChangeRun, graph: ChangeGraph, c
       const onMain = onMainByRun(run, j);
       if (n.fix === "deploy" && onMain) {
         const said = deployFailedWords(run, ctx.targets ?? [], ctx.reading);
-        if (said) return head(said.notSent ? "Not sent" : title, said.words);
+        if (said) return said.away ? head(said.away.words, said.words, said.away.tone) : head(said.notSent ? "Not sent" : title, said.words);
       }
       return head(title, ctx.pr?.merged && !onMain ? "PR merged on GitHub" : stopDetail(run, graph, title, onMain));
     }
@@ -381,6 +395,8 @@ export function changeAction(j: Journey, run: ChangeRun, g: ChangeGraph, ctx: { 
   const pending = ctx.targets?.find((t) => t.state !== "live");
   const deploysHref = (words: string | null | undefined) => (pending ? runDeploysHref(run, pending.name, pending.deploy) : wordsHref(run, words));
   const openSession = (id: string | null | undefined): ChangeAction | null => (id ? { kind: "session", label: "Open session", href: `/conversation/${id}` } : null);
+  // A Deploy stop its runner ended completed (deployStopOf) is a stop at Deploy all the same: Deploys is the way on.
+  if (run.status === "completed" && !j.outside && deployStopOf(run)) return { kind: "deploys", label: "Open Deploys", href: deploysHref(deployStopWords(run)) };
   switch (n.kind) {
     case "gate": return !n.mine && n.decisionId ? { kind: "card", label: "Open the card", href: `/decisions/${run.gate_decision_short_id ?? n.decisionId}` } : null;
     case "session":

@@ -38,7 +38,7 @@ const DEPLOY_FIX = replay("a failed deploy goes back to the session to fix the s
 const REJECTED = replay("a rejection ends the run at Rejected");
 const UNVERIFIED = replay("the rest end Deployed, unverified or Landed (run 1)");
 /** The graph as the run page reads it (useRunWorkflow): the workflows row, whose nodes keep only what the stored node
- *  shape holds (no fold, stop, machine), and the source it was pushed from. */
+ *  shape holds (workflowNodeValidator), and the source it was pushed from. */
 const STORED_KEYS = Object.keys((workflowNodeValidator as any).fields);
 const storedRow = {
   slug: "personal", name: "personal",
@@ -212,10 +212,12 @@ describe("the personal journey, as its reports arrive", () => {
     const cut = end(replay("r8f: a Land its station cuts off during the catch-up says the change landed, and resuming it finishes and deploys (run 1)"));
     expect((journeyOf({ ...personal, own_results: false, source: null }, cut as any).now as any).resume).toEqual({ at: "land", label: "Land" });
     // Only the graph's own words count: a reason naming a resume at a stop whose words do not (a reviewer's finding,
-    // a merge's output quoted into it) offers none, and a stored row's nodes, which keep no stop, offer none either.
+    // a merge's output quoted into it) offers none. A stored row's nodes keep each exit's stop, so they offer what the
+    // source does.
     const quoted = { ...cut, current_node_id: "rejected", fail_reason: "Stopped: The reviewer rejected the change: run `cast workflow resume ct-9 --at land` instead" };
     expect(resumeOf(quoted as any, personal.nodes)).toBeNull();
-    expect(resumeOf(cut as any, storedRow.nodes)).toBeNull();
+    expect(resumeOf(cut as any, storedRow.nodes)).toEqual(resumeOf(cut as any, personal.nodes));
+    expect(resumeOf(quoted as any, storedRow.nodes)).toBeNull();
   });
 
   test("a refused resume says the server's own words, never the error's envelope", () => {

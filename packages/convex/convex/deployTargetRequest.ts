@@ -5,7 +5,7 @@ import { workspaceGrantsAccess } from "./lib/accessKeys";
 import { nextShortId } from "./counters";
 import { enqueueConfigCommand } from "./users";
 import { DEPLOY_SHORT_ID_PREFIX, liveDeploys } from "@codecast/shared/contracts/deploys";
-import { canRedeploySha, commitTouchesTarget, NOT_YOUR_MACHINE } from "@codecast/shared/contracts/deployTargets";
+import { canRedeploySha, commitTouchesTarget, isLiveVersionBump, NOT_YOUR_MACHINE } from "@codecast/shared/contracts/deployTargets";
 import { teamKey } from "./deployTargetsCi";
 import { refuseWhilePaused } from "./deployPause";
 import { kickDispatch, sendsThroughGithub } from "./deployDispatch";
@@ -81,12 +81,14 @@ export async function requestTargetDeployCore(
     }
     sha = commit.sha;
   }
-  // What it will send: the commits on main after the live sha that touch the target, up to the sha it makes live.
+  // What it will send: the commits on main after the live sha that touch the target, up to the sha it makes live, less
+  // the live release's own version bump, which carries nothing (isLiveVersionBump, as the targets view's queue).
   let commits: Doc<"deploys">["commits"] & {} = [];
   if (action === "deploy") {
     const after = await mainCommitsAfter(ctx, t.repository, live?.sha ?? null, sha ?? null);
+    const filesOf = (c: Doc<"commits">) => (c.files ?? []).map((f) => f.filename);
     commits = await deployCommitsOf(ctx, after.commits
-      .filter((c) => commitTouchesTarget(t, (c.files ?? []).map((f) => f.filename)))
+      .filter((c) => commitTouchesTarget(t, filesOf(c)) && !isLiveVersionBump(t, { subject: c.message, files: filesOf(c) }, live?.version))
       .reverse()
       .slice(0, COMMITS_MAX));
   }

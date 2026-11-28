@@ -3,6 +3,9 @@
 // template by the run's name.
 import { describe, expect, test } from "bun:test";
 import { daemonRunGraph, graphForDaemonRun, publishDaemonGraph } from "./daemonGraph";
+import { graphEdgesPayload, graphNodesPayload } from "./graphPayload";
+import { parseWorkflowSource } from "./parser";
+import { BUILTIN_WORKFLOW_TEMPLATES } from "./templates";
 
 const EMPTY = { name: "workflow", goal: "Ship the thing", nodes: [], edges: [] };
 
@@ -22,6 +25,33 @@ describe("graphForDaemonRun", () => {
     expect(graph!.goal).toBe("g");
     expect([...graph!.nodes.keys()]).toEqual(["start", "exit"]);
     expect(graph!.edges).toEqual(wf.edges);
+  });
+
+  test("a graph read from its stored node copy ends a stop exit as the source does: failed, with its words", () => {
+    // ct-102797 ran from this copy, which kept no stop, and ended completed at Deploy failed under a green dot.
+    const src = parseWorkflowSource(`digraph g {
+      start [shape=Mdiamond]
+      exit [shape=Msquare]
+      failed [shape=Msquare, stop="The deploy failed", machine=true, whole_stop=true, keep_subject=true]
+      start -> exit
+      start -> failed [condition="outcome = failure"]
+    }`);
+    const wf = { name: "g", nodes: graphNodesPayload(src), edges: graphEdgesPayload(src) };
+    const failed = graphForDaemonRun({ workflow_name: "g", goal_override: null, project_path: null }, wf)!.nodes.get("failed")!;
+    expect(failed).toMatchObject({ stop: "The deploy failed", machine: true, whole_stop: true, keep_subject: true });
+  });
+
+  test("every attribute a shipped flow sets on a station or route survives the stored copy, but the ones only drawings read", () => {
+    // Drawing and editing only (rawGraph, pipeline, flowEdit): a run never reads them.
+    const DRAWN = new Set(["asks_if", "segment_flow", "segment_entry"]);
+    const lost: string[] = [];
+    for (const [name, source] of Object.entries(BUILTIN_WORKFLOW_TEMPLATES)) {
+      const g = parseWorkflowSource(source);
+      const read = graphForDaemonRun({ workflow_name: name, goal_override: null, project_path: null }, { name, nodes: graphNodesPayload(g), edges: graphEdgesPayload(g) })!;
+      for (const n of g.nodes.values()) for (const [k, v] of Object.entries(n)) if (v !== undefined && !DRAWN.has(k) && (read.nodes.get(n.id) as any)?.[k] === undefined) lost.push(`${name} ${n.id}.${k}`);
+      g.edges.forEach((e, i) => { for (const [k, v] of Object.entries(e)) if (v !== undefined && (read.edges[i] as any)?.[k] === undefined) lost.push(`${name} ${e.from}->${e.to}.${k}`); });
+    }
+    expect(lost).toEqual([]);
   });
 
   test("the graph stack (the-line.md L4) comes from the row, else from the stored source", () => {

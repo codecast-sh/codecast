@@ -40,7 +40,7 @@ describe("what a release does with each target", () => {
   });
 
   test("a target already live at the sha, or with nothing waiting, is left; an after it does not need is dropped", async () => {
-    const p = await plan({ server: server.map((t) => (t.name === "backend" ? { ...t, live: live("new") } : t)), commitsSince: async (_f, paths) => (paths[0] === "web/**" ? 0 : 2) });
+    const p = await plan({ server: server.map((t) => (t.name === "backend" ? { ...t, live: live("new") } : t)), commitsSince: async (_f, t) => (t.paths?.[0] === "web/**" ? 0 : 2) });
     expect(p.find((s) => s.target === "backend")!.why).toBe("already live (dp-new)");
     expect(p.find((s) => s.target === "web")!.action).toBe("skip");
     expect(p.find((s) => s.target === "mobile")!).toMatchObject({ action: "send", after: [], commits: 2 });
@@ -57,7 +57,7 @@ describe("what a release does with each target", () => {
     const p = await plan({ declared: exempting, files: ["app/screen.test.ts"] });
     expect(p).toMatchObject([{ target: "mobile", action: "skip", why: "the change touches none of its paths, past what it exempts (tests)" }]);
     const counted: string[][] = [];
-    await plan({ declared: exempting, commitsSince: async (_f, _p, unless) => (counted.push(unless), 0) });
+    await plan({ declared: exempting, commitsSince: async (_f, t) => (counted.push([...(t.unless ?? [])]), 0) });
     expect(counted).toEqual([["**/*.test.ts"]]);
   });
 
@@ -71,20 +71,28 @@ describe("what a release does with each target", () => {
       commit("app/a.test.ts");
       commit("app/lib/b.test.ts");
       const head = commit("web/c.ts");
-      expect(await commitsSince(repo, from, head, ["app/**"], ["**/*.test.ts"])).toBe(0);
-      expect(await commitsSince(repo, from, head, ["app/**"], [])).toBe(2);
-      expect(await commitsSince(repo, from, head, [], ["**/*.test.ts"])).toBe(1);
+      expect(await commitsSince(repo, from, head, { name: "app", paths: ["app/**"], unless: ["**/*.test.ts"] })).toBe(0);
+      expect(await commitsSince(repo, from, head, { name: "app", paths: ["app/**"], unless: [] })).toBe(2);
+      expect(await commitsSince(repo, from, head, { name: "app", paths: [], unless: ["**/*.test.ts"] })).toBe(1);
       const shipped = commit("app/d.ts");
-      expect(await commitsSince(repo, from, shipped, ["app/**"], ["**/*.test.ts"])).toBe(1);
+      expect(await commitsSince(repo, from, shipped, { name: "app", paths: ["app/**"], unless: ["**/*.test.ts"] })).toBe(1);
       // The release's own bump for the version live now, committed after its cut, carries nothing; one for another
       // version does.
       fs.writeFileSync(path.join(repo, "app/package.json"), "{}");
       git("add", ".");
       git("commit", "-qm", "chore(app): bump version to 2.0.0");
       const bumped = git("rev-parse", "HEAD");
-      expect(await commitsSince(repo, shipped, bumped, ["app/**"], [], "2.0.0")).toBe(0);
-      expect(await commitsSince(repo, shipped, bumped, ["app/**"], [], "1.9.0")).toBe(1);
-      expect(await commitsSince(repo, from, bumped, ["app/**"], ["**/*.test.ts"], "2.0.0")).toBe(1);
+      expect(await commitsSince(repo, shipped, bumped, { name: "app", paths: ["app/**"], unless: [] }, "2.0.0")).toBe(0);
+      expect(await commitsSince(repo, shipped, bumped, { name: "app", paths: ["app/**"], unless: [] }, "1.9.0")).toBe(1);
+      expect(await commitsSince(repo, from, bumped, { name: "app", paths: ["app/**"], unless: ["**/*.test.ts"] }, "2.0.0")).toBe(1);
+      // A release named for the target bumps its own package, the one its paths name first (desktop's electron).
+      fs.mkdirSync(path.join(repo, "packages/electron"), { recursive: true });
+      fs.writeFileSync(path.join(repo, "packages/electron/package.json"), "{}");
+      git("add", ".");
+      git("commit", "-qm", "chore(desktop): bump version to 1.1.135");
+      const desktopBump = git("rev-parse", "HEAD");
+      expect(await commitsSince(repo, bumped, desktopBump, { name: "desktop", paths: ["packages/electron/**"] }, "1.1.135")).toBe(0);
+      expect(await commitsSince(repo, bumped, desktopBump, { name: "mobile", paths: ["packages/electron/**"] }, "1.1.135")).toBe(1);
     } finally {
       fs.rmSync(repo, { recursive: true, force: true });
     }

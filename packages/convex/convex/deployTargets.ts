@@ -34,6 +34,7 @@ import { lineDeployTargets } from "./deployCarries";
 import {
   DEPLOY_TARGET_NAME_RE,
   commitTouchesTarget,
+  isLiveVersionBump,
   readJsonLive,
   type DeployLiveReader,
 } from "@codecast/shared/contracts/deployTargets";
@@ -234,7 +235,9 @@ export async function fillDeployRange(ctx: any, deployId: Id<"deploys">): Promis
     if (cut != null) patch.cut_at = cut;
   }
   let previous = d.previous_sha ?? null;
-  if (!previous) {
+  // The version live before it: that release's own version bump, committed after its cut, is not among its commits.
+  let previousVersion: string | undefined;
+  if (!previous || !d.commits?.length) {
     // The live deploys created just before this one, however far back it is.
     const earlier: Doc<"deploys">[] = await ctx.db
       .query("deploys")
@@ -243,14 +246,16 @@ export async function fillDeployRange(ctx: any, deployId: Id<"deploys">): Promis
       .take(30);
     // The deploy that went live last before it.
     const before = liveDeployOf(earlier.filter((x) => x._id !== d._id && x.sha && (x.live_at ?? x.created_at) <= (d.live_at ?? d.created_at)), { repository: d.repository });
-    if (before?.sha && before.sha !== d.sha) previous = patch.previous_sha = before.sha;
+    if (!previous && before?.sha && before.sha !== d.sha) previous = patch.previous_sha = before.sha;
+    if (before?.sha === previous) previousVersion = before?.version;
   }
   if (!d.commits?.length && previous) {
     const t = (await targetRows(ctx, d.workspace, d.repository)).find((r) => r.name === d.target);
     const range = await mainCommitsAfter(ctx, d.repository!, previous, d.sha);
     if (range.known) {
+      const filesOf = (c: Doc<"commits">) => (c.files ?? []).map((f) => f.filename);
       const commits = await deployCommitsOf(ctx, range.commits
-        .filter((c) => commitTouchesTarget(t ?? { paths: [] }, (c.files ?? []).map((f) => f.filename)))
+        .filter((c) => commitTouchesTarget(t ?? { paths: [] }, filesOf(c)) && !(t && isLiveVersionBump(t, { subject: c.message, files: filesOf(c) }, previousVersion)))
         .reverse()
         .slice(0, COMMITS_MAX));
       if (commits.length) patch.commits = commits;

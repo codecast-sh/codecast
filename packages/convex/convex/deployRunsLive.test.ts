@@ -4,7 +4,8 @@ import { hashToken } from "./apiTokens";
 import { publish } from "./deployTargets";
 import { stampMainOrder } from "./deployTargetsCi";
 import { recordDeployMarker } from "./deploys";
-import { HANDED_EXIT, completeRunsOnLive, deployStopOf, healOutsideMerges, liveExitOf, recordOutsideMergeOnPr } from "./deployCarries";
+import { HANDED_EXIT, completeRunsOnLive, healOutsideMerges, liveExitOf, recordOutsideMergeOnPr } from "./deployCarries";
+import { deployStopOf } from "@codecast/shared/contracts/deployStop";
 
 // A change run that stopped at Deploy failed on a release race (ct-102064: cli dp-3424 failed at Send, and dp-3456,
 // a later release, carried its merge live) reads Live once a deploy that carries its change goes live, and its
@@ -171,6 +172,29 @@ describe("a run stopped at Deploy reads Live once a later deploy carries its cha
     await mark("cli", 4, "live");
     expect(await drain()).toEqual([]);
     expect(told(t, "conv_subject").length).toBe(1);
+  });
+
+  test("a run that ended completed at Deploy failed, its stop lost, goes Live like a failed one, by deploy or by the heal", async () => {
+    const away = "This run could not send cli: cli is sent only from Bo's machine (bo-mac), not from this machine. a is on main and goes out with cli's next deploy.";
+    const lost = (id: string, task: string) => {
+      const r = stoppedAtDeploy(id, 1, away, task);
+      return { ...r, status: "completed", fail_reason: undefined, pr: { repository: REPO, number: 7, head_sha: sha(1), at: NOW - 90_000 }, node_statuses: r.node_statuses.map((n) => (n.node_id === "deploy__failed" ? { ...n, status: "completed" } : n)) };
+    };
+    const { t, mark, drain, ctx } = await world();
+    t.workflow_runs.push(lost("run_lost", "task_b"));
+    await mark("cli", 2, "live");
+    expect((await drain()).sort()).toEqual(["run_a", "run_lost"]);
+    expect(run(t, "run_lost")).toMatchObject({ status: "completed", current_node_id: "exit" });
+    expect(run(t, "run_lost").node_statuses.some((n: any) => n.node_id === "deploy__failed")).toBe(false);
+    // One whose deploys went live before anything read it is healed by the completed pass, not the failed one.
+    t.workflow_runs.push(lost("run_late", "task_c"));
+    const pass = async (status?: "completed", dry = false) => (await (healOutsideMerges as any)._handler(ctx, { dry, ...(status ? { status } : {}) })).healed;
+    expect(await pass()).toEqual([]);
+    expect(await pass("completed", true)).toEqual(["run_late"]);
+    expect(run(t, "run_late").current_node_id).toBe("deploy__failed");
+    expect(await pass("completed")).toEqual(["run_late"]);
+    expect(run(t, "run_late")).toMatchObject({ status: "completed", current_node_id: "exit" });
+    expect(await pass("completed")).toEqual([]);
   });
 
   test("a run with a session of its own says it is over from that session, as its runner's messages do", async () => {
@@ -368,7 +392,9 @@ describe("which runs a live deploy reads", () => {
     expect(deployStopOf({ ...base, current_node_id: "direct_deploy__stuck", node_statuses: waitFailed })).toBe("direct_deploy");
     expect(deployStopOf({ ...base, current_node_id: "direct_deploy__failed", node_statuses: [] })).toBeNull();
     expect(deployStopOf({ ...base, merge: undefined, current_node_id: "direct_deploy__failed", node_statuses: waitFailed })).toBeNull();
-    expect(deployStopOf({ ...base, status: "completed", current_node_id: "direct_deploy__failed", node_statuses: waitFailed })).toBeNull();
+    // A runner that lost the exit's stop ended it completed there: it stopped all the same (ct-102797's th76kej).
+    expect(deployStopOf({ ...base, status: "completed", current_node_id: "direct_deploy__failed", node_statuses: waitFailed })).toBe("direct_deploy");
+    expect(deployStopOf({ ...base, status: "running", current_node_id: "direct_deploy__failed", node_statuses: waitFailed })).toBeNull();
     expect(deployStopOf({ ...base, current_node_id: "check__failed", node_statuses: [{ node_id: "check__wait", status: "completed" }] })).toBeNull();
   });
   test("only a segment whose wait is await-deploy and whose Live leads straight to an exit", () => {

@@ -122,9 +122,8 @@ function graphElsewhere(run: DaemonRun, wf: DaemonRow, cwd: string, deviceId?: s
     }
   }
   // The pushed source is the whole graph; the stored node copy keeps only the
-  // attributes its table names (a stop exit's words, a segment's routing are
-  // not among them). Read the source when it stands alone, or from the file
-  // this machine pushed it from.
+  // attributes its table names (graphPayload.ts). Read the source when it
+  // stands alone, or from the file this machine pushed it from.
   const fromSource = sourceGraph(wf, cwd, deviceId);
   if (fromSource) {
     if (run.goal_override) fromSource.goal = run.goal_override;
