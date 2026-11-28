@@ -27,6 +27,7 @@ import { highlightSelectionMatches, search, searchKeymap } from "@codemirror/sea
 import { autocompletion, closeBrackets, closeBracketsKeymap, completeAnyWord, completionKeymap } from "@codemirror/autocomplete";
 import { bracketMatching, codeFolding, foldGutter, foldKeymap, indentOnInput, indentUnit } from "@codemirror/language";
 import { runCodeCommand, type CodeCommandId } from "./commands";
+import { CHEVRON_DOWN, CHEVRON_RIGHT, lineIcon } from "./icons";
 import type { ExplicitEditorSettings } from "./editorSettings";
 import type { IndentInfo } from "./indent";
 import { statusBar } from "./statusBar";
@@ -88,7 +89,7 @@ function relativeLineNumbers(): Extension {
 
 function lineNumberExtension(mode: LineNumberMode): Extension {
   if (mode === "off") return [];
-  return [mode === "relative" ? relativeLineNumbers() : lineNumbers(), highlightActiveLineGutter()];
+  return mode === "relative" ? relativeLineNumbers() : lineNumbers();
 }
 
 function indentExtension(indent: IndentInfo): Extension {
@@ -175,6 +176,13 @@ const applyOverrides = ViewPlugin.define((view) => {
 
 const fontThemes = new Map<string, Extension>();
 
+/** A row's height in whole pixels. A fractional line box (13px at 1.6 is
+ *  20.8px) puts every row on a fractional pixel, and the gutter's smaller
+ *  type, with its own line box, sits a pixel high against the code. */
+export function codeLineHeightPx(fontSize: number, lineHeight: number): number {
+  return Math.round(fontSize * lineHeight);
+}
+
 /** One theme per font size and line height, reused: each EditorView.theme
  *  mounts a stylesheet that is never taken down. */
 function fontTheme(fontSize: number, lineHeight: number): Extension {
@@ -184,7 +192,7 @@ function fontTheme(fontSize: number, lineHeight: number): Extension {
     theme = Prec.highest(
       EditorView.theme({
         "&": { fontSize: `${fontSize}px` },
-        ".cm-scroller": { lineHeight: String(lineHeight) },
+        ".cm-scroller": { lineHeight: `${codeLineHeightPx(fontSize, lineHeight)}px` },
         ".cm-gutters": { fontSize: `${fontSize - 1}px` },
       }),
     );
@@ -243,11 +251,18 @@ export function codeSetup(config: CodeSetupConfig): Extension {
     optionsField.init(() => ({ base: options, shown: options })),
     applyOverrides,
     compartments.lineNumbers.of(lineNumberExtension(options.lineNumbers)),
+    // Outside the line numbers' compartment: with numbers off, the fold
+    // gutter still marks the cursor's line.
+    highlightActiveLineGutter(),
     foldGutter({
+      // The breadcrumbs' chevrons. An open fold shows on the cursor's line
+      // and while the gutter is hovered; a closed one always (solCodeTheme).
       markerDOM: (open) => {
         const el = document.createElement("span");
-        el.textContent = open ? "⌄" : "›";
+        el.className = "cm-fold-marker";
+        el.dataset.fold = open ? "open" : "folded";
         el.title = open ? "Fold" : "Unfold";
+        el.append(lineIcon(open ? CHEVRON_DOWN : CHEVRON_RIGHT, 12));
         return el;
       },
     }),

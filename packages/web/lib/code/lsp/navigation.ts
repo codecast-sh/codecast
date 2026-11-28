@@ -23,6 +23,9 @@ import { el } from "./ui/list";
 import { readVaultFile } from "../../vault/client";
 import { currentState, type CodeBuffer } from "../buffers";
 import { useVaultStore } from "../../../store/vaultStore";
+import { jumpTo } from "../jump";
+import { featureContext } from "../features";
+import { searchDeclarations, type DeclarationHit } from "./declarations";
 
 type Loc = { uri: string; range: lsp.Range };
 
@@ -92,10 +95,11 @@ function fileLines(vaultId: string, path: string): Promise<string[] | null> {
   return hit;
 }
 
-function lineRow(text: string | null, range: lsp.Range, open: () => void): PeekRow {
+function lineRow(text: string | null, range: lsp.Range, open: () => void, onShown?: () => void): PeekRow {
   return {
     open,
     render(dom) {
+      if (text === null) onShown?.();
       dom.append(el("span", "cm-lsp-lineno", String(range.start.line + 1)));
       const code = el("span", "cm-lsp-code");
       if (text === null) code.textContent = "…";
@@ -133,7 +137,26 @@ function showLocations(view: EditorView, plugin: LSPPlugin, locs: Loc[], title: 
     const lines = loaded.get(uriKey(uri));
     return lines ? (n) => lines[n] ?? "" : null;
   };
-  let refresh: (() => void) | null = null;
+  let refresh: ((keepPlace?: boolean) => void) | null = null;
+  // Line text for a file on disk is read when one of its rows is first drawn,
+  // so a long list fills in as it scrolls; arrivals redraw once a frame.
+  const asked = new Set<string>();
+  let frame = 0;
+  const want = (uri: string) => {
+    const key = uriKey(uri);
+    if (asked.has(key)) return;
+    asked.add(key);
+    const t = resolveUri(rootPath, uri);
+    if (!t.inside) return;
+    void fileLines(vaultId, t.path).then((lines) => {
+      loaded.set(key, lines);
+      if (!lines || frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        refresh?.(true);
+      });
+    });
+  };
   showPeek(view, {
     id: "references",
     title,
@@ -144,7 +167,8 @@ function showLocations(view: EditorView, plugin: LSPPlugin, locs: Loc[], title: 
         const name = displayPath(rootPath, g[0].uri);
         rows.push({ group: true, render: (dom) => dom.append(el("span", "cm-lsp-label", name), el("span", "cm-lsp-hint", String(g.length))) });
         const read = docLines(g[0].uri);
-        for (const l of g) rows.push(lineRow(read ? read(l.range.start.line) : null, l.range, () => goToLocation(view, l.uri, l.range, rootPath)));
+        const uri = g[0].uri;
+        for (const l of g) rows.push(lineRow(read ? read(l.range.start.line) : null, l.range, () => goToLocation(view, l.uri, l.range, rootPath), () => want(uri)));
       }
       return rows;
     },
@@ -153,14 +177,6 @@ function showLocations(view: EditorView, plugin: LSPPlugin, locs: Loc[], title: 
       return () => (refresh = null);
     },
   });
-  // Fill in line text for files on disk only, a few files at a time.
-  const missing = ordered.filter((g) => !docLines(g[0].uri)).slice(0, 40);
-  void Promise.all(
-    missing.map(async (g) => {
-      const t = resolveUri(rootPath, g[0].uri);
-      if (t.inside) loaded.set(uriKey(g[0].uri), await fileLines(vaultId, t.path));
-    }),
-  ).then(() => refresh?.());
 }
 
 export function findReferences(view: EditorView): boolean {
@@ -551,63 +567,112 @@ function documentSymbols(view: EditorView): Promise<OutlineSymbol[]> {
     .then((list) => (list.length ? list : lezerSymbols(view.state)));
 }
 
+export interface SymbolPickOptions {
+  /** Seeds the filter (quick open's `@name`). */
+  query?: string;
+  /** Only this container's symbols (null: the top level), as a breadcrumb
+   *  lists its level. */
+  container?: string | null;
+  /** The symbol selected first, by name. */
+  current?: string;
+}
+
 /** The outline pick: type to filter, the editor follows the selection, Escape
  *  puts it back. */
-export function gotoSymbol(view: EditorView): boolean {
+export function gotoSymbol(view: EditorView, opts: SymbolPickOptions = {}): boolean {
   const start = view.state.selection;
   const scroll = view.scrollSnapshot();
-  void documentSymbols(view).then((symbols) => {
+  void documentSymbols(view).then((all) => {
+    const symbols = opts.container === undefined ? all : all.filter((s) => (s.container ?? null) === opts.container);
+    const current = opts.current === undefined ? undefined : symbols.find((s) => s.name === opts.current && s.nameFrom <= start.main.head && start.main.head <= s.to) ?? symbols.find((s) => s.name === opts.current);
     const lineOf = (s: OutlineSymbol, st: EditorState) => st.doc.lineAt(Math.min(s.nameFrom, st.doc.length)).number;
-    const jump = (s: OutlineSymbol, focus: boolean) => {
+    // A preview only shows the symbol; the pick is the jump the history keeps.
+    const preview = (s: OutlineSymbol) => {
       const pos = Math.min(s.nameFrom, view.state.doc.length);
       view.dispatch({ selection: { anchor: pos }, effects: EditorView.scrollIntoView(pos, { y: "center" }), userEvent: "select.symbol" });
-      if (focus) view.focus();
     };
     openQuickPick(view, {
       placeholder: symbols.length ? "Go to symbol in file" : "No symbols in this file",
+      initialQuery: opts.query,
+      initialItem: current,
       items: symbols,
       empty: "No matching symbol",
       entry: (s) => ({ label: s.name, detail: s.container ?? s.detail, hint: String(lineOf(s, view.state)), kind: kindGlyph(s.kind) }),
-      onPreview: (s) => s && jump(s, false),
-      onPick: (s) => jump(s, true),
+      onPreview: (s) => s && preview(s),
+      onPick: (s) => {
+        // Back from the pick returns to where the pick started, not to the last preview.
+        view.dispatch({ selection: start });
+        jumpTo(view, s.nameFrom, { focus: true });
+      },
       onCancel: () => view.dispatch({ selection: start, effects: scroll }),
     });
   });
   return true;
 }
 
-/** Symbols across the project, from the server attached here (or any server
- *  running for this folder). */
-export function gotoWorkspaceSymbol(view: EditorView, clients: LSPClient[]): boolean {
+/** Symbols across the project: the server attached here (or any server
+ *  running for this folder), merged with a declaration search over the whole
+ *  folder (declarations.ts), which also answers where no server runs. */
+export function gotoWorkspaceSymbol(view: EditorView, clients: LSPClient[], initialQuery?: string): boolean {
   const own = pluginOf(view)?.client;
   const client = [own, ...clients].find((c): c is LSPClient => !!c && serverCan(c, "workspaceSymbolProvider") && !!workspaceOf(c));
-  if (!client) {
+  const ws = client ? workspaceOf(client)! : null;
+  const ctx = view.state.facet(featureContext);
+  const vaultId = ws?.host.vaultId ?? ctx?.vaultId;
+  if (!vaultId) {
     showNotice(view, { tone: "warn", title: "No language server running for this folder" });
     return true;
   }
-  const ws = workspaceOf(client)!;
+  const rootPath = ws?.rootPath ?? "";
   type Sym = lsp.SymbolInformation | lsp.WorkspaceSymbol;
-  openQuickPick<Sym>(view, {
+  type Row = { sym: Sym; hit?: never } | { hit: DeclarationHit; sym?: never };
+  const fromServer = (query: string, signal: AbortSignal): Promise<Sym[]> => {
+    if (!client) return Promise.resolve([]);
+    client.sync();
+    const params: lsp.WorkspaceSymbolParams = { query };
+    signal.addEventListener("abort", () => client.cancelRequest(params));
+    return client.request<lsp.WorkspaceSymbolParams, Sym[] | null>("workspace/symbol", params).then(
+      (r) => (r ?? []).slice(0, 500),
+      () => [],
+    );
+  };
+  const where = (s: Sym) => {
+    const range = "range" in s.location ? s.location.range : null;
+    return { path: displayPath(rootPath, s.location.uri), line: range ? range.start.line + 1 : 0 };
+  };
+  openQuickPick<Row>(view, {
     placeholder: "Go to symbol in project",
+    initialQuery,
     empty: "No matching symbol",
-    items: (query, signal) => {
-      client.sync();
-      const params: lsp.WorkspaceSymbolParams = { query };
-      signal.addEventListener("abort", () => client.cancelRequest(params));
-      return client.request<lsp.WorkspaceSymbolParams, Sym[] | null>("workspace/symbol", params).then((r) => (r ?? []).slice(0, 500));
+    items: async (query, signal) => {
+      const [server, found] = await Promise.all([fromServer(query, signal), searchDeclarations(vaultId, query, signal).catch(() => [])]);
+      const seen = new Set(server.map((s) => {
+        const w = where(s);
+        return `${w.path}:${w.line}`;
+      }));
+      return [...server.map((sym): Row => ({ sym })), ...found.filter((h) => !seen.has(`${h.path}:${h.line}`)).map((hit): Row => ({ hit }))];
     },
-    entry: (s) => {
-      const range = "range" in s.location ? s.location.range : null;
-      return {
-        label: s.name,
-        detail: s.containerName || undefined,
-        hint: `${displayPath(ws.rootPath, s.location.uri)}${range ? `:${range.start.line + 1}` : ""}`,
-        kind: kindGlyph(lspKindName(s.kind)),
-      };
+    entry: (row) => {
+      if (row.hit) {
+        const glyph = kindGlyph(row.hit.kind);
+        return { label: row.hit.name, hint: `${row.hit.path}:${row.hit.line}`, kind: { ...glyph, color: "var(--sol-text-dim)" } };
+      }
+      const s = row.sym;
+      const w = where(s);
+      return { label: s.name, detail: s.containerName || undefined, hint: `${w.path}${w.line ? `:${w.line}` : ""}`, kind: kindGlyph(lspKindName(s.kind)) };
     },
-    onPick: (s) => {
+    onPick: (row) => {
+      if (row.hit) {
+        const pos = { line: row.hit.line - 1, character: row.hit.column - 1 };
+        if (ctx && row.hit.path === ctx.path) {
+          const line = view.state.doc.line(Math.min(row.hit.line, view.state.doc.lines));
+          jumpTo(view, line.from + Math.min(pos.character, line.length), { focus: true });
+        } else openVaultFile(row.hit.path, pos);
+        return;
+      }
+      const s = row.sym;
       const range = "range" in s.location ? s.location.range : { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } };
-      goToLocation(view, s.location.uri, range, ws.rootPath);
+      goToLocation(view, s.location.uri, range, rootPath);
     },
   });
   return true;

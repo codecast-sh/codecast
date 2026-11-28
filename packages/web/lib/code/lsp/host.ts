@@ -11,13 +11,14 @@ import { applyToBuffer } from "../fileSync";
 import { runCodeCommand } from "../commands";
 import { focusedEditorView } from "../features";
 import { readVaultFile, writeVaultFile } from "../../vault/client";
-import { filesHref } from "../../vault/vaultHref";
+import { filesHref, navigateToFiles } from "../../vault/vaultHref";
 import { requestEndpointOf, useVaultStore } from "../../../store/vaultStore";
 import type { WorkspaceHost } from "./workspace";
 import type { EditTarget } from "./edits";
 import { resolveUri, uriKey, type UriTarget } from "./uri";
 import { showNotice } from "./ui/notice";
 import { forgetClientDiagnostics } from "./diagnostics";
+import { jumpTo } from "../jump";
 
 const endpoint = () => {
   const ep = requestEndpointOf(useVaultStore.getState());
@@ -34,10 +35,7 @@ export function openVaultFile(path: string, pos?: lsp.Position): boolean {
   const line = pos ? pos.line + 1 : undefined;
   const column = pos ? pos.character + 1 : undefined;
   if (runCodeCommand("file.open", { path, line, column })) return true;
-  if (typeof window === "undefined") return false;
-  window.history.pushState(null, "", filesHref({ path, line }));
-  window.dispatchEvent(new PopStateEvent("popstate"));
-  return true;
+  return navigateToFiles(filesHref({ path, line }));
 }
 
 /** Wait for a view showing `uri` with its language server attached. */
@@ -107,9 +105,7 @@ export function editTarget(vaultId: string, rootPath: string): EditTarget {
 export function goToLocation(view: EditorView, uri: string, range: lsp.Range, rootPath: string): void {
   const plugin = LSPPlugin.get(view);
   if (plugin && uriKey(plugin.uri) === uriKey(uri)) {
-    const pos = plugin.fromPosition(range.start);
-    view.dispatch({ selection: { anchor: pos }, effects: EditorView.scrollIntoView(pos, { y: "center" }), userEvent: "select.definition" });
-    view.focus();
+    jumpTo(view, plugin.fromPosition(range.start), { focus: true });
     return;
   }
   const target = resolveUri(rootPath, uri);

@@ -26,6 +26,7 @@ import { useCurrentUser } from "../../../../../hooks/useCurrentUser";
 import { useEventListener } from "../../../../../hooks/useEventListener";
 import { useWatchEffect } from "../../../../../hooks/useWatchEffect";
 import { repoBlobHref } from "../../../../../lib/repoView";
+import { useLocalEditAction, useLocalEditAt } from "../../../../../hooks/useLocalEdit";
 import { landOn, useDiffAddress } from "../../../../../hooks/useDiffAddress";
 import { useFollowScroll } from "../../../../../hooks/useFollowSurface";
 import { useLinkedSessions } from "../../../../../hooks/useLinkedSessions";
@@ -299,6 +300,9 @@ export function PRContent({
     [createComment, noteMode, pr, repository, user?._id],
   );
 
+  // A thread on the new side opens its lines (where they are now) in this
+  // machine's checkout of the head branch.
+  const editAt = useLocalEditAt(repository, pr?.head_ref ?? "");
   const lineThreads: FileLineThreads = useMemo(
     () => ({
       threadsFor: (filename) => threadsByFile.get(filename),
@@ -312,6 +316,7 @@ export function PRContent({
           lineNumber={anchor.lineNumber}
           lineEnd={anchor.lineEnd}
           placement={placement}
+          editAction={items.length && anchor.side !== "LEFT" && placement?.state !== "outdated" ? editAt?.(filename, placement?.line ?? anchor.lineNumber, placement ? placement.lineEnd : anchor.lineEnd) : undefined}
           noteMode={noteMode}
           onNoteMode={setNoteMode}
           pendingCount={notes.length}
@@ -348,7 +353,7 @@ export function PRContent({
         if (anchor) setComposing({ file: filename, anchor, anchorLines });
       },
     }),
-    [threadsByFile, isAuthenticated, post, repository, pr?.head_sha, noteMode, setNoteMode, notes.length, landing, number, family, goTo, composing],
+    [threadsByFile, isAuthenticated, post, repository, pr?.head_sha, noteMode, setNoteMode, notes.length, landing, number, family, goTo, composing, editAt],
   );
 
   // What the tree shows beside each file: open threads, waiting notes, viewed.
@@ -458,6 +463,12 @@ export function PRContent({
     changes: f.changes,
     patch: f.patch,
   })), [prFiles]);
+  // Each file's "Edit": the file in this machine's checkout of the head
+  // branch, with the editor's diff against the pull request's base. A checkout
+  // on another branch holds another version: the file opens alone there.
+  const editAction = useLocalEditAction(repository, pr?.head_ref ?? "", (c) =>
+    c.onRef && pr?.base_sha ? { ref: pr.base_sha, label: "PR base" } : null,
+  );
 
   if (!pr) {
     const error = prFeed.error?.message || lookup.error;
@@ -572,6 +583,7 @@ export function PRContent({
                 flow={flow}
                 // The name opens the whole file as the pull request has it.
                 fileHref={pr.head_sha ? (path) => repoBlobHref(repository, pr.head_sha, path, family) : undefined}
+                fileAction={editAction}
                 lineThreads={lineThreads}
                 fileMarks={fileMarks}
                 onToggleViewed={isAuthenticated ? toggleViewed : undefined}

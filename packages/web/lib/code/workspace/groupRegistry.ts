@@ -62,6 +62,15 @@ export function viewOfGroup(key: string): object | null {
   return slots.get(key)?.view ?? null;
 }
 
+/** Put focus in a group: its editor when it shows one, else the group's body
+ *  (EditorGroup's `data-group-body`), so focus that leaves the tab strip, the
+ *  breadcrumbs or a closing tab stays in the workspace, never on <body>. */
+export function focusGroup(key: string): void {
+  const view = slots.get(key)?.view as { focus(): void } | null | undefined;
+  if (view) return view.focus();
+  if (typeof document !== "undefined") document.querySelector<HTMLElement>(`[data-group-body="${key}"]`)?.focus();
+}
+
 /** Called when a view and its breadcrumbs row are both bound (the row mounts
  *  after the editor, or the editor moves to another group). */
 export function onCrumbsBound(fn: (view: object) => void): () => void {

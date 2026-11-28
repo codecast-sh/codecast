@@ -142,3 +142,30 @@ test("below sm the panel is a full-width sheet over the page, hidden while close
     useInboxStore.setState({ shortcutsPanelOpen: initial });
   }
 });
+
+test("the editor's keys have one section, led while a code editor is on screen", async () => {
+  const initial = useInboxStore.getState().shortcutsPanelOpen;
+  useInboxStore.setState({ shortcutsPanelOpen: false });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const editor = document.createElement("div");
+  editor.setAttribute("data-code-workspace", "");
+  document.body.append(editor);
+  const root = createRoot(container);
+  const headings = () => [...container.querySelectorAll("[data-cc-help-heading]")].map((h) => h.textContent);
+  const sectionText = (label: string) => [...container.querySelectorAll("section")].find((s) => s.querySelector("h3")?.textContent === label)?.textContent ?? "";
+  try {
+    await act(() => root.render(<KeyboardShortcutsPanel />));
+    await act(() => useInboxStore.getState().toggleShortcutsPanel());
+    expect(headings()[0]).toBe("Editor");
+    const text = sectionText("Editor");
+    // The app's code.* shortcuts and the keys the editor claims itself.
+    for (const label of ["Go to file", "Close editor tab", "Go to definition", "Next problem", "Next agent edit", "Format document"]) expect(text).toContain(label);
+    expect(sectionText("Global")).not.toContain("Close editor tab");
+  } finally {
+    await act(() => root.unmount());
+    editor.remove();
+    container.remove();
+    useInboxStore.setState({ shortcutsPanelOpen: initial });
+  }
+});

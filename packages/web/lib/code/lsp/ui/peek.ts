@@ -22,7 +22,8 @@ export interface PeekSpec {
    *  rows can reflect live data. */
   rows(): PeekRow[];
   /** Subscribe to changes; return the unsubscribe. */
-  watch?(refresh: () => void): () => void;
+  /** `keepPlace`: the same rows with fresher content; selection and scroll stay. */
+  watch?(refresh: (keepPlace?: boolean) => void): () => void;
   /** Recomputed with the rows. */
   countNow?(): string;
 }
@@ -50,8 +51,9 @@ function createPeek(view: EditorView, spec: PeekSpec): Panel {
   head.append(el("span", "cm-lsp-peek-title", spec.title), count, close);
   const list = new VirtualList<PeekRow>({ maxRows: 8, onActivate: (row) => row.open?.() });
   dom.append(head, list.dom);
-  const refresh = () => {
-    list.setRows(spec.rows());
+  const refresh = (keepPlace = false) => {
+    if (keepPlace) list.redrawRows(spec.rows());
+    else list.setRows(spec.rows());
     if (spec.countNow) count.textContent = spec.countNow();
   };
   dom.addEventListener("keydown", (e) => {
@@ -74,7 +76,7 @@ function createPeek(view: EditorView, spec: PeekSpec): Panel {
     top: false,
     mount() {
       refresh();
-      unwatch = spec.watch?.(refresh);
+      unwatch = spec.watch?.((keepPlace?: boolean) => refresh(keepPlace));
       dom.focus();
     },
     destroy() {

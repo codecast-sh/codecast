@@ -2,6 +2,10 @@
 // in vim, Ctrl-- and Ctrl-Shift-- on a Mac, Alt-Left and Alt-Right
 // elsewhere) walk it the way VS Code does. A move of JUMP_LINES or more, or
 // into another file, is a new stop; a smaller move updates the current stop.
+// While vim runs, its own jumps decide instead, as Neovim's jumplist does:
+// G, gg, /, n, *, %, ' and ` start a stop however near, and 20j or a run of
+// J moves the current one however far. An explicit jump (lib/code/jump.ts:
+// definition, symbol, breadcrumb, `:line`) starts a stop in either mode.
 //
 // Plain module state, written from the editor's own events (never a store),
 // so recording costs a comparison per cursor move.
@@ -25,9 +29,21 @@ let walking: { target: NavLocation; until: number } | null = null;
 
 const sameFile = (a: NavLocation, b: NavLocation) => a.vaultId === b.vaultId && a.path === b.path;
 
-/** The cursor is here now. */
-export function noteLocation(loc: NavLocation, now = Date.now()): void {
+/** Set by a jump (vim's jumplist, or an explicit jumpTo) just before the
+ *  cursor moves. */
+let jumpPending = false;
+
+/** The next move is a jump (vim's jumplist took one). */
+export function noteJump(): void {
+  jumpPending = true;
+}
+
+/** The cursor is here now. `byDistance: false` (vim) makes only a jump or
+ *  another file a new stop. */
+export function noteLocation(loc: NavLocation, now = Date.now(), opts: { byDistance?: boolean } = {}): void {
   const cur = stack[index];
+  const jumped = jumpPending;
+  jumpPending = false;
   if (walking) {
     if (now < walking.until && !sameFile(loc, walking.target)) return;
     if (sameFile(loc, walking.target)) {
@@ -37,7 +53,8 @@ export function noteLocation(loc: NavLocation, now = Date.now()): void {
     }
     walking = null;
   }
-  if (cur && sameFile(cur, loc) && Math.abs(cur.line - loc.line) < JUMP_LINES) {
+  const near = !jumped && (opts.byDistance === false || Math.abs((cur?.line ?? 0) - loc.line) < JUMP_LINES);
+  if (cur && sameFile(cur, loc) && near) {
     stack[index] = loc;
     return;
   }
@@ -76,6 +93,7 @@ export function forgetPath(vaultId: string, path: string): void {
 }
 
 export function _resetNavHistory(): void {
+  jumpPending = false;
   stack = [];
   index = -1;
   walking = null;

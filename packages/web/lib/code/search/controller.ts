@@ -132,6 +132,13 @@ class ProjectSearch {
     }
   }
 
+  /** Ask for the search box: the pane selects its text when it next draws,
+   *  mounted now or once the tree opens to show it. */
+  requestBox(): void {
+    this.focusRequest++;
+    this.notify();
+  }
+
   /** The results changed in place (collapse, dismiss, replace): redraw. */
   touch(): void {
     this.notify();
@@ -303,14 +310,12 @@ export function registerProjectSearchCommands(): void {
       const flip = typeof args?.regex === "boolean" && args.regex !== projectSearch.get().options.regex;
       if (flip) projectSearch.set({ options: { regex: args.regex as boolean } }, { persist: false });
       if (args?.replace === true) projectSearch.set({ replaceOpen: true });
-      if (query !== null) vault.openSearch(query);
-      else vault.setLeftPaneTab("search");
+      vault.openSearch(query ?? undefined);
       // The box only searches when its text changes: same text, new flag
       // searches here.
       const text = projectSearch.wanted();
       if (flip && text && (query === null || query === text)) projectSearch.rerun();
-      projectSearch.focusRequest++;
-      projectSearch.touch();
+      projectSearch.requestBox();
     },
     "search.next": () => projectSearch.step(1),
     "search.prev": () => projectSearch.step(-1),

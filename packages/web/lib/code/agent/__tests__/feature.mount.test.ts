@@ -14,7 +14,9 @@ const { useInboxStore } = await import("../../../../store/inboxStore");
 const { useVaultStore } = await import("../../../../store/vaultStore");
 const { useAgentStore } = await import("../agentStore");
 const { addSentMark, agentMarks, agentMarksExtension } = await import("../editorMarks");
-const { agentKeys, checkSentTurns, openInlineInstruction, quoteSelection, selectedRange, watchTurn } = await import("../feature");
+const { externalChange } = await import("../../fileSync");
+const { agentKeys, askNow, editsItem, checkSentTurns, openInlineInstruction, quoteSelection, selectedRange, sessionDiffTargets, watchTurn } = await import("../feature");
+const { useDiffViewerStore } = await import("../../../../store/diffViewerStore");
 const { codeBuffers } = await import("../../buffers");
 const { instructionMessage, sendInstruction } = await import("../compose");
 
@@ -151,6 +153,25 @@ describe("Cmd-K", () => {
   });
 });
 
+describe(":Ask with the instruction typed", () => {
+  it("sends at once to the linked session and leaves the box's marker, no box", () => {
+    const view = mount();
+    view.dispatch({ selection: EditorSelection.cursor(view.state.doc.line(4).from) });
+    expect(askNow(view, "s1", "use checked addition")).toBe(true);
+    expect(useAgentStore.getState().inline).toBeNull();
+    const range = selectedRange(view, "/r/app")!;
+    const text = instructionMessage(range, "use checked addition");
+    expect(sends).toEqual([
+      ["optimistic", "s1", text],
+      ["send", "s1", text, undefined, "client-1"],
+    ]);
+    const sent = agentMarks(view.state).sent;
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ key: "client-1", sessionId: "s1", state: "queued" });
+    expect(view.state.doc.lineAt(sent[0].from).number).toBe(4);
+  });
+});
+
 describe("Cmd-K's target", () => {
   it("is the session linked when the box opened; with none, the box asks", () => {
     const view = mount();
@@ -221,6 +242,7 @@ describe("the sent marker", () => {
     useInboxStore.setState({ sessions: { s1: busy }, pendingMessages: {}, messages: { s1: [{ _id: "m1", role: "user", client_id: "c-q", timestamp: t0 + 2000 }] } } as never);
     checkSentTurns(state(), t0 + 2000);
     expect(agentMarks(buffer.view!.state).sent).toHaveLength(1);
+    expect(agentMarks(buffer.view!.state).sent[0].state).toBe("working");
     useInboxStore.setState({ sessions: { s1: idle } } as never);
     checkSentTurns(state(), t0 + 3000);
     expect(agentMarks(buffer.view!.state).sent).toEqual([]);
@@ -240,5 +262,52 @@ describe("the sent marker", () => {
     checkSentTurns(useInboxStore.getState() as never, t0 + 1000);
     checkSentTurns(useInboxStore.getState() as never, t0 + 2 * 60_000);
     expect(agentMarks(view.state).sent.map((x) => x.key)).toEqual(["k2"]);
+  });
+});
+
+describe("the agent edits status item", () => {
+  it("counts the buffer's edits, steps to the next on a press, and clears them on x", () => {
+    const view = mount();
+    const item = editsItem(view)!;
+    const sync = () => item.update?.({ startState: prev, state: view.state } as never);
+    let prev = view.state;
+    expect(item.dom.hidden).toBe(true);
+    for (const n of [2, 6]) {
+      const l = view.state.doc.line(n);
+      prev = view.state;
+      view.dispatch({ changes: { from: l.from, to: l.to, insert: "X" }, annotations: externalChange.of({ etag: "e" }) });
+      sync();
+    }
+    expect(item.dom.hidden).toBe(false);
+    expect(item.dom.textContent).toContain("2");
+    // Its name says what the bare count is and what a press does.
+    expect(item.dom.querySelector(".cm-agent-editsNext")!.getAttribute("aria-label")).toBe("2 agent edits, go to next");
+    view.dispatch({ selection: EditorSelection.cursor(0) });
+    item.dom.querySelector<HTMLButtonElement>(".cm-agent-editsNext")!.click();
+    expect(view.state.doc.lineAt(view.state.selection.main.head).number).toBe(2);
+    prev = view.state;
+    item.dom.querySelector<HTMLButtonElement>(".cm-agent-editsClear")!.click();
+    sync();
+    expect(agentMarks(view.state).edits).toEqual([]);
+    expect(item.dom.hidden).toBe(true);
+  });
+});
+
+describe("the diff picker's session refs", () => {
+  it("offers the linked session's base from the changes the panel holds, in its color", () => {
+    useAgentStore.setState({ links: { v: { sessionId: "s1", source: "beside" } } } as never);
+    const state = EditorState.create({ doc: "x" });
+    useDiffViewerStore.setState({ conversationId: "s1", changes: [{ changeType: "edit" }] } as never);
+    // Nothing committed: it stands on HEAD, which the picker lists already.
+    expect(sessionDiffTargets("v", state)).toEqual([]);
+    useDiffViewerStore.setState({ conversationId: "s1", changes: [{ changeType: "commit", commitHash: "abc1234" }, { changeType: "commit", commitHash: "def5678" }] } as never);
+    const [t] = sessionDiffTargets("v", state);
+    expect(t.ref).toBe("abc1234^");
+    expect(t.label).toBe("Fix the parser base");
+    expect(t.color).toBeTruthy();
+    // Another conversation's changes say nothing about the linked session.
+    useDiffViewerStore.setState({ conversationId: "s9" } as never);
+    expect(sessionDiffTargets("v", state)).toEqual([]);
+    useDiffViewerStore.setState({ conversationId: null, changes: [] } as never);
   });
 });

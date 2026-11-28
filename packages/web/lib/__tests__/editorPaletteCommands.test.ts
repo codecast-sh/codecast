@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { CODE_COMMAND_IDS } from "../code/commands";
-import { EDITOR_PALETTE_COMMANDS, editorCommandsLead } from "../editorPaletteCommands";
+import { EDITOR_PALETTE_COMMANDS, editorCommandsLead, editorPaletteKey } from "../editorPaletteCommands";
 import { formatAcceleratorParts } from "../../shortcuts";
 
 describe("editor palette commands", () => {
@@ -18,6 +18,13 @@ describe("editor palette commands", () => {
     }
     const quote = byId.get("agent.quoteSelection")!;
     expect(formatAcceleratorParts(quote.editorKey!).length).toBe(2);
+  });
+
+  test("the review commands are offered, each entry under its own key", () => {
+    const keys = EDITOR_PALETTE_COMMANDS.map(editorPaletteKey);
+    expect(new Set(keys).size).toBe(keys.length);
+    const labels = EDITOR_PALETTE_COMMANDS.filter((c) => c.id.startsWith("git.")).map((c) => c.label);
+    expect(labels).toEqual(["Diff vs HEAD", "Diff against…", "Diff side by side", "Next change", "Previous change", "Peek change", "Revert change"]);
   });
 
   // With Files focused, the words the editor shares with the app's pane

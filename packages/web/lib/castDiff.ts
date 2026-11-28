@@ -78,3 +78,17 @@ export function parseCastDiff(raw: string): DiffFileSection[] {
   }
   return files;
 }
+
+/** The line in the file as it is now where a section's first change sits: an
+ *  added line's own number, or for a removal the line that follows it. */
+export function firstChangedNewLine(file: Pick<DiffFileSection, "hunks">): number | undefined {
+  for (const hunk of file.hunks) {
+    let next = hunk.newStart;
+    for (const line of hunk.lines) {
+      if (line.type === "addition") return line.newLineNumber ?? next;
+      if (line.type === "deletion") return Math.max(1, next);
+      next = (line.newLineNumber ?? next) + 1;
+    }
+  }
+  return undefined;
+}

@@ -1,4 +1,6 @@
 import { describe, expect, it } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { ThemePalette } from "@codecast/shared/contracts/theme";
 import { blockCursorColors } from "../theme";
 import { BUILTIN_THEMES, ORIGINAL_PREVIEW } from "../../theme/builtinThemes";
@@ -48,9 +50,21 @@ describe("the vim block cursor", () => {
   });
 });
 
-it("diff tints are stronger on a dark background than on a light one", async () => {
-  const { diffTint } = await import("../theme");
-  expect(diffTint({ bg: "#fbf5e2" }, 0.08)).toBe(0.08);
-  expect(diffTint({ bg: "#20252e" }, 0.08)).toBe(0.16);
-  expect(diffTint({ bg: "not a color" }, 0.08)).toBe(0.08);
+describe("syntax and diff colors follow the color theme", () => {
+  const css = readFileSync(join(import.meta.dir, "../../../app/globals.css"), "utf8");
+  const decls = (name: string) => [...css.matchAll(new RegExp(`${name}:\\s*([^;]+);`, "g"))].map((m) => m[1]!.trim());
+
+  it("declares every --hljs-* and --diff-* color from the theme's own tokens, never a fixed hex", () => {
+    const names = [...new Set([...css.matchAll(/(--(?:hljs|diff)-[\w-]+):/g)].map((m) => m[1]!))];
+    expect(names.length).toBeGreaterThan(10);
+    for (const name of names) for (const value of decls(name)) expect({ name, value, fixed: /#[\da-f]{3,8}\b/i.test(value) }).toEqual({ name, value, fixed: false });
+  });
+
+  it("paints comments in the dim ink, which reads on its page in every shipped theme", () => {
+    expect(decls("--hljs-comment")).toEqual(["var(--sol-text-dim)"]);
+    for (const [name, p] of palettes) {
+      if (!p.bg || !p["text-dim"]) continue;
+      expect({ name, ok: contrast(p["text-dim"], p.bg) >= 4.4 }).toEqual({ name, ok: true });
+    }
+  });
 });

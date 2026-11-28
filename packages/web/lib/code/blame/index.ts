@@ -7,6 +7,8 @@
 // text and the fetch (gutter.ts) load the first time either turns on.
 
 import { EditorView } from "@codemirror/view";
+import type { EditorState } from "@codemirror/state";
+import type { CodeBlameHunk } from "@codecast/shared/contracts";
 import { useVaultStore } from "../../../store/vaultStore";
 import { registerCodeCommand } from "../commands";
 import { editorSetting, onEditorSettingsChange } from "../editorSettings";
@@ -14,6 +16,7 @@ import { featureContext, reconfigureEditorFeature, registerEditorFeature, regist
 import { useGitStatusStore } from "../git/status";
 import { blameAvailability } from "./data";
 import { blameGutterStandIn } from "../gutterSlots";
+import { lineIcon } from "../icons";
 
 type GutterModule = typeof import("./gutter");
 
@@ -31,6 +34,11 @@ function loadGutter(): Promise<GutterModule> {
     },
   );
   return loading;
+}
+
+/** The blame an editor holds, once its gutter or inline blame has read it. */
+export function blameHunksOf(state: EditorState): readonly CodeBlameHunk[] {
+  return gutterModule?.blameValue(state)?.hunks ?? [];
 }
 
 function readGutterOn(): boolean {
@@ -91,8 +99,7 @@ export function blameRetryReason(view: EditorView): string | null {
 
 // ── status bar chip ─────────────────────────────────────────────────────────
 
-const BLAME_SVG =
-  '<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5h3M4 12h3M4 19h3"/><path d="M11 5h9M11 12h6M11 19h8"/></svg>';
+const BLAME_ICON = '<path d="M4 5h3M4 12h3M4 19h3"/><path d="M11 5h9M11 12h6M11 19h8"/>';
 
 const chipTheme = EditorView.theme({
   ".cm-blame-chip": { padding: "0 6px", borderRadius: "3px" },
@@ -107,7 +114,7 @@ function blameChip(view: EditorView): StatusItemView {
   const dom = document.createElement("button");
   dom.type = "button";
   dom.className = "cm-blame-chip";
-  dom.innerHTML = BLAME_SVG;
+  dom.append(lineIcon(BLAME_ICON));
   dom.append(document.createTextNode("Blame"));
   dom.setAttribute("aria-label", "Session blame");
   dom.onmousedown = (e) => e.preventDefault();

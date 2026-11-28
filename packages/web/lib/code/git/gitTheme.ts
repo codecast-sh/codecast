@@ -1,7 +1,7 @@
 // The git gutter's styles: change bars, the peek widget, the diff bar and
 // the ref picker. gutter.ts adds this theme with the git feature.
 import { EditorView } from "@codemirror/view";
-import { EDITOR_FONT } from "../theme";
+import { EDITOR_FONT, OVERLAY } from "../theme";
 import { GIT_GUTTER_COLUMN } from "../gutterSlots";
 
 export const gitTheme = EditorView.theme({
@@ -55,7 +55,7 @@ export const gitTheme = EditorView.theme({
     fontSize: "13px",
     lineHeight: "1.6",
     color: "var(--sol-text-muted)",
-    backgroundColor: "color-mix(in srgb, var(--sol-red) 8%, transparent)",
+    backgroundColor: "var(--diff-del-line)",
     tabSize: "4",
   },
   ".cm-git-btn": {
@@ -86,8 +86,9 @@ export const gitTheme = EditorView.theme({
   ".cm-git-seg:first-child": { borderRadius: "3px 0 0 3px" },
   ".cm-git-seg:last-child": { borderRadius: "0 3px 3px 0", marginLeft: "-1px" },
   ".cm-git-seg-on": { color: "var(--sol-text)", backgroundColor: "var(--sol-bg-alt)" },
-  // The editor's own popup look (the completion list in theme.ts).
+  // The editor's own popup look (OVERLAY in theme.ts).
   ".cm-git-menu": {
+    ...OVERLAY,
     position: "absolute",
     top: "26px",
     left: "8px",
@@ -96,10 +97,6 @@ export const gitTheme = EditorView.theme({
     flexDirection: "column",
     minWidth: "220px",
     padding: "4px",
-    border: "1px solid color-mix(in srgb, var(--sol-border) 50%, transparent)",
-    borderRadius: "4px",
-    backgroundColor: "var(--sol-bg)",
-    boxShadow: "0 6px 20px rgb(0 0 0 / 0.18)",
     fontSize: "12px",
   },
   ".cm-git-menu-list": { display: "flex", flexDirection: "column", maxHeight: "16em", overflowY: "auto", marginTop: "4px" },
@@ -116,8 +113,11 @@ export const gitTheme = EditorView.theme({
     textAlign: "left",
     cursor: "pointer",
   },
-  ".cm-git-menu-item[aria-selected]": { backgroundColor: "color-mix(in srgb, var(--sol-cyan) 18%, transparent)", color: "var(--sol-text)" },
+  ".cm-git-menu-item[aria-selected]": { backgroundColor: "color-mix(in srgb, var(--sol-cyan) 16%, transparent)", color: "var(--sol-text)" },
   ".cm-git-menu-on": { color: "var(--sol-text)" },
+  // A session's ref: its color, then its name, the ref at the right edge.
+  ".cm-git-menu-dot": { flex: "none", alignSelf: "center", width: "6px", height: "6px", borderRadius: "50%", marginRight: "-6px" },
+  ".cm-git-menu-dot + span": { marginRight: "auto" },
   ".cm-git-menu-input": {
     padding: "3px 6px",
     border: "1px solid color-mix(in srgb, var(--sol-border) 40%, transparent)",

@@ -14,7 +14,8 @@ import { useRef } from "react";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { codeMirrorUndoGuard } from "../vault/codeMirrorUndo";
-import { bufferKey, codeBuffers } from "../../lib/code/buffers";
+import { bufferKey, codeBuffers, syncDiskLock } from "../../lib/code/buffers";
+import { flashStatusLock } from "../../lib/code/statusBar";
 import { registerCodeCommands, type CodeCommandContext } from "../../lib/code/commands";
 import { EditorHost, openCodeBuffer, openNewFileBuffer, previewState, syncReadOnly, type CursorTarget } from "../../lib/code/editorHost";
 import { applyDiskVersion, installCloseGuard, revertBuffer, saveAllBuffers, saveBuffer } from "../../lib/code/fileSync";
@@ -74,7 +75,11 @@ export function CodeEditor({ vaultId, path, body, readOnly, preview, target, new
       "file.save": (_args, ctx) => {
         const b = bufferFor(ctx);
         if (!b) return false;
-        void saveBuffer(b);
+        // A save that wrote nothing because the file is locked shows it on the
+        // lock, as vim answers E45: the key never does nothing visible.
+        void saveBuffer(b).then((outcome) => {
+          if ((outcome === "readonly" || outcome === "locked") && b.view) flashStatusLock(b.view);
+        });
       },
       "file.saveAll": () => {
         void saveAllBuffers();
@@ -114,6 +119,7 @@ export function CodeEditor({ vaultId, path, body, readOnly, preview, target, new
         ? openCodeBuffer({ vaultId, path, content: body.content, etag: body.etag, sizeBytes: body.size, readOnly })
         : openNewFileBuffer({ vaultId, path, readOnly }));
     if (open) syncReadOnly(open, readOnly);
+    else if (body) syncDiskLock(buffer, body.lockedMode);
     const fresh = !revealed.current || revealed.current.path !== path || revealed.current.target !== target || hostBuffer(h) !== buffer;
     revealed.current = { target, path };
     // The same file in another group is the same document (splitSync).
@@ -157,7 +163,9 @@ export function CodeEditor({ vaultId, path, body, readOnly, preview, target, new
     const h = host.current;
     if (!body || !h || isMirror(h)) return;
     const buffer = codeBuffers.get(bufferKey(vaultId, path));
-    if (buffer) void applyDiskVersion(buffer, body);
+    if (!buffer) return;
+    syncDiskLock(buffer, body.lockedMode);
+    void applyDiskVersion(buffer, body);
   }, [body]);
 
   return (

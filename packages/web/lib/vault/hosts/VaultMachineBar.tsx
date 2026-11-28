@@ -12,6 +12,8 @@
 // machine out of reach shows an offline mark; when it is the open one, its
 // segment is the reconnect button (the file tree and language servers wait
 // for that host's next forward, and this is the person's way to ask for it).
+// While this machine's own daemon is still being reached after a cached boot,
+// the bar holds one reconnect chip instead.
 
 import { Loader2, Lock, RotateCw, WifiOff } from "lucide-react";
 import { DeviceDot, DeviceIcon, deviceAccentClasses, deviceDisplayName, useRosterDevice, type Device } from "../../../components/DeviceBadge";
@@ -19,6 +21,8 @@ import { localEndpointOf, useVaultStore } from "../../../store/vaultStore";
 import { filesHref } from "../vaultHref";
 import { counterpartPath, hostPathFor, joinVaultPath as join } from "./hostVaults";
 import { hostOfVault } from "./routes";
+
+const barClass = "flex items-center gap-2 px-3 py-1 border-b border-sol-border/30 bg-sol-bg-alt/40";
 
 type SegmentState = "live" | "connecting" | "unreachable" | "mirror";
 
@@ -41,6 +45,7 @@ export function VaultMachineBar({ activePath, onNavigate }: { activePath: string
     hostStates: useVaultStore((st) => st.hostStates),
     hostFallback: useVaultStore((st) => st.hostFallback),
     connectHost: useVaultStore((st) => st.connectHost),
+    connection: useVaultStore((st) => st.connection),
   };
   const vault = s.vaults.find((v) => v.id === s.activeVaultId);
   const mirror = s.isRemote ? s.remoteVaults.find((v) => v.id === s.activeVaultId) : undefined;
@@ -76,6 +81,26 @@ export function VaultMachineBar({ activePath, onNavigate }: { activePath: string
       };
     }
   }
+  // This machine's daemon not answered yet, the tree and files painted from
+  // the cache: the bar says so, and pressing it asks again. (A host vault's
+  // reconnect is its own segment's.)
+  if (!current && s.connection === "cached" && !host) {
+    return (
+      <div className={barClass} data-vault-machine-bar>
+        <button
+          type="button"
+          onClick={() => void useVaultStore.getState().reconnect()}
+          title="Cached copy. Reconnect to this machine"
+          className="inline-flex items-center gap-1.5 rounded border border-sol-border/40 px-1.5 py-0.5 text-meta text-sol-text-muted hover:bg-sol-bg-alt hover:text-sol-text"
+          data-reconnect-local
+        >
+          <Loader2 className="w-3 h-3 animate-spin" aria-hidden />
+          <span>cached</span>
+          <RotateCw className="w-3 h-3" aria-hidden />
+        </button>
+      </div>
+    );
+  }
   if (!current) return null;
 
   const go = (seg: Segment) => {
@@ -86,7 +111,7 @@ export function VaultMachineBar({ activePath, onNavigate }: { activePath: string
   };
 
   return (
-    <div className="flex items-center gap-2 px-3 py-1 border-b border-sol-border/30 bg-sol-bg-alt/40" data-vault-machine-bar>
+    <div className={barClass} data-vault-machine-bar>
       <div role="group" aria-label="Machine" className="inline-flex items-center rounded border border-sol-border/40 p-px gap-px">
         <MachineSegment
           seg={current}

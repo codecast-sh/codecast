@@ -31,6 +31,16 @@ export interface SplitHandle {
   destroy(restoreCursor: boolean): void;
 }
 
+/** Each mounted split's right side, to the editor it mirrors: a command run
+ *  from that side (vim's `]c`, `:w`) acts on the editor, which owns the git
+ *  state and routes the hunk commands back to this split. */
+const owners = new WeakMap<EditorView, EditorView>();
+
+/** The editor a split's right side mirrors; the view itself otherwise. */
+export function splitOwner(view: EditorView): EditorView {
+  return owners.get(view) ?? view;
+}
+
 const fromMain = Annotation.define<true>();
 const fromSplit = Annotation.define<true>();
 
@@ -95,7 +105,15 @@ export function mountSplit(view: EditorView, kit: MergeKit, original: Text, onCh
         ...featureExtensions(view, ["vim"]),
         history(),
         EditorState.readOnly.of(view.state.readOnly),
-        keymap.of([{ key: "Mod-s", preventDefault: true, run: () => save() }, ...historyKeymap, ...defaultKeymap, indentWithTab]),
+        keymap.of([
+          { key: "Mod-s", preventDefault: true, run: () => save() },
+          // The same hunk keys the editor has (gutter.ts peekKeys).
+          { key: "Alt-F5", preventDefault: true, run: () => runCodeCommand("git.nextHunk", undefined, { view, source: "keymap" }) },
+          { key: "Shift-Alt-F5", preventDefault: true, run: () => runCodeCommand("git.prevHunk", undefined, { view, source: "keymap" }) },
+          ...historyKeymap,
+          ...defaultKeymap,
+          indentWithTab,
+        ]),
         forward,
       ],
     },
@@ -111,8 +129,8 @@ export function mountSplit(view: EditorView, kit: MergeKit, original: Text, onCh
     highlightChanges: true,
     diffConfig: GIT_DIFF_CONFIG,
   });
-  // Save and other buffer commands issued on the right side (vim's `:w`) act
-  // on the buffer it mirrors.
+  owners.set(merge.b, view);
+  // Save issued on the right side (vim's `:w`) saves the buffer it mirrors.
   const offSave = registerCodeCommand("file.save", (args, ctx) =>
     ctx.view === merge.b ? runCodeCommand("file.save", args, { ...ctx, view }) : false,
   );
@@ -144,6 +162,7 @@ export function mountSplit(view: EditorView, kit: MergeKit, original: Text, onCh
     },
     destroy(restoreCursor) {
       offSave();
+      owners.delete(merge.b);
       const head = merge.b.state.selection.main.head;
       const doc = merge.b.state.doc;
       merge.destroy();
