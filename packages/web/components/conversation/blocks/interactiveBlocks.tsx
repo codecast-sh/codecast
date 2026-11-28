@@ -29,6 +29,8 @@ import { ModernAskUserQuestion } from "./ModernAskUserQuestion";
 import { forgetModernAskSent, markModernAskSent } from "../../../lib/modernAskSent";
 import { AnswerProposals, MyProposalStatus } from "../teamProposals";
 import { newProposalKey, proposeOrExplain, useMyName, useMyProposalFor, useTeamProposalRole } from "../../../hooks/useTeamProposals";
+import { MarkerNotes } from "../../MarkerNotes";
+import type { ImageNote } from "../../../lib/imageNotes";
 
 // Live status badge + latest event for a Monitor or background-Bash block,
 // derived from the conversation's message window (monitorRowsFor — one
@@ -673,7 +675,9 @@ export function ThinkingBlock({ content }: { content: string }) {
 
 const IMAGE_COLLAPSED_HEIGHT = 100;
 
-export function ImageBlock({ image }: { image: ImageData }) {
+// `notes`: what the sender wrote for each marker drawn on the picture
+// (lib/imageNotes), shown on hovering the marker.
+export function ImageBlock({ image, notes }: { image: ImageData; notes?: readonly ImageNote[] }) {
   const { src, href, storageResolved, storageMissing } = useImageSrc(image);
   const gallery = useImageGallery();
   const messageId = useGalleryMessageId();
@@ -683,6 +687,7 @@ export function ImageBlock({ image }: { image: ImageData }) {
   // overlay on remount instead of flashing it while the HTTP-cached bytes decode.
   const [loaded, setLoaded] = useState(() => hasDecodedSrc(src));
   const [errored, setErrored] = useState(false);
+  const [natural, setNatural] = useState<{ width: number; height: number } | null>(null);
 
   useWatchEffect(() => {
     setLoaded(hasDecodedSrc(src));
@@ -712,7 +717,7 @@ export function ImageBlock({ image }: { image: ImageData }) {
   }
 
   // Modern shows the whole picture at its aspect ratio (ModernImage, CONV-18).
-  if (modern) return <ModernImage image={image} src={src} loaded={loaded} onLoad={() => { markSrcDecoded(src); setLoaded(true); }} onError={() => setErrored(true)} onOpen={() => { if (src) gallery?.open(src); }} />;
+  if (modern) return <ModernImage image={image} notes={notes} src={src} loaded={loaded} onLoad={() => { markSrcDecoded(src); setLoaded(true); }} onError={() => setErrored(true)} onOpen={() => { if (src) gallery?.open(src); }} />;
 
   if (!src) {
     return (
@@ -738,14 +743,17 @@ export function ImageBlock({ image }: { image: ImageData }) {
         className="overflow-hidden rounded-t border-x border-t border-sol-border hover:border-sol-blue/50 transition-all"
         style={{ height: IMAGE_COLLAPSED_HEIGHT }}
       >
-        <img
-          src={src}
-          alt={image.tool_use_id ? "Image from a tool" : "Attached image"}
-          className="w-full"
-          style={loaded ? undefined : { width: 0, height: 0, overflow: 'hidden', position: 'absolute' }}
-          onLoad={() => { markSrcDecoded(src); setLoaded(true); }}
-          onError={() => setErrored(true)}
-        />
+        <div className="relative">
+          <img
+            src={src}
+            alt={image.tool_use_id ? "Image from a tool" : "Attached image"}
+            className="block w-full"
+            style={loaded ? undefined : { width: 0, height: 0, overflow: 'hidden', position: 'absolute' }}
+            onLoad={(e) => { markSrcDecoded(src); setLoaded(true); setNatural({ width: e.currentTarget.naturalWidth, height: e.currentTarget.naturalHeight }); }}
+            onError={() => setErrored(true)}
+          />
+          {loaded && natural && notes?.length ? <MarkerNotes notes={notes} width={natural.width} height={natural.height} /> : null}
+        </div>
       </div>
       {loaded && !image.uploading && (
         <div
