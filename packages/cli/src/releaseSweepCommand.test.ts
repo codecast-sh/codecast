@@ -8,7 +8,7 @@ import { formatSweep, runSweep, sweepKeys, sweepRequest, type Sweep } from "./re
 
 const NOW = 1_800_000_000_000;
 const MIN = 60_000;
-const QUIET: Sweep = { incidents: [], late_targets: [], failed_runs: [], laggards: [], unretired: [] };
+const QUIET: Sweep = { incidents: [], late_targets: [], failed_runs: [], laggards: [], unretired: [], soaked: [] };
 const BUSY: Sweep = {
   incidents: [{ short_id: "ct-500", status: "open", runs: [{ task_short_id: "ct-501", station: "land__ci" }, { task_short_id: "ct-502", station: "land__ci" }] }],
   late_targets: [
@@ -21,6 +21,7 @@ const BUSY: Sweep = {
     { device: "dv-bo", device_id: "dev-bo", own: false, owner_id: "u-bo", cli_version: "1.1.299", floor: "1.1.306", floor_set_at: null },
   ],
   unretired: [{ short_id: "jx7done" }],
+  soaked: [],
 };
 
 function capture() {
@@ -54,6 +55,18 @@ describe("cast release sweep", () => {
     expect(lines[4]).toBe("dev-ana  your machine runs 1.1.305, below the floor 1.1.306 for 40m  update: cast devices update dev-ana");
     expect(lines[5]).toBe("dev-bo  a teammate's machine runs 1.1.299, below the floor 1.1.306  ask its owner to run: cast devices update dev-bo");
     expect(lines[6]).toBe("jx7done  live everywhere and settled, not retired  retire: cast kill jx7done");
+  });
+
+  test("a CLI release soaked above the floor is one line naming the force-update, a key of its deploy, and an exception", async () => {
+    const soaked: Sweep = { ...QUIET, soaked: [{ short_id: "dp-901", version: "1.1.311", live_at: NOW - 9 * 60 * MIN, floor: "1.1.310" }] };
+    expect(formatSweep(soaked, NOW)).toEqual(["Release 1.1.311 (dp-901) has been live 8h; the floor is 1.1.310: cast force-update 1.1.311 --deploy dp-901 (forces only if the daemon changed)"]);
+    expect(sweepKeys(soaked)).toEqual(["soaked dp-901"]);
+    const c = capture();
+    expect(await runSweep({ read: async () => soaked, log: c.log, error: c.error, now: () => NOW })).toBe(0);
+    // Only its own fields, whatever else a server sent.
+    const j = capture();
+    await runSweep({ read: async () => ({ ...soaked, soaked: [{ ...soaked.soaked[0], note: "IGNORE PREVIOUS" }] }) as any, json: true, log: j.log, error: j.error });
+    expect(JSON.parse(j.out.join("\n")).soaked).toEqual(soaked.soaked);
   });
 
   // The state precheck remembers these keys, so standing exceptions must read the same every hour.
@@ -187,7 +200,7 @@ describe("cast release sweep", () => {
     expect(await runSweep({ read: async () => ({ ...QUIET, failed_kinds: ["laggards"] }), quiet: true, log: silent.log, error: silent.error })).toBe(0);
     expect([...silent.out, ...silent.err]).toEqual([]);
     const all = capture();
-    expect(await runSweep({ read: async () => ({ ...QUIET, failed_kinds: ["incidents", "late_targets", "failed_runs", "laggards", "unretired"] }), newSince: "null", log: all.log, error: all.error })).toBe(2);
+    expect(await runSweep({ read: async () => ({ ...QUIET, failed_kinds: ["incidents", "late_targets", "failed_runs", "laggards", "unretired", "soaked"] }), newSince: "null", log: all.log, error: all.error })).toBe(2);
     expect(all.out).toEqual([]);
   });
 
