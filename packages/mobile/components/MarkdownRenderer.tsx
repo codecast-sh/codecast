@@ -35,7 +35,7 @@ import { ProposalCard } from './org/ProposalCard';
 import { DecisionCard } from './decisions/DecisionCard';
 import { SearchHighlightContext, markedRuns } from './search/highlight';
 import { parseMarkdown, plainText, planTable } from '@/lib/markdown';
-import type { Nodes, Paragraph, Image, List, Table } from 'mdast';
+import type { Nodes, Paragraph, Image, List, Root, Table } from 'mdast';
 import { parseEntityUrl, parseSharedEntityUrl, isEntityId, entityTypeFromId, parseProposalChangeRef, parsePublishedPageUrl, parseClaudeArtifactUrl, BARE_ID_AFTER, BARE_ID_BEFORE, BARE_ID_SOURCE, MENTION_ID_SOURCE, type EntityType } from '@codecast/shared/entities';
 // Canonical "★ Insight ─────" parser shared with web (pure string/regex module,
 // Hermes-safe). Mobile used to carry its own narrower copy in session/[id].tsx
@@ -46,6 +46,9 @@ import { resolveDateDisplay } from '@codecast/web/lib/dateMention';
 
 import { LinkText, HighlightedCodeText, useLinkLongPress } from './CodeText';
 import { OutsideMessage, useMessageLongPress } from './MessageLongPress';
+import { CommentAnchorContext } from './comments/CommentBubble';
+import { quotedRuns, unitBubble, unitCtx, unitPress, useCommentLayer, type CommentCtx, type CommentLayer } from './comments/markdownComments';
+import type { CommentUnit } from '@/lib/messageComments';
 
 export { LinkText, linkifyPlainText, HighlightedCodeText } from './CodeText';
 import { CodeBlockFullscreen } from './CodeBlockFullscreen';
@@ -69,7 +72,12 @@ type MdCtx = {
   selectable: boolean;
   plainTextFences: boolean;
   listDepth: number;
-};
+} & CommentCtx;
+
+/** A run of plain words, marked for the search or the comments on it. */
+function markRun(text: string, ctx: MdCtx, keyPrefix: string): React.ReactNode {
+  return ctx.quoted ? quotedRuns(text, ctx.quoted, keyPrefix) : markedRuns(text, ctx.found, keyPrefix);
+}
 
 // The references a writer did not mark up, inside a run of plain text: bare
 // URLs, @mentions and entity ids. Emphasis, code and links come from the
@@ -91,9 +99,9 @@ function linkedEntity(url: string): { type: EntityType; id: string; to?: string 
 
 function renderTextRefs(text: string, ctx: MdCtx, kp: string): React.ReactNode[] {
   const out: React.ReactNode[] = [];
-  const words = (s: string) => out.push(markedRuns(s, ctx.found, `${kp}h${out.length}-`));
+  const words = (s: string) => out.push(markRun(s, ctx, `${kp}h${out.length}-`));
   // Prose between references may name a run by its bare id ("Deploy 44822506482").
-  const plain = (s: string) => pushRunRefs(s, out, words, (w, key) => markedRuns(w, ctx.found, key), kp);
+  const plain = (s: string) => pushRunRefs(s, out, words, (w, key) => markRun(w, ctx, key), kp);
   const re = new RegExp(TEXT_REF_SOURCE, 'g');
   let last = 0;
   let m: RegExpExecArray | null;
@@ -443,14 +451,14 @@ function renderBlock(node: Nodes, ctx: MdCtx, k: string, first: boolean): React.
       if (RULE_RESIDUE_RE.test(plainText(node).trim())) return <RNView key={k} style={mdStyles.horizontalRule} />;
       const solo = soloReference(node);
       if (solo) return <SoloRefCard key={k} solo={solo} isUser={ctx.isUser} />;
-      return <RNText key={k} style={ctx.baseStyle} selectable={ctx.selectable}>{renderInline(node.children, ctx, k)}</RNText>;
+      return <RNText key={k} style={ctx.baseStyle} selectable={ctx.selectable} {...unitPress(ctx)}>{renderInline(node.children, ctx, k)}</RNText>;
     }
     case 'heading': {
       // A heading never sets smaller than the text around it: a reply set at
       // a reading size keeps its headings at body size.
       const fontSize = Math.max(HEADING_SIZES[node.depth - 1], StyleSheet.flatten(ctx.baseStyle)?.fontSize ?? 0);
       return (
-        <RNText key={k} style={[ctx.baseStyle, { fontSize, fontWeight: '700', marginTop: first ? 0 : 6 }]} selectable={ctx.selectable}>
+        <RNText key={k} style={[ctx.baseStyle, { fontSize, fontWeight: '700', marginTop: first ? 0 : 6 }]} selectable={ctx.selectable} {...unitPress(ctx)}>
           {renderInline(node.children, ctx, k)}
         </RNText>
       );
@@ -504,7 +512,7 @@ function renderBlock(node: Nodes, ctx: MdCtx, k: string, first: boolean): React.
 
 const BULLETS = ['•', '◦', '▪'];
 
-function MarkdownList({ node, ctx, k }: { node: List; ctx: MdCtx; k: string }) {
+function MarkdownList({ node, ctx, k, units }: { node: List; ctx: MdCtx; k: string; units?: CommentUnit[] }) {
   const start = node.start ?? 1;
   const markers = node.children.map((item, j) =>
     item.checked != null ? (item.checked ? '☑' : '☐')
@@ -517,15 +525,21 @@ function MarkdownList({ node, ctx, k }: { node: List; ctx: MdCtx; k: string }) {
   return (
     <RNView style={[mdStyles.listContainer, { gap }]}>
       {node.children.map((item, j) => {
+        // A top-level list's items are each a unit of the message's comments.
+        const unit = units?.[j];
+        const base = unit ? unitCtx(ctx, unit) : ctx;
         const itemCtx = {
-          ...ctx,
+          ...base,
           listDepth: ctx.listDepth + 1,
           baseStyle: item.checked === true ? [ctx.baseStyle, { textDecorationLine: 'line-through', color: Theme.textMuted0 }] : ctx.baseStyle,
         };
         return (
           <RNView key={j} style={mdStyles.listItem}>
             <RNText style={[ctx.baseStyle, mdStyles.listBullet, { width: markerWidth }]}>{markers[j]}</RNText>
-            <RNView style={{ flex: 1 }}>{renderBlocks(item.children, itemCtx, `${k}.${j}`, gap)}</RNView>
+            <RNView style={{ flex: 1 }}>
+              {renderBlocks(item.children, itemCtx, `${k}.${j}`, gap)}
+              {unitBubble(ctx, unit)}
+            </RNView>
           </RNView>
         );
       })}
@@ -632,12 +646,31 @@ function MarkdownTable({ node, ctx, k }: { node: Table; ctx: MdCtx; k: string })
 
 // The parsed body as native blocks. Internal: MarkdownContent wraps this with
 // insight-block extraction; InsightCard bodies reuse it.
-function MarkdownBlocks({ text, baseStyle, isUser, knownMentionHandles, selectable = true, plainTextFences = false }: { text: string; baseStyle: any; isUser: boolean; knownMentionHandles?: Set<string>; selectable?: boolean; plainTextFences?: boolean }) {
+function MarkdownBlocks({ text, tree: parsed, units, comments, baseStyle, isUser, knownMentionHandles, selectable = true, plainTextFences = false }: { text: string; tree?: Root; units?: CommentUnit[]; comments?: CommentLayer; baseStyle: any; isUser: boolean; knownMentionHandles?: Set<string>; selectable?: boolean; plainTextFences?: boolean }) {
   // Under a search (components/search/highlight), every text run marks the
   // words found; pills and links pass through.
   const found = useContext(SearchHighlightContext);
-  const tree = useMemo(() => parseMarkdown(text), [text]);
-  return <>{renderBlocks(tree.children, { baseStyle, isUser, knownMentionHandles, found, selectable, plainTextFences, listDepth: 0 }, 'b')}</>;
+  const own = useMemo(() => (parsed ? null : parseMarkdown(text)), [parsed, text]);
+  const tree = parsed ?? own!;
+  const ctx: MdCtx = { baseStyle, isUser, knownMentionHandles, found, selectable, plainTextFences, listDepth: 0 };
+  if (!comments || !units) return <>{renderBlocks(tree.children, ctx, 'b')}</>;
+  // Each top-level block is a unit of the message's comments (a list, one
+  // per item), drawn with its comments under it.
+  const withComments = { ...ctx, comments };
+  let u = 0;
+  const out = (tree.children as Nodes[]).map((node, i) => {
+    const k = `b.${i}`;
+    if (node.type === 'list') {
+      const items = units.slice(u, u + node.children.length);
+      u += node.children.length;
+      return <MarkdownList key={k} node={node} ctx={withComments} k={k} units={items} />;
+    }
+    const unit = units[u++];
+    const el = renderBlock(node, unit ? unitCtx(withComments, unit) : withComments, k, i === 0);
+    const bubble = unitBubble(withComments, unit);
+    return bubble && el != null ? <RNView key={k}>{el}{bubble}</RNView> : el;
+  }).filter((el) => el != null);
+  return out.length === 1 ? <>{out[0]}</> : <RNView style={{ gap: BLOCK_GAP }}>{out}</RNView>;
 }
 
 // "★ Insight ─────" callout — mirrors web's InsightCard (ConversationView):
@@ -671,18 +704,26 @@ export function MarkdownContent({ text, baseStyle, isUser = false, knownMentionH
     () => (isUser ? [{ type: 'text' as const, content: text }] : parseInsightBlocks(text)),
     [text, isUser],
   );
+  const textParts = useMemo(() => parts.flatMap((p) => (p.type === 'insight' ? [] : [p.content])), [parts]);
+  const comments = useCommentLayer(textParts);
+  let textPart = 0;
 
-  return (
+  const body = (
     <RNView>
       {parts.map((part, pIdx) =>
         part.type === 'insight' ? (
           <InsightCard key={pIdx} label={part.label} content={part.content} baseStyle={baseStyle} knownMentionHandles={knownMentionHandles} />
         ) : (
-          <MarkdownBlocks key={pIdx} text={part.content} baseStyle={baseStyle} isUser={isUser} knownMentionHandles={knownMentionHandles} selectable={selectable} plainTextFences={plainTextFences} />
+          (() => {
+            const t = textPart++;
+            return <MarkdownBlocks key={pIdx} text={part.content} tree={comments?.trees[t]} units={comments?.units[t]} comments={comments?.layer} baseStyle={baseStyle} isUser={isUser} knownMentionHandles={knownMentionHandles} selectable={selectable} plainTextFences={plainTextFences} />;
+          })()
         )
       )}
     </RNView>
   );
+  // A card drawn inside this body (a decision, a proposal) is not its words.
+  return comments ? <CommentAnchorContext.Provider value={null}>{body}</CommentAnchorContext.Provider> : body;
 }
 
 export const mdStyles = themedStyles((Theme) => StyleSheet.create({

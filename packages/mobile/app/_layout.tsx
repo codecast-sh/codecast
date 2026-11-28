@@ -4,6 +4,7 @@ import { useShareInbox } from '@/lib/shareInbox';
 import { UndoBarHost } from '@/components/UndoBar';
 import { PopupHost } from '@/components/PopupHost';
 import { SelectTextHost } from '@/components/SelectTextSheet';
+import { CommentEditorHost } from '@/components/comments/CommentEditor';
 import { BiometricGate } from '@/components/BiometricGate';
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { useFonts } from 'expo-font';
@@ -344,6 +345,7 @@ function RootLayoutNav() {
                   <UndoBarHost />
                   <PopupHost />
                   <SelectTextHost />
+                  <CommentEditorHost />
                   {calls ? (
                     <OverlayErrorBoundary>
                       <Suspense fallback={null}>

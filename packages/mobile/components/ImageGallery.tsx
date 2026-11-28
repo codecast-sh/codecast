@@ -5,6 +5,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Text as RNText } from '@/components/Themed';
 import { GestureHandlerRootView, NativePressable, gestureHandler } from '@/lib/gestureHandler';
+import { GalleryPins, type GalleryPicture } from '@/components/comments/GalleryPins';
+import { CommentEditorPanel, dismissCommentEditor, useCommentEditor } from '@/components/comments/CommentEditor';
 
 // Full-screen image gallery: a horizontal pager of zoomable pages, a header
 // (rotate, counter, close) and a filmstrip. All gestures run as worklets on
@@ -230,15 +232,21 @@ function Thumb<T>({ item, useSrc, active, onPress }: { item: T; useSrc: (item: T
   );
 }
 
-function HeaderButton({ icon, color = '#fff', onPress }: { icon: ComponentProps<typeof FontAwesome>['name']; color?: string; onPress: () => void }) {
+function HeaderButton({ icon, color = '#fff', onPress, label }: { icon: ComponentProps<typeof FontAwesome>['name']; color?: string; onPress: () => void; label?: string }) {
   return (
-    <NativePressable onPress={onPress} activeOpacity={0.6} hitSlop={10} style={styles.headerButton}>
+    <NativePressable onPress={onPress} activeOpacity={0.6} hitSlop={10} style={[styles.headerButton, label ? styles.headerButtonWide : null]}>
       <FontAwesome name={icon} size={17} color={color} />
+      {label ? <RNText style={[styles.headerLabel, { color }]}>{label}</RNText> : null}
     </NativePressable>
   );
 }
 
-export function ImageGallery<T>({ items, useSrc, initialIndex, visible, onClose, accent = '#fff' }: {
+/** The pins on the picture on screen; a component so it can call useSrc. */
+function CurrentPins<T>({ item, useSrc, picture, ...rest }: { item: T; useSrc: (item: T) => string | undefined; picture: GalleryPicture } & Omit<ComponentProps<typeof GalleryPins>, 'uri' | 'picture'>) {
+  return <GalleryPins uri={useSrc(item)} picture={picture} {...rest} />;
+}
+
+export function ImageGallery<T>({ items, useSrc, initialIndex, visible, onClose, accent = '#fff', comments }: {
   items: T[];
   // Called as a hook, once per rendered page and thumb; pass a stable function.
   useSrc: (item: T) => string | undefined;
@@ -246,6 +254,9 @@ export function ImageGallery<T>({ items, useSrc, initialIndex, visible, onClose,
   visible: boolean;
   onClose: () => void;
   accent?: string;
+  /** Pictures can take comments pinned to a spot, into the next message sent
+   *  in this conversation. `pictureOf` names an item's stored file. */
+  comments?: { conversationId: string; pictureOf: (item: T) => GalleryPicture };
 }) {
   const insets = useSafeAreaInsets();
   const window = useWindowDimensions();
@@ -253,6 +264,8 @@ export function ImageGallery<T>({ items, useSrc, initialIndex, visible, onClose,
   const [zoomed, setZoomed] = useState(false);
   const [chrome, setChrome] = useState(true);
   const [landscape, setLandscape] = useState(false);
+  const [pinMode, setPinMode] = useState(false);
+  const editing = useCommentEditor((s) => (s.open?.surface === 'gallery' ? s.open : null));
   const pager = useRef<FlatList<T>>(null);
   const strip = useRef<FlatList<T>>(null);
   const dismiss = useSharedValue(0);
@@ -265,11 +278,16 @@ export function ImageGallery<T>({ items, useSrc, initialIndex, visible, onClose,
   );
 
   useEffect(() => {
-    if (!visible) return;
+    // A pin's editor drawn here goes with the gallery.
+    if (!visible) {
+      if (useCommentEditor.getState().open?.surface === 'gallery') dismissCommentEditor();
+      return;
+    }
     setIndex(initialIndex);
     setZoomed(false);
     setChrome(true);
     setLandscape(false);
+    setPinMode(false);
     dismiss.value = 0;
     chromeShown.value = 1;
   }, [visible, initialIndex, dismiss, chromeShown]);
@@ -298,21 +316,23 @@ export function ImageGallery<T>({ items, useSrc, initialIndex, visible, onClose,
 
   if (!visible) return null;
   const many = items.length > 1;
+  const current = items[index];
 
   return (
-    <Modal visible transparent animationType="fade" statusBarTranslucent onRequestClose={onClose} supportedOrientations={['portrait', 'portrait-upside-down', 'landscape-left', 'landscape-right']}>
+    <Modal visible transparent animationType="fade" statusBarTranslucent onRequestClose={() => (editing ? dismissCommentEditor() : onClose())} supportedOrientations={['portrait', 'portrait-upside-down', 'landscape-left', 'landscape-right']}>
       <GestureHandlerRootView style={styles.root}>
         <Animated.View style={[StyleSheet.absoluteFill, styles.backdrop, backdropStyle]} />
         <RNView style={styles.center}>
           <RNView style={[page, landscape && { transform: [{ rotate: '90deg' }] }]}>
             <FlatList
               // Remount on a size change so paging offsets match the new width.
-              key={`${page.width}x${page.height}`}
+              // Pin mode remounts too, so a zoomed picture shows whole to pin on.
+              key={`${page.width}x${page.height}${pinMode ? ':pin' : ''}`}
               ref={pager}
               data={items}
               horizontal
               pagingEnabled
-              scrollEnabled={!zoomed}
+              scrollEnabled={!zoomed && !pinMode}
               showsHorizontalScrollIndicator={false}
               keyExtractor={(_, i) => String(i)}
               initialScrollIndex={index}
@@ -335,6 +355,18 @@ export function ImageGallery<T>({ items, useSrc, initialIndex, visible, onClose,
                 />
               )}
             />
+            {comments && current !== undefined && !zoomed ? (
+              <CurrentPins
+                item={current}
+                useSrc={useSrc}
+                picture={comments.pictureOf(current)}
+                conversationId={comments.conversationId}
+                page={page}
+                pinMode={pinMode}
+                accent={accent}
+                onPinned={() => setPinMode(false)}
+              />
+            ) : null}
           </RNView>
         </RNView>
 
@@ -342,8 +374,23 @@ export function ImageGallery<T>({ items, useSrc, initialIndex, visible, onClose,
           <RNView style={[styles.header, { paddingTop: insets.top + 6 }]}>
             <HeaderButton icon="rotate-right" color={landscape ? accent : '#fff'} onPress={() => { setLandscape((l) => !l); setZoomed(false); }} />
             <RNText style={styles.counter}>{many ? `${index + 1} / ${items.length}` : ''}</RNText>
-            <HeaderButton icon="close" onPress={onClose} />
+            <RNView style={styles.headerRight}>
+              {comments ? (
+                <HeaderButton
+                  icon="comment-o"
+                  label={pinMode ? 'Cancel' : 'Comment'}
+                  color={pinMode ? accent : '#fff'}
+                  onPress={() => { setPinMode((p) => !p); setZoomed(false); }}
+                />
+              ) : null}
+              <HeaderButton icon="close" onPress={onClose} />
+            </RNView>
           </RNView>
+          {pinMode ? (
+            <RNView style={[styles.hint, { top: insets.top + 64 }]} pointerEvents="none">
+              <RNText style={styles.hintText}>Tap a spot to pin a comment · it goes with your next message</RNText>
+            </RNView>
+          ) : null}
           {many && (
             <RNView style={[styles.strip, { paddingBottom: insets.bottom + 10 }]}>
               <FlatList
@@ -370,6 +417,7 @@ export function ImageGallery<T>({ items, useSrc, initialIndex, visible, onClose,
             </RNView>
           )}
         </Animated.View>
+        {editing ? <CommentEditorPanel key={editing.id} target={editing} /> : null}
       </GestureHandlerRootView>
     </Modal>
   );
@@ -396,6 +444,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: 'rgba(255,255,255,0.14)',
   },
+  headerRight: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  headerButtonWide: { width: 'auto', flexDirection: 'row', gap: 7, paddingHorizontal: 14 },
+  headerLabel: { fontSize: 14, fontWeight: '600' },
+  hint: { position: 'absolute', left: 24, right: 24, alignItems: 'center' },
+  hintText: { color: '#fff', fontSize: 14, textAlign: 'center', backgroundColor: 'rgba(255,255,255,0.16)', paddingHorizontal: 14, paddingVertical: 8, borderRadius: 18, overflow: 'hidden' },
   counter: {
     color: 'rgba(255,255,255,0.85)',
     fontSize: 14,

@@ -42,6 +42,7 @@ import { CONVEX_ORIGIN } from '@/lib/convex';
 import { openInBrowser, openLink } from '@/lib/links';
 import { optionalNative } from '@/lib/optionalNative';
 import { useAndroidImeInset } from '@/hooks/useAndroidImeInset';
+import { PageCommentBar, useOpenedFromSession, usePageComments } from '@/components/comments/pageComments';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const WebViewComp: any = optionalNative('RNCWebViewModule', () => require('react-native-webview').WebView);
@@ -122,6 +123,14 @@ export default function PageScreen() {
     if (sheetOpen && artifactId) (useInboxStore.getState() as any).markThreadRead('page', artifactId);
   }, [sheetOpen, artifactId, page?.comments.length]);
 
+  // Opened from a session, the page takes comments into the next message sent there.
+  const webview = useRef<{ injectJavaScript: (js: string) => void } | null>(null);
+  const fromSession = useOpenedFromSession();
+  const sessionTitle = useInboxStore((st: any) => (fromSession ? (st.sessions?.[fromSession]?.title as string | undefined) : undefined));
+  // Only where this person can send there, or the comments would never go out.
+  const canSend = useInboxStore((st: any) => (fromSession ? st.conversations?.[fromSession]?.is_own === true : false));
+  const promptComments = usePageComments(webview, slug ?? '', info?.title || page?.title || 'Published page', slug ? pageShareUrl(slug) : '', slug && canSend ? fromSession : null);
+
   if (!slug) return <ObjectMissing what="Page" loading={false} />;
   const shareUrl = pageShareUrl(slug);
   const browse = () => void openInBrowser(shareUrl);
@@ -169,7 +178,10 @@ export default function PageScreen() {
           {WebViewComp ? (
             <WebViewComp
               key={src}
+              ref={webview}
               source={{ uri: src }}
+              injectedJavaScript={promptComments?.injectedJavaScript}
+              onMessage={promptComments?.onMessage}
               originWhitelist={[origin]}
               onShouldStartLoadWithRequest={(req: { url: string; isTopFrame?: boolean }) => {
                 if (req.isTopFrame === false || req.url.startsWith(origin) || req.url === 'about:blank') return true;
@@ -191,6 +203,7 @@ export default function PageScreen() {
             </RNView>
           )}
         </RNView>
+        {promptComments && !sheetOpen ? <PageCommentBar comments={promptComments} sessionTitle={sessionTitle} /> : null}
 
         {sheetOpen ? (
           <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={insets.top + 44} style={styles.sheet}>

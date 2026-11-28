@@ -94,7 +94,10 @@ export function quoteToComposer(text: string, populate: PopulateFn): void {
 // The pictures a send carries, for naming them in the batch's image notes: the
 // composer's own pictures come first, as [Image 1..n], and the pictures quoted
 // from the transcript follow from `firstQuoted`.
-export type SendPictures = { composer?: readonly ComposerPicture[]; firstQuoted?: number };
+// `unmarked`: the quoted pictures go as they are, with no markers drawn on them
+// (the phone has no canvas to draw them), so each note names its spot by where
+// it sits on the picture rather than by a marker's number.
+export type SendPictures = { composer?: readonly ComposerPicture[]; firstQuoted?: number; unmarked?: boolean };
 
 export function takeReviewBatch(conversationId: string, messageId?: string, pictures?: SendPictures): string {
   return takeBatch(conversationId, messageId, pictures, false).text;
@@ -121,7 +124,7 @@ function takeBatch(conversationId: string, messageId: string | undefined, pictur
     const i = c.image.storageId ? attached.indexOf(c.image.storageId) : -1;
     return i >= 0 ? [[c.id, firstQuoted! + i] as const] : [];
   }));
-  const quotes = formatPendingComments(taken, numbers, pinNumbers(s.getReviewComments(conversationId)));
+  const quotes = formatPendingComments(taken, numbers, pictures?.unmarked ? undefined : pinNumbers(s.getReviewComments(conversationId)));
   const text = [answers, quotes].filter(Boolean).join("\n\n");
   if (!text) return { text: "", quoteIds: [] };
   const quoteIds = sending && quoteDraftsOn(s) ? taken.filter((c) => isRecordedQuote(conversationId, c)).map((c) => c.id) : [];

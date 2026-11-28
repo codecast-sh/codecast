@@ -199,6 +199,14 @@ describe("image quotes from the gallery", () => {
     expect(blocks[6]).toBe("fix these");
   });
 
+  test("a send with no markers drawn (the phone) names each pin by where it sits on the attached picture", () => {
+    const a = addImagePin(CONV, { ...shot, width: 1600, height: 900 }, { x: 0.25, y: 0.5 });
+    useInboxStore.getState().commitReviewComment(CONV, a, "this button is misaligned");
+    const blocks = attachReviewToMessage(CONV, "fix", { firstQuoted: 2, unmarked: true }).split("\n\n");
+    expect(blocks[0]).toStartWith("> [Image 2] at x=400, y=450 of 1600×900 px (25% from the left, 50% from the top)\n");
+    expect(blocks[1]).toBe("this button is misaligned");
+  });
+
   test("without attachment numbers a pin points at the picture by address", () => {
     addImagePin(CONV, shot, { x: 0.1, y: 0.2 });
     expect(takeReviewBatch(CONV)).toStartWith(`> ![image](${shot.href}) at 10% from the left, 20% from the top\n> Image from your message`);
