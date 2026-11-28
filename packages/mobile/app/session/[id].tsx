@@ -85,11 +85,10 @@ import { mutePatch, NOTIFY_LEVELS, useSessionNotify } from '@codecast/web/lib/se
 import { MessageIdentity } from '@codecast/web/lib/conversationBlockContexts';
 import { MessageLongPressContext, MessageTapContext, OutsideMessage, useMessageLongPress, type BlockCopy } from '@/components/MessageLongPress';
 import { CommentAnchorContext } from '@/components/comments/CommentBubble';
-import { openCommentEditor } from '@/components/comments/CommentEditor';
 import { CommentTray } from '@/components/comments/CommentTray';
 import { PictureCommentCount } from '@/components/comments/GalleryPins';
-import { commentLabel, quotesWholeUnit, type CommentUnit } from '@/lib/messageComments';
-import { genCommentId } from '@codecast/web/lib/reviewActions';
+import { unitCommentItem, withComments } from '@/components/comments/messageComments';
+import type { CommentUnit } from '@/lib/messageComments';
 import { openSelectText } from '@/components/SelectTextSheet';
 import { readableText } from '@/lib/markdown';
 import { ComposeButton } from '@/components/session/ComposeButton';
@@ -109,7 +108,7 @@ import { permissionRecord } from '@codecast/shared/contracts/commandRun';
 import { useRunningPermission } from '@codecast/web/hooks/useRunningPermission';
 import { ProposalBatchContext } from '@/components/org/ProposalCard';
 import { usePendingDecisionItems } from '@codecast/web/hooks/useDecisionQueue';
-import { attachReviewToMessage, quotedImages } from '@codecast/web/lib/reviewActions';
+import { attachReviewToMessage } from '@codecast/web/lib/reviewActions';
 import { hostedApprovalAnswer, hostedApprovalState, type HostedApprovalState } from '@codecast/web/lib/hostedApproval';
 import { HostedSources, HostedStep } from '@/components/hosted/Steps';
 import { ReplyChips } from '@/components/hosted/ReplyChips';
@@ -2002,9 +2001,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
   useEffect(() => { setLocalExpanded(false); }, [globalCollapsed]);
   const isBookmarked = bookmarkedSet?.has(message._id);
 
-  // The agent's words can be commented on, into the next message sent here:
-  // the comments join the batch the composer sends (its key, which proposal
-  // answers share), and only where this person can send.
+  // The agent's words take comments into the batch the composer sends (its key, as proposal answers), where this person can send.
   const batch = useContext(ProposalBatchContext);
   const commentAnchor = useMemo(
     () => (batch?.canSend && message.role === 'assistant' ? { conversationId: batch.conversationId, messageId: message._id } : null),
@@ -2029,25 +2026,8 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
       },
     });
     const items: SheetItem[] = [];
-    // A comment on the block pressed leads: it rides the next message as a
-    // quote with the words written under it. A block already commented on
-    // whole opens that comment instead, to read or add to it.
-    if (unit && target) {
-      const mine = (useInboxStore.getState().reviewComments[target.conversationId] ?? [])
-        .find((c) => c.messageId === message._id && !c.image && !c.page && !c.proposal && quotesWholeUnit(c.quote, unit.text));
-      items.push({
-        label: mine ? 'Edit your comment' : commentLabel(unit.kind),
-        icon: 'message-square',
-        onPress: () => {
-          if (mine) return openCommentEditor({ conversationId: target.conversationId, id: mine.id, isNew: false }, 350);
-          const id = genCommentId();
-          useInboxStore.getState().addReviewComment(target.conversationId, {
-            id, messageId: message._id, blockIndex: unit.index, quote: unit.text, body: '', createdAt: Date.now(),
-          });
-          openCommentEditor({ conversationId: target.conversationId, id, isNew: true }, 350);
-        },
-      });
-    }
+    // A comment on the block pressed leads (components/comments/messageComments).
+    if (unit && target) items.push(unitCommentItem(target.conversationId, message._id, unit));
     items.push(...copies.map(copyRow));
     if (messageText) {
       items.push(copyRow({ label: 'Copy text', text: messageText }));
@@ -2266,9 +2246,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
                 );
               }
             }
-            // Only the body's own words take comments: not tool output in the
-            // bubble, nor the split shapes above (skills, teammates), whose
-            // parts would each place every comment.
+            // Only the plain body takes comments: split shapes above would each place every comment.
             return (
               <CommentAnchorContext.Provider value={commentAnchor}>
                 <MarkdownContent text={content} baseStyle={bodyStyle} isUser={isUser} />
@@ -2591,15 +2569,8 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
     if (images.filesUploading) return void showNotice('A file is still uploading');
     setError(null);
 
-    const sendImages = images.optimisticImages();
-    // Pictures with comments pinned on them ride along after the composer's
-    // own, and each comment names its picture by that attachment number.
-    const quoted = quotedImages(conversationId);
-    const review = attachReviewToMessage(conversationId, trimmedMessage, {
-      firstQuoted: quoted.length ? sendImages.length + 1 : undefined,
-      unmarked: true,
-    });
-    sendImages.push(...quoted.map((q) => ({ media_type: 'image/png', storage_id: q.storageId })));
+    // The comments ride along, with the pictures they are pinned on.
+    const { text: review, images: sendImages } = withComments(conversationId, trimmedMessage, images.optimisticImages());
     const content = images.withAttachments(review) || IMAGE_ONLY_CONTENT;
 
     // The bubble lands on the next frame, in a commit of its own: written

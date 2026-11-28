@@ -45,12 +45,10 @@ import { replaceShortcodes } from '@codecast/shared/chat';
 import { resolveDateDisplay } from '@codecast/web/lib/dateMention';
 
 import { LinkText, HighlightedCodeText, useLinkLongPress } from './CodeText';
-import { MessageTapContext, OutsideMessage, useMessageLongPress, type MessageLongPress } from './MessageLongPress';
-import { CommentAnchorContext, CommentBubble } from './comments/CommentBubble';
-import { messageUnits, placeComments, quotedSpans, quotesWholeUnit, type CommentUnit } from '@/lib/messageComments';
-import { mixColor } from '@/lib/solColor';
-import { useInboxStore } from '@codecast/web/store/inboxStore';
-import type { PendingComment } from '@codecast/web/lib/quoteFormat';
+import { OutsideMessage, useMessageLongPress } from './MessageLongPress';
+import { CommentAnchorContext } from './comments/CommentBubble';
+import { quotedRuns, unitBubble, unitCtx, unitPress, useCommentLayer, type CommentCtx, type CommentLayer } from './comments/markdownComments';
+import type { CommentUnit } from '@/lib/messageComments';
 
 export { LinkText, linkifyPlainText, HighlightedCodeText } from './CodeText';
 import { CodeBlockFullscreen } from './CodeBlockFullscreen';
@@ -74,61 +72,7 @@ type MdCtx = {
   selectable: boolean;
   plainTextFences: boolean;
   listDepth: number;
-  /** The message's comments, when comments can be made on it (CommentLayer). */
-  comments?: CommentLayer;
-  /** The unit these blocks are: a long press on its text offers a comment on it. */
-  unit?: CommentUnit;
-  /** The words of this unit that comments quote, marked where they fall. */
-  quoted?: string[];
-};
-
-/** A message body's comment layer: which units hold comments, and the row's
- *  long press and tap that a unit's text takes over. */
-type CommentLayer = {
-  conversationId: string;
-  placed: Map<number, PendingComment[]>;
-  longPress: MessageLongPress;
-  tap: (() => void) | null;
-};
-
-/** The text of a unit takes its own long press (naming the unit) and passes taps on. */
-function unitPress(ctx: MdCtx) {
-  if (!ctx.unit || !ctx.comments) return null;
-  const { longPress, tap } = ctx.comments;
-  const unit = ctx.unit;
-  // No press highlight: a touch that starts a scroll would flash the block.
-  return { onLongPress: () => longPress(undefined, unit), onPress: tap ?? undefined, suppressHighlighting: true };
-}
-
-/** A unit's context: it, and the part-quotes of its comments to mark. */
-function unitCtx(ctx: MdCtx, unit: CommentUnit): MdCtx {
-  const quoted = (ctx.comments?.placed.get(unit.index) ?? [])
-    .filter((c) => !quotesWholeUnit(c.quote, unit.text))
-    .map((c) => c.quote);
-  return { ...ctx, unit, quoted: quoted.length ? quoted : undefined };
-}
-
-/** A unit's comments, drawn under it; nothing when it has none. */
-function unitBubble(ctx: MdCtx, unit: CommentUnit | undefined): React.ReactNode {
-  const list = unit && ctx.comments?.placed.get(unit.index);
-  return list?.length ? <CommentBubble conversationId={ctx.comments!.conversationId} comments={list} unitText={unit!.text} /> : null;
-}
-
-/** `text` as runs with the quoted words marked. */
-function quotedRuns(text: string, quotes: string[], keyPrefix: string): React.ReactNode {
-  const spans = quotedSpans(text, quotes);
-  if (!spans.length) return text;
-  const mark = { backgroundColor: mixColor(Theme.accent, 24, 'transparent') };
-  const parts: React.ReactNode[] = [];
-  let at = 0;
-  spans.forEach(([start, end], i) => {
-    if (start > at) parts.push(text.slice(at, start));
-    parts.push(<RNText key={`${keyPrefix}q${i}`} style={mark}>{text.slice(start, end)}</RNText>);
-    at = end;
-  });
-  if (at < text.length) parts.push(text.slice(at));
-  return parts;
-}
+} & CommentCtx;
 
 /** A run of plain words, marked for the search or the comments on it. */
 function markRun(text: string, ctx: MdCtx, keyPrefix: string): React.ReactNode {
@@ -727,41 +671,6 @@ function MarkdownBlocks({ text, tree: parsed, units, comments, baseStyle, isUser
     return bubble && el != null ? <RNView key={k}>{el}{bubble}</RNView> : el;
   }).filter((el) => el != null);
   return out.length === 1 ? <>{out[0]}</> : <RNView style={{ gap: BLOCK_GAP }}>{out}</RNView>;
-}
-
-/** The message's comments, laid over its text parts: one subscription to the
- *  batch, and one placement across every part, so a quote lands on one unit. */
-function useCommentLayer(textParts: string[]): { trees: Root[]; units: CommentUnit[][]; layer: CommentLayer } | null {
-  const anchor = useContext(CommentAnchorContext);
-  const longPress = useMessageLongPress();
-  const tap = useContext(MessageTapContext);
-  // A signature of this message's text comments, so a write to another
-  // message's (or to a note's words while typed elsewhere) changes nothing here.
-  const sig = useInboxStore((s) => {
-    if (!anchor) return '';
-    const list = s.reviewComments[anchor.conversationId];
-    if (!list?.length) return '';
-    return JSON.stringify(list.filter((c) => c.messageId === anchor.messageId && !c.image && !c.page && !c.proposal).map((c) => [c.id, c.quote, c.body, c.blockIndex, c.createdAt]));
-  });
-  const key = textParts.join('\u0000');
-  const parsed = useMemo(() => {
-    if (!anchor || !longPress) return null;
-    let base = 0;
-    const trees = textParts.map((t) => parseMarkdown(t));
-    const units = trees.map((t) => {
-      const list = messageUnits(t, base);
-      base += list.length;
-      return list;
-    });
-    return { trees, units };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, !!anchor, !!longPress]);
-  return useMemo(() => {
-    if (!anchor || !longPress || !parsed) return null;
-    const comments = sig ? (JSON.parse(sig) as [string, string, string, number, number][]).map(([id, quote, body, blockIndex, createdAt]): PendingComment => ({ id, quote, body, blockIndex, createdAt, messageId: anchor.messageId })) : [];
-    const placed = placeComments(comments, parsed.units.flat().map((x) => x.text));
-    return { ...parsed, layer: { conversationId: anchor.conversationId, placed, longPress, tap } };
-  }, [anchor, longPress, tap, parsed, sig]);
 }
 
 // "★ Insight ─────" callout — mirrors web's InsightCard (ConversationView):
