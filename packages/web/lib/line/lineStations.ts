@@ -18,7 +18,7 @@ export type LineNode = {
   [attr: string]: unknown;
 };
 
-export type LineEdge = { from: string; to: string; label?: string; condition?: string };
+export type LineEdge = { from: string; to: string; label?: string; condition?: string; free_visit?: string };
 
 /** The parsed shipped template (shippedLine.generated.ts). `files` names the
  *  template file a station's prompt or script ships in. */
