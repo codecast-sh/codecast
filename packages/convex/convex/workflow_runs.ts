@@ -2033,16 +2033,7 @@ export async function listRunsCore(ctx: Ctx, userId: Id<"users">, args: ListRuns
   const shaped = [];
   // `slim` (the CLI's list) leaves the station sessions out: each carries its
   // report and handoff, and 200 runs of them outgrew the call's time limit.
-  // The machine that runs each, by its name (`cast workflow show`): a machine of the run's owner, else only its id.
-  const names = new Map<string, string | null>();
-  for (const run of out.slice(0, limit)) {
-    const key = `${run.user_id}:${run.runner_device}`;
-    if (run.runner_device && !names.has(key)) {
-      const d = await ctx.db.query("devices").withIndex("by_user_device", (q: any) => q.eq("user_id", run.user_id).eq("device_id", run.runner_device)).first();
-      names.set(key, d ? deviceDisplayName(d as any) : null);
-    }
-    shaped.push({ ...(await enrichRun(ctx, args.slim ? run : await withAgentSessions(ctx, run, budget), reads)), runner_device_name: names.get(key) ?? undefined });
-  }
+  for (const run of out.slice(0, limit)) shaped.push(await enrichRun(ctx, args.slim ? run : await withAgentSessions(ctx, run, budget), reads));
   return shaped;
 }
 
@@ -2293,6 +2284,24 @@ export const shippingRuns = query({
 });
 
 // `cast workflow runs [--task|--plan]` (the-line.md L10) through /cli/workflow-runs/list.
+/**
+ * The machine that runs each, by its name (`cast workflow show`): a machine of the run's owner, else only its id. The
+ * CLI's alone: a device row's heartbeat would re-run every web subscription of the list.
+ */
+async function withRunnerNames<R extends { user_id: Id<"users">; runner_device?: string }>(ctx: Ctx, runs: R[]): Promise<Array<R & { runner_device_name?: string }>> {
+  const names = new Map<string, string | null>();
+  const out = [];
+  for (const run of runs) {
+    const key = `${run.user_id}:${run.runner_device}`;
+    if (run.runner_device && !names.has(key)) {
+      const d = await ctx.db.query("devices").withIndex("by_user_device", (q: any) => q.eq("user_id", run.user_id).eq("device_id", run.runner_device)).first();
+      names.set(key, d ? deviceDisplayName(d as any) : null);
+    }
+    out.push({ ...run, runner_device_name: names.get(key) ?? undefined });
+  }
+  return out;
+}
+
 export const listRunsFromCli = query({
   args: {
     api_token: v.string(),
@@ -2308,7 +2317,7 @@ export const listRunsFromCli = query({
     const auth = await verifyApiToken(ctx, args.api_token, false);
     if (!auth) return { error: "Unauthorized" };
     const { api_token: _t, ...rest } = args;
-    return { runs: await listRunsCore(ctx, auth.userId, rest) };
+    return { runs: await withRunnerNames(ctx, await listRunsCore(ctx, auth.userId, rest)) };
   },
 });
 
