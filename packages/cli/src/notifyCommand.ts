@@ -36,5 +36,5 @@ export function formatNotifyList(rows: NotifyRow[], titleOf: (id: string) => str
   if (rows.length === 0) return ["No session has its own notification setting: every one follows the default."];
   return [...rows]
     .sort((a, b) => b.updated_at - a.updated_at)
-    .map((r) => `${r.conversation_id.slice(0, 7)}  ${NOTIFY_LEVEL_LABEL[r.level].padEnd(26)}  ${titleOf(r.conversation_id)}`);
+    .map((r) => `${r.conversation_id.slice(0, 7)}  ${NOTIFY_LEVEL_LABEL[r.level].padEnd(26)}  ${titleOf(r.conversation_id)}`.trimEnd());
 }

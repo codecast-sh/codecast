@@ -23,6 +23,7 @@ describe("cast notify", () => {
     expect(lines[0]).toStartWith("jx7bbbb  every message");
     expect(lines[0]).toEndWith("Fix billing");
     expect(lines[1]).toStartWith("jx7aaaa  muted");
+    expect(formatNotifyList([{ conversation_id: "jx7cccc0000", level: "all", updated_at: 3 }], () => "")[0]).toBe("jx7cccc  every message");
     expect(formatNotifyList([], () => "")).toHaveLength(1);
   });
 });
