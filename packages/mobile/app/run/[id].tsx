@@ -30,7 +30,7 @@ import {
 import { landingOf } from '@codecast/web/lib/line/personalReport';
 import { resumeOf } from '@codecast/web/lib/ship/resumeAt';
 import type { TargetState } from '@codecast/web/lib/ship/journey';
-import { changeAction, changeHeadline, changeJourney, changeLinks, changePr, mergeHolder, mergeIsOff, shipsChange, type ChangeAction, type ChangeLink } from '@codecast/web/lib/ship/changePage';
+import { changeAction, changeHeadline, changeJourney, changeLinks, changePr, mergeHolder, mergeIsOff, newerMergedRun, shipsChange, type ChangeAction, type ChangeLink } from '@codecast/web/lib/ship/changePage';
 import { roleRowsOf } from '@codecast/web/lib/roleRows';
 import { usePullRequestMerge } from '@codecast/web/hooks/useSyncTimeline';
 import { onPrHead } from '@codecast/shared/contracts/deployTargets';
@@ -170,8 +170,10 @@ export default function RunScreen() {
   const mergedSha = changeRun && changeFlow ? landedSha(changeRun as any) ?? (prMerge?.merged ? prMerge.merge_sha : null) : null;
   const { reach, ready: reachRead } = useDeployReachRead(mergedSha && changePrRef ? `${changePrRef.repository}@${mergedSha}` : null);
   const targets = useMemo<TargetState[]>(() => reachTargets(reach), [reach]);
-  const journey = useMemo(() => (changeRun && changeFlow ? changeJourney(changeFlow, changeRun as any, targets, viewer, { pr: prMerge, reading: !reachRead }) : null), [changeRun, changeFlow, targets, viewer, prMerge, reachRead]);
-  const head = journey && changeRun && changeFlow ? changeHeadline(journey, changeRun as any, changeFlow, { pr: prMerge, targets, reading: !reachRead }) : null;
+  // A later run on the task that merged this run's pull request: the change went on there.
+  const newerMerged = useMemo(() => (run ? newerMergedRun(run as any, others as any) : null), [run, others]);
+  const journey = useMemo(() => (changeRun && changeFlow ? changeJourney(changeFlow, changeRun as any, targets, viewer, { pr: prMerge, reading: !reachRead, newerMerged }) : null), [changeRun, changeFlow, targets, viewer, prMerge, reachRead, newerMerged]);
+  const head = journey && changeRun && changeFlow ? changeHeadline(journey, changeRun as any, changeFlow, { pr: prMerge, targets, reading: !reachRead, newerMerged }) : null;
   const links = journey && changeRun && changeFlow ? changeLinks(changeRun as any, changeFlow, targets, prMerge) : [];
   const newer = run ? [...others].filter((r) => r.created_at > run.created_at).sort((a, b) => b.created_at - a.created_at)[0]?._id ?? null : null;
   // The role whose line started the run holds its merge switch: its page, read only when merge was off.

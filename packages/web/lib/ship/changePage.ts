@@ -159,11 +159,15 @@ const onMainByRun = (run: ChangeRun, j: Journey) => !!landedSha(run) || ((j.now.
  * and the bar read from where the deploy records put the merge (`targets`), as a landed run's do. A stop the run itself
  * caused after landing (a Deploy stop, a landing step that passed) and a personal Ship keep their own reading.
  */
-export function landedOutside(j: Journey, run: ChangeRun, graph: ChangeGraph, ctx: { pr?: PrState; targets?: ReadonlyArray<TargetState>; reading?: boolean } = {}): Journey {
+export function landedOutside(j: Journey, run: ChangeRun, graph: ChangeGraph, ctx: { pr?: PrState; targets?: ReadonlyArray<TargetState>; reading?: boolean; newerMerged?: string | null } = {}): Journey {
   const n = j.now;
-  // The server's record says so (it healed the run; a merge handed to a role heals the same way), else GitHub's PR does
-  // and the run's stop came before its landing. A healed run that reached Live reads as any live run.
-  const said = !!run.merge?.outside && !(run.status === "completed" && /^live$/i.test(exitReached(run, graph) ?? ""));
+  // A later run on the same task merged this pull request (the PR station reuses an open PR): the change went on there,
+  // and this run says so (changeHeadline), never that someone else merged it.
+  if (ctx.newerMerged && !run.merge?.outside) return j;
+  // The server's record says so (it healed the run; a merge handed to a role heals the same way), else GitHub's PR does:
+  // for a merge handed to its role, once GitHub merged it; otherwise when the run's stop came before its landing. A
+  // healed run that reached Live reads as any live run.
+  const said = (!!run.merge?.outside && !(run.status === "completed" && /^live$/i.test(exitReached(run, graph) ?? ""))) || (handedTo(run) !== null && !!ctx.pr?.merged);
   if (j.personal || (!said && n.kind !== "stopped" && n.kind !== "failed" && n.kind !== "unlanded")) return j;
   const stop = n.kind === "stopped" || n.kind === "failed" ? n : null;
   if (!said && stop && (stop.fix === "deploy" || stop.landed)) return j;
@@ -197,8 +201,20 @@ export function landedOutside(j: Journey, run: ChangeRun, graph: ChangeGraph, ct
 
 /** A change run's journey as its page reads it: the run's own (journey.ts), read as landed when someone else merged the
  *  change while the run stopped short of it (landedOutside). The web's run page and the phone's read it here. */
-export function changeJourney(graph: ChangeGraph, run: ChangeRun, targets: ReadonlyArray<TargetState>, viewer: JourneyViewer | null, ctx: { pr?: PrState; reading?: boolean } = {}): Journey {
+export function changeJourney(graph: ChangeGraph, run: ChangeRun, targets: ReadonlyArray<TargetState>, viewer: JourneyViewer | null, ctx: { pr?: PrState; reading?: boolean; newerMerged?: string | null } = {}): Journey {
   return landedOutside(journeyOf(graph as any, run as any, targets, viewer), run, graph, { ...ctx, targets });
+}
+
+/** A later run on the same task that merged this run's pull request (the PR station reuses an open PR): the newest such
+ *  run's id. `others`: the task's other runs. */
+export function newerMergedRun(
+  run: ChangeRun & { created_at?: number },
+  others: ReadonlyArray<ChangeRun & { _id: string; created_at?: number }>,
+): string | null {
+  const pr = changePr(run);
+  if (!pr) return null;
+  const same = (r: ChangeRun) => { const p = changePr(r); return !!p && p.number === pr.number && p.repository.toLowerCase() === pr.repository.toLowerCase(); };
+  return [...others].filter((r) => (r.created_at ?? 0) > (run.created_at ?? 0) && same(r) && !!landedSha(r)).sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0))[0]?._id ?? null;
 }
 
 /** Where a change someone else merged stands, from the deploy records: live, going out, failed or waiting per target. */
@@ -271,11 +287,13 @@ function deployFailedWords(run: ChangeRun, targets: ReadonlyArray<TargetState>, 
 }
 
 /** The page's headline for a change run: where the change stands now, and what it waits on. */
-export function changeHeadline(j: Journey, run: ChangeRun, graph: ChangeGraph, ctx: { pr?: PrState; targets?: ReadonlyArray<TargetState>; reading?: boolean } = {}): ChangeHeadline {
+export function changeHeadline(j: Journey, run: ChangeRun, graph: ChangeGraph, ctx: { pr?: PrState; targets?: ReadonlyArray<TargetState>; reading?: boolean; newerMerged?: string | null } = {}): ChangeHeadline {
   const n = j.now;
   const { tone } = journeyWords(j);
   const head = (words: string, waits: string | null = null, t: JourneyTone = tone): ChangeHeadline => ({ words, waits, tone: t });
   const fixing = (round: number | null, max: number | null) => `Its session is fixing it${round && max ? ` · round ${round} of ${max}` : ""}`;
+  // A later run merged it: where it stands now is that run's to say; the bar opens it (changeAction `newer`).
+  if (ctx.newerMerged && !j.outside && run.status !== "running" && run.status !== "paused") return head("A newer run merged it", null, "ok");
   if (j.outside) {
     const said = outsideWords(ctx.targets ?? [], ctx.reading);
     return head(run.merge?.by ? `Merged by ${run.merge.by}` : "Merged by someone else", said.waits, said.tone);
@@ -351,7 +369,8 @@ export function changeAction(j: Journey, run: ChangeRun, g: ChangeGraph, ctx: { 
   const n = j.now;
   const subject = run.spawner_conversation_id ?? null;
   // A merge handed to its role: the role's page, where its merge is held.
-  const handed = handedTo(run);
+  const handed = j.outside ? null : handedTo(run);
+  if (handed !== null && ctx.newer) return { kind: "newer", label: "Open the newer run", href: `/workflows/runs/${ctx.newer}` };
   if (handed !== null) return ctx.mergeRole ? { kind: "merge_switch", label: handed ? `Open @${handed}` : "Open its role", href: `/org/${ctx.mergeRole}` } : null;
   const pending = ctx.targets?.find((t) => t.state !== "live");
   const deploysHref = (words: string | null | undefined) => (pending ? runDeploysHref(run, pending.name, pending.deploy) : wordsHref(run, words));

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { onPrHead } from "@codecast/shared/contracts/deployTargets";
 import { journeyOf } from "../journey";
 import { stopTitle } from "../journeyWords";
-import { changeAction, changeHeadline, changeJourney, changeLinks, changePr, changeStations, currentHead, deployLine, endedStages, handedTo, mergeHolder, mergeIsOff, reviewEarlier, reviewOnHead, shipsChange } from "../changePage";
+import { changeAction, changeHeadline, changeJourney, changeLinks, changePr, changeStations, currentHead, deployLine, endedStages, handedTo, mergeHolder, mergeIsOff, newerMergedRun, reviewEarlier, reviewOnHead, shipsChange } from "../changePage";
 import { deploysHref } from "../../deploys/focus";
 import { BRANCHING_FLOW, UNION_CHANGE_FLOW } from "../journeyFixtures";
 import { appPool, flowBySlug, pushedFlow } from "../../line/flowPool";
@@ -577,6 +577,23 @@ describe("pl-1077 polish 6: a change someone else merged reads landed; a merge h
     expect(changeJourney(change, own, [], null, { pr: { merged: true, merge_sha: "31ccbb83b1" } }).outside).toBeUndefined();
   });
 
+  test("H1: a newer run on the task that merged the same PR keeps Open the newer run and says so, never someone else", () => {
+    const older = { ...stopped, _id: "run1", created_at: 1 };
+    const newerRun = run({ _id: "run2", created_at: 2, status: "completed", current_node_id: "exit", pr: { number: 349, repository: "acme/app" }, merge: { sha: "fec4c95767" } });
+    const otherPr = run({ _id: "run3", created_at: 3, status: "completed", pr: { number: 400, repository: "acme/app" }, merge: { sha: "abc" } });
+    const unmerged = run({ _id: "run4", created_at: 4, status: "failed", pr: { number: 349, repository: "acme/app" } });
+    expect(newerMergedRun(older, [newerRun, otherPr, unmerged])).toBe("run2");
+    expect(newerMergedRun(older, [otherPr, unmerged])).toBeNull();
+    // An earlier run that merged it is not a newer one.
+    expect(newerMergedRun({ ...older, created_at: 9 }, [newerRun])).toBeNull();
+    const j = changeJourney(change, older, live, null, { pr, newerMerged: "run2" });
+    expect(j.outside).toBeUndefined();
+    expect(changeHeadline(j, older, change, { pr, targets: live, newerMerged: "run2" })).toEqual({ words: "A newer run merged it", waits: null, tone: "ok" });
+    expect(changeAction(j, older, change, { pr, newer: "run2", targets: live })).toEqual({ kind: "newer", label: "Open the newer run", href: "/workflows/runs/run2" });
+    // With no newer run that merged it, the same stop reads as someone else's merge.
+    expect(changeJourney(change, older, live, null, { pr, newerMerged: null }).outside).toEqual({ sha: "fec4c95767" });
+  });
+
   test("H3: a merge handed to its role reads neutral, names the role and opens it; its merge-off words name it too", () => {
     const handed = run({ status: "completed", current_node_id: "handed", pr: { number: 9, repository: "acme/app", head_sha: "abc1234" }, node_statuses: [...ROUND, verdicts("merge", "green", "ship"), st("merge", "completed", 14, { result_preview: "Merge is @release's: handed to it." }), st("handed", "completed", 15)] });
     expect(handedTo(handed)).toBe("release");
@@ -585,6 +602,12 @@ describe("pl-1077 polish 6: a change someone else merged reads landed; a merge h
     expect(changeAction(journeyOf(change, handed), handed, change, { mergeRole: "or-7" })).toEqual({ kind: "merge_switch", label: "Open @release", href: "/org/or-7" });
     // Once the role merged it, the run is the merge's, not the hand-off's.
     expect(handedTo({ ...handed, merge: { sha: "f00d", outside: true } })).toBeNull();
+    // GitHub merged the handed PR before the server's heal: it reads landed, not still waiting on the role.
+    const ghMerged = changeJourney(change, handed, live, null, { pr: { merged: true, merge_sha: "f00dbabe12" } });
+    expect(ghMerged.outside).toEqual({ sha: "f00dbabe12" });
+    expect(changeHeadline(ghMerged, handed, change, { targets: live })).toMatchObject({ words: "Merged by someone else", waits: "Live on cli, mobile and web" });
+    expect(changeAction(ghMerged, handed, change, { mergeRole: "or-7", targets: live })).toBeNull();
+    expect(endedStages(ghMerged, handed, change)).toBe(ghMerged.stages);
     const refused = run({ ...stopped, fail_reason: "Stopped: @release's merge is off: `cast role line @release --merge on` lets its hands merge" });
     expect(mergeIsOff(refused)).toBe(true);
     expect(mergeHolder(refused)).toBe("release");

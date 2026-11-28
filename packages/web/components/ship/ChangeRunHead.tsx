@@ -23,8 +23,8 @@ import "./ship.css";
 const CHIP_TONE: Record<ChangeLink["tone"], "ship" | "drop" | "revise" | "default"> = { ok: "ship", bad: "drop", wait: "revise", default: "default" };
 
 /** `chips`: the page's own links (the session that ran it, the task), drawn after the change's. `newer`: a later run on
- *  the same task, where a stopped run's change went on. */
-export function ChangeRunHead({ run: given, flow, now_ms, chips, newer }: { run: any; flow: AppFlow; now_ms: number; chips?: React.ReactNode; newer?: string | null }) {
+ *  the same task, where a stopped run's change went on; `newerMerged`: one that merged this run's pull request. */
+export function ChangeRunHead({ run: given, flow, now_ms, chips, newer, newerMerged }: { run: any; flow: AppFlow; now_ms: number; chips?: React.ReactNode; newer?: string | null; newerMerged?: string | null }) {
   const pr = changePr(given);
   // Whether GitHub merged the PR (a person may have, outside the run), and where the deploy records put the merge.
   const prMerge = usePullRequestMerge(pr) ?? null;
@@ -34,13 +34,13 @@ export function ChangeRunHead({ run: given, flow, now_ms, chips, newer }: { run:
   const { reach, ready: reachRead } = useDeployReachRead(sha && pr ? `${pr.repository}@${sha}` : null);
   const targets = useMemo<TargetState[]>(() => reachTargets(reach), [reach]);
   const viewer = useJourneyViewer(run);
-  const journey = useMemo(() => changeJourney(flow, run, targets, viewer, { pr: prMerge, reading: !reachRead }), [flow, run, targets, viewer, prMerge, reachRead]);
+  const journey = useMemo(() => changeJourney(flow, run, targets, viewer, { pr: prMerge, reading: !reachRead, newerMerged }), [flow, run, targets, viewer, prMerge, reachRead, newerMerged]);
   const stages = useMemo(() => endedStages(journey, run, flow), [journey, run, flow]);
   // The role that holds its merge switch: the one the words name (handed to it, its merge off), else the role whose line
   // started the run. Its page, read only when merge was off or handed.
   const holder = mergeHolder(run);
   const mergeRole = useInboxStore((s) => (holder || (run.org_role_id && mergeIsOff(run)) ? roleRowsOf(s as any).roles.find((r) => (holder ? r.handle?.replace(/^@/, "") === holder : r._id === run.org_role_id))?.short_id ?? null : null));
-  const head = changeHeadline(journey, run, flow, { pr: prMerge, targets, reading: !reachRead });
+  const head = changeHeadline(journey, run, flow, { pr: prMerge, targets, reading: !reachRead, newerMerged });
   const links = changeLinks(run, flow, targets, prMerge);
   const action = changeAction(journey, run, flow, { newer, pr: prMerge, mergeRole, targets });
   const subject = run.spawner_conversation_id ? String(run.spawner_conversation_id) : null;

@@ -16,7 +16,7 @@ import { useRunFlow } from "../../../hooks/useFlowObject";
 import { repositoryOfRemote, sessionRemoteOf, sessionRootOf, sessionWorkspaceOf, useRepoFlows } from "../../../hooks/useRepoFlows";
 import { appPool, previewsPersonal, shipPicks, type AppFlow } from "../../../lib/line/flowPool";
 import { journeyOf, runIsLive, type Journey, type TargetState } from "../../../lib/ship/journey";
-import { changeJourney, changePr } from "../../../lib/ship/changePage";
+import { changeJourney, changePr, handedTo } from "../../../lib/ship/changePage";
 import { landedSha as mergedSha } from "../../../lib/ship/runRecord";
 import { usePullRequestMerge } from "../../../hooks/useSyncTimeline";
 import { repoObjectId } from "../../../lib/entityLinks";
@@ -75,7 +75,8 @@ function ShipButton({ conversationId, sessionTitle }: { conversationId: string; 
   // its PR as (someone else merged it: changePage landedOutside). Where the deploy records put that change, on every
   // target it touches: its PR's reach when it went up as one, else its commit's; never the session's other commits.
   const pr = run ? changePr(run) : null;
-  const prMerge = usePullRequestMerge(run?.status === "failed" && !mergedSha(run) ? pr : null) ?? null;
+  // Read only where it can change the reading: a stopped run, or a merge handed to its role, with nothing merged on record.
+  const prMerge = usePullRequestMerge(run && (run.status === "failed" || handedTo(run) !== null) && !mergedSha(run) ? pr : null) ?? null;
   const merged = run ? mergedSha(run) ?? (prMerge?.merged ? prMerge.merge_sha : null) : null;
   // Landed and left for a deploy to take out (its flow has no Deploy station): the chip then reads the reach.
   const landed = run ? landedSha(run) : null;
