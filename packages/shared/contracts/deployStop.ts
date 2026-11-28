@@ -17,3 +17,42 @@ export function failedDeploysOf(reason: string | null | undefined): Array<{ targ
 export function stuckTargetsOf(reason: string | null | undefined): string[] {
   return [...new Set([...(reason ?? "").matchAll(/\b([a-z][a-z0-9-]{0,31}) is not live\b/g)].map((m) => m[1]))];
 }
+
+type StoppedRun = {
+  status?: string;
+  current_node_id?: string | null;
+  merge?: { sha?: string | null } | null;
+  fail_reason?: string | null;
+  node_statuses?: ReadonlyArray<{ node_id: string; status?: string; result_preview?: string | null }> | null;
+};
+
+/**
+ * The Deploy segment a run stopped in (`deploy`, `direct_deploy`): its change merged, its wait failed, and the run
+ * ended at the segment's Deploy failed or Deploy stuck. A run that reached that exit reads as completed when its runner
+ * lost the exit's stop (a graph read from the stored node copy, which keeps no stop): it stopped all the same. Null for
+ * a run that stopped anywhere else.
+ */
+export function deployStopOf(run: StoppedRun): string | null {
+  if ((run.status !== "failed" && run.status !== "completed") || !run.merge?.sha) return null;
+  const m = /^(.+)__(failed|stuck)$/.exec(run.current_node_id ?? "");
+  if (!m) return null;
+  return (run.node_statuses ?? []).some((n) => n.node_id === `${m[1]}__wait` && n.status === "failed") ? m[1] : null;
+}
+
+/** A Deploy stop's words: the run's reason, else (a run that lost its stop and has none) what its Go live wait said. */
+export function deployStopWords(run: StoppedRun): string | null {
+  const stop = deployStopOf(run);
+  if (!stop) return null;
+  return run.fail_reason || [...(run.node_statuses ?? [])].reverse().find((n) => n.node_id === `${stop}__wait`)?.result_preview || null;
+}
+
+/**
+ * The targets a Deploy stop says this run could not send because another person's machine sends them, each with who
+ * sends it (awaitDeploy.ts: "This run could not send mobile: mobile is sent only from Jason Benn's machine (jb-m5-max),
+ * not from this machine. …"). Nothing failed: the change is on main and goes out with that machine's next send. Empty
+ * unless the stop names only such targets.
+ */
+export function awaySendsOf(reason: string | null | undefined): Array<{ target: string; sender: string }> {
+  if (!/^(?:Stopped:\s*)?This run could not send /.test(reason ?? "")) return [];
+  return [...reason!.matchAll(/\b([a-z][a-z0-9-]{0,31}) is sent only from (.+?), not from this machine/g)].map((m) => ({ target: m[1], sender: m[2] }));
+}

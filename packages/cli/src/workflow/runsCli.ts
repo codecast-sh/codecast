@@ -10,7 +10,7 @@ import { apiPost, isOlderBackendRefusal, type PublishDeps } from "../castApi.js"
 import { c, fmt } from "../colors.js";
 import { formatAge } from "../decideCommand.js";
 import { ownRestartOf } from "@codecast/shared/contracts/runRestart";
-import { failedDeploysOf, stuckTargetsOf } from "@codecast/shared/contracts/deployStop";
+import { awaySendsOf, failedDeploysOf, stuckTargetsOf } from "@codecast/shared/contracts/deployStop";
 import { sessionEndWords } from "@codecast/shared/contracts/sessionEnd";
 import { isCarriedOutcome } from "@codecast/shared/contracts/stationOutcome";
 import { runFlow } from "../taskShow.js";
@@ -201,7 +201,7 @@ export function restartHint(run: { task_short_id?: string | null; workflow_slug?
  * names none (a run cancelled while it waited, a flow with no deploy targets) says only what is true: it is on main.
  */
 function landedHint(run: { fail_reason?: string | null; merge?: { sha?: string | null; outside?: boolean | null; by?: string | null } | null }): string | null {
-  const failed = failedDeploysOf(run.fail_reason);
+  const failed = [...failedDeploysOf(run.fail_reason), ...awaySendsOf(run.fail_reason)];
   if (!run.merge?.sha && !failed.length) return null;
   const targets = failed.length ? failed.map((f) => f.target) : stuckTargetsOf(run.fail_reason);
   // Its pull request merged outside the run (deployCarries.recordOutsideMerge): the change is someone else's merge, on main all the same.

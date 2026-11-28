@@ -346,6 +346,24 @@ describe("D: a stop always has one way on, and never one that cannot help", () =
     expect(changeHeadline(journeyOf(change, r, [], null), r, change, { targets: [{ name: "cli", state: "live", deploy: "dp-3800" }] as any })).toMatchObject({ words: "Stopped at Deploy", waits: "Landed · live on cli dp-3800" });
   });
 
+  // ct-102797's th76kej: the run could not send mobile from another person's machine; it ended completed at Deploy failed
+  // (its runner lost the exit's stop) and read "Deploy failed" under a green dot, though nothing failed.
+  test("a send left to another person's machine reads waiting for that machine, failed or ended completed, and Live once a deploy took it", () => {
+    const reason = "This run could not send mobile: mobile is sent only from Jason Benn's machine (jb-m5-max), not from this machine. ac377bd is on main and goes out with mobile's next deploy.";
+    const stopped = run({ status: "failed", current_node_id: "deploy__failed", merge: { sha: "ac377bd88f", pr_url: "https://github.com/acme/app/pull/347" }, fail_reason: `Stopped: ${reason}`, node_statuses: [...MERGED, st("deploy__wait", "failed", 16, { result_preview: reason }), st("deploy__failed", "failed", 17)] });
+    const lost = run({ ...stopped, status: "completed", fail_reason: undefined, node_statuses: [...MERGED, st("deploy__wait", "failed", 16, { result_preview: reason }), st("deploy__failed", "completed", 17)] });
+    for (const r of [stopped, lost]) {
+      expect(head(r)).toEqual({ words: "Waiting for Jason Benn's machine (jb-m5-max) to send mobile", waits: "Landed · goes live with the next mobile deploy", tone: "wait" });
+      const at = (targets: any[]) => changeHeadline(journeyOf(change, r, [], null), r, change, { targets });
+      expect(at([{ name: "mobile", state: "deploying", deploy: "dp-3930" }])).toMatchObject({ words: "Deploying to mobile", tone: "wait" });
+      expect(at([{ name: "mobile", state: "live", deploy: "dp-3939" }])).toEqual({ words: "Live on mobile", waits: "Landed · live on mobile dp-3939", tone: "ok" });
+      expect(act(r)?.kind).toBe("deploys");
+    }
+    // Any other stop a runner ended completed reads as the stop, never under a green dot.
+    const failedLost = run({ ...lost, node_statuses: [...MERGED, st("deploy__wait", "failed", 16, { result_preview: "The deploy that carried ac377bd failed: mobile dp-3857 (Stopped at Send.)." }), st("deploy__failed", "completed", 17)] });
+    expect(head(failedLost)).toEqual({ words: "Deploy failed", waits: "Landed · mobile dp-3857 failed · goes live with the next mobile deploy", tone: "bad" });
+  });
+
   test("F2: a flow's own top-level unmerged that loops back to landing is not Deploy finding the change off main", () => {
     // change-pg17's path: ship__unshipped → unmerged → decide → decide__ship → ship → ship__shipped → deploy, which then failed.
     const flow = pushedFlow({ _id: "wf_pg17", ...BRANCHING_FLOW } as any) as any;

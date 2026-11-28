@@ -134,6 +134,9 @@ test("a landed run's restart is the deploy that takes it live, as the run page's
   expect(restartHint(two, stop)).toBe("it is on main, so running it again lands nothing: the next desktop and web deploys take it live (cast line deploy targets)");
   const unsent = { ...change, merge: { sha: "929c5d8d44" }, fail_reason: "Stopped: No deploy took 929c5d8 out: cli dp-3789 stopped at Send before sending anything (gh failed). A later deploy that takes it live ends this run at Live." };
   expect(restartHint(unsent, stop)).toBe("it is on main as 929c5d8, so running it again lands nothing: the next cli deploy takes it live (cast line deploy targets --target cli)");
+  // A send left to another person's machine (ct-102797's th76kej) goes out with that target's next deploy.
+  const away = { ...change, merge: { sha: "ac377bd88f" }, fail_reason: "Stopped: This run could not send mobile: mobile is sent only from Jason Benn's machine (jb-m5-max), not from this machine. ac377bd is on main and goes out with mobile's next deploy." };
+  expect(restartHint(away, stop)).toBe("it is on main as ac377bd, so running it again lands nothing: the next mobile deploy takes it live (cast line deploy targets --target mobile)");
   const stuck = { ...change, current_node_id: "deploy__stuck", merge: { sha: "acbd8d27a8" }, fail_reason: "Stopped: Deploy stuck: cli is not live with acbd8d2 after 60m (last: waiting on main CI at c6c7a32 (running)). Live: backend dp-3302." };
   expect(restartHint(stuck, null)).toBe("it is on main as acbd8d2, so running it again lands nothing: the next cli deploy takes it live (cast line deploy targets --target cli)");
   // Every target a stuck stop names, as awaitDeploy joins them.
