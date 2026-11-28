@@ -173,6 +173,15 @@ describe("B: the head is structure, never a station's free text", () => {
     expect(act(r)).toEqual({ kind: "session", label: "Open session", href: "/conversation/c1" });
   });
 
+  // ct-102698: the session pushed ca235f7 seconds after its brief and kept working; the head said it was fixing.
+  test("a fix pushed past the judged head: the run waits for its session's turn, and the bar still opens the session", () => {
+    const r = run({ current_node_id: "brief", pr: { number: 344, repository: "acme/app", head_sha: "ca235f7eb" }, ci_verdict: { green: true, head_sha: "fc0d91fb1" }, review_verdict: { verdict: "changes", head_sha: "fc0d91fb1" }, waiting_on_session: { node_id: "brief", conversation_id: "c1", since: 30, note: "## Review asked for changes" }, node_statuses: [...ROUND, verdicts("brief", "green", "changes"), st("brief", "running", 20, { visits: 1 })] });
+    expect(head(r)).toEqual({ words: "Fix pushed", waits: "Waiting for its session to finish its turn", tone: "session" });
+    expect(act(r)).toMatchObject({ kind: "session", href: "/conversation/c1" });
+    // Not pushed yet: still the finding and the fix it waits on.
+    expect(head({ ...r, pr: { ...r.pr, head_sha: "fc0d91fb1" } }).words).not.toBe("Fix pushed");
+  });
+
   test("Union's review asks for changes inside Land: the way out it took names the finding", () => {
     const r = run({ current_node_id: "fix", node_statuses: [...U_ROUND, st("land__brief", "completed", 7, { result_preview: "## The reviewer asked for changes - medium x" }), st("land__changes", "failed", 8, { result_preview: '{"exit": "changes"}' }), st("fix", "running", 9)] });
     expect(head(r, null, union)).toMatchObject({ words: "Changes asked", waits: "Its session is fixing it" });

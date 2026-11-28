@@ -17,7 +17,9 @@ import { CHANGE_STEPS, ago, byUrgency, openPrs, prState, prStepper, repositoryOf
 import { prMatches, runMatches, type DeployFocus } from "../../lib/deploys/focus";
 import { EntityIdPill } from "../EntityIdPill";
 import { usePullRequestRun } from "../../hooks/useSyncWorkflows";
+import { useSessionAsk } from "../../hooks/useJourneyViewer";
 import { reviewOnHead } from "../../lib/ship/changePage";
+import type { SessionAsk } from "../../lib/ship/sessionAsk";
 import { RepoTag } from "./RepoFace";
 import { ShipTrack } from "./ShipTrack";
 
@@ -132,7 +134,8 @@ function RunCard({ r, repository, tagIn, now, focus, earlier, dropped = false }:
   earlier: CardId | null;
   dropped?: boolean;
 }) {
-  const state = runState(r);
+  const ask = useSessionAsk(r);
+  const state = runState(r, ask);
   const title = r.task_title ?? r.task_short_id ?? "A change";
   return (
     <li className="dpp-run" id={`ship-${r._id}`} data-tone={state.tone} data-dropped={dropped ? "" : undefined} data-focus={runMatches(r, focus) ? "" : undefined} data-deploy-run={r._id}>
@@ -141,7 +144,7 @@ function RunCard({ r, repository, tagIn, now, focus, earlier, dropped = false }:
         {r.task_short_id ? <Link className="dpp-run-title" href={`/tasks/${r.task_short_id}`}>{title}</Link> : <span className="dpp-run-title">{title}</span>}
         <span className="dpp-age">{ago(now, r.updated_at)}</span>
       </div>
-      <ShipTrack track={stepsFor(r)} steps={stepper(r)} state={state} word={r.status === "paused" && r.gate_decision_short_id ? <DecisionWord id={r.gate_decision_short_id} word={state.word} /> : undefined} />
+      <ShipTrack track={stepsFor(r)} steps={stepper(r)} state={state} word={runWord(r, state, ask)} />
       <div className="dpp-refs">
         {r.spawner_conversation_id && !r.stand_in ? <EntityIdPill type="session" id={r.spawner_conversation_id} wide /> : null}
         {r.pr ? <EntityIdPill type="pr" id={`${r.pr.repository || repository}#${r.pr.number}`} idLabel={`#${r.pr.number}`} certain compact bare /> : null}
@@ -155,6 +158,20 @@ function RunCard({ r, repository, tagIn, now, focus, earlier, dropped = false }:
 /** A run waiting on a decision: its words open the decision, where the person answers it. */
 export function DecisionWord({ id, word }: { id: string; word: string }) {
   return <Link href={`/decisions/${id}`} className="dpp-decide" data-deploy-decision={id}>{word}</Link>;
+}
+
+/**
+ * A run's state as something to open when it waits on someone: its own decision; the card its session asked a person
+ * with, when the store holds it; else that session, where the ask is. Plain words otherwise.
+ */
+export function runWord(r: Pick<ShippingRun, "status" | "gate_decision_short_id" | "waiting_on_session">, state: { word: string }, ask: SessionAsk | null) {
+  const wait = r.waiting_on_session;
+  if (wait?.blocked && ask?.open !== false) {
+    if (ask?.short_id) return <DecisionWord id={ask.short_id} word={state.word} />;
+    return <Link href={`/conversation/${wait.conversation_id}`} className="dpp-decide" data-deploy-asking={wait.conversation_id}>{state.word}</Link>;
+  }
+  if (r.status === "paused" && r.gate_decision_short_id) return <DecisionWord id={r.gate_decision_short_id} word={state.word} />;
+  return undefined;
 }
 
 /** An open pull request no run carries: its title opens its page; the stepper reads what GitHub says of it, and the

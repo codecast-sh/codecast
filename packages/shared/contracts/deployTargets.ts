@@ -460,9 +460,12 @@ export type ShippingRun = {
   workflow_label: string | null;
   current_node_id: string | null;
   current_node_label: string | null;
-  node_statuses: Array<{ node_id: string; status: "pending" | "running" | "completed" | "failed" }>;
+  /** `started_at`: when the run last entered the station, which dates the brief a session it waits on was sent. */
+  node_statuses: Array<{ node_id: string; status: "pending" | "running" | "completed" | "failed"; started_at?: number }>;
   pr: { repository: string; number: number; first_head_sha: string; head_sha: string; at: number } | null;
   fail_reason: string | null;
+  /** The session the run waits on at a station it works (its fix), `blocked` while that session waits on a person. */
+  waiting_on_session?: { node_id: string; conversation_id: string; since: number; blocked?: boolean } | null;
   /** The CI station's verdict and the reviewer's, as their stations reported them; the merge once it landed. */
   ci_verdict?: { green: boolean; head_sha: string; at: number } | null;
   /** `head_sha`: the head the reviewer read; a verdict binds to it (verdictOnHead). */
@@ -590,4 +593,22 @@ export function verdictOnHead(judged: string, head: string, rebases: ReadonlyArr
 export function onPrHead<R extends { pr?: { head_sha?: string | null } | null }>(run: R, head: string | null | undefined): R {
   if (!head || !run.pr || run.pr.head_sha === head) return run;
   return { ...run, pr: { ...run.pr, head_sha: head } };
+}
+
+/**
+ * The session a run waits on at its fix has pushed since the round's verdicts: the pull request's head (a run read
+ * through onPrHead) is past the head the reviewer, else CI, judged, by more than a rebase. The run goes on only once that
+ * session's turn ends, so it waits on the session, not on a fix still being written. Never while it waits on a person.
+ */
+export function fixPushed(run: {
+  waiting_on_session?: { blocked?: boolean } | null;
+  pr?: { head_sha?: string | null } | null;
+  review_verdict?: { head_sha?: string | null } | null;
+  ci_verdict?: { head_sha?: string | null } | null;
+  station_rebases?: ReadonlyArray<{ from: string; to: string }> | null;
+}): boolean {
+  const head = run.pr?.head_sha;
+  const judged = run.review_verdict?.head_sha ?? run.ci_verdict?.head_sha;
+  if (!run.waiting_on_session || run.waiting_on_session.blocked || !head || !judged) return false;
+  return !verdictOnHead(judged, head, run.station_rebases);
 }

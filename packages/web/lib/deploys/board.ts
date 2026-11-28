@@ -2,12 +2,13 @@
 // main; on the right, Next deploy and each deploy card, with what each carried listed by session, PR, SHA, task,
 // branch or priority. Every commit is credited to the session that pressed Ship, the same on both columns.
 // Pure: no store, no React.
-import { after, sameSha, splitQueue, upTo, verdictOnHead, type QueueCommit, type QueueGroup, type ShippingRun, type ShippingShipper } from "@codecast/shared/contracts/deployTargets";
+import { after, fixPushed, sameSha, splitQueue, upTo, verdictOnHead, type QueueCommit, type QueueGroup, type ShippingRun, type ShippingShipper } from "@codecast/shared/contracts/deployTargets";
 import type { CheckoutRow } from "@codecast/shared/contracts/checkouts";
 import type { SessionPriorityRef } from "@codecast/shared/contracts/priorities";
 import { entityRoute } from "@codecast/shared/entities";
 import { isOpen, prOfSubject, sessionsOf, type DeploySession, type TeamDeployRow } from "./targets";
 import { ageShort } from "../lineFlow";
+import type { SessionAsk } from "../ship/sessionAsk";
 
 /* ───────────── What the page reads ───────────── */
 
@@ -234,13 +235,19 @@ export function stepper(run: Pick<ShippingRun, "status" | "node_statuses" | "cur
 
 export type RunState = { word: string; tone: "yellow" | "blue" | "red"; detail?: string };
 
-/** What the run is doing now, in words a person reads at a glance. */
-export function runState(run: Pick<ShippingRun, "status" | "fail_reason" | "gate_prompt" | "gate_decision_short_id" | "current_node_label" | "current_node_id" | "node_statuses" | "pr" | "ci_verdict" | "check_verdict" | "review_verdict" | "station_rebases" | "merge" | "track">): RunState {
+/**
+ * What the run is doing now, in words a person reads at a glance. A run whose session asks a person waits on that
+ * person, as the run page says (`ask`: the session's card when the store holds it, sessionAsk.ts; answered since, the
+ * session is fixing again); a session that pushed its fix and works on holds the run until its turn ends.
+ */
+export function runState(run: Pick<ShippingRun, "status" | "fail_reason" | "gate_prompt" | "gate_decision_short_id" | "current_node_label" | "current_node_id" | "node_statuses" | "pr" | "ci_verdict" | "check_verdict" | "review_verdict" | "station_rebases" | "merge" | "track" | "waiting_on_session">, ask: SessionAsk | null = null): RunState {
   if (run.status === "failed") {
     const detail = run.fail_reason?.replace(/^Stopped:\s*/i, "").trim();
     return detail ? { word: "Stopped", tone: "red", detail } : { word: "Stopped", tone: "red" };
   }
+  if (run.waiting_on_session?.blocked && ask?.open !== false) return { word: ask?.mine ? "Waiting on you" : "Waiting for a person", tone: "blue" };
   if (run.status === "paused") return { word: run.gate_prompt || run.gate_decision_short_id ? "Waiting on a decision" : "Paused", tone: "blue" };
+  if (fixPushed(run)) return { word: "Fix pushed", tone: "yellow", detail: "Waiting for its session to finish its turn" };
   const node = run.current_node_label;
   if (node === "Fix findings") {
     // What it fixes: the first step in trouble that names its fixing, else what the reviewer found.

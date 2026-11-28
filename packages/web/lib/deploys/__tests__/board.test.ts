@@ -234,6 +234,26 @@ describe("the run's state in words", () => {
     expect(runState(run("b", { current_node_label: "CI and review" }))).toEqual({ word: "CI and review running", tone: "yellow" });
     expect(runState(run("o", { current_node_label: "Open PR" }))).toEqual({ word: "Open PR", tone: "yellow" });
   });
+  // ct-102514: the session the run waits on pinned blocked on a card it asked; the card read "Fixing review findings".
+  test("a session that asks a person: the run waits on that person, on you when the card is yours", () => {
+    const asking = { current_node_label: "Fix findings", review_verdict: { verdict: "changes", at: 1, head_sha: "h1" }, waiting_on_session: { node_id: "brief", conversation_id: "c1", since: 5, blocked: true } };
+    expect(runState(run("a", asking))).toEqual({ word: "Waiting for a person", tone: "blue" });
+    const ask = { id: "d1", short_id: "sd-1", question: "Merge it?", open: true };
+    expect(runState(run("a", asking), { ...ask, mine: true })).toEqual({ word: "Waiting on you", tone: "blue" });
+    expect(runState(run("a", asking), { ...ask, mine: false })).toEqual({ word: "Waiting for a person", tone: "blue" });
+    // Answered since the wait began: the session is fixing again.
+    expect(runState(run("a", asking), { ...ask, mine: true, open: false }).word).toBe("Fixing review findings");
+  });
+  // ct-102698: the session pushed its fix after the brief and worked on; the run waited for its turn to end.
+  test("a fix pushed past the judged head waits for the session's turn; a rebase is no fix", () => {
+    const fixing = { current_node_label: "Fix findings", review_verdict: { verdict: "changes", at: 1, head_sha: "h1" }, ci_verdict: { green: true, head_sha: "h1", at: 1 }, waiting_on_session: { node_id: "brief", conversation_id: "c1", since: 5 } };
+    const at = (head: string, extra: Record<string, unknown> = {}) => run("f", { ...fixing, pr: { repository: "o/r", number: 1, first_head_sha: "h0", head_sha: head, at: 1 }, ...extra });
+    expect(runState(at("h1")).word).toBe("Fixing review findings");
+    expect(runState(at("h2"))).toEqual({ word: "Fix pushed", tone: "yellow", detail: "Waiting for its session to finish its turn" });
+    expect(runState(at("h2", { station_rebases: [{ from: "h1", to: "h2" }] })).word).toBe("Fixing review findings");
+    // A session waiting on a person says that, pushed or not.
+    expect(runState(at("h2", { waiting_on_session: { ...fixing.waiting_on_session, blocked: true } })).word).toBe("Waiting for a person");
+  });
 });
 
 describe("crediting a commit to the session that pressed Ship", () => {

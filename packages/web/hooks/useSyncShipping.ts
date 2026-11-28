@@ -37,7 +37,7 @@ export function useSyncShipping(workspace: StrictWorkspaceKey | null | undefined
   return { ready: data !== undefined, error };
 }
 
-const runSig = (r: ShippingRunRow) => `${r.status}|${r.updated_at}|${r.current_node_id ?? ""}|${r.node_statuses.map((n) => `${n.node_id}:${n.status}`).join(",")}|${r.pr?.number ?? ""}|${r.task_title ?? ""}|${r.spawner_conversation_id ?? ""}:${r.stand_in ? 1 : 0}|${r.gate_node_id ?? ""}|${r.merge?.sha ?? ""}|${r.ci_verdict?.green ?? ""}|${r.review_verdict?.verdict ?? ""}`;
+const runSig = (r: ShippingRunRow) => `${r.status}|${r.updated_at}|${r.current_node_id ?? ""}|${r.node_statuses.map((n) => `${n.node_id}:${n.status}`).join(",")}|${r.pr?.number ?? ""}|${r.task_title ?? ""}|${r.spawner_conversation_id ?? ""}:${r.stand_in ? 1 : 0}|${r.gate_node_id ?? ""}|${r.merge?.sha ?? ""}|${r.ci_verdict?.green ?? ""}|${r.review_verdict?.verdict ?? ""}|${r.waiting_on_session ? `${r.waiting_on_session.since}:${r.waiting_on_session.blocked ? 1 : 0}` : ""}`;
 const shipperSig = (s: ShippingShipperRow) => `${s.merged_sha ?? ""}|${s.spawner_conversation_id ?? ""}|${s.user_id ?? ""}|${s.stand_in ? 1 : 0}`;
 
 /**

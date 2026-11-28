@@ -35,18 +35,26 @@ export function useJourneyViewer(run: (Pick<JourneyRun, "status" | "gate_decisio
     const m = teamMembersOf(s).find((x: any) => x && String(x._id) === String(to.id));
     return m ? memberDisplayName(m) : null;
   });
-  // The session the run waits on asks a person (it pinned blocked): the card it asked with, read only while it waits.
-  // The subscription is the collection's ref (a store write costs a compare); the scan runs only when it changes.
+  const ask = useSessionAsk(run);
+  return useMemo(() => {
+    if (!sig) return { id, decision: null, ask };
+    const [user_id, holder, passed_to, asked_user_ids] = JSON.parse(sig);
+    return { id, decision: { user_id, holder, passed_to, asked_user_ids }, holder_name: holderName, ask };
+  }, [id, sig, holderName, ask]);
+}
+
+/**
+ * The card the session a run waits on asked a person with (it pinned blocked), as far as the store holds it; null
+ * otherwise. Read only while it waits: the subscription is the collection's ref (a store write costs a compare), the
+ * scan runs only when it changes, and the answer keeps its identity until what it says changes.
+ */
+export function useSessionAsk(run: Parameters<typeof blockedWaitOf>[0]): SessionAsk | null {
+  const id = useInboxStore((s) => (s.currentUser?._id ? String(s.currentUser._id) : null));
   const wait = blockedWaitOf(run);
   const rows = useInboxStore((s) => (wait ? (s.sessionDecisions as Record<string, AskRow>) : null));
   const askSig = useMemo(() => {
     const ask = wait && rows ? sessionAskOf(Object.values(rows), wait, id) : null;
     return ask ? JSON.stringify(ask) : "";
   }, [rows, wait?.conversation_id, wait?.since, wait?.after, id]);
-  return useMemo(() => {
-    const ask: SessionAsk | null = askSig ? JSON.parse(askSig) : null;
-    if (!sig) return { id, decision: null, ask };
-    const [user_id, holder, passed_to, asked_user_ids] = JSON.parse(sig);
-    return { id, decision: { user_id, holder, passed_to, asked_user_ids }, holder_name: holderName, ask };
-  }, [id, sig, holderName, askSig]);
+  return useMemo(() => (askSig ? (JSON.parse(askSig) as SessionAsk) : null), [askSig]);
 }

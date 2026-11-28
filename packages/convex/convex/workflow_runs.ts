@@ -2190,9 +2190,11 @@ export async function shippingRunsCore(ctx: Ctx, userId: Id<"users">, workspace:
       workflow_label: e.workflow_label ?? null,
       current_node_id: run.current_node_id ?? null,
       current_node_label: e.current_node_label ?? null,
-      node_statuses: run.node_statuses.map((n) => ({ node_id: n.node_id, status: n.status })),
+      node_statuses: run.node_statuses.map((n) => ({ node_id: n.node_id, status: n.status, ...(n.started_at != null ? { started_at: n.started_at } : {}) })),
       pr: run.pr ?? null,
       fail_reason: run.fail_reason ?? null,
+      // The session a fix station waits on, and whether it waits on a person (the card says so, and links the ask).
+      waiting_on_session: run.waiting_on_session ? { node_id: run.waiting_on_session.node_id, conversation_id: run.waiting_on_session.conversation_id, since: run.waiting_on_session.since, ...(run.waiting_on_session.blocked ? { blocked: true } : {}) } : null,
       // The stations' own verdicts, which the stepper reads before the station statuses.
       ci_verdict: run.ci_verdict ? { green: run.ci_verdict.green, head_sha: run.ci_verdict.head_sha, at: run.ci_verdict.at } : null,
       review_verdict: run.review_verdict ? { verdict: run.review_verdict.verdict, at: run.review_verdict.at, head_sha: run.review_verdict.head_sha } : null,
