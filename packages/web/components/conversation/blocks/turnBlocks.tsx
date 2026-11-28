@@ -60,6 +60,7 @@ import { RewindReview } from "../RewindToHere";
 import { useCanRewindFiles } from "../../../hooks/useCanRewindFiles";
 import { requestRewind } from "../../../lib/rewindFiles";
 import { AskUserQuestionBlock, ImageBlock, MonitorBlock, PlanModeBlock, ThinkingBlock } from "./interactiveBlocks";
+import { hideMarkerPoints, parseImageNotes } from "../../../lib/imageNotes";
 import { useImageSrc } from "../../../hooks/useImageSrc";
 import { FooterIconButton, FullscreenIcon, UserIcon } from "./shared";
 import { ModernReceiptWords } from "./ModernReceipt";
@@ -211,13 +212,15 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
   const contentRef = useRef<HTMLDivElement>(null);
   const [contentExpanded, setContentExpanded] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
+  // The notes this message pinned on its pictures, by [Image N]: each shows on hovering its marker.
+  const imageNotes = useMemo(() => parseImageNotes(content), [content]);
   // Rewind needs the fork that continues from here, so it is offered where forking is.
   const canRewind = useCanRewindFiles(conversationId, timestamp) && !!onForkFromMessage && !!messageUuid && !isPending && !isQueued;
   // The plan step's request id while the review is open: asked on the press, not on mount.
   const [rewinding, setRewinding] = useState<string | null>(null);
   const openRewind = () => { if (conversationId) setRewinding(requestRewind(conversationId, "plan", { message_ts: timestamp })); };
   // A mention's injected context is for the agent; the person sees what they typed.
-  const rawContent = stripMentionContext(stripPastedContent(content))
+  const rawContent = hideMarkerPoints(stripMentionContext(stripPastedContent(content)))
     .replace(/<task-notification>[\s\S]*?<\/task-notification>/g, "")
     .replace(/\[Image[:\s][^\]]*\]/gi, "")
     .replace(/<image\b[^>]*\/?>\s*(?:<\/image>)?/gi, "")
@@ -669,7 +672,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
       )}
       {!effectivelyCollapsed && images && images.filter(img => !img.tool_use_id).length > 0 && (
         <div className={`${indent} mt-2`}>
-          {images.filter(img => !img.tool_use_id).map((img, i) => <ImageBlock key={i} image={img} />)}
+          {images.filter(img => !img.tool_use_id).map((img, i) => <ImageBlock key={i} image={img} notes={imageNotes.get(i + 1)} />)}
         </div>
       )}
       {isTruncated && (

@@ -122,7 +122,7 @@ test("a note pinned on an attached picture rides the gate send as [Image N] at i
   const realFetch = globalThis.fetch;
   globalThis.fetch = (async () => { throw new Error("no blob here"); }) as unknown as typeof fetch;
   try {
-    expect(await submitGated("claude_code")).toEqual(["> [Image 1] at marker 1\n\nthis is cut off"]);
+    expect(await submitGated("claude_code")).toEqual(["> [Image 1] at marker 1 (50% from the left, 50% from the top)\n\nthis is cut off"]);
   } finally {
     globalThis.fetch = realFetch;
   }
