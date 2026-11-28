@@ -147,7 +147,7 @@ export function formatQuotedReply(quote: string, body?: string, verdict?: Review
 export function imageQuoteText(c: Pick<PendingComment, "quote" | "image">, attachmentNumber?: number, marker?: number): string {
   if (!c.image) return c.quote;
   const head = attachmentNumber ? `[Image ${attachmentNumber}]` : c.image.href ? `![image](${c.image.href})` : "[image]";
-  const at = !c.image.point ? "" : attachmentNumber && marker ? ` at marker ${marker} (${pointPercents(c.image.point)})` : ` ${describePoint(c.image)}`;
+  const at = !c.image.point ? "" : attachmentNumber && marker ? ` at marker ${marker} (${pointPercents(c.image.point, 1)})` : ` ${describePoint(c.image)}`;
   return c.quote ? `${head}${at}\n${c.quote}` : `${head}${at}`;
 }
 
@@ -168,9 +168,13 @@ export function pinNumbers(comments: readonly Pick<PendingComment, "id" | "image
   return numbers;
 }
 
-// "26% from the left, 26% from the top".
-function pointPercents(point: { x: number; y: number }): string {
-  return `${Math.round(point.x * 100)}% from the left, ${Math.round(point.y * 100)}% from the top`;
+// "26% from the left, 26% from the top". A marker's point keeps a decimal:
+// the hover area over it decides which side of the point the badge was drawn
+// on (lib/markedImage markerLayout), and a whole percent near the edge can
+// decide it the other way.
+function pointPercents(point: { x: number; y: number }, decimals = 0): string {
+  const pct = (v: number) => Number((v * 100).toFixed(decimals));
+  return `${pct(point.x)}% from the left, ${pct(point.y)}% from the top`;
 }
 
 // "at x=412, y=230 of 1600×900 px (26% from the left, 26% from the top)", or
