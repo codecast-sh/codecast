@@ -54,6 +54,7 @@ const { createRoot } = await import("react-dom/client");
 const { MemoryRouter } = await import("react-router");
 const { useInboxStore } = await import("../../../store/inboxStore");
 const { DeploysPage } = await import("../DeploysPage");
+const { stampDeploysLive } = await import("../../../hooks/useDeploysCacheFresh");
 
 afterAll(() => {
   closeDomWindow(dom);
@@ -89,7 +90,12 @@ const runs = [run("r-sit", "/code/sit", NOW - 3 * H, "Tidy the timer"), run("r-t
 const checkout = (repo: string) => ({ _id: `co-${repo}`, workspace: WS, device_id: "mac", path: `/code/${repo}`, repository: `jasonbenn/${repo}`, branch: "main", upstream: "origin/main", reported_at: NOW, level: { state: "ok" } });
 const byId = (rows: Array<{ _id: string }>) => Object.fromEntries(rows.map((r) => [r._id, r]));
 
-function seed({ personal = true, rows = true, saved }: { personal?: boolean; rows?: boolean; saved?: Record<string, string> } = {}) {
+function seed({ personal = true, rows = true, saved, liveAt = Date.now() }: { personal?: boolean; rows?: boolean; saved?: Record<string, string>; liveAt?: number | null } = {}) {
+  // The cache paints at once only when a Deploys page held these feeds live moments ago (useDeploysCacheFresh).
+  for (const ws of [WS, `team:${TEAM}`]) {
+    if (liveAt == null) window.localStorage.removeItem(`codecast:deploys-live:${ws}`);
+    else stampDeploysLive(ws, liveAt);
+  }
   const s = useInboxStore.getState() as any;
   useInboxStore.setState({
     currentUser: { _id: ME, name: "You" },
@@ -241,6 +247,24 @@ test("a team's page asks by team_id and draws its targets as before, with Person
   const picker = host.querySelector("[data-deploys-team]") as HTMLSelectElement;
   expect([...picker.options].map((o) => `${o.value}:${o.textContent}`)).toEqual([`${WS}:Personal`, `team:${TEAM}:Codecast`]);
   expect(picker.value).toBe(`team:${TEAM}`);
+  unmount();
+});
+
+// pl-1077 polish 5: switching to a workspace opened hours ago painted its old counts, live deploy and merged runs for
+// the seconds its first answer took.
+test("a cache no page held live recently reads until the feeds answer: no targets, no count, no runs", () => {
+  for (const liveAt of [null, NOW - 3 * H]) {
+    seed({ personal: false, liveAt });
+    const { host, unmount } = mount();
+    expect(host.querySelector(".dpp[aria-busy]")).not.toBeNull();
+    expect(host.querySelector("[data-deploy-target]")).toBeNull();
+    expect(host.querySelector("[data-deploy-run]")).toBeNull();
+    unmount();
+  }
+  // Held live a minute ago: the cache paints at once.
+  seed({ personal: false, liveAt: Date.now() - 60_000 });
+  const { host, unmount } = mount();
+  expect(host.querySelector("[data-deploy-target]")).not.toBeNull();
   unmount();
 });
 

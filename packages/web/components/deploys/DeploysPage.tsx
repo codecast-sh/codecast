@@ -26,6 +26,7 @@ import { FOCUS_PARAMS, PERSONAL_PROJECTS_FILTER, focusRef, focusRepository, focu
 import { useDeployReach } from "../../hooks/useDeployReach";
 import { focusTargets } from "../../lib/deploys/spot";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
+import { useDeploysCacheFresh } from "../../hooks/useDeploysCacheFresh";
 import { rememberFilters } from "../../lib/rememberedFilters";
 import { DeploysBoard } from "./DeploysBoard";
 import { RepoFace } from "./RepoFace";
@@ -84,7 +85,11 @@ export function DeploysPage({ initialTarget, initialTeam, initialDeploy, initial
   const meLogin = useInboxStore((s) => (s.currentUser as { github_username?: string } | null)?.github_username ?? null);
   // Shipping paints from the store; a run whose PR has not opened finds its repository by the checkout it runs in.
   // Web goes live before the backend that answers it: a failed read with nothing stored reads as unavailable.
-  const shipping = useShipping(workspace);
+  const fed = useShipping(workspace);
+  // A cache paints before the feeds answer only when this browser held them live moments ago (useDeploysCacheFresh):
+  // an older one holds counts, a live deploy and runs that have moved on since, so the page reads until they answer.
+  const fresh = useDeploysCacheFresh(workspace, ready && fed.live, now);
+  const shipping = fed.live || fresh ? fed : { ...fed, shipping: null };
   // Each deploy card shown reads its own commits' lines from the store; the board says which are shown, and one feeder
   // per card keeps them current.
   const [lineIds, setLineIds] = useState<string[]>([]);
@@ -153,11 +158,11 @@ export function DeploysPage({ initialTarget, initialTeam, initialDeploy, initial
   // `dpp-frame` is the page's own width (deploys.css): it decides one column or two, never the window.
   // Classic and Minimal: the page's name at the start of the targets row.
   // Modern: the page header over the targets and the target.
-  const header = <PageHeader legacy={null} title="Deploys" count={(personal ? projects.length : allTargets.length) || null} actions={teamPicker} />;
+  const header = <PageHeader legacy={null} title="Deploys" count={ready || fresh ? (personal ? projects.length : allTargets.length) || null : null} actions={teamPicker} />;
   const railTitle = !modern && <div className="dpp-title-row"><h1 className="dpp-title">Deploys</h1>{teamPicker}</div>;
   const frame = modern ? "dpp-frame dpp-frame--headed" : "dpp-frame";
   if (personal) {
-    if (!ready && projects.length === 0) return <div className={frame}>{header}<div className="dpp" aria-busy><nav className="dpp-targets">{railTitle}</nav><div className="dpp-main dpp-cold" /></div></div>;
+    if (!ready && (!fresh || projects.length === 0)) return <div className={frame}>{header}<div className="dpp" aria-busy><nav className="dpp-targets">{railTitle}</nav><div className="dpp-main dpp-cold" /></div></div>;
     if (projects.length === 0) return <div className={frame}>{header}<div className="dpp" data-deploys-none><nav className="dpp-targets">{railTitle}</nav><div className="dpp-empty">No deploys yet</div></div></div>;
     const drawn = shown.flatMap((x) => x.targets);
     return (
@@ -196,7 +201,7 @@ export function DeploysPage({ initialTarget, initialTeam, initialDeploy, initial
       </div>
     );
   }
-  if (!ready && allTargets.length === 0) return <div className={frame}>{header}<div className="dpp" aria-busy><nav className="dpp-targets">{railTitle}</nav><div className="dpp-main dpp-cold" /></div></div>;
+  if (!ready && (!fresh || allTargets.length === 0)) return <div className={frame}>{header}<div className="dpp" aria-busy><nav className="dpp-targets">{railTitle}</nav><div className="dpp-main dpp-cold" /></div></div>;
   if (allTargets.length === 0) return <div className={frame}>{header}<div className="dpp" data-deploys-none><nav className="dpp-targets">{railTitle}</nav><div className="dpp-empty">No deploys yet</div></div></div>;
 
   return (
