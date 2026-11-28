@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { canAnswer, deployHold, insideWords, journeyOf, journeyStages, targetsFromLine, verdictsOf } from "../journey";
-import { gateWaitWords, whoWords, journeyWords, readableWhy, sentBackWords, waitWords, wholeWhy } from "../journeyWords";
+import { gateWaitWords, whoWords, journeyWords, outputSummary, readableWhy, sentBackWords, waitWords, wholeWhy } from "../journeyWords";
 import { approvalOf, approvalWords, shipConfirms } from "../approval";
 import { landedSha } from "../runRecord";
 import { sessionAskOf } from "../sessionAsk";
@@ -712,5 +712,30 @@ describe("station results", () => {
   test("a flow whose stations report no result reads as it did", () => {
     const j = journeyOf(change, run({ status: "completed", current_node_id: "exit", merge: { sha: "4a6e413b2c" }, node_statuses: [...MERGED, st("deploy__wait", "completed", 16, { result_preview: "Live: 4a6e413b2c on web dp-12." }), st("deploy__live", "completed", 17, { result_preview: '{"exit": "live"}' })] }));
     expect(j.stages.every((s) => s.state === "done" && !s.note && !s.left)).toBe(true);
+  });
+});
+
+// ct-102514: the Local CI stage panel showed a cut log whose tail was a machine temp path.
+describe("a script step's long output reads as how it ended and why", () => {
+  const LOG = [
+    "201 paths changed since f8cff0a1f",
+    "narrowed: packages/convex runs 11 of the 815 test files the change reaches (hub files' deeper importers wait for --full)",
+    "narrowed: packages/web runs 485 of the",
+    "… 3224 characters cut …",
+    "e",
+    "narrowed: packages/web ran 485 of 1210 reached test files; --full runs the rest",
+    "red in 709s; logs in /var/folders/ab/cdefgh/T/ci-local-XyZ123",
+    "Still red after the session's turn on it: the pull request opens, and CI judges it against main.",
+  ].join("\n");
+  test("the ending lines, the temp path off, the whole log behind its control", () => {
+    expect(outputSummary(LOG)).toEqual({ head: "red in 709s\nStill red after the session's turn on it: the pull request opens, and CI judges it against main.", full: LOG });
+  });
+  test("an error earlier in the output leads", () => {
+    const out = ["building", "error: EXPO_TOKEN not set", "at run (x.ts:1:2)", "step 3", "step 4", "exited 1"].join("\n");
+    expect(outputSummary(out).head).toBe("error: EXPO_TOKEN not set\nexited 1");
+  });
+  test("short output reads whole; a temp path in it never does", () => {
+    expect(outputSummary("CI green on #311")).toEqual({ head: "CI green on #311", full: null });
+    expect(outputSummary("green in 12s; logs in /tmp/ci-local-1")).toEqual({ head: "green in 12s", full: "green in 12s; logs in /tmp/ci-local-1" });
   });
 });

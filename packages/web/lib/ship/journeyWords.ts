@@ -4,6 +4,7 @@
 import { jsonOf } from "./personalRound";
 import type { Journey, JourneyStage, JourneyWait, StageWho } from "./journey";
 import { holdWords, whoWords } from "@codecast/shared/contracts/shipRun";
+import { deployCauseLine } from "@codecast/shared/contracts/lineDeploy";
 import type { SessionAsk } from "./sessionAsk";
 
 /** A run that stopped on its session's ask, in the past tense: the run ended, so nobody waits on it any more. Older
@@ -117,4 +118,25 @@ export function journeyWords(j: Journey | null): { words: string; tone: JourneyT
     case "stopped": case "failed": return { words: stopWords(n), tone: "bad" };
     default: return { words: "Ship", tone: "idle" };
   }
+}
+
+/** A machine's temp directory (a log a script left there), with the words that point at it: never a headline. */
+const TEMP_PATH = /[;,]?\s*(?:(?:full\s+)?(?:logs?|output)\s+(?:in|at)\s+)?(?:\/private)?\/(?:var\/folders|tmp)\/\S+/gi;
+const CUT = /characters cut/i;
+
+/**
+ * A script step's output as a reader takes it in: short output whole; a long one (a cut log, many lines) as its last two
+ * lines, which say how it ended and why, with the line naming an error put first when it sits earlier, temp paths
+ * taken off. `full`: the whole output, for a control that opens it.
+ */
+export function outputSummary(text: string): { head: string; full: string | null } {
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const long = lines.length > 3 || text.length > 320 || CUT.test(text);
+  if (!long && text.replace(TEMP_PATH, "") === text) return { head: text, full: null };
+  const said = lines.filter((l) => !CUT.test(l)).map((l) => l.replace(TEMP_PATH, "").trim()).filter((l) => l.length > 1);
+  if (!long) return { head: said.join("\n"), full: text };
+  const tail = said.slice(-2);
+  const cause = deployCauseLine(said.join("\n"));
+  const head = cause && !tail.includes(cause) ? [cause, tail[tail.length - 1]] : tail;
+  return { head: head.join("\n"), full: text };
 }

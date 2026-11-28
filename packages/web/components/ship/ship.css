@@ -187,6 +187,10 @@
 .sj-detail li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; font-size: 12px; }
 .sj-detail b { font-weight: 600; }
 .sj-detail p { flex-basis: 100%; margin: 0 0 0 16px; color: var(--sol-text-muted); line-height: 1.45; white-space: pre-line; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.sj-detail-full { flex-basis: 100%; margin-left: 16px; min-width: 0; }
+.sj-detail-full summary { display: inline-flex; align-items: center; min-height: 44px; cursor: pointer; color: var(--sol-text-dim); font-size: 12px; }
+.sj-detail-full summary:hover { color: var(--sol-text-muted); }
+.sj-detail-full pre { margin: 0; max-height: 320px; overflow: auto; padding: 8px; border-radius: 6px; background: var(--sol-bg-alt); color: var(--sol-text-muted); font-size: 11px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
 .sj-detail-mark { width: 8px; height: 8px; border-radius: 999px; background: var(--sol-text-dim); align-self: center; }
 .sj-detail-mark[data-status="completed"] { background: var(--sj-ok); }
 .sj-detail-mark[data-status="failed"] { background: var(--sj-bad); }
