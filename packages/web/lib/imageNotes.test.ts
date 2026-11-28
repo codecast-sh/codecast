@@ -39,6 +39,18 @@ describe("parseImageNotes", () => {
   });
 });
 
+test("a point near the edge reads back close enough to put the hover area on the badge's side", () => {
+  const text = formatPendingComments([pin("a", "blob:one", 0.9294, 0.0731, "edge")], new Map([["a", 1]]), new Map([["a", 1]]));
+  expect(text).toStartWith("> [Image 1] at marker 1 (92.9% from the left, 7.3% from the top)");
+  const back = parseImageNotes(text).get(1)![0].point!;
+  for (const [w, h] of [[1000, 1000], [1600, 900], [400, 2000]]) {
+    const drawn = markerLayout({ x: 0.9294, y: 0.0731 }, w, h);
+    const hover = markerLayout(back, w, h);
+    expect([hover.dx, hover.dy]).toEqual([drawn.dx, drawn.dy]);
+    expect(Math.abs(hover.bx - drawn.bx)).toBeLessThan(drawn.r);
+  }
+});
+
 describe("messageImageNotes", () => {
   const message = {
     content: "> [Image 2] at marker 1 (50% from the left, 50% from the top)\n\nthis one",

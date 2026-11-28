@@ -747,7 +747,7 @@ export function ImageBlock({ image, notes }: { image: ImageData; notes?: readonl
           <img
             src={src}
             alt={image.tool_use_id ? "Image from a tool" : "Attached image"}
-            className="w-full"
+            className="block w-full"
             style={loaded ? undefined : { width: 0, height: 0, overflow: 'hidden', position: 'absolute' }}
             onLoad={(e) => { markSrcDecoded(src); setLoaded(true); setNatural({ width: e.currentTarget.naturalWidth, height: e.currentTarget.naturalHeight }); }}
             onError={() => setErrored(true)}
