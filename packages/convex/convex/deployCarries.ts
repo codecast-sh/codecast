@@ -290,9 +290,9 @@ export function liveRunPatch(run: StoppedRun, prefix: string, to: { live: string
 }
 
 /**
- * A deploy went live: every run of its workspace that stopped at Deploy (failed or stuck, its change merged), or whose
- * pull request was merged outside it (mergedOutside), and whose change is now live on every target it touches is over
- * at Live, as its wait would have ended had it seen this deploy. Its task settles as a completed run's does, the
+ * A deploy went live: every run on its repository, in any workspace, that stopped at Deploy (failed or stuck, its change
+ * merged), or whose pull request was merged outside it (mergedOutside), and whose change is now live on every target it
+ * touches that its owner can read is over at Live, as its wait would have ended had it seen this deploy. Its task settles as a completed run's does, the
  * blocker its stop left on the task goes, and the session that heard it stop hears that it is over, once. A run that
  * stopped anywhere else, or whose change some target still lacks, stays as it is. Returns the runs completed.
  */
