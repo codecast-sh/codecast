@@ -66,7 +66,7 @@ const BINARIES: Record<string, string> = {
 // constant bumped by the release lagged every release by a commit and a
 // Railway build (1.1.119 downloaded as 1.1.118, 2026-09-24). The constant is
 // only the fallback when the feed cannot be read.
-const MAC_DMG_VERSION = "1.1.134";
+const MAC_DMG_VERSION = "1.1.135";
 /** The latest version a desktop feed under desktop/ names, read at most once a
  * minute; `fallback` until the feed is read. latest-mac.yml is the Mac feed,
  * latest.yml the Windows one (electron-updater's names). */
