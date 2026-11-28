@@ -45,6 +45,12 @@ export const workflowNodeValidator = v.object({
   segment: v.optional(v.string()),
   segment_exit: v.optional(v.union(v.literal("done"), v.literal("stop"))),
   fold: v.optional(v.boolean()),
+  // How a run ends at an exit (cli types.ts): a stop's words, a stop about the machine, words that say it all, and an
+  // end that keeps the change's session. A runner reading this copy fails a stop exit as a run of the source does.
+  stop: v.optional(v.string()),
+  machine: v.optional(v.boolean()),
+  whole_stop: v.optional(v.boolean()),
+  keep_subject: v.optional(v.boolean()),
 });
 
 export const workflowEdgeValidator = v.object({

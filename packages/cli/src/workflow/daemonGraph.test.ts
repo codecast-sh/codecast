@@ -3,6 +3,8 @@
 // template by the run's name.
 import { describe, expect, test } from "bun:test";
 import { daemonRunGraph, graphForDaemonRun, publishDaemonGraph } from "./daemonGraph";
+import { graphEdgesPayload, graphNodesPayload } from "./graphPayload";
+import { parseWorkflowSource } from "./parser";
 
 const EMPTY = { name: "workflow", goal: "Ship the thing", nodes: [], edges: [] };
 
@@ -22,6 +24,20 @@ describe("graphForDaemonRun", () => {
     expect(graph!.goal).toBe("g");
     expect([...graph!.nodes.keys()]).toEqual(["start", "exit"]);
     expect(graph!.edges).toEqual(wf.edges);
+  });
+
+  test("a graph read from its stored node copy ends a stop exit as the source does: failed, with its words", () => {
+    // ct-102797 ran from this copy, which kept no stop, and ended completed at Deploy failed under a green dot.
+    const src = parseWorkflowSource(`digraph g {
+      start [shape=Mdiamond]
+      exit [shape=Msquare]
+      failed [shape=Msquare, stop="The deploy failed", machine=true, whole_stop=true, keep_subject=true]
+      start -> exit
+      start -> failed [condition="outcome = failure"]
+    }`);
+    const wf = { name: "g", nodes: graphNodesPayload(src), edges: graphEdgesPayload(src) };
+    const failed = graphForDaemonRun({ workflow_name: "g", goal_override: null, project_path: null }, wf)!.nodes.get("failed")!;
+    expect(failed).toMatchObject({ stop: "The deploy failed", machine: true, whole_stop: true, keep_subject: true });
   });
 
   test("the graph stack (the-line.md L4) comes from the row, else from the stored source", () => {

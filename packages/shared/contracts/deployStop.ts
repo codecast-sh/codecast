@@ -28,9 +28,9 @@ type StoppedRun = {
 
 /**
  * The Deploy segment a run stopped in (`deploy`, `direct_deploy`): its change merged, its wait failed, and the run
- * ended at the segment's Deploy failed or Deploy stuck. A run that reached that exit reads as completed when its runner
- * lost the exit's stop (a graph read from the stored node copy, which keeps no stop): it stopped all the same. Null for
- * a run that stopped anywhere else.
+ * ended at the segment's Deploy failed or Deploy stuck. A run that reached that exit before the stored node copy kept
+ * an exit's stop (cli graphPayload.ts) ended completed there, its runner having read that copy: it stopped all the same.
+ * Null for a run that stopped anywhere else.
  */
 export function deployStopOf(run: StoppedRun): string | null {
   if ((run.status !== "failed" && run.status !== "completed") || !run.merge?.sha) return null;

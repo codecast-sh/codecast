@@ -37,6 +37,12 @@ export function graphNodesPayload(graph: WorkflowGraph) {
     ...(n.segment ? { segment: n.segment } : {}),
     ...(n.segment_exit ? { segment_exit: n.segment_exit } : {}),
     ...(n.fold ? { fold: true } : {}),
+    // How a run ends at an exit: a stop fails it with its words, as a run of the source would (runner.ts). Without
+    // these a runner reading this copy ended every stop exit completed (ct-102797's Deploy failed under a green dot).
+    ...(n.stop ? { stop: n.stop } : {}),
+    ...(n.machine ? { machine: true } : {}),
+    ...(n.whole_stop ? { whole_stop: true } : {}),
+    ...(n.keep_subject ? { keep_subject: true } : {}),
   }));
 }
 
