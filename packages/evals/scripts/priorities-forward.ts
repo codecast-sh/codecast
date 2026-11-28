@@ -195,7 +195,7 @@ export function asProduced(golden: Golden): Produced[] {
   }));
 }
 
-const DIFF_SYSTEM = `You study how an incrementally evolved list of one person's priorities differs from an authoritative list made at the same moment by reading their whole history up to it. A priority is an outcome the person drives at for a day to a month, with a few critical milestones and the work sessions that serve it.
+const DIFF_SYSTEM = `You study how an incrementally evolved list of one person's priorities differs from an authoritative list made at the same moment by reading their whole history up to it. A priority is an outcome that holds a real share of the person's attention for days to weeks, with a few critical milestones and the work sessions that serve it.
 
 The incremental list comes from a program that runs every hour or two and sees only what changed since its last run, plus its own list so far. The authoritative list is a careful reader's view with everything up to the moment in front of it. It is a strong reference, not the truth: when the incremental list holds something the reader left out, or names it better, say so.
 
