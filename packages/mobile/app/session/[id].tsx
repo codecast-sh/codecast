@@ -205,6 +205,9 @@ type ImageData = {
   url?: string;
   // The local file an optimistic attachment paints while it uploads.
   preview_url?: string;
+  // A gallery entry's message and time, which a comment pinned on it names.
+  message_id?: string;
+  timestamp?: number;
 };
 
 type Message = {
@@ -3237,11 +3240,11 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
       serverSessionImages ?? [],
       extractSessionImages(allMessages, isTrustedImageSrc),
     );
-    return entries.map((e): ImageData =>
-      e.storage_id
-        ? { media_type: "image/png", storage_id: e.storage_id }
-        : { media_type: "image", url: e.src }
-    );
+    return entries.map((e): ImageData => ({
+      ...(e.storage_id ? { media_type: "image/png", storage_id: e.storage_id } : { media_type: "image", url: e.src }),
+      message_id: e.message_id,
+      timestamp: e.timestamp,
+    }));
   }, [allMessages, serverSessionImages]);
 
   // Sweep a pre-feature history into conversation_images once, so a thread whose
@@ -3267,10 +3270,10 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   const [galleryVisible, setGalleryVisible] = useState(false);
   const [galleryIndex, setGalleryIndex] = useState(0);
   // A spot on a picture takes a comment into the next message sent here.
-  const galleryComments = useMemo(() => (isReal ? {
+  const galleryComments = useMemo(() => (isReal && conversation?.is_own ? {
     conversationId: id as string,
-    pictureOf: (img: ImageData) => ({ storageId: img.storage_id, src: img.url }),
-  } : undefined), [isReal, id]);
+    pictureOf: (img: ImageData) => ({ storageId: img.storage_id, src: img.url, messageId: img.message_id, timestamp: img.timestamp }),
+  } : undefined), [isReal, id, conversation?.is_own]);
   // Read through a ref so every bubble keeps one handler as images arrive.
   const allSessionImagesRef = useRef(allSessionImages);
   allSessionImagesRef.current = allSessionImages;

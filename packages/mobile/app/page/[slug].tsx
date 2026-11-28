@@ -127,7 +127,9 @@ export default function PageScreen() {
   const webview = useRef<{ injectJavaScript: (js: string) => void } | null>(null);
   const fromSession = useOpenedFromSession();
   const sessionTitle = useInboxStore((st: any) => (fromSession ? (st.sessions?.[fromSession]?.title as string | undefined) : undefined));
-  const promptComments = usePageComments(webview, slug ?? '', info?.title || page?.title || 'Published page', slug ? pageShareUrl(slug) : '', slug ? fromSession : null);
+  // Only where this person can send there, or the comments would never go out.
+  const canSend = useInboxStore((st: any) => (fromSession ? st.conversations?.[fromSession]?.is_own === true : false));
+  const promptComments = usePageComments(webview, slug ?? '', info?.title || page?.title || 'Published page', slug ? pageShareUrl(slug) : '', slug && canSend ? fromSession : null);
 
   if (!slug) return <ObjectMissing what="Page" loading={false} />;
   const shareUrl = pageShareUrl(slug);

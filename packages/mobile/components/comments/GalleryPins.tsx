@@ -14,7 +14,8 @@ import { pinNumbers } from '@codecast/web/lib/quoteFormat';
 import { Text as RNText } from '@/components/Themed';
 import { openCommentEditor } from './CommentEditor';
 
-export type GalleryPicture = { storageId?: string; src?: string };
+/** A gallery picture: its stored file or address, and the message it came in. */
+export type GalleryPicture = { storageId?: string; src?: string; messageId?: string; timestamp?: number };
 type Size = { width: number; height: number };
 
 /** The picture's place on the page: drawn `contain`-fitted and centered. */
@@ -73,9 +74,12 @@ export function GalleryPins({ conversationId, picture, uri, page, pinMode, accen
     const id = addImagePin(conversationId, {
       src: uri ?? picture.src ?? '',
       storageId: picture.storageId,
+      // A picture with no stored file is named by its address, never a data: blob.
+      href: picture.src && /^https?:/.test(picture.src) ? picture.src : undefined,
       width: natural?.width,
       height: natural?.height,
-      messageId: messageWith(conversationId, picture.storageId),
+      messageId: picture.messageId ?? messageWith(conversationId, picture.storageId),
+      timestamp: picture.timestamp,
     }, { x: round(x), y: round(y) });
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     onPinned();
