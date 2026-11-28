@@ -866,8 +866,9 @@ check.
 A CLI release forces nothing when it goes live: the floor moves only to a
 release that has been live 8h with no rollback (sd-4745), so a bad build
 never reaches every daemon. Codecast's `cli` target has no `finish`. Once a
-release has soaked, the Release Captain runs `cast force-update <version>
---deploy dp-N` (releaseFinish.ts). Forcing restarts every daemon, so it is
+release has soaked above the workspace's floor, `cast release sweep` lists it
+(`soaked`), which wakes the Release Captain's hourly check, and the captain
+runs `cast force-update <version> --deploy dp-N` (releaseFinish.ts). Forcing restarts every daemon, so it is
 worth it only when the daemon changed: the command compares the daemon build id
 (daemonBuildIdCompute) of the tree at the deploy's sha with the one at the
 release the team's machines were last forced onto: the live deploy of the

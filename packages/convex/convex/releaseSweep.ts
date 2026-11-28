@@ -1,7 +1,7 @@
 // The release sweep (pl-1146 piece 7): the exceptions a workspace's Release
 // Captain acts on, in one read, so its hourly check is gated on there being
 // a new one (`cast release sweep --new` as the routine's `state` precheck)
-// and spends nothing on a quiet hour or on exceptions it already saw. Five kinds, each read the way the surface that owns
+// and spends nothing on a quiet hour or on exceptions it already saw. Six kinds, each read the way the surface that owns
 // it reads it:
 //   - open run-stop incidents (flowStops.openFlowStopIncidents);
 //   - deploy targets holding a commit merged longer ago than the target's
@@ -15,7 +15,10 @@
 //     more (teamCliFloor.teamFleet), for a caller who may read the fleet;
 //   - sessions whose change is live everywhere and that nothing keeps, yet are
 //     still in the inbox (retireOnLive.liveRetireRefusal answers null), in a
-//     workspace with the `retire_on_live` feature on.
+//     workspace with the `retire_on_live` feature on;
+//   - the live release of codecast's own CLI, once it has soaked SOAK_MS with
+//     no rollback and the workspace's floor is still below it (sd-4745: only
+//     the Release Captain raises the floor, with `cast force-update`).
 // Reads only. A public action runs each kind in queries of its own, so no kind
 // spends another's read budget, and the heavy reads are cut finer still: a
 // `commits` row carries its files' patches (tens of KB each on a busy repo),
@@ -37,7 +40,8 @@ import { liveRetireRefusal } from "./retireOnLive";
 import { workspaceKeyHasFeature } from "./lib/teamFeatureGuard";
 import { isTerminalTaskStatus } from "@codecast/shared/tasks";
 import { commitTouchesTarget, deployDeadlineMs } from "@codecast/shared/contracts/deployTargets";
-import { liveDeployOf } from "@codecast/shared/contracts/deploys";
+import { CLI_RELEASE_REPOSITORY, DEPLOY_SHORT_ID_RE, liveDeployOf } from "@codecast/shared/contracts/deploys";
+import { getSystemConfig, highestFloor } from "./systemConfig";
 import { isBelowMinimum } from "@platform/flags";
 
 const MINUTE = 60_000;
@@ -61,6 +65,8 @@ export const RETIRE_SESSIONS_MAX = 12;
 export const RETIRE_JUDGMENTS_MAX = 40;
 /** A target with no deploy open and none in a week is dormant (deployReach): it ships rarely and holds nothing up. */
 const DORMANT_MS = 7 * DAY;
+/** A CLI release live this long with no rollback may become the floor (sd-4745). */
+export const SOAK_MS = 8 * 3600_000;
 
 // What the sweep answers is an agent's input (`--new` puts it in the message that wakes @release), so it carries only
 // what the server made or checked: ids, counts, shas, versions, times, enum states, and names that pass `safeName`.
@@ -71,14 +77,16 @@ export type LateTarget = { target: string; repository: string; commits: number; 
 export type FailedRun = { run_id: Id<"workflow_runs">; task_short_id: string; flow: string; station: string | null; failed_at: number };
 export type Laggard = { device: Id<"devices">; device_id: string | null; own: boolean; owner_id: Id<"users">; cli_version: string | null; floor: string; floor_set_at: number | null };
 export type Unretired = { conversation_id: Id<"conversations">; short_id: string };
-export const SWEEP_KINDS = ["incidents", "late_targets", "failed_runs", "laggards", "unretired"] as const;
+/** `floor`: the workspace's effective floor, null when none is set. */
+export type Soaked = { short_id: string; version: string; live_at: number; floor: string | null };
+export const SWEEP_KINDS = ["incidents", "late_targets", "failed_runs", "laggards", "unretired", "soaked"] as const;
 export type SweepKind = (typeof SWEEP_KINDS)[number];
 /** `failed_kinds`: the kinds whose read failed this time, each listed empty, so one kind's failure never fails the rest.
  *  `unretired_skipped`: the sessions whose retirement judgment failed this time, left out of `unretired`.
  *  `unretired_more` / `failed_runs_more`: the list stopped at its cap (or its judging budget) with more left unread.
  *  `laggards` is empty for a caller who may not read the team's fleet (mayForceTeamFleet). */
 export type ReleaseSweep = {
-  workspace: string; checked_at: number; incidents: SweepIncident[]; late_targets: LateTarget[]; failed_runs: FailedRun[]; laggards: Laggard[]; unretired: Unretired[];
+  workspace: string; checked_at: number; incidents: SweepIncident[]; late_targets: LateTarget[]; failed_runs: FailedRun[]; laggards: Laggard[]; unretired: Unretired[]; soaked: Soaked[];
   unretired_skipped: number; unretired_more: boolean; failed_runs_more: boolean; failed_kinds: SweepKind[];
 };
 
@@ -322,6 +330,25 @@ export const laggardsOf = internalQuery({
   handler: async (ctx, { workspace, viewer, now, from_session }): Promise<Laggard[]> => await laggards(ctx, workspace, viewer, now, from_session),
 });
 
+/** The live release of codecast's own CLI, at most one, once it has soaked and the workspace's floor is still below
+ *  it: the Release Captain raises the floor to it with `cast force-update` (releaseFinish.ts). */
+export const soakedOf = internalQuery({
+  args: { workspace: v.string(), now: v.number() },
+  handler: async (ctx, { workspace, now }): Promise<Soaked[]> => {
+    // Another repository's `cli` target is no release of codecast's CLI.
+    const live = liveDeployOf((await targetDeploys(ctx, workspace, "cli")).filter((d) => d.repository?.toLowerCase() === CLI_RELEASE_REPOSITORY));
+    const release = version(live?.version);
+    const liveAt = live?.live_at ?? live?.created_at;
+    // A rollback is live: no release stands to hold machines to until its fix forward goes out and soaks.
+    if (!live || !release || live.action === "rollback" || liveAt == null || now - liveAt < SOAK_MS || !DEPLOY_SHORT_ID_RE.test(live.short_id)) return [];
+    const ws = parseWorkspaceKey(workspace);
+    const team: Doc<"teams"> | null = ws?.type === "team" ? await ctx.db.get(ws.teamId) : null;
+    const floor = highestFloor([await getSystemConfig(ctx, "min_cli_version"), team?.min_cli_version]);
+    if (floor && !isBelowMinimum(floor, release)) return [];
+    return [{ short_id: live.short_id, version: release, live_at: liveAt, floor: version(floor) }];
+  },
+});
+
 export const sweep = action({
   args: scopeArgs,
   handler: async (ctx, args): Promise<ReleaseSweep> => {
@@ -341,7 +368,7 @@ export const sweep = action({
         return [];
       }
     };
-    const [incidents, late_targets, failed_runs, laggards, unretiredRows] = await Promise.all([
+    const [incidents, late_targets, failed_runs, laggards, unretiredRows, soaked] = await Promise.all([
       kind("incidents", (): Promise<SweepIncident[]> => ctx.runQuery(internal.releaseSweep.incidents, { workspace: s.workspace })),
       kind("late_targets", () => lateTargets(ctx, s.workspace, now)),
       kind("failed_runs", async () => {
@@ -358,9 +385,10 @@ export const sweep = action({
         unretiredMore = more;
         return rows;
       }),
+      kind("soaked", (): Promise<Soaked[]> => ctx.runQuery(internal.releaseSweep.soakedOf, { workspace: s.workspace, now })),
     ]);
     return {
-      workspace: s.workspace, checked_at: now, incidents, late_targets, failed_runs, laggards, unretired: unretiredRows,
+      workspace: s.workspace, checked_at: now, incidents, late_targets, failed_runs, laggards, unretired: unretiredRows, soaked,
       unretired_skipped: unretiredSkipped, unretired_more: unretiredMore, failed_runs_more: failedRunsMore, failed_kinds: SWEEP_KINDS.filter((k) => failed.has(k)),
     };
   },
