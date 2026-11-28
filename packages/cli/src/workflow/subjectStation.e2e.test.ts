@@ -100,14 +100,22 @@ describe("the session is the run's subject", () => {
     expect(s.sent().at(-1)!.body).toContain("is over: Done.");
   }, 60_000);
 
-  // ct-102698 sat at Fix findings for an hour: its subject had ended the turn, but agents it left running kept its row
-  // reading working. Its agent's own status (waiting: the turn is over, background work runs on) is the answer.
-  test("a subject whose turn ended while its background agents run has answered: the run goes on (ct-102698)", async () => {
+  // A subject that ends its turn on background work it started (a test run, an Agent making the fix) reads waiting: that
+  // work wakes it again, so the run waits for it rather than freezing the fix half-made (ct-98624). Its row reads
+  // working all the while (ct-102698); once its agent reads idle, the turn is over and the run goes on.
+  test("a subject waiting on background work it started, with no push, is waited for: the run freezes the finished fix", async () => {
     const { root, edit } = world("bad\n");
-    server(() => edit("good\n"), { row: (briefed) => (briefed ? { work_state: "working", bucket: "working", agent_status: "waiting" } : {}) });
+    let reads = 0;
+    const s = server(() => edit("half\n"), { row: (briefed) => {
+      if (!briefed) return {};
+      if (++reads < 6) return { work_state: "working", bucket: "working", agent_status: "waiting" };
+      if (reads === 6) edit("good\n");
+      return { work_state: "done", agent_status: "idle" };
+    } });
     const { outcome } = await start(root);
     expect(outcome).toBe("completed");
-  }, 30_000);
+    expect(s.sent().filter((m) => /^Check failed/.test(m.body))).toHaveLength(1);
+  }, 60_000);
 
   test("a dormant pin from before the brief is not its answer: the run waits for the turn the brief started to end (ct-98624)", async () => {
     const { root, edit } = world("bad\n");
