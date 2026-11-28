@@ -224,6 +224,7 @@ jobs:
               fi
               bun build src/index.ts \
                 --compile \
+                --no-compile-autoload-dotenv \
                 --target="bun-$target" \
                 --minify \
                 --sourcemap \
