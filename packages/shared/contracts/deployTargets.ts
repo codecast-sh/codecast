@@ -354,20 +354,33 @@ export function commitTouchesTarget(t: TargetPaths, files: readonly string[] | n
   return files.some((f) => fileShipsTo(t, f));
 }
 
+/** A target as far as its releases' version bumps: its name and the paths it ships. */
+export type ReleaseTarget = TargetPaths & { name: string };
+
+/**
+ * The package a target ships whole that its `when` names first (`packages/electron` for `packages/electron/**`): the
+ * target's own, whose package.json its release bumps. Null when the first path is not a whole directory.
+ */
+function ownPackageDir(t: TargetPaths): string | null {
+  return t.paths?.[0]?.match(/^([^*?[\]]+)\/\*\*$/)?.[1] ?? null;
+}
+
 /**
  * A release target's own version bump for the version live there now: the release workflow commits it to main after
  * the cut it records (finalize-cli-release.yml's `chore(cli): bump version to X`, cut-desktop-release.yml's
- * `chore(electron): bump desktop to vX`), so it carries nothing the live deploy lacks. Precisely: its subject names that
- * version as a release, and the only file it changes that ships to the target is the package.json of the package its
- * scope names (`packages/cli/package.json` for `chore(cli)`), the version it bumps. Any other manifest (a shared
- * package's dependencies) is work.
+ * `chore(electron): bump desktop to vX`, a hand release's `chore(desktop): bump version to X`), so it carries nothing
+ * the live deploy lacks. Precisely: its subject names that version as a release, and the only file it changes that
+ * ships to the target is the package.json it bumps: the one of the package its scope names (`packages/cli/package.json`
+ * for `chore(cli)`), or, when the release names the target itself, the target's own package's (ownPackageDir:
+ * `packages/electron/package.json` for desktop). Any other manifest (a shared package's dependencies) is work.
  */
-export function isLiveVersionBump(t: TargetPaths, c: { subject: string; files: readonly string[] | null | undefined }, liveVersion: string | null | undefined): boolean {
+export function isLiveVersionBump(t: ReleaseTarget, c: { subject: string; files: readonly string[] | null | undefined }, liveVersion: string | null | undefined): boolean {
   const live = liveVersion?.trim().replace(/^v/i, "");
   if (!live || !c.files?.length) return false;
   const release = parseRelease(c.subject.split("\n")[0]);
   if (!release?.scope || release.version !== live) return false;
-  const own = (f: string) => f === `${release.scope}/package.json` || f.endsWith(`/${release.scope}/package.json`);
+  const ownDir = release.surface === t.name ? ownPackageDir(t) : null;
+  const own = (f: string) => f === `${release.scope}/package.json` || f.endsWith(`/${release.scope}/package.json`) || (ownDir !== null && f === `${ownDir}/package.json`);
   const shipped = c.files.filter((f) => fileShipsTo(t, f));
   return shipped.length > 0 && shipped.every(own);
 }

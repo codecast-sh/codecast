@@ -121,13 +121,25 @@ describe("a release's order and steps (DP15)", () => {
 });
 
 describe("a release's own version bump (isLiveVersionBump)", () => {
-  const cli = { paths: ["packages/cli/**", "packages/shared/**"], unless: ["**/*.test.ts"] };
-  const desktop = { paths: ["packages/electron/**"] };
+  const cli = { name: "cli", paths: ["packages/cli/**", "packages/shared/**"], unless: ["**/*.test.ts"] };
+  const desktop = { name: "desktop", paths: ["packages/electron/**"], unless: ["**/*.test.ts"] };
 
   test("the bump the release workflow commits after its cut, for the version live now, is carried", () => {
     expect(isLiveVersionBump(cli, { subject: "chore(cli): bump version to 1.1.323", files: ["packages/cli/package.json"] }, "1.1.323")).toBe(true);
     // The desktop bump also rewrites the web server's download link: that file ships to web, not desktop.
     expect(isLiveVersionBump(desktop, { subject: "chore(electron): bump desktop to v1.1.134", files: ["packages/electron/package.json", "packages/web/server/index.ts"] }, "v1.1.134")).toBe(true);
+  });
+
+  test("a release that names the target bumps the target's own package, the one its paths name first (8c2272f)", () => {
+    const bump = { subject: "chore(desktop): bump version to 1.1.135", files: ["packages/electron/package.json", "packages/web/server/index.ts"] };
+    expect(isLiveVersionBump(desktop, bump, "1.1.135")).toBe(true);
+    expect(isLiveVersionBump(desktop, bump, "1.1.134")).toBe(false);
+    expect(isLiveVersionBump(desktop, { ...bump, files: ["packages/electron/package.json", "packages/electron/main.js"] }, "1.1.135")).toBe(false);
+    // Another target's release, and a target whose first path is no whole package, name no package of this target's.
+    expect(isLiveVersionBump(desktop, { ...bump, subject: "chore(mobile): bump version to 1.1.135" }, "1.1.135")).toBe(false);
+    expect(isLiveVersionBump({ ...desktop, paths: ["packages/electron/*.json"] }, bump, "1.1.135")).toBe(false);
+    // A target's other packages stay work: cli's shared manifest under a cli release.
+    expect(isLiveVersionBump(cli, { subject: "chore(cli): bump version to 1.1.323", files: ["packages/shared/package.json"] }, "1.1.323")).toBe(false);
   });
 
   test("anything else is work: another version, code beside the bump, no live version, a dependency bump", () => {
