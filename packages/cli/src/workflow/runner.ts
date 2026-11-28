@@ -42,8 +42,7 @@ import { behindWords, frozenChangeContext, heldWords, readFrozenChange } from ".
 import { carriedFailureNote } from "./unpushedCommits.js";
 import { webBaseUrl } from "../config/readLocalConfig.js";
 import { checkoutChangeOf, failureExcerpt, findingRoots, gateAnswerMessage, runEndMessage, runWorktreePath, sentBackWords, subjectOf, writerBrief, writersNamed, type Subject, type Writer } from "./subjectStation.js";
-import { notLiveYet, startSubjectParker, subjectOtherWork, subjectRow, subjectSettled, subjectTakenOver, type SubjectParker } from "./subjectPark.js";
-import { SubjectTurn } from "./subjectTurn.js";
+import { notLiveYet, startSubjectParker, subjectOtherWork, subjectRow, subjectSettled, subjectTakenOver, SubjectTurn, type SubjectParker } from "./subjectPark.js";
 import { lineRunsRoot } from "./runDirs.js";
 import { releaseEndedRunTree, restoreRunTree, stopRunBrowser, usesRunTree } from "./runWorktree.js";
 
@@ -482,11 +481,10 @@ async function executeSubjectNode(node: WorkflowNode, graph: WorkflowGraph, cont
   const waiting = (on: Record<string, any> | null) => options.runId ? reportProgress(options, { current_node_id: node.id, node_id: node.id, node_status: "running", waiting_on_session: on }) : Promise.resolve();
   const on = { node_id: node.id, conversation_id: subject.conversationId, since: Date.now(), note: (context["stop_reason"] || brief).slice(0, 600) };
   await waiting(on);
-  const turn = await new SubjectTurn({ cwd, branch: readFrozenChange(context["run_dir"])?.branch ?? context["branch"] ?? null, shortId: subject.shortId, say: (note) => waiting({ ...on, note }) }).begin();
   // It answers only with a turn after the brief reached it: a detached run's caller can still be mid-turn when a fast
   // check fails, and that turn's end is no answer. Where the delivery cannot be read, the send is when it arrived.
   const outcome = await waitOnStation(node, graph, context, cwd, options, undefined, {
-    ...subject, sentAtCount: row.message_count ?? 0, sentAt, awaitDelivery: true, unreadDeliveryAt: sentAt - CLOCK_SKEW_MS, turn,
+    ...subject, sentAtCount: row.message_count ?? 0, sentAt, awaitDelivery: true, unreadDeliveryAt: sentAt - CLOCK_SKEW_MS, turn: await new SubjectTurn({ cwd, branch: readFrozenChange(context["run_dir"])?.branch ?? context["branch"] ?? null, shortId: subject.shortId, say: (note) => waiting({ ...on, note }) }).begin(),
     onPerson: (pin) => waiting(pin === null ? on : { ...on, since: Date.now(), note: pin.slice(0, 600), blocked: true }),
   });
   await waiting(null);
