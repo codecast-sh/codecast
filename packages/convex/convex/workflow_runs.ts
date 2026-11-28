@@ -2033,7 +2033,16 @@ export async function listRunsCore(ctx: Ctx, userId: Id<"users">, args: ListRuns
   const shaped = [];
   // `slim` (the CLI's list) leaves the station sessions out: each carries its
   // report and handoff, and 200 runs of them outgrew the call's time limit.
-  for (const run of out.slice(0, limit)) shaped.push(await enrichRun(ctx, args.slim ? run : await withAgentSessions(ctx, run, budget), reads));
+  // The machine that runs each, by its name (`cast workflow show`): a machine of the run's owner, else only its id.
+  const names = new Map<string, string | null>();
+  for (const run of out.slice(0, limit)) {
+    const key = `${run.user_id}:${run.runner_device}`;
+    if (run.runner_device && !names.has(key)) {
+      const d = await ctx.db.query("devices").withIndex("by_user_device", (q: any) => q.eq("user_id", run.user_id).eq("device_id", run.runner_device)).first();
+      names.set(key, d ? deviceDisplayName(d as any) : null);
+    }
+    shaped.push({ ...(await enrichRun(ctx, args.slim ? run : await withAgentSessions(ctx, run, budget), reads)), runner_device_name: names.get(key) ?? undefined });
+  }
   return shaped;
 }
 

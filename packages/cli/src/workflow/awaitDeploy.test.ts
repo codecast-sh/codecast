@@ -552,10 +552,10 @@ describe("awaitDeploy", () => {
     expect(f.lines[0]).toBe("backend: waiting for the next `cast deploy backend` or a change run that sends it (nobody has sent backend since 0f0f0f0 in dp-0; 0m of 60m)");
   });
 
-  test("a send waiting on a release in flight says what it goes out after", async () => {
+  test("a send waiting on a release in flight says what it waits for", async () => {
     const f = fake((tick) => [{ name: "cli", history: [{ ...dp("dp-3", tick >= 1 ? "live" : "running"), note: "Waiting for the CLI release in flight (runs 46042822000 )" }] }]);
     await awaitDeploy({ sha: SHA, base: "main", plan: deployDuties(declared, ["cli/c.ts"]), intervalMs: MIN }, f.io);
-    expect(f.lines[0]).toBe("cli: dp-3 goes out after the CLI release in flight (runs 46042822000), then sends 1a2b3c4 (0m of 45m)");
+    expect(f.lines[0]).toBe("cli: dp-3 waits for the CLI release in flight (runs 46042822000), then sends 1a2b3c4 (0m of 45m)");
   });
 });
 

@@ -95,10 +95,14 @@ export const gateOpen = (run: Pick<ShipRunFacts, "status" | "gate_decision_id" |
  * person or a named role to send it (`by`), or waiting on targets that go out by themselves.
  */
 export type DeployHold = { kind: "out" | "red" | "ci" | "press" | "wait"; by: string | null };
+/** A target's deploy going out, as its line says it (awaitDeploy deployingWords): sending, or waiting inside its send
+ *  ("dp-3 waits for the CLI release in flight, then sends …"; older lines said "goes out after"). The deploy is sending
+ *  by its record either way, as the Deploys page says. */
+export const DEPLOY_GOING = /\b(dp-\d+) (?:sending|waits for|goes out after)\b/;
 export function deployHold(line: string | null | undefined): DeployHold {
   const hold = (kind: DeployHold["kind"], by: string | null = null): DeployHold => ({ kind, by });
   if (!line) return hold("wait");
-  if (/\bdp-\d+ sending\b|going out in dp-/.test(line)) return hold("out");
+  if (DEPLOY_GOING.test(line) || /going out in dp-/.test(line)) return hold("out");
   if (/waiting on main CI at \w+ \(red\b/.test(line)) return hold("red");
   if (/waiting on main CI|once main CI is green|waiting for main CI/.test(line)) return hold("ci");
   const named = line.match(/waiting for (.+?) to send it/)?.[1];

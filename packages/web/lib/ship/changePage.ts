@@ -5,7 +5,7 @@
 // segment), the exit the run reached, and the verdicts, merge and deploys the run recorded. A reason in words stays in
 // the bar under the track. Pure, with relative imports only: the phone's run page reads a run here too.
 import { SEGMENT_SEP, takesSessionChange, type FlowEdgeIn, type FlowNodeIn } from "@codecast/shared/contracts/flowPool";
-import { entityRoute } from "@codecast/shared/entities";
+import { entityRoute, repoObjectId } from "@codecast/shared/entities";
 import { verdictOnHead } from "@codecast/shared/contracts/deployTargets";
 import { failedDeploysOf } from "@codecast/shared/contracts/deployStop";
 import { journeyOf, journeyStages, targetsFromLine, withRunDeploys, type Journey, type JourneyStage, type JourneyViewer, type TargetState } from "./journey";
@@ -75,6 +75,13 @@ export function changePr(run: ChangeRun): { repository: string; number: number }
   const said = [...(run.node_statuses ?? [])].sort(byNewest).map((n) => PR_URL.exec(n.result_preview ?? "")).find(Boolean);
   const m = said ?? PR_URL.exec(run.merge?.pr_url ?? "");
   return m ? { repository: m[1], number: Number(m[2]) } : null;
+}
+
+/** The deploy reach a change run's page reads: its merged pull request's, the very row the PR page reads (usePrDeploy),
+ *  so the two pages say the same per target; else the commit it landed. Null before it is on main. */
+export function changeReachRef(pr: { repository: string; number: number } | null, prMerged: boolean, sha: string | null): string | null {
+  if (!pr || !sha) return null;
+  return repoObjectId(prMerged ? { type: "pr", repository: pr.repository, number: pr.number } : { type: "commit", repository: pr.repository, sha });
 }
 
 /** The head the run's pull request is on now: what the run recorded, else the newest step that reported the PR's head. */
@@ -480,7 +487,7 @@ export function changeLinks(run: ChangeRun, graph: ChangeGraph, targets: Readonl
   const ciNode = newestIn(run, stations.ci);
   const ci = current(run.ci_verdict, head);
   const ciWords = live && ciNode?.status === "running" ? { label: "CI running", tone: "wait" as const }
-    : ci ? (ci.green && ci.ci_changed ? { label: "CI green, not counted", tone: "default" as const, title: "This change edits CI, so CI can't vouch for it" } : ci.green ? { label: "CI green", tone: "ok" as const } : { label: "CI red", tone: "bad" as const })
+    : ci ? (ci.green && ci.ci_changed ? { label: "CI green · edits CI", tone: "default" as const, title: "It edits CI, so CI can't vouch for it: a person approves the merge" } : ci.green ? { label: "CI green", tone: "ok" as const } : { label: "CI red", tone: "bad" as const })
     : ciNode ? { label: "CI", tone: "default" as const } : null;
   if (ciWords && prGithub) out.push({ kind: "ci", label: ciWords.label, tone: ciWords.tone, href: `${prGithub}/checks`, external: true, title: ("title" in ciWords && ciWords.title) || "The checks on the pull request, on GitHub" });
   const review = newestIn(run, stations.review);

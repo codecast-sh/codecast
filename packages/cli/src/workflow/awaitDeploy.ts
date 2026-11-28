@@ -276,7 +276,7 @@ export function failedWords(short: string, failed: Array<{ target: string; deplo
  */
 export function deployingWords(d: TargetDeploy, short: string): string {
   const waiting = (d.note ?? "").split("\n")[0].trim().match(/^waiting for\b\s*(.*)$/i)?.[1];
-  return waiting ? `${d.short_id} goes out after ${waiting.replace(/\s+\)/g, ")")}, then sends ${short}` : `${d.short_id} sending ${short}`;
+  return waiting ? `${d.short_id} waits for ${waiting.replace(/\s+\)/g, ")")}, then sends ${short}` : `${d.short_id} sending ${short}`;
 }
 
 /** Since when nobody has sent a target: its live deploy's commit, when one is recorded. */

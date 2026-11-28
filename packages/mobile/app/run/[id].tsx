@@ -30,7 +30,7 @@ import {
 import { landingOf } from '@codecast/web/lib/line/personalReport';
 import { resumeOf } from '@codecast/web/lib/ship/resumeAt';
 import type { TargetState } from '@codecast/web/lib/ship/journey';
-import { changeAction, changeHeadline, changeJourney, changeLinks, changePr, mergeHolder, mergeIsOff, newerMergedRun, shipsChange, type ChangeAction, type ChangeLink } from '@codecast/web/lib/ship/changePage';
+import { changeAction, changeHeadline, changeJourney, changeLinks, changePr, changeReachRef, mergeHolder, mergeIsOff, newerMergedRun, shipsChange, type ChangeAction, type ChangeLink } from '@codecast/web/lib/ship/changePage';
 import { roleRowsOf } from '@codecast/web/lib/roleRows';
 import { usePullRequestMerge } from '@codecast/web/hooks/useSyncTimeline';
 import { onPrHead } from '@codecast/shared/contracts/deployTargets';
@@ -168,7 +168,7 @@ export default function RunScreen() {
   // Its verdicts judged on the head GitHub has the PR on, as the PR's header judges them.
   const changeRun = useMemo(() => (run ? onPrHead(run as any, prMerge?.head_sha) : run), [run, prMerge?.head_sha]);
   const mergedSha = changeRun && changeFlow ? landedSha(changeRun as any) ?? (prMerge?.merged ? prMerge.merge_sha : null) : null;
-  const { reach, ready: reachRead } = useDeployReachRead(mergedSha && changePrRef ? `${changePrRef.repository}@${mergedSha}` : null);
+  const { reach, ready: reachRead } = useDeployReachRead(changeReachRef(changePrRef, !!prMerge?.merged, mergedSha));
   const targets = useMemo<TargetState[]>(() => reachTargets(reach), [reach]);
   // A later run on the task that merged this run's pull request: the change went on there.
   const newerMerged = useMemo(() => (run ? newerMergedRun(run as any, others as any) : null), [run, others]);

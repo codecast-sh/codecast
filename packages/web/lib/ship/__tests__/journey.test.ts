@@ -497,6 +497,11 @@ test("targetsFromLine reads the Deploy stage's line, old and new", () => {
     { name: "cli", state: "deploying", deploy: "dp-13" },
   ]);
   expect(targetsFromLine("Waiting for codecast/change-ct-1 to land on main.")).toEqual([]);
+  // A deploy whose send waits inside it (a CLI release cut waiting on main's CI) is going out, as Deploys says.
+  for (const line of ["cli: dp-4018 waits for main's CI to pass on a commit after the last release that includes 92dd630, then sends 2f2f4eb (3m of 4h)", "cli: dp-4018 goes out after a green CI verdict on a main commit after the last version bump that carries 92dd63058c, then sends 2f2f4eb (3m of 4h)"]) {
+    expect(targetsFromLine(line)).toEqual([{ name: "cli", state: "deploying", deploy: "dp-4018" }]);
+    expect(deployHold(line).kind).toBe("out");
+  }
 });
 
 test("readableWhy cuts long reasons at a word", () => {

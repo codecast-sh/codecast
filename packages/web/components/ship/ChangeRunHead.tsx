@@ -5,7 +5,7 @@
 import { useMemo } from "react";
 import Link from "next/link";
 import type { TargetState } from "../../lib/ship/journey";
-import { changeAction, changeHeadline, changeJourney, changeLinks, changePr, endedStages, mergeHolder, mergeIsOff, type ChangeLink } from "../../lib/ship/changePage";
+import { changeAction, changeHeadline, changeJourney, changeLinks, changePr, changeReachRef, endedStages, mergeHolder, mergeIsOff, type ChangeLink } from "../../lib/ship/changePage";
 import { landedSha } from "../../lib/ship/runRecord";
 import { onPrHead } from "@codecast/shared/contracts/deployTargets";
 import { reachTargets } from "../../lib/ship/sessionShip";
@@ -31,7 +31,7 @@ export function ChangeRunHead({ run: given, flow, now_ms, chips, newer, newerMer
   // Its verdicts judged on the head GitHub has the PR on, as the PR's header judges them.
   const run = useMemo(() => onPrHead(given, prMerge?.head_sha), [given, prMerge?.head_sha]);
   const sha = landedSha(run) ?? (prMerge?.merged ? prMerge.merge_sha : null);
-  const { reach, ready: reachRead } = useDeployReachRead(sha && pr ? `${pr.repository}@${sha}` : null);
+  const { reach, ready: reachRead } = useDeployReachRead(changeReachRef(pr, !!prMerge?.merged, sha));
   const targets = useMemo<TargetState[]>(() => reachTargets(reach), [reach]);
   const viewer = useJourneyViewer(run);
   const journey = useMemo(() => changeJourney(flow, run, targets, viewer, { pr: prMerge, reading: !reachRead, newerMerged }), [flow, run, targets, viewer, prMerge, reachRead, newerMerged]);

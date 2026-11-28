@@ -21,7 +21,7 @@ import { ownRestartOf } from "@codecast/shared/contracts/runRestart";
 import { resumeOf, type ResumeAt } from "./resumeAt";
 import { roundsOnOwnResults } from "./ownRound";
 import type { SessionAsk } from "./sessionAsk";
-import { canAnswer, deployHold, gateOpen, type DeployHold, type GateDecision } from "@codecast/shared/contracts/shipRun";
+import { canAnswer, DEPLOY_GOING, deployHold, gateOpen, type DeployHold, type GateDecision } from "@codecast/shared/contracts/shipRun";
 
 export { insideWords, type InsideRoute, type StageInside } from "./segmentInside";
 
@@ -694,8 +694,8 @@ export function targetsFromLine(line: string | null | undefined): TargetState[] 
   const out: TargetState[] = [];
   for (const m of line.matchAll(/(?:^|;\s*)([a-z][a-z0-9-]{0,31}):\s*([^;]*)/g)) {
     const live = m[2].match(/^live in (dp-\d+)/);
-    const going = m[2].match(/^(dp-\d+) sending\b/);
-    out.push(live ? { name: m[1], state: "live", deploy: live[1] } : going ? { name: m[1], state: "deploying", deploy: going[1] } : { name: m[1], state: "waiting" });
+    const going = m[2].match(DEPLOY_GOING);
+    out.push(live ? { name: m[1], state: "live", deploy: live[1] } : going?.index === 0 ? { name: m[1], state: "deploying", deploy: going[1] } : { name: m[1], state: "waiting" });
   }
   return out.length ? out : targetsFromOldLine(line);
 }

@@ -74,6 +74,9 @@ test("the detail names each station with its label, time, outcome and session, a
   const out = formatRunDetail(run, new Map([["triage", "Triage"], ["build", "Build"]]), now);
   expect(out).toContain("Fix flow ct-9  running  r1");
   expect(out).toContain("machine dev-123");
+  const named = formatRunDetail({ ...run, runner_device_name: "jb-m5-max" }, new Map(), now);
+  expect(named).toContain("machine jb-m5-max");
+  expect(named).not.toContain("dev-123");
   expect(out).toMatch(/triage \(Triage\)\s+completed, 2m, outcome success, session jx7a/);
   expect(out).toMatch(/build \(Build\)\s+running, 5m so far, 2 visits <$/m);
   expect(formatRunDetail({ ...run, status: "failed", fail_reason: "verify exited 1" }, new Map(), now)).toContain("failed: verify exited 1");

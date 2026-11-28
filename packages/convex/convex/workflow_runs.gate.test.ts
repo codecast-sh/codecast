@@ -429,6 +429,11 @@ describe("runs belong to the workspace (the-line.md L8)", () => {
     expect(await listRunsCore(ctx, STRANGER, { run_id: RUN })).toEqual([]);
     expect(await listRunsCore(ctx, MATE, { run_id: "not-a-run" })).toEqual([]);
     await expect(listRunsCore(ctx, STRANGER, { team_id: TEAM })).rejects.toThrow();
+    // The machine that runs it reads by its name, one of the owner's; any other stays an id.
+    tables.workflow_runs[0].runner_device = "9ab14acad2604760";
+    expect((await listRunsCore(ctx, MATE, { run_id: RUN }))[0].runner_device_name).toBeUndefined();
+    tables.devices = [{ _id: "devices_1", user_id: HOST, device_id: "9ab14acad2604760", label: "macOS - jb-m5-max", platform: "darwin", last_seen: NOW }];
+    expect((await listRunsCore(ctx, MATE, { run_id: RUN }))[0].runner_device_name).toBe("jb-m5-max");
     void tables;
   });
 
