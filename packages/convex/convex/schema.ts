@@ -9464,6 +9464,8 @@ export default defineSchema({
     // Sparse in effect: a live deploy finds the runs that merged the commits it carries by their full merge sha, in
     // whichever workspace each run sits (deployCarries.completeLiveRuns).
     .index("by_merge_sha", ["merge.sha"])
+    // Read by nothing: kept one deploy so the merge's non-interactive convex push deletes no large index.
+    .index("by_workspace_merge_sha", ["workspace", "merge.sha"])
     // A session flow's runs (session_flows): the runs on one graph in one workspace, newest first.
     .index("by_workspace_graph", ["workspace", "graph_hash", "updated_at"])
     // Sparse in effect: only runs queued to resume carry resume_queued, read oldest first by the sweep.
