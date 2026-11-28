@@ -36,6 +36,7 @@ import { ingestSnapshotArgs } from "./lib/workflowGraphValidators";
 import { admitRoleRun, requeueForSweep } from "./orgLine";
 import { flowAgents, missingAgentOn } from "./lib/linePlacement";
 import { agentDisplayName, deviceDisplayName } from "@codecast/shared/contracts";
+import { withRunnerNames } from "./lib/runnerNames";
 import { placeName, placeRunOnDevice } from "./lib/runDevicePlace";
 import { navPromptField } from "./userMessagesFilter";
 import { retainSessionCreator } from "./sessionLaunch";
@@ -2284,24 +2285,6 @@ export const shippingRuns = query({
 });
 
 // `cast workflow runs [--task|--plan]` (the-line.md L10) through /cli/workflow-runs/list.
-/**
- * The machine that runs each, by its name (`cast workflow show`): a machine of the run's owner, else only its id. The
- * CLI's alone: a device row's heartbeat would re-run every web subscription of the list.
- */
-async function withRunnerNames<R extends { user_id: Id<"users">; runner_device?: string }>(ctx: Ctx, runs: R[]): Promise<Array<R & { runner_device_name?: string }>> {
-  const names = new Map<string, string | null>();
-  const out = [];
-  for (const run of runs) {
-    const key = `${run.user_id}:${run.runner_device}`;
-    if (run.runner_device && !names.has(key)) {
-      const d = await ctx.db.query("devices").withIndex("by_user_device", (q: any) => q.eq("user_id", run.user_id).eq("device_id", run.runner_device)).first();
-      names.set(key, d ? deviceDisplayName(d as any) : null);
-    }
-    out.push({ ...run, runner_device_name: names.get(key) ?? undefined });
-  }
-  return out;
-}
-
 export const listRunsFromCli = query({
   args: {
     api_token: v.string(),
