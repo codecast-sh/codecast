@@ -180,7 +180,7 @@ function fail(message: string): never {
  * shared/contracts/runRestart.ts), else for a run that ships a change a fresh run once the change is fixed (Ship
  * again), else a resume at the station it stopped at. A run bound to no task cannot be resumed.
  */
-export function restartHint(run: { task_short_id?: string | null; workflow_slug?: string | null; takes_change?: boolean | null; current_node_id?: string | null; fail_reason?: string | null; merge?: { sha?: string | null } | null }, stop?: string | null): string {
+export function restartHint(run: { task_short_id?: string | null; workflow_slug?: string | null; takes_change?: boolean | null; current_node_id?: string | null; fail_reason?: string | null; merge?: { sha?: string | null; outside?: boolean | null; by?: string | null } | null }, stop?: string | null): string {
   const landed = landedHint(run);
   if (landed) return landed;
   const task = run.task_short_id;
@@ -198,11 +198,13 @@ export function restartHint(run: { task_short_id?: string | null; workflow_slug?
  * A landed change's way on: the next deploy of each target its Deploy stop names (failed, or not live). A stop that
  * names none (a run cancelled while it waited, a flow with no deploy targets) says only what is true: it is on main.
  */
-function landedHint(run: { fail_reason?: string | null; merge?: { sha?: string | null } | null }): string | null {
+function landedHint(run: { fail_reason?: string | null; merge?: { sha?: string | null; outside?: boolean | null; by?: string | null } | null }): string | null {
   const failed = failedDeploysOf(run.fail_reason);
   if (!run.merge?.sha && !failed.length) return null;
   const targets = failed.length ? failed.map((f) => f.target) : stuckTargetsOf(run.fail_reason);
-  const onMain = `it is on main${run.merge?.sha ? ` as ${run.merge.sha.slice(0, 7)}` : ""}, so running it again lands nothing`;
+  // Its pull request merged outside the run (deployCarries.recordOutsideMerge): the change is someone else's merge, on main all the same.
+  const outside = run.merge?.outside ? `, merged outside the run${run.merge.by ? ` by ${run.merge.by}` : ""}` : "";
+  const onMain = `it is on main${run.merge?.sha ? ` as ${run.merge.sha.slice(0, 7)}` : ""}${outside}, so running it again lands nothing`;
   if (!targets.length) return `${onMain}; where it is live: cast line deploy targets`;
   const see = targets.length === 1 ? `cast line deploy targets --target ${targets[0]}` : "cast line deploy targets";
   return `${onMain}: the next ${targets.join(" and ")} deploy${targets.length > 1 ? "s take" : " takes"} it live (${see})`;

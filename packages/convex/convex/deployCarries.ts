@@ -275,62 +275,130 @@ export function liveExitOf(graph: GraphShape, prefix: string): { live: string; e
  * deploys, the stop it ended at gone, the segment's Live and the exit after it completed.
  */
 export function liveRunPatch(run: StoppedRun, prefix: string, to: { live: string; exit: string }, line: string, now: number): Pick<Doc<"workflow_runs">, "status" | "current_node_id" | "node_statuses"> {
+  const wait = `${prefix}__wait`;
   const statuses = run.node_statuses
     .filter((n) => n.node_id !== run.current_node_id && n.node_id !== to.live && n.node_id !== to.exit)
-    .map((n) => (n.node_id === `${prefix}__wait` ? { ...n, status: "completed" as const, outcome: "success", result_preview: line, completed_at: now } : n));
+    .map((n) => (n.node_id === wait ? { ...n, status: "completed" as const, outcome: "success", result_preview: line, completed_at: now } : n));
   const done = (node_id: string, result?: string) => ({ node_id, status: "completed" as const, outcome: "success", ...(result ? { result_preview: result } : {}), started_at: now, completed_at: now });
+  // A run whose pull request was merged outside it never reached its Deploy wait: the wait is where it went live.
+  if (!statuses.some((n) => n.node_id === wait)) statuses.push(done(wait, line));
   statuses.push(done(to.live, to.live === to.exit ? undefined : JSON.stringify({ exit: "live" })));
   if (to.exit !== to.live) statuses.push(done(to.exit));
   return { status: "completed", current_node_id: to.exit, node_statuses: statuses };
 }
 
 /**
- * A deploy went live: every run of its workspace that stopped at Deploy (failed or stuck, its change merged) and whose
- * change is now live on every target it touches is over at Live, as its wait would have ended had it seen this
- * deploy. Its task settles as a completed run's does, the blocker its stop left on the task goes, and the session
- * that heard it stop hears that it is over, once. A run that stopped anywhere else, or whose change some target still
- * lacks, stays as it is. Returns the runs completed.
+ * A deploy went live: every run of its workspace that stopped at Deploy (failed or stuck, its change merged), or whose
+ * pull request was merged outside it (mergedOutside), and whose change is now live on every target it touches is over
+ * at Live, as its wait would have ended had it seen this deploy. Its task settles as a completed run's does, the
+ * blocker its stop left on the task goes, and the session that heard it stop hears that it is over, once. A run that
+ * stopped anywhere else, or whose change some target still lacks, stays as it is. Returns the runs completed.
  */
 export async function completeLiveRuns(ctx: any, deployId: Id<"deploys">, now = Date.now()): Promise<Id<"workflow_runs">[]> {
   const d: Doc<"deploys"> | null = await ctx.db.get(deployId);
   if (!d || d.status !== "live" || !d.sha || !d.repository) return [];
-  const runs = await runsMergedInto(ctx, d);
   const done: Id<"workflow_runs">[] = [];
-  for (const run of runs) {
-    if (run.updated_at < now - STOPPED_RUN_WINDOW_MS) continue;
-    const prefix = deployStopOf(run);
-    // A run a person queued to resume is theirs to finish.
-    if (!prefix || run.resume_queued) continue;
-    // This deploy holds the change (its own commit, or a cut on main at or after the merge's place); else it is not
-    // what took the change live, and the deploy that does answers for it.
-    const commit = await commitBySha(ctx, d.repository, run.merge!.sha);
-    if (!commit?.main_at || !(sameSha(d.sha, commit.sha) || (d.cut_at != null && commit.main_at <= d.cut_at))) continue;
-    const files = commit.files?.map((f) => f.filename) ?? null;
-    const reach = await reachOf(ctx, async (w) => w === run.workspace, d.repository, { sha: commit.sha, main_at: commit.main_at, merged_at: commit.main_at }, files);
-    if (reach?.state !== "live") continue;
-    const graph = await runWorkflowOf(ctx, run);
-    const to = graph ? liveExitOf(graph as unknown as GraphShape, prefix) : null;
-    if (!to) continue;
-    const live = reach.targets.filter((t) => t.state === "live" && t.deploy);
-    const line = `Live: ${commit.sha.slice(0, 7)} on ${live.map((t) => `${t.target} ${t.deploy!.short_id}`).join(", ")}.`;
-    const patch = liveRunPatch(run, prefix, to, line, now);
-    await ctx.db.patch(run._id, { ...patch, fail_reason: undefined, updated_at: now });
-    done.push(run._id);
-    const task = run.task_id ? await ctx.db.get(run.task_id) : null;
-    if (task) {
-      // The stop marked the task blocked with its reason (settleRunTask); that reason no longer stands.
-      if (run.fail_reason && task.execution_concerns === run.fail_reason) {
-        await patchTask(ctx, task, { execution_concerns: undefined, ...(task.execution_status === "blocked" ? { execution_status: undefined } : {}), updated_at: now });
-      }
-      await settleRunTask(ctx, { ...run, ...patch }, "completed", undefined, now);
-    }
-    await tellStoppedSession(ctx, run, task, graph?.label || graph?.name || "change", line, d.workspace);
-  }
+  for (const run of await runsMergedInto(ctx, d)) if (await completeRunIfLive(ctx, run, d.repository, d, now)) done.push(run._id);
   return done;
 }
 
 /**
- * The failed runs of a live deploy's workspace that merged a commit it carries: the commit at its own sha, and when it
+ * Complete one stopped run at Live when its merge is live on every target it touches: held by `d` when a deploy is
+ * named (else that deploy is not what took it live, and the one that does answers for it), by any live deploy when
+ * none is (a merge recorded after its deploys already went out). True when it completed the run.
+ */
+async function completeRunIfLive(ctx: any, run: Doc<"workflow_runs">, repository: string, d: Doc<"deploys"> | null, now: number): Promise<boolean> {
+  if (run.updated_at < now - STOPPED_RUN_WINDOW_MS) return false;
+  const stop = deployStopOf(run);
+  // A run a person queued to resume is theirs to finish.
+  if ((!stop && !mergedOutside(run)) || run.resume_queued) return false;
+  const commit = await commitBySha(ctx, repository, run.merge!.sha);
+  if (!commit?.main_at) return false;
+  if (d && !(sameSha(d.sha, commit.sha) || (d.cut_at != null && commit.main_at <= d.cut_at))) return false;
+  const files = commit.files?.map((f) => f.filename) ?? null;
+  const reach = await reachOf(ctx, async (w) => w === run.workspace, repository, { sha: commit.sha, main_at: commit.main_at, merged_at: commit.main_at }, files);
+  if (reach?.state !== "live") return false;
+  const graph = await runWorkflowOf(ctx, run);
+  const prefix = stop ?? (graph ? deployPrefixOf(graph as unknown as GraphShape) : null);
+  const to = graph && prefix ? liveExitOf(graph as unknown as GraphShape, prefix) : null;
+  if (!to) return false;
+  const live = reach.targets.filter((t) => t.state === "live" && t.deploy);
+  const line = `Live: ${commit.sha.slice(0, 7)} on ${live.map((t) => `${t.target} ${t.deploy!.short_id}`).join(", ")}.`;
+  const patch = liveRunPatch(run, prefix!, to, line, now);
+  await ctx.db.patch(run._id, { ...patch, fail_reason: undefined, updated_at: now });
+  const task = run.task_id ? await ctx.db.get(run.task_id) : null;
+  if (task) {
+    // The stop marked the task blocked with its reason (settleRunTask); that reason no longer stands.
+    await clearStopBlocker(ctx, task, run.fail_reason, now);
+    await settleRunTask(ctx, { ...run, ...patch }, "completed", undefined, now);
+  }
+  const how = stop ? "It had stopped at Deploy; a later deploy took the change live." : `It had ended before its merge, and its pull request was merged outside it${run.merge!.by ? ` by ${run.merge!.by}` : ""}; deploys took the change live.`;
+  await tellStoppedSession(ctx, run, task, graph?.label || graph?.name || "change", line, how, run.workspace ?? "");
+  return true;
+}
+
+/** Drop the blocker a run's stop left on its task (settleRunTask), when the task still names that stop. */
+async function clearStopBlocker(ctx: any, task: Doc<"tasks">, failReason: string | undefined, now: number): Promise<void> {
+  if (!failReason || task.execution_concerns !== failReason) return;
+  await patchTask(ctx, task, { execution_concerns: undefined, ...(task.execution_status === "blocked" ? { execution_status: undefined } : {}), updated_at: now });
+}
+
+// ── runs whose pull request someone else merged ──────────────────────────────
+
+/** The exit a change run ends at when the role behind it merges its change itself (change.cast `handed`). */
+export const HANDED_EXIT = "handed";
+
+type UnmergedRun = Pick<Doc<"workflow_runs">, "status" | "current_node_id" | "merge">;
+
+/** A run that ended before its own merge: failed at a stop with no merge recorded, or handed to its role. */
+export const endedBeforeMerge = (run: UnmergedRun): boolean =>
+  !run.merge && (run.status === "failed" || (run.status === "completed" && run.current_node_id === HANDED_EXIT));
+
+/** A run that ended before its own merge whose pull request was then merged outside it (recordOutsideMerge). */
+export const mergedOutside = (run: UnmergedRun): boolean =>
+  !!run.merge?.outside && (run.status === "failed" || (run.status === "completed" && run.current_node_id === HANDED_EXIT));
+
+/** The Deploy segment a run's change goes live through: the change flow's own (`deploy`), else the first one it has. */
+export function deployPrefixOf(graph: GraphShape): string | null {
+  const waits = graph.nodes.filter((n) => n.id.endsWith("__wait") && n.script?.includes("await-deploy")).map((n) => n.id.slice(0, -"__wait".length));
+  return waits.includes("deploy") ? "deploy" : waits[0] ?? null;
+}
+
+/** "Merged by someone else: #349 merged as fec4c95 by ashot; going live." */
+export const outsideMergeWords = (pr: { number: number }, sha: string, by?: string) =>
+  `Merged by someone else: #${pr.number} merged as ${sha.slice(0, 7)}${by ? ` by ${by}` : ""}; going live.`;
+
+/**
+ * A pull request was merged: the newest run on it, when it ended before its own merge (a stop, or handed to its role),
+ * records that merge as made outside it (merge.outside, and who merged it when GitHub said), reads "Merged by someone
+ * else; going live" in place of its stop, drops the blocker its stop left on the task, and completes at Live at once
+ * when deploys already carry the merge (else the deploy that does completes it, completeLiveRuns). A run still running
+ * sees the merge itself (its Merge station reads a merged pull request), and a run that recorded a merge is left alone.
+ */
+export async function recordOutsideMerge(ctx: any, pr: Doc<"pull_requests">, by: string | undefined, now = Date.now()): Promise<Id<"workflow_runs"> | null> {
+  if (pr.state !== "merged" || !pr.merge_commit_sha) return null;
+  const run: Doc<"workflow_runs"> | null = await ctx.db
+    .query("workflow_runs")
+    .withIndex("by_pr", (q: any) => q.eq("pr.repository", pr.repository).eq("pr.number", pr.number))
+    .order("desc")
+    .first();
+  if (!run || !endedBeforeMerge(run) || run.resume_queued || run.updated_at < now - STOPPED_RUN_WINDOW_MS) return null;
+  const sha = pr.merge_commit_sha.toLowerCase();
+  const merge = {
+    sha, branch: pr.head_ref ?? "", into: pr.base_ref ?? "main", at: pr.merged_at ?? now,
+    pr_url: `https://github.com/${pr.repository}/pull/${pr.number}`, outside: true, ...(by ? { by } : {}),
+  };
+  const words = outsideMergeWords(pr, sha, by);
+  await ctx.db.patch(run._id, { merge, ...(run.status === "failed" ? { fail_reason: words } : {}), updated_at: now });
+  const task: Doc<"tasks"> | null = run.task_id ? await ctx.db.get(run.task_id) : null;
+  if (task) await clearStopBlocker(ctx, task, run.fail_reason, now);
+  const merged = { ...run, merge, ...(run.status === "failed" ? { fail_reason: words } : {}), updated_at: now } as Doc<"workflow_runs">;
+  await completeRunIfLive(ctx, merged, pr.repository, null, now);
+  return run._id;
+}
+
+/**
+ * The failed runs (and the handed ones whose merge was made outside them) of a live deploy's workspace that merged a commit it carries: the commit at its own sha, and when it
  * is placed on main the commits after its target's previous live deploy and at or before its cut, found by merge sha.
  */
 async function runsMergedInto(ctx: any, d: Doc<"deploys">): Promise<Doc<"workflow_runs">[]> {
@@ -351,7 +419,7 @@ async function runsMergedInto(ctx: any, d: Doc<"deploys">): Promise<Doc<"workflo
       .query("workflow_runs")
       .withIndex("by_workspace_merge_sha", (q: any) => q.eq("workspace", d.workspace).gte("merge.sha", s).lt("merge.sha", `${s}~`))
       .take(20);
-    for (const r of rows) if (r.status === "failed") runs.set(String(r._id), r);
+    for (const r of rows) if (r.status === "failed" || mergedOutside(r)) runs.set(String(r._id), r);
   }
   return [...runs.values()];
 }
@@ -363,11 +431,11 @@ async function runsMergedInto(ctx: any, d: Doc<"deploys">): Promise<Doc<"workflo
  * the subject is the one to tell, that judgment sends the tell, at once if it is kept, else once the ask's time is up
  * if it stays. A killed session is left alone, and a stop that reached nobody tells nobody.
  */
-async function tellStoppedSession(ctx: any, run: Doc<"workflow_runs">, task: Doc<"tasks"> | null, flow: string, line: string, workspace: string): Promise<void> {
+async function tellStoppedSession(ctx: any, run: Doc<"workflow_runs">, task: Doc<"tasks"> | null, flow: string, line: string, how: string, workspace: string): Promise<void> {
   const subject: Doc<"conversations"> | null = run.primary_conversation_id ? await ctx.db.get(run.primary_conversation_id) : null;
   const named = runSenderName(flow, task?.short_id).replace(/^the /, "The ");
   // The deploy's line opens with "Live:" itself: the end is said once.
-  const content = `${named} is over: ${/^Live:/.test(line) ? line : `Live. ${line}`} It had stopped at Deploy; a later deploy took the change live. Nothing more is waiting on this session for it.`;
+  const content = `${named} is over: ${/^Live:/.test(line) ? line : `Live. ${line}`} ${how} Nothing more is waiting on this session for it.`;
   // From the run, as its runner's own messages are: its session when it has one, else the run by the name the runner
   // signs with (runSender.ts).
   const from = subject ? subject.short_id ?? String(subject._id).slice(0, 7) : "unknown";
@@ -402,4 +470,40 @@ async function stopHeardBy(ctx: any, run: Doc<"workflow_runs">, task: Doc<"tasks
 export const completeRunsOnLive = internalMutation({
   args: { deploy: v.id("deploys") },
   handler: async (ctx, args) => ({ completed: (await completeLiveRuns(ctx, args.deploy)).map(String) }),
+});
+
+/** recordOutsideMerge, after the webhook that saw the pull request merged (githubWebhooks processPRClosedEvent). */
+export const recordOutsideMergeOnPr = internalMutation({
+  args: { pr: v.id("pull_requests"), by: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const pr = await ctx.db.get(args.pr);
+    return { run: pr ? String((await recordOutsideMerge(ctx, pr, args.by)) ?? "") || null : null };
+  },
+});
+
+/**
+ * The runs whose pull request was merged outside them before recordOutsideMerge existed (ct-102786's #349), healed as
+ * the webhook would have. Idempotent: a run that records a merge is never read again. A dry run by default; one page
+ * of failed runs, newest first, and with `auto` each page schedules the next until runs older than the window.
+ *   packages/convex/run.sh deployCarries:healOutsideMerges '{"dry": false, "auto": true}'
+ */
+export const healOutsideMerges = internalMutation({
+  args: { dry: v.optional(v.boolean()), auto: v.optional(v.boolean()), cursor: v.optional(v.union(v.string(), v.null())) },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const dry = args.dry !== false;
+    const res = await ctx.db.query("workflow_runs").withIndex("by_status", (q: any) => q.eq("status", "failed")).order("desc").paginate({ cursor: args.cursor ?? null, numItems: 200 });
+    const healed: string[] = [];
+    for (const run of res.page as Doc<"workflow_runs">[]) {
+      if (!run.pr || !endedBeforeMerge(run) || run.updated_at < now - STOPPED_RUN_WINDOW_MS) continue;
+      const pr: Doc<"pull_requests"> | null = await ctx.db.query("pull_requests").withIndex("by_repository_number", (q: any) => q.eq("repository", run.pr!.repository).eq("number", run.pr!.number)).first();
+      if (pr?.state !== "merged" || !pr.merge_commit_sha) continue;
+      if (dry) healed.push(String(run._id));
+      else if (await recordOutsideMerge(ctx, pr, undefined, now)) healed.push(String(run._id));
+    }
+    const oldest = (res.page as Doc<"workflow_runs">[]).at(-1)?.created_at ?? 0;
+    const next = res.isDone || oldest < now - 2 * STOPPED_RUN_WINDOW_MS ? null : res.continueCursor;
+    if (next && args.auto) await ctx.scheduler.runAfter(0, internal.deployCarries.healOutsideMerges, { dry: args.dry, auto: true, cursor: next });
+    return { dry, read: res.page.length, healed, next };
+  },
 });

@@ -9369,7 +9369,9 @@ export default defineSchema({
     share_token: v.optional(v.string()),
     // The line's merge step landed (the-line.md L12): what went where, when.
     // `authorized`: on a merge no role is behind, the person whose word allowed it and why (orgLineMerge.personAuthorized).
-    merge: v.optional(v.object({ sha: v.string(), branch: v.string(), into: v.string(), at: v.number(), pr_url: v.optional(v.string()), authorized: v.optional(v.object({ user_id: v.id("users"), why: v.string() })) })),
+    // `outside`: the run ended before its own merge and someone else merged its pull request (`by`, their GitHub login,
+    // when GitHub said); deployCarries.recordOutsideMerge.
+    merge: v.optional(v.object({ sha: v.string(), branch: v.string(), into: v.string(), at: v.number(), pr_url: v.optional(v.string()), authorized: v.optional(v.object({ user_id: v.id("users"), why: v.string() })), outside: v.optional(v.boolean()), by: v.optional(v.string()) })),
     // The run's own graph cleared it to land with no card (orgLineMerge.clearForMerge): when, the script station that
     // wrote it and its words, the runner's account, and the attempt (runAttempt). Valid only in that attempt; every
     // resume, reask and land-again drops it.

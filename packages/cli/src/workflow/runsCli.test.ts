@@ -113,6 +113,12 @@ test("a failed run's restart is the one its stop names in the graph's words, els
   expect(restartHint({ workflow_slug: "line", current_node_id: "build" }, null)).toBe("it is bound to no task, so it cannot be resumed: start it again");
 });
 
+// Polish round 6 H1: ct-102786's Merge refused, the Release Captain merged #349, and show still said to ship it again.
+test("a run whose pull request was merged outside it names no re-ship", async () => {
+  const run = { task_short_id: "ct-9", workflow_slug: "change", takes_change: true, current_node_id: "unshipped", merge: { sha: "fec4c95767", outside: true, by: "captain" }, fail_reason: "Merged by someone else: #349 merged as fec4c95 by captain; going live." };
+  expect(restartHint(run, await stopWords(run))).toBe("it is on main as fec4c95, merged outside the run by captain, so running it again lands nothing; where it is live: cast line deploy targets");
+});
+
 // Polish round 3 H2: ct-102396 stopped at Deploy failed with its change on main; show said "run it again" while the run
 // page offered Open Deploys. The stops are the ones changePage.test.ts opens Deploys on (ct-102256, F3, "a stop at Deploy").
 test("a landed run's restart is the deploy that takes it live, as the run page's Open Deploys", async () => {
