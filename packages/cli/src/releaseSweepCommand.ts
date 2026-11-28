@@ -27,6 +27,8 @@ export type Sweep = {
   failed_runs: Array<{ task_short_id: string; flow: string; station: string | null; failed_at: number }>;
   laggards: Array<{ device: string; device_id: string | null; own: boolean; owner_id: string; cli_version: string | null; floor: string; floor_set_at: number | null }>;
   unretired: Array<{ short_id: string }>;
+  /** The live CLI release, once it has soaked 8h above the workspace's floor (`floor` null when none is set). */
+  soaked: Array<{ short_id: string; version: string; live_at: number; floor: string | null }>;
   /** The kinds the server could not read this time, each listed empty (absent from an older server). */
   failed_kinds?: SweepKind[];
   /** Sessions the server could not judge for retirement this time, left out of `unretired` (absent from an older server). */
@@ -36,7 +38,7 @@ export type Sweep = {
   failed_runs_more?: boolean;
 };
 
-const SWEEP_KINDS = ["incidents", "late_targets", "failed_runs", "laggards", "unretired"] as const;
+const SWEEP_KINDS = ["incidents", "late_targets", "failed_runs", "laggards", "unretired", "soaked"] as const;
 type SweepKind = (typeof SWEEP_KINDS)[number];
 
 /** The sweep's own fields and nothing else a server sent. */
@@ -47,6 +49,7 @@ export function project(s: Sweep): Sweep {
     failed_runs: s.failed_runs.map((r) => ({ task_short_id: r.task_short_id, flow: r.flow, station: r.station, failed_at: r.failed_at })),
     laggards: s.laggards.map((l) => ({ device: l.device, device_id: l.device_id, own: l.own, owner_id: l.owner_id, cli_version: l.cli_version, floor: l.floor, floor_set_at: l.floor_set_at })),
     unretired: s.unretired.map((u) => ({ short_id: u.short_id })),
+    soaked: s.soaked.map((r) => ({ short_id: r.short_id, version: r.version, live_at: r.live_at, floor: r.floor })),
     // Only the kind names this CLI knows: anything else a server sent is dropped.
     ...(Array.isArray(s.failed_kinds) && s.failed_kinds.length ? { failed_kinds: SWEEP_KINDS.filter((k) => s.failed_kinds!.includes(k)) } : {}),
     ...(Number.isInteger(s.unretired_skipped) && s.unretired_skipped! > 0 ? { unretired_skipped: s.unretired_skipped } : {}),
@@ -61,7 +64,7 @@ const span = (ms: number) => {
 };
 
 /** Every exception, a kind that could not be read among them: its own exceptions are hidden, so it is never quiet. */
-export const sweepCount = (s: Sweep) => s.incidents.length + s.late_targets.length + s.failed_runs.length + s.laggards.length + s.unretired.length + (s.failed_kinds?.length ?? 0);
+export const sweepCount = (s: Sweep) => s.incidents.length + s.late_targets.length + s.failed_runs.length + s.laggards.length + s.unretired.length + s.soaked.length + (s.failed_kinds?.length ?? 0);
 
 /** A body the server answered with: every list there, or the read failed (an empty 200 is no quiet hour). */
 const isSweep = (s: unknown): s is Sweep =>
@@ -90,6 +93,9 @@ export function formatSweep(s: Sweep, now: number): string[] {
   for (const u of s.unretired) {
     lines.push(`${u.short_id}  live everywhere and settled, not retired  retire: cast kill ${u.short_id}`);
   }
+  for (const r of s.soaked) {
+    lines.push(`Release ${r.version} (${r.short_id}) has been live 8h; the floor is ${r.floor ?? "unset"}: cast force-update ${r.version} --deploy ${r.short_id} (forces only if the daemon changed)`);
+  }
   for (const k of s.failed_kinds ?? []) {
     lines.push(`${k}  could not be read this time, so any of its exceptions are hidden  read again: cast release sweep`);
   }
@@ -109,6 +115,7 @@ export function sweepKeys(s: Sweep): string[] {
     ...s.failed_runs.map((r) => `failed ${r.task_short_id} ${r.station} ${r.failed_at}`),
     ...s.laggards.map((l) => `lagging ${l.device} below ${l.floor}`),
     ...s.unretired.map((u) => `unretired ${u.short_id}`),
+    ...s.soaked.map((r) => `soaked ${r.short_id}`),
     // Wakes once when a kind starts failing, not every hour it stays failed.
     ...(s.failed_kinds ?? []).map((k) => `unreadable ${k}`),
   ].sort();
@@ -188,7 +195,7 @@ export async function runSweep(o: { read: () => Promise<Sweep>; json?: boolean; 
   const code = sweepCount(s) ? SWEEP_FOUND_EXIT : SWEEP_QUIET_EXIT;
   if (o.quiet) return code;
   if (o.json) o.log(JSON.stringify(s, null, 2));
-  else if (code === SWEEP_QUIET_EXIT) o.log("Nothing needs the Release Captain: no open incident, late target, failed run, lagging machine or unretired session.");
+  else if (code === SWEEP_QUIET_EXIT) o.log("Nothing needs the Release Captain: no open incident, late target, failed run, lagging machine, unretired session or soaked release.");
   else for (const line of formatSweep(s, (o.now ?? Date.now)())) o.log(line);
   return code;
 }
@@ -202,7 +209,7 @@ export function sweepRequest(scope: Record<string, unknown>, session: string | u
 export function registerReleaseCommand(program: Command, deps: GroupDeps): void {
   const release = program.command("release").description(commandGroup("release").description);
   release.command("sweep")
-    .description("What the Release Captain must act on now: open incidents, targets past their deadline, failed runs outside an incident, machines below the floor, live sessions not retired. Exits 0 when something needs action, 1 when quiet, 2 on error (a precheck)")
+    .description("What the Release Captain must act on now: open incidents, targets past their deadline, failed runs outside an incident, machines below the floor, live sessions not retired, a CLI release soaked above the floor. Exits 0 when something needs action, 1 when quiet, 2 on error (a precheck)")
     .option("--team <name|id>", "The workspace (default: your active team)")
     .option("--json", "Machine-readable output")
     .option("--new", `The gate for a state precheck: reads the keys it saw from $${TRIGGER_PRECHECK_STATE_ENV}, prints {"wake", "state", "message"}, and wakes only on an exception not seen in 7 days`)

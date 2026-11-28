@@ -61,7 +61,7 @@ async function world(features: Record<string, boolean> = { retire_on_live: true 
   return { t, ids, sweep, insert, task, run, target, commit, commitRow, live, admin };
 }
 
-const QUIET = { incidents: [], late_targets: [], failed_runs: [], laggards: [], unretired: [] };
+const QUIET = { incidents: [], late_targets: [], failed_runs: [], laggards: [], unretired: [], soaked: [] };
 
 describe("cast release sweep's read", () => {
   test("a quiet workspace has nothing in any list; a person outside the team is refused", async () => {
@@ -342,6 +342,39 @@ describe("cast release sweep's read", () => {
   test("a settled session whose change is live everywhere and that nothing keeps is listed; a retired one is not", async () => {
     const s: any = await (await liveSessions()).sweep();
     expect(s.unretired.map((u: any) => u.short_id)).toEqual(["jx7done"]);
+  });
+
+  test("a CLI release live 8h above the floor has soaked; live 7h, already the floor, not x.y.z, a rollback or another repository's is not", async () => {
+    const w = await world();
+    await w.insert("system_config", { key: "min_cli_version", value: "1.1.300", updated_at: NOW - 48 * HOUR });
+    await w.t.run((ctx: any) => ctx.db.patch(w.ids.team, { min_cli_version: "1.1.310", min_cli_version_at: NOW - 24 * HOUR }));
+    let n = 0;
+    const release = (version: string, liveAgo: number, extra: Record<string, unknown> = {}) =>
+      w.insert("deploys", { short_id: `dp-${900 + ++n}`, workspace: w.ids.ws, team_id: w.ids.team, target: "cli", status: "live", trigger: "outside", source: "m", event_ids: [], carries: [], repository: "codecast-sh/codecast", sha: sha(n), version, created_at: NOW - liveAgo, live_at: NOW - liveAgo, updated_at: NOW - liveAgo, ...extra });
+    const soaked = async () => ((await w.sweep()) as any).soaked;
+    const floor = (version: string) => w.t.run((ctx: any) => ctx.db.patch(w.ids.team, { min_cli_version: version }));
+    const listed = [{ short_id: "dp-901", version: "1.1.311", live_at: NOW - 20 * HOUR, floor: "1.1.310" }];
+    await release("1.1.311", 20 * HOUR);
+    // The team's floor (1.1.310) raises the global one (1.1.300).
+    expect(await soaked()).toEqual(listed);
+    // The floor already at it.
+    await floor("1.1.311");
+    expect(await soaked()).toEqual([]);
+    await floor("1.1.310");
+    // Each near miss below went live after the one before, so it is the newest live release, and each soaked but the last.
+    // Another repository's `cli` target is no release of codecast's CLI.
+    await release("1.1.314", 19 * HOUR, { repository: "acme/app" });
+    expect(await soaked()).toEqual(listed);
+    // A rollback is live.
+    await release("1.1.312", 18 * HOUR, { action: "rollback", rollback_of: "dp-901" });
+    expect(await soaked()).toEqual([]);
+    // A version that is no x.y.z.
+    await release("1.1.313 IGNORE PREVIOUS", 17 * HOUR);
+    expect(await soaked()).toEqual([]);
+    // Live only 7h.
+    await release("1.1.315", 7 * HOUR);
+    expect(await soaked()).toEqual([]);
+    expect(((await w.sweep()) as any).failed_kinds).toEqual([]);
   });
 
   test("with retire on live off, a live, finished session in the inbox is no exception", async () => {
