@@ -254,6 +254,9 @@ export interface FileLockOptions {
   describe?: string;
   /** What the holder is doing, stamped beside its pid so a listing can say. */
   what?: string;
+  /** false: no release-and-re-raise on SIGINT/SIGTERM/SIGHUP, for a holder whose own handlers must run first (a flow
+   *  runner reports its run stopped before it exits). The release then rides `exit` and the caller's own release. */
+  signals?: boolean;
 }
 
 /** Take `lockFile` exclusively. Resolves to the release function. */
@@ -271,7 +274,7 @@ export async function acquireFileLock(lockFile: string, opts: FileLockOptions = 
       fs.closeSync(fd);
       const release = () => removeIfOurs(lockFile, stamp);
       process.once("exit", release);
-      const signals: NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"];
+      const signals: NodeJS.Signals[] = opts.signals === false ? [] : ["SIGINT", "SIGTERM", "SIGHUP"];
       const onSignal = (sig: NodeJS.Signals) => {
         release();
         cleanup();
@@ -353,16 +356,26 @@ export function listFileSlots(dir: string): { holding: SlotEntry[]; waiting: Slo
 export async function acquireFileSlot(
   dir: string,
   slots: number,
-  opts: { waitMs?: number; onWait?: () => void; describe?: string; what?: string } = {},
+  opts: {
+    waitMs?: number; onWait?: () => void; describe?: string; what?: string; signals?: boolean;
+    /** How many of the slots the machine can hold now (fewer when memory is short), asked before every try: a place
+     *  is taken only while fewer than that are held, and only among the first that many, so racers cannot overshoot. */
+    room?: () => number;
+    /** Asked before every try: true gives the wait up (the run it was for ended). */
+    stop?: () => boolean;
+  } = {},
 ): Promise<() => void> {
   const deadline = Date.now() + (opts.waitMs ?? Number.POSITIVE_INFINITY);
   const ticket = path.join(dir, "waiting", `${process.pid}-${Math.random().toString(36).slice(2, 8)}.json`);
   const leave = () => fs.rmSync(ticket, { force: true });
   try {
     for (;;) {
-      for (let i = 0; i < slots; i++) {
+      if (opts.stop?.()) throw new Error(`the wait for ${opts.describe ?? "a slot"} was given up`);
+      const room = Math.min(slots, opts.room?.() ?? slots);
+      const open = room >= slots ? slots : room > 0 && listFileSlots(dir).holding.length < room ? room : 0;
+      for (let i = 0; i < open; i++) {
         try {
-          return await acquireFileLock(path.join(dir, `slot-${i}.lock`), { waitMs: 0, staleMs: Number.POSITIVE_INFINITY, describe: opts.describe, what: opts.what });
+          return await acquireFileLock(path.join(dir, `slot-${i}.lock`), { waitMs: 0, staleMs: Number.POSITIVE_INFINITY, describe: opts.describe, what: opts.what, signals: opts.signals });
         } catch {
           /* held by a live process */
         }

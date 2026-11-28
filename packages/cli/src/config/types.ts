@@ -341,6 +341,10 @@ export interface Config extends CloudSessionSyncSettings {
   // a repository (owner/name) for one. A device id, label or hostname of the user's own; "here" keeps runs local.
   flow?: { device?: string; devices?: Record<string, string> };
   interactive_jobs?: { per_machine?: number };
+  // Places in the named slot local_ci (default 2; machineSlot.ts): Local CI stations and `cast slot run --name local_ci`.
+  local_ci?: { per_machine?: number };
+  // Places in the named slot worktree (default one per 16 GB of memory): `cast slot run --name worktree`.
+  worktree?: { per_machine?: number };
 
   // --- Server-stamped bookkeeping (index.ts) ---
   created_at?: string;

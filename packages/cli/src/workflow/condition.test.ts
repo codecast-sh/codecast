@@ -259,6 +259,14 @@ describe("evalCondition: every condition the shipped workflows use", () => {
     ["outcome = failure and merge.exit_code = 3 and retest.visits < 3", { outcome: "failure", "merge.exit_code": "3", "retest.visits": "3" }, false],
     ["outcome = failure and merge.exit_code = 3", { outcome: "failure", "merge.exit_code": "3" }, true],
     ["outcome = failure and merge.exit_code = 3", { outcome: "failure", "merge.exit_code": "2" }, false],
+    // Merge still in line for the lease after its wait (exit 4) runs again, three times at most.
+    ["outcome = failure and merge.exit_code = 4 and merge.free.visits < 3", { outcome: "failure", "merge.exit_code": "4" }, true],
+    ["outcome = failure and merge.exit_code = 4 and merge.free.visits < 3", { outcome: "failure", "merge.exit_code": "4", "merge.free.visits": "2" }, true],
+    ["outcome = failure and merge.exit_code = 4 and merge.free.visits < 3", { outcome: "failure", "merge.exit_code": "4", "merge.free.visits": "3" }, false],
+    ["outcome = failure and merge.exit_code = 4 and merge.free.visits < 3", { outcome: "failure", "merge.exit_code": "2" }, false],
+    // After those visits it stops as still in line, resumable at PR, never "not merged".
+    ["outcome = failure and merge.exit_code = 4", { outcome: "failure", "merge.exit_code": "4", "merge.free.visits": "3" }, true],
+    ["outcome = failure and merge.exit_code = 4", { outcome: "failure", "merge.exit_code": "2" }, false],
     ["outcome = failure and retest.exit_code = 4", { outcome: "failure", "retest.exit_code": "4" }, true],
     ["outcome = failure and retest.exit_code = 4", { outcome: "failure", "retest.exit_code": "1" }, false],
     ["outcome = failure and onto_main.exit_code = 4", { outcome: "failure", "onto_main.exit_code": "4" }, true],

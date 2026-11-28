@@ -132,6 +132,23 @@ app.get("/api/desktop/latest", async (c) =>
   c.json({ version: await latestDesktopVersion() })
 );
 
+// The CLI release latest.json names, read at most once a minute: Settings >
+// Daemon's Update names it, so a machine's day-old cached check cannot clear
+// the request (ct-102439). latest.json carries no CORS header, so the page
+// reads it through here. null until the manifest is read.
+let latestCli: { version: string | null; at: number } = { version: null, at: 0 };
+app.get("/api/cli/latest", async (c) => {
+  if (Date.now() - latestCli.at >= 60_000) {
+    latestCli = { ...latestCli, at: Date.now() };
+    try {
+      const res = await fetch("https://dl.codecast.sh/latest.json", { signal: AbortSignal.timeout(3_000) });
+      const version = res.ok ? (await res.json())?.version : undefined;
+      if (typeof version === "string" && /^\d+\.\d+\.\d+$/.test(version)) latestCli = { version, at: Date.now() };
+    } catch {}
+  }
+  return c.json({ version: latestCli.version });
+});
+
 app.get("/download/:binary", (c) => {
   const binary = c.req.param("binary");
   const url = BINARIES[binary];

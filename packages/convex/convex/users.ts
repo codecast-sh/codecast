@@ -3,6 +3,7 @@ import { currentMembershipVisibility } from "./teamVisibility";
 import { heartbeatTailnetPatch, tailnetValidator } from "./lib/heartbeatTailnet";
 import { distributionValidator, selfUpdateBeatPatch, updateRequestFor, updateStatusValidator } from "./lib/deviceUpdate";
 import { getUserOrToken } from "./lib/auth";
+import { highestFloor } from "./systemConfig";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { mutation, query, internalMutation, internalQuery } from "./functions";
 import { scheduleLiveActivityRefresh } from "./lib/liveActivityRefresh";
@@ -826,7 +827,8 @@ export const daemonHeartbeat = mutation({
       cc_session_tokens: true,
       // Membership-verified: the pointer outlives a lapsed membership.
       team_id: (await activeTeamMembershipFor(ctx, auth.userId))?.teamId,
-      min_cli_version: minVersionConfig?.value ?? undefined,
+      // The global floor raised by the user's teams' floors (systemConfig.effectiveMinCliVersion).
+      min_cli_version: highestFloor([minVersionConfig?.value, ...teams.map((t) => t?.min_cli_version)]) ?? undefined,
       agent_permission_modes: user?.agent_permission_modes ?? undefined,
       // The backend new Claude sessions start on; null = the shipped default.
       claude_backend: user?.claude_backend ?? null,

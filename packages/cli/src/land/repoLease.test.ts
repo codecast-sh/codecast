@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { holdRepoLease, leaseRouteMissing } from "./repoLease";
+import { LeaseLineWait, holdRepoLease, leaseAccessRefused, leaseRouteMissing } from "./repoLease";
 
 // The client side of the repository's lease: a holder that lost it (the server
 // says another holds it, or it has not renewed for half the lease) knows, and
@@ -39,6 +39,45 @@ describe("holdRepoLease", () => {
     await lease.release();
   });
 
+  test("a wait past waitMs with keepPlace throws LeaseLineWait keeping its place, and a take with its token asks as the same waiter", async () => {
+    const tokens: string[] = [];
+    const ops: string[] = [];
+    let clock = 0;
+    const post = async (_p: string, body: Record<string, unknown>) => {
+      ops.push(String(body.op));
+      tokens.push(String(body.token));
+      clock += 1000;
+      return ops.length < 4 ? { held: false, holder: "merge A", since: 0, position: 3 } : { held: true };
+    };
+    const err = await holdRepoLease(post, { repository: "o/r", holder: "merge B", log: () => {}, pollMs: 1, waitMs: 2000, keepPlace: true, now: () => clock }).then(() => null, (e) => e);
+    expect(err).toBeInstanceOf(LeaseLineWait);
+    expect(err.place).toBe("3rd in line behind merge A");
+    // Never released: the place stays for the next ask with the same token.
+    expect(ops).toEqual(["take", "take"]);
+    const lease = await holdRepoLease(post, { repository: "o/r", holder: "merge B", token: err.token, log: () => {}, pollMs: 1, now: () => clock });
+    expect(new Set(tokens)).toEqual(new Set([err.token]));
+    // The station's end and a signal both release it: one release goes out.
+    await Promise.all([lease.release(), lease.release()]);
+    expect(ops.filter((o) => o === "release")).toEqual(["release"]);
+  });
+
+  test("onLost hears a lease lost under its holder: a renewal answered by another, or none succeeding for half the lease", async () => {
+    let lostTold = 0;
+    const s = server([{ held: true }, { held: false, holder: "merge B" }, { held: false, holder: "merge B" }]);
+    const lease = await holdRepoLease(s.post, { repository: "o/r", holder: "merge A", log: () => {}, renewMs: 10, onLost: () => lostTold++ });
+    await new Promise((r) => setTimeout(r, 60));
+    expect(lostTold).toBe(1);
+    await lease.release();
+    let clock = 0;
+    let staleTold = 0;
+    const down = server([{ held: true }, ...Array.from({ length: 50 }, () => new Error("fetch failed"))]);
+    const stale = await holdRepoLease(down.post, { repository: "o/r", holder: "merge A", log: () => {}, renewMs: 5, staleMs: 100, now: () => clock, onLost: () => staleTold++ });
+    clock = 101;
+    await new Promise((r) => setTimeout(r, 40));
+    expect(staleTold).toBe(1);
+    await stale.release();
+  });
+
   test("a holder that has not renewed for half the lease (a sleeping laptop) counts it lost without asking", async () => {
     let clock = 0;
     const s = server([{ held: true }]);
@@ -64,5 +103,14 @@ describe("holdRepoLease", () => {
     const refused = server([new Error("Run r1 cannot lease o/r: neither its workspace nor any of your teams works on it.")]);
     await expect(holdRepoLease(refused.post, { repository: "o/r", holder: "x", log: () => {}, pollMs: 1 })).rejects.toThrow("cannot lease o/r");
     expect(refused.ops).toEqual(["take"]);
+  });
+
+  test("an access refusal is told apart by the server's own words, for this repository only", () => {
+    // Both refusals convex repoLeases.ts leaseWorkspace throws, word for word (pinned in repoLeases.test.ts).
+    expect(leaseAccessRefused(new Error("Run r1 cannot lease o/r: neither its workspace nor any of your teams works on it."), "o/r")).toBe(true);
+    expect(leaseAccessRefused(new Error("Team t1 cannot lease o/r: it does not work on it."), "o/r")).toBe(true);
+    expect(leaseAccessRefused(new Error("Run r1 cannot lease o/r2: neither its workspace nor any of your teams works on it."), "o/r")).toBe(false);
+    expect(leaseAccessRefused(new Error("No run r1 you can lease a repository for."), "o/r")).toBe(false);
+    expect(leaseAccessRefused(new Error("this codecast server has no /cli/repo-lease route — it needs a newer deployment."), "o/r")).toBe(false);
   });
 });

@@ -95,6 +95,10 @@ test("the card shows the note to its new owner, escalated or passed", async () =
   const up = await mount(<HandoffNote decision={{ status: "pending", passed_to: { id: "u3", kind: "user", by: "u1", note: "Costs money" }, escalated: { at: 1, by: "u1", note: "Costs money", to: ["u3"] } } as any} />);
   expect(up.container.querySelector("[data-decision-handoff=escalated]")?.textContent).toContain("Costs money");
   up.unmount();
+  // Codecast's own escalation (convex lib/cardWaiters.ts) has no sender: the card shows the count.
+  const waited = await mount(<HandoffNote decision={{ status: "pending", escalated: { at: 1, note: "3 changes wait on this", to: ["u3"], waiting: 3 } } as any} />);
+  expect(waited.container.querySelector("[data-decision-handoff=escalated]")?.textContent).toContain("3 changes wait on this");
+  waited.unmount();
   const pass = await mount(<HandoffNote decision={{ status: "pending", passed_to: { id: "u2", kind: "user", by: "u1", note: "Yours" } } as any} />);
   expect(pass.container.querySelector("[data-decision-handoff=passed]")?.textContent).toContain("Yours");
   pass.unmount();

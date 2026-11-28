@@ -640,6 +640,27 @@ the task's followers are not notified), and the run's owner hears it: its
 subject session in the run's end message, else the person whose account ran
 it, through a note posted `to_owner`.
 
+A stop of the pipeline every change goes through (main stayed red, CI never
+reported, a deploy stuck or failed) is marked on its exit
+with the breakage it names, `shared="main_red"` (lowercase letters, digits and
+`_`; a bare `shared=true` names it by the exit's id); a segment exit's mark
+rides onto the step a flow routes it by. Only such a stop records a
+fingerprint, `flowstop:<repository>:<breakage>`, and files a held `flowstop`
+signal (convex `flowStops.ts`). The key holds no flow, so every flow composing
+one segment, and every exit naming one breakage (the change flow's `mainred`
+and `mainred_again`), meets in one cause. Once the same breakage holds runs of two different tasks,
+it opens one cause: the workspace's @release holds it, Ground and the line
+leave it alone, and each stopped run's task waits on it. When it closes, each
+run it still stops resumes at the station its exit names in `resume=` (the
+change flow's pipeline stops name PR: a resume is a new attempt, and Merge
+clears only on that attempt's CI and review), else at the station that failed
+(never a segment's exit step): queued where a line's sweep carries out the queue, else at once on its
+machine. Dropped as another problem's duplicate, its runs wait on that one. A
+stop about the change itself (a rejection, findings, a conflict) is never an
+incident, however alike its words read across changes, and neither is
+congestion (main keeps moving, a merge turn not won): nothing is broken, and
+each change resumes on its own.
+
 Every comment a run posts goes through the run's own primary session, so it is
 signed by the run in its flow's label ("Ship run"), and so are its notifications
 (`lib/actor.ts` kind `run`); the stop words carry `$<station>.summary`, the
@@ -991,6 +1012,43 @@ the person's checkout, else at Fix not frozen. Each way back to the session
 (Fix findings, Resolve conflict, Fix deploy) has `max_visits=3`. A run with no
 session behind it stops where it would brief one: Conflict, Found work, Deploy
 failed.
+
+### Machine slots: heavy stations take turns on one machine
+
+A Ship runs on the asking machine's daemon, so every Ship started there runs
+its Local CI on that one machine. A command station marked
+`machine_slot="<name>"` takes a place in that named slot of the machine before
+its script runs (`machineSlot.ts`; the names and their caps are
+`machineCaps.ts` MACHINE_SLOTS: `local_ci`, 2, and `worktree`, one per 16 GB
+of memory and at least one, unless `cast config <name>.per_machine` or
+`CAST_LOCAL_CI_MAX` / `CAST_WORKTREE_MAX` says otherwise; any other name, or
+the attribute on a station that is not a command, fails validation). Each
+place is a lock held by a live pid under `~/.codecast/slots/<name>/`, so a
+holder that died frees it on the next try. While the machine is short of
+memory (`watcherMemory.ts underPressure`: the kernel's pressure level, or swap
+filling while little is available) a slot admits one holder, never none, so
+pressure that outlasts every holder cannot starve them all; it never counts
+processes. The station waits up to its `timeout`, and the script's clock
+starts only once it holds a place; a run cancelled while it waits never
+starts the station. A wait that runs out is the outcome `no_slot`
+(`workflow/stationSlot.ts`), and it goes to the station the node names in
+`no_slot="<station>"`, never down the node's edges; without that attribute
+the run stops there. It is an attribute rather than an edge because a station
+placed with `before=` or `after=` writes no edges (its anchor's routes are
+its own), and a cast that predates machine slots ignores both attributes and
+runs the station as before. Codecast's `change` says `no_slot="pr"` on Local
+CI, as a red Local CI already goes on after its fix: CI judges the change.
+The place is released when the station ends or the runner exits; the runner
+takes it without the lock's own signal handlers, so a Ctrl-C still records
+the run stopped before the runner exits.
+
+`cast slot run --name <n> [--wait <dur>] -- <cmd...>` takes the same places
+for any command (exit 75 when the wait runs out). A signal goes on to the
+command, and the place is given back only once the command has ended (killed
+after 10s), so no second holder starts beside one still winding down. Work
+that checks a worktree of its own (`/implement`, orchestrate's hands) runs as
+`cast slot run --name worktree -- <cmd>`. `cast slot ls` and `cast queue`
+list each slot's holders and waiters.
 
 ## FL5. A Claude Code workflow becomes a flow
 

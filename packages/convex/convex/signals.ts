@@ -43,7 +43,7 @@ import { noticeCauseReopened } from "./lineNotices";
 import { titleSimilarity } from "./taskMining";
 import { callModel } from "./lib/anthropic";
 import { isTerminalTaskStatus } from "@codecast/shared/tasks";
-import { SIGNAL_KINDS, type SignalKind } from "@codecast/shared/contracts/signalFingerprint";
+import { holdsFlowStop, SIGNAL_KINDS, type SignalKind } from "@codecast/shared/contracts/signalFingerprint";
 import { LINE_SIGNAL_CAP, LINE_SIGNAL_WINDOW_MS, lineProfileContentKey, lineProfileUnchanged } from "@codecast/shared/contracts/lineProfile";
 import { lineFinderValidator, lineProfileFactsValidator } from "./lib/lineProfileValidator";
 import { isPlaced, placeSignal, scopeProject, type Placement } from "./lib/signalPlacement";
@@ -504,10 +504,10 @@ async function attachDecision(ctx: any, workspace: string, signal: SignalInput, 
  * counts findings beyond the held ones (the new finding commitSignal is
  * about to insert).
  */
-async function openCauseWithHeld(ctx: any, db: WorkDb, seed: CauseSeed & { fingerprint: string; observed_at?: number }, placement: Placement, o: { now: number; issueKey: string | null; split: { from: string } | null; newCause: NewCause; extra: number }) {
+async function openCauseWithHeld(ctx: any, db: WorkDb, seed: CauseSeed & { fingerprint: string; observed_at?: number }, placement: Placement, o: { now: number; issueKey: string | null; split: { from: string } | null; newCause: NewCause; extra: number; heldSince?: number }) {
   const workspace = db.workspaceKey;
   const observedAt = seed.observed_at ?? o.now;
-  const held = o.issueKey ? await heldUnderIssue(ctx, workspace, [seed.fingerprint, o.issueKey]) : await heldSignals(ctx, workspace, seed.fingerprint);
+  const held = o.issueKey ? await heldUnderIssue(ctx, workspace, [seed.fingerprint, o.issueKey]) : await heldSignals(ctx, workspace, seed.fingerprint, o.heldSince);
   const seen = [observedAt, ...held.map((r) => r.observed_at)];
   const signalCount = held.length + o.extra;
   const { taskId, taskShortId } = await openCause(ctx, db, seed, placement.project_id, {
@@ -523,6 +523,17 @@ async function openCauseWithHeld(ctx: any, db: WorkDb, seed: CauseSeed & { finge
   // cause it opened, so the cause carries their history.
   for (const row of held) await ctx.db.patch(row._id, { task_id: taskId, attach: "fingerprint" as SignalAttach });
   return { taskId, taskShortId, signalCount };
+}
+
+/**
+ * A cause opened for the signals held under the seed's key, every one of them
+ * joining it: flowStops.ts, once the held stops come from two changes. The
+ * seed's own signal is one of the held rows already. `title` names the cause
+ * instead of the seed's title; `heldSince` leaves held rows observed before it
+ * (a stop too old to say anything about now) where they are.
+ */
+export async function openCauseOfHeld(ctx: any, db: WorkDb, seed: SignalInput, now: number, o: { title?: string; heldSince?: number } = {}): Promise<Id<"tasks">> {
+  return (await openCauseWithHeld(ctx, db, seed, filedPlacement(null), { now, issueKey: null, split: null, newCause: o.title ? { title: o.title } : {}, extra: 0, heldSince: o.heldSince })).taskId;
 }
 
 /**
@@ -619,7 +630,9 @@ export async function commitSignal(ctx: any, db: WorkDb, userId: Id<"users">, si
  * one (`cast signal add`, a cause filed from the line page), the lesson the
  * line's learn station files from a person's card answer (LE12), a case
  * against a judge, made from a finding someone found wrong (LL11), and a step
- * of the line's deploy stage that failed (deploys.md DP9).
+ * of the line's deploy stage that failed (deploys.md DP9). A run its flow
+ * stopped is held: flowStops.ts opens its cause only once a second change
+ * stops the same way (openCauseOfHeld).
  */
 const CAUSE_OPENING_SOURCES = new Set(["person", "lesson", JUDGE_CASE_SOURCE, "deploy"]);
 
@@ -656,6 +669,8 @@ export const dropUnconvertedCauses = internalMutation({
       seen.add(String(row.task_id));
       const task = await ctx.db.get(row.task_id);
       if (!task || task.source !== "signal" || task.status !== "open") continue;
+      // An incident's held stops opened it on purpose (flowStops.ts), though their source opens nothing alone.
+      if (holdsFlowStop(task.cause?.fingerprints)) continue;
       const signals = await ctx.db.query("signals").withIndex("by_task", (q) => q.eq("task_id", task._id)).collect();
       const sources = [...new Set(signals.map((s) => s.source))];
       let converts = false;
@@ -671,8 +686,8 @@ export const dropUnconvertedCauses = internalMutation({
 });
 
 /** The workspace's held signals under one key, newest first. */
-async function heldSignals(ctx: any, workspace: string, fingerprint: string): Promise<Doc<"signals">[]> {
-  return (await keyRows(ctx, workspace, fingerprint)).filter((r) => !r.task_id && !r.retired);
+export async function heldSignals(ctx: any, workspace: string, fingerprint: string, since?: number): Promise<Doc<"signals">[]> {
+  return (await keyRows(ctx, workspace, fingerprint)).filter((r) => !r.task_id && !r.retired && (since === undefined || r.observed_at > since));
 }
 
 /**
@@ -744,6 +759,7 @@ const KIND_WORDS: Record<string, string> = {
   ux: "a usability report",
   cohesion: "a consistency report",
   request: "a request",
+  flowstop: "a stopped run",
 };
 const kindWords = (kind: string) => KIND_WORDS[kind] ?? "a report";
 
@@ -1538,14 +1554,21 @@ export async function mergeIssue(ctx: any, userId: Id<"users">, workspace: strin
 
 /** One problem folds into another: every report moves to the survivor, the folded one is dropped as its duplicate, and what waited on it waits on the survivor. How many reports moved. */
 export async function foldProblem(ctx: any, userId: Id<"users">, merged: Doc<"tasks">, survivor: Doc<"tasks">, now: number): Promise<number> {
-  const all = await ctx.db.query("signals").withIndex("by_task", (q: any) => q.eq("task_id", merged._id)).collect();
-  await moveSignalRows(ctx, all, merged, survivor, { now, userId, attach: "fingerprint", released: merged.cause?.fingerprints ?? [], patch: { folded_from: merged._id } });
+  const moved = await moveProblemSignals(ctx, userId, merged, survivor, now);
   const folded = (await ctx.db.get(merged._id))!;
   await moveTaskStatus(ctx, folded, "dropped", { actorUserId: userId, now, extra: { duplicate_of: survivor.short_id, ...(folded.cause ? { cause: { ...withoutIssue(folded.cause), merged_into: survivor._id } } : {}) } });
   await redirectDependents(ctx, userId, byUser(userId), folded, survivor, `${folded.short_id} merged into ${survivor.short_id}`, { onLoop: "leave" });
   // The cause its own run argued travels with its findings: the survivor's next run reads it here, and its card supersedes the folded one's (lineTrial.cards).
   const argued = merged.project_id ? await proposedCause(ctx, merged) : null;
   if (argued) await noteOn(ctx, survivor._id, `Merged in ${merged.short_id}, whose run named its cause: ${argued.line}${argued.where.length ? ` (${argued.where.join(", ")})` : ""}. A fix here answers its findings too.`);
+  return moved;
+}
+
+/** Every report of one problem, its keys with them, moves to another (foldProblem; flowStops.settleIncidentRuns, for
+ *  an incident marked a plain duplicate or superseded). How many moved. */
+export async function moveProblemSignals(ctx: any, userId: Id<"users">, from: Doc<"tasks">, to: Doc<"tasks">, now: number): Promise<number> {
+  const all = await ctx.db.query("signals").withIndex("by_task", (q: any) => q.eq("task_id", from._id)).collect();
+  await moveSignalRows(ctx, all, from, to, { now, userId, attach: "fingerprint", released: from.cause?.fingerprints ?? [], patch: { folded_from: from._id } });
   return all.length;
 }
 

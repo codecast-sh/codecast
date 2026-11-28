@@ -6,7 +6,7 @@
 import { fnv1a32 } from "./inboxProjection";
 
 /** What a signal can say it saw (LE3). The door, the CLI and a repo's line profile share this list. */
-export const SIGNAL_KINDS = ["bug", "regression", "prompt_miss", "ux", "cohesion", "request"] as const;
+export const SIGNAL_KINDS = ["bug", "regression", "prompt_miss", "ux", "cohesion", "request", "flowstop"] as const;
 export type SignalKind = (typeof SIGNAL_KINDS)[number];
 
 /** An eval finding: a surface and the check (a gate, a verdict) or freeze id it concerns. */
@@ -44,6 +44,27 @@ export function groupFingerprint(prefix: string | undefined, kind: string, fp: s
 
 function hex8(s: string): string {
   return fnv1a32(s).toString(16).padStart(8, "0");
+}
+
+/** The source of the signal a run's stop files (convex flowStops.ts). */
+export const FLOW_STOP_SOURCE = "flow";
+
+/**
+ * A cause holding a stop of the shared pipeline: an incident the workspace's
+ * @release owns, never fix work for Ground or a line (convex flowStops.ts).
+ */
+export const holdsFlowStop = (fingerprints: ReadonlyArray<string> | undefined): boolean => !!fingerprints?.some((f) => f.startsWith("flowstop:"));
+
+/**
+ * A run stopped at an exit its flow marks shared (workflow_runs.stop_fingerprint):
+ * one key per repository and breakage, the name the exit gives it
+ * (`shared="main_red"`), so the same breakage on many changes reaches one cause
+ * whichever flow composed the exit and whichever of its exits said it. The
+ * stop's words are no part of the key, since they carry the change's own files
+ * and a model's prose and so never read alike across changes.
+ */
+export function flowStopFingerprint(repository: string, breakage: string): string {
+  return `flowstop:${repository.trim().toLowerCase()}:${breakage.trim()}`;
 }
 
 /** A Sentry issue mirrored as a group: the issue id is already Sentry's grouping. */

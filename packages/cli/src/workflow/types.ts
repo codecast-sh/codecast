@@ -48,6 +48,13 @@ export interface WorkflowNode {
   // A station that parks may hold at most this many of the flow's runs: while it holds that many, the flow's live
   // admission starts nothing (convex liveFlows.queueFullWords). Union's onefix Queue says room=8.
   room?: number;
+  // Command nodes: a cap of this machine's (machineCaps.ts MACHINE_SLOTS) the station takes a place in before its script
+  // runs, waiting up to its timeout with its clock stopped; no place by then is the outcome `no_slot` (stationSlot.ts).
+  // Not `slot=`, which marks a backbone's segment for a variant to fill.
+  machine_slot?: string;
+  // Where a `no_slot` outcome goes: a station id. An attribute rather than an edge, so a station placed with before=
+  // or after= can say it, and a cast that predates machine slots ignores it. Without one, no_slot stops the run there.
+  no_slot?: string;
   // Command nodes that render the line's own text (Union's shared text from
   // _shared.md): re-made whenever the run resumes, so a resumed run reads the
   // text as it is now, never the copy in its checkpoint (line-versions.md LV4).
@@ -102,6 +109,18 @@ export interface WorkflowNode {
   // test database, a missing tool), not that the change is wrong: the task
   // gets a note and the run's owner hears it, never followers as a blocker.
   machine?: boolean;
+  // A stop that says the shared pipeline is broken (main red, CI or a deploy
+  // down), not this change: the same stop on two changes is one incident for the
+  // workspace's @release, and the runs it stopped resume when it closes (convex
+  // flowStops.ts). The value names the breakage (`shared="main_red"`), so every
+  // flow composing one segment, and every exit that means the same breakage, is
+  // one incident; a bare `shared=true` names it by the exit's own id. A segment
+  // exit's mark rides onto the step a routed stop leaves by.
+  shared?: true | string;
+  // A stop exit: the station a run stopped here resumes at (a station id), when the station that failed is not the
+  // one to start again from (a resume is a new attempt, and Merge clears only on that attempt's CI and review). The
+  // incident that holds the run resumes it there (convex flowStops.ts); without one it resumes at what failed.
+  resume?: string;
   // Bookkeeping (flows.md FL6): the station finishes the stage before it (reads
   // its verdicts, records the sha it merged), so a person sees it as part of
   // that stage, never as a stage of its own. It runs like any other station.

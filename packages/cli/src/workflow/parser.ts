@@ -8,6 +8,7 @@ import { SEGMENT_SEP, retiredFlowLine, segmentTopOf } from "@codecast/shared/con
 import { Parser, tokenize, inlineRef, isStopExit, mentionsFailure, shapeOf, type Attr, type RawGraph, type ReadFile } from "./rawGraph";
 import { VARIANT_KEYS, applyOverrides, variantEdits, withGuides } from "./variantEdits";
 import { teamFlowFile } from "./teamFlowIndex";
+import { machineSlotProblem } from "../machineSlot.js";
 
 export type { ReadFile };
 const readDisk: ReadFile = (abs) => (fs.existsSync(abs) && fs.statSync(abs).isFile() ? fs.readFileSync(abs, "utf-8") : null);
@@ -265,7 +266,7 @@ function shippedSlugOf(src: string, raw: RawGraph): string | null {
 }
 
 const STRING_FIELDS = ["prompt", "script", "doc", "card", "stop", "goal", "guide"];
-const ID_FIELDS = ["asker", "answerer", "retry_target"];
+const ID_FIELDS = ["asker", "answerer", "retry_target", "no_slot", "resume"];
 
 /**
  * A segment's params (`params="except above=50"`): `$except` in its stations
@@ -366,7 +367,7 @@ function expandFlows(raw: RawGraph, dir: string | undefined, read: ReadFile, res
         const said = String(a.label ?? sid).replace(/[^\w .,:()-]/g, "");
         const exitId = `${p}${sid}`;
         // A routed stop keeps the segment's words for why, read as $stop_reason by whatever the node routes to.
-        nodes.set(exitId, { shape: "parallelogram", label: said, script: `echo '{"exit": "${sid}"}'${failing ? "; exit 1" : ""}`, segment: id, segment_label: segLabel, ...marks, segment_exit: failing ? "stop" : "done", ...(failing ? { stop: rewrite(String(a.stop)) } : {}) });
+        nodes.set(exitId, { shape: "parallelogram", label: said, script: `echo '{"exit": "${sid}"}'${failing ? "; exit 1" : ""}`, segment: id, segment_label: segLabel, ...marks, segment_exit: failing ? "stop" : "done", ...(failing ? { stop: rewrite(String(a.stop)), ...(a.shared !== undefined ? { shared: a.shared } : {}), ...(copy.resume !== undefined ? { resume: copy.resume } : {}) } : {}) });
         // `<node>.exit` in the node's own conditions reads which exit the segment took.
         const which = (c: string) => c.replace(new RegExp(`(^|[^\\w.])${id}\\.exit\\b`, "g"), `$1${exitId}.json.exit`);
         for (const e of out.filter((e) => (failing ? mentionsFailure(e) : !mentionsFailure(e)))) edges.push({ ...e, from: exitId, ...(e.condition ? { condition: which(e.condition) } : {}) });
@@ -494,6 +495,17 @@ export function validateWorkflow(graph: WorkflowGraph): string[] {
     if (node.type === "command" && !node.script) {
       errors.push(`Command node '${node.id}' has no script attribute`);
     }
+    if (node.machine_slot !== undefined) {
+      if (node.type !== "command") errors.push(`${node.id} [machine_slot="${node.machine_slot}"]: only a command station (shape=parallelogram) takes a machine slot`);
+      else {
+        const problem = machineSlotProblem(node.machine_slot);
+        if (problem) errors.push(`${node.id} [machine_slot="${node.machine_slot}"]: ${problem}`);
+      }
+    }
+    // The name is the incident's key (convex flowStops.ts): one spelling, so two flows naming one breakage meet.
+    if (typeof node.shared === "string" && !/^[a-z0-9_]+$/.test(node.shared)) errors.push(`${node.id} [shared="${node.shared}"]: name the breakage in lowercase letters, digits and _ (shared="main_red"), or shared=true for the exit's own id`);
+    if (node.resume !== undefined && !node.stop) errors.push(`${node.id} [resume="${node.resume}"]: only a stop exit (stop=) says where a run stopped there resumes`);
+    if (node.no_slot !== undefined && node.machine_slot === undefined) errors.push(`${node.id} [no_slot="${node.no_slot}"]: only a station that takes a machine slot (machine_slot=) can end no_slot`);
     if (node.type === "call" && !node.prompt) {
       errors.push(`Call node '${node.id}' has no prompt attribute`);
     }

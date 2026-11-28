@@ -520,6 +520,10 @@ export default defineSchema({
     // The library flow a session's change is offered first (flows.md FL4): a
     // flow's slug, set by an admin on /flows. Unset: the shipped `change`.
     default_flow: v.optional(v.string()),
+    // The team's CLI floor: members' machines below it update themselves (a device takes the highest floor that applies).
+    min_cli_version: v.optional(v.string()),
+    // When it was last raised: the release sweep names a machine still below it half an hour later.
+    min_cli_version_at: v.optional(v.number()),
     // Installed apps (docs/architecture/installed-apps.md), set by an admin
     // in Team settings (teams.setAppsPolicy): may members install the team's
     // pages as desktop apps (unset: yes), and may those apps get full access
@@ -2288,6 +2292,8 @@ export default defineSchema({
     .index("by_scope_user", ["scope_user_id"])
     .index("by_team_handle", ["team_id", "handle"])
     .index("by_scope_user_handle", ["scope_user_id", "handle"])
+    // Every team's @release, for a CLI release telling other teams (teamCliFloor.tellOtherTeams).
+    .index("by_handle", ["handle"])
     .index("by_short_id", ["short_id"]),
 
   // The audit trail of a role's scope (docs/architecture/scopes-and-feed.md
@@ -5835,7 +5841,8 @@ export default defineSchema({
     ),
     // Sent up to the owner's manager, else the workspace admins (escalateCore):
     // who sent it, why, when, and whom it went to. It sorts first for them; a later pass or unassign clears it.
-    escalated: v.optional(v.object({ by: v.id("users"), at: v.number(), note: v.string(), to: v.array(v.id("users")) })),
+    // No `by`: codecast escalated it because `waiting` changes wait on it (lib/cardWaiters.ts).
+    escalated: v.optional(v.object({ by: v.optional(v.id("users")), at: v.number(), note: v.string(), to: v.array(v.id("users")), waiting: v.optional(v.number()) })),
     // Asked of named people (`cast decide --to`): Share out leaves it with them (decisionRouting.ts).
     addressed: v.optional(v.boolean()),
     // The people it is visible to; materialized one row each in decision_inbox.
@@ -7811,6 +7818,7 @@ export default defineSchema({
       v.literal("ux"),
       v.literal("cohesion"),
       v.literal("request"),
+      v.literal("flowstop"),
     ),
     fingerprint: v.string(),
     title: v.string(),
@@ -9407,6 +9415,11 @@ export default defineSchema({
     // (cast workflow resume --queue): the line's sweep resumes it there, ahead
     // of new starts (orgLine.planSweep), onto the current flow when asked.
     resume_queued: v.optional(v.object({ at: v.string(), current_flow: v.optional(v.boolean()), by: v.id("users"), since: v.number() })),
+    // The run's last stop at a stop exit (flowStops.ts): the station to resume it at, the key a shared exit's stop files
+    // under, and the incident that holds it (its task waits on it; the run resumes at stop_station when it closes).
+    stop_station: v.optional(v.string()),
+    stop_fingerprint: v.optional(v.string()),
+    incident_task_id: v.optional(v.id("tasks")),
     // When a re-pin moved the live run onto newer flow versions (flowVersions.repinLiveRuns). Its runner holds the
     // graph it loaded at start, so the run's machine restarts the runner once the run waits at a gate (daemon
     // resumeOrphanedWorkflowRuns); the new runner's first report clears it.
@@ -9452,6 +9465,8 @@ export default defineSchema({
     .index("by_workspace_graph", ["workspace", "graph_hash", "updated_at"])
     // Sparse in effect: only runs queued to resume carry resume_queued, read oldest first by the sweep.
     .index("by_resume_queued", ["resume_queued.since"])
+    // Sparse in effect: the runs an incident holds, resumed when it closes (flowStops.settleIncidentRuns).
+    .index("by_incident_status", ["incident_task_id", "status"])
     // The run behind a pull request (changeApprovals.ts).
     .index("by_pr", ["pr.repository", "pr.number"]),
 

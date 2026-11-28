@@ -3478,12 +3478,15 @@ cliRoute("/cli/line/fixloop/record", async (ctx, body) => ctx.runMutation((api a
 cliRoute("/cli/line/fixloop/cursor", async (ctx, body) => ctx.runQuery((api as any).landedChanges.cursor, body));
 cliRoute("/cli/line/fixloop/summary", async (ctx, body) => ctx.runQuery((api as any).landedChanges.summary, body));
 cliRoute("/cli/deploys/get", async (ctx, body) => ctx.runQuery(api.deploys.get, body));
+// A team's CLI floor and which of its machines run a release (teamCliFloor.ts).
+for (const [route, fn, write] of [["set", api.teamCliFloor.set, true], ["fleet", api.teamCliFloor.fleet, false], ["lower", api.teamCliFloor.lower, true], ["forced", api.teamCliFloor.forcedRelease, false], ["tell-release", api.teamCliFloor.tellRelease, true], ["tell-other-teams", api.teamCliFloor.tellOtherTeams, true]] as const) cliRoute(`/cli/team-cli-floor/${route}`, async (ctx, body) => write ? ctx.runMutation(fn as any, body) : ctx.runQuery(fn as any, body));
 // Our own CI runner's verdict per commit (ciVerdicts.ts): logs upload through /cli/images/upload-url first.
 cliRoute("/cli/ci/record", async (ctx, body) => ctx.runMutation(api.ciVerdicts.record, body));
 for (const r of ["show", "log"] as const) cliRoute(`/cli/ci/${r}`, async (ctx, body) => ctx.runQuery(api.ciVerdicts[r], body));
 // Deploy targets (deploys.md DP10 to DP14): the checkout's declared targets, each one's live sha and waiting queue, a deploy of one from codecast, a ship pass.
 cliRoute("/cli/deploys/targets/publish", async (ctx, body) => ctx.runMutation(api.deployTargets.publish, body), { forwardDeviceId: true });
 cliRoute("/cli/deploys/targets", async (ctx, body) => ctx.runQuery(api.deployTargets.view, body));
+cliRoute("/cli/release/sweep", async (ctx, body) => ctx.runAction(api.releaseSweep.sweep, body));
 cliRoute("/cli/deploys/targets/poll", async (ctx, body) => ctx.runAction(api.deployTargets.pollNow, body));
 // A repository's pipeline (pipeline.md PL6), published beside its deploy targets, and read back per team.
 cliRoute("/cli/pipelines/publish", async (ctx, body) => ctx.runMutation(api.pipelines.publish, body), { forwardDeviceId: true });

@@ -1,8 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
-import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { EventEmitter } from "node:events";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { runShell } from "../land/shipCheckout.js";
+import { pollUntil } from "../test-helpers/pollUntil";
 import { BRANCH, PR_URL, T, setup } from "./mergeStation.testkit";
+import { noteLanded } from "./mergeScratch";
+import { stopOnSignal } from "./mergeStation";
 
 // The Merge station's before-merge deploy steps: from a tree that holds main,
 // another round when main moves under them, what a failure says is deployed,
@@ -116,7 +121,7 @@ describe("cast flow merge: before-merge steps", () => {
       const order: string[] = [];
       const r = await s.run({ runStep: async () => { order.push("step"); return { code: 0, output: "" }; } });
       expect(r.code).toBe(0);
-      expect(s.logged).toContain("waiting for cast ship checkout on host-2 to finish its deploys and merge in o/r (holding it 2m)");
+      expect(s.logged).toContain("waiting for the lease on o/r: behind cast ship checkout on host-2 (2m)");
       const leases = s.posts.filter((p) => p.path === "/cli/repo-lease");
       // Taken (after one wait), asked outright before the step and again before the merge, released at the end.
       expect(leases.map((p) => p.body.op)).toEqual(["take", "take", "renew", "renew", "release"]);
@@ -128,6 +133,228 @@ describe("cast flow merge: before-merge steps", () => {
       expect(s.posts.length - 1).toBe(s.posts.map((p) => p.body.op).lastIndexOf("release"));
       expect(at("/cli/line/merge/record")).toBeLessThan(s.posts.length - 1);
     } finally { s.done(); }
+  }, T);
+
+  test("a merge with no before-merge step still takes its turn: the lease is held from before the rebase to the landed sha", async () => {
+    const s = setup();
+    try {
+      const head = s.branch("web/page.ts", "page\n");
+      s.advanceMain("other.txt", "other\n");
+      s.ci(head);
+      const order: string[] = [];
+      let takes = 0;
+      s.answers["/cli/repo-lease"] = (body) => {
+        order.push(`lease ${body.op}`);
+        return body.op === "release" ? { released: true }
+          : body.op === "take" && ++takes === 1 ? { held: false, holder: "the merge of PR #9 (run r9) on host-2", since: Date.now(), expires_at: Date.now() + 600_000, position: 2 }
+          : { held: true, expires_at: Date.now() + 600_000 };
+      };
+      const record = s.answers["/cli/line/merge/record"];
+      s.answers["/cli/line/merge/record"] = (body) => { order.push("merge recorded"); return record(body); };
+      const r = await s.run({ scratch: async (repo, at) => { order.push("scratch tree"); return s.scratch(repo, at); } });
+      expect(r.code).toBe(0);
+      expect(s.git(s.work, "rev-parse", "origin/main")).toBe(r.line);
+      expect(s.logged).toContain("waiting for the lease on o/r: 2nd in line behind the merge of PR #9 (run r9) on host-2 (0m)");
+      // Waited in line before the worktree the rebase runs in, held to the merge, released after it was recorded.
+      expect(order).toEqual(["lease take", "lease take", "scratch tree", "lease renew", "merge recorded", "lease release"]);
+    } finally { s.done(); }
+  }, T);
+
+  // A personal workspace with no GitHub App, published checkout or deploy targets for the repository is refused its
+  // lease, and a server older than the lease has none: a merge that deploys nothing has no turn to keep, so it merges.
+  const unleasable = {
+    "the server will not lease the repository to the run's workspace": "Run run_1 cannot lease o/r: neither its workspace nor any of your teams works on it.",
+    "the server has no lease route": "this codecast server has no /cli/repo-lease route — it needs a newer deployment.",
+  };
+  for (const [why, refusal] of Object.entries(unleasable)) {
+    test(`${why}: a merge with no before-merge step merges without the lease, saying so once`, async () => {
+      const s = setup();
+      try {
+        const head = s.branch("web/page.ts", "page\n");
+        s.ci(head);
+        s.answers["/cli/repo-lease"] = () => { throw new Error(refusal); };
+        const r = await s.run();
+        expect(r.code).toBe(0);
+        expect(s.git(s.work, "rev-parse", "origin/main")).toBe(r.line);
+        expect(s.logged.filter((l) => l.includes("without the repository's turn"))).toEqual([`warning: merging without the repository's turn: ${refusal}`]);
+        expect(s.posts.filter((p) => p.path === "/cli/repo-lease").map((p) => p.body.op)).toEqual(["take"]);
+      } finally { s.done(); }
+    }, T);
+
+    test(`${why}: a merge with a before-merge step refuses (exit 2), deploying and merging nothing`, async () => {
+      const s = setup();
+      try {
+        s.profile("deploy");
+        const head = s.branch("api/route.ts", "export {}\n");
+        s.ci(head);
+        s.answers["/cli/repo-lease"] = () => { throw new Error(refusal); };
+        const ran: string[] = [];
+        const r = await s.run({ runStep: async (cmd) => { ran.push(cmd); return { code: 0, output: "" }; } });
+        expect(r).toEqual({ code: 2, line: `convex must go out before the merge, and only under the lease on o/r's deploys, which could not be taken: ${refusal}` });
+        expect(ran).toEqual([]);
+        expect(s.merged()).toBe(false);
+      } finally { s.done(); }
+    }, T);
+  }
+
+  // An origin that is not github.com (an SSH host alias such as git@github-work:o/r) names no repository to lease.
+  test("no repository named: a merge with no before-merge step merges without the lease, saying so once", async () => {
+    const s = setup();
+    try {
+      const head = s.branch("web/page.ts", "page\n");
+      s.ci(head);
+      const r = await s.run({ repository: null });
+      expect(r.code).toBe(0);
+      expect(s.git(s.work, "rev-parse", "origin/main")).toBe(r.line);
+      expect(s.logged.filter((l) => l.includes("without the repository's turn"))).toEqual(["warning: merging without the repository's turn: no GitHub repository is named for this checkout's origin"]);
+      expect(s.posts.filter((p) => p.path === "/cli/repo-lease")).toEqual([]);
+    } finally { s.done(); }
+  }, T);
+
+  test("no repository named: a merge with a before-merge step refuses (exit 2), deploying and merging nothing", async () => {
+    const s = setup();
+    try {
+      s.profile("deploy");
+      const head = s.branch("api/route.ts", "export {}\n");
+      s.ci(head);
+      const ran: string[] = [];
+      const r = await s.run({ repository: null, runStep: async (cmd) => { ran.push(cmd); return { code: 0, output: "" }; } });
+      expect(r).toEqual({ code: 2, line: "convex must go out before the merge, and only under the lease on the repository's deploys, which could not be taken: no GitHub repository is named for this checkout's origin" });
+      expect(ran).toEqual([]);
+      expect(s.merged()).toBe(false);
+    } finally { s.done(); }
+  }, T);
+
+  test("any other refusal of the lease refuses the merge (exit 2), even with no before-merge step", async () => {
+    const s = setup();
+    try {
+      const head = s.branch("web/page.ts", "page\n");
+      s.ci(head);
+      s.answers["/cli/repo-lease"] = () => { throw new Error("No run run_1 you can lease a repository for."); };
+      const r = await s.run();
+      expect(r).toEqual({ code: 2, line: "could not take the lease on o/r's deploys: No run run_1 you can lease a repository for." });
+      expect(s.merged()).toBe(false);
+    } finally { s.done(); }
+  }, T);
+
+  test("a wait in line past its budget exits 4 having done nothing, keeping its place: the next visit asks with the same token", async () => {
+    const s = setup();
+    try {
+      s.profile("deploy");
+      const head = s.branch("api/route.ts", "export {}\n");
+      s.ci(head);
+      let free = false;
+      s.answers["/cli/repo-lease"] = (body) => body.op === "release" ? { released: true }
+        : free ? { held: true, expires_at: Date.now() + 600_000 } : { held: false, holder: "the merge of PR #9 on host-2", since: Date.now(), expires_at: Date.now() + 600_000, position: 3 };
+      const steps: string[] = [];
+      const runStep = async () => { steps.push("step"); return { code: 0, output: "" }; };
+      const waited = await s.run({ leaseLineMs: 0, runStep });
+      expect(waited).toEqual({ code: 4, line: "still waiting for the lease after 0m: 3rd in line behind the merge of PR #9 on host-2; nothing was done, and the run asks again in the same place" });
+      const first = s.posts.filter((p) => p.path === "/cli/repo-lease");
+      // Never released: the server keeps the place for its token.
+      expect(first.map((p) => p.body.op)).toEqual(["take"]);
+      expect(readFileSync(join(s.runDir, "merge-lease-token"), "utf-8")).toBe(first[0].body.token);
+      expect(steps).toEqual([]);
+      expect(s.merged()).toBe(false);
+      free = true;
+      const r = await s.run({ runStep });
+      expect(r.code).toBe(0);
+      const leases = s.posts.filter((p) => p.path === "/cli/repo-lease");
+      expect(new Set(leases.map((p) => p.body.token))).toEqual(new Set([first[0].body.token]));
+      expect(existsSync(join(s.runDir, "merge-lease-token"))).toBe(false);
+    } finally { s.done(); }
+  }, T);
+
+  test("a SIGTERM (the runner ending the station) releases the lease before the station exits 143, waiting in line or holding it", async () => {
+    const s = setup();
+    try {
+      s.profile("deploy");
+      const head = s.branch("api/route.ts", "export {}\n");
+      s.ci(head);
+      const signals = new EventEmitter();
+      const order: string[] = [];
+      const exit = (code: number) => { order.push(`exit ${code}`); };
+      s.answers["/cli/repo-lease"] = (body) => { order.push(`lease ${body.op}`); return body.op === "release" ? { released: true } : { held: true, expires_at: Date.now() + 600_000 }; };
+      // Holding it: the signal comes while a before-merge step runs.
+      await s.run({ signals, exit, runStep: async () => { signals.emit("SIGTERM"); await new Promise((r) => setTimeout(r, 50)); return { code: 0, output: "" }; } });
+      expect(order.slice(0, order.indexOf("exit 143") + 1).filter((o) => o !== "lease renew")).toEqual(["lease take", "lease release", "exit 143"]);
+      // One release, however many ask for it, and no listener left behind.
+      expect(order.filter((o) => o === "lease release")).toHaveLength(1);
+      expect(signals.listenerCount("SIGTERM")).toBe(0);
+
+      // Waiting in line: it leaves the line at once rather than after another poll.
+      order.length = 0;
+      s.answers["/cli/repo-lease"] = (body) => {
+        order.push(`lease ${body.op}`);
+        if (body.op === "take") setTimeout(() => signals.emit("SIGTERM"), 10);
+        return body.op === "release" ? { released: false } : { held: false, holder: "merge A", since: Date.now(), expires_at: Date.now() + 600_000, position: 2 };
+      };
+      const started = Date.now();
+      const r = await s.run({ signals, exit });
+      expect(Date.now() - started).toBeLessThan(4000);
+      expect(r.code).toBe(2);
+      await new Promise((res) => setTimeout(res, 20));
+      // The first run merged the change, so this one, stopped while it waits to send its steps again, says merged.
+      expect(order).toEqual(["lease take", "lease release", "exit 0"]);
+      expect(signals.listenerCount("SIGTERM")).toBe(0);
+    } finally { s.done(); }
+  }, T);
+
+  test("a SIGTERM while a step runs stops the step before the lease is released; a step that will not stop keeps the lease", async () => {
+    const s = setup();
+    try {
+      s.profile("deploy");
+      const head = s.branch("api/route.ts", "export {}\n");
+      s.ci(head);
+      const signals = new EventEmitter();
+      const order: string[] = [];
+      const exit = (code: number) => { order.push(`exit ${code}`); };
+      s.answers["/cli/repo-lease"] = (body) => { order.push(`lease ${body.op}`); return body.op === "release" ? { released: true } : { held: true, expires_at: Date.now() + 600_000 }; };
+      const ready = join(s.root, "ready");
+      let group = 0;
+      // A real step in its own process group: the signal arrives once it is running, as the runner's would.
+      const step = (script: string) => async (_cmd: string, cwd: string, log: (l: string) => void, env: Record<string, string> = {}, onChild?: (c: any) => void) => {
+        const ran = runShell(script, cwd, log, env, (child) => { group = child.pid!; onChild?.(child); });
+        await pollUntil(() => existsSync(ready), "the step to start");
+        signals.emit("SIGTERM");
+        const r = await ran;
+        order.push("step ended");
+        return r;
+      };
+      // A deploy that takes a moment to stop on TERM: it has ended before the lease goes.
+      await s.run({ signals, exit, runStep: step(`trap 'sleep 0.5; exit 143' TERM; touch ${ready}; sleep 20 & wait`) });
+      await pollUntil(() => order.includes("exit 143"), "the station to exit");
+      expect(order.slice(0, order.indexOf("exit 143") + 1).filter((o) => o !== "lease renew")).toEqual(["lease take", "step ended", "lease release", "exit 143"]);
+
+      // A deploy that ignores TERM: the station exits inside the runner's grace without handing the lease on.
+      order.length = 0;
+      rmSync(ready, { force: true });
+      const run = s.run({ signals, exit, runStep: step(`trap '' TERM; touch ${ready}; sleep 30`) });
+      await pollUntil(() => order.includes("exit 143"), "the station to exit", { ms: 15_000 });
+      expect(order.filter((o) => o !== "lease renew")).toEqual(["lease take", "exit 143"]);
+      process.kill(-group, "SIGKILL");
+      await run;
+    } finally { s.done(); }
+  }, T);
+
+  test("a station signalled after its change merged says merged (exit 0, the sha), never Not merged", async () => {
+    const signals = new EventEmitter();
+    const codes: number[] = [];
+    const said: string[] = [];
+    const log = console.log;
+    console.log = (l: string) => { said.push(String(l)); };
+    const off = stopOnSignal({ signals, exit: (c: number) => { codes.push(c); } } as any, new AbortController(), async () => {});
+    try {
+      noteLanded("a".repeat(40));
+      signals.emit("SIGTERM");
+      await pollUntil(() => codes.length > 0, "the station to exit");
+      expect(codes).toEqual([0]);
+      expect(said).toContain("a".repeat(40));
+    } finally {
+      console.log = log;
+      off();
+      noteLanded(null);
+    }
   }, T);
 
   /** A step that records the tree it ran from; on its first run, someone pushes to the branch so GitHub refuses the

@@ -6,7 +6,7 @@
 // being worked.
 
 import type { Doc, Id } from "../_generated/dataModel";
-import type { MutationCtx, QueryCtx } from "../_generated/server";
+import type { QueryCtx } from "../_generated/server";
 import {
   blockerRefs,
   blockersHoldingBack,
@@ -25,7 +25,6 @@ import {
 } from "@codecast/shared/tasks";
 import { canAccessTask, isSameWorkspace, requireSameWorkspace, workspaceForResource, type AuthorizedWorkspace } from "./access";
 import { notFound } from "./auth";
-import { recordTaskChange, type TaskChangeBy } from "./taskHistory";
 
 type ReadCtx = Pick<QueryCtx, "db">;
 
@@ -288,25 +287,7 @@ export function storedGraphRefs(
   return out;
 }
 
-/**
- * The one writer of a task's edges: set its blocked_by or blocks to `next`
- * and stamp updated_at. A blocked_by change is the task's own history (TG11);
- * blocks only mirrors other rows' blocked_by and records none. `task` is the
- * row as read before the write; a `next` it already holds writes nothing.
- */
-export async function writeEdges(
-  ctx: Pick<MutationCtx, "db">,
-  task: Pick<Doc<"tasks">, "_id" | "blocked_by" | "blocks">,
-  field: "blocked_by" | "blocks",
-  next: string[],
-  by: TaskChangeBy,
-  now = Date.now(),
-): Promise<void> {
-  const prev = task[field] ?? [];
-  if (prev.length === next.length && prev.every((r, i) => r === next[i])) return;
-  await ctx.db.patch(task._id, { [field]: next, updated_at: now });
-  if (field === "blocked_by") await recordTaskChange(ctx, task._id, by, [["blocked_by", prev, next]], now);
-}
+// The one writer of a task's edges is lib/taskEdges.ts writeEdges.
 
 // ---------------------------------------------------------------------------
 // Edges that cannot loop (TG4)

@@ -27,7 +27,7 @@ describe("a flow as a diagram", () => {
       ["out", "every failure is main's", "Wait for green main"], ["stop", "Main stayed red", null], ["out", "it edits CI", "Why a person"], ["stop", "Needs a person", null], ["stop", "Found work", null],
       ["back", "conflicts with main", "this session"], ["back", "CI red or changes asked", "this session"], ["back", "no verdict, or only small findings", "this session"], ["stop", "No verdicts", null],
     ]);
-    expect(side(3)).toEqual([["back", "conflict", "this session"], ["out", "retest", "Retest"], ["stop", "Main keeps moving", null], ["stop", "Not merged", null]]);
+    expect(side(3)).toEqual([["back", "conflict", "this session"], ["out", "retest", "Retest"], ["stop", "Main keeps moving", null], ["stop", "Still in line", null], ["stop", "Not merged", null]]);
   });
 
   test("a run pinned to the retired quick-change reads as its four segments, each holding its own steps, ending at Live", () => {

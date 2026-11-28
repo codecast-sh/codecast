@@ -354,6 +354,8 @@ export const deployTables = {
     holder_user_id: v.id("users"),
     acquired_at: v.number(),
     expires_at: v.number(),
+    // Who asked while it was held, in the order they asked (repoLeases.ts): each gets it in turn.
+    waiters: v.optional(v.array(v.object({ token: v.string(), holder: v.string(), since: v.number(), seen_at: v.number() }))),
   })
     .index("by_repository", ["repository"])
     .index("by_workspace_repository", ["workspace", "repository"]),

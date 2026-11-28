@@ -122,7 +122,6 @@ import {
   type Workspace,
 } from "./resolveWorkspace.js";
 import { listProfiles, saveProfile, verifyActiveIdentity, switchFleetTo, launchProfileName, deleteProfile, getAccountsHeartbeatPayload, CcAccountError, accountLaunchInfo, accountTokenInfo, writeAccountToken, removeAccountToken, ensureProfileStore, profileStoreDir, adoptProfileStoreCredential, auditProfileIdentities, repairProfileIdentities, credentialHealth, readActiveCredential, type ProfileAudit } from "./ccAccounts.js";
-import { setReserved } from "./ccProfileFlags.js";
 import { buildAccountUsage, buildUsageReport, loadLocalUsageProfiles, renderAccountUsage, renderUsageReport } from "./usageCommand.js";
 import { recoveryModeOf, titleLine, type RecoveryMode } from "@codecast/shared/contracts";
 import { TRIGGER_PRECHECK_MODES, triggerPrecheckMode, type TriggerPrecheckMode } from "@codecast/shared/contracts";
@@ -146,7 +145,7 @@ import { ensureTmux, tryInstallTmux, tmuxRun, hasTmux, listCodecastPanes, pickPa
 import { routeTmuxArgs, socketOfTmuxEnv } from "./tmuxRoute.js";
 import { editHarnessJson, removeHarnessFile, withHarnessCause, writeHarnessFile } from "./harness.js";
 import { isManagedInstall } from "./managedInstall.js";
-import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, getPublishVersion, getStateVersion, getBrowserVersion, getChatVersion, ensureCastAlias, isDevMode, updateRecentlyFailed, recordUpdateFailure, getDecideVersion, getCallsVersion, getLimitsVersion, getComputerVersion, getCheckVersion, getSkillsVersion, getPrVersion, getModsVersion, getSimVersion, getVaultVersion} from "./update.js";
+import { checkForUpdates, performUpdate, UPDATE_IN_PROGRESS, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, getPublishVersion, getStateVersion, getBrowserVersion, getChatVersion, ensureCastAlias, isDevMode, updateRecentlyFailed, recordUpdateFailure, getDecideVersion, getCallsVersion, getLimitsVersion, getComputerVersion, getCheckVersion, getSkillsVersion, getPrVersion, getModsVersion, getSimVersion, getVaultVersion} from "./update.js";
 import { type SectionSpec, getSnippetTargets, installSectionToTargets, cutOwnedSections, REFERENCES_SECTION, installMessagingSnippet, installReferencesSnippet, installPublishSnippet, installBrowserSnippet, installChatSnippet, snippetStale, stampSnippet } from "./snippets.js";
 import { installAllStableHooks, parseStableHookClient, removeAllStableHooks, runStableContextHook } from "./stableContext.js";
 import { isCredentialHelperFastPath, isRelayHookArgv, isStableContextFastPath as isStableContextFastPathArgv, isTaskContextFastPath, messagingOnly, runFastPath } from "./fastPath.js";
@@ -4541,6 +4540,7 @@ accountsCmd
   .requiredOption("--for <job>", "what they are kept for, e.g. reviews")
   .action(async (names: string[], opts: { for: string }) => {
     try {
+      const { setReserved } = await import("./ccProfileFlags.js");
       const changed = setReserved(names, opts.for.trim());
       console.log(changed.length ? `${c.green}✓${c.reset} reserved ${changed.map((n) => `${c.cyan}${n}${c.reset}`).join(", ")} for ${opts.for.trim()}` : `${c.dim}already reserved for ${opts.for.trim()}${c.reset}`);
     } catch (err) {
@@ -4555,6 +4555,7 @@ accountsCmd
   .description("Give reserved profiles back to auto-switch")
   .action(async (names: string[]) => {
     try {
+      const { setReserved } = await import("./ccProfileFlags.js");
       const changed = setReserved(names, null);
       console.log(changed.length ? `${c.green}✓${c.reset} released ${changed.map((n) => `${c.cyan}${n}${c.reset}`).join(", ")}` : `${c.dim}none of them was reserved${c.reset}`);
     } catch (err) {
@@ -5190,7 +5191,7 @@ program
         // auto-start) runs the old code: stop it so the new one starts.
         if (getDaemonPid()) stopDaemon();
       } else {
-        console.log(`Update failed${error ? ` (${error})` : ""}, restarting with current version`);
+        console.log(error === UPDATE_IN_PROGRESS ? "another update of this install is in progress; restarting without updating" : `Update failed${error ? ` (${error})` : ""}, restarting with current version`);
       }
     }
     startDaemon({ afterStop: true });
@@ -5772,7 +5773,7 @@ program
 
 program
   .command("queue")
-  .description("Every queue on this machine: typecheck watchers, Interactive jobs and subagent workers, what runs and what waits")
+  .description("Every queue on this machine: typecheck watchers, Interactive jobs, named slots and subagent workers, what runs and what waits")
   .option("--json", "Print the queues as JSON")
   .action(async (o: { json?: boolean }) => {
     const { runQueueCommand } = await import("./queueCommand.js");
@@ -5969,7 +5970,7 @@ registerSyncVerbs(syncCommand);
 // ones with their own setter below. The help and the unknown-key error both
 // read this list, so they cannot disagree.
 const CONFIG_SETTABLE_KEYS = ["auth_token", "web_url", "user_id", "convex_url", "team_id", "excluded_paths", "claude_args", "codex_args", "browser_capture", "cloud_mirror_enabled", "cloud_mirror_exclude", "cloud_mirror_include", "sync_always", "sync_never", "session_trailer", "tmux_server_per_session", "level_checkouts_enabled", "messaging_only"] as const;
-const CONFIG_ALL_KEYS: readonly string[] = [...CONFIG_SETTABLE_KEYS, "claude_backend", "subagents.per_session", "subagents.per_machine", "check.per_machine", "check.reserve_gb", "interactive_jobs.per_machine", "flow.device", "agent"];
+const CONFIG_ALL_KEYS: readonly string[] = [...CONFIG_SETTABLE_KEYS, "claude_backend", "subagents.per_session", "subagents.per_machine", "check.per_machine", "check.reserve_gb", "interactive_jobs.per_machine", "local_ci.per_machine", "worktree.per_machine", "flow.device", "agent"];
 
 program
   .command("config")
@@ -5984,6 +5985,8 @@ program
     "  cast config set check.reserve_gb 24       # memory typecheck watchers leave for everything else (default 8 GB or 20% of RAM, whichever is more)\n" +
     "  cast config set check.per_machine 8       # at most this many typecheck watchers (default 16; fewer when memory is short)\n" +
     "  cast config set interactive_jobs.per_machine 4  # commands run as Interactive jobs at once (default 8)\n" +
+    "  cast config set local_ci.per_machine 1    # Local CI runs at once (cast slot ls; default 2)\n" +
+    "  cast config set worktree.per_machine 2    # worktrees at work at once (cast slot run --name worktree; default one per 16 GB)\n" +
     "  cast config set flow.device <machine>     # cast flow run places runs on this machine of yours (\"here\" keeps them local)\n" +
     "  cast config set flow.device.<owner>/<repo> <machine>  # the same for one repository"
   )
@@ -6159,7 +6162,7 @@ program
     // The queue limits: whole numbers, one shape for every queue (cast queue
     // shows them all). Workers are capped per session and per machine by the
     // server; typecheck watchers and Interactive jobs per machine by this CLI.
-    const capKey = /^(subagents)\.(per_session|per_machine)$|^(check|interactive_jobs)\.(per_machine)$/.exec(key ?? "");
+    const capKey = /^(subagents)\.(per_session|per_machine)$|^(check|interactive_jobs|local_ci|worktree)\.(per_machine)$/.exec(key ?? "");
     if (capKey) {
       const group = (capKey[1] ?? capKey[3]) as "subagents" | MachineCapKey;
       const field = (capKey[2] ?? capKey[4]) as "per_session" | "per_machine";
@@ -13129,7 +13132,11 @@ program
     // left the machine with no daemon at all.
     const daemonWasRunning = getDaemonPid() !== null;
 
-    const { success } = await performUpdate();
+    const { success, error } = await performUpdate();
+    if (error === UPDATE_IN_PROGRESS) {
+      console.error("Another cast process is updating this install; run `cast update` again in a minute.");
+      process.exit(1);
+    }
     if (success) {
       await refreshEnabledSnippets(config);
 
@@ -13163,43 +13170,6 @@ program
       console.log("No desktop update applied (already current, app running, or unavailable). Use --force to reinstall.");
     }
     process.exit(applied ? 0 : 1);
-  });
-
-program
-  .command("force-update")
-  .description("Set minimum CLI version to force remote clients to update (admin only)")
-  .argument("<version>", "Minimum version required (e.g., 1.0.12)")
-  .action(async (version) => {
-    const config = readConfig();
-    if (!config?.auth_token || !config?.convex_url) {
-      console.error("Not authenticated. Run: cast auth");
-      process.exit(1);
-    }
-
-    if (!/^\d+\.\d+\.\d+$/.test(version)) {
-      console.error("Invalid version format. Use semver (e.g., 1.0.12)");
-      process.exit(1);
-    }
-
-    const syncService = new SyncService({
-      convexUrl: config.convex_url,
-      authToken: config.auth_token,
-      userId: config.user_id,
-    });
-
-    try {
-      await syncService.getClient().mutation(
-        "systemConfig:setMinCliVersion" as any,
-        { version, api_token: config.auth_token }
-      );
-      console.log(`Minimum CLI version set to ${version}`);
-      console.log("Remote daemons will auto-update within 5 minutes");
-      process.exit(0);
-    } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      console.error(`Failed to set min version: ${errMsg}`);
-      process.exit(1);
-    }
   });
 
 program
@@ -23359,7 +23329,9 @@ if (!isStableContextFastPath && !isCredentialHelperFastPath(process.argv) && !pr
 
   console.error(`\nAuto-updating to v${available}...`);
   autoUpdateInstalling = true;
-  const { success } = await performUpdate();
+  const { success, error } = await performUpdate();
+  // Another process is installing this release: not a failure to back off from.
+  if (error === UPDATE_IN_PROGRESS) return;
   if (success) {
     // The same refresh `cast update` runs, so an automatic update can never
     // write a different set of files than a manual one. Every write it makes

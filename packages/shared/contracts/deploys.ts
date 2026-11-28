@@ -13,6 +13,9 @@ export const DAY = 24 * 60 * 60 * 1000;
 export const DEPLOY_SHORT_ID_PREFIX = "dp";
 export const DEPLOY_SHORT_ID_RE = /^dp-\d+$/i;
 
+/** The repository codecast's own CLI is released from: its GitHub releases, and the `cli` deploys that are its releases. */
+export const CLI_RELEASE_REPOSITORY = "codecast-sh/codecast";
+
 /**
  * requested: the line asked for it and no machine has started it yet.
  * running:   the team's deploy path is running it.
@@ -204,6 +207,8 @@ export type DeployView = {
   short_id: string;
   /** The store's stub key of a deploy asked for from the web. */
   client_key?: string;
+  /** The team it deployed for: whose fleet a CLI release's finish forces. */
+  team_id?: string | null;
   project_id: string | null;
   target: string;
   status: DeployStatus;

@@ -19,7 +19,8 @@ import { appendTaskStep, priorityForTaskStep } from "./priorityCreate";
 import { outcomeOfDeclaration, subagentEnded } from "./subagentFleet";
 import { formatTaskCommentMessage, fromConvexAgentType, inlineForeignText, toConvexAgentType } from "@codecast/shared/contracts";
 import { blockersHoldingBack, docRelatesToTask, isStaleTask, readinessOf, topologicalOrder } from "@codecast/shared/tasks";
-import { assertDependencyEdges, offFrontierReason, openBlockersOf, orderFrontier, readinessLookups, readyTasks, requireTaskByRef, stampGraphStatus, storedGraphRefs, taskByRef, writeEdges } from "./lib/taskGraph";
+import { assertDependencyEdges, offFrontierReason, openBlockersOf, orderFrontier, readinessLookups, readyTasks, requireTaskByRef, stampGraphStatus, storedGraphRefs, taskByRef } from "./lib/taskGraph";
+import { patchDepMirror, writeEdges } from "./lib/taskEdges";
 import { addWaitsAtCreate, cliCaller, pendingReleases, tellReleased } from "./taskWaits";
 import { commentReaches, executionHintArgs, executionHintPatch, isEphemeralTask } from "./lib/taskExecution";
 import { bySystem, byUser, recordTaskChange, type TaskChangeBy } from "./lib/taskHistory";
@@ -40,8 +41,8 @@ import {
   taskStatusAlias,
   taskStatusChoices,
   teamTaskStatuses,
+  type TeamTaskStatus,
 } from "@codecast/shared/tasks";
-import type { TeamTaskStatus } from "@codecast/shared/tasks";
 import { briefGoalRefs, LINE_CATEGORIES, LINE_READINESS, LINE_RISKS } from "@codecast/shared/contracts/goalsBrief";
 import { causeBrief } from "./goals";
 import { Doc, Id } from "./_generated/dataModel";
@@ -2713,37 +2714,6 @@ export const addComment = mutation({
     return { id };
   },
 });
-
-// create and update accept blocked_by/blocks as raw arrays, and plans
-// insert whole graphs (createFromTemplate, fork); each accepted edge must
-// also land on the referenced task's other side or the stored mirror drifts
-// (addDep/removeDep already keep it for single edges). Same
-// short-id resolution addDep uses, but an unresolvable, inaccessible or
-// cross-workspace reference skips the mirror instead of rejecting a write
-// the caller already made. The mirror may name `self` by its `_id` (a plan's
-// older rows): that form is the same edge, so it is never added twice and
-// is removed with the short id.
-export async function patchDepMirror(
-  ctx: any,
-  userId: Id<"users">,
-  self: { short_id: string; _id?: string; workspace: AuthorizedWorkspace },
-  otherRef: string,
-  mirrorField: "blocks" | "blocked_by",
-  op: "add" | "remove",
-  // Who made the edit: a blocked_by mirror is the other task's own history (TG11).
-  by?: TaskChangeBy,
-) {
-  const other = await taskByRef(ctx, otherRef);
-  if (!other || !(await canAccessTask(ctx, userId, other))) return;
-  if (op === "add" && !isSameWorkspace(other, self.workspace)) return;
-  const mirror: string[] = other[mirrorField] || [];
-  const isSelf = (id: string) => id === self.short_id || (!!self._id && id === self._id);
-  if (op === "add" ? mirror.some(isSelf) : !mirror.some(isSelf)) return;
-  const next = op === "add"
-    ? [...mirror, self.short_id]
-    : mirror.filter((id: string) => !isSelf(id));
-  await writeEdges(ctx, other, mirrorField, next, by ?? bySystem);
-}
 
 export const addDep = mutation({
   args: {

@@ -19,6 +19,7 @@ import { sessionEndWords } from "@codecast/shared/contracts/sessionEnd";
 import { factsFor, holdsItsFacts, pinDirectCommands, runGraph, StartFactsError } from "./startFacts";
 import { keepEnds } from "./keepEnds";
 import { executeCommand, expandScriptVars, recordNodeOutput, type StationWatch } from "./commandStation";
+import { NO_SLOT, withStationSlot } from "./stationSlot";
 import { planReadiness } from "../planReadiness.js";
 import { readGateCard } from "../cardFile.js";
 import { agentResultPreview, resultPreview } from "./chainWorkflow.js";
@@ -1413,7 +1414,7 @@ async function executeFanout(
     const ctx = { ...state.context };
     let outcome: NodeOutcome;
     if (options.dryRun) outcome = "success";
-    else if (branch.type === "command") outcome = await executeCommand(branch, ctx, cwd, stationWatch(options), stationEnv(options));
+    else if (branch.type === "command") outcome = await withStationSlot(branch, ctx, () => executeCommand(branch, ctx, cwd, stationWatch(options), stationEnv(options)), { what: slotHolder(branch, options), watch: stationWatch(options) });
     else if (branch.type === "call") outcome = await executeCallNode(branch, graph, ctx, cwd, options);
     // A hand is checkpointed when it starts, so a resumed fanout waits on it rather than starting a second (runResume.ts).
     else if ((branch.type === "agent" || branch.type === "prompt") && branch.backend === "session") outcome = await executeSessionNode(branch, graph, ctx, cwd, options, () => {
@@ -1429,10 +1430,10 @@ async function executeFanout(
       if (k.startsWith(`${branch.id}.`)) state.context[k] = v;
     }
     // The branch's own report ends its node, which stops its hand (workflow_runs.stopStationHands).
-    // Its words are what its node shows, as a station's outside a fan-out (a Check that was Skipped says why).
+    // Its words are what its node shows, as a station's outside a fan-out; a branch that waited out its slot failed.
     if (options.runId) {
       const result_preview = stationPreview(branch, ctx);
-      await reportProgress(options, { current_node_id: node.id, node_id: branch.id, node_status: outcome === "failure" ? "failed" : "completed", outcome, session_id: ctx[`${branch.id}.session_id`], ...(result_preview ? { result_preview } : {}) });
+      await reportProgress(options, { current_node_id: node.id, node_id: branch.id, node_status: outcome === "failure" || outcome === NO_SLOT ? "failed" : "completed", outcome, session_id: ctx[`${branch.id}.session_id`], ...(result_preview ? { result_preview } : {}) });
     }
     state.visitCounts[branch.id] = (state.visitCounts[branch.id] || 0) + 1;
     state.completed.push(branch.id);
@@ -1772,6 +1773,8 @@ function stopIfEnded(options: RunOptions): void {
 function stationEnv(options: RunOptions): Record<string, string> {
   return options.runSession ? { [RUN_CONVERSATION_ENV]: options.runSession } : {};
 }
+
+const slotHolder = (node: WorkflowNode, options: RunOptions): string => `${node.label} of ${options.taskId ?? options.runId ?? "a local run"}`;
 
 /**
  * What a command station watches while its script runs: whether a person stopped the run. A cancel from the web
@@ -2711,7 +2714,7 @@ async function runNodeLoop(
     } else if (current.type === "start") {
       outcome = "success";
     } else if (current.type === "command") {
-      outcome = await executeCommand(current, state.context, cwd, stationWatch(options), stationEnv(options));
+      outcome = await withStationSlot(current, state.context, () => executeCommand(current, state.context, cwd, stationWatch(options), stationEnv(options)), { what: slotHolder(current, options), watch: stationWatch(options) });
     } else if (current.type === "call") {
       outcome = await executeCallNode(current, graph, state.context, cwd, options);
     } else if (current.type === "human" && options.runId) {
@@ -2754,8 +2757,8 @@ async function runNodeLoop(
         current_node_id: current.id,
         node_id: current.id,
         // A gate's outcome is the key it was answered with ("s" for Ship):
-        // only "failure" is a failed node.
-        node_status: outcome === "failure" ? "failed" : "completed",
+        // only "failure" is a failed node, and a no_slot with nowhere to go.
+        node_status: outcome === "failure" || (outcome === NO_SLOT && !current.no_slot) ? "failed" : "completed",
         outcome,
         session_id: state.context[`${current.id}.session_id`],
         result_preview: stationPreview(current, state.context),
@@ -2860,7 +2863,9 @@ async function runNodeLoop(
     delete state.context["station_dead"];
     const landedExit = outcome === "success" ? landedExitOf(graph, current, state.context) : null;
     if (landedExit) console.log(`  ${c.green}✓${c.reset} the change is already on upstream at ${state.context["change_landed"].slice(0, 10)}: the run ends done`);
-    const next = landedExit ? landedExit : stationBlocked
+    // A station that waited out its machine slot goes where its no_slot= says, or stops the run (stationSlot.ts).
+    const noSlot = outcome === NO_SLOT;
+    const next = noSlot ? (current.no_slot ? graph.nodes.get(current.no_slot) ?? null : null) : landedExit ? landedExit : stationBlocked
       ? resolveNextNode({ ...graph, edges: graph.edges.filter((e) => e.from !== current.id || /\bhandoff\b/.test(e.condition ?? "")) }, current, state.context)
       : stationDead || faninFailed
         ? resolveNextNode({ ...graph, edges: graph.edges.filter((e) => e.from !== current.id || /\boutcome\b/.test(e.condition ?? "")) }, current, state.context)
@@ -2917,7 +2922,7 @@ async function runNodeLoop(
       // A dead station says why it left no answer; a routable outcome no edge
       // takes names the fields its edges route on.
       const saysWhy = stationDead || faninFailed || (current.type === "parallel_fanout" && outcome === "failure");
-      state.failReason = saysWhy && state.context["last_error"] ? state.context["last_error"] : deadEndReason(graph, current.id, outcome, state.context);
+      state.failReason = noSlot ? state.context[`${current.id}.output`] : saysWhy && state.context["last_error"] ? state.context["last_error"] : deadEndReason(graph, current.id, outcome, state.context);
       // The station's own error stopped the run, whatever handoff the task reads (runFailure handedBack).
       if (saysWhy && state.context["last_error"]) state.context["stopped_on_error"] = current.id;
       else delete state.context["stopped_on_error"];

@@ -600,7 +600,7 @@ script. They are read only by the CLI; the server's copy leaves them out
 | `policy = "release"` | the target goes out with every release, and with a change flow's Deploy stage when the change touches it |
 | `after = ["backend"]` | sent only once those targets are live with this release; an `after` the release does not touch is not waited on; a cycle or an unknown name refuses the file |
 | `ci = "<command>"` | the line-deploy graph's CI station: the deploy sha's verdict before the send (`cast line deploy ci --workflow ci.yml`) |
-| `finish = "<command>"` | the Finish station once live; `$version` is what went out (`cast force-update $version` after a CLI release) |
+| `finish = "<command>"` | the Finish station once live; `$version` is what went out (`cast force-update $version --deploy $deploy` after a CLI release, DP20) |
 | `deadline = "45m"` | how long a change flow's Deploy stage waits for the target to go live, from when it can first go out, before it calls the deploy stuck; default a day for a target a person or a role sends, 60m for one it sends, 30m for one that deploys itself; at most 24h |
 
 Targets run side by side except where `after` orders them; a target whose
@@ -838,3 +838,58 @@ A standing pause reminds whoever lifts it every four hours, on weekdays
 from 9:00 to 18:00 in the team's zone only: a rollback's reminds the
 Release Captain of its task, any other the one who paused
 (`production_paused`).
+
+## DP20. A CLI release makes the team's machines update
+
+A machine below its CLI floor updates itself and restarts its daemon. Its
+floor is the highest of the global `min_cli_version` (platform staff only,
+`systemConfig.setMinCliVersion`) and the floor of each team its owner
+belongs to (`teams.min_cli_version`), so a team floor never lowers the
+global one. The heartbeat and the daemon's forced-update check
+(`systemConfig.getMinCliVersion` with its token) both serve that highest
+floor (`systemConfig.effectiveMinCliVersion`).
+
+A team's admins raise its floor, and so does its Release Captain: the role
+holding the team's deploy grant, from its standing session, never a
+session a member merely filed under the role (`teamCliFloor.set`). The
+Release Captain only raises; the team's admins also lower or clear it
+(`teamCliFloor.lower`), the way back from a floor no release reaches.
+`cast force-update <version> --team <team>` raises it, `--team <team>
+--lower-to <version>` and `--team <team> --clear` lower and clear it;
+without `--team` only platform staff may run it, and it sets the global
+floor (anyone else is told which `--team` they meant). The CLI refuses a
+floor above the release latest.json names. A daemon below its floor that
+already runs the release latest.json names waits for a newer one rather
+than reinstall the same binary and restart below the floor on every
+check.
+
+Codecast's `cli` target finishes with `cast force-update $version --deploy
+$deploy` (releaseFinish.ts). Forcing restarts every daemon, so it is worth
+it only when the daemon changed: the finish compares the daemon build id
+(daemonBuildIdCompute) of the tree at the deploy's sha with the one at the
+release the team's machines were last forced onto: the live deploy of the
+same target whose version is the team's effective floor, else the global
+floor (`teamCliFloor.forcedRelease`), each tree read from `git archive`.
+So a release that skipped its force is made up by the next one. Equal ids
+force nothing. Different ids, or no such deploy on record, raise the
+deploy's team floor to the release, then read the team's fleet
+(`teamCliFloor.fleet`: every member's machine seen in the last day) each
+minute for up to 20 minutes (`--wait`), until no online machine lags. The
+decision and the fleet (took it, lagging, offline, cannot update itself:
+a source checkout, a managed install, or automatic update turned off) are
+appended to the deploy's note, re-read after the wait so a note written
+meanwhile is kept. A finish whose runner may not raise the team's floor
+records "Not forced" with the refusal, and the team's @release hears it
+with the version (`teamCliFloor.tellRelease`); machines still lagging after
+the wait reach @release by name and version, once.
+
+Platform staff running the finish also raise the global floor, which
+forces every team. Anyone else forces only the deploy's team: forcing
+another team's machines is that team's Release Captain's call. So the
+server (`teamCliFloor.tellOtherTeams`; the caller cannot read other teams)
+tells each other team's @release, once per deploy, when its members'
+machines seen in the last day run older and its floor is below the
+release: the version, that it changes the daemon, the team's floor, how
+many machines run older, and `cast force-update <version> --team <team>`.
+The caller learns only how many teams were told, which the deploy's note
+records.

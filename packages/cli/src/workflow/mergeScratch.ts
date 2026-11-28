@@ -149,13 +149,23 @@ export async function stopSteps(graceMs = STOP_GRACE_MS): Promise<boolean> {
 
 /** The sha the merge landed as, once it has (merge.json is written first): a station stopped after that point still
  *  merged, and says so with exit 0, so the graph does not call a merged change "not merged". */
-let landedAs: string | null = null;
-export function noteLanded(sha: string): void { landedAs = sha; }
+let landed: string | null = null;
+export function noteLanded(sha: string | null): void { landed = sha; }
+export const landedAs = (): string | null => landed;
+
+/** How many trees hold a signal handler here, which ends the process itself once its tree is released. */
+let treeExits = 0;
+export const treeOwnsExit = (): boolean => treeExits > 0;
 
 /** What production may be left on if the station is stopped now: set while a step goes out again from main to
  *  replace a deploy, so a stop in the middle says so on the way out. */
 let restoring: string | null = null;
 export function noteRestoring(what: string | null): void { restoring = what; }
+
+/** What a signalled station finishes before a tree's handler here may exit the process: its lease's release, which
+ *  must not be cut off by a tree released first. */
+let exitHold: Promise<unknown> = Promise.resolve();
+export function holdExit(work: Promise<unknown>): void { exitHold = Promise.all([exitHold, work.catch(() => {})]); }
 
 /** On SIGTERM or SIGINT: stop the running step, then release the tree; a step that will not stop leaves its tree to
  *  the age-based sweep. Returns whether the tree was released. */
@@ -177,18 +187,20 @@ export async function acquiredTree(repo: string, at: string): Promise<ScratchTre
   const release = async () => {
     if (released) return;
     released = true;
+    treeExits--;
     for (const sig of ["SIGTERM", "SIGINT"] as const) process.off(sig, onSignal);
     await releaseWorkspace(repo, name).catch(() => {});
     defaultExec("git", ["branch", "-D", branch], repo);
   };
   function onSignal(sig: NodeJS.Signals) {
     if (restoring) console.log(`stopped while ${restoring}: production may run a backend the default branch lacks until the next merge or deploy`);
-    void shutDown(release).finally(() => {
-      if (landedAs) { console.log(landedAs); process.exit(0); }
+    void shutDown(release).finally(() => exitHold).finally(() => {
+      if (landed) { console.log(landed); process.exit(0); }
       process.exit(sig === "SIGINT" ? 130 : 143);
     });
   }
   for (const sig of ["SIGTERM", "SIGINT"] as const) process.once(sig, onSignal);
+  treeExits++;
   let setUp = false;
   return {
     path: workspace.path,

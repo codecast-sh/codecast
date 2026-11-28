@@ -92,6 +92,19 @@ export function verdictLine(v: Verdict, name: string, version: string | undefine
 /** Failed or still behind: what makes the command exit non-zero. Skipped machines do not count. */
 export const notCurrent = (v: Verdict): boolean => v.kind === "failed" || v.kind === "behind";
 
+/**
+ * The mark `cast devices` puts beside a machine's version: below the fleet
+ * floor, or behind `latest`, the release the manifest names now. The
+ * machine's own cached check (`update_available`, up to a day old) is read
+ * only when the manifest could not be (`latest` null).
+ */
+export function versionMark(row: { cli_version?: string; update_required?: boolean; update_available?: string }, latest: string | null): "below floor" | "update" | null {
+  if (!row.cli_version) return null;
+  if (row.update_required) return "below floor";
+  if (latest === null) return row.update_available ? "update" : null;
+  return RELEASE.test(row.cli_version) && !isCurrent(row.cli_version, latest) ? "update" : null;
+}
+
 export function summaryLine(verdicts: Verdict[], latest: string): string {
   const counted = verdicts.filter((v) => v.kind !== "skipped");
   const ok = counted.filter((v) => !notCurrent(v)).length;

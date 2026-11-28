@@ -336,6 +336,8 @@ import {
   type PermissionHookInput,
 } from "./permissionHookWait.js";
 import { getVersion, performUpdate, ensureCastAlias, checkForUpdates, isDevMode, installChannel, updater } from "./update.js";
+import { forcedUpdateWaits, selfUpdateOutcome, watchdogUpdateReport } from "./daemonSelfUpdate.js";
+import { compareVersions } from "@platform/cli-kit/update";
 import { isManagedInstall } from "./managedInstall.js";
 import { readInventoryAsync, toInvocableList } from "./capabilities/inventory.js";
 import {
@@ -5750,8 +5752,9 @@ async function runSelfUpdate(why: string, at?: number): Promise<void> {
   logLifecycle("update_start", `${why} from v${currentVersion}`);
   void sendHeartbeat().catch(() => {});
   await flushRemoteLogs();
-  const result = await performUpdate();
-  if (result.success) {
+  // A round another updater deferred is tried again here, with the row still installing.
+  const failed = await selfUpdateOutcome(performUpdate, { at, onDeferred: (n) => logLifecycle("update_deferred", `Update deferred from v${currentVersion}: another updater holds the lock (try ${n})`) });
+  if (!failed) {
     // The refresh this daemon's successor runs on boot rewrites the
     // harness; someone asked for this update, so its changes are
     // recorded as requested, not automatic.
@@ -5761,8 +5764,8 @@ async function runSelfUpdate(why: string, at?: number): Promise<void> {
     restartDaemonProcess(why);
     return;
   }
-  updateRun = { state: "failed", error: String(result.error ?? "unknown error").slice(-500), at };
-  logLifecycle("update_failed", `Update failed from v${currentVersion} error=${result.error}`);
+  updateRun = failed;
+  logLifecycle("update_failed", `Update failed from v${currentVersion} error=${failed.error}`);
   await flushRemoteLogs();
   void sendHeartbeat().catch(() => {});
 }
@@ -7083,7 +7086,7 @@ function transcriptWarningLevel(warning: string): LogLevel {
 }
 
 const OUTCOME_LOGGED_COMMANDS = new Set([
-  "kill_session", "start_session", "resume_session", "fork_session", "hibernate_session",
+  "kill_session", "start_session", "resume_session", "fork_session", "hibernate_session", "retire_on_live",
   "move_to_device", "switch_account", "escape", "rewind",
 ]);
 
@@ -7125,7 +7128,7 @@ async function executeRemoteCommand(
   // daemon would resume a local copy and answer in parallel with the remote
   // (split-brain). A person reclaims a session from a dead owner with the
   // header chip, which restamps the owner before any command reaches this daemon.
-  const SESSION_COMMANDS = new Set(["resume_session", "fork_session", "kill_session", "send_keys", "set_permission_mode", "escape", "rewind", "hibernate_session", "switch_claude_backend", "rewind_files"]);
+  const SESSION_COMMANDS = new Set(["resume_session", "fork_session", "kill_session", "send_keys", "set_permission_mode", "escape", "rewind", "hibernate_session", "switch_claude_backend", "rewind_files", "retire_on_live"]);
   if (SESSION_COMMANDS.has(command) && commandArgs && syncServiceRef) {
     try {
       const parsedArgs = JSON.parse(commandArgs);
@@ -8474,6 +8477,13 @@ async function executeRemoteCommand(
           : await killConversationBackends(conversationId, sessionIdHint, parsed.keep_workspace !== true);
         result = killed.result;
         error = killed.error;
+        break;
+      }
+      // A deploy took the session's own commits live (convex retireOnLive.ts): this machine reads its checkout and its pane's attached clients (the hibernation pass's reading), then retires it or keeps it and says why.
+      case "retire_on_live": {
+        const { runRetireOnLiveCommand } = await import("./workflow/retireOnLive.js");
+        const terminalOf = async (id: string) => { const s = buildReverseConversationCache(readConversationCache())[id]; const r = s ? await resolveSessionCommandPane(id, s, detectSessionAgentType(s)) : null; return { pane: r?.tmuxTarget ?? null, running: r ? !!r.proc : null }; };
+        result = JSON.stringify(await runRetireOnLiveCommand(siteUrl, config.auth_token, commandArgs, { terminalOf, tmuxSessions: productionHibernationIo.tmuxSessions }));
         break;
       }
       // `cast hibernate <session>`: park the pane now. Being asked by a person
@@ -30199,18 +30209,6 @@ interface WatchdogDependencies extends TranscriptSyncDeps {
   watcher: SessionWatcher;
 }
 
-function compareVersions(a: string, b: string): number {
-  const partsA = a.split(".").map(Number);
-  const partsB = b.split(".").map(Number);
-  for (let i = 0; i < Math.max(partsA.length, partsB.length); i++) {
-    const numA = partsA[i] || 0;
-    const numB = partsB[i] || 0;
-    if (numA > numB) return 1;
-    if (numA < numB) return -1;
-  }
-  return 0;
-}
-
 let forcedUpdateDeclinedFor: string | null = null;
 async function checkForForcedUpdate(syncService: SyncService): Promise<boolean> {
   try {
@@ -30227,6 +30225,14 @@ async function checkForForcedUpdate(syncService: SyncService): Promise<boolean> 
           log(`[UPDATE] v${currentVersion} is below the minimum v${minVersion}; ${isManagedInstall() ? "installed by the organization's MDM, so waiting for a newer Codecast.pkg" : "automatic update is off, so waiting for a manual update"}`);
           forcedUpdateDeclinedFor = minVersion;
         }
+        return false;
+      }
+      // Already on the newest release: installing it again would restart the
+      // daemon into the same version, below the same floor, every check.
+      const latest = (await updater.fetchManifest().catch(() => null))?.version ?? null;
+      if (forcedUpdateWaits(currentVersion, latest)) {
+        if (forcedUpdateDeclinedFor !== `${minVersion}@${latest}`) log(`[UPDATE] v${currentVersion} is below the minimum v${minVersion}, but it is the newest release (latest.json names v${latest}); waiting for a newer one`);
+        forcedUpdateDeclinedFor = `${minVersion}@${latest}`;
         return false;
       }
       logLifecycle("forced_update_start", `current=${currentVersion} min=${minVersion}`);
@@ -35456,6 +35462,10 @@ export async function runWatchdog(): Promise<void> {
   // This catches cases where the daemon's own checkForForcedUpdate failed or killed the daemon
   if (mayUpgradeDaemon && minCliVersion && compareVersions(version, minCliVersion) < 0 && (config.auto_update === false || isManagedInstall())) {
     logLine(`Binary outdated: current=${version} min=${minCliVersion}; ${isManagedInstall() ? "managed install, the MDM ships updates" : "automatic update is off"}, leaving it`);
+  } else if (mayUpgradeDaemon && minCliVersion && compareVersions(version, minCliVersion) < 0
+    && forcedUpdateWaits(version, (await updater.fetchManifest().catch(() => null))?.version ?? null)) {
+    // The newest release already: a reinstall would restart into the same version (checkForForcedUpdate).
+    logLine(`Binary outdated: current=${version} min=${minCliVersion}; it is the newest release, waiting for a newer one`);
   } else if (mayUpgradeDaemon && minCliVersion && compareVersions(version, minCliVersion) < 0) {
     logLine(`Binary outdated: current=${version} min=${minCliVersion}, updating...`);
     await sendWatchdogLog("info", `[LIFECYCLE] watchdog_update_start: current=${version} min=${minCliVersion}`);
@@ -35472,8 +35482,9 @@ export async function runWatchdog(): Promise<void> {
         daemonAlive = false;
       }
     } else {
-      logLine(`Watchdog update failed: ${result.error}`);
-      await sendWatchdogLog("warn", `[LIFECYCLE] watchdog_update_failed: current=${version} target>=${minCliVersion} error=${result.error}`);
+      const { error, result: deferred } = watchdogUpdateReport(result);
+      logLine(error ?? deferred!);
+      if (error) await sendWatchdogLog("warn", `[LIFECYCLE] watchdog_update_failed: current=${version} target>=${minCliVersion} error=${result.error}`);
     }
   }
 
@@ -35531,8 +35542,7 @@ export async function runWatchdog(): Promise<void> {
         body: JSON.stringify({
           api_token: config.auth_token,
           command_id: updateCmd.id,
-          result: result.success ? "Updated by watchdog" : undefined,
-          error: result.success ? undefined : `Watchdog update failed: ${result.error}`,
+          ...watchdogUpdateReport(result),
         }),
       }).catch(() => {});
       if (result.success) {

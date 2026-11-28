@@ -10,6 +10,7 @@ describe("evalsSignalFingerprint", () => {
 
 import {
   checkFingerprint,
+  flowStopFingerprint,
   groupFingerprint,
   jobFingerprint,
   metricFingerprint,
@@ -19,6 +20,15 @@ import {
   sentryIssueFingerprint,
   topInAppFrame,
 } from "./signalFingerprint";
+
+describe("flowStopFingerprint", () => {
+  test("one key per repository and breakage, with no flow and no stop words in it", () => {
+    const a = flowStopFingerprint("Acme/App", "main_red");
+    expect(a).toBe("flowstop:acme/app:main_red");
+    expect(flowStopFingerprint("acme/app", "ci_unread")).not.toBe(a);
+    expect(flowStopFingerprint("acme/other", "main_red")).not.toBe(a);
+  });
+});
 
 describe("groupFingerprint", () => {
   test("segment and fp, with the source prefix in front when set", () => {

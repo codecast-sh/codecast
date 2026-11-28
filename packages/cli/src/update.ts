@@ -161,6 +161,14 @@ export function recordUpdateFailure(version: string): void {
 /** Printed where an update was asked for on a managed install. */
 export const MANAGED_UPDATE_NOTE = `cast was installed by your organization (${process.execPath}); it updates when your MDM installs a newer Codecast.pkg.`;
 
+/** performUpdate's error when it skipped the round because another process
+ *  is updating this install (updateRetry.ts exclusiveUpdate). */
+export const UPDATE_IN_PROGRESS = "update_in_progress";
+
+/** The update lock sits beside the binary it guards (the updater's `<binary>.new`): two config dirs (a CODECAST_DIR
+ *  override, another HOME) updating one install still meet at it. */
+export const updateLockPath = (execPath = process.execPath): string => `${execPath}.update.lock`;
+
 export async function performUpdate(): Promise<{ success: boolean; error?: string }> {
   // A root-owned binary (Codecast.pkg from an MDM) is not this user's to
   // replace; the organization ships the next version (managedInstall.ts).
@@ -168,12 +176,14 @@ export async function performUpdate(): Promise<{ success: boolean; error?: strin
     console.error(MANAGED_UPDATE_NOTE);
     return { success: false, error: "managed_install" };
   }
+  if (isDevMode()) return { success: false, error: "dev_mode" };
   // Loaded here, off the boot graph: only an update needs it.
-  const { updateWithRetry } = await import("./updateRetry.js");
-  const result = await updateWithRetry(() => updater.performUpdate());
+  const { exclusiveUpdate, updateWithRetry } = await import("./updateRetry.js");
+  const result = await exclusiveUpdate(updateLockPath(), () => updateWithRetry(() => updater.performUpdate()));
   // Callers print their own "Update failed" line without the reason, so name it
-  // here. Dev mode is a refusal, not a failure, and stays quiet.
-  if (!result.success && result.error && result.error !== "dev_mode") {
+  // here. Dev mode is a refusal, not a failure, and stays quiet; so is a round
+  // skipped because another updater is installing.
+  if (!result.success && result.error && result.error !== "dev_mode" && result.error !== UPDATE_IN_PROGRESS) {
     console.error("Update failed:", result.error);
   }
   return { success: result.success, error: result.error };

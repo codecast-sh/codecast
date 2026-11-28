@@ -4,13 +4,14 @@
 // signature gate holds signed clients to signed releases. Every side effect
 // is injected; no process, network or file outside the fixture is touched.
 import { describe, expect, it } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { generateKeyPairSync } from "node:crypto";
 import { publicKeyToBase64, sha256Hex, signManifest, type UpdaterFs } from "@platform/cli-kit/update";
-import { DARWIN_SIGNING_TEAM, RELEASE_BASE_URL, RELEASE_MANIFEST_SIGNING, createCodecastUpdater, makeCurlDownload, makeDarwinSignatureCheck } from "./update";
-import { isReleaseRace, updateWithRetry } from "./updateRetry";
+import { DARWIN_SIGNING_TEAM, RELEASE_BASE_URL, RELEASE_MANIFEST_SIGNING, createCodecastUpdater, makeCurlDownload, makeDarwinSignatureCheck, UPDATE_IN_PROGRESS, updateLockPath } from "./update";
+import { UPDATE_DEFER_RETRIES, UPDATE_DEFER_RETRY_MS, forcedUpdateWaits, selfUpdateOutcome, watchdogUpdateReport } from "./daemonSelfUpdate";
+import { exclusiveUpdate, isReleaseRace, updateWithRetry } from "./updateRetry";
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
@@ -216,6 +217,182 @@ describe("a download that raced the manifest is tried once more", () => {
     expect(isReleaseRace("download_incomplete")).toBe(true);
     expect(isReleaseRace("download_curl_22")).toBe(false);
     expect(isReleaseRace(undefined)).toBe(false);
+  });
+});
+
+describe("a floor no release reaches (ct-102483)", () => {
+  it("a machine on the newest release waits instead of reinstalling it and restarting below the floor", () => {
+    // Floor 1.1.400, newest release 1.1.306: installing puts 1.1.306 back, the
+    // daemon restarts still below 1.1.400, and installs again every check.
+    expect(forcedUpdateWaits("1.1.306", "1.1.306")).toBe(true);
+    expect(forcedUpdateWaits("1.1.307", "1.1.306")).toBe(true);
+    // Once latest.json moves, it installs.
+    expect(forcedUpdateWaits("1.1.306", "1.1.307")).toBe(false);
+    // Unread manifest: install, and the install reports why it failed.
+    expect(forcedUpdateWaits("1.1.306", null)).toBe(false);
+  });
+});
+
+describe("a self update another process is already installing", () => {
+  // Each perform answers from the script in turn; waits are recorded, not slept.
+  function run(script: Array<{ success: boolean; error?: string }>) {
+    const waits: number[] = [];
+    const deferrals: number[] = [];
+    let performs = 0;
+    const outcome = selfUpdateOutcome(async () => script[Math.min(performs++, script.length - 1)]!, {
+      at: 5,
+      wait: async (ms) => { waits.push(ms); },
+      onDeferred: (n) => deferrals.push(n),
+    });
+    return { outcome, waits, deferrals, performs: () => performs };
+  }
+  const deferred = { success: false, error: UPDATE_IN_PROGRESS };
+
+  it("is tried again a minute later, and installs once the other updater lets go", async () => {
+    const r = run([deferred, deferred, { success: true }]);
+    expect(await r.outcome).toBeNull();
+    expect(r.performs()).toBe(3);
+    expect(r.waits).toEqual([UPDATE_DEFER_RETRY_MS, UPDATE_DEFER_RETRY_MS]);
+    expect(r.deferrals).toEqual([1, 2]);
+  });
+
+  it("fails the device row with a clear reason when the lock stays held, instead of installing forever", async () => {
+    const r = run([deferred]);
+    const failed = await r.outcome;
+    expect(failed).toMatchObject({ state: "failed", at: 5 });
+    expect(failed!.error).toContain("another updater (cast update, or a command's update check) held this install's update lock for 5 minutes");
+    expect(r.performs()).toBe(UPDATE_DEFER_RETRIES + 1);
+    expect(r.waits).toHaveLength(UPDATE_DEFER_RETRIES);
+  });
+
+  it("fails at once on any other error", async () => {
+    expect(await run([{ success: false, error: "checksum_mismatch_darwin-arm64" }]).outcome).toEqual({ state: "failed", error: "checksum_mismatch_darwin-arm64", at: 5 });
+    expect(await run([{ success: false }]).outcome).toEqual({ state: "failed", error: "unknown error", at: 5 });
+  });
+
+  it("the watchdog reports its force_update as deferred, not failed, while another process installs", () => {
+    expect(watchdogUpdateReport(deferred)).toEqual({ result: "Deferred by watchdog: another process is updating this install" });
+    expect(watchdogUpdateReport({ success: true })).toEqual({ result: "Updated by watchdog" });
+    expect(watchdogUpdateReport({ success: false, error: "checksum_mismatch_darwin-arm64" })).toEqual({ error: "Watchdog update failed: checksum_mismatch_darwin-arm64" });
+  });
+});
+
+describe("cast restart while another process updates this install", () => {
+  // The restart action runs a real daemon, so its words are read from the source (the boot graph has no room for a
+  // helper module): the in-progress case is named before the failure line, and the restart goes on after both.
+  it("says the update is in progress, not that it failed, and restarts", () => {
+    const restart = readFileSync(join(import.meta.dir, "index.ts"), "utf-8").split('program\n  .command("restart")')[1]?.split("program\n  .command(")[0] ?? "";
+    const failedLine = restart.indexOf("Update failed");
+    expect(failedLine).toBeGreaterThan(0);
+    const branch = restart.slice(restart.lastIndexOf("} else {", failedLine), restart.indexOf("\n", failedLine));
+    expect(branch).toContain('error === UPDATE_IN_PROGRESS ? "another update of this install is in progress; restarting without updating" : `Update failed');
+    expect(restart.indexOf("startDaemon({ afterStop: true })")).toBeGreaterThan(failedLine);
+  });
+});
+
+describe("two updaters on one install (ct-102415)", () => {
+  // Real files on a temp install, and a download that streams like curl -o:
+  // open (truncating) the fixed `<binary>.new`, write half, yield, write the
+  // rest. Unlocked, the second updater deletes and truncates the first's
+  // download mid-stream: one reads the other's half file (download_incomplete,
+  // or a checksum mismatch), and the retry races the same way.
+  const BIG = enc.encode("NEW CODECAST BINARY ".repeat(4096));
+  async function install(dir: string) {
+    const exe = join(dir, "codecast");
+    writeFileSync(exe, "OLD");
+    const manifest = {
+      version: "9.9.9",
+      released: "2026-09-23T00:00:00Z",
+      binaries: { "darwin-arm64": { url: `${RELEASE_BASE_URL}/cli/releases/v9.9.9/abc/codecast-darwin-arm64`, sha256: await sha256Hex(BIG), size: BIG.byteLength } },
+    };
+    const download = async (_url: string, dest: string) => {
+      const fd = openSync(dest, "w");
+      try {
+        writeSync(fd, BIG.subarray(0, BIG.byteLength / 2));
+        await new Promise((r) => setTimeout(r, 20));
+        writeSync(fd, BIG.subarray(BIG.byteLength / 2));
+      } finally {
+        closeSync(fd);
+      }
+    };
+    const updater = () =>
+      createCodecastUpdater({
+        currentVersion: "1.0.0",
+        stateDir: join(dir, "state"),
+        fetch: releaseFetch(manifest),
+        manifestSigning: TEST_SIGNING,
+        execPath: exe,
+        platform: "darwin",
+        arch: "arm64",
+        log: () => {},
+        download,
+        verifyPlatformSignature: async () => ({ ok: true }),
+      });
+    return { exe, updater };
+  }
+  const noPause = async () => {};
+
+  it("serialize: one installs, the other skips the round, and the binary is the release", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "cast-update-race-"));
+    try {
+      const { exe, updater } = await install(dir);
+      // Beside the binary whose `<binary>.new` it guards, whatever config dir each updater runs with.
+      const lock = updateLockPath(exe);
+      expect(lock).toBe(`${exe}.update.lock`);
+      // The lock adds no signal handler: the daemon's own SIGTERM handler must run once, not again re-raised by the lock.
+      const handlers = () => ["SIGINT", "SIGTERM", "SIGHUP"].map((s) => process.listenerCount(s as NodeJS.Signals));
+      const before = handlers();
+      const during: number[][] = [];
+      const run = (u: ReturnType<typeof updater>) => exclusiveUpdate(lock, () => { during.push(handlers()); return updateWithRetry(() => u.performUpdate(), noPause); });
+      const results = await Promise.all([run(updater()), run(updater())]);
+      expect(during).toEqual([before]);
+      expect(results.filter((r) => r.success)).toHaveLength(1);
+      expect(results.filter((r) => !r.success).map((r) => r.error)).toEqual([UPDATE_IN_PROGRESS]);
+      expect(readFileSync(exe)).toEqual(Buffer.from(BIG));
+      // The lock is released: the next round runs.
+      expect((await run(updater())).success).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("control: unlocked, the same two updaters break each other's download, so the fixture still races", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "cast-update-race-"));
+    try {
+      const { updater } = await install(dir);
+      const run = (u: ReturnType<typeof updater>) => updateWithRetry(() => u.performUpdate(), noPause);
+      const results = await Promise.all([run(updater()), run(updater())]);
+      expect(results.filter((r) => r.success).length).toBeLessThan(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("a lock that cannot be written beside the binary runs the update anyway, so its own failure is reported", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "cast-update-ro-"));
+    try {
+      chmodSync(dir, 0o555);
+      let ran = false;
+      const result = await exclusiveUpdate(join(dir, "codecast.update.lock"), async () => { ran = true; return { success: false, error: "permission denied" }; });
+      expect(ran).toBe(true);
+      expect(result).toEqual({ success: false, error: "permission denied" });
+    } finally {
+      chmodSync(dir, 0o755);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reclaims a lock left by a dead updater", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "cast-update-race-"));
+    try {
+      const { exe, updater } = await install(dir);
+      const lock = join(dir, "update.lock");
+      writeFileSync(lock, JSON.stringify({ pid: 2 ** 22 + 17, at: Date.now(), token: "dead" }));
+      expect((await exclusiveUpdate(lock, () => updater().performUpdate())).success).toBe(true);
+      expect(readFileSync(exe)).toEqual(Buffer.from(BIG));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

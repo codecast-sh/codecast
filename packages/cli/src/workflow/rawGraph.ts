@@ -291,6 +291,8 @@ export class Parser {
     if (attrs.definition) node.definition = String(attrs.definition);
     if (attrs.isolated !== undefined) node.isolated = attrs.isolated === true || attrs.isolated === "true";
     for (const k of ["parks", "machine", "fold"] as const) if (attrs[k] === true || attrs[k] === "true") node[k] = true;
+    if (attrs.shared === true || attrs.shared === "true") node.shared = true;
+    else if (attrs.shared !== undefined && attrs.shared !== false && attrs.shared !== "false") node.shared = String(attrs.shared);
     if (attrs.asks_if) node.asks_if = String(attrs.asks_if);
     if (attrs.refresh !== undefined) node.refresh = attrs.refresh === true || attrs.refresh === "true";
     if (attrs.reviewer !== undefined) node.reviewer = attrs.reviewer === true || attrs.reviewer === "true";
@@ -298,6 +300,8 @@ export class Parser {
     if (attrs.timeout !== undefined) node.timeout = Number(attrs.timeout);
     if (attrs.silent !== undefined) node.silent = Number(attrs.silent);
     if (attrs.room !== undefined && Number.isInteger(Number(attrs.room)) && Number(attrs.room) > 0) node.room = Number(attrs.room);
+    if (attrs.machine_slot !== undefined) node.machine_slot = String(attrs.machine_slot);
+    if (attrs.no_slot !== undefined) node.no_slot = String(attrs.no_slot);
     if (attrs.max_visits !== undefined) node.max_visits = attrs.max_visits as number;
     if (attrs.max_free_visits !== undefined) node.max_free_visits = Number(attrs.max_free_visits);
     if (attrs.max_retries !== undefined) node.max_retries = attrs.max_retries as number;
@@ -311,6 +315,7 @@ export class Parser {
     if (attrs.asker) node.asker = String(attrs.asker);
     if (attrs.answerer) node.answerer = String(attrs.answerer);
     if (attrs.stop) node.stop = String(attrs.stop);
+    if (attrs.resume !== undefined) node.resume = String(attrs.resume);
     if (attrs.keep_subject === true || attrs.keep_subject === "true") node.keep_subject = true;
     if (attrs.whole_stop === true || attrs.whole_stop === "true") node.whole_stop = true;
     if (attrs.max_tokens !== undefined) node.max_tokens = Number(attrs.max_tokens);
