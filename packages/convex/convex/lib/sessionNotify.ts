@@ -10,6 +10,7 @@ import { enqueuePush } from "../pushRouter";
 import { listSessionPartyIds } from "../sessionOwners";
 import { inboxOwnersOf, waitAudienceOf } from "./inboxOwners";
 import { cardRangFor } from "./decisionRing";
+import { sessionNotifyLevel } from "./sessionWatch";
 
 export type SessionNotifType =
   | "session_idle"
@@ -56,7 +57,9 @@ export async function deliverSessionNotification(
   message: string,
   // The digest's own delivery sets this: the fold-up alert must not be folded
   // up again.
-  opts?: { bypassDigest?: boolean },
+  // `watched`: the recipient subscribed to this session, which is the whole
+  // reason this row exists, so neither their mutes nor the digest hold it.
+  opts?: { bypassDigest?: boolean; watched?: boolean },
 ): Promise<boolean> {
   const user = await ctx.db.get(recipientId);
   if (!user) return false;
@@ -65,11 +68,15 @@ export async function deliverSessionNotification(
   // "waiting for you" would be the same news again, without the question.
   // Someone the card did not ring still hears the session wait.
   if (type === "session_idle" && (await cardRangFor(ctx, conversationId, user))) return false;
+  if (!opts?.watched && SESSION_STATE_TYPES.has(type)) {
+    const conv = await ctx.db.get(conversationId);
+    if (conv && (await sessionNotifyLevel(ctx, user, conv)) === "muted") return false;
+  }
 
   // Open window → this row joins the fold-up and stays quiet. Closed window →
   // it alerts now and opens the next one.
   let quiet = false;
-  if (type === "session_idle" && !opts?.bypassDigest && idleDigestOn(user.notification_preferences)) {
+  if (type === "session_idle" && !opts?.bypassDigest && !opts?.watched && idleDigestOn(user.notification_preferences)) {
     const now = Date.now();
     const state = user.idle_digest_state;
     const windowEndsAt = (state?.last_alerted_at ?? 0) + IDLE_DIGEST_WINDOW_MS;
@@ -162,6 +169,8 @@ export async function deliverSessionNotificationToParties(
   type: SessionNotifType,
   title: string,
   message: string,
+  // People already told about this episode as the session's subscribers.
+  skip?: ReadonlySet<string>,
 ): Promise<boolean> {
   // Under the owners model (team feature session_owners) the alert follows
   // the owners rule: the person owners hear, the implicit starter included,
@@ -184,6 +193,7 @@ export async function deliverSessionNotificationToParties(
     const people = escalatedTo && (!audience || audience.person) ? [escalatedTo] : audience?.people ?? [];
     let reached = false;
     for (const id of new Set(people.map(String))) {
+      if (skip?.has(id)) continue;
       if (await deliverSessionNotification(ctx, id, conversation._id, type, title, message)) reached = true;
     }
     return reached;
@@ -200,17 +210,18 @@ export async function deliverSessionNotificationToParties(
   // account that runs it has been handed over (the same rule the inbox scan
   // applies), so the runner is not rung about work that is no longer theirs to
   // answer. An unowned session is the runner's own and always rings them.
-  const runnerAssignedAway = isAssignedAwayFromOwnerSet(recipients, conversation.user_id.toString());
-  let delivered = runnerAssignedAway
+  const runnerSkipped = isAssignedAwayFromOwnerSet(recipients, conversation.user_id.toString())
+    || !!skip?.has(conversation.user_id.toString());
+  let delivered = runnerSkipped
     ? false
     : await deliverSessionNotification(
       ctx, conversation.user_id, conversation._id, type, title, message,
     );
 
-  const seen = new Set<string>(runnerAssignedAway ? [] : [conversation.user_id.toString()]); // runner: done above
+  const seen = new Set<string>(runnerSkipped ? [] : [conversation.user_id.toString()]); // runner: done above
   for (const ownerId of recipients) {
     const key = ownerId.toString();
-    if (seen.has(key)) continue;
+    if (seen.has(key) || skip?.has(key)) continue;
     seen.add(key);
     if (await deliverSessionNotification(ctx, ownerId, conversation._id, type, title, message)) {
       delivered = true;

@@ -6,6 +6,7 @@ import { enqueuePush } from "./pushRouter";
 import { isTeamMember } from "./privacy";
 import { ENTITY_TYPE, NOTIFICATION_TYPE } from "./lib/notificationTypes";
 import { isEphemeralTask } from "./lib/taskExecution";
+import { sessionNotifyLevel } from "./lib/sessionWatch";
 
 export const PREFERENCE_MAP: Record<string, string> = {
   task_assigned: "task_activity",
@@ -299,6 +300,10 @@ export async function emitNotification(ctx: MutationCtx, args: ObjectType<typeof
   }
 
   let created = 0;
+  // News about a session reaches nobody who muted it (or its project, folder
+  // or runner), except what is addressed to them by name or must reach them.
+  const addressed = args.always || PREFERENCE_MAP[args.event_type] === "mention";
+  const conv = !addressed && args.conversation_id ? await ctx.db.get(args.conversation_id) : null;
 
   for (const recipient of allowed) {
     if (
@@ -310,6 +315,7 @@ export async function emitNotification(ctx: MutationCtx, args: ObjectType<typeof
     ) {
       continue;
     }
+    if (conv && (await sessionNotifyLevel(ctx, recipient, conv)) === "muted") continue;
 
     const notifId = await ctx.db.insert("notifications", {
       recipient_user_id: recipient._id,

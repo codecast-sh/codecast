@@ -58,6 +58,7 @@ import { activityLine } from "@codecast/shared/render";
 import type { SessionActivity } from "@codecast/shared/contracts";
 import { attachmentViews, extractSessionImages, type SessionImageEntry } from "./sessionImages";
 import { trustedImageOrigin, latestImagePreviewUrl, listConversationFileChanges } from "./lib/messageReads";
+import { noteWatchedActivity } from "./sessionWatch";
 export { latestImagePreviewUrl, listConversationFileChanges };
 
 /** Bound demand-scoped coverage checks independently of transcript size. */
@@ -1338,6 +1339,8 @@ export const addMessage = mutation({
       }
     }
 
+    if (args.role === "assistant" && safeContent?.trim()) await noteWatchedActivity(ctx, conversation);
+
     // Same open-poll trigger as addMessages (the retry-queue drain delivers
     // through this singular path).
     if (args.role === "assistant" && args.tool_calls?.some((tc) => tc.name === "AskUserQuestion")) {
@@ -2114,6 +2117,13 @@ export async function writeMessageBatch(ctx: MutationCtx, conversation: Doc<"con
   // (insertedCount 0), which is exactly the batch that must schedule the
   // check. The check re-reads the messages table at fire time, so a poll
   // answered in the meantime is a no-op. (see notifications.checkNeedsInput)
+  // Subscribers to every message hear assistant text in coalesced batches.
+  // Outside the insert block for the same reason: streamed text lands as a
+  // patch to a row already synced.
+  if (args.messages.some((m) => m.role === "assistant" && !!m.content?.trim())) {
+    await noteWatchedActivity(ctx, conversation);
+  }
+
   const newestBatchMsg = args.messages.reduce((a, b) => ((b.timestamp || 0) >= (a.timestamp || 0) ? b : a));
   if (
     newestBatchMsg.role === "assistant" &&

@@ -80,6 +80,7 @@ import { RoleFailoverBanner } from '@/components/org/RoleFailoverBanner';
 import { useSessionHuddle } from '@/components/calls/SessionHuddleButton';
 import { RenameSessionSheet } from '@/components/session/RenameSessionSheet';
 import { appAlert, showActionSheet, type SheetItem } from '@/lib/popups';
+import { mutePatch, NOTIFY_LEVELS, useSessionNotify } from '@codecast/web/lib/sessionNotify';
 import { MessageIdentity } from '@codecast/web/lib/conversationBlockContexts';
 import { MessageLongPressContext, OutsideMessage, useMessageLongPress, type BlockCopy } from '@/components/MessageLongPress';
 import { openSelectText } from '@/components/SelectTextSheet';
@@ -3331,6 +3332,33 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   const setPrivacy = useInboxStore((s) => s.setPrivacy);
   const setTeamVisibility = useInboxStore((s) => s.setTeamVisibility);
 
+  // How loudly this session reaches the person, and the broader mutes that
+  // cover it: the same reader and writes as the web's Notifications menu.
+  const notify = useSessionNotify((conversation as any) ?? { _id: String(id) });
+  const notifyValue = notify.level === 'default'
+    ? (notify.broad ? 'Muted' : undefined)
+    : NOTIFY_LEVELS.find((l) => l.key === notify.level)?.label;
+  const handleNotifyMenu = useCallback(() => {
+    const store = useInboxStore.getState();
+    const convId = String(conversation?._id ?? id);
+    const items: SheetItem[] = NOTIFY_LEVELS.map((l) => ({
+      label: l.label,
+      detail: l.key === 'default' && notify.broad ? 'Muted by a project, folder or teammate mute' : undefined,
+      selected: notify.level === l.key,
+      onPress: () => store.setSessionNotify(convId, l.key),
+    }));
+    const scope = (key: 'project' | 'folder' | 'teammate', label: string, muted: boolean) => ({
+      label,
+      detail: muted ? 'Muted. Tap to unmute' : 'Mute everything from here',
+      selected: muted,
+      onPress: () => store.updateNotificationSettings(mutePatch(notify, key, !muted)),
+    });
+    if (notify.project) items.push(scope('project', `Project ${notify.project.title}`, notify.project.muted));
+    if (notify.folder) items.push(scope('folder', `Folder ${notify.folder.name}`, notify.folder.muted));
+    if (notify.teammate) items.push(scope('teammate', notify.teammate.name, notify.teammate.muted));
+    showActionSheet('Notifications', items);
+  }, [conversation?._id, id, notify]);
+
   const handleToggleFavorite = useCallback(() => {
     if (!id) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -3919,6 +3947,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     [
       { key: 'rename', label: 'Rename', icon: 'edit-3', onPress: () => setRenameVisible(true) },
       { key: 'favorite', label: 'Favorite', icon: 'star', on: !!conversation?.is_favorite, onPress: handleToggleFavorite },
+      ...(notify.me ? [{ key: 'notify', label: 'Notifications', icon: (notifyValue === 'Muted' ? 'bell-off' : 'bell') as 'bell', value: notifyValue, onPress: handleNotifyMenu }] : []),
       ...(moveVerbs.includes('switch') ? [{ key: 'switch', label: 'Switch agent', icon: 'repeat' as const, value: conversation ? agentDisplayName(conversation.agent_type) : undefined, onPress: () => pickAgentFor('switch') }] : []),
       ...(moveVerbs.includes('fork') && isRealConversation ? [{ key: 'fork', label: 'Fork as…', icon: 'git-branch' as const, onPress: () => pickAgentFor('fork') }] : []),
     ],

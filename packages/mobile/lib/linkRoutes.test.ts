@@ -381,3 +381,10 @@ describe('mobileNotificationRoute', () => {
     expect(mobileNotificationRoute({ link: '/somewhere/unknown', entity_type: 'task', entity_id: 'ct-2' })).toBe('/task/ct-2');
   });
 });
+
+describe('session subscription notifications', () => {
+  test('new messages in a subscribed session open that session', () => {
+    expect(mobileNotificationRoute({ conversation_id: 'jx7abc123def' } as any)).toBe(mobileRouteForUrl('/conversation/jx7abc123def'));
+    expect(mobileNotificationRoute({ conversation_id: 'jx7abc123def' } as any)).toContain('jx7abc123def');
+  });
+});

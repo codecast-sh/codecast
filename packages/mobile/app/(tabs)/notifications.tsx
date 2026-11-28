@@ -81,6 +81,7 @@ function notificationIcon(type: string): { name: React.ComponentProps<typeof Fon
     case "team_invite": return { name: "users", color: Theme.greenBright };
     case "session_idle": return { name: "check", color: Theme.green };
     case "sessions_need_input": return { name: "bell", color: Theme.green };
+    case "session_activity": return { name: "commenting", color: Theme.blue };
     case "permission_request": return { name: "shield", color: Theme.orange };
     case "session_error": return { name: "exclamation-triangle", color: Theme.red };
     case "team_session_start": return { name: "play-circle", color: Theme.blue };

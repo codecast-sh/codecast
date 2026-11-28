@@ -3141,6 +3141,63 @@ program
   });
 
 program
+  .command("notify")
+  .description(
+    "How loudly a session reaches you: every message, needs input, muted\n\n" +
+    "Sets this session's own notification level, the same choice as the\n" +
+    "Notifications item in the session menu on the web and the phone. all pings\n" +
+    "on every reply (bursts folded to one push), needs-input pings every time it\n" +
+    "waits on a person, mute silences it, default goes back to the usual rules.\n" +
+    "Project, folder and teammate mutes are set in the app.\n\n" +
+    "Examples:\n" +
+    "  cast notify jx7c6zk all\n" +
+    "  cast notify jx7c6zk needs-input\n" +
+    "  cast notify jx7c6zk mute\n" +
+    "  cast notify jx7c6zk default\n" +
+    "  cast notify --list        # every session with its own setting"
+  )
+  .argument("[session]", "Session short ID (default: current session)")
+  .argument("[level]", "all | needs-input | mute | default")
+  .option("--list", "List every session that has its own notification setting")
+  .action(async (session: string | undefined, level: string | undefined, opts: { list?: boolean }) => {
+    const { parseNotifyLevel, formatNotifyList, NOTIFY_LEVEL_LABEL } = await import("./notifyCommand");
+    const config = readConfig();
+    if (!config?.convex_url || !config.auth_token) {
+      console.error("Not signed in: run cast auth first");
+      process.exit(1);
+    }
+    const { ConvexHttpClient } = await import("convex/browser");
+    const client = new ConvexHttpClient(config.convex_url) as any;
+    if (opts.list) {
+      const rows = await client.query("sessionWatch:listMine", { api_token: config.auth_token });
+      for (const line of formatNotifyList(rows, () => "")) console.log(line);
+      return;
+    }
+    // One argument is a level for the current session when it names one.
+    if (session && !level && parseNotifyLevel(session)) {
+      level = session;
+      session = undefined;
+    }
+    const parsed = level ? parseNotifyLevel(level) : null;
+    if (!parsed) {
+      console.error("Name a level: all, needs-input, mute or default (e.g. cast notify jx7c6zk needs-input)");
+      process.exit(1);
+    }
+    const target = session || detectCurrentSessionId();
+    if (!target) {
+      console.error("No session given and none detected: pass a short ID (e.g. cast notify jx7c6zk all)");
+      process.exit(1);
+    }
+    try {
+      const result = await client.mutation("sessionWatch:setLevel", { api_token: config.auth_token, conversation_id: target, level: parsed });
+      console.log(`${c.green}ok${c.reset} ${c.cyan}${String(result.conversation_id).slice(0, 7)}${c.reset} notifies you: ${NOTIFY_LEVEL_LABEL[parsed]}`);
+    } catch (err: any) {
+      console.error(/not found/i.test(String(err?.message)) ? `No session ${target} that you can read` : `Could not set it: ${err?.message ?? err}`);
+      process.exit(1);
+    }
+  });
+
+program
   .command("restore")
   // Legacy verb, kept as a hidden alias (see `stash` above).
   .alias("undismiss")

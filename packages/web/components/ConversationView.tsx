@@ -200,6 +200,7 @@ import { PeerTransferStrip } from "./conversation/PeerTransferStrip";
 import { ConversationAgeMenuItems, ConversationMetadata, ConversationTaskProgress, ConversationTaskStatsMenuItem, DensityMenuOptions, DeviceMoveStatusStrip, EdgeMessagesIndicator, HandoffMarker, MessagesUnavailableState, RestartStatusStrip, SummaryOnlyState, SessionGalleryButton, ThreadTailLoader, TimelineRule } from "./conversation/sessionChrome";
 import { SessionAccountLine } from "./conversation/SessionAccountLabel";
 import { HeaderModelControl } from "./SessionControlMenu";
+import { SessionNotifyIndicator, SessionNotifySubmenu } from "./SessionNotifyMenu";
 import { useEffortKeys } from "../hooks/useEffortKeys";
 import { DENSITY_BY_CONVERSATION, DENSITY_OPTIONS, FEED_DENSITY_CYCLE, defaultDensity } from "../lib/conversationDensity";
 import { followRestoredConversation } from "../lib/followRestoredConversation";
@@ -4795,6 +4796,8 @@ const ConversationViewInner = (
                     the row's only plain actions. */}
                 {headerExtra}
 
+                {!guest && <SessionNotifyIndicator conversation={conversation as any} />}
+
                 <DropdownMenu open={sessionMenuOpen} onOpenChange={setSessionMenuOpen}>
                   <DropdownMenuTrigger asChild>
                     {/* data-cc-keep: the Minimal style rests the header on the
@@ -4884,6 +4887,7 @@ const ConversationViewInner = (
                     )}
                     {/* A phone hides the header's facts strip, so the cloud agent's link and actions live here too. */}
                     {!guest && <CloudAgentMenuItems actions={cloudAgentActions} />}
+                    {!guest && <SessionNotifySubmenu conversation={conversation as any} />}
                     <DropdownMenuSeparator />
                     <DropdownMenuLabel className="text-mark uppercase tracking-wide text-sol-text-dim">View</DropdownMenuLabel>
                     <DropdownMenuItem onSelect={() => setTimeout(() => { if (propHighlightQuery) propClearHighlight?.(); setIsLocalSearchOpen(true); setLocalSearchQuery(""); setTimeout(() => localSearchInputRef.current?.focus(), 0); })}>

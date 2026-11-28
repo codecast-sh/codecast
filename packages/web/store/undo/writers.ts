@@ -269,6 +269,7 @@ export const LOCAL_ONLY_UNDO_KEYS: Record<string, string> = {
   projectUpdates:
     "Written by editProjectUpdate, whose spec carries an inverse with the prior body; posts, comments and deletes are never undoable.",
   sessionReads: "Read state; never undoable.",
+  sessionNotify: "Written only by setSessionNotify, a setting changed back in the same menu; never undoable.",
   trialCards: "Written only by trialAnswer, which moves a paused trial run on, trialReask, which has its machine ask it again, and trialReaskRefused, which takes a refused re-ask's stamp back; like answerDecision, never undoable.",
   trialRuns: "Written only by trialRerun, which starts a new run, and trialClose, which closes the problem for everyone watching; never undoable.",
   weeklyCards: "Written only by setWeeklyCardOptions, a setting, and setObjectShareLink, a sharing change; neither is undoable.",

@@ -303,6 +303,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   runPriorities: MACHINE,
   snoozeWalkie: SETTINGS,
   updateNotificationSettings: SETTINGS,
+  setSessionNotify: SETTINGS,
   updateIssueSyncSource: SETTINGS,
   setOpsSourceStatus: SETTINGS,
   setAnchorCleanChat: SEND,

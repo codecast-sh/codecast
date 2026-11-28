@@ -1545,6 +1545,18 @@ export type BucketAssignmentItem = {
   updated_at: number;
 };
 
+// How loudly the viewer hears one session (sessionWatch.listMine). No row is
+// the default: the ordinary rules, and the viewer's project, folder and
+// teammate mutes.
+export type SessionNotifyLevel = "all" | "needs_input" | "muted";
+export type SessionNotifyItem = {
+  _id: string;
+  conversation_id: string;
+  level: SessionNotifyLevel;
+  updated_at: number;
+};
+export const sessionNotifyKey = (conversationId: string) => `sn:${conversationId}`;
+
 // One row per (user, conversation): where this viewer's attention stopped.
 // Unread is never stored — it is isSessionUnread(mark, session.updated_at),
 // re-derived at render so an ack and a new turn cannot disagree.
@@ -7636,6 +7648,11 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
    *  count". Local only — a session's read state never dispatches. */
   markSessionSeen: (id: string) => void;
 
+  /** The viewer's per-session notify settings, keyed sn:<conversation id>. */
+  sessionNotify: Record<string, SessionNotifyItem>;
+  /** Subscribe to every message, to needs input, mute, or go back to default. */
+  setSessionNotify: (conversationId: string, level: SessionNotifyLevel | "default") => void;
+
   // -- Session unread (server-backed, per viewer) --
   /** The viewer's read marks, keyed by row id (sessionReads.listMine). Unread
    *  is derived from these against each session's updated_at, never stored. */
@@ -7970,7 +7987,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   revokeDeviceEnrollment: (teamId: string, enrollmentId: string) => void;
   restoreDeviceEnrollment: (teamId: string, enrollmentId: string) => void;
   setDefaultModel: (agentClient: string, model: string | null) => void;
-  updateNotificationSettings: (patch: { notifications_enabled?: boolean; notification_preferences?: Record<string, any>; muted_members?: string[]; machine_wide_presence?: boolean; sessions_read_dms?: boolean }) => void;
+  updateNotificationSettings: (patch: { notifications_enabled?: boolean; notification_preferences?: Record<string, any>; muted_members?: string[]; muted_projects?: string[]; muted_folders?: string[]; machine_wide_presence?: boolean; sessions_read_dms?: boolean }) => void;
   setAgentPermissionModes: (modes: { claude?: string; codex?: string; gemini?: string; muse?: string }) => void;
   setClaudeBackend: (backend: "sdk" | "tmux") => void;
   setAgentDefaultParams: (agent: string, params: Record<string, string>) => void;
@@ -11745,6 +11762,13 @@ const inboxStoreConfig = (set: any, get: any) => ({
     const count = this.conversations[id]?.message_count ?? this.sessions[id]?.message_count;
     if (typeof count === "number") this._seenMessageCount[id] = count;
     this._seenUpToAt[id] = Date.now();
+  }),
+
+  sessionNotify: {},
+  setSessionNotify: action(function (this: Draft, conversationId: string, level: SessionNotifyLevel | "default") {
+    const key = sessionNotifyKey(conversationId);
+    if (level === "default") delete this.sessionNotify[key];
+    else this.sessionNotify[key] = { _id: key, conversation_id: conversationId, level, updated_at: Date.now() };
   }),
 
   // -- Session unread --

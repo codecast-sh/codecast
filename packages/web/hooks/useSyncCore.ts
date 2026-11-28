@@ -5,6 +5,7 @@ import { useSyncChangeFeed } from "./useSyncChangeFeed";
 import { useSyncSessionDecisions } from "./useSyncSessionDecisions";
 import { useSyncBuckets } from "./useSyncBuckets";
 import { useSyncSessionReads } from "./useSyncSessionReads";
+import { useSyncSessionNotify } from "./useSyncSessionNotify";
 import { useInboxDigestCompare } from "./useInboxDigestCompare";
 import { emitSyncWake } from "./syncWake";
 import { useSyncMentionTasks } from "./useSyncTasks";
@@ -30,6 +31,7 @@ export type SyncCoreProfile = "web" | "mobile";
 //   useSyncSessionDecisions  the decision queue (the questions bucket input)
 //   useSyncBuckets         labels
 //   useSyncSessionReads    the viewer's per-session read marks (unread)
+//   useSyncSessionNotify   the viewer's per-session notify settings
 //   useInboxDigestCompare  the anti-entropy loop (sync-convergence C6/C7):
 //                          replica digest vs the overlay's stamps, bounded
 //                          heal through getInboxSessionsByIds + one probe
@@ -51,6 +53,7 @@ export function useSyncCore(profile: SyncCoreProfile): void {
   useSyncSessionDecisions();
   useSyncBuckets();
   useSyncSessionReads();
+  useSyncSessionNotify();
   useInboxDigestCompare();
   // The task/doc/plan index every search's instant tier reads (Cmd-K, the
   // phone's search, @-mentions): small rows across every workspace.

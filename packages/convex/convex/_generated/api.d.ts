@@ -840,6 +840,7 @@ import type * as sessionRelease from "../sessionRelease.js";
 import type * as sessionThreads from "../sessionThreads.js";
 import type * as sessionTransfer from "../sessionTransfer.js";
 import type * as sessionVisibilityPreview from "../sessionVisibilityPreview.js";
+import type * as sessionWatch from "../sessionWatch.js";
 import type * as sheetQueries from "../sheetQueries.js";
 import type * as ship from "../ship.js";
 import type * as sideAnswers from "../sideAnswers.js";
@@ -1778,6 +1779,7 @@ declare const fullApi: ApiFromModules<{
   sessionThreads: typeof sessionThreads;
   sessionTransfer: typeof sessionTransfer;
   sessionVisibilityPreview: typeof sessionVisibilityPreview;
+  sessionWatch: typeof sessionWatch;
   sheetQueries: typeof sheetQueries;
   ship: typeof ship;
   sideAnswers: typeof sideAnswers;

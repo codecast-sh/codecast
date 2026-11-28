@@ -74,6 +74,8 @@ const CURRENT_USER_METADATA_FIELDS = [
   "sync_projects",
   "team_share_paths",
   "muted_members",
+  "muted_projects",
+  "muted_folders",
   "agent_permission_modes",
   "agent_default_params",
   "claude_backend",
