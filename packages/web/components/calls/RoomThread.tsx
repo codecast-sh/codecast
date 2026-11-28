@@ -332,6 +332,9 @@ export const RoomThread = memo(function RoomThread({
   // controls' Add does (AddPeople): from a seat in the live huddle only.
   const scribeLive = useQueryNoThrow(api.transcripts.getLive, seated && liveTranscriptId ? { room_key: roomKey, tail: 1 } : "skip").data as ScribeLive;
   const scribe = useScribe(seated ? roomKey : null, scribeLive);
+  // A removal pressed here takes Scribe's chip off at once (huddleSlice's
+  // press), as useScribe shows it gone everywhere else in this window.
+  const scribeLeaving = useInboxStore((st) => st.scribePresses[roomKey] === "remove");
   const { open: openAddAgent, adding } = useAddToCall({ roomKey, liveTranscriptId, routes, teamId: call?.team_id, scribe: seated && scribeLive ? scribe : undefined });
   const removeFeed = useRemoveLiveFeed(liveTranscriptId);
   const facesOn = useInboxStore((st) => teamHasFeature(st.teams, call?.team_id, "agent_faces"));
@@ -598,6 +601,7 @@ export const RoomThread = memo(function RoomThread({
             const agent = r.kind === "session" ? roster.find((a) => a.target === r.target) : null;
             // The call's Scribe never has a face (transcriptsScribe seats it with none).
             const isScribe = r.role === "scribe";
+            if (isScribe && scribeLeaving) return null;
             return (
               <span
                 key={`${r.kind}:${r.target}`}
@@ -610,7 +614,11 @@ export const RoomThread = memo(function RoomThread({
                   removable={canRemove}
                   removeBlocked={r.kind === "session" && r.target === heldRoute ? OWN_ROUTE_HELD : null}
                   onRemove={() =>
-                    void removeFeed(r.kind, r.target).catch((e) => toast.error(humanizeConvexError(e, "Could not take it out of the call")))
+                    // Scribe leaves through its own store action from a seat (one way out,
+                    // shown at once); any other agent, or a reader outside the call, through the route.
+                    isScribe && scribe.present
+                      ? scribe.remove()
+                      : void removeFeed(r.kind, r.target).catch((e) => toast.error(humanizeConvexError(e, "Could not take it out of the call")))
                   }
                 />
                 {agent?.working && transcribing && (

@@ -98,7 +98,7 @@ const call = (over: Partial<any> = {}) => ({
   ...over,
 });
 
-test("the call's Scribe is one of the agent chips: named Scribe, no face switch, out of the working tail, removed like any agent", async () => {
+test("the call's Scribe is one of the agent chips: named Scribe, no face switch, out of the working tail, and its × takes it off at once", async () => {
   const now = Date.now();
   const working = (id: string) => ({ _id: id, title: id, agent_type: "claude_code", agent_status: "working", updated_at: now, last_heartbeat: now });
   useInboxStore.setState({
@@ -111,6 +111,7 @@ test("the call's Scribe is one of the agent chips: named Scribe, no face switch,
     { kind: "session", target: "conv_other", mode: "live", added_by: "u-me" },
     { kind: "session", target: "conv_scribe", mode: "live", added_by: "u-me", role: "scribe", face: false },
   ];
+  scribeLive = { transcript_id: "t1", team_id: "team1", routes: routes.slice(1), scribe_claim: null };
   const r = await render(
     <RoomThread roomKey={ROOM} call={call({ routes, team_id: "team1" })} rows={[]} liveTranscriptId="t1" surface="stage" seated />,
   );
@@ -122,8 +123,26 @@ test("the call's Scribe is one of the agent chips: named Scribe, no face switch,
   const tail = [...r.container.querySelectorAll(".rt-working")].map((e) => e.textContent).join(" ");
   expect(tail).toContain("is working");
   expect(tail).not.toContain("Scribe");
+  // Scribe's own store action, and the chip goes in the same frame, before any answer.
+  const dispatched: unknown[] = [];
+  (useInboxStore.getState() as any)._setDispatch(() => new Promise((res) => void dispatched.push(res)));
   convexMutated.length = 0;
   await act(async () => scribeChip.querySelector<HTMLButtonElement>("button[aria-label^='Remove']")!.click());
+  expect(dispatched.length).toBe(1);
+  expect(convexMutated).toEqual([]);
+  expect([...r.container.querySelectorAll(".rt-chip")].some((c) => c.textContent?.includes("Scribe"))).toBe(false);
+  await r.unmount();
+  useInboxStore.getState().noteScribePress(ROOM, null);
+  scribeLive = undefined;
+});
+
+test("a reader outside the call takes Scribe out through its route", async () => {
+  useInboxStore.setState({ currentUser: { _id: "u-me" }, liveRooms: [], sessions: {}, teams: [] } as any);
+  const routes = [{ kind: "session", target: "conv_scribe", mode: "live", added_by: "u-me", role: "scribe", face: false }];
+  const r = await render(<RoomThread roomKey={ROOM} call={call({ routes })} rows={[]} liveTranscriptId="t1" surface="stage" seated={false} />);
+  const chip = [...r.container.querySelectorAll<HTMLElement>(".rt-chip")].find((c) => c.textContent?.includes("Scribe"))!;
+  convexMutated.length = 0;
+  await act(async () => chip.querySelector<HTMLButtonElement>("button[aria-label^='Remove']")!.click());
   expect(convexMutated).toEqual([{ transcript_id: "t1", kind: "session", target: "conv_scribe" }]);
   await r.unmount();
 });
