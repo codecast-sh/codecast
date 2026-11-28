@@ -131,6 +131,21 @@ describe("runLineGraphEdit", () => {
     expect(writes).toEqual([]);
   });
 
+  test("a default-branch copy in the flow cache is never edited: the next run writes it again", async () => {
+    const was = process.env.CODECAST_FLOWS_CACHE;
+    process.env.CODECAST_FLOWS_CACHE = path.dirname(root);
+    fs.writeFileSync(path.join(root, ".codecast-flow-copy"), JSON.stringify({ repo: "/elsewhere/.git", sha: "abc" }));
+    const writes: string[] = [];
+    try {
+      await expect(runLineGraphEdit({ root, file: "server/line/watch.cast", node: "investigate", text: "New.\n" }, { admit: async (f) => f, write: (f) => { writes.push(f); } }))
+        .rejects.toThrow(/copy of the repo's default-branch flow/);
+    } finally {
+      if (was === undefined) delete process.env.CODECAST_FLOWS_CACHE;
+      else process.env.CODECAST_FLOWS_CACHE = was;
+    }
+    expect(writes).toEqual([]);
+  });
+
   test("only a .cast is a graph", async () => {
     await expect(runLineGraphEdit({ root, file: "server/line/watch/investigate.md", node: "investigate", text: "x" }, { admit: async (f) => f, write: () => {} })).rejects.toThrow(/names a \.cast file/);
   });

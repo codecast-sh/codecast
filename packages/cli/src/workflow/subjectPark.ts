@@ -11,6 +11,8 @@ import * as path from "node:path";
 import { git, gitTry } from "../wipSnapshot.js";
 import type { DeployTargetRow } from "./awaitDeploy.js";
 import type { Subject } from "./subjectStation.js";
+// How a subject's turn is read beside its parking: runner.ts takes both from here.
+export { SubjectTurn } from "./subjectTurn.js";
 
 type Call = (route: string, body: Record<string, unknown>) => Promise<any>;
 

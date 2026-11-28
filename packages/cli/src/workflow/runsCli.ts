@@ -150,8 +150,20 @@ export function formatRunDetail(run: RunListRow, labels: Map<string, string> = n
     const mark = STATUS_MARK[n.status] ?? " ";
     const here = n.node_id === run.current_node_id && run.status !== "completed" ? " <" : "";
     lines.push(`  ${mark} ${name(n).padEnd(width)}  ${bits.join(", ")}${here}`);
+    const waiting = n.status === "running" ? waitingWords(run.waiting_on_session, n.node_id) : null;
+    if (waiting) lines.push(`    ${waiting}`);
   }
   return lines.join("\n");
+}
+
+/** What a station waits on in a session (the run's waiting_on_session): a person, when the session asked one, else the session itself. */
+function waitingWords(on: unknown, nodeId: string): string | null {
+  const w = on as { node_id?: string; conversation_id?: string; note?: string; blocked?: boolean } | null | undefined;
+  if (!w || w.node_id !== nodeId || !w.conversation_id) return null;
+  const session = w.conversation_id.slice(0, 7);
+  const line = (w.note ?? "").split("\n").map((l) => l.trim()).find((l) => l && !l.startsWith("#")) ?? "";
+  const said = line.length > 200 ? `${line.slice(0, 199)}…` : line;
+  return w.blocked ? `${c.yellow}waiting for a person:${c.reset} ${said || "(no detail)"} (asked by session ${session})` : `waiting on session ${session}${said ? `: ${said}` : ""}`;
 }
 
 function fail(message: string): never {

@@ -17,6 +17,7 @@ import { createHash } from "node:crypto";
 import { spawnSync } from "../proc.js";
 import { parseWorkflowSource, type ReadFile } from "./parser.js";
 import { defaultFlowsCache } from "./teamFlowIndex.js";
+import { markFlowCopy } from "./flowCopy.js";
 
 export type FlowAtDefault =
   /** The checkout's copy is the default branch's, or there is no repo flow of this name on it: run what was found. */
@@ -128,6 +129,9 @@ export function repoFlowAtDefault(slug: string, cwd: string, found: string | nul
     fs.mkdirSync(path.dirname(abs), { recursive: true });
     fs.writeFileSync(abs, text);
   }
+  // Named as this repo's copy: a push of it records this directory, and the daemon runs it as the run's own flow.
+  const common = git(["rev-parse", "--path-format=absolute", "--git-common-dir"]).out.trim();
+  markFlowCopy(dir, common ? fs.realpathSync(common) : top, sha);
   return { use: "default", ref, sha, file: path.join(dir, rel), rel, source: mainSet.get(rel)!, behind };
 }
 
