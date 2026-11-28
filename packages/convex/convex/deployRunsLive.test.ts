@@ -4,7 +4,7 @@ import { hashToken } from "./apiTokens";
 import { publish } from "./deployTargets";
 import { stampMainOrder } from "./deployTargetsCi";
 import { recordDeployMarker } from "./deploys";
-import { HANDED_EXIT, completeRunsOnLive, deployStopOf, liveExitOf, recordOutsideMergeOnPr } from "./deployCarries";
+import { HANDED_EXIT, completeRunsOnLive, deployStopOf, healOutsideMerges, liveExitOf, recordOutsideMergeOnPr } from "./deployCarries";
 
 // A change run that stopped at Deploy failed on a release race (ct-102064: cli dp-3424 failed at Send, and dp-3456,
 // a later release, carried its merge live) reads Live once a deploy that carries its change goes live, and its
@@ -114,7 +114,8 @@ async function world() {
     t.pull_requests.push({ _id: `pr_${number}`, team_id: TEAM, github_pr_id: number, repository: REPO, number, title: "a fix", body: "", state: "merged", author_github_username: "ana", head_ref: `fix-${number}`, base_ref: "main", linked_session_ids: [], merged_at: NOW - 20_000, merge_commit_sha: sha(merged), created_at: NOW - 90_000, updated_at: NOW - 20_000 });
     return (await (recordOutsideMergeOnPr as any)._handler(ctx, { pr: `pr_${number}`, ...(by ? { by } : {}) })).run;
   };
-  return { t, mark, drain, mergedOnGitHub };
+  const heal = async (dry: boolean) => (await (healOutsideMerges as any)._handler(ctx, { dry })).healed;
+  return { t, mark, drain, mergedOnGitHub, heal };
 }
 
 /** A change run on pull request #n that ended before its own merge: stopped at Not merged, or handed to its role. */
@@ -239,6 +240,38 @@ describe("a run whose pull request someone else merged reads that merge and goes
     expect(run(t, "run_h")).toMatchObject({ status: "completed", current_node_id: "exit" });
     expect(run(t, "run_h").merge).toMatchObject({ outside: true });
     expect(run(t, "run_h").merge.by).toBeUndefined();
+  });
+
+  test("the task of a run handed to its role stays in review through the merge, and is done once the merge goes live", async () => {
+    const { t, mark, drain, mergedOnGitHub } = await world();
+    t.tasks.push({ _id: "task_d", short_id: "ct-4", workspace: WS, status: "in_review", review_verdict: { verdict: "approve", at: NOW - 60_000 } });
+    t.workflow_runs.push(endedBeforeMerge("run_hd", 11, "task_d", "handed"));
+    await mergedOnGitHub(11, 2, "captain");
+    expect(t.tasks.find((x) => x._id === "task_d")!.status).toBe("in_review");
+    await mark("cli", 2, "live");
+    expect(await drain()).toContain("run_hd");
+    expect(t.tasks.find((x) => x._id === "task_d")!.status).toBe("done");
+  });
+
+  test("a flow with no Deploy segment says merged, not going live", async () => {
+    const { t, mergedOnGitHub } = await world();
+    t.workflows.push({ _id: "wf_nodeploy", user_id: ME, name: "review-only", label: "Review", nodes: [node("merge", "command"), node("unshipped", "exit"), node("exit", "exit")], edges: [{ from: "merge", to: "exit" }] });
+    t.workflow_runs.push({ ...endedBeforeMerge("run_nd", 12, "task_c", "stopped"), workflow_id: "wf_nodeploy" });
+    await mergedOnGitHub(12, 2);
+    expect(run(t, "run_nd").fail_reason).toBe(`Merged by someone else: #12 merged as ${sha(2).slice(0, 7)}.`);
+  });
+
+  test("the backfill heals the pull request's newest run, and its dry run lists only that run", async () => {
+    const { t, heal } = await world();
+    t.workflow_runs.push({ ...endedBeforeMerge("run_b_old", 13, "task_c", "stopped"), created_at: NOW - 300_000 });
+    t.workflow_runs.push(endedBeforeMerge("run_b_new", 13, "task_c", "stopped"));
+    t.pull_requests.push({ _id: "pr_13", team_id: TEAM, github_pr_id: 13, repository: REPO, number: 13, title: "x", body: "", state: "merged", author_github_username: "ana", head_ref: "fix-13", base_ref: "main", linked_session_ids: [], merged_at: NOW - 20_000, merge_commit_sha: sha(2), created_at: NOW - 90_000, updated_at: NOW - 20_000 });
+    expect(await heal(true)).toEqual(["run_b_new"]);
+    expect(run(t, "run_b_new").merge).toBeUndefined();
+    expect(await heal(false)).toEqual(["run_b_new"]);
+    expect(run(t, "run_b_new").merge.outside).toBe(true);
+    expect(run(t, "run_b_old").merge).toBeUndefined();
+    expect(await heal(false)).toEqual([]);
   });
 
   test("a running run, a run that recorded its own merge, and an older run on the same pull request are left alone", async () => {

@@ -20,6 +20,7 @@ import { enqueuePendingMessage } from "./pendingMessages";
 import { settleRunTask } from "./workflow_runs";
 import { internal } from "./_generated/api";
 import { workspaceKeyHasFeature } from "./lib/teamFeatureGuard";
+import { HANDED_EXIT } from "@codecast/shared/contracts/mergeOff";
 
 /** How far back merges are read for the waiting set and a marker's carries. */
 const MERGE_WINDOW_MS = 90 * DAY;
@@ -323,7 +324,8 @@ async function completeRunIfLive(ctx: any, run: Doc<"workflow_runs">, repository
   const to = graph && prefix ? liveExitOf(graph as unknown as GraphShape, prefix) : null;
   if (!to) return false;
   const live = reach.targets.filter((t) => t.state === "live" && t.deploy);
-  const line = `Live: ${commit.sha.slice(0, 7)} on ${live.map((t) => `${t.target} ${t.deploy!.short_id}`).join(", ")}.`;
+  // A repository whose change no deploy target takes out is live once it is on main.
+  const line = live.length ? `Live: ${commit.sha.slice(0, 7)} on ${live.map((t) => `${t.target} ${t.deploy!.short_id}`).join(", ")}.` : `Live: ${commit.sha.slice(0, 7)} is on main, and no deploy target takes it out.`;
   const patch = liveRunPatch(run, prefix!, to, line, now);
   await ctx.db.patch(run._id, { ...patch, fail_reason: undefined, updated_at: now });
   const task = run.task_id ? await ctx.db.get(run.task_id) : null;
@@ -345,8 +347,7 @@ async function clearStopBlocker(ctx: any, task: Doc<"tasks">, failReason: string
 
 // ── runs whose pull request someone else merged ──────────────────────────────
 
-/** The exit a change run ends at when the role behind it merges its change itself (change.cast `handed`). */
-export const HANDED_EXIT = "handed";
+export { HANDED_EXIT };
 
 type UnmergedRun = Pick<Doc<"workflow_runs">, "status" | "current_node_id" | "merge">;
 
@@ -364,9 +365,20 @@ export function deployPrefixOf(graph: GraphShape): string | null {
   return waits.includes("deploy") ? "deploy" : waits[0] ?? null;
 }
 
-/** "Merged by someone else: #349 merged as fec4c95 by ashot; going live." */
-export const outsideMergeWords = (pr: { number: number }, sha: string, by?: string) =>
-  `Merged by someone else: #${pr.number} merged as ${sha.slice(0, 7)}${by ? ` by ${by}` : ""}; going live.`;
+/** "Merged by someone else: #349 merged as fec4c95 by ashot; going live.", the last words only for a flow that deploys. */
+export const outsideMergeWords = (pr: { number: number }, sha: string, by?: string, deploys = true) =>
+  `Merged by someone else: #${pr.number} merged as ${sha.slice(0, 7)}${by ? ` by ${by}` : ""}${deploys ? "; going live" : ""}.`;
+
+/** The run a merged pull request's merge is recorded on: the newest run on it, when it ended before its own merge. */
+async function outsideMergeRun(ctx: any, pr: Doc<"pull_requests">, now: number): Promise<Doc<"workflow_runs"> | null> {
+  if (pr.state !== "merged" || !pr.merge_commit_sha) return null;
+  const run: Doc<"workflow_runs"> | null = await ctx.db
+    .query("workflow_runs")
+    .withIndex("by_pr", (q: any) => q.eq("pr.repository", pr.repository).eq("pr.number", pr.number))
+    .order("desc")
+    .first();
+  return run && endedBeforeMerge(run) && !run.resume_queued && run.updated_at >= now - STOPPED_RUN_WINDOW_MS ? run : null;
+}
 
 /**
  * A pull request was merged: the newest run on it, when it ended before its own merge (a stop, or handed to its role),
@@ -376,19 +388,17 @@ export const outsideMergeWords = (pr: { number: number }, sha: string, by?: stri
  * sees the merge itself (its Merge station reads a merged pull request), and a run that recorded a merge is left alone.
  */
 export async function recordOutsideMerge(ctx: any, pr: Doc<"pull_requests">, by: string | undefined, now = Date.now()): Promise<Id<"workflow_runs"> | null> {
-  if (pr.state !== "merged" || !pr.merge_commit_sha) return null;
-  const run: Doc<"workflow_runs"> | null = await ctx.db
-    .query("workflow_runs")
-    .withIndex("by_pr", (q: any) => q.eq("pr.repository", pr.repository).eq("pr.number", pr.number))
-    .order("desc")
-    .first();
-  if (!run || !endedBeforeMerge(run) || run.resume_queued || run.updated_at < now - STOPPED_RUN_WINDOW_MS) return null;
+  const run = await outsideMergeRun(ctx, pr, now);
+  if (!run || !pr.merge_commit_sha) return null;
   const sha = pr.merge_commit_sha.toLowerCase();
   const merge = {
     sha, branch: pr.head_ref ?? "", into: pr.base_ref ?? "main", at: pr.merged_at ?? now,
     pr_url: `https://github.com/${pr.repository}/pull/${pr.number}`, outside: true, ...(by ? { by } : {}),
   };
-  const words = outsideMergeWords(pr, sha, by);
+  // A flow with no Deploy segment never goes live: its words say merged, and nothing waits on a deploy.
+  const graph = await runWorkflowOf(ctx, run);
+  const prefix = graph ? deployPrefixOf(graph as unknown as GraphShape) : null;
+  const words = outsideMergeWords(pr, sha, by, !!(prefix && liveExitOf(graph as unknown as GraphShape, prefix)));
   await ctx.db.patch(run._id, { merge, ...(run.status === "failed" ? { fail_reason: words } : {}), updated_at: now });
   const task: Doc<"tasks"> | null = run.task_id ? await ctx.db.get(run.task_id) : null;
   if (task) await clearStopBlocker(ctx, task, run.fail_reason, now);
@@ -497,9 +507,10 @@ export const healOutsideMerges = internalMutation({
     for (const run of res.page as Doc<"workflow_runs">[]) {
       if (!run.pr || !endedBeforeMerge(run) || run.updated_at < now - STOPPED_RUN_WINDOW_MS) continue;
       const pr: Doc<"pull_requests"> | null = await ctx.db.query("pull_requests").withIndex("by_repository_number", (q: any) => q.eq("repository", run.pr!.repository).eq("number", run.pr!.number)).first();
-      if (pr?.state !== "merged" || !pr.merge_commit_sha) continue;
-      if (dry) healed.push(String(run._id));
-      else if (await recordOutsideMerge(ctx, pr, undefined, now)) healed.push(String(run._id));
+      if (!pr) continue;
+      // The run a real pass records the merge on, which is the pull request's newest, not always the run this page read.
+      const target = dry ? (await outsideMergeRun(ctx, pr, now))?._id : await recordOutsideMerge(ctx, pr, undefined, now);
+      if (target && !healed.includes(String(target))) healed.push(String(target));
     }
     const oldest = (res.page as Doc<"workflow_runs">[]).at(-1)?.created_at ?? 0;
     const next = res.isDone || oldest < now - 2 * STOPPED_RUN_WINDOW_MS ? null : res.continueCursor;
