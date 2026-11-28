@@ -8,6 +8,7 @@ import type { SessionPriorityRef } from "@codecast/shared/contracts/priorities";
 import { entityRoute } from "@codecast/shared/entities";
 import { isOpen, prOfSubject, sessionsOf, type DeploySession, type TeamDeployRow } from "./targets";
 import { ageShort } from "../lineFlow";
+import type { SessionAsk } from "../ship/sessionAsk";
 
 /* ───────────── What the page reads ───────────── */
 
@@ -234,12 +235,17 @@ export function stepper(run: Pick<ShippingRun, "status" | "node_statuses" | "cur
 
 export type RunState = { word: string; tone: "yellow" | "blue" | "red"; detail?: string };
 
-/** What the run is doing now, in words a person reads at a glance. */
-export function runState(run: Pick<ShippingRun, "status" | "fail_reason" | "gate_prompt" | "gate_decision_short_id" | "current_node_label" | "current_node_id" | "node_statuses" | "pr" | "ci_verdict" | "check_verdict" | "review_verdict" | "station_rebases" | "merge" | "track">): RunState {
+/**
+ * What the run is doing now, in words a person reads at a glance. A run whose session asks a person waits on that
+ * person, as the run page says (`ask`: the session's card when the store holds it, sessionAsk.ts; answered since, the
+ * session is fixing again).
+ */
+export function runState(run: Pick<ShippingRun, "status" | "fail_reason" | "gate_prompt" | "gate_decision_short_id" | "current_node_label" | "current_node_id" | "node_statuses" | "pr" | "ci_verdict" | "check_verdict" | "review_verdict" | "station_rebases" | "merge" | "track" | "waiting_on_session">, ask: SessionAsk | null = null): RunState {
   if (run.status === "failed") {
     const detail = run.fail_reason?.replace(/^Stopped:\s*/i, "").trim();
     return detail ? { word: "Stopped", tone: "red", detail } : { word: "Stopped", tone: "red" };
   }
+  if (run.waiting_on_session?.blocked && ask?.open !== false) return { word: ask?.mine ? "Waiting on you" : "Waiting for a person", tone: "blue" };
   if (run.status === "paused") return { word: run.gate_prompt || run.gate_decision_short_id ? "Waiting on a decision" : "Paused", tone: "blue" };
   const node = run.current_node_label;
   if (node === "Fix findings") {
@@ -250,6 +256,17 @@ export function runState(run: Pick<ShippingRun, "status" | "fail_reason" | "gate
   }
   if (node === "CI and review") return { word: "CI and review running", tone: "yellow" };
   return { word: node || "Starting", tone: "yellow" };
+}
+
+/**
+ * What a run's state word opens when it waits on someone: its own decision; the card its session asked a person with,
+ * when the store holds it; else that session, where the ask is. Null: plain words.
+ */
+export function runWordTarget(r: Pick<ShippingRun, "status" | "gate_decision_short_id" | "waiting_on_session">, ask: SessionAsk | null): { decision: string } | { session: string } | null {
+  const wait = r.waiting_on_session;
+  if (wait?.blocked && ask?.open !== false) return ask?.short_id ? { decision: ask.short_id } : { session: wait.conversation_id };
+  if (r.status === "paused" && r.gate_decision_short_id) return { decision: r.gate_decision_short_id };
+  return null;
 }
 
 const RANK: Record<ShippingRun["status"], number> = { failed: 0, paused: 1, running: 2, pending: 2 };

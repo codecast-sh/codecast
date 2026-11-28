@@ -108,8 +108,21 @@ describe("workflow_runs.shippingRuns", () => {
     expect(Object.keys(open).sort()).toEqual([
       "_id", "check_verdict", "ci_verdict", "created_at", "current_node_id", "current_node_label", "fail_reason", "gate_decision_short_id", "gate_decision_status", "gate_node_id", "gate_prompt",
       "merge", "node_statuses", "pr", "primary_conversation_id", "project_path", "review_verdict", "spawner_conversation_id", "stand_in", "status", "task_id",
-      "task_short_id", "task_title", "track", "updated_at", "user_id", "workflow_label", "workflow_slug",
+      "task_short_id", "task_title", "track", "updated_at", "user_id", "waiting_on_session", "workflow_label", "workflow_slug",
     ]);
+  });
+
+  // ct-102514: the card read "Fixing review findings" while the session it waited on asked a person.
+  test("a run waiting on its session carries the wait, with the station's start that dates the session's ask", async () => {
+    const { run, read, ids } = await setup();
+    await run({ spawner: ids.open, at: NOW - 1000, extra: {
+      current_node_id: "land",
+      node_statuses: [{ node_id: "pr", status: "completed" }, { node_id: "land", status: "running", started_at: NOW - 500 }],
+      waiting_on_session: { node_id: "land", conversation_id: ids.open, since: NOW - 400, note: "merging waits on your call", blocked: true },
+    } });
+    const [row] = await read(ids.ana);
+    expect(row.waiting_on_session).toEqual({ node_id: "land", conversation_id: ids.open, since: NOW - 400, blocked: true });
+    expect(row.node_statuses.at(-1)).toEqual({ node_id: "land", status: "running", started_at: NOW - 500 });
   });
 
   test("another team's runs never show, and a stranger or a signed-out reader gets nothing", async () => {

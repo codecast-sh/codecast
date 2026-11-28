@@ -11,7 +11,7 @@ import { useInboxStore } from "../../store/inboxStore";
 import { roleRowsOf } from "../../lib/roleRows";
 import { ArrowRight, Check, ChevronDown, CornerDownLeft, Loader2, Minus, X } from "lucide-react";
 import { insideWords, targetsFromLine, withRunDeploys, type InsideRoute, type Journey as JourneyModel, type JourneyStage, type JourneyNow, type JourneyWait, type TargetState } from "../../lib/ship/journey";
-import { WHO_WORDS, gateWaitWords, holdWords, plainNote, sentBackWords, stopTitle, waitWords } from "../../lib/ship/journeyWords";
+import { WHO_WORDS, gateWaitWords, holdWords, outputSummary, plainNote, sentBackWords, stopTitle, waitWords } from "../../lib/ship/journeyWords";
 import { approvalWords } from "../../lib/ship/approval";
 import { ageShort } from "../../lib/lineFlow";
 import { leftWords } from "../../lib/ship/stationResult";
@@ -170,6 +170,22 @@ function LeftStep({ step, task, className }: { step: string; task?: string | nul
     : <span className={className} title={step} data-journey-left>{leftWords(step)}</span>;
 }
 
+/** What a step said. A script's long output (a cut log) reads as how it ended and why; the whole of it opens below. */
+function StepSaid({ said, script }: { said: string; script: boolean }) {
+  const { head, full } = script ? outputSummary(said) : { head: said, full: null };
+  return (
+    <>
+      <p>{head}</p>
+      {full ? (
+        <details className="sj-detail-full" data-journey-full-output>
+          <summary>Full output</summary>
+          <pre>{full}</pre>
+        </details>
+      ) : null}
+    </>
+  );
+}
+
 function StageDetail({ stage, now_ms, task }: { stage: JourneyStage; now_ms: number; task?: string | null }) {
   return (
     <ul className="sj-detail" data-journey-detail={stage.id}>
@@ -182,7 +198,7 @@ function StageDetail({ stage, now_ms, task }: { stage: JourneyStage; now_ms: num
           {st.session ? <Link className="sj-detail-session" href={`/conversation/${st.session.id}`}>{st.session.title ?? "Open session"}</Link> : null}
           {st.at ? <span className="sj-since">{ageShort(now_ms - st.at)}</span> : null}
           {/* The step that posted the step left for the person says it below, where it opens the task. */}
-          {st.said && !(stage.left && st.said.startsWith(leftWords(""))) ? <p>{st.said}</p> : null}
+          {st.said && !(stage.left && st.said.startsWith(leftWords(""))) ? <StepSaid said={st.said} script={!st.session} /> : null}
         </li>
       ))}
       {stage.left ? <li><LeftStep step={stage.left} task={task} className="sj-detail-left" /></li> : null}

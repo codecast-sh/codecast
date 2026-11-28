@@ -2,7 +2,7 @@ import { after, onPrHead, splitQueue, upTo } from "@codecast/shared/contracts/de
 import { describe, expect, test } from "bun:test";
 import {
   attemptGroups, branchHref, carriedOfAttempts, carriedOfDeploy, carriedOfQueue, fold, mineSessionIds, queueCommits, repositoryOfRun, rowsFor,
-  recordedOf, runOwner, runState, shipperOf, shippingRuns, stepper, stepsFor, tasksOnMain, withLines, yourSessions,
+  recordedOf, runOwner, runState, runWordTarget, shipperOf, shippingRuns, stepper, stepsFor, tasksOnMain, withLines, yourSessions,
   isMerged, type BoardDeploy, type BoardQueueCommit,
 } from "../board";
 import { runWord } from "../spot";
@@ -233,6 +233,30 @@ describe("the run's state in words", () => {
     expect(runState(run("w", { ...fix, ci_verdict: { green: true }, node_statuses: [{ node_id: "ci", status: "failed" }] })).word).toBe("Fixing review findings");
     expect(runState(run("b", { current_node_label: "CI and review" }))).toEqual({ word: "CI and review running", tone: "yellow" });
     expect(runState(run("o", { current_node_label: "Open PR" }))).toEqual({ word: "Open PR", tone: "yellow" });
+  });
+  // ct-102514: the session the run waits on pinned blocked on a card it asked; the card read "Fixing review findings".
+  test("a session that asks a person: the run waits on that person, on you when the card is yours", () => {
+    const asking = { current_node_label: "Fix findings", review_verdict: { verdict: "changes", at: 1, head_sha: "h1" }, waiting_on_session: { node_id: "brief", conversation_id: "c1", since: 5, blocked: true } };
+    expect(runState(run("a", asking))).toEqual({ word: "Waiting for a person", tone: "blue" });
+    const ask = { id: "d1", short_id: "sd-1", question: "Merge it?", open: true };
+    expect(runState(run("a", asking), { ...ask, mine: true })).toEqual({ word: "Waiting on you", tone: "blue" });
+    expect(runState(run("a", asking), { ...ask, mine: false })).toEqual({ word: "Waiting for a person", tone: "blue" });
+    // Answered since the wait began: the session is fixing again.
+    expect(runState(run("a", asking), { ...ask, mine: true, open: false }).word).toBe("Fixing review findings");
+  });
+
+
+});
+
+describe("what a run's state word opens", () => {
+  const ask = { id: "d1", short_id: "sd-1", question: "Merge it?", mine: false, open: true };
+  const asking = { waiting_on_session: { node_id: "brief", conversation_id: "c1", since: 5, blocked: true } };
+  test("the session's card when held, else the session; a paused run's own card; else nothing", () => {
+    expect(runWordTarget(run("a", asking), ask)).toEqual({ decision: "sd-1" });
+    expect(runWordTarget(run("a", asking), null)).toEqual({ session: "c1" });
+    expect(runWordTarget(run("a", asking), { ...ask, open: false })).toBeNull();
+    expect(runWordTarget(run("p", { status: "paused", gate_decision_short_id: "sd-9" }), null)).toEqual({ decision: "sd-9" });
+    expect(runWordTarget(run("r"), null)).toBeNull();
   });
 });
 

@@ -460,9 +460,12 @@ export type ShippingRun = {
   workflow_label: string | null;
   current_node_id: string | null;
   current_node_label: string | null;
-  node_statuses: Array<{ node_id: string; status: "pending" | "running" | "completed" | "failed" }>;
+  /** `started_at`: when the run last entered the station, which dates the brief a session it waits on was sent. */
+  node_statuses: Array<{ node_id: string; status: "pending" | "running" | "completed" | "failed"; started_at?: number }>;
   pr: { repository: string; number: number; first_head_sha: string; head_sha: string; at: number } | null;
   fail_reason: string | null;
+  /** The session the run waits on at a station it works (its fix), `blocked` while that session waits on a person. */
+  waiting_on_session?: { node_id: string; conversation_id: string; since: number; blocked?: boolean } | null;
   /** The CI station's verdict and the reviewer's, as their stations reported them; the merge once it landed. */
   ci_verdict?: { green: boolean; head_sha: string; at: number } | null;
   /** `head_sha`: the head the reviewer read; a verdict binds to it (verdictOnHead). */

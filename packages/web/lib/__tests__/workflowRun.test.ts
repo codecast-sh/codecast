@@ -65,6 +65,19 @@ describe("runNodeRows", () => {
     const run = { status: "completed", node_statuses: [at("pr", 1), at("verdicts", 2), at("why", 3), at("decide", 4), at("merge", 5), at("landed", 6)] };
     expect(runNodeRows(run, g).map((r) => r.id)).toEqual(["pr", "verdicts", "why", "decide", "merge", "landed", "moved", "retest"]);
   });
+
+  // ct-102514: a pull-request run's Not run list held the straight-to-main track's stations and each fix three times.
+  test("the stations not reached are the run's own track's, each name once", () => {
+    const nodes: Array<[string, string]> = [["start", "Start"], ["local_ci", "Local CI"], ["pr", "PR"], ["verdicts", "Verdicts"], ["brief", "Fix findings"], ["ci_conflict", "Resolve conflict"], ["merge", "Merge"], ["fix_conflict", "Resolve conflict"], ["landed", "Merged"], ["deploy", "Deploy"], ["direct_check", "Check"], ["direct_check__verify", "Verify"], ["direct_fix", "Fix findings"], ["land", "Land"], ["land__rebase", "Rebase"], ["direct_deploy", "Deploy"]];
+    const edges = [["start", "local_ci"], ["start", "direct_check"], ["local_ci", "pr"], ["pr", "verdicts"], ["verdicts", "brief"], ["verdicts", "ci_conflict"], ["verdicts", "merge"], ["brief", "local_ci"], ["ci_conflict", "local_ci"], ["merge", "landed"], ["merge", "fix_conflict"], ["fix_conflict", "local_ci"], ["landed", "deploy"], ["direct_check", "direct_check__verify"], ["direct_check__verify", "direct_fix"], ["direct_check__verify", "land"], ["direct_fix", "direct_check"], ["land", "land__rebase"], ["land__rebase", "direct_deploy"]].map(([from, to]) => ({ from, to }));
+    const g = { nodes: nodes.map(([id, label]) => ({ id, label, type: id === "start" ? "start" : "command" })), edges };
+    const at = (node_id: string, t: number, status = "completed") => ({ node_id, status, started_at: t });
+    const run = { status: "running", current_node_id: "brief", node_statuses: [at("start", 0), at("local_ci", 1), at("pr", 2), at("verdicts", 3), at("ci_conflict", 4), at("brief", 5, "running")] };
+    const ahead = runNodeRows(run, g).filter((r) => r.status === "pending" && !r.current).map((r) => r.label);
+    expect(ahead).toEqual(["Merge", "Merged", "Deploy"]);
+    // A run that has entered nothing yet has every track ahead of it.
+    expect(runNodeRows({ status: "pending", node_statuses: [] }, g).map((r) => r.label)).toContain("Check");
+  });
 });
 
 describe("a decision card's answer is the way the run went (pl-1077 polish 3)", () => {

@@ -10,11 +10,12 @@ import { normalizeRepository } from "@codecast/shared/contracts";
 import { onPrHead } from "@codecast/shared/contracts/deployTargets";
 import type { PrDeployModel } from "../../hooks/usePrDeploy";
 import { useShipping } from "../../hooks/useSyncShipping";
-import { CHANGE_STEPS, isMerged, prState, prStepper, runState, stepper, stepsFor } from "../../lib/deploys/board";
+import { CHANGE_STEPS, isMerged, prState, prStepper, runState, runWordTarget, stepper, stepsFor } from "../../lib/deploys/board";
 import { teamWorkspaceKey } from "../../lib/workspaceScope";
 import { deploysFocusHref } from "../../lib/deploys/focus";
 import { ShipTrack } from "../deploys/ShipTrack";
-import { DecisionWord } from "../deploys/ShippingColumn";
+import { RunWord } from "../deploys/ShippingColumn";
+import { useSessionAsk } from "../../hooks/useJourneyViewer";
 import { EntityIdPill } from "../EntityIdPill";
 import { ShipControl } from "../ShipControl";
 import { PRShipsTo } from "./PRDeploy";
@@ -40,10 +41,12 @@ export function PRShipStrip({ pr, model, shepherd, authed, runVerdict }: {
   // Judged on the head GitHub has the PR on, as the header's Review figure is: a push the run has not recorded yet
   // (Resolve conflict's force-push) leaves its verdicts on the head before.
   const run = carrier ? onPrHead(carrier, pr.head_sha) : null;
+  const ask = useSessionAsk(run);
   if (!model.open) return null;
-  const state = run ? runState(run) : prState(pr, runVerdict);
+  const state = run ? runState(run, ask) : prState(pr, runVerdict);
   const steps = run ? stepper(run) : prStepper(pr, runVerdict);
-  const decide = run?.status === "paused" && run.gate_decision_short_id ? <DecisionWord id={run.gate_decision_short_id} word={state.word} /> : undefined;
+  const to = run ? runWordTarget(run, ask) : null;
+  const decide = to ? <RunWord to={to} word={state.word} /> : undefined;
   const deploysHref = model.teamId ? deploysFocusHref({ team: model.teamId, repository: model.repository, target: model.shipsTo?.[0]?.target.name ?? null, focus: { kind: "pr", pr: model.number } }) : null;
   const goesTo = model.declares && model.shipsTo?.length ? <PRShipsTo model={model} /> : null;
   return (

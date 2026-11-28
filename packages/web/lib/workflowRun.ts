@@ -135,7 +135,40 @@ export function runNodeRows(run: any, workflow?: any | null): RunNodeRow[] {
     const n = known.get(ns.node_id);
     if (n?.type !== "start" && !(n?.type === "exit" && ns.node_id === "exit")) push(ns.node_id, ns.label ?? n?.label ?? nodeWords(ns.node_id), n?.type);
   }
-  return inRunOrder(asRoutes(oneSegmentRow(rows), statuses, known), statuses);
+  return onItsTrack(inRunOrder(asRoutes(oneSegmentRow(rows), statuses, known), statuses), statuses, workflow?.edges);
+}
+
+/**
+ * The stations the run has not reached, as far as they are still its own: those its graph leads to from a station it
+ * entered (from its start only when it entered none), so a change run that went up as a pull request never lists the
+ * straight-to-main track's Check, Land or Rebase. A name the run already shows (a station it ran, or another not yet
+ * reached by the same name: a fix in each segment) is said once.
+ */
+function onItsTrack(rows: RunNodeRow[], statuses: ReadonlyArray<{ node_id: string }>, edges: ReadonlyArray<{ from: string; to: string }> | null | undefined): RunNodeRow[] {
+  const ahead = rows.filter((r) => !rowReached(r));
+  if (!ahead.length) return rows;
+  let keep = (_: RunNodeRow) => true;
+  if (edges?.length) {
+    const next = new Map<string, string[]>();
+    for (const e of edges) next.set(e.from, [...(next.get(e.from) ?? []), e.to]);
+    const entered = statuses.map((n) => n.node_id).filter((id) => id !== "start");
+    const reach = new Set<string>();
+    const walk = entered.length ? entered : ["start"];
+    while (walk.length) {
+      const id = walk.pop()!;
+      if (reach.has(id)) continue;
+      reach.add(id);
+      walk.push(...(next.get(id) ?? []));
+    }
+    keep = (r) => reach.has(r.id);
+  }
+  const said = new Set(rows.filter(rowReached).map((r) => r.label));
+  return rows.filter((r) => {
+    if (rowReached(r)) return true;
+    if (!keep(r) || said.has(r.label)) return false;
+    said.add(r.label);
+    return true;
+  });
 }
 
 /** A step whose only output names the segment exit it took (`{"exit": "revise"}`). */
