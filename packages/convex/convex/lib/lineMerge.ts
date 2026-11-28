@@ -4,6 +4,7 @@
 // role reader (orgRoles.lineOfRole) and the merge step share one reading.
 
 import { countersFor } from "./orgCaps";
+import { MERGE_OFF_REASON, roleMergeOffReason } from "@codecast/shared/contracts/mergeOff";
 
 export const MERGE_AUTHORITY_ID = "merge";
 export const MERGE_AUTHORITY_LABEL = "Merge the flow's approved branches into the project's default branch when their checks pass; the daily limit counts merges only";
@@ -37,14 +38,15 @@ export function mergeGrantOf(role: { authority?: Grant[] | null }, now: number):
 }
 
 /** Whether this line may merge right now, read from the role row alone. */
-export function mergeAllowance(role: { line_merge?: boolean | null; line_merge_rate?: RateBar | null; authority?: Grant[] | null; counters?: any; status?: string }, now: number, measured: MeasuredRate | null = null): MergeAllowance {
+export function mergeAllowance(role: { handle?: string | null; line_merge?: boolean | null; line_merge_rate?: RateBar | null; authority?: Grant[] | null; counters?: any; status?: string }, now: number, measured: MeasuredRate | null = null): MergeAllowance {
   const on = !!role.line_merge;
   const grant = mergeGrantOf(role, now);
   const used = countersFor(role, now).merges ?? 0;
   const limit = grant?.limit?.per_day ?? null;
   const bar = role.line_merge_rate ? { bar: role.line_merge_rate.bar, min: role.line_merge_rate.min } : null;
   const base = { on, used, limit, grant, mode: bar ? "rate" as const : "count" as const, bar, measured };
-  if (!on) return { ...base, allowed: false, reason: "merge is off for this flow; a person turns it on with cast role line --merge on" };
+  // The switch is the role's: its hands' runs stop here, and the role merges their changes itself.
+  if (!on) return { ...base, allowed: false, reason: role.handle ? roleMergeOffReason(role.handle) : MERGE_OFF_REASON };
   if (role.status && role.status !== "active") return { ...base, allowed: false, reason: `the role is ${role.status}` };
   if (!grant) {
     const expired = (role.authority ?? []).some((a) => a.id === MERGE_AUTHORITY_ID);

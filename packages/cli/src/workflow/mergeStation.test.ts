@@ -31,6 +31,20 @@ describe("cast flow merge", () => {
     } finally { s.done(); }
   }, T);
 
+  // A Release Captain's hands run with the Captain's merge off by design: the Captain merges their changes (ct-102786).
+  test("a role whose merge is off is handed the merge (exit 5, naming the role); any other refusal stays a refusal", async () => {
+    const s = setup();
+    try {
+      s.ci(s.branch("b.txt", "bee\n"));
+      const off = "@release's merge is off: `cast role line @release --merge on` lets its hands merge";
+      s.answers["/cli/line/merge/check"] = () => ({ allowed: false, on: false, role: { handle: "release" }, reason: off });
+      expect(await s.run()).toEqual({ code: 5, line: `Merge is @release's: handed to it. ${off}.` });
+      s.answers["/cli/line/merge/check"] = () => ({ allowed: false, on: true, role: { handle: "release" }, reason: "the role has reached its daily merge limit (2 of 2)" });
+      expect(await s.run()).toEqual({ code: 2, line: "the role has reached its daily merge limit (2 of 2)" });
+      expect(s.gh().calls.some((c) => c[1] === "merge")).toBe(false);
+    } finally { s.done(); }
+  }, T);
+
   test("a merge deletes only origin's branch: a worktree holding the branch keeps it, and the merge is on origin's main", async () => {
     const s = setup();
     try {

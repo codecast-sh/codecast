@@ -6,7 +6,7 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { defaultExec, type Exec } from "../lineMerge";
-import { refreezeSessionChange, snapshotRunTree, writeFrozenChange } from "./flowChange";
+import { refreezeSessionChange, resumeAfterFix, snapshotRunTree, writeFrozenChange } from "./flowChange";
 import { readFrozenChange } from "./flowChangeFile";
 import { prStation, rebasePr } from "./prStation";
 import { ENV, git, sandbox, useSandbox, write } from "./carry.testkit";
@@ -444,11 +444,55 @@ describe("a branch's carry", () => {
     expect(git(here, "show", `${kept}:b.txt`)).toBe("mine");
   }, 180_000);
 
-  test("a run worktree taken off the change's branch refuses and is left as it is (ct-99118)", async () => {
-    const { here, worktree, runDir, start } = originWorld("off");
+  // ct-102728: the Fix session checked out a stacked branch in the run's worktree and pushed its fix to the change's
+  // branch; the refreeze threw "on tv-pr2-voice, not the change's branch", and a 3h fix was lost.
+  test("a run worktree taken off the change's branch reads the change back from origin and goes back on it; the other branch is untouched", async () => {
+    const { here, worktree, runDir, start, push } = originWorld("off");
     const tip = start();
     git(worktree, "checkout", "--quiet", "-b", "elsewhere");
-    await expect(refreezeSessionChange(here, runDir, worktree)).rejects.toThrow(/not the change's branch feat/);
+    write(worktree, "c.txt", "stacked\n");
+    git(worktree, "add", "c.txt");
+    git(worktree, "commit", "--quiet", "-m", "stacked work");
+    const other = git(worktree, "rev-parse", "HEAD");
+    git(worktree, "push", "--quiet", "origin", "elsewhere");
+    const fixed = push("a.txt", "fixed\n", "the fix");
+    const { change, moved } = await refreezeSessionChange(here, runDir, worktree, { resume: "cast workflow resume ct-9 --at pr" });
+    expect(change.tip).toBe(fixed);
+    expect(moved).toBe(true);
+    expect(git(worktree, "rev-parse", "--abbrev-ref", "HEAD")).toBe("feat");
+    expect(git(worktree, "rev-parse", "HEAD")).toBe(fixed);
+    expect(git(here, "rev-parse", "elsewhere")).toBe(other);
+    expect(readFrozenChange(runDir)?.tip).toBe(fixed);
+    expect(tip).not.toBe(fixed);
+  }, 180_000);
+
+  test("a fix committed on a detached HEAD, or on another branch never pushed, refuses rather than reading as unchanged", async () => {
+    const { here, worktree, runDir, start } = originWorld("off-loose");
+    const tip = start();
+    git(worktree, "checkout", "--quiet", "--detach");
+    write(worktree, "a.txt", "fixed here only\n");
+    git(worktree, "commit", "--quiet", "-am", "the fix, unpushed");
+    const loose = git(worktree, "rev-parse", "HEAD");
+    await expect(refreezeSessionChange(here, runDir, worktree, { resume: "cast workflow resume ct-9 --at pr" })).rejects.toThrow(/is on no branch, not the change's branch feat, and it holds 1 commit no branch on origin has \(up to [0-9a-f]{10}\): push the fix to feat, not a detached HEAD, so the run left it as it is\. .*`cast workflow resume ct-9 --at pr`/);
+    expect(git(worktree, "rev-parse", "HEAD")).toBe(loose);
+    git(worktree, "checkout", "--quiet", "-b", "unpushed");
+    await expect(refreezeSessionChange(here, runDir, worktree)).rejects.toThrow(/push the fix to feat, not unpushed/);
+    expect(git(here, "rev-parse", "feat")).toBe(tip);
+  }, 180_000);
+
+  test("the resume a fixed change names is where the fix station goes on success", () => {
+    const graph = { edges: [{ from: "brief", to: "pr" }, { from: "local_ci_fix", to: "local_ci", condition: "outcome = success" }, { from: "local_ci_fix", to: "x", condition: "outcome = failure" }] };
+    expect(resumeAfterFix(graph, "brief", "ct-9")).toBe("cast workflow resume ct-9 --at pr");
+    expect(resumeAfterFix(graph, "local_ci_fix", "ct-9")).toBe("cast workflow resume ct-9 --at local_ci");
+    expect(resumeAfterFix(graph, "brief", undefined)).toBeNull();
+  });
+
+  test("a run worktree off the change's branch with edits left uncommitted there refuses, naming the resume, and is left as it is", async () => {
+    const { here, worktree, runDir, start } = originWorld("off-dirty");
+    const tip = start();
+    git(worktree, "checkout", "--quiet", "-b", "elsewhere");
+    write(worktree, "a.txt", "half done\n");
+    await expect(refreezeSessionChange(here, runDir, worktree, { resume: "cast workflow resume ct-9 --at pr" })).rejects.toThrow(/is on elsewhere, not the change's branch feat, and it holds edits left uncommitted on elsewhere, so the run left it as it is\. The change is the branch: once feat holds the fix on origin, resume the run with `cast workflow resume ct-9 --at pr`\./);
     expect(git(worktree, "rev-parse", "--abbrev-ref", "HEAD")).toBe("elsewhere");
     expect(git(here, "rev-parse", "feat")).toBe(tip);
   }, 180_000);

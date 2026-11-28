@@ -244,6 +244,12 @@
       "stop": "$merge.output"
     },
     {
+      "id": "handed",
+      "label": "Handed to its role",
+      "shape": "Msquare",
+      "type": "exit"
+    },
+    {
       "id": "direct_review",
       "label": "Review",
       "shape": "box",
@@ -766,6 +772,12 @@
       "to": "in_line",
       "label": "line still long",
       "condition": "outcome = failure and merge.exit_code = 4"
+    },
+    {
+      "from": "merge",
+      "to": "handed",
+      "label": "the role merges",
+      "condition": "outcome = failure and merge.exit_code = 5"
     },
     {
       "from": "merge",

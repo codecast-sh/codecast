@@ -267,6 +267,9 @@ describe("evalCondition: every condition the shipped workflows use", () => {
     // After those visits it stops as still in line, resumable at PR, never "not merged".
     ["outcome = failure and merge.exit_code = 4", { outcome: "failure", "merge.exit_code": "4", "merge.free.visits": "3" }, true],
     ["outcome = failure and merge.exit_code = 4", { outcome: "failure", "merge.exit_code": "2" }, false],
+    // A role's merge off hands the change to the role (exit 5); any other refusal (exit 2) is Not merged.
+    ["outcome = failure and merge.exit_code = 5", { outcome: "failure", "merge.exit_code": "5" }, true],
+    ["outcome = failure and merge.exit_code = 5", { outcome: "failure", "merge.exit_code": "2" }, false],
     ["outcome = failure and retest.exit_code = 4", { outcome: "failure", "retest.exit_code": "4" }, true],
     ["outcome = failure and retest.exit_code = 4", { outcome: "failure", "retest.exit_code": "1" }, false],
     ["outcome = failure and onto_main.exit_code = 4", { outcome: "failure", "onto_main.exit_code": "4" }, true],

@@ -568,6 +568,14 @@ describe("workflow/runResume resumePoint", () => {
     expect(p.from).toBe("row");
   });
 
+  test("a station the row records as carried resumes as the success the graph routed it as, still marked carried", () => {
+    const p = resumePoint(graph(), { status: "running", current_node_id: "decide", node_statuses: [{ node_id: "start", status: "completed", outcome: "success", completed_at: 1 }, { node_id: "build", status: "completed", outcome: "carried", completed_at: 2 }] }, null)!;
+    expect(p.node_outcomes.build).toBe("success");
+    expect(p.context["build.outcome"]).toBe("success");
+    expect(p.context["build.carried"]).toBe("true");
+    expect(p.context.outcome).toBe("success");
+  });
+
   test("a row stands mid-run once a runner reported past its start, and not before", () => {
     expect(isMidRun({ status: "pending", node_statuses: [] })).toBe(false);
     // Running at a station no runner ever reported on: run-daemon refuses it, so a resume leaves such a run pending.

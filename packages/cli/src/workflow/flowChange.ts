@@ -36,6 +36,8 @@ import { originSupersedes, originTip } from "./originBranch.js";
 import { ownVersion, sessionTranscripts, type Writer } from "./ownLines.js";
 import { shippingUnpushed, unpushedCommits } from "./unpushedCommits.js";
 import { worktreeMovedWords } from "@codecast/shared/contracts/runRestart";
+import { reclaimMovedWorktree } from "./movedWorktree.js";
+export { resumeAfterFix } from "./movedWorktree.js";
 import type { RunHands } from "../lineTrialBranch.js";
 export { frozenChangeContext, writeFrozenChange, type FrozenChange } from "./flowChangeFile.js";
 
@@ -711,11 +713,18 @@ async function refuseCommittedCredentials(root: string, last: string, head: stri
  * one still moving after that is left as it is. Returns the new change, whether
  * anything moved, and what the carry held out.
  */
-export async function refreezeSessionChange(root: string, runDir: string, worktreePath: string | null, opts: { roster?: Roster; since?: number } = {}): Promise<{ change: FrozenChange; moved: boolean; held: FrozenChange["held"] }> {
+export async function refreezeSessionChange(root: string, runDir: string, worktreePath: string | null, opts: { roster?: Roster; since?: number; resume?: string | null } = {}): Promise<{ change: FrozenChange; moved: boolean; held: FrozenChange["held"] }> {
   const { readFrozenChange, writeFrozenChange } = await import("./flowChangeFile.js");
   const before = readFrozenChange(runDir);
   if (!before || (!before.session && before.source !== "checkout")) throw new Error("The run's change did not come from a session, so there is no session's change to freeze again");
   const rebuilt = rebuiltFrom(before);
+  // A named branch is the change: a session that moved the worktree off it (to fix the change from elsewhere) pushed the fix there.
+  const on = !rebuilt && worktreePath ? await gitTry(worktreePath, ["symbolic-ref", "--quiet", "--short", "HEAD"]) : before.branch;
+  if (on !== before.branch) {
+    const back = await reclaimMovedWorktree(root, worktreePath!, before, on, (head) => branchCarry(root, runDir, before, head, head), opts.resume ?? null);
+    writeFrozenChange(runDir, back.change);
+    return { ...back, held: [] };
+  }
   for (let reads = 1; ; reads++) {
     const { seen, carry } = worktreePath ? await treeCarry(worktreePath, runDir, before) : { seen: null, carry: null };
     const local = () => git(root, ["rev-parse", "--verify", "--quiet", `refs/heads/${before.branch}`]).catch(() => before.tip);
@@ -734,9 +743,7 @@ export async function refreezeSessionChange(root: string, runDir: string, worktr
       });
     } else {
       // A named branch or pull request is the change: the session fixes it by committing there (a pull request's by
-      // pushing), here or from elsewhere. The reset moves the branch here, so the worktree must be on it.
-      const on = worktreePath ? await gitTry(worktreePath, ["symbolic-ref", "--quiet", "--short", "HEAD"]) : before.branch;
-      if (on !== before.branch) throw new Error(`The run's worktree ${worktreePath} is ${on ? `on ${on}` : "on no branch"}, not the change's branch ${before.branch}, so it is left as it is`);
+      // pushing), here or from elsewhere. The worktree is on it (above), so the reset moves the branch here.
       change = { ...before, ...(await branchCarry(root, runDir, before, head, top)) };
     }
     // A write while the refreeze ran would be lost to the reset: read the worktree once more first.

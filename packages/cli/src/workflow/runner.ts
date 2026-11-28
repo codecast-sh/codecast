@@ -18,7 +18,7 @@ import { holdForVerdict, type VerdictAsk } from "./verdictAsk";
 import { sessionEndWords } from "@codecast/shared/contracts/sessionEnd";
 import { factsFor, holdsItsFacts, pinDirectCommands, runGraph, StartFactsError } from "./startFacts";
 import { keepEnds } from "./keepEnds";
-import { executeCommand, expandScriptVars, recordNodeOutput, type StationWatch } from "./commandStation";
+import { executeCommand, expandScriptVars, recordNodeOutput, reportedOutcome, type StationWatch } from "./commandStation";
 import { NO_SLOT, withStationSlot } from "./stationSlot";
 import { planReadiness } from "../planReadiness.js";
 import { readGateCard } from "../cardFile.js";
@@ -41,7 +41,7 @@ import { RUN_CONVERSATION_ENV } from "../sessionIdentity.js";
 import { behindWords, frozenChangeContext, heldWords, readFrozenChange } from "./flowChangeFile.js";
 import { carriedFailureNote } from "./unpushedCommits.js";
 import { webBaseUrl } from "../config/readLocalConfig.js";
-import { checkoutChangeOf, failureExcerpt, findingRoots, gateAnswerMessage, runEndMessage, runWorktreePath, sentBackWords, subjectOf, writerBrief, writersNamed, type Subject, type Writer } from "./subjectStation.js";
+import { checkoutChangeOf, completeBanner, failureExcerpt, findingRoots, gateAnswerMessage, runEndMessage, runWorktreePath, sentBackWords, subjectOf, writerBrief, writersNamed, type Subject, type Writer } from "./subjectStation.js";
 import { notLiveYet, startSubjectParker, subjectOtherWork, subjectRow, subjectSettled, subjectTakenOver, SubjectTurn, type SubjectParker } from "./subjectPark.js";
 import { lineRunsRoot } from "./runDirs.js";
 import { releaseEndedRunTree, restoreRunTree, stopRunBrowser, usesRunTree } from "./runWorktree.js";
@@ -490,8 +490,8 @@ async function executeSubjectNode(node: WorkflowNode, graph: WorkflowGraph, cont
   await waiting(null);
   if (outcome !== "success") return outcome;
   try {
-    const { refreezeSessionChange } = await import("./flowChange.js");
-    const { change, moved, held } = await refreezeSessionChange(cwd, context["run_dir"], await runWorktreePath(cwd, context["worktree"]));
+    const { refreezeSessionChange, resumeAfterFix } = await import("./flowChange.js");
+    const { change, moved, held } = await refreezeSessionChange(cwd, context["run_dir"], await runWorktreePath(cwd, context["worktree"]), { resume: resumeAfterFix(graph, node.id, options.taskId) });
     Object.assign(context, frozenChangeContext(context["run_dir"]));
     const heldNote = noteHeld(context, held);
     // Nothing is left to check or land: the run ends done here (runNodeLoop).
@@ -614,10 +614,10 @@ async function briefWriters(node: WorkflowNode, graph: WorkflowGraph, context: R
     return winner.outcome;
   }
   try {
-    const { refreezeSessionChange, inboxRosterVia } = await import("./flowChange.js");
+    const { refreezeSessionChange, inboxRosterVia, resumeAfterFix } = await import("./flowChange.js");
     // Files a writer's shell made after its brief (a lockfile, codegen output) are its fix too.
     const since = Math.min(...waits.map((w) => w.sentAt));
-    const { change, moved, held } = await refreezeSessionChange(cwd, context["run_dir"], await runWorktreePath(cwd, context["worktree"]), { roster: inboxRosterVia(call), since });
+    const { change, moved, held } = await refreezeSessionChange(cwd, context["run_dir"], await runWorktreePath(cwd, context["worktree"]), { roster: inboxRosterVia(call), since, resume: resumeAfterFix(graph, node.id, options.taskId) });
     Object.assign(context, frozenChangeContext(context["run_dir"]));
     const heldNote = noteHeld(context, held);
     // Nothing is left to check or land: the run ends done here (runNodeLoop).
@@ -2529,7 +2529,7 @@ async function driveRun(
   }
 
   if (current.type === "exit" && !state.failed) {
-    console.log(`\n${c.bold}${c.green}━━━ Workflow complete ━━━${c.reset}`);
+    console.log(`\n${c.bold}${c.green}━━━ ${completeBanner(lastSaid(state))} ━━━${c.reset}`);
     console.log(`${c.dim}Nodes: ${state.completed.join(" → ")}${c.reset}`);
     // A reject verdict ends the run but not the task: it sits at open as
     // blocked until a person decides (the-line.md L4).
@@ -2759,7 +2759,7 @@ async function runNodeLoop(
         // A gate's outcome is the key it was answered with ("s" for Ship):
         // only "failure" is a failed node, and a no_slot with nowhere to go.
         node_status: outcome === "failure" || (outcome === NO_SLOT && !current.no_slot) ? "failed" : "completed",
-        outcome,
+        outcome: reportedOutcome(current.id, state.context, outcome),
         session_id: state.context[`${current.id}.session_id`],
         result_preview: stationPreview(current, state.context),
         // A call node's cost, as the server charged it (learning-loop.md LL10).

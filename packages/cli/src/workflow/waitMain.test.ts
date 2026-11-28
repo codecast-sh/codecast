@@ -2,17 +2,27 @@ import { describe, expect, test } from "bun:test";
 import type { Exec } from "../lineMerge";
 import { spoken, waitForMain } from "./waitMain";
 
-/** git and gh as a repository on GitHub would answer, from a script: each look at main reads the next state. */
-function fakeRepo(states: Array<{ head: string; runs: Array<{ id: number; name: string; status: string; conclusion: string | null }> }>, jobs: Record<number, Array<{ name: string; conclusion: string }>> = {}) {
+type FakeRun = { id: number; name: string; status: string; conclusion: string | null; sha?: string; event?: string };
+
+/** git and gh as a repository on GitHub would answer, from a script: each look at main reads the next state. A state's
+ *  `under` is main's first-parent history below its head; a run's `sha` puts it on one of those commits. */
+function fakeRepo(states: Array<{ head: string; under?: string[]; runs: FakeRun[] }>, jobs: Record<number, Array<{ name: string; conclusion: string }>> = {}, people: Record<string, number> = {}) {
   let look = -1;
   const exec: Exec = (cmd, args) => {
     if (cmd === "git" && args[0] === "ls-remote") {
       look = Math.min(look + 1, states.length - 1);
       return { status: 0, stdout: `${states[look].head}\trefs/heads/main\n`, stderr: "" };
     }
+    // A commit is the release workflow's bump unless `people` names it: a person's, committed at that time (in seconds).
+    if (cmd === "git" && args[0] === "log") {
+      const sha = args[args.length - 1];
+      return { status: 0, stdout: sha in people ? `Ana\x1fAna\x1f${people[sha]}` : "github-actions[bot]\x1fgithub-actions[bot]\x1f0", stderr: "" };
+    }
+    if (cmd === "git" && args[0] === "rev-list") return { status: 0, stdout: [states[look].head, ...(states[look].under ?? [])].join("\n"), stderr: "" };
+    if (cmd === "gh" && args[0] === "run" && args[1] === "list" && args.includes("--event")) return { status: 0, stdout: JSON.stringify([{ workflowName: "CI" }, { workflowName: "Lint" }]), stderr: "" };
     if (cmd === "gh" && args[0] === "run" && args[1] === "list") {
       const s = states[look];
-      return { status: 0, stdout: JSON.stringify([...s.runs.map((r) => ({ databaseId: r.id, workflowName: r.name, headSha: s.head, status: r.status, conclusion: r.conclusion })), { databaseId: 1, workflowName: "CI", headSha: "older", status: "completed", conclusion: "failure" }]), stderr: "" };
+      return { status: 0, stdout: JSON.stringify([...s.runs.map((r) => ({ databaseId: r.id, workflowName: r.name, headSha: r.sha ?? s.head, status: r.status, conclusion: r.conclusion, event: r.event ?? "push" })), { databaseId: 1, workflowName: "CI", headSha: "older", status: "completed", conclusion: "failure", event: "push" }]), stderr: "" };
     }
     if (cmd === "gh" && args[0] === "run" && args[1] === "view") return { status: 0, stdout: JSON.stringify({ jobs: jobs[Number(args[2])] ?? [] }), stderr: "" };
     throw new Error(`unexpected ${cmd} ${args.join(" ")}`);
@@ -37,11 +47,55 @@ describe("waitForMain", () => {
     ]);
   });
 
-  test("a head with no CI run yet is not green", async () => {
-    const repo = fakeRepo([{ head: "cccccccccccc", runs: [] }, GREEN("cccccccccccc")]);
+  test("a person's head with no CI run yet is not green, even over a green parent", async () => {
+    const parent = { id: 9, name: "CI", status: "completed", conclusion: "success", sha: "c0c0c0c0c0c0" };
+    const repo = fakeRepo([{ head: "cccccccccccc", under: ["c0c0c0c0c0c0"], runs: [parent] }, GREEN("cccccccccccc")], {}, { cccccccccccc: 0 });
     const said: string[] = [];
     expect((await waitForMain({ cwd: ".", base: "main", deadlineMs: 3600_000, intervalMs: 60_000, ...repo, say: (l) => said.push(l) })).ok).toBe(true);
-    expect(said).toEqual(["Waiting for main CI to go green (running at cccccccccc; 0s of 1h)"]);
+    expect(said).toEqual(["Waiting for main CI to go green (no CI run yet at cccccccccc; 0s of 1h)"]);
+  });
+
+  // A CLI release pushes its version bump with the workflow's token, which starts no workflow: the bump never gets CI,
+  // and the release's own dispatched workflows are not CI (ct-102798 waited 54m, ct-102786 67m on such heads).
+  test("a head CI never runs on is judged by the newest commit under it that CI ran on; dispatched release workflows are not CI", async () => {
+    const bump = "b0b0b0b0b0b0";
+    const repo = fakeRepo([{ head: bump, under: ["a1a1a1a1a1a1", "a2a2a2a2a2a2"], runs: [
+      { id: 40, name: "CI", status: "completed", conclusion: "success", sha: "a1a1a1a1a1a1" },
+      { id: 41, name: "Cut signed CLI release", status: "in_progress", conclusion: null, sha: "a1a1a1a1a1a1", event: "workflow_dispatch" },
+      { id: 42, name: "Finalize pre-uploaded CLI release", status: "in_progress", conclusion: null, sha: "a1a1a1a1a1a1", event: "workflow_dispatch" },
+    ] }]);
+    const r = await waitForMain({ cwd: ".", base: "main", deadlineMs: 3600_000, intervalMs: 60_000, ...repo });
+    expect(r).toEqual({ ok: true, line: "Main CI is green at a1a1a1a1a1: main's head b0b0b0b0b0 has no CI run, so the newest commit under it that CI ran on is judged." });
+  });
+
+  test("while CI runs on the commit judged in place of a head with none, the progress line names both", async () => {
+    const repo = fakeRepo([
+      { head: "c3c3c3c3c3c3", under: ["c2c2c2c2c2c2", "c1c1c1c1c1c1"], runs: [{ id: 50, name: "CI", status: "in_progress", conclusion: null, sha: "c1c1c1c1c1c1" }, { id: 51, name: "Deploy", status: "completed", conclusion: "failure", sha: "c3c3c3c3c3c3" }] },
+      { head: "c3c3c3c3c3c3", under: ["c2c2c2c2c2c2", "c1c1c1c1c1c1"], runs: [{ id: 50, name: "CI", status: "completed", conclusion: "success", sha: "c1c1c1c1c1c1" }] },
+    ]);
+    const said: string[] = [];
+    const r = await waitForMain({ cwd: ".", base: "main", deadlineMs: 3600_000, intervalMs: 60_000, ...repo, say: (l) => said.push(l) });
+    expect(said).toEqual(["Waiting for main CI to go green (CI running at c1c1c1c1c1; main's 2 newest commits, up to c3c3c3c3c3, have no CI run; 0s of 1h)"]);
+    expect(r.ok).toBe(true);
+  });
+
+  // A person's push that CI has not registered a run for yet is not judged by its parent (verifier, round 6).
+  test("a person's fresh commit with no run yet keeps the wait on it; once it is old enough with none, its parent judges", async () => {
+    const fresh = fakeRepo([
+      { head: "e2e2e2e2e2e2", under: ["e1e1e1e1e1e1"], runs: [{ id: 70, name: "CI", status: "completed", conclusion: "success", sha: "e1e1e1e1e1e1" }] },
+      { head: "e2e2e2e2e2e2", under: ["e1e1e1e1e1e1"], runs: [{ id: 71, name: "CI", status: "completed", conclusion: "success" }, { id: 70, name: "CI", status: "completed", conclusion: "success", sha: "e1e1e1e1e1e1" }] },
+    ], {}, { e2e2e2e2e2e2: 0 });
+    const said: string[] = [];
+    const r = await waitForMain({ cwd: ".", base: "main", deadlineMs: 3600_000, intervalMs: 60_000, ...fresh, say: (l) => said.push(l) });
+    expect(said).toEqual(["Waiting for main CI to go green (no CI run yet at e2e2e2e2e2; 0s of 1h)"]);
+    expect(r.line).toBe("Main CI is green at e2e2e2e2e2.");
+    const stale = fakeRepo([{ head: "e2e2e2e2e2e2", under: ["e1e1e1e1e1e1"], runs: [{ id: 70, name: "CI", status: "completed", conclusion: "success", sha: "e1e1e1e1e1e1" }] }], {}, { e2e2e2e2e2e2: -3600 });
+    expect((await waitForMain({ cwd: ".", base: "main", deadlineMs: 3600_000, intervalMs: 60_000, ...stale })).line).toStartWith("Main CI is green at e1e1e1e1e1: main's head e2e2e2e2e2 has no CI run");
+  });
+
+  test("a run ci.yml's concurrency cancelled does not judge its commit", async () => {
+    const repo = fakeRepo([{ head: "d2d2d2d2d2d2", under: ["d1d1d1d1d1d1"], runs: [{ id: 60, name: "CI", status: "completed", conclusion: "cancelled" }, { id: 61, name: "CI", status: "completed", conclusion: "success", sha: "d1d1d1d1d1d1" }] }]);
+    expect((await waitForMain({ cwd: ".", base: "main", deadlineMs: 3600_000, intervalMs: 60_000, ...repo })).line).toBe("Main CI is green at d1d1d1d1d1: main's head d2d2d2d2d2 has no CI run, so the newest commit under it that CI ran on is judged.");
   });
 
   test("past the deadline it fails, naming main's red jobs", async () => {

@@ -4,6 +4,7 @@
 // version of the line delivered is lineVersions.ts). The run page, the task
 // page's Line block, the /line rows and the project's Line tab all read it, so
 // a run is told the same way everywhere. Pure: no store, no React.
+import { mergeOffIn } from "@codecast/shared/contracts/mergeOff";
 import { CARD_GATE_NODE_ID, isLineRun, passedUnansweredCard, type LineRunEnd } from "@codecast/shared/contracts/changeCard";
 import { threadStateHeadline, threadStateResult } from "@codecast/shared/contracts";
 import { choiceWords, closedAtStep, isLiveRun, runEnd } from "@codecast/shared/contracts/causeHistory";
@@ -251,7 +252,7 @@ export function landWords(n: { node_id: string; status: string; result_preview?:
 }
 
 /** Whether a landing step printed that it merged nothing because the line's merge step is off. */
-export const mergeOffIn = (text: string | null | undefined): boolean => /not merged:\s*merge is off/i.test(text ?? "");
+export { mergeOffIn };
 /** A ship that ran and merged nothing, the line's merge step off: the fix waits on its branch for a person to merge it. */
 export const NOT_MERGED_OFF = "Not merged: merge off";
 /** A landing row's words for a change that did not land (not shipped, not landed, not merged): never a pass. */

@@ -17,6 +17,7 @@ import { tookPastStart } from "@codecast/shared/contracts/runStart";
 import { sourceTakesSessionChange } from "@codecast/shared/contracts/flowPool";
 import type { ShippingRun, ShippingRuns, ShippingShipper } from "@codecast/shared/contracts/deployTargets";
 import { isTerminalTaskStatus } from "@codecast/shared/tasks";
+import { handedUnmerged } from "@codecast/shared/contracts/mergeOff";
 import { canAccessConversation, canAccessTask, canAccessPlan, computeWorkspaceKey, parseWorkspaceKey, requireAccessiblePlan, requireAccessibleTask, resolveWorkspaceKey, workspaceGrantsAccess } from "./lib/access";
 import { patchTask } from "./lib/taskWrite";
 import { repairedClosedAt, repairedLineStatus, statusHistory } from "./lib/lineCauseRepair";
@@ -104,10 +105,13 @@ export async function canReadRun(ctx: Ctx, userId: Id<"users">, run: any): Promi
 export function runEndStatus(
   taskStatus: string,
   runStatus: "completed" | "failed" | "running",
-  run: Parameters<typeof lineRunOutcome>[0] & { created_at?: number },
+  run: Parameters<typeof lineRunOutcome>[0] & { created_at?: number; current_node_id?: string | null; merge?: { sha?: string | null } | null },
   verdict?: { verdict: string; at: number } | null,
 ): "done" | "open" | "in_review" | null {
   if (runStatus !== "completed" || isTerminalTaskStatus(taskStatus)) return null;
+  // Handed to the role behind it, nothing merged yet: the task waits where it is until the role's merge goes live
+  // (deployCarries.recordOutsideMerge completes the run then, and settles the task again).
+  if (handedUnmerged({ status: runStatus, ...run })) return taskStatus === "in_progress" ? "in_review" : null;
   const end = lineRunOutcome(run)?.kind;
   if (end === "shipped" && !mergeLeft(run ?? {})) return "done";
   if (end === "parked") return taskStatus === "in_progress" ? "open" : null;

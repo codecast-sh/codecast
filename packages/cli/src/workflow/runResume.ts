@@ -5,6 +5,7 @@
 // (`cast workflow run-daemon <run_id>` on a mid-run row, which the daemon's
 // sweep and the trace's Resume both reach).
 
+import { isCarriedOutcome } from "@codecast/shared/contracts/stationOutcome";
 import * as fs from "fs";
 import * as path from "path";
 import { fileURLToPath } from "url";
@@ -336,7 +337,9 @@ export function resumePoint(graph: WorkflowGraph, row: ResumeRow, checkpoint: Ru
       .filter((n) => n.node_id !== nodeId && (n.status === "completed" || n.status === "failed"))
       .sort((a, b) => (a.completed_at ?? 0) - (b.completed_at ?? 0));
     for (const n of done) {
-      const outcome = n.outcome || (n.status === "failed" ? "failure" : "success");
+      // "carried" is the record's word for a station that ended red and went on as a success: the graph routed it as one.
+      const outcome = isCarriedOutcome(n.outcome) ? "success" : n.outcome || (n.status === "failed" ? "failure" : "success");
+      if (isCarriedOutcome(n.outcome)) context[`${n.node_id}.carried`] = "true";
       visit_counts[n.node_id] = 1;
       completed.push(n.node_id);
       node_outcomes[n.node_id] = outcome;

@@ -23,6 +23,7 @@ import { wouldLabel } from "./fixDecision";
 import { guessPhase, type LinePhaseKey } from "@codecast/shared/contracts/linePhases";
 import { ASK_LINE } from "@codecast/shared/contracts/personAsk";
 import { NO_GOAL } from "@codecast/shared/contracts/goalsBrief";
+import { mergeOffIn } from "@codecast/shared/contracts/mergeOff";
 import type { SwitchLedger } from "../../components/consequential/ConsequentialSwitch";
 
 export const dayWords = shortDay;
@@ -212,7 +213,7 @@ export function newestRuns<R extends { task_id?: string | null; created_at?: num
  *  line ..."): true, false when it gave another reason, null when it said nothing about merging. */
 export function mergeStepOff(text: string | null | undefined): boolean | null {
   const m = (text ?? "").match(/not merged:\s*([^\n]+)/i);
-  return m ? /merge is off/i.test(m[1]) : null;
+  return m ? mergeOffIn(m[1]) : null;
 }
 
 export type NotStartedFacts = {

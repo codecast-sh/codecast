@@ -32,6 +32,8 @@
 //   exit 3  retest: CI tested another head, or the default branch's changes interact with the change
 //   exit 4  still in line for the repository's lease after LEASE_LINE_MS: nothing was done, and the place in line is
 //           kept in $run_dir for the graph to run the station again
+//   exit 5  handed to the role behind the run: its merge is off, so the role merges the change itself (by design: a
+//           Release Captain's hands leave the merge to the Captain); the last line names the role
 
 import * as fs from "node:fs";
 import os from "node:os";
@@ -42,13 +44,14 @@ import { defaultExec, landedSha, mergePullRequest, sleepSync, undoneChanges, typ
 import { deploysFor, runShell, shipKeyRefusal, shipSpec, type Log } from "../land/shipCheckout.js";
 import type { ShipDeployStep } from "../workspace/types.js";
 import { keepEnds } from "./keepEnds";
+import { handedWords, mergeOffRole } from "@codecast/shared/contracts/mergeOff";
 import { CI_APPROVAL_FILE } from "./changeVerdicts";
 import { LEASE_LINE_MS, LeaseLineWait, holdRepoLease, leaseAccessRefused, leaseHolder, leaseRouteMissing, type RepoLease } from "../land/repoLease.js";
 import { acquiredTree, holdExit, landedAs, mainCheckout, noteLanded, treeOwnsExit, noteRestoring, stopSteps, sweepScratchTrees, takeMergeLock, trackStep, type ScratchTree } from "./mergeScratch";
 import { chainBetween, recordRebase, verifyRebaseChain, type RebaseLink, type RegeneratedRebase } from "./rebaseRecord";
 import { GENERATED_FILE, generatorsFor, readGenerators, writtenBy, type Generator } from "./generatedFiles";
 
-export type MergeStationResult = { code: 0 | 1 | 2 | 3 | 4; line: string };
+export type MergeStationResult = { code: 0 | 1 | 2 | 3 | 4 | 5; line: string };
 
 export type MergeStationArgs = {
   /** The run's checkout: the repository the scratch tree is made from. */
@@ -191,6 +194,8 @@ async function mergeStation(args: MergeStationArgs): Promise<MergeStationResult>
       why: `CI green on ${short(head)}${ci.tested_main_sha ? ` against ${short(String(ci.tested_main_sha))}` : ""} and the review said ship`,
     });
     const check = await args.post("/cli/line/merge/check", { run_id: args.runId });
+    const role = check?.role?.handle;
+    if (role && check.on === false && mergeOffRole(check.reason) === role) return { code: 5, line: handedWords(role, check.reason) };
     if (!check?.allowed) return refuse(check?.reason ?? "the server did not allow the merge");
   } catch (err) {
     return refuse(message(err));

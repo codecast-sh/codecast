@@ -77,6 +77,9 @@ test("the detail names each station with its label, time, outcome and session, a
   expect(out).toMatch(/triage \(Triage\)\s+completed, 2m, outcome success, session jx7a/);
   expect(out).toMatch(/build \(Build\)\s+running, 5m so far, 2 visits <$/m);
   expect(formatRunDetail({ ...run, status: "failed", fail_reason: "verify exited 1" }, new Map(), now)).toContain("failed: verify exited 1");
+  // Local CI still red after the session's turn on it carried on to the PR: no check mark (polish round 6 M1).
+  const carried = { ...run, node_statuses: [{ node_id: "local_ci", status: "completed", outcome: "carried", started_at: 0, completed_at: 60_000 }] };
+  expect(formatRunDetail(carried, new Map([["local_ci", "Local CI"]]), now)).toMatch(/~ local_ci \(Local CI\)\s+completed, 1m, ended red, carried on$/m);
 });
 
 // Polish round 5: ct-102514 read "brief running, 11.7h so far" while its session had asked a person; the run page said so.
@@ -111,6 +114,12 @@ test("a failed run's restart is the one its stop names in the graph's words, els
   expect(restartHint({ task_short_id: "ct-9", workflow_slug: "line", current_node_id: "build" }, null)).toBe("try it again from where it stopped: cast workflow resume ct-9 --at build");
   expect(restartHint({ task_short_id: "ct-9", workflow_slug: "line" }, null)).toBe("try it again from its start: cast workflow resume ct-9 --at start");
   expect(restartHint({ workflow_slug: "line", current_node_id: "build" }, null)).toBe("it is bound to no task, so it cannot be resumed: start it again");
+});
+
+// Polish round 6 H1: ct-102786's Merge refused, the Release Captain merged #349, and show still said to ship it again.
+test("a run whose pull request was merged outside it names no re-ship", async () => {
+  const run = { task_short_id: "ct-9", workflow_slug: "change", takes_change: true, current_node_id: "unshipped", merge: { sha: "fec4c95767", outside: true, by: "captain" }, fail_reason: "Merged by someone else: #349 merged as fec4c95 by captain; going live." };
+  expect(restartHint(run, await stopWords(run))).toBe("it is on main as fec4c95, merged outside the run by captain, so running it again lands nothing; where it is live: cast line deploy targets");
 });
 
 // Polish round 3 H2: ct-102396 stopped at Deploy failed with its change on main; show said "run it again" while the run
@@ -168,4 +177,14 @@ test("a variant of change keeps the library's restart at the library's stop node
   expect(await stopWords(noci, shipped.map((n) => (n.id === "noci" ? { ...n, label: "Our own stop" } : n)))).toBeNull();
   expect(await stopWords(noci, shipped.filter((n) => n.id !== "noci"))).toBeNull();
   expect(await stopWords(noci, [{ id: "noci", stop: "Own words: `cast workflow resume x --at ci`" }])).toContain("--at ci");
+});
+
+// Polish round 6 (verifier): a run handed to its role is not "Workflow complete" and its session is not told it is over.
+test("a run handed to its role says so in its banner and to its session", async () => {
+  const { runEndMessage, completeBanner } = await import("./subjectStation.js");
+  const merge = "Merge is @release's: handed to it. @release's merge is off: `cast role line @release --merge on` lets its hands merge.";
+  expect(completeBanner(merge)).toBe("Handed to @release");
+  expect(completeBanner("Live: abc1234 on cli dp-1.")).toBe("Workflow complete");
+  expect(runEndMessage({ name: "change", label: "Ship" } as any, { taskId: "ct-9", endLabel: "Handed to its role", failed: false, lastOutput: merge }))
+    .toBe("The Ship run on ct-9 handed its merge to @release: @release's merge is off, so @release merges the change itself. The run ends at Live once that merge goes live; nothing is waiting on this session for it meanwhile.");
 });

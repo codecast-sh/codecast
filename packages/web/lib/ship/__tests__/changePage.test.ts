@@ -612,6 +612,15 @@ describe("pl-1077 polish 6: a change someone else merged reads landed; a merge h
     expect(mergeIsOff(refused)).toBe(true);
     expect(mergeHolder(refused)).toBe("release");
     expect(changeHeadline(journeyOf(change, refused), refused, change).waits).toBe("@release's merge is off");
+    // The line flow's merge says it after "merge left to a person: ", and an older CLI's stop carried the old words:
+    // both read as merge off from the one matcher every reader shares (contracts/mergeOff.ts).
+    const left = run({ ...stopped, fail_reason: "Stopped: merge left to a person: @release's merge is off: `cast role line @release --merge on` lets its hands merge" });
+    expect(mergeIsOff(left)).toBe(true);
+    expect(mergeHolder(left)).toBe("release");
+    expect(changeAction(journeyOf(change, left), left, change, { mergeRole: "or-7", targets: live })).toMatchObject({ kind: "merge_switch", label: "Turn merge on" });
+    const older = run({ ...stopped, fail_reason: "Stopped: merge left to a person: merge is off for this flow; a person turns it on with cast role line --merge on" });
+    expect(mergeIsOff(older)).toBe(true);
+    expect(mergeHolder(older)).toBeNull();
   });
 
   test("M1: Local CI red that the run carried past reads amber, never done", () => {

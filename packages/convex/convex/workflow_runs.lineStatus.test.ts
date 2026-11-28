@@ -393,6 +393,15 @@ describe("a review approve inside a run that is not a line run", () => {
     expect((await read()).task.status).toBe("done");
   });
 
+  // Polish round 6 (verifier): a run handed to the role behind it completes with nothing merged; the reviewer's approve
+  // must not close the task until the role's merge goes live.
+  test("a run handed to its role leaves the task where it was; once its merge is recorded the approve closes it", () => {
+    const handed = { created_at: T0, status: "completed", current_node_id: "handed", node_statuses: changeNodes("pr", "review", "verdicts", "merge") };
+    expect(runEndStatus("in_review", "completed", handed, { verdict: "approve", at: T0 + 1 })).toBeNull();
+    expect(runEndStatus("in_progress", "completed", handed, { verdict: "approve", at: T0 + 1 })).toBe("in_review");
+    expect(runEndStatus("in_review", "completed", { ...handed, current_node_id: "exit", merge: { sha: "f".repeat(40) } }, { verdict: "approve", at: T0 + 1 })).toBe("done");
+  });
+
   test("an approve from an earlier run does not close the task at this run's end", () => {
     const run = { created_at: T0, node_statuses: changeNodes("pr") };
     expect(runEndStatus("in_review", "completed", run, { verdict: "approve", at: T0 + 1 })).toBe("done");

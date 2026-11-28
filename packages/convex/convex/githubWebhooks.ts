@@ -712,6 +712,9 @@ export const processPRClosedEvent = internalMutation({
     });
 
     await recordPRMergedActivity(ctx, pr, existing.state, pr.state);
+    // A change run that ended before its own merge (a stop, or handed to its role) records this one and goes live with it.
+    // In its own transaction: it reads deploy reach, and a failure there must not undo this event.
+    if (merged) await ctx.scheduler.runAfter(0, internal.deployCarries.recordOutsideMergeOnPr, { pr: pr._id, ...(prPayload.merged_by?.login ? { by: String(prPayload.merged_by.login) } : {}) });
     // A Release Captain's revert that touched what judges changes: an engineer hears it merged (changeApprovals.ts).
     if (merged) await noticeCaptainRevertMerged(ctx, pr);
     await fireTrigger(ctx, merged ? "pr_merged" : "pr_closed", pr);

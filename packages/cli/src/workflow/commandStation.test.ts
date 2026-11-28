@@ -6,7 +6,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { pollUntil } from "../test-helpers/pollUntil.js";
 import { isolateCodecastDir, type IsolatedCodecastDir } from "../test-helpers/codecastDir.js";
-import { executeCommand, silentBoundMs } from "./commandStation";
+import { executeCommand, reportedOutcome, silentBoundMs } from "./commandStation";
 import { parseWorkflowSource } from "./parser";
 import { KILL_IF_SAME, bootTimeMs, reapDeadRunnerStations, stationRecordDir } from "./stationProcs";
 import { snapshotProcessTable } from "../processTable.js";
@@ -254,5 +254,24 @@ describe("a station that ends on its own", () => {
     expect(told[0].running).toBe(true);
     expect(ctx["slowok.output"]).toBe("ok");
     expect(ctx["slowok.notes"]).toContain("printed nothing for");
+  }, 30_000);
+});
+
+// Polish round 6 M1: Local CI still red after the session's turn on it goes on to the PR, and its record read ✓ success.
+describe("a station that declares it carried on", () => {
+  test("routes as a success and records carried; the next visit that declares nothing records success", async () => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "station-outcome-"));
+    const ctx: Record<string, string> = {};
+    const carried = { id: "lc", type: "command", script: 'echo "still red"; echo carried > "$CAST_STATION_OUTCOME"' } as WorkflowNode;
+    expect(await executeCommand(carried, ctx, tmp)).toBe("success");
+    expect(reportedOutcome("lc", ctx, "success")).toBe("carried");
+    expect(ctx["lc.output"]).toBe("still red");
+    const plain = { ...carried, script: "echo green" } as WorkflowNode;
+    expect(await executeCommand(plain, ctx, tmp)).toBe("success");
+    expect(reportedOutcome("lc", ctx, "success")).toBe("success");
+    // A failure is a failure, whatever it declared.
+    const red = { ...carried, script: 'echo carried > "$CAST_STATION_OUTCOME"; exit 1' } as WorkflowNode;
+    expect(await executeCommand(red, ctx, tmp)).toBe("failure");
+    expect(reportedOutcome("lc", ctx, "failure")).toBe("failure");
   }, 30_000);
 });

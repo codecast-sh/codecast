@@ -12,6 +12,7 @@ import { formatAge } from "../decideCommand.js";
 import { ownRestartOf } from "@codecast/shared/contracts/runRestart";
 import { failedDeploysOf, stuckTargetsOf } from "@codecast/shared/contracts/deployStop";
 import { sessionEndWords } from "@codecast/shared/contracts/sessionEnd";
+import { isCarriedOutcome } from "@codecast/shared/contracts/stationOutcome";
 import { runFlow } from "../taskShow.js";
 
 export interface RunNode {
@@ -143,11 +144,12 @@ export function formatRunDetail(run: RunListRow, labels: Map<string, string> = n
     const bits = [
       n.status,
       took ? (n.completed_at ? took : `${took} so far`) : null,
-      n.outcome ? (answers.get(n.node_id)?.get(n.outcome.toLowerCase()) ? `answered ${answers.get(n.node_id)!.get(n.outcome.toLowerCase())}` : `outcome ${n.outcome}`) : null,
+      n.outcome ? (answers.get(n.node_id)?.get(n.outcome.toLowerCase()) ? `answered ${answers.get(n.node_id)!.get(n.outcome.toLowerCase())}` : isCarriedOutcome(n.outcome) ? "ended red, carried on" : `outcome ${n.outcome}`) : null,
       n.visits && n.visits > 1 ? `${n.visits} visits` : null,
       n.session_id ? `session ${n.session_id}` : null,
     ].filter(Boolean);
-    const mark = STATUS_MARK[n.status] ?? " ";
+    // A station that ended red and the run went on past it (contracts/stationOutcome.ts) passed nothing.
+    const mark = isCarriedOutcome(n.outcome) ? "~" : STATUS_MARK[n.status] ?? " ";
     const here = n.node_id === run.current_node_id && run.status !== "completed" ? " <" : "";
     lines.push(`  ${mark} ${name(n).padEnd(width)}  ${bits.join(", ")}${here}`);
     const waiting = n.status === "running" ? waitingWords(run.waiting_on_session, n.node_id) : null;
@@ -180,7 +182,7 @@ function fail(message: string): never {
  * shared/contracts/runRestart.ts), else for a run that ships a change a fresh run once the change is fixed (Ship
  * again), else a resume at the station it stopped at. A run bound to no task cannot be resumed.
  */
-export function restartHint(run: { task_short_id?: string | null; workflow_slug?: string | null; takes_change?: boolean | null; current_node_id?: string | null; fail_reason?: string | null; merge?: { sha?: string | null } | null }, stop?: string | null): string {
+export function restartHint(run: { task_short_id?: string | null; workflow_slug?: string | null; takes_change?: boolean | null; current_node_id?: string | null; fail_reason?: string | null; merge?: { sha?: string | null; outside?: boolean | null; by?: string | null } | null }, stop?: string | null): string {
   const landed = landedHint(run);
   if (landed) return landed;
   const task = run.task_short_id;
@@ -198,11 +200,13 @@ export function restartHint(run: { task_short_id?: string | null; workflow_slug?
  * A landed change's way on: the next deploy of each target its Deploy stop names (failed, or not live). A stop that
  * names none (a run cancelled while it waited, a flow with no deploy targets) says only what is true: it is on main.
  */
-function landedHint(run: { fail_reason?: string | null; merge?: { sha?: string | null } | null }): string | null {
+function landedHint(run: { fail_reason?: string | null; merge?: { sha?: string | null; outside?: boolean | null; by?: string | null } | null }): string | null {
   const failed = failedDeploysOf(run.fail_reason);
   if (!run.merge?.sha && !failed.length) return null;
   const targets = failed.length ? failed.map((f) => f.target) : stuckTargetsOf(run.fail_reason);
-  const onMain = `it is on main${run.merge?.sha ? ` as ${run.merge.sha.slice(0, 7)}` : ""}, so running it again lands nothing`;
+  // Its pull request merged outside the run (deployCarries.recordOutsideMerge): the change is someone else's merge, on main all the same.
+  const outside = run.merge?.outside ? `, merged outside the run${run.merge.by ? ` by ${run.merge.by}` : ""}` : "";
+  const onMain = `it is on main${run.merge?.sha ? ` as ${run.merge.sha.slice(0, 7)}` : ""}${outside}, so running it again lands nothing`;
   if (!targets.length) return `${onMain}; where it is live: cast line deploy targets`;
   const see = targets.length === 1 ? `cast line deploy targets --target ${targets[0]}` : "cast line deploy targets";
   return `${onMain}: the next ${targets.join(" and ")} deploy${targets.length > 1 ? "s take" : " takes"} it live (${see})`;
