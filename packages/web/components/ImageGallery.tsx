@@ -8,6 +8,8 @@ import { useShallow } from "zustand/react/shallow";
 import { useInboxStore } from "../store/inboxStore";
 import { addImagePin, composerPictureIndex, type ComposerPicture } from "../lib/reviewActions";
 import { pinNumbers, type PendingComment } from "../lib/quoteFormat";
+import { messageImageNotes } from "../lib/imageNotes";
+import { MarkerNotes } from "./MarkerNotes";
 import { KeyCap } from "./KeyboardShortcutsHelp";
 import { CommentEditor } from "./MessageReview";
 import { useCurrentUser } from "../hooks/useCurrentUser";
@@ -258,6 +260,13 @@ export function ImageGalleryProvider({ conversationId, onJumpToMessage, quotable
   const current = currentItem && !isGalleryPage(currentItem) ? currentItem : null;
   const currentPins = current ? pinsBySrc.get(current.src) ?? [] : [];
   const currentSrc = current?.src ?? null;
+  // The notes the message that sent this picture wrote for its markers: each
+  // shows beside its marker on hover; a message sent before points were
+  // written lists them under the picture instead.
+  const sentIn = useInboxStore((s) => (current?.messageId && conversationId ? s.messages[conversationId]?.find((m) => m._id === current.messageId) : undefined));
+  const currentNotes = useMemo(() => messageImageNotes(sentIn, current?.storageId), [sentIn, current?.storageId]);
+  const unplacedNotes = currentNotes.filter((n) => !n.point);
+  const [natural, setNatural] = useState<{ src: string; width: number; height: number } | null>(null);
   const hasPrev = currentIndex > 0;
   const hasNext = currentIndex < list.length - 1;
   const count = list.length;
@@ -388,7 +397,11 @@ export function ImageGalleryProvider({ conversationId, onJumpToMessage, quotable
                 className={`block max-w-[90vw] object-contain rounded ${count > 1 ? "max-h-[78vh]" : "max-h-[86vh]"} ${
                   canPin && !zoom.zoomed ? "cursor-crosshair" : ""}`}
                 onClick={pinAt}
+                onLoad={(e) => setNatural({ src: e.currentTarget.getAttribute("src") ?? "", width: e.currentTarget.naturalWidth, height: e.currentTarget.naturalHeight })}
               />
+              {natural?.src === currentSrc && (
+                <MarkerNotes notes={currentNotes} width={natural.width} height={natural.height} contentClassName="!z-[10002]" />
+              )}
               {currentPins.map((c) => (
                 <ImagePin
                   key={c.id}
@@ -401,6 +414,16 @@ export function ImageGalleryProvider({ conversationId, onJumpToMessage, quotable
                 />
               ))}
             </div>
+            {unplacedNotes.length > 0 && !zoom.zoomed && (
+              <ol className="mt-2 flex max-w-[90vw] flex-col gap-1 text-xs text-white/80" aria-label="Your notes on this picture">
+                {unplacedNotes.map((n) => (
+                  <li key={n.number} className="flex items-start gap-1.5">
+                    <span className="mt-px flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-sol-yellow px-1 text-meta font-bold leading-none text-black">{n.number}</span>
+                    <span className="whitespace-pre-wrap break-words">{n.body}</span>
+                  </li>
+                ))}
+              </ol>
+            )}
             {canPin && !zoom.zoomed && (
               <div className="mt-2 flex items-center gap-1.5 text-meta font-mono text-white/35">
                 <MessageSquarePlus className="h-3 w-3" strokeWidth={2} />

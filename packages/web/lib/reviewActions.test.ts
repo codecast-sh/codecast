@@ -190,9 +190,9 @@ describe("image quotes from the gallery", () => {
     expect(quotedImages(CONV)).toEqual([{ storageId: "s1", src: shot.src, markers: [{ x: 0.25, y: 0.5, number: 1 }, { x: 0.9, y: 0.1, number: 2 }] }]);
     const text = attachReviewToMessage(CONV, "fix these", { firstQuoted: 3 });
     const blocks = text.split("\n\n");
-    expect(blocks[0]).toBe("> [Image 3] at marker 1\n> " + blocks[0].split("\n> ")[1]);
+    expect(blocks[0]).toBe("> [Image 3] at marker 1 (25% from the left, 50% from the top)\n> " + blocks[0].split("\n> ")[1]);
     expect(blocks[1]).toBe("this button is misaligned");
-    expect(blocks[2]).toStartWith("> [Image 3] at marker 2\n");
+    expect(blocks[2]).toStartWith("> [Image 3] at marker 2 (90% from the left, 10% from the top)\n");
     expect(blocks[3]).toBe("and this badge overlaps");
     expect(blocks[4]).toMatch(/^> !\[image\]\(https:\/\/example\.com\/a\.png\) at 50% from the left, 50% from the top\n> Image returned by your Read call at .*: `\/tmp\/shot\.png`$/);
     expect(blocks[5]).toBe("wrong color");
@@ -215,9 +215,9 @@ describe("image quotes from the gallery", () => {
     expect(composerMarkers(CONV, sending)).toEqual(new Map([[1, [{ x: 0.5, y: 0.25, number: 1 }]]]));
     expect(quotedImages(CONV, sending).map((q) => q.storageId)).toEqual(["s1"]);
     const blocks = attachReviewToMessage(CONV, "fix", { composer: sending, firstQuoted: 3 }).split("\n\n");
-    expect(blocks[0]).toBe("> [Image 2] at marker 1");
+    expect(blocks[0]).toBe("> [Image 2] at marker 1 (50% from the left, 25% from the top)");
     expect(blocks[1]).toBe("this label is cut off");
-    expect(blocks[2]).toStartWith("> [Image 3] at marker 1\n> Image from your message");
+    expect(blocks[2]).toStartWith("> [Image 3] at marker 1 (10% from the left, 10% from the top)\n> Image from your message");
   });
 
   test("a picture leaving the composer takes its notes with it", () => {
@@ -238,7 +238,7 @@ describe("image quotes from the gallery", () => {
     expect(typed).toStartWith(`> ![image](${shot.href})`);
     expect(typed).not.toContain("cut off");
     expect(useInboxStore.getState().reviewComments[CONV].map((c) => c.id)).toEqual([onAttached]);
-    expect(attachReviewToMessage(CONV, "", { composer: [{ previewUrl: "blob:one" }] })).toBe("> [Image 1] at marker 1\n\ncut off");
+    expect(attachReviewToMessage(CONV, "", { composer: [{ previewUrl: "blob:one" }] })).toBe("> [Image 1] at marker 1 (50% from the left, 50% from the top)\n\ncut off");
   });
 });
 

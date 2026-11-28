@@ -115,6 +115,7 @@ import { hostedConnectionWords } from '@codecast/web/components/conversation/Hos
 import { useLinkDown } from '@/hooks/useLinkDown';
 import { answerNote, conversationTitle } from '@codecast/web/components/simple/lane';
 import { useConversationApprovals, useConversationWorking } from '@codecast/web/components/simple/useLane';
+import { hideMarkerPoints } from '@codecast/web/lib/imageNotes';
 import { agentDisplayName, agentSupportsFork, contextWindowTokens, isHostedAgentType, parseDecisionAnswer, ACTIVE_AGENT_STATUSES, DECISION_ANSWER_TAG_RE, SAFETY_BLOCK_HINT, CLOUD_AGENT_ACTION_SUBTYPE, parseScheduledTask, policyTeamOf, sessionEscalationCaption, stripPastedContent, stripCompactionProvenance, isPollResponsePayload, personalSettingOn, type VaultReadyMessage } from '@codecast/shared/contracts';
 import { DELIVERY_FAILED_SUBTYPE, parseDeliveryFailedNotice } from '@codecast/shared/contracts/deliveryFailed';
 import { MarkdownContent, CodeBlockWithCopy, linkifyPlainText } from '@/components/MarkdownRenderer';
@@ -1909,7 +1910,7 @@ function displayMessage(item: Message): Message {
   if (!item.content) return item;
   let out = displayCache.get(item);
   if (!out) {
-    out = { ...item, content: stripPastedContent(item.content) };
+    out = { ...item, content: hideMarkerPoints(stripPastedContent(item.content)) };
     displayCache.set(item, out);
   }
   return out;
