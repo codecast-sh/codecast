@@ -66,9 +66,8 @@ policy = "release"
 # A send can wait up to 80 min for a release in flight before it cuts (scripts/cut-cli-release.sh),
 # and finalize up to 90 min for CI on the source commit.
 deadline = "4h"
-# A runner whose installed cast has --deploy runs the finish (releaseFinish.ts); one whose cast
-# predates it takes the else branch, the old global force. Drop the else after the next CLI release.
-finish = "if cast force-update --help 2>&1 | grep -q -- --deploy; then cast force-update $version --deploy $deploy; else cast force-update $version; fi"
+# No finish: a release is forced only once it has been live 8h with no rollback (sd-4745), by the
+# Release Captain running `cast force-update <version> --deploy dp-N` (deploys.md DP20).
 
 # An OTA update to every channel, after the backend it calls is live. The app bundles
 # shared and web code too, so those paths ship it.
