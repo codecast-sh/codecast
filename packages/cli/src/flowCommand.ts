@@ -435,11 +435,12 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
         console.log(placed ? `runs on ${placed.name} (${placed.device_id.slice(0, 8)}, ${placed.from}), in its checkout of this repository: the change's branch is pushed to origin and fetched there` : "runs on this machine");
         if (preview) {
           console.log(`${preview.paths.length} file${preview.paths.length === 1 ? "" : "s"}:`);
-          // A writer is its codecast session's short id; one codecast never synced has only its agent's session id.
-          const writer = (id: string) => (/^[0-9a-f]{8}$/.test(id) ? `a session codecast has not synced (${id})` : `session ${id}`);
+          // A writer is its codecast session's short id; one codecast never synced has only its agent's session id,
+          // which names nothing a person can open.
+          const writer = (id: string) => (/^[0-9a-f]{8}$/.test(id) ? "another agent session on this machine" : `session ${id}`);
           for (const f of preview.paths) {
             const also = preview.shared.find((s) => s.path === f)?.also;
-            console.log(`  ${f}${also ? dim(`  also edited by ${also.map(writer).join(", ")}`) : ""}`);
+            console.log(`  ${f}${also ? dim(`  also edited by ${[...new Set(also.map(writer))].join(", ")}`) : ""}`);
           }
           for (const h of preview.held) console.log(`  held out: ${h.path} (${h.why})`);
         }
