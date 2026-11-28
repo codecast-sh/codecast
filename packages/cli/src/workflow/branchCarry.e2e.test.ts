@@ -454,6 +454,7 @@ describe("a branch's carry", () => {
     git(worktree, "add", "c.txt");
     git(worktree, "commit", "--quiet", "-m", "stacked work");
     const other = git(worktree, "rev-parse", "HEAD");
+    git(worktree, "push", "--quiet", "origin", "elsewhere");
     const fixed = push("a.txt", "fixed\n", "the fix");
     const { change, moved } = await refreezeSessionChange(here, runDir, worktree, { resume: "cast workflow resume ct-9 --at pr" });
     expect(change.tip).toBe(fixed);
@@ -463,6 +464,20 @@ describe("a branch's carry", () => {
     expect(git(here, "rev-parse", "elsewhere")).toBe(other);
     expect(readFrozenChange(runDir)?.tip).toBe(fixed);
     expect(tip).not.toBe(fixed);
+  }, 180_000);
+
+  test("a fix committed on a detached HEAD, or on another branch never pushed, refuses rather than reading as unchanged", async () => {
+    const { here, worktree, runDir, start } = originWorld("off-loose");
+    const tip = start();
+    git(worktree, "checkout", "--quiet", "--detach");
+    write(worktree, "a.txt", "fixed here only\n");
+    git(worktree, "commit", "--quiet", "-am", "the fix, unpushed");
+    const loose = git(worktree, "rev-parse", "HEAD");
+    await expect(refreezeSessionChange(here, runDir, worktree, { resume: "cast workflow resume ct-9 --at pr" })).rejects.toThrow(/is on no branch, not the change's branch feat, and it holds 1 commit no branch on origin has \(up to [0-9a-f]{10}\): push the fix to feat, not a detached HEAD, so the run left it as it is\. .*`cast workflow resume ct-9 --at pr`/);
+    expect(git(worktree, "rev-parse", "HEAD")).toBe(loose);
+    git(worktree, "checkout", "--quiet", "-b", "unpushed");
+    await expect(refreezeSessionChange(here, runDir, worktree)).rejects.toThrow(/push the fix to feat, not unpushed/);
+    expect(git(here, "rev-parse", "feat")).toBe(tip);
   }, 180_000);
 
   test("the resume a fixed change names is where the fix station goes on success", () => {

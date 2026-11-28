@@ -3,9 +3,9 @@
 // pushed the fix to the change's own branch, tv-pr3-tips-voice). The change is
 // the branch, on origin as the session pushed it, so the refreeze reads it back
 // from there and puts the worktree back on it, instead of failing a fixed
-// change. Only when it cannot (edits left uncommitted on the other branch, a
-// branch it cannot read or check out) does it stop, naming the resume that
-// fits a fixed change.
+// change. Only when it cannot (edits left uncommitted on the other branch,
+// commits there that origin never got, a branch it cannot read or check out)
+// does it stop, naming the resume that fits a fixed change.
 import { git, gitTry } from "../wipSnapshot.js";
 import type { FrozenChange } from "./flowChangeFile.js";
 import type { WorkflowGraph } from "./types";
@@ -39,6 +39,10 @@ export async function reclaimMovedWorktree(
   const local = (await gitTry(root, ["rev-parse", "--verify", "--quiet", `refs/heads/${before.branch}`])) || before.tip;
   let read: { tip: string; remote_tip?: string };
   try { read = await carry(local); } catch (err) { throw stop(`origin's ${before.branch} could not be read back (${first(err)})`); }
+  // Commits only this worktree holds (a fix committed on a detached HEAD, or on another branch never pushed) would be
+  // left behind by the checkout, and the run would read the change as unchanged.
+  const loose = Number((await gitTry(worktree, ["rev-list", "--count", "HEAD", "--not", "--remotes=origin", `refs/heads/${before.branch}`])) ?? 0);
+  if (loose > 0) throw stop(`it holds ${loose} commit${loose === 1 ? "" : "s"} no branch on origin has (up to ${(await git(worktree, ["rev-parse", "--short=10", "HEAD"]))}): push the fix to ${before.branch}, not ${on ?? "a detached HEAD"}`);
   const change = { ...before, ...read };
   try { await git(worktree, ["checkout", "--quiet", "-B", before.branch, change.tip]); } catch (err) { throw stop(`it could not be put back on ${before.branch} (${first(err)})`); }
   const tree = (rev: string) => git(root, ["rev-parse", `${rev}^{tree}`]).catch(() => rev);
