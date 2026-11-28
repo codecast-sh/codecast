@@ -277,7 +277,7 @@ test("what is typed as an answer is still there after stepping to another ask an
   document.body.appendChild(pane);
   const root = createRoot(pane);
   await act(() => root.render(<MemoryRouter>{modern(<Thread conversationId="c1" asks={[ask(1), ask(2)]} />)}</MemoryRouter>));
-  const box = () => pane.querySelector<HTMLInputElement>('input[aria-label="Answer in your own words"]')!;
+  const box = () => pane.querySelector<HTMLInputElement>('input[data-decision-words]')!;
   const setValue = Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, "value")!.set!;
   await act(() => { setValue.call(box(), "neither, pause it at night"); box().dispatchEvent(new dom.window.Event("input", { bubbles: true })); });
   expect(box().value).toBe("neither, pause it at night");
@@ -444,4 +444,38 @@ test("on an ordinary decision, Return asks and keeps the card; ⌘Return answers
   useInboxStore.setState({ commentOnDecision: real.commentOnDecision, askDecisionSession: real.askDecisionSession, answerDecision: real.answerDecision });
   useInboxStore.getState().clearDraft("decision:d6");
   unmount();
+});
+
+// The docked card asks the same way: Return asks and the card stays, with the
+// box saying so; ⌘Return answers with the words.
+test("on the docked card, Return asks and the card stays; ⌘Return answers with the words", async () => {
+  const { useInboxStore } = await import("../../../store/inboxStore");
+  const calls: string[] = [];
+  const real = useInboxStore.getState();
+  useInboxStore.setState({
+    commentOnDecision: (async (_id: string, text: string) => { calls.push(`comment:${text}`); }) as any,
+    askDecisionSession: (async () => { calls.push("ask"); }) as any,
+    answerDecision: (async (_id: string, input: any) => { calls.push(`answer:${input.text}`); }) as any,
+  });
+  const pane = document.createElement("div");
+  document.body.appendChild(pane);
+  const root = createRoot(pane);
+  // Its own conversation: the test before answered c1's card from the sheet, which opens c1's next ask as the sheet.
+  await act(() => root.render(<MemoryRouter>{modern(<Thread conversationId="c7" asks={[{ ...ask(7), conversationId: "c7" }]} />)}</MemoryRouter>));
+  const box = () => pane.querySelector<HTMLInputElement>("input[data-decision-words]")!;
+  expect(box().getAttribute("data-decision-words")).toBe("ask-or-answer");
+  expect(box().placeholder).toBe("Ask the session, or answer in your own words");
+  const setValue = Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, "value")!.set!;
+  const type = (text: string) => act(() => { setValue.call(box(), text); box().dispatchEvent(new dom.window.Event("input", { bubbles: true })); });
+  await type("what does option 2 cost?");
+  expect(pane.querySelector("[data-decision-words-keys]")?.textContent).toContain("answer with this");
+  await act(async () => { box().form!.requestSubmit(); await new Promise((r) => setTimeout(r, 0)); });
+  expect(calls).toEqual(["comment:what does option 2 cost?", "ask"]);
+  expect(pane.querySelector("[data-cc-ask-question]")?.textContent).toBe("Question 7?");
+  await type("go with 1");
+  await act(async () => { box().dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true })); await new Promise((r) => setTimeout(r, 0)); });
+  expect(calls.at(-1)).toBe("answer:go with 1");
+  useInboxStore.setState({ commentOnDecision: real.commentOnDecision, askDecisionSession: real.askDecisionSession, answerDecision: real.answerDecision });
+  useInboxStore.getState().clearDraft("decision:d7");
+  await act(() => root.unmount());
 });

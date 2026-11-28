@@ -13,7 +13,7 @@ import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useInboxStore } from "../../store/inboxStore";
 import { useDecisionComments, useDecisionThreadFeed, useDecisionThreadReadAt, useDecisionThreadUnread } from "../../hooks/useDecisionThread";
 import { ownerReason } from "../../lib/decisionDiscussion";
-import { askDecisionSession, decisionThreadComments, markDecisionThreadRead, newDecisionCommentId, sendDecisionComment } from "../../lib/decisionThread";
+import { askDecisionSession, decisionThreadComments, discussDecision, markDecisionThreadRead, newDecisionCommentId, sendDecisionComment } from "../../lib/decisionThread";
 import { isThreadResolved, type CommentThread as ThreadModel } from "../../lib/commentThread";
 import { cn } from "../../lib/utils";
 import { toast } from "sonner";
@@ -79,10 +79,13 @@ export function DecisionDiscussion({ decisionId, compact = false, className, ope
   // Asked from a card away from its session (an inbox or flow card), the session wakes and the card leaves the
   // needs-input list, so the asking session becomes the selected conversation and the reply is followed there.
   // A surface built around talking to it (askFirst) keeps its own chat in place.
-  const ask = () => {
-    void askDecisionSession(decisionId).then(refusedToast);
+  const followAsker = () => {
     const store = useInboxStore.getState();
     if (!askFirst && sessionId && store.currentSessionId !== sessionId) store.requestNavigate(sessionId);
+  };
+  const ask = () => {
+    void askDecisionSession(decisionId).then(refusedToast);
+    followAsker();
   };
   const discuss = onDiscuss ?? (() => { setAsking(true); setOpen(true); });
 
@@ -121,9 +124,11 @@ export function DecisionDiscussion({ decisionId, compact = false, className, ope
           placeholder={asking ? `Ask ${name}…` : "Comment for the team"}
           readAt={frozenReadAt.current}
           onAdd={async ({ content, parentCommentId }) => {
-            const why = await sendDecisionComment(decisionId, content, newDecisionCommentId(), parentCommentId?.startsWith("dcstub-") ? undefined : parentCommentId);
+            const parent = parentCommentId?.startsWith("dcstub-") ? undefined : parentCommentId;
+            if (!asking) { refusedToast(await sendDecisionComment(decisionId, content, newDecisionCommentId(), parent)); return; }
+            const why = await discussDecision(decisionId, content, parent);
             refusedToast(why);
-            if (!why && asking) { if (!askFirst) setAsking(false); ask(); }
+            if (!why) { if (!askFirst) setAsking(false); followAsker(); }
           }}
           onEdit={(commentId, content) => { void useInboxStore.getState().editDecisionComment(commentId, content).then((r: any) => refusedToast(r?.error ?? null)); }}
           onDelete={(commentId) => { void useInboxStore.getState().deleteDecisionComment(commentId).then((r: any) => refusedToast(r?.error ?? null)); }}
