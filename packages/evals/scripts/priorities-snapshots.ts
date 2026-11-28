@@ -427,7 +427,8 @@ const SYNTH_SCHEMA_V2 = (() => {
 type SnapPriority = GoldenPriority & { workspace: 'union' | 'codecast' | 'personal'; evidence: string; session_milestones?: Record<string, string | null> };
 type Snapshot = Omit<Golden, 'priorities'> & {
   as_of: string; priorities: SnapPriority[]; cost_usd: number; variant: string;
-  one_off_sessions?: Array<{ session: string; why: string }>;
+  /** Why each one_off session serves no goal. */
+  one_off_why?: Record<string, string>;
   /** Sessions the synthesis saw and left nowhere: not under a priority, not standing, not one_off. */
   unaccounted: string[];
 };
@@ -456,12 +457,12 @@ async function synthesize(cut: { name: string; at: number }, sessions: UniSessio
     return { ...p, sessions: placed.map((x) => x.id), ...(VARIANT === 'v2' ? { session_milestones: Object.fromEntries(placed.map((x) => [x.id, x.milestone])) } : {}) };
   });
   const standing_sessions = out.standing_sessions.filter((s) => known.has(s) && !(s in session_labels));
-  const one_off_sessions = out.one_off_sessions?.filter((o) => known.has(o.session) && !(o.session in session_labels) && !standing_sessions.includes(o.session));
-  const accounted = new Set([...Object.keys(session_labels), ...standing_sessions, ...(one_off_sessions ?? []).map((o) => o.session)]);
+  const oneOff = out.one_off_sessions?.filter((o) => known.has(o.session) && !(o.session in session_labels) && !standing_sessions.includes(o.session));
+  const accounted = new Set([...Object.keys(session_labels), ...standing_sessions, ...(oneOff ?? []).map((o) => o.session)]);
   return {
     person: USER, window: ['2026-11-10', iso(cut.at).slice(0, 10)], as_of: new Date(cut.at).toISOString(), variant: VARIANT,
     priorities, session_labels, standing_sessions,
-    ...(one_off_sessions ? { one_off_sessions } : {}),
+    ...(oneOff ? { one_off_sessions: oneOff.map((o) => o.session), one_off_why: Object.fromEntries(oneOff.map((o) => [o.session, o.why])) } : {}),
     unaccounted: present.map((s) => s.id).filter((s) => !accounted.has(s)),
     cost_usd: reply.usd,
   };
