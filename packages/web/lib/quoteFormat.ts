@@ -142,10 +142,12 @@ export function formatQuotedReply(quote: string, body?: string, verdict?: Review
 // send is named by its `[Image N]` attachment token and carries its pins drawn
 // on it as numbered markers, so the point is that marker's number. Otherwise
 // the image is its address as a markdown image and the point is described.
+// A marker's line also gives its point in percentages: the transcript reads it
+// back (lib/imageNotes) to show the note when the marker is hovered.
 export function imageQuoteText(c: Pick<PendingComment, "quote" | "image">, attachmentNumber?: number, marker?: number): string {
   if (!c.image) return c.quote;
   const head = attachmentNumber ? `[Image ${attachmentNumber}]` : c.image.href ? `![image](${c.image.href})` : "[image]";
-  const at = !c.image.point ? "" : attachmentNumber && marker ? ` at marker ${marker}` : ` ${describePoint(c.image)}`;
+  const at = !c.image.point ? "" : attachmentNumber && marker ? ` at marker ${marker} (${pointPercents(c.image.point)})` : ` ${describePoint(c.image)}`;
   return c.quote ? `${head}${at}\n${c.quote}` : `${head}${at}`;
 }
 
@@ -166,11 +168,16 @@ export function pinNumbers(comments: readonly Pick<PendingComment, "id" | "image
   return numbers;
 }
 
+// "26% from the left, 26% from the top".
+function pointPercents(point: { x: number; y: number }): string {
+  return `${Math.round(point.x * 100)}% from the left, ${Math.round(point.y * 100)}% from the top`;
+}
+
 // "at x=412, y=230 of 1600×900 px (26% from the left, 26% from the top)", or
 // only the percentages when the picture's size is unknown.
 export function describePoint({ point, width, height }: QuotedImage): string {
   if (!point) return "";
-  const pct = `${Math.round(point.x * 100)}% from the left, ${Math.round(point.y * 100)}% from the top`;
+  const pct = pointPercents(point);
   if (!width || !height) return `at ${pct}`;
   return `at x=${Math.round(point.x * width)}, y=${Math.round(point.y * height)} of ${width}×${height} px (${pct})`;
 }

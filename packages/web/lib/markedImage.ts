@@ -10,21 +10,26 @@ export type ImageMarker = { x: number; y: number; number: number };
 // Solarized yellow, the gallery's pin color.
 const MARKER_FILL = "#b58900";
 
+// Where a marker draws on a w×h picture, in its pixels: the ring at the point
+// (px, py), and the badge of radius r at (bx, by), up and to the right of the
+// point, flipped near an edge so it stays on the picture. The transcript's
+// hover areas (components/MarkerNotes) place themselves with the same numbers.
+export function markerLayout(point: { x: number; y: number }, w: number, h: number) {
+  const r = Math.max(11, Math.round(Math.min(w, h) * 0.022));
+  const px = point.x * w;
+  const py = point.y * h;
+  const dx = px + r * 3.2 > w ? -1 : 1;
+  const dy = py - r * 3.2 < 0 ? 1 : -1;
+  return { r, px, py, dx, dy, bx: px + dx * r * 2, by: py + dy * r * 2 };
+}
+
 export async function drawMarkers(picture: Blob, markers: readonly ImageMarker[]): Promise<Blob | null> {
   try {
     const drawn = await drawFitted(picture);
     if (!drawn) return null;
     const { ctx, w, h } = drawn;
-    const r = Math.max(11, Math.round(Math.min(w, h) * 0.022));
     for (const m of markers) {
-      const px = m.x * w;
-      const py = m.y * h;
-      // The badge sits up and to the right of the point, flipped near an edge
-      // so it stays on the picture.
-      const dx = px + r * 3.2 > w ? -1 : 1;
-      const dy = py - r * 3.2 < 0 ? 1 : -1;
-      const bx = px + dx * r * 2;
-      const by = py + dy * r * 2;
+      const { r, px, py, dx, dy, bx, by } = markerLayout(m, w, h);
       const ringAndStem = () => {
         const k = r * 0.55;
         ctx.beginPath();

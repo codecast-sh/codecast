@@ -2,6 +2,8 @@ import { useState } from "react";
 import { pressable } from "../../ops/parts";
 import { imageBoxStyle, knownImageDims, rememberImageDims, type ImageDims } from "../../../lib/imageDims";
 import type { ImageData } from "../types";
+import type { ImageNote } from "../../../lib/imageNotes";
+import { MarkerNotes } from "../../MarkerNotes";
 
 // The Modern style's transcript image (CONV-18): the whole picture at its own
 // aspect ratio, capped at 28rem tall, where Classic shows a 100px strip. Its
@@ -16,6 +18,7 @@ const UNKNOWN_HEIGHT = 100;
 
 export function ModernImage({
   image,
+  notes,
   src,
   loaded,
   onLoad,
@@ -23,6 +26,7 @@ export function ModernImage({
   onOpen,
 }: {
   image: ImageData;
+  notes?: readonly ImageNote[];
   src: string | undefined;
   loaded: boolean;
   onLoad: () => void;
@@ -59,6 +63,7 @@ export function ModernImage({
           onError={onError}
         />
       )}
+      {src && loaded && dims && notes?.length ? <MarkerNotes notes={notes} width={dims.width} height={dims.height} /> : null}
       {(!src || !loaded) && (
         <div className="absolute inset-0 flex items-center justify-center">
           <span className="text-meta text-sol-text-dim">Loading image…</span>
