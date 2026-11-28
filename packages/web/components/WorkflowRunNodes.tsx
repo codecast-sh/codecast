@@ -10,10 +10,12 @@
 // step row in the same gutter.
 
 import Link from "next/link";
-import { Bot, CheckCircle2, ChevronRight, Circle, CornerDownRight, Flag, GitFork, Loader2, Merge, MessageSquare, Terminal, User, XCircle, Zap } from "lucide-react";
+import { AlertTriangle, Bot, CheckCircle2, Circle, CornerDownRight, Flag, GitFork, Loader2, Merge, MessageSquare, Terminal, User, XCircle, Zap } from "lucide-react";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { useOpenLinkedSession } from "../hooks/useOpenLinkedSession";
 import { formatRunDuration, rowReached, runNodeGroups, runNodeLine, scriptLine, wfFmtTokens, type RunNodeRow } from "../lib/workflowRun";
+import { outputSummary } from "../lib/ship/journeyWords";
+import { isCarriedOutcome } from "../lib/ship/stationResult";
 import { TaskSessionRow, type TaskLinkedSession } from "./tasks/TaskSessionList";
 import { RailProgress } from "./ContextRail";
 
@@ -35,6 +37,8 @@ function StepMark({ row }: { row: RunNodeRow }) {
   const cls = "w-3.5 h-3.5 flex-shrink-0";
   // The way out a segment took (a card answered Revise): where the run went, neither a pass nor a failure.
   if (row.route) return <CornerDownRight className={`${cls} text-sol-text-dim`} aria-label="route taken" />;
+  // Ended red and the run carried on past it (Local CI red, the PR opens): never a pass.
+  if (row.status === "completed" && isCarriedOutcome(row.outcome)) return <AlertTriangle className={`${cls} text-sol-yellow`} aria-label="red, carried on" />;
   if (row.status === "completed") return <CheckCircle2 className={`${cls} text-sol-green`} aria-label="completed" />;
   if (row.status === "failed") return <XCircle className={`${cls} text-sol-red`} aria-label="failed" />;
   if (row.status === "running" || row.current) return <Loader2 className={`${cls} text-sol-cyan animate-spin`} aria-label="running" />;
@@ -111,8 +115,14 @@ function SessionNodeRow({ row, now, onOpen }: { row: RunNodeRow; now: number; on
 function StepRow({ row, now }: { row: RunNodeRow; now: number }) {
   const TypeIcon = TYPE_ICONS[row.type] ?? Bot;
   const tone = stepTone(row);
-  const line = scriptLine(runNodeLine(row));
   const href = row.session_id ? `/conversation/${row.session_id}` : null;
+  // A command's long output (a cut log) reads as how it ended and why, as the run's stage detail says it; the whole of
+  // it opens below (never inside a link: a row that opens a session keeps its one line).
+  const raw = row.type === "command" && !href ? (row.status === "running" ? row.activity || row.result_preview : row.result_preview || row.activity) : null;
+  // A script's JSON result keeps its own reading (scriptLine); a short plain line reads as it is.
+  const cut = raw && !raw.trimStart().startsWith("{") ? outputSummary(raw) : null;
+  const out = cut?.full ? cut : null;
+  const line = out ? out.head : scriptLine(runNodeLine(row));
   const body = (
     <>
       <span className="mt-0.5 flex-shrink-0" data-step-status={row.route ? "route" : row.status}><StepMark row={row} /></span>
@@ -123,7 +133,13 @@ function StepRow({ row, now }: { row: RunNodeRow; now: number }) {
         } ${row.current ? "font-medium" : ""}`}>
           {row.label}
         </div>
-        {line && <p className="mt-0.5 text-meta text-sol-text-muted truncate leading-snug">{line}</p>}
+        {line && <p className={`mt-0.5 text-meta text-sol-text-muted leading-snug ${out ? "whitespace-pre-line break-words" : "truncate"}`}>{line}</p>}
+        {out?.full ? (
+          <details className="mt-0.5" data-step-full-output>
+            <summary className="cursor-pointer text-meta text-sol-text-dim hover:text-sol-text-muted">Full output</summary>
+            <pre className="mt-1 max-h-80 overflow-auto whitespace-pre-wrap break-words rounded bg-sol-bg-alt p-2 text-meta text-sol-text-muted">{out.full}</pre>
+          </details>
+        ) : null}
         <div className="mt-0.5 flex items-center gap-1.5 text-meta text-sol-text-dim/70 min-w-0 empty:hidden">
           <StepMeta row={row} now={now} />
         </div>
@@ -148,27 +164,14 @@ function StepRow({ row, now }: { row: RunNodeRow; now: number }) {
   );
 }
 
-function NotRun({ rows, now }: { rows: RunNodeRow[]; now: number }) {
-  return (
-    <details className="group" data-run-not-run={rows.length}>
-      <summary className="flex min-h-[44px] cursor-pointer list-none items-center gap-2 px-2 text-meta text-sol-text-dim hover:text-sol-text-muted [&::-webkit-details-marker]:hidden">
-        <ChevronRight className="w-3.5 h-3.5 flex-shrink-0 transition-transform group-open:rotate-90" aria-hidden />
-        <span>Not run</span>
-        <span className="tabular-nums">{rows.length}</span>
-      </summary>
-      {rows.map((row) => <StepRow key={row.id} row={row} now={now} />)}
-    </details>
-  );
-}
-
 /** `page` heads each phase the way a page heads a section (its title, what
  *  it was for, and how far it got); the default is the compact panel header. */
 export function WorkflowRunNodes({ run, workflow, className, headings = "panel" }: { run: any; workflow?: any | null; className?: string; headings?: "panel" | "page" }) {
   const now = useCoarseNow(30_000);
   const openLinkedSession = useOpenLinkedSession();
-  const groups = runNodeGroups(run, workflow);
-  // An ended run's stations it never reached are side routes it did not take: put away, one press from view.
+  // An ended run's stations it never reached are side routes it did not take, and none can run now: left out.
   const ended = run?.status === "completed" || run?.status === "failed";
+  const groups = runNodeGroups(run, workflow).map((g) => (ended ? { ...g, rows: g.rows.filter(rowReached) } : g)).filter((g) => !ended || g.rows.length > 0);
   if (groups.every((g) => g.rows.length === 0)) {
     return <div className="px-2 py-2 text-xs text-sol-text-dim">No steps</div>;
   }
@@ -190,12 +193,11 @@ export function WorkflowRunNodes({ run, workflow, className, headings = "panel" 
               <span className="text-meta text-sol-text-dim/60 tabular-nums">{g.rows.length}</span>
             </div>
           ))}
-          {(ended ? g.rows.filter(rowReached) : g.rows).map((row) =>
+          {g.rows.map((row) =>
             row.session
               ? <SessionNodeRow key={row.id} row={row} now={now} onOpen={openLinkedSession} />
               : <StepRow key={row.id} row={row} now={now} />,
           )}
-          {ended && g.rows.some((r) => !rowReached(r)) ? <NotRun rows={g.rows.filter((r) => !rowReached(r))} now={now} /> : null}
         </section>
       ))}
     </div>

@@ -8,7 +8,7 @@ import { SEGMENT_SEP, takesSessionChange, type FlowEdgeIn, type FlowNodeIn } fro
 import { entityRoute } from "@codecast/shared/entities";
 import { verdictOnHead } from "@codecast/shared/contracts/deployTargets";
 import { failedDeploysOf } from "@codecast/shared/contracts/deployStop";
-import { journeyStages, targetsFromLine, withRunDeploys, type Journey, type TargetState } from "./journey";
+import { journeyOf, journeyStages, targetsFromLine, withRunDeploys, type Journey, type JourneyStage, type JourneyViewer, type TargetState } from "./journey";
 import { gateWaitWords, holdWords, journeyWords, sentBackWords, stopTitle, type JourneyTone } from "./journeyWords";
 import { landedSha } from "./runRecord";
 import { deploysFocusHref, deploysHref as wordsHref, runDeploysHref, runTeam } from "../deploys/focus";
@@ -26,7 +26,8 @@ export type ChangeRun = {
   review_verdict?: { verdict: string; head_sha?: string | null } | null;
   /** Heads Merge only rebased onto main: a review on `from` holds on `to` (verdictOnHead). */
   station_rebases?: ReadonlyArray<{ from: string; to: string }> | null;
-  merge?: { sha?: string | null; pr_url?: string | null } | null;
+  /** `outside`: someone else merged the PR, the server recorded it (`by`: their GitHub login) and the run goes live. */
+  merge?: { sha?: string | null; pr_url?: string | null; outside?: boolean; by?: string | null } | null;
   current_node_id?: string | null;
   waiting_on_session?: { node_id: string; conversation_id?: string | null } | null;
   gate_node_id?: string | null;
@@ -131,11 +132,90 @@ function exitReached(run: ChangeRun, graph: ChangeGraph): string | null {
 
 /** The merge station's refusal when the person's merge switch for the flow is off (convex lib/lineMerge.ts), as the
  *  run's reason carries it, or as the CLI's merge said it ("merge left to a person: merge is off …"). */
-const MERGE_OFF = /^(Stopped:\s*)?(merge left to a person:\s*)?merge is off for this flow\b/;
+const MERGE_OFF = /^(Stopped:\s*)?((merge left to a person:\s*)?merge is off for this flow|@[\w-]+'s merge is off)\b/;
 export const mergeIsOff = (run: ChangeRun) => MERGE_OFF.test(run.fail_reason ?? "");
+
+/** A role hand's run whose Merge belongs to its role, and the role's merge is off: the run ends at its `handed` exit and
+ *  its merge step says whose ("Merge is @release's: handed to it."). The role's handle, "" when no step names it. */
+const HANDED = /^\s*Merge is @([\w-]+)'s: handed to it/;
+export function handedTo(run: ChangeRun): string | null {
+  if (run.status !== "completed" || run.merge?.sha || leafOf(run.current_node_id ?? "") !== "handed") return null;
+  return [...(run.node_statuses ?? [])].sort(byNewest).map((n) => HANDED.exec(n.result_preview ?? "")?.[1]).find(Boolean) ?? "";
+}
+
+/** The role that holds the change's merge, by handle, when its words name one: the role it was handed to, or the one
+ *  whose merge is off ("@release's merge is off: …"). Null when they name none (the run's own role holds it then). */
+export function mergeHolder(run: ChangeRun): string | null {
+  return handedTo(run) || /^(?:Stopped:\s*)?@([\w-]+)'s merge is off\b/.exec(run.fail_reason ?? "")?.[1] || null;
+}
 
 /** Whether the change is on main by the run's own record: a sha it landed, or a landing step that passed. */
 const onMainByRun = (run: ChangeRun, j: Journey) => !!landedSha(run) || ((j.now.kind === "stopped" || j.now.kind === "failed") && !!j.now.landed);
+
+/**
+ * A change on main while its run stopped short of merging it: GitHub merged its PR (someone did, outside the run; its
+ * merge switch was off, say), or the run's record holds a merge its stations never made (the server heals such runs).
+ * The stop is moot: the merge reads done, the stages the run never entered before Deploy read skipped, and Deploy, Live
+ * and the bar read from where the deploy records put the merge (`targets`), as a landed run's do. A stop the run itself
+ * caused after landing (a Deploy stop, a landing step that passed) and a personal Ship keep their own reading.
+ */
+export function landedOutside(j: Journey, run: ChangeRun, graph: ChangeGraph, ctx: { pr?: PrState; targets?: ReadonlyArray<TargetState>; reading?: boolean } = {}): Journey {
+  const n = j.now;
+  // The server's record says so (it healed the run; a merge handed to a role heals the same way), else GitHub's PR does
+  // and the run's stop came before its landing. A healed run that reached Live reads as any live run.
+  const said = !!run.merge?.outside && !(run.status === "completed" && /^live$/i.test(exitReached(run, graph) ?? ""));
+  if (j.personal || (!said && n.kind !== "stopped" && n.kind !== "failed" && n.kind !== "unlanded")) return j;
+  const stop = n.kind === "stopped" || n.kind === "failed" ? n : null;
+  if (!said && stop && (stop.fix === "deploy" || stop.landed)) return j;
+  const sha = landedSha(run) ?? (ctx.pr?.merged ? ctx.pr.merge_sha ?? "" : null);
+  if (sha === null) return j;
+  const deployAt = j.stages.findIndex((s) => s.role === "deploy");
+  const stopAt = j.stages.findIndex((s) => s.state === "stopped");
+  if (!said && n.kind !== "unlanded" && deployAt >= 0 && stopAt >= deployAt) return j;
+  const targets = ctx.targets ?? [];
+  const live = targets.length > 0 && targets.every((t) => t.state === "live");
+  const going = targets.filter((t) => t.state === "deploying");
+  const failed = targets.some((t) => t.state === "failed");
+  // No targets once reach is read: the change touches none, so there is nothing to send.
+  const none = !targets.length && !ctx.reading;
+  const deploy: JourneyStage["state"] = live ? "done" : going.length ? "active" : failed ? "stopped" : none ? "nothing" : "waiting";
+  // The merge itself happened, whoever made it: the station that merges and the stage that lands read done.
+  const merges = (s: JourneyStage) => s.role === "land" || leafOf(s.id) === "merge";
+  const stages = j.stages.map((s, i): JourneyStage => {
+    if (s.role === "deploy") return { ...s, state: deploy };
+    if (s.role === "live") return { ...s, state: live ? "done" : none ? "skipped" : "idle" };
+    if (deployAt >= 0 && i > deployAt) return s;
+    if (merges(s)) return { ...s, state: "done" };
+    return stopAt >= 0 && i > stopAt ? { ...s, state: "skipped" } : s;
+  });
+  const now: Journey["now"] = live ? { kind: "live", targets: targets.map((t) => t.name), line: null }
+    : going.length ? { kind: "deploying", targets: going.map((t) => t.name), line: null, waits: [] }
+    : none ? { kind: "merged", sha, at: null }
+    : { kind: "landed", sha, at: null, line: null, hold: { kind: "wait", by: null }, waits: [] };
+  return { ...j, stages, now, outside: { sha } };
+}
+
+/** A change run's journey as its page reads it: the run's own (journey.ts), read as landed when someone else merged the
+ *  change while the run stopped short of it (landedOutside). The web's run page and the phone's read it here. */
+export function changeJourney(graph: ChangeGraph, run: ChangeRun, targets: ReadonlyArray<TargetState>, viewer: JourneyViewer | null, ctx: { pr?: PrState; reading?: boolean } = {}): Journey {
+  return landedOutside(journeyOf(graph as any, run as any, targets, viewer), run, graph, { ...ctx, targets });
+}
+
+/** Where a change someone else merged stands, from the deploy records: live, going out, failed or waiting per target. */
+function outsideWords(targets: ReadonlyArray<TargetState>, reading = false): { waits: string; tone: JourneyTone } {
+  // Reach not answered yet and nothing cached: a cached answer is the ordinary first paint, refreshed when it lands.
+  if (reading && !targets.length) return { waits: "Reading where it is live", tone: "wait" };
+  if (!targets.length) return { waits: "Nothing to deploy", tone: "ok" };
+  const named = (state: TargetState["state"]) => targets.filter((t) => t.state === state);
+  const live = named("live"), going = named("deploying"), failed = named("failed"), waiting = named("waiting");
+  const parts = [
+    live.length ? `live on ${listWords(live.map((t) => t.name))}` : null,
+    ...going.map((t) => `going out to ${t.name}${t.deploy ? ` in ${t.deploy}` : ""}`),
+    failed.length ? `${failed.map((t) => `${t.name}${t.deploy ? ` ${t.deploy}` : ""}`).join(", ")} failed` : null,
+    waiting.length ? `waiting to deploy to ${listWords(waiting.map((t) => t.name))}` : null,
+  ].filter(Boolean) as string[];
+  return { waits: sentence(parts.join(" · ")), tone: failed.length ? "bad" : live.length === targets.length ? "ok" : "wait" };
+}
 
 /**
  * Where a stop happened, past the stage the bar names: the step inside a segment that failed doing its work ("PR" in
@@ -155,7 +235,7 @@ function stopDetail(run: ChangeRun, graph: ChangeGraph, title: string, landed: b
   const route = failed.find((n) => ROUTE_ONLY.test(n.result_preview ?? ""));
   let outcome = said(route ? byId.get(route.node_id)!.label : exitReached(run, graph));
   if (outcome && /pull request/i.test(outcome) && changePr(run)) outcome = null;
-  if (mergeIsOff(run)) outcome = "Merge is off";
+  if (mergeIsOff(run)) outcome = mergeHolder(run) ? `@${mergeHolder(run)}'s merge is off` : "Merge is off";
   const parts = [landed ? "Landed" : null, inner, outcome].filter(Boolean) as string[];
   return parts.length ? parts.map((p, i) => (i ? lower(p) : p)).join(" · ") : null;
 }
@@ -196,8 +276,15 @@ export function changeHeadline(j: Journey, run: ChangeRun, graph: ChangeGraph, c
   const { tone } = journeyWords(j);
   const head = (words: string, waits: string | null = null, t: JourneyTone = tone): ChangeHeadline => ({ words, waits, tone: t });
   const fixing = (round: number | null, max: number | null) => `Its session is fixing it${round && max ? ` · round ${round} of ${max}` : ""}`;
+  if (j.outside) {
+    const said = outsideWords(ctx.targets ?? [], ctx.reading);
+    return head(run.merge?.by ? `Merged by ${run.merge.by}` : "Merged by someone else", said.waits, said.tone);
+  }
   // A finished run ended where its exit says: a pushed flow older than its journey's rules can read Live where it Landed.
   const ended = run.status === "completed" ? exitReached(run, graph) : null;
+  // Handed to the role that holds its merge: nothing failed, and nothing is on main yet; the role merges it.
+  const handed = handedTo(run);
+  if (handed !== null) return head(handed ? `Handed to @${handed}` : ended ?? "Handed to its role", handed ? `Waiting for @${handed} to merge it` : null, "idle");
   if (ended) {
     if (/^live$/i.test(ended)) {
       const on = n.kind === "live" && n.targets.length ? n.targets : targetsFromLine(deployLine(run, changeStations(graph))).map((t) => t.name);
@@ -263,6 +350,9 @@ export type ChangeAction = { kind: "newer" | "merge_switch" | "deploys" | "sessi
 export function changeAction(j: Journey, run: ChangeRun, g: ChangeGraph, ctx: { newer?: string | null; pr?: PrState; mergeRole?: string | null; targets?: ReadonlyArray<TargetState> } = {}): ChangeAction | null {
   const n = j.now;
   const subject = run.spawner_conversation_id ?? null;
+  // A merge handed to its role: the role's page, where its merge is held.
+  const handed = handedTo(run);
+  if (handed !== null) return ctx.mergeRole ? { kind: "merge_switch", label: handed ? `Open @${handed}` : "Open its role", href: `/org/${ctx.mergeRole}` } : null;
   const pending = ctx.targets?.find((t) => t.state !== "live");
   const deploysHref = (words: string | null | undefined) => (pending ? runDeploysHref(run, pending.name, pending.deploy) : wordsHref(run, words));
   const openSession = (id: string | null | undefined): ChangeAction | null => (id ? { kind: "session", label: "Open session", href: `/conversation/${id}` } : null);
@@ -306,7 +396,8 @@ export function changeAction(j: Journey, run: ChangeRun, g: ChangeGraph, ctx: { 
  * read those as done; the head says the exit, so the track does too.
  */
 export function endedStages(j: Journey, run: ChangeRun, g: ChangeGraph): Journey["stages"] {
-  const ended = run.status === "completed" ? exitReached(run, g) : null;
+  // A change someone else merged reads from its deploy records (landedOutside), not the exit its run stopped at.
+  const ended = run.status === "completed" && !j.outside ? exitReached(run, g) : null;
   if (!ended || /^live$/i.test(ended)) return j.stages;
   const landedOnly = /^(landed|merged)$/i.test(ended);
   return j.stages.map((s) => (s.role === "live" && s.state === "done" ? { ...s, state: "skipped" as const }
@@ -336,6 +427,22 @@ export function reviewOnHead(
   const words = v ? REVIEW_WORDS[v.verdict] : undefined;
   if (!v?.head_sha || !head || !words) return null;
   return verdictOnHead(v.head_sha, head, run?.station_rebases) ? words : null;
+}
+
+/**
+ * The run's reviewer judged an earlier head than the one the pull request is on now (a fix or a conflict resolve pushed
+ * since, and no rebase carries the verdict over): which head, and the reviewer's session, so a reader sees the review
+ * happened and on what, never "nobody reviewed". Null when it judged this head, or judged none.
+ */
+export function reviewEarlier(
+  run: { review_verdict?: { verdict: string; head_sha?: string | null } | null; station_rebases?: ReadonlyArray<{ from: string; to: string }> | null; node_statuses?: ReadonlyArray<Status> | null } | null | undefined,
+  head: string | null | undefined,
+): { label: string; sha: string; session: string | null } | null {
+  const v = run?.review_verdict;
+  if (!v?.head_sha || !head || !REVIEW_WORDS[v.verdict] || verdictOnHead(v.head_sha, head, run?.station_rebases)) return null;
+  const step = [...(run?.node_statuses ?? [])].filter((n) => leafOf(n.node_id) === "review" && n.session?._id).sort(byNewest)[0];
+  const sha = v.head_sha.slice(0, 7);
+  return { label: `Reviewed an earlier head (${sha})`, sha, session: step?.session?._id ? String(step.session._id) : null };
 }
 
 /**

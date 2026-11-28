@@ -13,7 +13,7 @@ import { passScore, segmentTopOf, SEGMENT_SEP, type FlowEdgeIn, type FlowNodeIn 
 import { inGroup, inStage, isSubject, LANDING_STEP, planStages, type FlowStage, type StageRole } from "@codecast/shared/contracts/flowStagePlan";
 import { insideOf, insideOnRun, type RouteBase, type StageInside } from "./segmentInside";
 import { landedSha, parentOf, recordedIds } from "./runRecord";
-import { stationResult } from "./stationResult";
+import { isCarriedOutcome, stationResult } from "./stationResult";
 import { personalRound, shortWhy } from "./personalRound";
 import { personalStages } from "./personalJourney";
 import { askStopWhy, readableWhy, stopWhy } from "./journeyWords";
@@ -31,9 +31,10 @@ export type StageWho = "session" | "agent" | "you" | "person" | "auto";
  * `back`: it sent the work back to the session (a red CI, changes asked). `routed`: a step in it failed and the run went
  * on through a route out of it (a script that exits non-zero to choose a path); never a stop. `stopped`: the run ended
  * there. `skipped`: a finished run never entered it. `nothing`: it ran and found nothing to do there, its result's
- * outcome `skipped` (no checks documented, no deploy documented; stationResult.ts).
+ * outcome `skipped` (no checks documented, no deploy documented; stationResult.ts). `carried`: it ended red and the run
+ * carried on past it (Local CI red, the pull request opens): never a pass.
  */
-export type StageState = "idle" | "active" | "back" | "waiting" | "done" | "routed" | "stopped" | "skipped" | "nothing" | "unknown";
+export type StageState = "idle" | "active" | "back" | "waiting" | "done" | "routed" | "carried" | "stopped" | "skipped" | "nothing" | "unknown";
 export type { StageRole };
 
 export type JourneyStage = {
@@ -58,9 +59,10 @@ export type JourneyStage = {
   left?: string | null;
 };
 
-/** `skipped`: it finished and its result said it found nothing to do (stationResult.ts). `earlier`: an own-results
+/** `skipped`: it finished and its result said it found nothing to do (stationResult.ts). `carried`: it ended red and
+ *  the run carried on past it. `earlier`: an own-results
  *  round's step that ran in an earlier round, not this one (personalRound.ts). */
-export type StageStep = { id: string; label: string; status: string; visits: number | null; said: string | null; session: { id: string; title: string | null } | null; at: number | null; skipped?: boolean; earlier?: boolean };
+export type StageStep = { id: string; label: string; status: string; visits: number | null; said: string | null; session: { id: string; title: string | null } | null; at: number | null; skipped?: boolean; earlier?: boolean; carried?: boolean };
 
 /** One thing the run is waiting on: the station, its latest progress line, since it was entered, and its deadline. */
 export type JourneyWait = { on: string; line: string | null; since: number | null; deadline: number | null };
@@ -103,8 +105,9 @@ export type JourneyNow =
       /** The runner's own words for the stop name its one restart (shared/contracts/runRestart.ts): `why` is whole. */
       whole?: true };
 
-/** `personal`: a personal Ship's run (ownRound.ts), whose bar reads by its own rules. */
-export type Journey = { stages: JourneyStage[]; now: JourneyNow; personal?: true };
+/** `personal`: a personal Ship's run (ownRound.ts), whose bar reads by its own rules. `outside`: the change landed at
+ *  `sha` while its run stopped short of merging it, someone else merged it (changePage.ts landedOutside). */
+export type Journey = { stages: JourneyStage[]; now: JourneyNow; personal?: true; outside?: { sha: string } };
 
 /** Where the session's landed change stands on each deploy target. */
 export type TargetState = { name: string; state: "waiting" | "deploying" | "live" | "failed"; deploy?: string | null; at?: number | null };
@@ -129,6 +132,8 @@ type NodeStatus = {
   started_at?: number;
   completed_at?: number;
   activity?: string | null;
+  /** The runner's outcome: `carried` on a station that ended red and let the run go on (stationResult.ts). */
+  outcome?: string | null;
   session?: { _id: string; title?: string | null } | null;
 };
 
@@ -449,7 +454,7 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
   const stepsOf = (b: Base): StageStep[] => {
     const steps: StageStep[] = statuses
       .filter((n) => (inStage(b, n.node_id) && !isEntry(n.node_id) && !isEnd(n.node_id)) || b.loops.some((l) => l.id === n.node_id))
-      .map((n) => ({ id: n.node_id, label: labelOf(n.node_id), status: n.status, visits: n.visits ?? null, said: n.result_preview?.trim() || n.activity || null, session: n.session ? { id: String(n.session._id), title: n.session.title ?? null } : null, at: n.started_at ?? null }));
+      .map((n) => ({ id: n.node_id, label: labelOf(n.node_id), status: n.status, visits: n.visits ?? null, said: n.result_preview?.trim() || n.activity || null, session: n.session ? { id: String(n.session._id), title: n.session.title ?? null } : null, at: n.started_at ?? null, ...(n.status === "completed" && isCarriedOutcome(n.outcome) ? { carried: true } : {}) }));
     return personal ? personal.steps(b, steps) : steps;
   };
   // What a stage's steps did last (one entry per node: its latest visit); a segment's entry only routes into its steps.
@@ -475,6 +480,8 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
     // Never entered while the run went past it (a run that started on a later station of its flow): skipped, not ahead.
     if (!last) return passed || (current >= 0 && index < current) ? "skipped" : "idle";
     if (last.status === "running" || last.status === "pending") return live ? "active" : "idle";
+    // A station of it ended red and the run carried on past it (Local CI red, the PR opens): amber, never a pass.
+    if (b.role !== "land" && statuses.some((n) => inStage(b, n.node_id) && statusOf(n.node_id) === n && n.status === "completed" && isCarriedOutcome(n.outcome))) return "carried";
     // A landing stage with the merge recorded, or whose landing step passed (landedByStep), landed, whatever its
     // bookkeeping did after.
     if (b.role === "land" && (sha || landedStep)) return "done";

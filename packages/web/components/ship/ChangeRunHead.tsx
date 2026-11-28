@@ -4,8 +4,8 @@
 // only what the person does (changeAction): each fact on the page once.
 import { useMemo } from "react";
 import Link from "next/link";
-import { journeyOf, type TargetState } from "../../lib/ship/journey";
-import { changeAction, changeHeadline, changeLinks, changePr, endedStages, mergeIsOff, type ChangeLink } from "../../lib/ship/changePage";
+import type { TargetState } from "../../lib/ship/journey";
+import { changeAction, changeHeadline, changeJourney, changeLinks, changePr, endedStages, mergeHolder, mergeIsOff, type ChangeLink } from "../../lib/ship/changePage";
 import { landedSha } from "../../lib/ship/runRecord";
 import { onPrHead } from "@codecast/shared/contracts/deployTargets";
 import { reachTargets } from "../../lib/ship/sessionShip";
@@ -34,10 +34,12 @@ export function ChangeRunHead({ run: given, flow, now_ms, chips, newer }: { run:
   const { reach, ready: reachRead } = useDeployReachRead(sha && pr ? `${pr.repository}@${sha}` : null);
   const targets = useMemo<TargetState[]>(() => reachTargets(reach), [reach]);
   const viewer = useJourneyViewer(run);
-  const journey = useMemo(() => journeyOf(flow, run, targets, viewer), [flow, run, targets, viewer]);
+  const journey = useMemo(() => changeJourney(flow, run, targets, viewer, { pr: prMerge, reading: !reachRead }), [flow, run, targets, viewer, prMerge, reachRead]);
   const stages = useMemo(() => endedStages(journey, run, flow), [journey, run, flow]);
-  // The role whose line started the run holds its merge switch: its page, read only when merge was off.
-  const mergeRole = useInboxStore((s) => (run.org_role_id && mergeIsOff(run) ? roleRowsOf(s as any).roles.find((r) => r._id === run.org_role_id)?.short_id ?? null : null));
+  // The role that holds its merge switch: the one the words name (handed to it, its merge off), else the role whose line
+  // started the run. Its page, read only when merge was off or handed.
+  const holder = mergeHolder(run);
+  const mergeRole = useInboxStore((s) => (holder || (run.org_role_id && mergeIsOff(run)) ? roleRowsOf(s as any).roles.find((r) => (holder ? r.handle?.replace(/^@/, "") === holder : r._id === run.org_role_id))?.short_id ?? null : null));
   const head = changeHeadline(journey, run, flow, { pr: prMerge, targets, reading: !reachRead });
   const links = changeLinks(run, flow, targets, prMerge);
   const action = changeAction(journey, run, flow, { newer, pr: prMerge, mergeRole, targets });
