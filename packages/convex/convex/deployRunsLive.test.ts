@@ -115,7 +115,7 @@ async function world() {
     return (await (recordOutsideMergeOnPr as any)._handler(ctx, { pr: `pr_${number}`, ...(by ? { by } : {}) })).run;
   };
   const heal = async (dry: boolean) => (await (healOutsideMerges as any)._handler(ctx, { dry })).healed;
-  return { t, mark, drain, mergedOnGitHub, heal };
+  return { t, ctx, mark, drain, mergedOnGitHub, heal };
 }
 
 /** A change run on pull request #n that ended before its own merge: stopped at Not merged, or handed to its role. */
@@ -284,6 +284,60 @@ describe("a run whose pull request someone else merged reads that merge and goes
     t.workflow_runs.push({ ...endedBeforeMerge("run_own", 10, "task_c", "stopped"), merge: { sha: sha(2), branch: "b", into: "main", at: NOW } });
     expect(await mergedOnGitHub(10, 2)).toBeNull();
     expect(run(t, "run_own").merge.outside).toBeUndefined();
+  });
+});
+
+// The healed runs of #349 and its siblings: their merge was recorded, but none completed. Each ran in a workspace that
+// does not own the repository's deploy targets (a member's other team, or their personal one), and some merged a
+// change that touches no target; either read as no reach, and no reach refused Live.
+describe("an outside merge goes Live whichever workspace its run sits in", () => {
+  const OTHER = "team_2";
+  const inOther = (t: Record<string, any[]>) => {
+    t.teams.push({ _id: OTHER, name: "Other" });
+    t.team_memberships.push({ _id: "m2", user_id: ME, team_id: OTHER, role: "member" });
+  };
+  const recorded = (id: string, n: number, merged: number, workspace: string) => ({
+    ...endedBeforeMerge(id, n, "task_c", "stopped"), workspace,
+    fail_reason: `Merged by someone else: #${n} merged as ${sha(merged).slice(0, 7)}; going live.`,
+    merge: { sha: sha(merged), branch: `fix-${n}`, into: "main", at: NOW - 20_000, pr_url: `https://github.com/${REPO}/pull/${n}`, outside: true },
+  });
+
+  test("a run of another team of its owner completes at Live when the merge is recorded after its deploys went live", async () => {
+    const { t, mark, drain, mergedOnGitHub } = await world();
+    inOther(t);
+    await mark("cli", 2, "live");
+    await drain();
+    t.workflow_runs.push({ ...endedBeforeMerge("run_x", 20, "task_c", "stopped"), workspace: `team:${OTHER}`, team_id: OTHER });
+    expect(await mergedOnGitHub(20, 2)).toBe("run_x");
+    expect(run(t, "run_x")).toMatchObject({ status: "completed", current_node_id: "exit" });
+    expect(run(t, "run_x").node_statuses.find((n: any) => n.node_id === "deploy__wait").result_preview).toMatch(/^Live: [0-9a-f]{7} on cli dp-\d+\.$/);
+  });
+
+  test("a merge that touches no deploy target is live once it is on main", async () => {
+    const { t, ctx, mergedOnGitHub } = await world();
+    t.commits.push({ _id: "commit_5", sha: sha(5), message: "change 5", author_name: "Ana", author_email: "a@x", timestamp: NOW, files_changed: 1, insertions: 0, deletions: 0, repository: REPO, team_id: TEAM, branch: "main", files: [file("scripts/release.sh")] });
+    await stampMainOrder(ctx, ["commit_5" as any], NOW - 5_000);
+    t.workflow_runs.push(endedBeforeMerge("run_s", 21, "task_c", "stopped"));
+    expect(await mergedOnGitHub(21, 5)).toBe("run_s");
+    expect(run(t, "run_s")).toMatchObject({ status: "completed", current_node_id: "exit" });
+    expect(run(t, "run_s").node_statuses.find((n: any) => n.node_id === "deploy__wait").result_preview).toBe(`Live: ${sha(5).slice(0, 7)} is on main, and no deploy target takes it out.`);
+  });
+
+  test("the backfill completes a run that recorded the merge but stayed failed, its dry run changes nothing, and a completed run is left alone", async () => {
+    const { t, mark, drain, heal } = await world();
+    inOther(t);
+    await mark("cli", 2, "live");
+    await drain();
+    t.workflow_runs.push(recorded("run_r", 22, 2, `team:${OTHER}`), recorded("run_p", 23, 2, `user:${ME}`));
+    // Run B's merge touches web, which nothing has taken live: it stays as it is.
+    t.workflow_runs.push(recorded("run_w", 24, 3, `team:${OTHER}`));
+    expect((await heal(true)).sort()).toEqual(["run_p", "run_r"]);
+    expect(run(t, "run_r").status).toBe("failed");
+    expect((await heal(false)).sort()).toEqual(["run_p", "run_r"]);
+    expect(run(t, "run_r")).toMatchObject({ status: "completed", current_node_id: "exit", fail_reason: undefined });
+    expect(run(t, "run_p")).toMatchObject({ status: "completed", current_node_id: "exit" });
+    expect(run(t, "run_w").status).toBe("failed");
+    expect(await heal(false)).toEqual([]);
   });
 });
 
