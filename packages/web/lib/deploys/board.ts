@@ -2,7 +2,7 @@
 // main; on the right, Next deploy and each deploy card, with what each carried listed by session, PR, SHA, task,
 // branch or priority. Every commit is credited to the session that pressed Ship, the same on both columns.
 // Pure: no store, no React.
-import { after, sameSha, turnWaitNote, splitQueue, upTo, verdictOnHead, type QueueCommit, type QueueGroup, type ShippingRun, type ShippingShipper } from "@codecast/shared/contracts/deployTargets";
+import { after, sameSha, splitQueue, upTo, verdictOnHead, type QueueCommit, type QueueGroup, type ShippingRun, type ShippingShipper } from "@codecast/shared/contracts/deployTargets";
 import type { CheckoutRow } from "@codecast/shared/contracts/checkouts";
 import type { SessionPriorityRef } from "@codecast/shared/contracts/priorities";
 import { entityRoute } from "@codecast/shared/entities";
@@ -238,7 +238,7 @@ export type RunState = { word: string; tone: "yellow" | "blue" | "red"; detail?:
 /**
  * What the run is doing now, in words a person reads at a glance. A run whose session asks a person waits on that
  * person, as the run page says (`ask`: the session's card when the store holds it, sessionAsk.ts; answered since, the
- * session is fixing again); a session the runner saw push and work on reads as the runner says it (turnWaitNote).
+ * session is fixing again).
  */
 export function runState(run: Pick<ShippingRun, "status" | "fail_reason" | "gate_prompt" | "gate_decision_short_id" | "current_node_label" | "current_node_id" | "node_statuses" | "pr" | "ci_verdict" | "check_verdict" | "review_verdict" | "station_rebases" | "merge" | "track" | "waiting_on_session">, ask: SessionAsk | null = null): RunState {
   if (run.status === "failed") {
@@ -247,8 +247,6 @@ export function runState(run: Pick<ShippingRun, "status" | "fail_reason" | "gate
   }
   if (run.waiting_on_session?.blocked && ask?.open !== false) return { word: ask?.mine ? "Waiting on you" : "Waiting for a person", tone: "blue" };
   if (run.status === "paused") return { word: run.gate_prompt || run.gate_decision_short_id ? "Waiting on a decision" : "Paused", tone: "blue" };
-  const said = turnWaitNote(run.waiting_on_session);
-  if (said) return { word: said, tone: "yellow" };
   const node = run.current_node_label;
   if (node === "Fix findings") {
     // What it fixes: the first step in trouble that names its fixing, else what the reviewer found.

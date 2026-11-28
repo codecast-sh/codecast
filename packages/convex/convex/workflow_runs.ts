@@ -15,7 +15,7 @@ import { projectLeadRole } from "./lib/orgAccess";
 import { CARD_GATE_NODE_ID, costParts, isLineRun, lineRunOutcome, mergeLeft, type ChangeCard } from "@codecast/shared/contracts/changeCard";
 import { tookPastStart } from "@codecast/shared/contracts/runStart";
 import { sourceTakesSessionChange } from "@codecast/shared/contracts/flowPool";
-import { turnWaitNote, type ShippingRun, type ShippingRuns, type ShippingShipper } from "@codecast/shared/contracts/deployTargets";
+import type { ShippingRun, ShippingRuns, ShippingShipper } from "@codecast/shared/contracts/deployTargets";
 import { isTerminalTaskStatus } from "@codecast/shared/tasks";
 import { canAccessConversation, canAccessTask, canAccessPlan, computeWorkspaceKey, parseWorkspaceKey, requireAccessiblePlan, requireAccessibleTask, resolveWorkspaceKey, workspaceGrantsAccess } from "./lib/access";
 import { patchTask } from "./lib/taskWrite";
@@ -2180,8 +2180,6 @@ export async function shippingRunsCore(ctx: Ctx, userId: Id<"users">, workspace:
       const task = await ctx.db.get(run.task_id);
       if (task && isTerminalTaskStatus(task.status)) continue;
     }
-    // The runner's own words for a wait on a session that pushed; never the brief, which can run to pages.
-    const waitSaid = turnWaitNote(run.waiting_on_session);
     runs.push({
       _id: run._id,
       status: run.status as ShippingRun["status"],
@@ -2196,7 +2194,7 @@ export async function shippingRunsCore(ctx: Ctx, userId: Id<"users">, workspace:
       pr: run.pr ?? null,
       fail_reason: run.fail_reason ?? null,
       // The session a fix station waits on, and whether it waits on a person (the card says so, and links the ask).
-      waiting_on_session: run.waiting_on_session ? { node_id: run.waiting_on_session.node_id, conversation_id: run.waiting_on_session.conversation_id, since: run.waiting_on_session.since, ...(run.waiting_on_session.blocked ? { blocked: true } : {}), ...(waitSaid ? { note: waitSaid } : {}) } : null,
+      waiting_on_session: run.waiting_on_session ? { node_id: run.waiting_on_session.node_id, conversation_id: run.waiting_on_session.conversation_id, since: run.waiting_on_session.since, ...(run.waiting_on_session.blocked ? { blocked: true } : {}) } : null,
       // The stations' own verdicts, which the stepper reads before the station statuses.
       ci_verdict: run.ci_verdict ? { green: run.ci_verdict.green, head_sha: run.ci_verdict.head_sha, at: run.ci_verdict.at } : null,
       review_verdict: run.review_verdict ? { verdict: run.review_verdict.verdict, at: run.review_verdict.at, head_sha: run.review_verdict.head_sha } : null,

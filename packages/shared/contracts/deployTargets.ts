@@ -464,9 +464,8 @@ export type ShippingRun = {
   node_statuses: Array<{ node_id: string; status: "pending" | "running" | "completed" | "failed"; started_at?: number }>;
   pr: { repository: string; number: number; first_head_sha: string; head_sha: string; at: number } | null;
   fail_reason: string | null;
-  /** The session the run waits on at a station it works (its fix), `blocked` while that session waits on a person.
-   *  `note`: only the runner's own wait words (turnWaitNote), never the brief. */
-  waiting_on_session?: { node_id: string; conversation_id: string; since: number; blocked?: boolean; note?: string } | null;
+  /** The session the run waits on at a station it works (its fix), `blocked` while that session waits on a person. */
+  waiting_on_session?: { node_id: string; conversation_id: string; since: number; blocked?: boolean } | null;
   /** The CI station's verdict and the reviewer's, as their stations reported them; the merge once it landed. */
   ci_verdict?: { green: boolean; head_sha: string; at: number } | null;
   /** `head_sha`: the head the reviewer read; a verdict binds to it (verdictOnHead). */
@@ -594,14 +593,4 @@ export function verdictOnHead(judged: string, head: string, rebases: ReadonlyArr
 export function onPrHead<R extends { pr?: { head_sha?: string | null } | null }>(run: R, head: string | null | undefined): R {
   if (!head || !run.pr || run.pr.head_sha === head) return run;
   return { ...run, pr: { ...run.pr, head_sha: head } };
-}
-
-/**
- * The runner's own words for a fix station still waiting on a session that pushed ("waiting for jx7abcd to finish; it
- * pushed abc1234 5 min ago", cli workflow/subjectTurn.ts), said verbatim; null for any other note (the brief it sent, a
- * blocked session's pin). Only the runner knows a push came after the brief, so nothing else infers it.
- */
-export function turnWaitNote(wait: { note?: string | null; blocked?: boolean } | null | undefined): string | null {
-  const note = wait && !wait.blocked ? wait.note?.trim() : null;
-  return note && !note.includes("\n") && note.length <= 200 && /^waiting for \S+ to finish\b/.test(note) ? note : null;
 }

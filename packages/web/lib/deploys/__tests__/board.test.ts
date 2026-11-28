@@ -244,17 +244,7 @@ describe("the run's state in words", () => {
     // Answered since the wait began: the session is fixing again.
     expect(runState(run("a", asking), { ...ask, mine: true, open: false }).word).toBe("Fixing review findings");
   });
-  // ct-102698: the session pushed its fix and worked on; only the runner knows the push came after the brief.
-  test("a session the runner saw push reads in the runner's words; a moved head alone says nothing", () => {
-    const fixing = { current_node_label: "Fix findings", review_verdict: { verdict: "changes", at: 1, head_sha: "h1" }, pr: { repository: "o/r", number: 1, first_head_sha: "h0", head_sha: "h2", at: 1 } };
-    const wait = { node_id: "brief", conversation_id: "c1", since: 5 };
-    expect(runState(run("f", { ...fixing, waiting_on_session: wait })).word).toBe("Fixing review findings");
-    const said = "waiting for jx74bpd to finish; it pushed ca235f7 5 min ago";
-    expect(runState(run("f", { ...fixing, waiting_on_session: { ...wait, note: said } }))).toEqual({ word: said, tone: "yellow" });
-    // The brief the station sent is no wait words; a session asking a person says that.
-    expect(runState(run("f", { ...fixing, waiting_on_session: { ...wait, note: "## Review asked for changes" } })).word).toBe("Fixing review findings");
-    expect(runState(run("f", { ...fixing, waiting_on_session: { ...wait, note: said, blocked: true } })).word).toBe("Waiting for a person");
-  });
+
 
 });
 
