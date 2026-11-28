@@ -1,6 +1,7 @@
-// Priorities (design doc s97c8407b2g6brbrbf6mz93n298jxjn0): what one person is
-// driving at for a day to a month, inferred from their own sessions by a pass
-// that follows their work. A priority is a lens over existing work, not work
+// Priorities (design doc s97c8407b2g6brbrbf6mz93n298jxjn0): the goals one
+// person is driving at over weeks, up to a month or two (work that finishes in
+// a day or two is a milestone of one), inferred from their own sessions by a
+// pass that follows their work. A priority is a lens over existing work, not work
 // itself: it points up to at most one company goal (`serves`, an initiative)
 // and down, through its milestones (stored as `steps`), at tasks, sessions,
 // PRs and commits. One level only, and never across workspaces. The person's
