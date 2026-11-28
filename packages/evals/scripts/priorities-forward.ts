@@ -5,12 +5,13 @@
 // (priorities-snapshots.ts).
 //
 //   bun packages/evals/scripts/priorities-forward.ts replay --user <email|user id> --out <dir>
-//       [--from 2026-11-10 --to 2026-11-24] [--every 90] [--snapshots 2026-11-14,2026-11-18,2026-11-21,2026-11-25]
+//       [--from 2026-11-10 --to 2026-11-24] [--every 90] [--snapshots 2026-11-14,2026-11-18,2026-11-21,2026-11-25,2026-11-27T22:30:00Z]
 //       [--system-file <path>] [--workspace all|personal|team:<id>]
 //     Steps the pass every --every minutes (90 by default, about live's cadence of a pass after activity) over the
 //     window, one production replay call per step that had activity (priorityPassEval:evalPass, writing nothing,
 //     each session as it stood then), carrying the state from step to step, and keeps what it holds at each
-//     snapshot time (00:00 UTC of each date). It writes as it goes and picks up where a killed run stopped.
+//     snapshot time (00:00 UTC of a date, or a full ISO time on the grid). It writes as it goes and picks up where a
+//     killed run stopped, or, given a later --to and more snapshots, carries a finished run on.
 //   bun packages/evals/scripts/priorities-forward.ts compare --run <dir> --snapshots <dir> [--golden <path>] [--out <dir>]
 //     Scores each snapshot time's replayed set against that time's authoritative set (score() and the model judge
 //     of priorities-measure.ts) and, with --golden, the last one against the hand-made set too; then has a model
@@ -121,7 +122,9 @@ async function replay(arg: Args) {
   const scope = replayScope({ window: [arg('from', '2026-11-10'), arg('to', '2026-11-24')] } as Golden, arg);
   const every = Number(arg('every', '90')) * MINUTE;
   if (DAY % every) throw new Error('--every must divide a day, so snapshot times fall on the grid');
-  const snapshot_at = arg('snapshots', '2026-11-14,2026-11-18,2026-11-21,2026-11-25').split(',').map((d) => Date.parse(`${d.trim()}T00:00:00Z`));
+  // A date is its 00:00 UTC; a full ISO time is taken as given (it must fall on the --every grid).
+  const snapshot_at = arg('snapshots', '2026-11-14,2026-11-18,2026-11-21,2026-11-25').split(',').map((d) => Date.parse(d.includes('T') ? d.trim() : `${d.trim()}T00:00:00Z`));
+  if (snapshot_at.some((t) => Number.isNaN(t) || (t - Date.parse(`${arg('from', '2026-11-10')}T00:00:00Z`)) % every)) throw new Error('every snapshot time must be a valid time on the --every grid from --from');
   const systemFile = process.argv.includes('--system-file') ? home(arg('system-file')) : null;
   const system = systemFile ? readFileSync(systemFile, 'utf8') : PRIORITY_PASS_SYSTEM;
   const system_sha = createHash('sha256').update(system).digest('hex').slice(0, 12);
@@ -133,6 +136,9 @@ async function replay(arg: Args) {
     args: { user: arg('user'), workspace: scope.scope, from: scope.from, to: scope.to, system_file: systemFile },
     system_sha, every_min: every / MINUTE, snapshot_at, workspaces: [], cost_usd: 0,
   };
+  // A resumed run may go on past its old window and take more snapshots.
+  run.snapshot_at = snapshot_at;
+  run.args = { ...run.args, to: scope.to };
   const save = () => writeFileSync(file, JSON.stringify(run, null, 1));
 
   for (const w of scope.workspaces) {
