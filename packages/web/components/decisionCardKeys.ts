@@ -3,14 +3,14 @@
 // routing itself is routeQueueKey's (lib/decisionQueue).
 import type { RefObject } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
-import { routeQueueKey } from "../lib/decisionQueue";
+import { routeQueueKey, type FreeTextMode } from "../lib/decisionQueue";
 import { hasOpenModal } from "../shortcuts";
 import { keyScopeHasFocus, keysOwnedElsewhere } from "../shortcuts/keyOwnership";
 
 export type DecisionCardKeys = {
   options: { index: number }[];
   answer: (index: number) => void;
-  answerFreeText: (text: string) => void;
+  answerFreeText: (text: string, mode: FreeTextMode) => void;
   otherText: string;
   openSession: () => void;
   onSkip?: () => void;
@@ -73,7 +73,7 @@ export function useDecisionCardKeys(k: DecisionCardKeys): void {
       e.preventDefault();
       e.stopPropagation();
       switch (action.kind) {
-        case "commit-free-text": answerFreeText(otherText); break;
+        case "commit-free-text": answerFreeText(otherText, action.answer ? "answer" : "ask"); break;
         case "close-free-text": setOtherOpen(false); break;
         case "answer": { const opt = options[action.option]; if (opt) answer(opt.index); break; }
         case "open-session": if (stepper) openSession(); break;

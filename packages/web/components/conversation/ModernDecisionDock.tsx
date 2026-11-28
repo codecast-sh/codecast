@@ -3,6 +3,15 @@ import { ChevronDown, ChevronRight, ChevronUp, Maximize2 } from "lucide-react";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { ModernAskCard } from "./ModernAsk";
+import { KeyCap } from "../KeyboardShortcutsHelp";
+import { isMac } from "../../shortcuts";
+import type { OwnWordsKeys } from "../decisions/OwnWordsBox";
+
+const WORDS_PLACEHOLDER: Record<OwnWordsKeys, string> = {
+  "send": "Answer in your own words",
+  "ask": "Ask the session that asked",
+  "ask-or-answer": "Ask the session, or answer in your own words",
+};
 
 // A decision docked above the composer, in the Modern style (the folded
 // SessionDecisionCard branches here). Classic folds an advisory ask to a pill
@@ -42,7 +51,7 @@ const OTHERS_SHOWN = 3;
 /** Another open ask of the same thread, as the card lists it. */
 export type DockedAsk = { key: string; position: number; question: string };
 
-export function ModernDecisionDock({ question, excerpt, kicker, aside, options, recommended, proceedingWith, proceedingLabel, held, onAnswer, text, onText, onAnswerText, onOpen, answerable, others = [], othersOpen, onOthersOpen, onPick, collapsed = false, onCollapsed }: {
+export function ModernDecisionDock({ question, excerpt, kicker, aside, options, recommended, proceedingWith, proceedingLabel, held, onAnswer, text, onText, onAnswerText, textKeys = "send", thread, onOpen, answerable, others = [], othersOpen, onOthersOpen, onPick, collapsed = false, onCollapsed }: {
   question: string;
   /** The ask's reasoning as plain text; its first lines show under the question. */
   excerpt?: string;
@@ -61,7 +70,11 @@ export function ModernDecisionDock({ question, excerpt, kicker, aside, options, 
   text: string;
   onText: (text: string) => void;
   /** Absent when the ask takes no typed answer. */
-  onAnswerText?: (text: string) => void;
+  onAnswerText?: (text: string, mode: "ask" | "answer") => void;
+  /** What Return does with the words: ask the session (⌘Return answers), only ask, or send them as the answer. */
+  textKeys?: OwnWordsKeys;
+  /** The ask's thread, where words asked from here and the session's reply show. */
+  thread?: ReactNode;
   onOpen: () => void;
   /** Its options can be pressed from here. */
   answerable: boolean;
@@ -157,17 +170,28 @@ export function ModernDecisionDock({ question, excerpt, kicker, aside, options, 
           ))}
         </div>
       )}
+      {thread}
       {onAnswerText && (
-          <form className={`flex min-w-0 items-center gap-2 ${drawn ? "mt-2" : ""}`} onSubmit={(e) => { e.preventDefault(); if (text.trim()) onAnswerText(text.trim()); }}>
+        <>
+          <form className={`flex min-w-0 items-center gap-2 ${drawn ? "mt-2" : ""}`} onSubmit={(e) => { e.preventDefault(); if (text.trim()) onAnswerText(text.trim(), textKeys === "send" ? "answer" : "ask"); }}>
             <Input
               value={text}
+              onKeyDown={(e) => { if (textKeys === "ask-or-answer" && e.key === "Enter" && (e.metaKey || e.ctrlKey) && text.trim()) { e.preventDefault(); onAnswerText(text.trim(), "answer"); } }}
               onChange={(e) => onText(e.target.value)}
-              placeholder="Answer in your own words"
-              aria-label="Answer in your own words"
+              placeholder={WORDS_PLACEHOLDER[textKeys]}
+              aria-label={WORDS_PLACEHOLDER[textKeys]}
+              data-decision-words={textKeys}
               className="h-control-md min-w-0 flex-1 text-ui"
             />
-            <Button type="submit" size="md" variant="outline" disabled={!text.trim()}>Send</Button>
+            <Button type="submit" size="md" variant="outline" disabled={!text.trim()}>{textKeys === "send" ? "Send" : "Ask"}</Button>
           </form>
+          {textKeys === "ask-or-answer" && text.trim() && (
+            <div className="mt-1 flex items-center gap-1.5 text-meta text-sol-text-dim" data-decision-words-keys>
+              <KeyCap size="xs">return</KeyCap><span>ask</span>
+              <KeyCap size="xs">{isMac ? "⌘" : "ctrl"}</KeyCap><KeyCap size="xs">return</KeyCap><span>answer with this</span>
+            </div>
+          )}
+        </>
       )}
       {others.length > 0 && onPick && (
         <ul className="-mx-2 mt-3 border-t border-sol-border pt-1.5" data-decision-others>

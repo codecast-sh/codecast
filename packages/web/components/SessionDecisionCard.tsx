@@ -9,7 +9,7 @@ import { PermissionStack } from "./PermissionCard";
 import { useInboxStore, getProjectName } from "../store/inboxStore";
 import { type DecisionStepper } from "../hooks/useDecisionQueue";
 import { useDecisionCardKeys } from "./decisionCardKeys";
-import { queueTier, messagesSinceAsk, optionPageSlugs, findDecisionAnchorMessage, decisionDraftKey, type QueueItem } from "../lib/decisionQueue";
+import { queueTier, messagesSinceAsk, optionPageSlugs, findDecisionAnchorMessage, decisionDraftKey, type FreeTextMode, type QueueItem } from "../lib/decisionQueue";
 import { isOnThreadRoute } from "../lib/openSessionAtMessage";
 import { decisionHref, ladderRecommendation, ladderRecommenders } from "../lib/decisionLinks";
 import { DecisionAnswerControls } from "./decisions/DecisionAnswerControls";
@@ -19,6 +19,9 @@ import { DecisionOptionList, RecommendedMark, TypeAnswerButton } from "./decisio
 import { OptionPages } from "./decisions/OptionPages";
 import { ChangeCardHeadline, ChangeCardVerdictBar, ChangeCardView } from "./decisions/ChangeCardView";
 import { DecisionDiscussion } from "./decisions/DecisionDiscussion";
+import { OwnWordsBox, type OwnWordsKeys } from "./decisions/OwnWordsBox";
+import { discussDecision } from "../lib/decisionThread";
+import { toast } from "sonner";
 import { PassDecision } from "./decisions/PassDecision";
 import { DecisionBody, DecisionFacts, DecisionLadder, hasDecisionBody } from "./decisions/DecisionSections";
 import { GateRunChip } from "./decisions/DecisionCompactCard";
@@ -256,11 +259,30 @@ export function SessionDecisionCard({ item, stepper, asks, onPick, startSize, al
     if (gated(index)) void Promise.resolve(sent).then((r) => r !== NOT_CONFIRMED && onDone(), () => {});
     else onDone();
   }, [answerItem, onDone, held, gated]);
-  const answerFreeText = useCallback((text: string) => {
-    if (!text.trim()) return;
-    answerItemFreeText(text);
+  // Typed words are as often a question about the options as an answer, and
+  // answering with a question closed the card on it. On a `cast decide` card,
+  // Return asks: the words go to the asking session in the card's thread, the
+  // card stays, and the reply lands under them. ⌘Return settles the question
+  // with the words. A gate on a run takes only its options (typed words reach
+  // the run as a question back), so there they always ask. A terminal prompt
+  // has no thread and a hosted conversation's ask is its owner's approval:
+  // both take the words as the answer.
+  const threaded = !!decideId && !hosted;
+  const gateOnly = threaded && !!decisionRow?.workflow_run_id;
+  const wordsKeys: OwnWordsKeys = !threaded ? "send" : gateOnly ? "ask" : "ask-or-answer";
+  const answerFreeText = useCallback((text: string, mode: FreeTextMode = "ask") => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    if (threaded && decideId && (mode === "ask" || gateOnly)) {
+      void discussDecision(decideId, trimmed).then((why) => { if (why) toast.error(why); });
+      setOtherText("");
+      setOtherOpen(false);
+      return;
+    }
+    answerItemFreeText(trimmed);
+    toast.success("Answer sent", { description: trimmed.length > 140 ? `${trimmed.slice(0, 140)}…` : trimmed });
     onDone();
-  }, [answerItemFreeText, onDone]);
+  }, [threaded, gateOnly, decideId, setOtherText, answerItemFreeText, onDone]);
   const dismiss = useCallback(() => { dismissItem(); onDone(); }, [dismissItem, onDone]);
   // A `cast decide` row can be handed on; a terminal prompt and a hosted
   // assistant's ask (only its owner answers) cannot. A trial's stays put, and so does a priority card (THE RULE on isPriorityCard).
@@ -290,8 +312,8 @@ export function SessionDecisionCard({ item, stepper, asks, onPick, startSize, al
   // The pinned state's `You` line names this ask ("answer the card…"); it opens
   // the sheet through here, so the line is a way in, not a dead end.
   useWatchEffect(() => registerDecisionOpener(item.conversationId, grow), [item.conversationId, grow]);
-  // Answering in the person's own words: the text goes to the agent as the answer and the question closes.
-  // "Discuss with …" on this card opens the same box, since talking it over with the session is that answer.
+  // The person's own words (answerFreeText says what they do on each kind of card).
+  // "Discuss with …" on a gate's card opens the same box, since there the words always go to the session.
   const ownWords = !isInfraDialog && !richControls && !isPermissionCard;
   const openOwnWords = useCallback(() => { setOtherOpen(true); setTimeout(() => otherRef.current?.focus(), 0); }, []);
 
@@ -621,21 +643,16 @@ export function SessionDecisionCard({ item, stepper, asks, onPick, startSize, al
         </div>
       )}
       <RunFallbackLine run={decisionRow?.status === "pending" ? decisionRow.run : undefined} className="mt-3" />
+      {/* Off a run, the thread shows once something was asked in it: the words asked from the box and the session's reply stay on the card. */}
+      {threaded && !gateOnly && <DecisionDiscussion decisionId={decideId!} compact bare className="mt-3" />}
       {otherOpen && (
-        <div className="mt-3">
-          <textarea
-            ref={otherRef}
-            value={otherText}
-            onChange={(e) => setOtherText(e.target.value)}
-            rows={3}
-            placeholder={hosted ? LANE_COPY.approval.typeAnswer : "Answer in your own words; this goes to the agent as a message."}
-            className="w-full bg-sol-card border border-sol-border rounded px-2 py-1.5 text-sm text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-blue/50"
-          />
-          <div className="flex items-center gap-2 mt-1 text-meta text-sol-text-dim">
-            <KeyCap size="xs">return</KeyCap><span>send</span>
-            <KeyCap size="xs">esc</KeyCap><span>cancel</span>
-          </div>
-        </div>
+        <OwnWordsBox
+          boxRef={otherRef}
+          value={otherText}
+          onChange={setOtherText}
+          placeholder={hosted ? LANE_COPY.approval.typeAnswer : threaded ? "Ask the session that asked, or answer in your own words" : "Answer in your own words; this goes to the agent as a message."}
+          keys={wordsKeys}
+        />
       )}
       {!cardBar && escapeHatch}
       {!cardBar && ladderBlock && <div className="mt-6">{ladderBlock}</div>}
@@ -747,7 +764,7 @@ export function SessionDecisionCard({ item, stepper, asks, onPick, startSize, al
   const excerptSource = item.contextMd || poll?.question.detail;
   if (modern) return (
     <div ref={rootRef} tabIndex={-1} data-session-decision={item.conversationId} className="decision-card decision-fold relative z-20 shrink-0 conv-col mx-auto w-full px-2 sm:px-3 md:px-4 outline-none" onWheel={(e) => { if (e.deltaY > 0 && stepper) grow(); }}>
-      <ModernDecisionDock question={question} excerpt={excerptSource ? plainParagraphs(excerptSource) : undefined} kicker={askingRole ? `@${askingRole.handle} asks` : stepper ? (session?.title || "Session") : undefined} aside={place ? `${place.position} of ${place.total}` : undefined} options={hosted ? options.map((o) => ({ ...o, label: approvalButtonLabel(o.label) })) : options} recommended={item.defaultOption ?? (hosted ? undefined : options[0]?.index)} proceedingWith={item.defaultOption} proceedingLabel={defaultLabel} text={otherText} onText={setOtherText} othersOpen={allRows} onOthersOpen={onAllRows} others={stepper || !threadAsks ? undefined : threadAsks.flatMap((a, i) => (a.key === item.key ? [] : [{ key: a.key, position: i + 1, question: a.question }]))} onPick={onPick ? (key) => onPick(key, "line") : undefined} held={(i) => !!held(i)} onAnswer={answer} onAnswerText={isPermissionCard || isInfraDialog || richControls ? undefined : answerFreeText} onOpen={grow} answerable={!isPermissionCard && !isInfraDialog && !richControls} collapsed={dockCollapsed} onCollapsed={(v) => useInboxStore.getState().updateClientUI({ decision_dock_folded: v ? item.key : null })} />
+      <ModernDecisionDock question={question} excerpt={excerptSource ? plainParagraphs(excerptSource) : undefined} kicker={askingRole ? `@${askingRole.handle} asks` : stepper ? (session?.title || "Session") : undefined} aside={place ? `${place.position} of ${place.total}` : undefined} options={hosted ? options.map((o) => ({ ...o, label: approvalButtonLabel(o.label) })) : options} recommended={item.defaultOption ?? (hosted ? undefined : options[0]?.index)} proceedingWith={item.defaultOption} proceedingLabel={defaultLabel} text={otherText} onText={setOtherText} othersOpen={allRows} onOthersOpen={onAllRows} others={stepper || !threadAsks ? undefined : threadAsks.flatMap((a, i) => (a.key === item.key ? [] : [{ key: a.key, position: i + 1, question: a.question }]))} onPick={onPick ? (key) => onPick(key, "line") : undefined} held={(i) => !!held(i)} onAnswer={answer} textKeys={wordsKeys} thread={threaded ? <DecisionDiscussion decisionId={decideId!} compact bare className="mt-2" /> : undefined} onAnswerText={isPermissionCard || isInfraDialog || richControls ? undefined : answerFreeText} onOpen={grow} answerable={!isPermissionCard && !isInfraDialog && !richControls} collapsed={dockCollapsed} onCollapsed={(v) => useInboxStore.getState().updateClientUI({ decision_dock_folded: v ? item.key : null })} />
     </div>
   );
   return (

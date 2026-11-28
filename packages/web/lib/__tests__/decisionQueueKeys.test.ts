@@ -51,8 +51,12 @@ describe("stand-down: inputs that are not the card's own box", () => {
 });
 
 describe("the card's own free-text box", () => {
-  test("Enter commits the answer", () => {
-    expect(routeQueueKey(key("Enter"), ctx({ editing: true, inOwnFreeTextBox: true }))).toEqual({ kind: "commit-free-text" });
+  test("Enter asks with the words; ⌘ or Ctrl with Enter answers with them", () => {
+    expect(routeQueueKey(key("Enter"), ctx({ editing: true, inOwnFreeTextBox: true }))).toEqual({ kind: "commit-free-text", answer: false });
+    expect(routeQueueKey(key("Enter", { metaKey: true }), ctx({ editing: true, inOwnFreeTextBox: true }))).toEqual({ kind: "commit-free-text", answer: true });
+    expect(routeQueueKey(key("Enter", { ctrlKey: true }), ctx({ editing: true, inOwnFreeTextBox: true }))).toEqual({ kind: "commit-free-text", answer: true });
+    // A chord in any other box is that box's.
+    expect(routeQueueKey(key("Enter", { metaKey: true }), ctx({ editing: true, inOwnFreeTextBox: false }))).toBeNull();
   });
   test("Shift+Enter stays a newline", () => {
     expect(routeQueueKey(key("Enter", { shiftKey: true }), ctx({ editing: true, inOwnFreeTextBox: true }))).toBeNull();

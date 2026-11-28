@@ -120,8 +120,12 @@ export function queueTier(item: QueueItem): 1 | 2 | 3 {
 // through it first — the rules about which keys it may claim are the actual
 // safety surface. A non-null action means the card claims the key
 // (preventDefault + stopPropagation); null means the key was never ours.
+/** What typed words do to a question: ask the session about it (it stays open) or settle it. */
+export type FreeTextMode = "ask" | "answer";
+
 export type QueueKeyAction =
-  | { kind: "commit-free-text" }
+  /** `answer`: the words settle the question (⌘ or Ctrl with Enter); otherwise they ask the session about it and the question stays open. */
+  | { kind: "commit-free-text"; answer: boolean }
   | { kind: "close-free-text" }
   | { kind: "answer"; option: number }
   | { kind: "open-session" }
@@ -151,6 +155,9 @@ export function routeQueueKey(
     sheet: "full" | "peek";
   }
 ): QueueKeyAction | null {
+  // ⌘ or Ctrl with Return in the card's own box answers with the words; every other chord is never the card's.
+  const answerChord = (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key === "Enter" && ctx.editing && ctx.inOwnFreeTextBox && !ctx.modalOpen && !ctx.ownedElsewhere;
+  if (answerChord) return { kind: "commit-free-text", answer: true };
   if (e.metaKey || e.ctrlKey || e.altKey) return null;
   // A modal owns the keyboard entirely; the queue behind it must not answer,
   // skip, or swallow anything (a capture listener eating the compose dialog's
@@ -164,7 +171,7 @@ export function routeQueueKey(
     // input — search, a composer in the thread behind — belongs to that surface.
     if (!ctx.inOwnFreeTextBox) return null;
     if (e.key === "Escape") return { kind: "close-free-text" };
-    if (e.key === "Enter" && !e.shiftKey) return { kind: "commit-free-text" };
+    if (e.key === "Enter" && !e.shiftKey) return { kind: "commit-free-text", answer: false };
     return null;
   }
   // Digits answer a QUESTION. A permission card is never answerable this way:

@@ -62,6 +62,11 @@ export async function askDecisionSession(decisionId: string): Promise<string | n
   );
 }
 
+/** Say something to the decision's session in its thread: the words stay on the card and its reply fills in under them. */
+export async function discussDecision(decisionId: string, text: string, parentId?: string): Promise<string | null> {
+  return (await sendDecisionComment(decisionId, text, newDecisionCommentId(), parentId)) ?? askDecisionSession(decisionId);
+}
+
 /** Mark the viewer's thread read, when it has news. */
 export function markDecisionThreadRead(decisionId: string): void {
   useInboxStore.getState().markThreadRead("decision", decisionThreadRootKey(decisionId));
