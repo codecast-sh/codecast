@@ -350,6 +350,35 @@ describe("cast decide answer from a plain shell on the wire", () => {
   });
 });
 
+describe("cast decide show names its task's status now", () => {
+  const SITE = "https://x.test";
+  const realFetch = globalThis.fetch;
+  const realLog = console.log;
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    console.log = realLog;
+  });
+
+  // Polish round 7: sd-5132 printed "(at in_review)", the station it was posted at, for a task long done.
+  it("prints the task's current status, not the one the card was posted at", async () => {
+    globalThis.fetch = (async () => new Response(JSON.stringify({
+      decision: { short_id: "sd-1", kind: "single", options: [{ label: "A" }], status: "answered", station: "in_review" },
+      task: { short_id: "ct-9", title: "Ship it", status: "done" },
+    }), { status: 200 })) as unknown as typeof fetch;
+    const out: string[] = [];
+    console.log = (...a: unknown[]) => { out.push(a.join(" ")); };
+    const { Command } = await import("commander");
+    const { registerDecideCommand } = await import("./decideCommand.js");
+    const program = new Command();
+    program.exitOverride();
+    registerDecideCommand(program, { getCliEndpoint: () => ({ siteUrl: SITE, apiToken: "t" }), detectCurrentSessionId: () => "s1" } as any);
+    await program.parseAsync(["node", "cast", "decide", "show", "sd-1"]);
+    const line = out.find((l) => l.includes("ct-9"))!;
+    expect(line).toContain("Ship it (done)");
+    expect(line).not.toContain("in_review");
+  });
+});
+
 describe("cast decide ls --answered-since", () => {
   const now = Date.parse("2026-10-24T12:00:00Z");
   it("takes epoch ms, a span back from now, or an ISO time", () => {

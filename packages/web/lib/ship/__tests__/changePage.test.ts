@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { onPrHead } from "@codecast/shared/contracts/deployTargets";
 import { journeyOf } from "../journey";
 import { stopTitle } from "../journeyWords";
-import { changeAction, changeHeadline, changeJourney, changeLinks, changePr, changeStations, currentHead, deployLine, endedStages, handedTo, mergeHolder, mergeIsOff, newerMergedRun, reviewEarlier, reviewOnHead, shipsChange } from "../changePage";
+import { changeAction, changeHeadline, changeJourney, changeLinks, changePr, changeReachRef, changeStations, currentHead, deployLine, endedStages, handedTo, mergeHolder, mergeIsOff, newerMergedRun, reviewEarlier, reviewOnHead, shipsChange } from "../changePage";
 import { deploysHref } from "../../deploys/focus";
 import { BRANCHING_FLOW, UNION_CHANGE_FLOW } from "../journeyFixtures";
 import { appPool, flowBySlug, pushedFlow } from "../../line/flowPool";
@@ -246,11 +246,11 @@ describe("C: truth", () => {
     expect(changeLinks(r2, change).map((l) => l.label)).toEqual(["PR #217", "CI", "Review"]);
     // CI green on a change that edits CI, current: shown, but not as a pass.
     const r3 = run({ pr: { number: 217, repository: "acme/app", head_sha: "bbb" }, ci_verdict: { green: true, ci_changed: true, head_sha: "bbb" }, node_statuses: ROUND });
-    expect(changeLinks(r3, change).find((l) => l.kind === "ci")).toMatchObject({ label: "CI green, not counted", tone: "default" });
+    expect(changeLinks(r3, change).find((l) => l.kind === "ci")).toMatchObject({ label: "CI green · edits CI", tone: "default", title: expect.stringContaining("a person approves") });
     // Resolve conflict force-pushed ddd, which GitHub has and the run has not recorded: judged on the PR's real head, the
     // run's verdicts on bbb say nothing, as the PR's header says nobody has reviewed it.
     const r4 = run({ pr: { number: 217, repository: "acme/app", head_sha: "bbb" }, ci_verdict: { green: true, ci_changed: true, head_sha: "bbb" }, review_verdict: { verdict: "ship", head_sha: "bbb" }, node_statuses: [st("pr", "completed", 1), st("ci", "completed", 2), st("review", "completed", 2, { session: { _id: "r" } }), st("merge", "failed", 3), st("fix_conflict", "completed", 4)] });
-    expect(changeLinks(r4, change).map((l) => l.label)).toEqual(["PR #217", "CI green, not counted", "Review passed"]);
+    expect(changeLinks(r4, change).map((l) => l.label)).toEqual(["PR #217", "CI green · edits CI", "Review passed"]);
     expect(changeLinks(onPrHead(r4, "ddd"), change).map((l) => l.label)).toEqual(["PR #217", "CI", "Review"]);
   });
 
@@ -435,6 +435,14 @@ describe("changeLinks", () => {
   test("Union's nested stations, and the deploy line inside its Deploy segment", () => {
     const r = run({ status: "completed", current_node_id: "exit", merge: { sha: "5caaa346ac" }, node_statuses: [...U_ROUND, st("land__merge", "completed", 7, { result_preview: '{"sha":"5caaa346ac","pr":5016}' }), st("land__landed", "completed", 8), st("deploy", "completed", 9), st("deploy__wait", "completed", 10, { result_preview: "Live: 5caaa34 on backend dp-12." }), st("deploy__live", "completed", 11, { result_preview: '{"exit": "live"}' })] });
     expect(changeLinks(r, union).map((l) => `${l.kind}:${l.label}`)).toEqual(["pr:PR #5016", "ci:CI", "review:Review", "merged:Merged 5caaa34", "deploy:backend dp-12"]);
+  });
+
+  test("a run reads the reach its merged PR's page reads, else its landed commit's", () => {
+    const pr = { repository: "Acme/App", number: 217 };
+    expect(changeReachRef(pr, true, "31ccbb83b1")).toBe("acme/app#217");
+    expect(changeReachRef(pr, false, "31ccbb83b1")).toBe("acme/app@31ccbb83b1");
+    expect(changeReachRef(pr, true, null)).toBeNull();
+    expect(changeReachRef(null, false, "31ccbb83b1")).toBeNull();
   });
 
   test("the deploy records say each target's state; a waiting target opens Deploys at the change", () => {

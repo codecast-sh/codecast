@@ -51,7 +51,7 @@ while :; do
       exit 0
     fi
     if source=$(green_source); then break; fi
-    why="a green CI verdict on a main commit after the last version bump${CAST_DEPLOY_SHA:+ that carries ${CAST_DEPLOY_SHA:0:10}}"
+    why="main's CI to pass on a commit after the last release${CAST_DEPLOY_SHA:+ that includes ${CAST_DEPLOY_SHA:0:7}}"
   else
     why="the CLI release in flight (runs $busy)"
   fi

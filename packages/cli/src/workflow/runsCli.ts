@@ -33,6 +33,8 @@ export interface RunListRow {
   status: string;
   fail_reason?: string;
   runner_device?: string;
+  /** The runner machine's name, when the server knows it (an older one sends none). */
+  runner_device_name?: string;
   current_node_id?: string;
   current_node_label?: string;
   task_short_id?: string;
@@ -122,7 +124,7 @@ export function formatRunDetail(run: RunListRow, labels: Map<string, string> = n
   const facts = [
     `started ${formatAge(now - run.created_at)}`,
     `updated ${formatAge(now - run.updated_at)}`,
-    run.runner_device ? `machine ${run.runner_device.slice(0, 12)}` : null,
+    run.runner_device ? `machine ${run.runner_device_name ?? run.runner_device.slice(0, 12)}` : null,
   ].filter(Boolean);
   lines.push(`  ${fmt.muted(facts.join(", "))}`);
   if (run.fail_reason) lines.push(`  ${c.red}failed:${c.reset} ${sessionEndWords(run.fail_reason)}`);

@@ -36,6 +36,7 @@ import { ingestSnapshotArgs } from "./lib/workflowGraphValidators";
 import { admitRoleRun, requeueForSweep } from "./orgLine";
 import { flowAgents, missingAgentOn } from "./lib/linePlacement";
 import { agentDisplayName, deviceDisplayName } from "@codecast/shared/contracts";
+import { withRunnerNames } from "./lib/runnerNames";
 import { placeName, placeRunOnDevice } from "./lib/runDevicePlace";
 import { navPromptField } from "./userMessagesFilter";
 import { retainSessionCreator } from "./sessionLaunch";
@@ -2299,7 +2300,7 @@ export const listRunsFromCli = query({
     const auth = await verifyApiToken(ctx, args.api_token, false);
     if (!auth) return { error: "Unauthorized" };
     const { api_token: _t, ...rest } = args;
-    return { runs: await listRunsCore(ctx, auth.userId, rest) };
+    return { runs: await withRunnerNames(ctx, await listRunsCore(ctx, auth.userId, rest)) };
   },
 });
 

@@ -11,6 +11,7 @@ import {
   cancelFromCli,
   createFromCli,
   listRunsCore,
+  listRunsFromCli,
   graphOfRun,
   pollGateResponse,
   updateProgress,
@@ -429,6 +430,15 @@ describe("runs belong to the workspace (the-line.md L8)", () => {
     expect(await listRunsCore(ctx, STRANGER, { run_id: RUN })).toEqual([]);
     expect(await listRunsCore(ctx, MATE, { run_id: "not-a-run" })).toEqual([]);
     await expect(listRunsCore(ctx, STRANGER, { team_id: TEAM })).rejects.toThrow();
+    // The CLI's read names the machine that runs it, one of the owner's; any other stays an id. The web's list reads no
+    // device row, whose heartbeat would re-run it.
+    const cliRun = async () => ((await (listRunsFromCli as any)._handler(ctx, { api_token: TOKEN, run_id: RUN })).runs[0]);
+    tables.workflow_runs[0].runner_device = "9ab14acad2604760";
+    tables.devices = [{ _id: "devices_0", user_id: STRANGER, device_id: "9ab14acad2604760", label: "macOS - theirs", platform: "darwin", last_seen: NOW }];
+    expect((await cliRun()).runner_device_name).toBeUndefined();
+    tables.devices.push({ _id: "devices_1", user_id: HOST, device_id: "9ab14acad2604760", label: "macOS - jb-m5-max", platform: "darwin", last_seen: NOW });
+    expect((await cliRun()).runner_device_name).toBe("jb-m5-max");
+    expect((await listRunsCore(ctx, MATE, { run_id: RUN }))[0]).not.toHaveProperty("runner_device_name");
     void tables;
   });
 

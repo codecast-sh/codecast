@@ -847,7 +847,7 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
           }
           const d: DecisionRow = result.decision;
           console.log(formatDecisionList([d]));
-          if (result.task) console.log(fmt.muted(`  task: ${result.task.short_id} ${result.task.title} (at ${d.station ?? result.task.status})`));
+          if (result.task) console.log(fmt.muted(`  task: ${result.task.short_id} ${result.task.title} (${result.task.status})`));
           if (result.stack) console.log(fmt.muted(`  stack: ${result.stack.short_id} ${result.stack.title}`));
           if (result.holder_role) console.log(fmt.muted(`  holder: role ${result.holder_role.name} (@${result.holder_role.handle}) under a grant`));
           for (const hop of result.ladder ?? []) {

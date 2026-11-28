@@ -118,7 +118,7 @@ describe("the cli send (ct-102056)", () => {
     const w = world({ versions: ["1.0.1", "1.0.1", "1.0.1"], green: (poll) => (poll < 2 ? [0] : [0, 2]) });
     const r = w.run({ CAST_DEPLOY_SHA: w.shas[1], CAST_DEPLOY_ID: "dp-9" });
     expect(r.code).toBe(0);
-    expect(r.out.match(/Waiting for a green CI verdict/g)?.length).toBe(2);
+    expect(r.out.match(/Waiting for main's CI to pass on a commit after the last release that includes [0-9a-f]{7}\n/g)?.length).toBe(2);
     expect(cutOf(r.calls)).toBe(w.shas[2]);
   });
 
@@ -126,7 +126,7 @@ describe("the cli send (ct-102056)", () => {
     const w = world({ versions: ["1.0.0", "1.0.1", "1.0.1"], green: () => [0] });
     const r = w.run({ CUT_WAIT_SECONDS: "0" });
     expect(r.code).toBe(1);
-    expect(r.out).toContain("Still waiting for a green CI verdict on a main commit after the last version bump");
+    expect(r.out).toContain("Still waiting for main's CI to pass on a commit after the last release after");
     expect(r.calls).not.toContain("gh workflow run");
   });
 });
