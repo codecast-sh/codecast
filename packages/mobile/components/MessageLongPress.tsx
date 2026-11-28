@@ -1,4 +1,5 @@
 import { createContext, useContext, type ReactNode } from 'react';
+import type { CommentUnit } from '@/lib/messageComments';
 
 /**
  * A hard press anywhere in a message opens that message's menu. The message
@@ -9,9 +10,15 @@ import { createContext, useContext, type ReactNode } from 'react';
  * first.
  */
 export type BlockCopy = { label: string; text: string; icon?: 'copy' | 'link' };
-export type MessageLongPress = (copies?: BlockCopy[]) => void;
+/** `unit` is the block of text pressed, which the menu offers to comment on. */
+export type MessageLongPress = (copies?: BlockCopy[], unit?: CommentUnit) => void;
 
 export const MessageLongPressContext = createContext<MessageLongPress | null>(null);
+
+/** The message row's own tap. Text that takes a long press of its own (a
+ *  block offering a comment) passes a tap through to it, since a touchable
+ *  text would otherwise swallow it. */
+export const MessageTapContext = createContext<(() => void) | null>(null);
 
 export function useMessageLongPress(): MessageLongPress | null {
   return useContext(MessageLongPressContext);

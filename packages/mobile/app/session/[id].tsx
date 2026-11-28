@@ -12,7 +12,7 @@ import { useLocalSearchParams, Stack, useRouter, useFocusEffect, router } from '
 import { useQuery, useMutation } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import { Id } from '@codecast/convex/convex/_generated/dataModel';
-import { memo, useState, useCallback, useEffect, useRef, useMemo, type ReactNode } from 'react';
+import { memo, useState, useCallback, useContext, useEffect, useRef, useMemo, type ReactNode } from 'react';
 import * as Haptics from 'expo-haptics';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import Feather from '@expo/vector-icons/Feather';
@@ -83,7 +83,13 @@ import { RenameSessionSheet } from '@/components/session/RenameSessionSheet';
 import { appAlert, showActionSheet, type SheetItem } from '@/lib/popups';
 import { mutePatch, NOTIFY_LEVELS, useSessionNotify } from '@codecast/web/lib/sessionNotify';
 import { MessageIdentity } from '@codecast/web/lib/conversationBlockContexts';
-import { MessageLongPressContext, OutsideMessage, useMessageLongPress, type BlockCopy } from '@/components/MessageLongPress';
+import { MessageLongPressContext, MessageTapContext, OutsideMessage, useMessageLongPress, type BlockCopy } from '@/components/MessageLongPress';
+import { CommentAnchorContext } from '@/components/comments/CommentBubble';
+import { openCommentEditor } from '@/components/comments/CommentEditor';
+import { CommentTray } from '@/components/comments/CommentTray';
+import { PictureCommentCount } from '@/components/comments/GalleryPins';
+import { commentLabel, quotesWholeUnit, type CommentUnit } from '@/lib/messageComments';
+import { genCommentId } from '@codecast/web/lib/reviewActions';
 import { openSelectText } from '@/components/SelectTextSheet';
 import { readableText } from '@/lib/markdown';
 import { ComposeButton } from '@/components/session/ComposeButton';
@@ -103,7 +109,7 @@ import { permissionRecord } from '@codecast/shared/contracts/commandRun';
 import { useRunningPermission } from '@codecast/web/hooks/useRunningPermission';
 import { ProposalBatchContext } from '@/components/org/ProposalCard';
 import { usePendingDecisionItems } from '@codecast/web/hooks/useDecisionQueue';
-import { attachReviewToMessage } from '@codecast/web/lib/reviewActions';
+import { attachReviewToMessage, quotedImages } from '@codecast/web/lib/reviewActions';
 import { hostedApprovalAnswer, hostedApprovalState, type HostedApprovalState } from '@codecast/web/lib/hostedApproval';
 import { HostedSources, HostedStep } from '@/components/hosted/Steps';
 import { ReplyChips } from '@/components/hosted/ReplyChips';
@@ -776,7 +782,7 @@ function imageKeyOf(image: ImageData): string | undefined {
     || (image.data ? `data:${image.media_type};base64,${image.data}` : undefined);
 }
 
-function ImageBlock({ image, onPress }: { image: ImageData; onPress?: () => void }) {
+function ImageBlock({ image, onPress, conversationId }: { image: ImageData; onPress?: () => void; conversationId?: string }) {
   const messageLongPress = useMessageLongPress();
   const Theme = useTheme();
   const src = useImageSrc(image);
@@ -804,6 +810,7 @@ function ImageBlock({ image, onPress }: { image: ImageData; onPress?: () => void
       <RNView style={styles.imageExpandHint}>
         <FontAwesome name="expand" size={10} color="rgba(255,255,255,0.8)" />
       </RNView>
+      {conversationId ? <PictureCommentCount conversationId={conversationId} pictureKey={image.storage_id ?? src} accent={Theme.accent} /> : null}
     </Pressable>
   );
 }
@@ -1995,11 +2002,21 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
   useEffect(() => { setLocalExpanded(false); }, [globalCollapsed]);
   const isBookmarked = bookmarkedSet?.has(message._id);
 
+  // The agent's words can be commented on, into the next message sent here:
+  // the comments join the batch the composer sends (its key, which proposal
+  // answers share), and only where this person can send.
+  const batch = useContext(ProposalBatchContext);
+  const commentAnchor = useMemo(
+    () => (batch?.canSend && message.role === 'assistant' ? { conversationId: batch.conversationId, messageId: message._id } : null),
+    [batch?.canSend, batch?.conversationId, message.role, message._id],
+  );
+
   // The bubble's menu. A block inside it (a tool row, a link, thinking) puts
   // what of it can be copied first; the message's own actions follow.
-  const handleLongPress = (copies: BlockCopy[] = []) => {
+  const handleLongPress = (copies: BlockCopy[] = [], unit?: CommentUnit) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     const messageText = stripSystemTags(message.content || '').trim();
+    const target = commentAnchor;
     const canFork = !message.role?.startsWith('system') && message.message_uuid && onFork;
     const canBookmark = !!conversationId;
     const copyRow = ({ label, text, icon = 'copy' }: BlockCopy): SheetItem => ({
@@ -2011,12 +2028,33 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
         showToast?.('Copied to clipboard');
       },
     });
-    const items: SheetItem[] = copies.map(copyRow);
+    const items: SheetItem[] = [];
+    // A comment on the block pressed leads: it rides the next message as a
+    // quote with the words written under it. A block already commented on
+    // whole opens that comment instead, to read or add to it.
+    if (unit && target) {
+      const mine = (useInboxStore.getState().reviewComments[target.conversationId] ?? [])
+        .find((c) => c.messageId === message._id && !c.image && !c.page && !c.proposal && quotesWholeUnit(c.quote, unit.text));
+      items.push({
+        label: mine ? 'Edit your comment' : commentLabel(unit.kind),
+        icon: 'message-square',
+        onPress: () => {
+          if (mine) return openCommentEditor({ conversationId: target.conversationId, id: mine.id, isNew: false }, 350);
+          const id = genCommentId();
+          useInboxStore.getState().addReviewComment(target.conversationId, {
+            id, messageId: message._id, blockIndex: unit.index, quote: unit.text, body: '', createdAt: Date.now(),
+          });
+          openCommentEditor({ conversationId: target.conversationId, id, isNew: true }, 350);
+        },
+      });
+    }
+    items.push(...copies.map(copyRow));
     if (messageText) {
       items.push(copyRow({ label: 'Copy text', text: messageText }));
       // A press on the transcript is this menu; picking out part of a turn
-      // happens on a page with the system's selection handles.
-      items.push({ label: 'Select text', icon: 'type', onPress: () => openSelectText(readableText(messageText)) });
+      // happens on a page with the system's selection handles, where a
+      // selection can be commented on too.
+      items.push({ label: 'Select text', icon: 'type', onPress: () => openSelectText(readableText(messageText), target ?? undefined) });
     }
     items.push(
       {
@@ -2116,6 +2154,8 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     }
   };
+  // A commentable block's text takes its own long press; its taps pass on to this.
+  const rowTap = globalCollapsed && !localExpanded ? handleTapToExpand : Keyboard.dismiss;
 
   return (
     // The bubble claims every tap (it holds the long-press menu), so the
@@ -2123,6 +2163,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
     // with nothing to do puts the keyboard away here. Links, tool rows and
     // images inside are deeper pressables and take their own taps.
     <MessageLongPressContext.Provider value={handleLongPress}>
+    <MessageTapContext.Provider value={rowTap}>
     <MessageIdentity.Provider value={identity}>
     <Pressable onLongPress={() => handleLongPress()} onPress={globalCollapsed && !localExpanded ? handleTapToExpand : Keyboard.dismiss}>
       {isUser && sender ? <RNText style={styles.userBubbleSender} numberOfLines={1}>{sender}</RNText> : null}
@@ -2160,7 +2201,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
       {hasImages && (
         <RNView style={styles.imagesContainer}>
           {message.images!.map((img, i) => (
-            <ImageBlock key={i} image={img} onPress={() => openGallery?.(img)} />
+            <ImageBlock key={i} image={img} onPress={() => openGallery?.(img)} conversationId={batch?.conversationId} />
           ))}
         </RNView>
       )}
@@ -2225,7 +2266,14 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
                 );
               }
             }
-            return <MarkdownContent text={content} baseStyle={bodyStyle} isUser={isUser} />;
+            // Only the body's own words take comments: not tool output in the
+            // bubble, nor the split shapes above (skills, teammates), whose
+            // parts would each place every comment.
+            return (
+              <CommentAnchorContext.Provider value={commentAnchor}>
+                <MarkdownContent text={content} baseStyle={bodyStyle} isUser={isUser} />
+              </CommentAnchorContext.Provider>
+            );
           })()}
           {!contentExpanded && (isLongContent || estimatedOverflow) && (
             <LinearGradient
@@ -2373,6 +2421,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
       </RNView>
     </Pressable>
     </MessageIdentity.Provider>
+    </MessageTapContext.Provider>
     </MessageLongPressContext.Provider>
   );
 }
@@ -2543,7 +2592,15 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
     setError(null);
 
     const sendImages = images.optimisticImages();
-    const content = images.withAttachments(attachReviewToMessage(conversationId, trimmedMessage)) || IMAGE_ONLY_CONTENT;
+    // Pictures with comments pinned on them ride along after the composer's
+    // own, and each comment names its picture by that attachment number.
+    const quoted = quotedImages(conversationId);
+    const review = attachReviewToMessage(conversationId, trimmedMessage, {
+      firstQuoted: quoted.length ? sendImages.length + 1 : undefined,
+      unmarked: true,
+    });
+    sendImages.push(...quoted.map((q) => ({ media_type: 'image/png', storage_id: q.storageId })));
+    const content = images.withAttachments(review) || IMAGE_ONLY_CONTENT;
 
     // The bubble lands on the next frame, in a commit of its own: written
     // inside the press, it shares the composer's commit, which Reanimated
@@ -2649,8 +2706,9 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
           },
         }}
         onFocusChange={hosted ? undefined : setComposerFocused}
-        above={hosted ? null : (
+        above={hosted ? <CommentTray conversationId={conversationId as string} /> : (
           <>
+            <CommentTray conversationId={conversationId as string} />
             {isConvexId(String(conversationId)) && (
               <ComposerOwnerStrip conversationId={conversationId as string} active={composerFocused || !!message.trim()} />
             )}
@@ -3237,6 +3295,11 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
 
   const [galleryVisible, setGalleryVisible] = useState(false);
   const [galleryIndex, setGalleryIndex] = useState(0);
+  // A spot on a picture takes a comment into the next message sent here.
+  const galleryComments = useMemo(() => (isReal ? {
+    conversationId: id as string,
+    pictureOf: (img: ImageData) => ({ storageId: img.storage_id, src: img.url }),
+  } : undefined), [isReal, id]);
   // Read through a ref so every bubble keeps one handler as images arrive.
   const allSessionImagesRef = useRef(allSessionImages);
   allSessionImagesRef.current = allSessionImages;
@@ -5090,6 +5153,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
         initialIndex={galleryIndex}
         visible={galleryVisible}
         onClose={() => setGalleryVisible(false)}
+        comments={galleryComments}
       />
     </ChangesProvider>
     </ProposalBatchContext.Provider>
