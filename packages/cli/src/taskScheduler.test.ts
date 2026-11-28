@@ -236,9 +236,7 @@ describe("TaskScheduler device affinity", () => {
     const elsewhere = { ...spawnTask("t1", path.join(dir, "nope")), originating_conversation_id: "conv123", precheck: "cast release sweep --new", precheck_mode: "state" };
     const away = makeScheduler([elsewhere], { claimResult: (t) => t });
     await away.scheduler.poll();
-    expect(away.calls.claimed).toEqual([]);
-    expect(away.calls.injected).toEqual([]);
-
+    expect([away.calls.claimed, away.calls.injected]).toEqual([[], []]);
     const here = makeScheduler([{ ...elsewhere, project_path: dir }], { claimResult: (t) => t });
     await here.scheduler.poll();
     expect(here.calls.claimed).toEqual(["t1"]);
@@ -625,8 +623,7 @@ describe("precheck gate", () => {
     const task = injectTask("exit 1", { project_path: path.join(dir, "vanished") });
     const { scheduler, calls } = makeScheduler([task], { claimResult: (t) => t });
     await scheduler.poll();
-    expect(calls.claimed).toEqual([]);
-    expect(calls.injected).toEqual([]);
+    expect([calls.claimed, calls.injected]).toEqual([[], []]);
   });
 
   it("a trigger with no precheck runs exactly as before", async () => {
