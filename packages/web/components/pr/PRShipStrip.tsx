@@ -10,11 +10,11 @@ import { normalizeRepository } from "@codecast/shared/contracts";
 import { onPrHead } from "@codecast/shared/contracts/deployTargets";
 import type { PrDeployModel } from "../../hooks/usePrDeploy";
 import { useShipping } from "../../hooks/useSyncShipping";
-import { CHANGE_STEPS, isMerged, prState, prStepper, runState, stepper, stepsFor } from "../../lib/deploys/board";
+import { CHANGE_STEPS, isMerged, prState, prStepper, runState, runWordTarget, stepper, stepsFor } from "../../lib/deploys/board";
 import { teamWorkspaceKey } from "../../lib/workspaceScope";
 import { deploysFocusHref } from "../../lib/deploys/focus";
 import { ShipTrack } from "../deploys/ShipTrack";
-import { runWord } from "../deploys/ShippingColumn";
+import { RunWord } from "../deploys/ShippingColumn";
 import { useSessionAsk } from "../../hooks/useJourneyViewer";
 import { EntityIdPill } from "../EntityIdPill";
 import { ShipControl } from "../ShipControl";
@@ -45,7 +45,8 @@ export function PRShipStrip({ pr, model, shepherd, authed, runVerdict }: {
   if (!model.open) return null;
   const state = run ? runState(run, ask) : prState(pr, runVerdict);
   const steps = run ? stepper(run) : prStepper(pr, runVerdict);
-  const decide = run ? runWord(run, state, ask) : undefined;
+  const to = run ? runWordTarget(run, ask) : null;
+  const decide = to ? <RunWord to={to} word={state.word} /> : undefined;
   const deploysHref = model.teamId ? deploysFocusHref({ team: model.teamId, repository: model.repository, target: model.shipsTo?.[0]?.target.name ?? null, focus: { kind: "pr", pr: model.number } }) : null;
   const goesTo = model.declares && model.shipsTo?.length ? <PRShipsTo model={model} /> : null;
   return (

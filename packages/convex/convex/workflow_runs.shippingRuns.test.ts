@@ -125,6 +125,16 @@ describe("workflow_runs.shippingRuns", () => {
     expect(row.node_statuses.at(-1)).toEqual({ node_id: "land", status: "running", started_at: NOW - 500 });
   });
 
+  test("a wait carries the runner's own words for a session that pushed, never the brief", async () => {
+    const { run, read, ids } = await setup();
+    const said = "waiting for jx7open to finish; it pushed abc1234 just now";
+    await run({ spawner: ids.open, at: NOW - 2000, extra: { current_node_id: "land", waiting_on_session: { node_id: "land", conversation_id: ids.open, since: NOW - 400, note: said } } });
+    await run({ spawner: ids.secret, at: NOW - 1000, extra: { current_node_id: "land", waiting_on_session: { node_id: "land", conversation_id: ids.secret, since: NOW - 400, note: "## Review asked for changes\n\nlong brief" } } });
+    const rows = await read(ids.ana);
+    expect(rows.find((r: any) => r.spawner_conversation_id === ids.open).waiting_on_session.note).toBe(said);
+    expect("note" in rows.find((r: any) => r.spawner_conversation_id === ids.secret).waiting_on_session).toBe(false);
+  });
+
   test("another team's runs never show, and a stranger or a signed-out reader gets nothing", async () => {
     const { t, run, read, ids } = await setup();
     await run();

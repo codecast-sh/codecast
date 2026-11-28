@@ -6,7 +6,7 @@
 // the bar under the track. Pure, with relative imports only: the phone's run page reads a run here too.
 import { SEGMENT_SEP, takesSessionChange, type FlowEdgeIn, type FlowNodeIn } from "@codecast/shared/contracts/flowPool";
 import { entityRoute } from "@codecast/shared/entities";
-import { fixPushed, verdictOnHead } from "@codecast/shared/contracts/deployTargets";
+import { turnWaitNote, verdictOnHead } from "@codecast/shared/contracts/deployTargets";
 import { failedDeploysOf } from "@codecast/shared/contracts/deployStop";
 import { journeyStages, targetsFromLine, withRunDeploys, type Journey, type TargetState } from "./journey";
 import { gateWaitWords, holdWords, journeyWords, sentBackWords, stopTitle, type JourneyTone } from "./journeyWords";
@@ -28,7 +28,7 @@ export type ChangeRun = {
   station_rebases?: ReadonlyArray<{ from: string; to: string }> | null;
   merge?: { sha?: string | null; pr_url?: string | null } | null;
   current_node_id?: string | null;
-  waiting_on_session?: { node_id: string; conversation_id?: string | null; blocked?: boolean } | null;
+  waiting_on_session?: { node_id: string; conversation_id?: string | null; blocked?: boolean; note?: string | null } | null;
   gate_node_id?: string | null;
   gate_decision_id?: string | null;
   gate_decision_short_id?: string | null;
@@ -217,8 +217,9 @@ export function changeHeadline(j: Journey, run: ChangeRun, graph: ChangeGraph, c
     }
     case "session": {
       if (n.blocked) return head(n.ask?.mine ? "Waiting on your answer" : sentBackWords(n));
-      // Its fix is on the pull request and the session works on: the run goes on once that turn ends.
-      if (fixPushed(run)) return head("Fix pushed", "Waiting for its session to finish its turn", "session");
+      // The runner saw the session push and keeps waiting on its turn: its own words say so.
+      const said = turnWaitNote(run.waiting_on_session);
+      if (said) return head(said, null, "session");
       const found = n.what ? null : foundWords(run, graph);
       return head(n.what ?? found ?? sentBackWords(n), fixing(n.round, n.max), found && /\b(red|rejected)\b/i.test(found) ? "bad" : tone);
     }

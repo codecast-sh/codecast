@@ -2,7 +2,7 @@ import { after, onPrHead, splitQueue, upTo } from "@codecast/shared/contracts/de
 import { describe, expect, test } from "bun:test";
 import {
   attemptGroups, branchHref, carriedOfAttempts, carriedOfDeploy, carriedOfQueue, fold, mineSessionIds, queueCommits, repositoryOfRun, rowsFor,
-  recordedOf, runOwner, runState, shipperOf, shippingRuns, stepper, stepsFor, tasksOnMain, withLines, yourSessions,
+  recordedOf, runOwner, runState, runWordTarget, shipperOf, shippingRuns, stepper, stepsFor, tasksOnMain, withLines, yourSessions,
   isMerged, type BoardDeploy, type BoardQueueCommit,
 } from "../board";
 import { runWord } from "../spot";
@@ -244,15 +244,29 @@ describe("the run's state in words", () => {
     // Answered since the wait began: the session is fixing again.
     expect(runState(run("a", asking), { ...ask, mine: true, open: false }).word).toBe("Fixing review findings");
   });
-  // ct-102698: the session pushed its fix after the brief and worked on; the run waited for its turn to end.
-  test("a fix pushed past the judged head waits for the session's turn; a rebase is no fix", () => {
-    const fixing = { current_node_label: "Fix findings", review_verdict: { verdict: "changes", at: 1, head_sha: "h1" }, ci_verdict: { green: true, head_sha: "h1", at: 1 }, waiting_on_session: { node_id: "brief", conversation_id: "c1", since: 5 } };
-    const at = (head: string, extra: Record<string, unknown> = {}) => run("f", { ...fixing, pr: { repository: "o/r", number: 1, first_head_sha: "h0", head_sha: head, at: 1 }, ...extra });
-    expect(runState(at("h1")).word).toBe("Fixing review findings");
-    expect(runState(at("h2"))).toEqual({ word: "Fix pushed", tone: "yellow", detail: "Waiting for its session to finish its turn" });
-    expect(runState(at("h2", { station_rebases: [{ from: "h1", to: "h2" }] })).word).toBe("Fixing review findings");
-    // A session waiting on a person says that, pushed or not.
-    expect(runState(at("h2", { waiting_on_session: { ...fixing.waiting_on_session, blocked: true } })).word).toBe("Waiting for a person");
+  // ct-102698: the session pushed its fix and worked on; only the runner knows the push came after the brief.
+  test("a session the runner saw push reads in the runner's words; a moved head alone says nothing", () => {
+    const fixing = { current_node_label: "Fix findings", review_verdict: { verdict: "changes", at: 1, head_sha: "h1" }, pr: { repository: "o/r", number: 1, first_head_sha: "h0", head_sha: "h2", at: 1 } };
+    const wait = { node_id: "brief", conversation_id: "c1", since: 5 };
+    expect(runState(run("f", { ...fixing, waiting_on_session: wait })).word).toBe("Fixing review findings");
+    const said = "waiting for jx74bpd to finish; it pushed ca235f7 5 min ago";
+    expect(runState(run("f", { ...fixing, waiting_on_session: { ...wait, note: said } }))).toEqual({ word: said, tone: "yellow" });
+    // The brief the station sent is no wait words; a session asking a person says that.
+    expect(runState(run("f", { ...fixing, waiting_on_session: { ...wait, note: "## Review asked for changes" } })).word).toBe("Fixing review findings");
+    expect(runState(run("f", { ...fixing, waiting_on_session: { ...wait, note: said, blocked: true } })).word).toBe("Waiting for a person");
+  });
+
+});
+
+describe("what a run's state word opens", () => {
+  const ask = { id: "d1", short_id: "sd-1", question: "Merge it?", mine: false, open: true };
+  const asking = { waiting_on_session: { node_id: "brief", conversation_id: "c1", since: 5, blocked: true } };
+  test("the session's card when held, else the session; a paused run's own card; else nothing", () => {
+    expect(runWordTarget(run("a", asking), ask)).toEqual({ decision: "sd-1" });
+    expect(runWordTarget(run("a", asking), null)).toEqual({ session: "c1" });
+    expect(runWordTarget(run("a", asking), { ...ask, open: false })).toBeNull();
+    expect(runWordTarget(run("p", { status: "paused", gate_decision_short_id: "sd-9" }), null)).toEqual({ decision: "sd-9" });
+    expect(runWordTarget(run("r"), null)).toBeNull();
   });
 });
 

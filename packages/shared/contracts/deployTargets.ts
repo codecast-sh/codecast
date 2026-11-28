@@ -464,8 +464,9 @@ export type ShippingRun = {
   node_statuses: Array<{ node_id: string; status: "pending" | "running" | "completed" | "failed"; started_at?: number }>;
   pr: { repository: string; number: number; first_head_sha: string; head_sha: string; at: number } | null;
   fail_reason: string | null;
-  /** The session the run waits on at a station it works (its fix), `blocked` while that session waits on a person. */
-  waiting_on_session?: { node_id: string; conversation_id: string; since: number; blocked?: boolean } | null;
+  /** The session the run waits on at a station it works (its fix), `blocked` while that session waits on a person.
+   *  `note`: only the runner's own wait words (turnWaitNote), never the brief. */
+  waiting_on_session?: { node_id: string; conversation_id: string; since: number; blocked?: boolean; note?: string } | null;
   /** The CI station's verdict and the reviewer's, as their stations reported them; the merge once it landed. */
   ci_verdict?: { green: boolean; head_sha: string; at: number } | null;
   /** `head_sha`: the head the reviewer read; a verdict binds to it (verdictOnHead). */
@@ -596,19 +597,11 @@ export function onPrHead<R extends { pr?: { head_sha?: string | null } | null }>
 }
 
 /**
- * The session a run waits on at its fix has pushed since the round's verdicts: the pull request's head (a run read
- * through onPrHead) is past the head the reviewer, else CI, judged, by more than a rebase. The run goes on only once that
- * session's turn ends, so it waits on the session, not on a fix still being written. Never while it waits on a person.
+ * The runner's own words for a fix station still waiting on a session that pushed ("waiting for jx7abcd to finish; it
+ * pushed abc1234 5 min ago", cli workflow/subjectTurn.ts), said verbatim; null for any other note (the brief it sent, a
+ * blocked session's pin). Only the runner knows a push came after the brief, so nothing else infers it.
  */
-export function fixPushed(run: {
-  waiting_on_session?: { blocked?: boolean } | null;
-  pr?: { head_sha?: string | null } | null;
-  review_verdict?: { head_sha?: string | null } | null;
-  ci_verdict?: { head_sha?: string | null } | null;
-  station_rebases?: ReadonlyArray<{ from: string; to: string }> | null;
-}): boolean {
-  const head = run.pr?.head_sha;
-  const judged = run.review_verdict?.head_sha ?? run.ci_verdict?.head_sha;
-  if (!run.waiting_on_session || run.waiting_on_session.blocked || !head || !judged) return false;
-  return !verdictOnHead(judged, head, run.station_rebases);
+export function turnWaitNote(wait: { note?: string | null; blocked?: boolean } | null | undefined): string | null {
+  const note = wait && !wait.blocked ? wait.note?.trim() : null;
+  return note && !note.includes("\n") && note.length <= 200 && /^waiting for \S+ to finish\b/.test(note) ? note : null;
 }
