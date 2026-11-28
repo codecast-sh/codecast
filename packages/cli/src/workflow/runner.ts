@@ -490,8 +490,8 @@ async function executeSubjectNode(node: WorkflowNode, graph: WorkflowGraph, cont
   await waiting(null);
   if (outcome !== "success") return outcome;
   try {
-    const { refreezeSessionChange } = await import("./flowChange.js");
-    const { change, moved, held } = await refreezeSessionChange(cwd, context["run_dir"], await runWorktreePath(cwd, context["worktree"]));
+    const { refreezeSessionChange, resumeAfterFix } = await import("./flowChange.js");
+    const { change, moved, held } = await refreezeSessionChange(cwd, context["run_dir"], await runWorktreePath(cwd, context["worktree"]), { resume: resumeAfterFix(graph, node.id, options.taskId) });
     Object.assign(context, frozenChangeContext(context["run_dir"]));
     const heldNote = noteHeld(context, held);
     // Nothing is left to check or land: the run ends done here (runNodeLoop).
@@ -614,10 +614,10 @@ async function briefWriters(node: WorkflowNode, graph: WorkflowGraph, context: R
     return winner.outcome;
   }
   try {
-    const { refreezeSessionChange, inboxRosterVia } = await import("./flowChange.js");
+    const { refreezeSessionChange, inboxRosterVia, resumeAfterFix } = await import("./flowChange.js");
     // Files a writer's shell made after its brief (a lockfile, codegen output) are its fix too.
     const since = Math.min(...waits.map((w) => w.sentAt));
-    const { change, moved, held } = await refreezeSessionChange(cwd, context["run_dir"], await runWorktreePath(cwd, context["worktree"]), { roster: inboxRosterVia(call), since });
+    const { change, moved, held } = await refreezeSessionChange(cwd, context["run_dir"], await runWorktreePath(cwd, context["worktree"]), { roster: inboxRosterVia(call), since, resume: resumeAfterFix(graph, node.id, options.taskId) });
     Object.assign(context, frozenChangeContext(context["run_dir"]));
     const heldNote = noteHeld(context, held);
     // Nothing is left to check or land: the run ends done here (runNodeLoop).
