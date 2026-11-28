@@ -43,6 +43,13 @@ export function graphNodesPayload(graph: WorkflowGraph) {
     ...(n.machine ? { machine: true } : {}),
     ...(n.whole_stop ? { whole_stop: true } : {}),
     ...(n.keep_subject ? { keep_subject: true } : {}),
+    // A station's machine slot and where no place goes, its silence clock, its refresh on resume, and the free entries
+    // its free_visit edges give it: each changes how a run of this copy goes, so each is kept.
+    ...(n.machine_slot ? { machine_slot: n.machine_slot } : {}),
+    ...(n.no_slot ? { no_slot: n.no_slot } : {}),
+    ...(n.silent !== undefined ? { silent: n.silent } : {}),
+    ...(n.refresh ? { refresh: true } : {}),
+    ...(n.max_free_visits !== undefined ? { max_free_visits: n.max_free_visits } : {}),
   }));
 }
 
@@ -51,5 +58,6 @@ export function graphEdgesPayload(graph: WorkflowGraph) {
     from: e.from, to: e.to,
     ...(e.label ? { label: e.label } : {}),
     ...(e.condition ? { condition: e.condition } : {}),
+    ...(e.free_visit ? { free_visit: e.free_visit } : {}),
   }));
 }

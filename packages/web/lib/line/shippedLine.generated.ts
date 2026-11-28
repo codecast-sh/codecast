@@ -24,19 +24,22 @@ export const SHIPPED_LINE: ShippedLine = {
       "id": "stopped",
       "label": "Stopped",
       "shape": "Msquare",
-      "type": "exit"
+      "type": "exit",
+      "stop": "$handoff_note"
     },
     {
       "id": "rejected",
       "label": "Rejected",
       "shape": "Msquare",
-      "type": "exit"
+      "type": "exit",
+      "stop": "The reviewer rejected the change. $review_note"
     },
     {
       "id": "ci_red",
       "label": "Not merged: CI stayed red",
       "shape": "Msquare",
-      "type": "exit"
+      "type": "exit",
+      "stop": "Not merged: CI stayed red after three rounds back to the builder. The last CI brief is the task's latest blocker comment."
     },
     {
       "id": "ground",
@@ -129,7 +132,8 @@ export const SHIPPED_LINE: ShippedLine = {
       "agent": "claude",
       "isolated": true,
       "max_visits": 3,
-      "timeout": 10800
+      "timeout": 10800,
+      "max_free_visits": 3
     },
     {
       "id": "implement_line",
@@ -141,7 +145,8 @@ export const SHIPPED_LINE: ShippedLine = {
       "agent": "claude",
       "isolated": true,
       "max_visits": 3,
-      "timeout": 10800
+      "timeout": 10800,
+      "max_free_visits": 3
     },
     {
       "id": "verify",
@@ -242,7 +247,8 @@ export const SHIPPED_LINE: ShippedLine = {
       "type": "command",
       "script": "# The rebase station (the-line.md L12): a card waits hours for its answer and\n# the default branch moves under it, so a Ship answer first puts the branch on\n# the default branch as the remote has it and runs the project's check on what\n# that makes. A failed run resumed onto the default branch (cast workflow\n# resume --onto-main) runs it too, with the check left to the station it\n# resumes at. Prints {\"rebased\", \"landed\", \"why\"}.\n#   exit 0: on the default branch and checked, or nothing of the change is left\n#           on the branch because it is already there (landed: true, the run\n#           goes to watch rather than shipping it twice)\n#   exit 1: the rebase conflicted, git refused to start it (a lock, a dirty\n#           index), or the check failed on the rebased\n#           branch; what happened goes on the task and the run goes back to\n#           implement, or stops where the flow has no implement\n#   exit 2: no worktree here, the default branch could not be fetched, or the\n#           rebased branch could not be pushed; ship decides on the branch as it is\ntarget=$default_branch\nbr=$branch\ndir=$run_dir\nmkdir -p \"$dir\"\n# merge.json is written only once the change is found on the default branch (here when it already is, else by ship),\n# and the deploy clock is for the commit it names.\nrm -f \"$dir/merge.json\" \"$dir/deploy-clock.json\"\nclean() { printf '%s' \"$1\" | tr -d '\\000-\\037\\\\\"'; }\nanswer() { printf '{\"rebased\": %s, \"landed\": %s, \"why\": \"%s\"}\\n' \"$1\" \"$2\" \"$(clean \"$3\")\"; }\n\nwt=\"$(cast ws path $worktree 2>/dev/null)\"\nif [ -z \"$wt\" ] || ! cd \"$wt\" 2>/dev/null; then\n  answer false false \"the run's worktree $worktree is not on this machine\"\n  exit 2\nfi\n\nif ! git fetch -q origin \"$target\"; then\n  answer false false \"git fetch origin $target failed\"\n  exit 2\nfi\nupstream=\"origin/$target\"\nwas=\"$(git rev-parse HEAD)\"\n# The files the change touched since it forked from the default branch.\nfork=\"$(git merge-base \"$was\" \"$upstream\")\"\ntouched=()\nwhile IFS= read -r f; do touched+=(\"$f\"); done < <(git diff --name-only --no-renames \"$fork\" \"$was\")\n\n# An untracked file the default branch has since begun to track blocks the\n# checkout (git refuses to overwrite it). A worktree starts with copies of the\n# main tree's untracked agent files, which is how one usually gets there, but\n# it may be work the agent wrote too. Each moves into this attempt's folder in\n# the run's directory so the rebase can go on, and back into the worktree on\n# every path that leaves the branch as it was.\naside=()\nback=\"$dir/aside/$(date +%Y%m%d-%H%M%S)\"\nwhile IFS= read -r f; do aside+=(\"$f\"); done < <(comm -12 <(git -c core.quotePath=off ls-files --others --exclude-standard | sort) <(git -c core.quotePath=off ls-tree -r --name-only \"$upstream\" | sort))\nfor f in \"${aside[@]}\"; do mkdir -p \"$back/$(dirname \"$f\")\" && mv \"$f\" \"$back/$f\"; done\nrestore() { for f in \"${aside[@]}\"; do mkdir -p \"$(dirname \"$f\")\" && mv \"$back/$f\" \"$f\"; done; }\n[ \"${#aside[@]}\" -eq 0 ] || cast task comment $task_id \"Moved ${#aside[@]} untracked file(s) that $upstream tracks out of the run's worktree, into $back, so the rebase could check $upstream out; they go back if the branch stays as it was: ${aside[*]}\" -t progress > /dev/null\n\nif ! git rebase --autostash \"$upstream\" > \"$dir/rebase.log\" 2>&1; then\n  conflicted=()\n  while IFS= read -r f; do conflicted+=(\"$f\"); done < <(git diff --name-only --diff-filter=U | head -20)\n  git rebase --abort > /dev/null 2>&1\n  restore\n  said=\"$(tail -n 5 \"$dir/rebase.log\" | tr '\\n' ' ')\"\n  if [ \"${#conflicted[@]}\" -eq 0 ]; then\n    # No file conflicted: git refused before replaying anything (a lock, a\n    # dirty index), so it is no conflict to resolve. Git's own first\n    # complaint says what to fix.\n    why=\"$(grep -m 1 -E '^(error|fatal):' \"$dir/rebase.log\" | sed -E 's/^(error|fatal): //')\"\n    [ -n \"$why\" ] || why=\"$said\"\n    cast task comment $task_id \"Rebasing $br onto $upstream could not start, so nothing of the change was tried and the branch is as it was. Git said: $(tr '\\n' ' ' < \"$dir/rebase.log\") Fix that in the run's worktree $worktree; the rebase then has to run again.\" -t review > /dev/null\n    answer false false \"rebase could not start: $why\"\n    exit 1\n  fi\n  # The default branch changed these files after the branch forked, and one of\n  # those commits may already carry the change, reworked after review (the\n  # shared tree is committed while a change waits for its answer). Which side\n  # holds what is for whoever resolves it to read, so the note names the\n  # commits and asks to keep both sides, never to overwrite the default branch.\n  where=\"\"\n  for f in \"${conflicted[@]}\"; do\n    where=\"$where${where:+; }$f: $(git log --format='%h %s' \"$fork..$upstream\" -- \"$f\" | head -5 | awk 'NR > 1 { printf \", \" } { printf \"%s\", $0 }')\"\n  done\n  names=\"${conflicted[*]}\"\n  cast task comment $task_id \"Rebasing $br onto $upstream conflicted${names:+ in $names}. The branch is as it was before the rebase. $upstream changed those files after the branch forked ($where), and one of those commits may already carry part or all of this change, reworked after review. Rebase onto $upstream keeping both sides: drop the branch's side of a hunk only where $upstream already holds it, and never overwrite $upstream's own edits. Say on the task what $upstream already had. Then run the check and hand off again. Git said: $said\" -t review > /dev/null\n  answer false false \"rebase onto $upstream conflicted${names:+ in $names} ($where)\"\n  exit 1\nfi\n\nif [ \"$(git rev-list --count \"$upstream..HEAD\")\" = 0 ]; then\n  # Every commit of the change is already on the default branch: it landed\n  # another way (git drops a commit whose patch is already upstream). Where:\n  # the first commit after the fork whose every file the change touched reads\n  # as the change left it, which finds a hand landing that carried more too.\n  landed=\"$([ \"${#touched[@]}\" -gt 0 ] && git log --reverse --format=%H \"$fork..$upstream\" -- \"${touched[@]}\" | while read -r c; do\n    same=1\n    for f in \"${touched[@]}\"; do [ \"$(git rev-parse -q --verify \"$c:$f\")\" = \"$(git rev-parse -q --verify \"$was:$f\")\" ] || { same=0; break; }; done\n    [ \"$same\" = 1 ] && { echo \"$c\"; break; }\n  done)\"\n  # The commit that carries it goes where Deploy starts from, and on the run as its merge, as Land would have done.\n  # Where the change started: what Land read before landing it ($run_dir/since), else the commit the run froze the\n  # change on (change.json's base), else the fork here unless that is the branch's own tip (after a fast-forward it is,\n  # and a branch with no commit of its own sits there too). With none of them nothing says this tip is the change, so\n  # no merge.json is written and Deploy says nothing was merged.\n  since=\"$(cat \"$dir/since\" 2>/dev/null)\"\n  [ -n \"$since\" ] || since=\"$(sed -n 's/^ *\"base\": *\"\\([0-9a-f]*\\)\".*/\\1/p' \"$dir/change.json\" 2>/dev/null | head -n 1)\"\n  [ -n \"$since\" ] || { [ \"$fork\" != \"$was\" ] && since=\"$fork\"; }\n  [ -n \"$since\" ] && cast flow landed --branch \"$was\" --as \"$br\" --base \"$target\" --files \"$change_files\" --since \"$since\" --out \"$dir/merge.json\" --run \"$run_id\" > /dev/null 2>&1\n  cast task comment $task_id \"Already on $target${landed:+ as ${landed:0:10}}: nothing of $br is left to ship, so the flow goes on to watch.\" -t progress > /dev/null\n  answer true true \"already on $upstream${landed:+ as ${landed:0:10}}\"\n  exit 0\nfi\n\nif [ \"$(git rev-parse HEAD)\" != \"$was\" ]; then\n  # The base moved: the approved change is checked again on what it now sits on.\n  cmd=$line.commands.check\n  if [ -n \"$cmd\" ] && ! bash -c \"$cmd\" > \"$dir/rebase-check.log\" 2>&1; then\n    said=\"$(tail -n 30 \"$dir/rebase-check.log\")\"\n    git reset -q --keep \"$was\"\n    restore\n    cast task comment $task_id \"After rebasing $br onto $upstream the project's check fails, so the change no longer fits the default branch as it is now. The branch is as it was before the rebase. Rebase it, make the check pass, and hand off again. The check said:\n$said\" -t review > /dev/null\n    answer true false \"the check fails on the branch rebased onto $upstream\"\n    exit 1\n  fi\n  # The branch on the remote is the one the ship command lands; it follows the rebase. A push the remote\n  # refuses (the lease, the network, credentials) leaves the remote unrebased: ship then decides on the\n  # branch as it is, knowingly, and the worktree goes back to match it.\n  if ! git push -q --force-with-lease origin \"HEAD:$br\" > \"$dir/rebase-push.log\" 2>&1; then\n    said=\"$(tail -n 3 \"$dir/rebase-push.log\" | tr '\\n' ' ')\"\n    git reset -q --keep \"$was\"\n    restore\n    answer false false \"push of the rebased branch failed: $said\"\n    exit 2\n  fi\nfi\nanswer true false \"on $upstream at $(git rev-parse --short HEAD)\"\nexit 0\n",
       "max_visits": 4,
-      "timeout": 3600
+      "timeout": 3600,
+      "max_free_visits": 6
     },
     {
       "id": "ship",
@@ -464,7 +470,8 @@ export const SHIPPED_LINE: ShippedLine = {
       "from": "review",
       "to": "rebase",
       "label": "Ship already answered",
-      "condition": "review_verdict = approve and human.gate.selected = S"
+      "condition": "review_verdict = approve and human.gate.selected = S",
+      "free_visit": "rebase"
     },
     {
       "from": "review",
@@ -580,13 +587,15 @@ export const SHIPPED_LINE: ShippedLine = {
       "from": "ship",
       "to": "implement",
       "label": "CI red",
-      "condition": "outcome = failure and ship.exit_code = 7 and ship.json.ci_red_rounds <= 3 and category != line"
+      "condition": "outcome = failure and ship.exit_code = 7 and ship.json.ci_red_rounds <= 3 and category != line",
+      "free_visit": "implement"
     },
     {
       "from": "ship",
       "to": "implement_line",
       "label": "CI red",
-      "condition": "outcome = failure and ship.exit_code = 7 and ship.json.ci_red_rounds <= 3 and category = line"
+      "condition": "outcome = failure and ship.exit_code = 7 and ship.json.ci_red_rounds <= 3 and category = line",
+      "free_visit": "implement_line"
     },
     {
       "from": "ship",

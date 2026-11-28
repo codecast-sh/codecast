@@ -33,7 +33,7 @@ export function landingOf(run: ReportRun & { merge?: { sha: string } | null }, g
   return sha ? { word: own ? "Landed" : "Merged", sha } : null;
 }
 
-/** A stored workflows row (useRunWorkflow) keeps no fold, stop, backend or machine on its nodes (workflowNodeValidator):
+/** A workflows row (useRunWorkflow) pushed by a cast whose stored nodes kept no fold or stop (cli graphPayload.ts):
  *  they read from its source, as pushedFlow reads them, so a report drawn from the row reads the graph the journey does. */
 function withSourceAttrs(g: RunGraph): RunGraph {
   if (!g.source || g.nodes!.some((n) => n.fold || n.stop)) return g;

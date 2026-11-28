@@ -51,6 +51,13 @@ export const workflowNodeValidator = v.object({
   machine: v.optional(v.boolean()),
   whole_stop: v.optional(v.boolean()),
   keep_subject: v.optional(v.boolean()),
+  // A station's machine slot and where no place goes, seconds of quiet before it reads silent, a station re-made on
+  // resume, and how many free_visit entries it takes without spending a visit.
+  machine_slot: v.optional(v.string()),
+  no_slot: v.optional(v.string()),
+  silent: v.optional(v.number()),
+  refresh: v.optional(v.boolean()),
+  max_free_visits: v.optional(v.number()),
 });
 
 export const workflowEdgeValidator = v.object({
@@ -58,6 +65,7 @@ export const workflowEdgeValidator = v.object({
   to: v.string(),
   label: v.optional(v.string()),
   condition: v.optional(v.string()),
+  free_visit: v.optional(v.string()),
 });
 
 /** Each station's text file, repo-relative, for a graph that reads them (`@file`). */
