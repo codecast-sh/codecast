@@ -41,7 +41,6 @@ import { ChatAvatar } from '@/components/chat/MessageRow';
 import { CONVEX_ORIGIN } from '@/lib/convex';
 import { openInBrowser, openLink } from '@/lib/links';
 import { optionalNative } from '@/lib/optionalNative';
-import { PageCommentBar, useOpenedFromSession, usePageComments } from '@/components/comments/pageComments';
 import { useAndroidImeInset } from '@/hooks/useAndroidImeInset';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -123,12 +122,6 @@ export default function PageScreen() {
     if (sheetOpen && artifactId) (useInboxStore.getState() as any).markThreadRead('page', artifactId);
   }, [sheetOpen, artifactId, page?.comments.length]);
 
-  // Opened from a session, the page takes comments into the next message sent there.
-  const webview = useRef<{ injectJavaScript: (js: string) => void } | null>(null);
-  const fromSession = useOpenedFromSession();
-  const sessionTitle = useInboxStore((st: any) => (fromSession ? (st.sessions?.[fromSession]?.title as string | undefined) : undefined));
-  const promptComments = usePageComments(webview, slug ?? '', info?.title || page?.title || 'Published page', slug ? pageShareUrl(slug) : '', slug ? fromSession : null);
-
   if (!slug) return <ObjectMissing what="Page" loading={false} />;
   const shareUrl = pageShareUrl(slug);
   const browse = () => void openInBrowser(shareUrl);
@@ -176,10 +169,7 @@ export default function PageScreen() {
           {WebViewComp ? (
             <WebViewComp
               key={src}
-              ref={webview}
               source={{ uri: src }}
-              injectedJavaScript={promptComments?.injectedJavaScript}
-              onMessage={promptComments?.onMessage}
               originWhitelist={[origin]}
               onShouldStartLoadWithRequest={(req: { url: string; isTopFrame?: boolean }) => {
                 if (req.isTopFrame === false || req.url.startsWith(origin) || req.url === 'about:blank') return true;
@@ -201,7 +191,6 @@ export default function PageScreen() {
             </RNView>
           )}
         </RNView>
-        {promptComments && !sheetOpen ? <PageCommentBar comments={promptComments} sessionTitle={sessionTitle} /> : null}
 
         {sheetOpen ? (
           <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={insets.top + 44} style={styles.sheet}>
