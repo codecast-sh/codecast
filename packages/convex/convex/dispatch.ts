@@ -3454,11 +3454,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   updateNotificationSettings: async (ctx, _userId, [patch]: [Record<string, any>]) => {
     return await ctx.runMutation!(api.users.updateNotificationPreferences, patch as any);
   },
-  // How loudly the viewer hears one session (store setSessionNotify paints the
-  // sessionNotify row first).
-  setSessionNotify: async (ctx, _userId, [conversationId, level]: [string, "default" | "all" | "needs_input" | "muted"]) => {
-    return await ctx.runMutation!(api.sessionWatch.setLevel, { conversation_id: conversationId, level });
-  },
+  setSessionNotify: async (ctx, _userId, [conversation_id, level]: [string, any]) => ctx.runMutation!(api.sessionWatch.setLevel, { conversation_id, level }),
   setAgentPermissionModes: async (ctx, _userId, [modes]: [Record<string, any>]) => {
     return await ctx.runMutation!(api.users.updateAgentPermissionModes, modes as any);
   },

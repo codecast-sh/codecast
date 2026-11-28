@@ -424,6 +424,7 @@ export type { ThreadInboxRow, ThreadKind, ThreadLastReply } from "./threadTypes"
 export { threadRowId } from "./threadTypes";
 import type { ThreadsCursor } from "./threadTypes";
 import type { CallRoomFlags, GuestWaiting, LiveRoom, RoomKnock } from "./callRoomTypes";
+import { sessionNotifyKey, type SessionNotifyItem, type SessionNotifyLevel } from "./sessionNotifyTypes";
 import { isTriggerEditable } from "../lib/triggerEditable";
 import { detailRowsToEvict, isDetailKey, isDetailPinned, pullRequestDetailRow, taskCommentsRow, thinPullRequestRow, thinTaskRow, type DetailKey, type PullRequestDetailRow, type TaskCommentsRow } from "../lib/detailRows";
 import { FOLDER_ACTIVE_WINDOW_MS, type FolderActivity } from "../lib/railFolderFilter";
@@ -1544,18 +1545,6 @@ export type BucketAssignmentItem = {
   bucket_id?: string | null;
   updated_at: number;
 };
-
-// How loudly the viewer hears one session (sessionWatch.listMine). No row is
-// the default: the ordinary rules, and the viewer's project, folder and
-// teammate mutes.
-export type SessionNotifyLevel = "all" | "needs_input" | "muted";
-export type SessionNotifyItem = {
-  _id: string;
-  conversation_id: string;
-  level: SessionNotifyLevel;
-  updated_at: number;
-};
-export const sessionNotifyKey = (conversationId: string) => `sn:${conversationId}`;
 
 // One row per (user, conversation): where this viewer's attention stopped.
 // Unread is never stored — it is isSessionUnread(mark, session.updated_at),

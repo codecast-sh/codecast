@@ -76,6 +76,7 @@ import { dataDeletionTables } from "./dataDeletionsSchema";
 import { eventFilterValidator, pendingEventValidator } from "./lib/eventFilterValidator";
 import { decisionValidator, intentSourceValidator, milestoneValidator, questionValidator, scoreValidator } from "./lib/initiativeValidators";
 import { orgChangeReplyValidator, orgLogSubjectValidator } from "./lib/orgLogValidators";
+import { ENTITY_TYPE } from "./lib/notificationTypes";
 
 // Derived from the single source of truth in @codecast/shared/contracts so the
 // schema, validators, the CLI daemon, and the browser store can never drift.
@@ -9602,42 +9603,10 @@ export default defineSchema({
 
   entity_subscriptions: defineTable({
     user_id: v.id("users"),
-    entity_type: v.union(
-      v.literal("task"),
-      v.literal("doc"),
-      v.literal("plan"),
-      v.literal("conversation"),
-      v.literal("artifact"),
-      // Chat notifications never fan out over this table — the sender computes the
-      // recipient list and re-checks channel access for each one, because a chat
-      // preview carries real message text. This member exists only so the
-      // notification and subscription entity unions stay one shape. Should a row
-      // ever appear, `emit` re-checks team membership for a chat_channel entity
-      // and both membership-removal paths (`teams.removeMember` and
-      // `teams.removeFromTeam`) delete the rows of a departing member.
-      v.literal("chat_channel"),
-      // Device alerts go straight to the machine's owner, so nothing subscribes
-      // to a device either. Present for the same reason: one shape.
-      v.literal("device"),
-      // A code comment names its recipients directly. Same reason: one shape.
-      v.literal("code"),
-      // A role, by short id: a goal stall notice to a person who reports to
-      // it. Direct recipients only, like a device — nothing subscribes to a
-      // role. Present for the same reason: one shape.
-      v.literal("org_role"),
-      // A team, for join requests. Direct recipients only. Same reason.
-      v.literal("team"),
-      // A machine, for the overload alert. Direct recipients only. Same reason.
-      v.literal("machine"),
-      // A passkey, for its owner's add and remove notices. Same reason.
-      v.literal("passkey"),
-      // A weekly card, for its owner's Monday notice. Same reason.
-      v.literal("weekly_card"),
-      // A metric watch, for its alert to the people it names. Same reason.
-      v.literal("metric_watch"),
-      // A deploy, for the notice that it dropped someone's work. Same reason.
-      v.literal("deploy")
-    ),
+    // The notification entity union (lib/notificationTypes.ts), so the two
+    // stay one shape. Only task, doc, plan, conversation and artifact rows are
+    // subscribed to; the rest name their recipients directly.
+    entity_type: ENTITY_TYPE,
     entity_id: v.string(),
     reason: v.union(
       v.literal("creator"),

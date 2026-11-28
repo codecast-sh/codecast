@@ -1,7 +1,8 @@
 "use client";
 import Link from "next/link";
 import { BellRing } from "lucide-react";
-import { useInboxStore, useTrackedStore, type SessionNotifyItem, type SessionNotifyLevel } from "../../store/inboxStore";
+import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
+import type { SessionNotifyItem, SessionNotifyLevel } from "../../store/sessionNotifyTypes";
 import { SettingsRow, SettingsSection } from "./ui";
 import { SelectBox } from "../ui/select-box";
 

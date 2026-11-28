@@ -4,7 +4,8 @@
 // so both show the same state and write the same fields. Relative imports
 // only: the phone bundle reaches this file.
 import { broadlyMuted, sessionFolderOf } from "@codecast/convex/convex/lib/sessionWatch";
-import { sessionNotifyKey, useTrackedStore, type SessionNotifyLevel } from "../store/inboxStore";
+import { useTrackedStore } from "../store/inboxStore";
+import { sessionNotifyKey, type SessionNotifyLevel } from "../store/sessionNotifyTypes";
 
 export type NotifyConversation = {
   _id: string;
