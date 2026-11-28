@@ -11,6 +11,7 @@ import { failedDeploysOf } from "@codecast/shared/contracts/deployStop";
 import { journeyOf, journeyStages, targetsFromLine, withRunDeploys, type Journey, type JourneyStage, type JourneyViewer, type TargetState } from "./journey";
 import { gateWaitWords, holdWords, journeyWords, sentBackWords, stopTitle, type JourneyTone } from "./journeyWords";
 import { landedSha } from "./runRecord";
+import { HANDED_EXIT, handedRole, mergeOffIn, mergeOffRole } from "@codecast/shared/contracts/mergeOff";
 import { deploysFocusHref, deploysHref as wordsHref, runDeploysHref, runTeam } from "../deploys/focus";
 
 type Status = { node_id: string; status?: string; result_preview?: string | null; started_at?: number; session?: { _id: string; title?: string | null } | null };
@@ -130,23 +131,21 @@ function exitReached(run: ChangeRun, graph: ChangeGraph): string | null {
   return n?.type === "exit" ? n.label : null;
 }
 
-/** The merge station's refusal when the person's merge switch for the flow is off (convex lib/lineMerge.ts), as the
- *  run's reason carries it, or as the CLI's merge said it ("merge left to a person: merge is off …"). */
-const MERGE_OFF = /^(Stopped:\s*)?((merge left to a person:\s*)?merge is off for this flow|@[\w-]+'s merge is off)\b/;
-export const mergeIsOff = (run: ChangeRun) => MERGE_OFF.test(run.fail_reason ?? "");
+/** The merge station's refusal when a merge switch is off (convex lib/lineMerge.ts), as the run's reason carries it,
+ *  or as the CLI's merge said it ("merge left to a person: …"): the one matcher every reader shares. */
+export const mergeIsOff = (run: ChangeRun) => mergeOffIn(run.fail_reason);
 
 /** A role hand's run whose Merge belongs to its role, and the role's merge is off: the run ends at its `handed` exit and
  *  its merge step says whose ("Merge is @release's: handed to it."). The role's handle, "" when no step names it. */
-const HANDED = /^\s*Merge is @([\w-]+)'s: handed to it/;
 export function handedTo(run: ChangeRun): string | null {
-  if (run.status !== "completed" || run.merge?.sha || leafOf(run.current_node_id ?? "") !== "handed") return null;
-  return [...(run.node_statuses ?? [])].sort(byNewest).map((n) => HANDED.exec(n.result_preview ?? "")?.[1]).find(Boolean) ?? "";
+  if (run.status !== "completed" || run.merge?.sha || leafOf(run.current_node_id ?? "") !== HANDED_EXIT) return null;
+  return [...(run.node_statuses ?? [])].sort(byNewest).map((n) => handedRole(n.result_preview)).find(Boolean) ?? "";
 }
 
 /** The role that holds the change's merge, by handle, when its words name one: the role it was handed to, or the one
  *  whose merge is off ("@release's merge is off: …"). Null when they name none (the run's own role holds it then). */
 export function mergeHolder(run: ChangeRun): string | null {
-  return handedTo(run) || /^(?:Stopped:\s*)?@([\w-]+)'s merge is off\b/.exec(run.fail_reason ?? "")?.[1] || null;
+  return handedTo(run) || mergeOffRole(run.fail_reason) || null;
 }
 
 /** Whether the change is on main by the run's own record: a sha it landed, or a landing step that passed. */
