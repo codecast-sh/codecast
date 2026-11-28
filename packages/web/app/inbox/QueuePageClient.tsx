@@ -480,7 +480,9 @@ export function QueuePageClient() {
     const store = useInboxStore.getState();
     if (Object.keys(store.sessions).length === 0 && !clientStateInitialized) return;
     if (!isConvexId(paramSessionId) && !store.sessions[paramSessionId]) {
-      router.replace(`/conversation/${encodeURIComponent(paramSessionId)}`);
+      // A stub that has since rekeyed (its first send created it) is followed
+      // to its real id: the resolver would answer Not Found for the stub.
+      router.replace(`/conversation/${encodeURIComponent(store.resolveLiveSessionId(paramSessionId))}`);
       return;
     }
     const paramChanged = paramSessionId !== lastAppliedParamId.current;
