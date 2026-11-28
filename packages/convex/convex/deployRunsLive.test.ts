@@ -313,6 +313,17 @@ describe("an outside merge goes Live whichever workspace its run sits in", () =>
     expect(run(t, "run_x").node_statuses.find((n: any) => n.node_id === "deploy__wait").result_preview).toMatch(/^Live: [0-9a-f]{7} on cli dp-\d+\.$/);
   });
 
+  test("a run of another team of its owner, its merge recorded before the deploy, is completed when that deploy goes live", async () => {
+    const { t, mark, drain, mergedOnGitHub } = await world();
+    inOther(t);
+    t.workflow_runs.push({ ...endedBeforeMerge("run_y", 25, "task_c", "stopped"), workspace: `team:${OTHER}`, team_id: OTHER });
+    expect(await mergedOnGitHub(25, 2)).toBe("run_y");
+    expect(run(t, "run_y").status).toBe("failed");
+    await mark("cli", 2, "live");
+    expect(await drain()).toContain("run_y");
+    expect(run(t, "run_y")).toMatchObject({ status: "completed", current_node_id: "exit" });
+  });
+
   test("a merge that touches no deploy target is live once it is on main", async () => {
     const { t, ctx, mergedOnGitHub } = await world();
     t.commits.push({ _id: "commit_5", sha: sha(5), message: "change 5", author_name: "Ana", author_email: "a@x", timestamp: NOW, files_changed: 1, insertions: 0, deletions: 0, repository: REPO, team_id: TEAM, branch: "main", files: [file("scripts/release.sh")] });

@@ -418,8 +418,10 @@ export async function recordOutsideMerge(ctx: any, pr: Doc<"pull_requests">, by:
 }
 
 /**
- * The failed runs (and the handed ones whose merge was made outside them) of a live deploy's workspace that merged a commit it carries: the commit at its own sha, and when it
- * is placed on main the commits after its target's previous live deploy and at or before its cut, found by merge sha.
+ * The failed runs (and the handed ones whose merge was made outside them) that merged a commit a live deploy carries:
+ * the commit at its own sha, and when it is placed on main the commits after its target's previous live deploy and at
+ * or before its cut, found by merge sha. In any workspace (a run of another team on the repository, or a personal
+ * one): whether the change is live for the run is read with its owner's access (runLiveAt).
  */
 async function runsMergedInto(ctx: any, d: Doc<"deploys">): Promise<Doc<"workflow_runs">[]> {
   // A run's merge.sha is the full sha its merge pushed; a deploy's own sha may be short, so each is read as a prefix.
@@ -437,7 +439,7 @@ async function runsMergedInto(ctx: any, d: Doc<"deploys">): Promise<Doc<"workflo
   for (const s of shas) {
     const rows: Doc<"workflow_runs">[] = await ctx.db
       .query("workflow_runs")
-      .withIndex("by_workspace_merge_sha", (q: any) => q.eq("workspace", d.workspace).gte("merge.sha", s).lt("merge.sha", `${s}~`))
+      .withIndex("by_merge_sha", (q: any) => q.gte("merge.sha", s).lt("merge.sha", `${s}~`))
       .take(20);
     for (const r of rows) if (r.status === "failed" || mergedOutside(r)) runs.set(String(r._id), r);
   }
